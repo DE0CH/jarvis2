@@ -11,7 +11,7 @@ it is**: nothing here touches Jarvis 1's box, cluster, repo paths, session image
 | Cluster | Its own Hetzner Cloud project (`jarvis2`), one box, single-node **k3s** reconciled by **Flux** from this repo (public) |
 | Core (secrets controller) | Go, its own namespace + pod on that box, minimal network surface; all state in memory |
 | Router | The Jarvis 2 backend (API for the app and the web page); outside the core; untrusted |
-| Sessions | Fly Machines in a **new Fly organisation** (`jarvis2`), so Jarvis 1's budget scan never sees them |
+| Sessions | Fly Machines in a **new Fly organisation** (`jarvis2-370`), so Jarvis 1's budget scan never sees them |
 | Public address | `jarvis2.deyaochen.com`, a Cloudflare Tunnel (cloudflared on the box) behind its own Cloudflare Access app: Deyao's login only, no service tokens |
 | iPhone app | "Jarvis 2" (`dev.de0ch.jarvis2`, its own TestFlight app): a Swift shell + the React Native UI in an ExtensionKit extension (lessons/73) |
 | CI | GitHub Actions (this repo is public, so macOS runners are free): images to GHCR, the app to TestFlight |
@@ -39,6 +39,5 @@ Recovery after a core restart: designed only when needed.
   dead-machine resume exactly once, burns, mismatch/fork refusals, kill rejecting null).
 - Cloudflare: scoped token `jarvis2-infra` minted (`CF_JARVIS2_INFRA_TOKEN` in claude-env's `default` store).
 - Hetzner: project created (named `jarvis2-mock`, to rename to `jarvis2`), token `HETZNER_JARVIS2_MOCK_API`; no server yet.
-- Fly: blocked on billing. A linked org was refused ("Parent organization trust is too low"); no `jarvis2`
-  org exists. Waiting on Deyao's choice of how to pay for Jarvis 2's sessions.
+- Fly: org `jarvis2-370` (standalone, Pay As You Go; Deyao adds its card); org-scoped token `JARVIS2_FLY_TOKEN` (+ `JARVIS2_FLY_ORG`) in claude-env's `default` store.
 - Not started: infra bring-up, router, session image, app.
