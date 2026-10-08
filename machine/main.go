@@ -54,6 +54,7 @@ const (
 	coreKeyPath = dir + "/core-key"     // written by the core through Fly exec
 	goPath      = dir + "/init-requested"
 	certPath    = dir + "/cert.json"
+	clientPath  = dir + "/client.json" // the router URL + the machines' Access token, for later commands
 	jarvis1     = "/usr/local/bin/entrypoint.sh"
 )
 
@@ -531,7 +532,7 @@ func addStore(name string) error {
 		return err
 	}
 	fmt.Fprintf(os.Stderr, "asked Deyao to add %s to this session (approval in the Jarvis 2 app); waiting up to 1 h\n", name)
-	me := os.Getenv("FLY_MACHINE_ID")
+	me := c.me
 	keys, _ := ownKeys()
 	deadline := time.Now().Add(time.Hour)
 	for time.Now().Before(deadline) {
@@ -588,17 +589,27 @@ type client struct {
 	http                 *http.Client
 }
 
+type clientConf struct{ URL, AccessID, AccessSecret, Machine string }
+
+// newClient: from the machine's env at boot (saved to clientPath, mode 600), from that file later — the
+// harness's env doesn't carry the machines' Access token
 func newClient() (*client, error) {
 	priv, err := loadPrivate()
 	if err != nil {
 		return nil, err
 	}
-	base := strings.TrimSuffix(os.Getenv("JARVIS2_URL"), "/")
-	if base == "" {
-		return nil, errors.New("JARVIS2_URL is not set")
+	conf := clientConf{os.Getenv("JARVIS2_URL"), os.Getenv("JARVIS2_ACCESS_ID"), os.Getenv("JARVIS2_ACCESS_SECRET"), os.Getenv("FLY_MACHINE_ID")}
+	if conf.URL != "" && conf.Machine != "" {
+		b, _ := json.Marshal(conf)
+		os.WriteFile(clientPath, b, 0o600)
+	} else if b, err := os.ReadFile(clientPath); err == nil {
+		json.Unmarshal(b, &conf)
 	}
-	return &client{base: base, id: os.Getenv("JARVIS2_ACCESS_ID"), secret: os.Getenv("JARVIS2_ACCESS_SECRET"),
-		me: os.Getenv("FLY_MACHINE_ID"), sig: priv.sig, http: &http.Client{Timeout: 10 * time.Minute}}, nil
+	if conf.URL == "" {
+		return nil, errors.New("no router URL (JARVIS2_URL)")
+	}
+	return &client{base: strings.TrimSuffix(conf.URL, "/"), id: conf.AccessID, secret: conf.AccessSecret,
+		me: conf.Machine, sig: priv.sig, http: &http.Client{Timeout: 10 * time.Minute}}, nil
 }
 
 func (c *client) raw(method, path string, body []byte, hdr ...string) ([]byte, http.Header, int, error) {
