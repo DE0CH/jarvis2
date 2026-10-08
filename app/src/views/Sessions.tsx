@@ -1,6 +1,6 @@
 import { useRef } from "react";
 import { View } from "react-native";
-import { api, ago, challengeRequest, HARNESS, REGION, sessionTitle, type Approval, type Session, type State } from "../lib/api";
+import { api, ago, challengeRequest, HARNESS, REGION, sessionTitle, storesOf, type Approval, type Session, type State } from "../lib/api";
 import { useStore, getStore, pend, refresh, refreshUntil, pendUntil, settle, ask, toast, failed, exclusive } from "../lib/store";
 import { hasShell, requestSecure } from "../lib/shell";
 import { Box, Button, Callout, Card, Flex, Heading, Lbl, Muted, P, Pill } from "../ui/kit";
@@ -113,7 +113,7 @@ export function Sessions() {
           {inGroup.map((m) => {
             const busy = pending.get("s:" + m.id) || null;
             const moving = !!MOVING[m.state] && m.state !== "initialising";
-            const line1 = [m.environment ? "stores: " + m.environment : "no stores", HARNESS[m.harness || ""] || m.harness, m.model].filter(Boolean).join(" · ");
+            const line1 = [storesOf(m).length ? "stores: " + storesOf(m).join(", ") : "no stores", HARNESS[m.harness || ""] || m.harness, m.model].filter(Boolean).join(" · ");
             return (
               <Card key={m.id} dim={!!busy} data={{ session: m.id }} style={{ flex: 1 }}>
                 <Flex justify="space-between" align="flex-start" gap={2} mb={1}>

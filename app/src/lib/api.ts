@@ -57,7 +57,7 @@ export type SessionState = "starting" | "approval" | "initialising" | "started" 
 export type Session = {
   id: string; machineId?: string | null; released?: boolean; name?: string; state: SessionState | string; status?: string | null;
   created?: string; region?: string; environment?: string; harness?: string; label?: string; model?: string;
-  permissionMode?: string; guest?: string; pausedAt?: string | null; error?: string | null; title?: string; destroyedAt?: string;
+  permissionMode?: string; guest?: string; stores?: string[] | null; size?: string; image?: string; pausedAt?: string | null; error?: string | null; title?: string; destroyedAt?: string;
 };
 export type SignedDoc = { payload: string; sig: string };
 export type ApprovalKind = "new-session" | "resume-upgrade" | "add-store";
@@ -101,3 +101,5 @@ export function ago(iso: string | Date) {
   if (s < 60) return "just now"; if (s < 3600) return Math.floor(s / 60) + " min ago"; if (s < 86400) return Math.floor(s / 3600) + " h ago"; return Math.floor(s / 86400) + " d ago";
 }
 export const sessionTitle = (m: Session) => m.title || m.label || m.name || m.id;
+/** the stores a session (or a record) was given */
+export const storesOf = (m: Session) => (m.stores && m.stores.length ? m.stores : (m.environment || "").split(",").filter(Boolean));

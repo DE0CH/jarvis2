@@ -44,9 +44,15 @@ Carried over from the mock (DE0CH/jarvis2-mock DECISIONS.md) unless marked new.
 11. **iPhone only** (`TARGETED_DEVICE_FAMILY = 1`), portrait + landscape.
 12. **The web page** can view everything, request a new session (non-sensitive stores; harness on the form),
     reject approvals, pause/resume/destroy; approvals happen only in the app.
-13. **TestFlight from GitHub Actions** (not Xcode Cloud): cloud signing with the App Store Connect API key,
-    build number = the workflow's run number, internal group "Owner" (all builds). App record "Jarvis 2"
-    (6820459076); icon = the Jarvis icon unchanged.
+13. **TestFlight from GitHub Actions** (not Xcode Cloud): the archive is built unsigned and the export signs
+    it with Apple's cloud-managed distribution certificate (App Store Connect API key in repo secrets) —
+    signing at archive time would mint a development certificate per runner, and the team is at its limit.
+    Build number = the workflow's run number; internal group "Owner" (all builds). App record "Jarvis 2"
+    (6820459076); icon = the Jarvis icon unchanged. `workflow_dispatch` with `only=testflight` ships without
+    rerunning the walkthrough.
+15. **React Native's frameworks sit in the app's `Frameworks/`**, not inside the extension (App Store
+    validation refuses an extension that carries its own); the extension loads them via its rpath. The shell
+    binary links none of them.
 14. **CI walkthrough** runs twice (light, dark), each against a fresh core + router and a reset simulator
     keychain, because the core keeps the phone's keys in memory and refuses a second pairing.
 

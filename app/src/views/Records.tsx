@@ -1,7 +1,7 @@
 // Destroyed sessions (GET api/records): what each was, view only — a destroyed session's machine is
 // burned, so nothing here can bring it back.
 import { useEffect } from "react";
-import { ago, HARNESS, sessionTitle } from "../lib/api";
+import { ago, HARNESS, sessionTitle, storesOf } from "../lib/api";
 import { useStore, loadRecords } from "../lib/store";
 import { Card, Flex, Heading, Muted, P, Pill, Spinner } from "../ui/kit";
 import { Cards } from "../ui/cards";
@@ -22,7 +22,7 @@ export function Records() {
               <Heading size={3} style={{ flex: 1 }}>{sessionTitle(m)}</Heading>
               <Pill kind="dim">destroyed</Pill>
             </Flex>
-            <Muted>{[m.environment ? "stores: " + m.environment : "no stores", HARNESS[m.harness || ""] || m.harness, m.model].filter(Boolean).join(" · ")}</Muted>
+            <Muted>{[storesOf(m).length ? "stores: " + storesOf(m).join(", ") : "no stores", HARNESS[m.harness || ""] || m.harness, m.model].filter(Boolean).join(" · ")}</Muted>
             <Muted>{[m.created ? "created " + ago(m.created) : "", m.destroyedAt ? "destroyed " + ago(m.destroyedAt) : ""].filter(Boolean).join(" · ")}</Muted>
           </Card>
         ))}
