@@ -1,0 +1,31 @@
+{
+  "expo": {
+    "name": "Jarvis 2",
+    "slug": "jarvis2",
+    "version": "1.0.0",
+    "orientation": "default",
+    "icon": "./assets/icon.png",
+    "scheme": "jarvis2",
+    "userInterfaceStyle": "automatic",
+    "ios": {
+      "bundleIdentifier": "dev.de0ch.jarvis2",
+      "appleTeamId": "S64YL394S3",
+      "supportsTablet": true,
+      "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false
+      }
+    },
+    "web": {
+      "output": "single",
+      "favicon": "./assets/favicon.png",
+      "name": "Jarvis 2"
+    },
+    "plugins": [
+      "expo-router"
+    ],
+    "experiments": {
+      "typedRoutes": false,
+      "reactCompiler": true
+    }
+  }
+}

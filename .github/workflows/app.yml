@@ -1,0 +1,182 @@
+name: app
+# The Jarvis 2 app (app/): the web export, the shell's crypto against the real core, the iOS app on a
+# simulator walked end to end against the REAL core (fakefly build) and router running on the runner,
+# and — on main — a TestFlight build (cloud-signed with the App Store Connect API key).
+on:
+  push:
+    paths: [app/**, core/**, router/**, .github/workflows/app.yml]
+  workflow_dispatch:
+concurrency: { group: app-${{ github.ref }}, cancel-in-progress: false }
+jobs:
+  web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - name: typecheck + web export (the router serves ../web at /)
+        working-directory: app
+        run: |
+          npm ci --no-audit --no-fund
+          npx tsc --noEmit
+          npx expo export --platform web --output-dir ../web
+      - uses: actions/upload-artifact@v4
+        with: { name: web, path: web }
+
+  interop:
+    # Shell/CoreCrypto.swift (CryptoKit) against the real Go core: pairing strings, signed lists, split-key
+    # unlock, approvals with and without burn certs, refusals
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version: "1.25" }
+      - name: core (fakefly)
+        run: |
+          cd core && go build -tags fakefly -o ../core-bin .
+          cd .. && (ADDR=127.0.0.1:8090 nohup ./core-bin > core.log 2>&1 &)
+          for i in $(seq 30); do grep -q "SETUP TOKEN" core.log && break; sleep 1; done
+      - name: swift run Interop
+        working-directory: app/ios/interop
+        run: swift run -c release Interop http://127.0.0.1:8090 "$(sed -n 's/.*SETUP TOKEN \([0-9a-f]*\).*/\1/p' ../../../core.log)"
+
+  simulator:
+    runs-on: macos-26
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - uses: actions/setup-go@v5
+        with: { go-version: "1.25" }
+      - name: core (fakefly) + router
+        run: |
+          mkdir -p bin out
+          (cd core && go build -tags fakefly -o ../bin/core .)
+          (cd router && go build -o ../bin/router .)
+      - name: Install
+        working-directory: app
+        run: npm ci --no-audit --no-fund
+      - name: JS bundle (runs inside the extension)
+        working-directory: app
+        run: |
+          mkdir -p ios/Extension/res
+          npx expo export:embed --platform ios --dev false --entry-file node_modules/expo-router/entry.js \
+            --bundle-output ios/Extension/main.jsbundle --assets-dest ios/Extension/res
+          mkdir -p ios/Extension/res/assets && ls -la ios/Extension/main.jsbundle
+      - run: brew install xcodegen
+      - name: Generate project + pods
+        working-directory: app/ios
+        run: xcodegen generate && pod install
+      - name: Boot simulator + stream logs
+        run: |
+          xcrun simctl boot "iPhone 17" || true
+          xcrun simctl bootstatus "iPhone 17" -b
+          nohup xcrun simctl spawn "iPhone 17" log stream --style compact --level debug \
+            --predicate 'process == "JarvisUI" OR process == "Jarvis2"' > out/sim.log 2>&1 &
+      - name: Build for testing (the shell talks to the router on the runner)
+        working-directory: app/ios
+        run: |
+          set -o pipefail
+          xcodebuild build-for-testing -workspace Jarvis2.xcworkspace -scheme Jarvis2 \
+            -destination 'platform=iOS Simulator,name=iPhone 17' -derivedDataPath ../../dd \
+            JARVIS_BASE=http://127.0.0.1:18080/ 2>&1 | tee ../../xcodebuild.log | grep -E "error:|\*\* " || true
+          grep -q "TEST BUILD SUCCEEDED" ../../xcodebuild.log
+      - name: UI test, light then dark (fresh core, router and keychain each time)
+        run: |
+          ok=0
+          for a in light dark; do
+            pkill -x core || true; pkill -x router || true; sleep 1
+            rm -rf data-$a && mkdir -p data-$a
+            (ADDR=127.0.0.1:8090 nohup bin/core > out/core-$a.log 2>&1 &)
+            for i in $(seq 30); do grep -q "SETUP TOKEN" out/core-$a.log && break; sleep 1; done
+            (NO_ACCESS=1 CORE_URL=http://127.0.0.1:8090 DATA_DIR=$PWD/data-$a WEB_DIR=$PWD/web SNAPSHOT_WAIT_SECONDS=2 \
+              SESSION_IMAGE=ghcr.io/de0ch/jarvis2-session:ci ADDR=127.0.0.1:18080 nohup bin/router > out/router-$a.log 2>&1 &)
+            sleep 2 && curl -sf http://127.0.0.1:18080/api/state > /dev/null && echo "router up ($a)"
+            TOKEN=$(sed -n 's/.*SETUP TOKEN \([0-9a-f]*\).*/\1/p' out/core-$a.log)
+            xcrun simctl keychain "iPhone 17" reset
+            xcrun simctl uninstall "iPhone 17" dev.de0ch.jarvis2 || true
+            xcrun simctl ui "iPhone 17" appearance $a
+            (cd app/ios && TEST_RUNNER_JARVIS2_APPEARANCE=$a TEST_RUNNER_JARVIS2_SETUP_TOKEN=$TOKEN TEST_RUNNER_JARVIS2_CORE=http://127.0.0.1:8090 \
+              xcodebuild test-without-building -workspace Jarvis2.xcworkspace -scheme Jarvis2 \
+              -destination 'platform=iOS Simulator,name=iPhone 17' -derivedDataPath ../../dd \
+              -resultBundlePath ../../result-$a.xcresult 2>&1 | tee ../../test-$a.log | grep -E "error:|Test Case|\*\* " || true)
+            grep -q "TEST EXECUTE SUCCEEDED\|\*\* TEST SUCCEEDED" test-$a.log || ok=1
+          done
+          exit $ok
+      - name: Export results
+        if: always()
+        run: |
+          for a in light dark; do mkdir -p out/$a; xcrun xcresulttool export attachments --path result-$a.xcresult --output-path out/$a || true; done
+          cat test-*.log > out/test.log 2>/dev/null || true
+          tail -c 300000 xcodebuild.log > out/xcodebuild-tail.log || true
+          grep -n "error:" xcodebuild.log | head -100 > out/errors.txt || true
+          mkdir -p out/crash
+          find ~/Library/Logs/DiagnosticReports -newer app/package.json -name "*.ips" -exec cp {} out/crash/ \; 2>/dev/null || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with: { name: results, path: out }
+
+  testflight:
+    # main only, after the walkthrough and the interop test pass: archive (cloud signing with the ASC API
+    # key), upload; the internal group "Owner" (all builds) gets it once Apple has processed it
+    if: github.ref == 'refs/heads/main'
+    needs: [simulator, interop, web]
+    runs-on: macos-26
+    timeout-minutes: 120
+    env:
+      ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+      ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - name: Install + JS bundle
+        working-directory: app
+        run: |
+          npm ci --no-audit --no-fund
+          mkdir -p ios/Extension/res
+          npx expo export:embed --platform ios --dev false --entry-file node_modules/expo-router/entry.js \
+            --bundle-output ios/Extension/main.jsbundle --assets-dest ios/Extension/res
+          mkdir -p ios/Extension/res/assets
+      - run: brew install xcodegen
+      - name: Generate project + pods
+        working-directory: app/ios
+        run: xcodegen generate && pod install
+      - name: API key
+        env: { ASC_PRIVATE_KEY: "${{ secrets.ASC_PRIVATE_KEY }}" }
+        run: |
+          mkdir -p ~/.asc && printf '%s\n' "$ASC_PRIVATE_KEY" > ~/.asc/AuthKey.p8 && chmod 600 ~/.asc/AuthKey.p8
+      - name: Archive (cloud signing)
+        working-directory: app/ios
+        run: |
+          set -o pipefail
+          xcodebuild archive -workspace Jarvis2.xcworkspace -scheme Jarvis2 -configuration Release \
+            -destination 'generic/platform=iOS' -archivePath ../../Jarvis2.xcarchive \
+            -allowProvisioningUpdates -authenticationKeyPath ~/.asc/AuthKey.p8 \
+            -authenticationKeyID "$ASC_KEY_ID" -authenticationKeyIssuerID "$ASC_ISSUER_ID" \
+            CODE_SIGN_STYLE=Automatic DEVELOPMENT_TEAM=S64YL394S3 CODE_SIGN_IDENTITY="Apple Development" \
+            CURRENT_PROJECT_VERSION=${{ github.run_number }} 2>&1 | tee ../../archive.log | grep -E "error:|warning: .*sign|\*\* " || true
+          grep -q "ARCHIVE SUCCEEDED" ../../archive.log
+      - name: Export + upload to App Store Connect
+        run: |
+          cat > ExportOptions.plist <<'EOF'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0"><dict>
+            <key>method</key><string>app-store-connect</string>
+            <key>destination</key><string>upload</string>
+            <key>teamID</key><string>S64YL394S3</string>
+            <key>signingStyle</key><string>automatic</string>
+            <key>manageAppVersionAndBuildNumber</key><false/>
+          </dict></plist>
+          EOF
+          set -o pipefail
+          xcodebuild -exportArchive -archivePath Jarvis2.xcarchive -exportOptionsPlist ExportOptions.plist -exportPath export \
+            -allowProvisioningUpdates -authenticationKeyPath ~/.asc/AuthKey.p8 \
+            -authenticationKeyID "$ASC_KEY_ID" -authenticationKeyIssuerID "$ASC_ISSUER_ID" 2>&1 | tee export.log | tail -30
+          grep -q "EXPORT SUCCEEDED\|Upload succeeded" export.log
+      - name: logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with: { name: testflight-logs, path: "*.log" }

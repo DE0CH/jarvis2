@@ -1,0 +1,11 @@
+node_modules/
+.expo/
+dist/
+ios/Pods/
+ios/Jarvis2.xcodeproj/
+ios/Jarvis2.xcworkspace/
+ios/Podfile.lock
+ios/Extension/main.jsbundle
+ios/Extension/res/
+ios/interop/.build/
+ios/interop/Package.resolved

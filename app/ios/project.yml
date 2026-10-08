@@ -1,0 +1,85 @@
+name: Jarvis2
+options:
+  bundleIdPrefix: dev.de0ch
+  deploymentTarget:
+    iOS: "26.0"
+settings:
+  base:
+    CODE_SIGN_IDENTITY: "-"
+    CODE_SIGN_STYLE: Manual
+    DEVELOPMENT_TEAM: ""
+    SWIFT_VERSION: "5.0"
+    ENABLE_USER_SCRIPT_SANDBOXING: NO
+    EX_ENABLE_EXTENSION_POINT_GENERATION: YES
+    MARKETING_VERSION: "0.1"
+    CURRENT_PROJECT_VERSION: "1"
+    # the router the shell talks to (and hands to the React Native UI); CI's simulator build overrides it
+    # on the xcodebuild command line with the router running on the runner
+    JARVIS_BASE: "https://jarvis2.deyaochen.com/"
+targets:
+  Jarvis2:
+    type: application
+    platform: iOS
+    sources: [Shell, Shared]
+    dependencies:
+      - target: JarvisUI
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.de0ch.jarvis2
+        PRODUCT_NAME: Jarvis2
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_FILE: Shell/Info.plist
+        INFOPLIST_KEY_CFBundleDisplayName: "Jarvis 2"
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        INFOPLIST_KEY_UIApplicationSceneManifest_Generation: YES
+        INFOPLIST_KEY_NSFaceIDUsageDescription: "Face ID approves what Jarvis 2 asks you to sign and unlocks secret stores."
+        INFOPLIST_KEY_ITSAppUsesNonExemptEncryption: NO
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        TARGETED_DEVICE_FAMILY: "1"
+        INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone: "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight"
+  JarvisUI:
+    type: extensionkit-extension
+    platform: iOS
+    sources:
+      - path: Extension
+        excludes: ["res/**"]
+      - path: Shared
+      - path: Extension/res/assets
+        type: folder
+        buildPhase: resources
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.de0ch.jarvis2.ui
+        PRODUCT_NAME: JarvisUI
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_FILE: Extension/Info.plist
+        OTHER_LDFLAGS: ["$(inherited)", "-lc++"]
+    postBuildScripts:
+      # CocoaPods adds no embed/resources phases to an ExtensionKit target (lessons/73 in claude-env)
+      - name: Embed Pods Frameworks + resources (extension)
+        basedOnDependencyAnalysis: false
+        script: |
+          set -e
+          D="${PODS_ROOT}/Target Support Files/Pods-JarvisUI"
+          [ -f "$D/Pods-JarvisUI-frameworks.sh" ] && "$D/Pods-JarvisUI-frameworks.sh"
+          [ -f "$D/Pods-JarvisUI-resources.sh" ] && "$D/Pods-JarvisUI-resources.sh"
+          true
+  Jarvis2UITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources: [UITests]
+    dependencies:
+      - target: Jarvis2
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.de0ch.jarvis2.uitests
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_TARGET_NAME: Jarvis2
+schemes:
+  Jarvis2:
+    build:
+      targets:
+        Jarvis2: all
+    test:
+      config: Release
+      targets: [Jarvis2UITests]
