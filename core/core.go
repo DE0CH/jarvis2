@@ -24,7 +24,7 @@ type Err struct {
 	Msg    string
 }
 
-func (e *Err) Error() string { return e.Msg }
+func (e *Err) Error() string                    { return e.Msg }
 func fail(status int, f string, a ...any) error { return &Err{status, fmt.Sprintf(f, a...)} }
 
 // SignedDoc: what every answer is — the exact JSON text and the core's signature over it
@@ -61,16 +61,17 @@ type Request struct {
 	Stores      []string        `json:"stores"`
 	Sensitive   []string        `json:"sensitive"`
 	Options     Options         `json:"options"`
+	AddedStore  string          `json:"addedStore,omitempty"` // set when the machine succeeds itself with one more store
 }
 
 type Cert struct {
-	Kind        string          `json:"kind"` // "succession-cert"
-	PredID      string          `json:"predecessorId"`
-	Machine     *StartedMachine `json:"machine"`
-	Stores      []string        `json:"stores"`
-	Options     Options         `json:"options"`
-	Nonce       string          `json:"nonce"`
-	IssuedAt    string          `json:"issuedAt"`
+	Kind     string          `json:"kind"` // "succession-cert"
+	PredID   string          `json:"predecessorId"`
+	Machine  *StartedMachine `json:"machine"`
+	Stores   []string        `json:"stores"`
+	Options  Options         `json:"options"`
+	Nonce    string          `json:"nonce"`
+	IssuedAt string          `json:"issuedAt"`
 }
 
 type unlocked struct {
@@ -364,9 +365,44 @@ func (c *Core) Succession(in SuccessionInput) (SignedDoc, error) {
 		}
 		sort.Strings(req.Stores)
 		sort.Strings(req.Sensitive)
+		if req.PredID == in.Machine {
+			// adding a store to a running session: succession(machine → same machine, old set + one)
+			var pc Cert
+			c.verifyOwn(in.Predecessor, &pc)
+			added, err := oneMore(pc.Stores, req.Stores)
+			if err != nil {
+				return SignedDoc{}, err
+			}
+			if c.killed[in.Machine] || pc.Options != req.Options || *pc.Machine != *m {
+				return SignedDoc{}, fail(400, "adding a store needs the same live machine with the same options")
+			}
+			req.AddedStore = added
+		}
 	}
 	b, _ := json.Marshal(req)
 	return c.sign(map[string]any{"kind": "challenge", "nonce": c.mac("challenge", string(b)), "request": req})
+}
+
+// oneMore: `next` is `prev` plus exactly one store (both sorted, no duplicates) → that store
+func oneMore(prev, next []string) (string, error) {
+	have := map[string]bool{}
+	for _, n := range prev {
+		have[n] = true
+	}
+	added := ""
+	for _, n := range next {
+		if have[n] {
+			delete(have, n)
+		} else if added == "" {
+			added = n
+		} else {
+			added = "\x00"
+		}
+	}
+	if len(have) != 0 || added == "" || added == "\x00" {
+		return "", fail(400, "a machine can succeed itself only with its store set plus exactly one store")
+	}
+	return added, nil
 }
 
 type challenge struct {
@@ -406,6 +442,9 @@ func (c *Core) RespondPhone(d *SignedDoc, sig string) (SignedDoc, error) {
 	if ch.Request.Machine == nil {
 		return SignedDoc{}, fail(400, "a burn is answered by the dead-machine responder")
 	}
+	if r := ch.Request; r.AddedStore != "" && c.killed[r.Machine.ID] {
+		return SignedDoc{}, fail(403, "machine %s was killed", r.Machine.ID)
+	}
 	c.logf("phone approved %s: %s → %s %v", ch.Nonce[:12], orNull(ch.Request.PredID), ch.Request.Machine.ID, ch.Request.Stores)
 	return c.issue(ch)
 }
@@ -420,6 +459,9 @@ func (c *Core) RespondDead(d *SignedDoc) (SignedDoc, error) {
 		return SignedDoc{}, err
 	}
 	r := ch.Request
+	if r.AddedStore != "" {
+		return SignedDoc{}, fail(403, "adding a store is answered only by the iPhone")
+	}
 	if r.PredID == "" || !c.killed[r.PredID] || c.used[r.PredID] {
 		return SignedDoc{}, fail(403, "predecessor is not a killed, unused machine")
 	}

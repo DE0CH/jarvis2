@@ -41,7 +41,7 @@ func (f *fakeFly) ReadKeys(id string) (MachineKeys, error) {
 	return MachineKeys{b64.EncodeToString(m.enc.PublicKey().Bytes()), b64.EncodeToString(m.sig.PublicKey().Bytes())}, nil
 }
 func (f *fakeFly) WriteAPIKey(id, key string) error { f.machines[id].apiKey = key; return nil }
-func (f *fakeFly) Init(id string) error              { f.machines[id].inited = true; return nil }
+func (f *fakeFly) Init(id string) error             { f.machines[id].inited = true; return nil }
 func (f *fakeFly) Destroy(id string) error {
 	m, ok := f.machines[id]
 	if !ok {
@@ -332,5 +332,50 @@ func TestSensitiveMarkOnlyGrows(t *testing.T) {
 	l := pl(t)(c.ListSensitive("n"))
 	if fmt.Sprint(l["stores"]) != "[default gmail]" {
 		t.Fatalf("got %v", l["stores"])
+	}
+}
+
+func TestAddAStoreToARunningSession(t *testing.T) {
+	c, f, p := setup(t)
+	cert, id := newLine(t, c, p, "default")
+	// succession(machine → same machine, old set + one): only the iPhone answers it
+	ch := pl(t)(c.Succession(SuccessionInput{Predecessor: &cert, Machine: id, Stores: []string{"default", "gmail"}}))
+	if ch["request"].(map[string]any)["addedStore"] != "gmail" {
+		t.Fatal("challenge doesn't name the added store")
+	}
+	chd, _ := c.Succession(SuccessionInput{Predecessor: &cert, Machine: id, Stores: []string{"default", "gmail"}})
+	if _, err := c.RespondDead(&chd); err == nil {
+		t.Fatal("dead-machine responder added a store")
+	}
+	cert2, err := c.RespondPhone(&chd, p.sign(chd.Payload))
+	if err != nil {
+		t.Fatal(err)
+	}
+	unlock(t, c, p, "default")
+	unlock(t, c, p, "gmail")
+	if _, err := c.PullSecrets(&cert2, f.machines[id].apiKey); err != nil {
+		t.Fatal(err)
+	}
+	// not zero, not two, not a swap, not a different harness
+	for _, bad := range []SuccessionInput{
+		{Predecessor: &cert, Machine: id, Stores: []string{"default"}},
+		{Predecessor: &cert2, Machine: id, Stores: []string{"default", "gmail", "x"}},
+		{Predecessor: &cert, Machine: id, Stores: []string{"gmail"}},
+		{Predecessor: &cert, Machine: id, Stores: []string{"default", "gmail"}, Options: Options{Harness: "opencode"}},
+	} {
+		if _, err := c.Succession(bad); err == nil {
+			t.Fatalf("accepted %v", bad.Stores)
+		}
+	}
+	// a killed machine can't grow its set, and a resume from it keeps the grown set automatically
+	c.Kill(id)
+	if _, err := c.RespondPhone(&chd, p.sign(chd.Payload)); err == nil {
+		t.Fatal("added a store to a killed machine")
+	}
+	st := pl(t)(c.Start(StartRequest{Image: "ghcr.io/de0ch/jarvis2-session:1"}))
+	n := st["machine"].(map[string]any)["id"].(string)
+	chr, _ := c.Succession(SuccessionInput{Predecessor: &cert2, Machine: n, Stores: []string{"default", "gmail"}})
+	if _, err := c.RespondDead(&chr); err != nil {
+		t.Fatal(err)
 	}
 }
