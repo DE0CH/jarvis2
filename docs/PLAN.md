@@ -33,11 +33,14 @@ Recovery after a core restart: designed only when needed.
 4. Session image: Jarvis 1's image adapted: an init entry point that pulls its cert and secrets.
 5. App: the mock's shell + extension pointed at the router; TestFlight.
 
-## Status (paused 2026-10-07)
+## Status (2026-10-08)
 
-- Core: written (`core/`), 11 tests pass (setup, seeding, split-key unlock, pull secrets, new lines,
-  dead-machine resume exactly once, burns, mismatch/fork refusals, kill rejecting null).
-- Cloudflare: scoped token `jarvis2-infra` minted (`CF_JARVIS2_INFRA_TOKEN` in claude-env's `default` store).
-- Hetzner: project created (named `jarvis2-mock`, to rename to `jarvis2`), token `HETZNER_JARVIS2_MOCK_API`; no server yet.
-- Fly: org `jarvis2-370` (standalone, Pay As You Go; Deyao adds its card); org-scoped token `JARVIS2_FLY_TOKEN` (+ `JARVIS2_FLY_ORG`) in claude-env's `default` store.
-- Not started: infra bring-up, router, session image, app.
+- Core: `core/`, tests pass; now also hands each machine the core's key through Fly, waits for slow first
+  pulls. Running on the box, holding the Fly token, **waiting for the iPhone pairing** (docs/RUNBOOK.md).
+- Infra: box `jarvis2` (cx23, fsn1) with k3s + Flux from this repo; tunnel `jarvis2` + Access apps
+  (`jarvis2.deyaochen.com` for Deyao, `/m` for machines); Fly app `jarvis2-sessions` in org `jarvis2-370`.
+- Router: `router/` (docs/API.md), deployed.
+- Session image: `session-image/` + `machine/`, built by CI.
+- End-to-end test on real Fly with a software phone: passed (every flow).
+- App: `app/` — see app/DECISIONS.md.
+- Decisions to review: docs/DECISIONS.md.
