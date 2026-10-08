@@ -71,6 +71,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }  # the pin checks compare against older commits
       - name: pin the new tags in k8s/ (Flux rolls them out); never over a newer pin
         run: |
           T="sha-${GITHUB_SHA::12}"
