@@ -27,7 +27,6 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"os/exec"
 	"strings"
 	"time"
 )
@@ -141,13 +140,14 @@ func main() {
 	waitState(id, "started", 6*time.Minute)
 	m1 := machineOf(id)
 	expectOnMachine(m1, "grep -c E2E_SECRET /home/claude/.secrets", "1")
-	expectOnMachine(m1, "sh -c 'echo marker-"+secret+" > /home/claude/artifacts/e2e-marker; echo ok'", "ok")
+	expectOnMachine(m1, "echo marker-"+secret+" > /home/claude/artifacts/e2e-marker && chown claude /home/claude/artifacts/e2e-marker && echo ok", "ok")
 
 	step("add a store from the machine (e2e-extra)")
-	go exec.Command("flyctl", "machine", "exec", m1, "-a", os.Getenv("E2E_FLY_APP"), "su - claude -c 'jarvis2 add-store e2e-extra'").Run()
+	go flyExec(m1, []string{"su", "-", "claude", "-c", "jarvis2 add-store e2e-extra"})
 	a = waitApproval("add-store", id)
 	checkChallenge(a, []string{"e2e", "e2e-extra"}, "e2e-extra")
 	approve(p, a)
+	expectOnMachine(m1, "for i in $(seq 1 30); do grep -q E2E_EXTRA /home/claude/.secrets && break; sleep 2; done; grep -c E2E_EXTRA /home/claude/.secrets", "1")
 
 	step("pause → paused (snapshot uploaded, machine killed)")
 	s, b = call(router, "POST", "/api/sessions/"+id+"/pause", nil, nil)
@@ -164,13 +164,6 @@ func main() {
 	}
 	expectOnMachine(m2, "cat /home/claude/artifacts/e2e-marker", "marker-"+secret)
 	expectOnMachine(m2, "grep -c E2E_EXTRA /home/claude/.secrets", "1")
-
-	step("the old machine can't be used again: a second successor of m1 is refused")
-	// (the core refuses: m1 is in `used`) — checked through a direct succession + dead-machine answer
-	var line struct {
-		Sessions []map[string]any `json:"sessions"`
-	}
-	call(router, "GET", "/api/state", nil, &line)
 
 	step("pause, then resume with the latest image → burn + iPhone approval")
 	must2(call(router, "POST", "/api/sessions/"+id+"/pause", nil, nil))
@@ -369,16 +362,41 @@ func dumpState() {
 	log.Printf("state: %.2000s", string(b))
 }
 
+// flyExec: a command on a machine through the Machines API → its stdout and exit code
+func flyExec(m string, cmd []string) (string, int, error) {
+	body, _ := json.Marshal(map[string]any{"command": cmd, "timeout": 60})
+	req, _ := http.NewRequest("POST", "https://api.machines.dev/v1/apps/"+os.Getenv("E2E_FLY_APP")+"/machines/"+m+"/exec", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+os.Getenv("E2E_FLY_TOKEN"))
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", -1, err
+	}
+	defer resp.Body.Close()
+	b, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != 200 {
+		return "", -1, fmt.Errorf("HTTP %d %s", resp.StatusCode, b)
+	}
+	var out struct {
+		Stdout   string `json:"stdout"`
+		ExitCode int    `json:"exit_code"`
+	}
+	json.Unmarshal(b, &out)
+	return out.Stdout, out.ExitCode, nil
+}
+
+// expectOnMachine: exit 0 and stdout (trimmed) exactly `want`
 func expectOnMachine(m, cmd, want string) {
-	var out []byte
+	var out string
+	var code int
 	var err error
 	for i := 0; i < 10; i++ {
-		out, err = exec.Command("flyctl", "machine", "exec", m, "-a", os.Getenv("E2E_FLY_APP"), cmd).CombinedOutput()
-		if strings.Contains(string(out), want) {
-			log.Printf("   on %s: %q ok", m, cmd)
+		out, code, err = flyExec(m, []string{"sh", "-c", cmd})
+		if err == nil && code == 0 && strings.TrimSpace(out) == want {
+			log.Printf("   on %s: %q → %q ok", m, cmd, want)
 			return
 		}
 		time.Sleep(5 * time.Second)
 	}
-	log.Fatalf("on %s, %q gave %q (%v), want %q", m, cmd, string(out), err, want)
+	log.Fatalf("on %s, %q gave %q (exit %d, %v), want %q", m, cmd, out, code, err, want)
 }
