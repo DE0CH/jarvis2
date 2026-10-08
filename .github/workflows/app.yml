@@ -51,6 +51,11 @@ jobs:
         with: { node-version: 22 }
       - uses: actions/setup-go@v5
         with: { go-version: "1.25" }
+      - name: typecheck the shell first (fails in a minute, not after the pods build)
+        working-directory: app/ios
+        run: |
+          xcrun -sdk iphonesimulator swiftc -typecheck -parse-as-library -swift-version 5 \
+            -target arm64-apple-ios26.0-simulator Shell/*.swift Shared/*.swift
       - name: core (fakefly) + router
         run: |
           mkdir -p bin out
