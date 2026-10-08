@@ -51,6 +51,10 @@ is listed here, numbered; the app's own list is `app/DECISIONS.md`.
 14. **Network policies**: only the router reaches the core; the core reaches only the internet on 443
     (Fly), not the cluster; the router is reachable only from cloudflared.
 
+20. **The core restarts only when `core/` changes** (CI pins its image separately), because a restart is a
+    new controller: the phone pairs again and the stores are seeded again. A box reboot or a node move also
+    restarts it (recovery is undesigned, as in PLAN).
+
 ## Infra
 
 15. **Box**: Hetzner cx23 (2 vCPU, 4 GB, 40 GB) in fsn1, EUR 6.588/month gross plus its IPv4, in the

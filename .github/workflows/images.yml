@@ -79,7 +79,13 @@ jobs:
           cur="$(grep -ho 'jarvis2-router:sha-[0-9a-f]*' k8s/apps/router.yaml | head -1 | cut -d- -f3)"
           if [ -n "$cur" ] && full="$(git rev-parse -q --verify "$cur^{commit}")" && [ "$full" != "$GITHUB_SHA" ] \
              && git merge-base --is-ancestor "$GITHUB_SHA" "$full"; then echo "main already pins a newer build ($cur)"; exit 0; fi
-          sed -i -E "s#(ghcr.io/de0ch/jarvis2-(core|router|session)):sha-[0-9a-f]{12}#\1:$T#g" k8s/apps/*.yaml
+          sed -i -E "s#(ghcr.io/de0ch/jarvis2-(router|session)):sha-[0-9a-f]{12}#\1:$T#g" k8s/apps/*.yaml
+          # the core moves ONLY when core/ changed: a core restart is a new controller (Deyao re-pairs, stores
+          # are seeded again), so a router or app push must never restart it
+          corecur="$(grep -ho 'jarvis2-core:sha-[0-9a-f]*' k8s/apps/core.yaml | cut -d- -f3)"
+          if ! corefull="$(git rev-parse -q --verify "$corecur^{commit}")" || ! git diff --quiet "$corefull" "$GITHUB_SHA" -- core/; then
+            sed -i -E "s#(ghcr.io/de0ch/jarvis2-core):sha-[0-9a-f]{12}#\1:$T#g" k8s/apps/core.yaml
+          fi
           git diff --quiet && exit 0
           git config user.name "jarvis2-ci"; git config user.email "ci@jarvis2.invalid"
           git commit -qam "images: pin $T [skip ci]"
