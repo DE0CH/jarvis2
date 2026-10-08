@@ -117,8 +117,6 @@ struct SecureNewSession: View {
           ChoiceCard(on: harness == h.id, id: "secure-harness-\(h.id)", action: { harness = h.id }) { ChoiceText(title: h.title, sub: h.sub) }
         }
       }
-      Lbl(text: "Session image")
-      Muted(text: "The router's current session image. The core reports what the machine really runs; it is shown in the session's details.")
       if let failure { Callout(text: failure, color: .red).padding(.top, 16).accessibilityIdentifier("secure-error") }
     }
     .task { await load() }

@@ -23,6 +23,18 @@ targets:
     sources: [Shell, Shared]
     dependencies:
       - target: JarvisUI
+    postBuildScripts:
+      # the extension's React Native frameworks are copied (and signed) into this app's Frameworks folder;
+      # the shell itself links none of them — only the extension's process loads them
+      - name: Embed the extension's frameworks
+        basedOnDependencyAnalysis: false
+        script: |
+          set -e
+          export PODS_ROOT="${SRCROOT}/Pods"
+          export PODS_BUILD_DIR="${BUILD_DIR}"
+          export PODS_CONFIGURATION_BUILD_DIR="${BUILD_DIR}/${CONFIGURATION}${EFFECTIVE_PLATFORM_NAME}"
+          export PODS_XCFRAMEWORKS_BUILD_DIR="${PODS_CONFIGURATION_BUILD_DIR}/XCFrameworkIntermediates"
+          "${PODS_ROOT}/Target Support Files/Pods-JarvisUI/Pods-JarvisUI-frameworks.sh"
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: dev.de0ch.jarvis2
@@ -54,14 +66,16 @@ targets:
         GENERATE_INFOPLIST_FILE: YES
         INFOPLIST_FILE: Extension/Info.plist
         OTHER_LDFLAGS: ["$(inherited)", "-lc++"]
+        # React Native's dynamic frameworks sit in the APP's Frameworks folder (an extension may not carry
+        # its own: App Store validation ITMS-90206); the extension finds them from Extensions/JarvisUI.appex
+        LD_RUNPATH_SEARCH_PATHS: ["$(inherited)", "@executable_path/../../Frameworks", "@executable_path/Frameworks"]
     postBuildScripts:
-      # CocoaPods adds no embed/resources phases to an ExtensionKit target (lessons/73 in claude-env)
-      - name: Embed Pods Frameworks + resources (extension)
+      # CocoaPods adds no resources phase to an ExtensionKit target (lessons/73 in claude-env)
+      - name: Pods resources (extension)
         basedOnDependencyAnalysis: false
         script: |
           set -e
           D="${PODS_ROOT}/Target Support Files/Pods-JarvisUI"
-          [ -f "$D/Pods-JarvisUI-frameworks.sh" ] && "$D/Pods-JarvisUI-frameworks.sh"
           [ -f "$D/Pods-JarvisUI-resources.sh" ] && "$D/Pods-JarvisUI-resources.sh"
           true
   Jarvis2UITests:
