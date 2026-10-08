@@ -1,0 +1,43 @@
+# The core: one replica, all state in memory (a restart = a new controller, SECRETS-CONTROLLER.md). No
+# service-account token, no volume, read-only root. Only the router may reach it; it may reach the internet
+# (Fly's API) but nothing inside the cluster.
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: core, namespace: jarvis2-core }
+spec:
+  replicas: 1
+  strategy: { type: Recreate }
+  selector: { matchLabels: { app: core } }
+  template:
+    metadata: { labels: { app: core } }
+    spec:
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      containers:
+        - name: core
+          image: ghcr.io/de0ch/jarvis2-core:sha-000000000000
+          ports: [{ containerPort: 8090 }]
+          resources: { requests: { cpu: 20m, memory: 32Mi }, limits: { memory: 256Mi } }
+          securityContext: { runAsNonRoot: true, runAsUser: 65532, runAsGroup: 65532, allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: { drop: [ALL] }, seccompProfile: { type: RuntimeDefault } }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: core, namespace: jarvis2-core }
+spec:
+  selector: { app: core }
+  ports: [{ port: 8090, targetPort: 8090 }]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: { name: core, namespace: jarvis2-core }
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from: [{ namespaceSelector: { matchLabels: { jarvis2/ns: router } }, podSelector: { matchLabels: { app: router } } }]
+      ports: [{ port: 8090 }]
+  egress:
+    - to: [{ namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: kube-system } }, podSelector: { matchLabels: { k8s-app: kube-dns } } }]
+      ports: [{ port: 53, protocol: UDP }, { port: 53, protocol: TCP }]
+    - to: [{ ipBlock: { cidr: 0.0.0.0/0, except: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16] } }]
+      ports: [{ port: 443 }]

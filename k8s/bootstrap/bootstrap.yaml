@@ -1,0 +1,42 @@
+# Applied ONCE by infra/cloud-init.sh with the node's admin kubeconfig; NOT reconciled by Flux. Namespaces
+# (Pod Security "restricted") and the limited identity Flux applies everything else with: admin inside the
+# three Jarvis 2 namespaces only, nothing cluster-scoped, so a push to k8s/apps can't grant itself more.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: jarvis2-core
+  labels: { pod-security.kubernetes.io/enforce: restricted, jarvis2/ns: core }
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: jarvis2-router
+  labels: { pod-security.kubernetes.io/enforce: restricted, jarvis2/ns: router }
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: jarvis2-edge
+  labels: { pod-security.kubernetes.io/enforce: restricted, jarvis2/ns: edge }
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata: { name: flux-applier, namespace: flux-system }
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata: { name: flux-applier, namespace: jarvis2-core }
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: admin }
+subjects: [{ kind: ServiceAccount, name: flux-applier, namespace: flux-system }]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata: { name: flux-applier, namespace: jarvis2-router }
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: admin }
+subjects: [{ kind: ServiceAccount, name: flux-applier, namespace: flux-system }]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata: { name: flux-applier, namespace: jarvis2-edge }
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: admin }
+subjects: [{ kind: ServiceAccount, name: flux-applier, namespace: flux-system }]

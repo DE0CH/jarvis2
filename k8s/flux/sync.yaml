@@ -1,0 +1,22 @@
+# Applied once by infra/cloud-init.sh after `flux install`. Flux pulls this public repo every minute and
+# applies ./k8s/apps as the limited flux-applier identity (k8s/bootstrap).
+apiVersion: source.toolkit.fluxcd.io/v1
+kind: GitRepository
+metadata: { name: jarvis2, namespace: flux-system }
+spec:
+  interval: 1m
+  url: https://github.com/DE0CH/jarvis2
+  ref: { branch: main }
+---
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata: { name: jarvis2, namespace: flux-system }
+spec:
+  interval: 1m
+  retryInterval: 30s
+  timeout: 5m
+  sourceRef: { kind: GitRepository, name: jarvis2 }
+  path: ./k8s/apps
+  prune: true
+  wait: false
+  serviceAccountName: flux-applier

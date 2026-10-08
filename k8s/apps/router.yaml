@@ -1,0 +1,61 @@
+# The router: the app's API, the web page, the machines' API. Reached only from the tunnel (jarvis2-edge);
+# reaches the core and the internet (Access certs). Its records live on a volume; its settings that are
+# secrets (the machines' Access service token, the Access audiences) come from the router-env Secret,
+# created by infra/cloud-init.sh, never in git.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata: { name: router-data, namespace: jarvis2-router }
+spec:
+  accessModes: [ReadWriteOnce]
+  resources: { requests: { storage: 20Gi } }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: router, namespace: jarvis2-router }
+spec:
+  replicas: 1
+  strategy: { type: Recreate }
+  selector: { matchLabels: { app: router } }
+  template:
+    metadata: { labels: { app: router } }
+    spec:
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      securityContext: { fsGroup: 65532 }
+      containers:
+        - name: router
+          image: ghcr.io/de0ch/jarvis2-router:sha-000000000000
+          ports: [{ containerPort: 8080 }]
+          env:
+            - { name: SESSION_IMAGE, value: "ghcr.io/de0ch/jarvis2-session:sha-000000000000" }
+            - { name: FLY_REGION, value: lhr }
+            - { name: MACHINE_URL, value: "https://jarvis2.deyaochen.com" }
+          envFrom: [{ secretRef: { name: router-env } }]
+          volumeMounts: [{ name: data, mountPath: /data }]
+          resources: { requests: { cpu: 20m, memory: 64Mi }, limits: { memory: 1Gi } }
+          securityContext: { runAsNonRoot: true, runAsUser: 65532, runAsGroup: 65532, allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: { drop: [ALL] }, seccompProfile: { type: RuntimeDefault } }
+      volumes: [{ name: data, persistentVolumeClaim: { claimName: router-data } }]
+---
+apiVersion: v1
+kind: Service
+metadata: { name: router, namespace: jarvis2-router }
+spec:
+  selector: { app: router }
+  ports: [{ port: 8080, targetPort: 8080 }]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: { name: router, namespace: jarvis2-router }
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from: [{ namespaceSelector: { matchLabels: { jarvis2/ns: edge } } }]
+      ports: [{ port: 8080 }]
+  egress:
+    - to: [{ namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: kube-system } }, podSelector: { matchLabels: { k8s-app: kube-dns } } }]
+      ports: [{ port: 53, protocol: UDP }, { port: 53, protocol: TCP }]
+    - to: [{ namespaceSelector: { matchLabels: { jarvis2/ns: core } } }]
+      ports: [{ port: 8090 }]
+    - to: [{ ipBlock: { cidr: 0.0.0.0/0, except: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16] } }]
+      ports: [{ port: 443 }]
