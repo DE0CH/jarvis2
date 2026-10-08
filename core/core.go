@@ -280,8 +280,9 @@ func (c *Core) Start(r StartRequest) (SignedDoc, error) {
 	if err != nil {
 		return SignedDoc{}, fail(502, "reading the machine's keys through fly: %v", err)
 	}
-	// the machine's API key, delivered through Fly too (it authenticates Pull secrets)
-	if err := c.fly.WriteAPIKey(id, c.mac("api", id)); err != nil {
+	// the machine's API key (it authenticates Pull secrets) and the core's signing key (the machine checks
+	// its cert with it), delivered through Fly too
+	if err := c.fly.WriteMachineFiles(id, c.mac("api", id), c.signer.PublicKey()); err != nil {
 		return SignedDoc{}, fail(502, "fly exec: %v", err)
 	}
 	m := &StartedMachine{ID: id, Image: image, EncryptionKey: keys.EncryptionKey, SigningKey: keys.SigningKey}

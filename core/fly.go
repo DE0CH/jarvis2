@@ -23,7 +23,7 @@ type MachineKeys struct {
 type Fly interface {
 	Create(r StartRequest) (id, image string, err error)
 	ReadKeys(id string) (MachineKeys, error)
-	WriteAPIKey(id, key string) error
+	WriteMachineFiles(id, apiKey, coreKey string) error
 	Init(id string) error
 	Destroy(id string) error
 	ConfirmDestroyed(id string) (bool, error)
@@ -31,9 +31,10 @@ type Fly interface {
 
 // paths inside the session image (session-image/jarvis2-init)
 const (
-	keysPath   = "/run/jarvis2/keys.json"
-	apiKeyPath = "/run/jarvis2/api-key"
-	initPath   = "/usr/local/bin/jarvis2-init"
+	keysPath    = "/run/jarvis2/keys.json"
+	apiKeyPath  = "/run/jarvis2/api-key"
+	coreKeyPath = "/run/jarvis2/core-key"
+	initPath    = "/usr/local/bin/jarvis2-init"
 )
 
 var sizes = map[string]map[string]any{
@@ -153,8 +154,11 @@ func (f *FlyAPI) ReadKeys(id string) (MachineKeys, error) {
 	return k, fmt.Errorf("no keys at %s: %v", keysPath, last)
 }
 
-func (f *FlyAPI) WriteAPIKey(id, key string) error {
-	_, err := f.exec(id, []string{"/bin/sh", "-c", "umask 077; mkdir -p /run/jarvis2; printf %s \"$1\" > " + apiKeyPath, "_", key}, 10)
+// WriteMachineFiles: the machine's API key and the core's public signing key, through Fly exec — so the
+// machine learns the core's key from Fly, never from the router
+func (f *FlyAPI) WriteMachineFiles(id, apiKey, coreKey string) error {
+	_, err := f.exec(id, []string{"/bin/sh", "-c", "umask 077; mkdir -p /run/jarvis2; printf %s \"$1\" > " + apiKeyPath +
+		"; umask 022; printf %s \"$2\" > " + coreKeyPath + "; chown -R claude /run/jarvis2 2>/dev/null; true", "_", apiKey, coreKey}, 10)
 	return err
 }
 

@@ -17,6 +17,7 @@ import (
 type fakeMachine struct {
 	enc, sig  *ecdh.PrivateKey
 	apiKey    string
+	coreKey   string
 	destroyed bool
 	inited    bool
 }
@@ -40,8 +41,11 @@ func (f *fakeFly) ReadKeys(id string) (MachineKeys, error) {
 	m := f.machines[id]
 	return MachineKeys{b64.EncodeToString(m.enc.PublicKey().Bytes()), b64.EncodeToString(m.sig.PublicKey().Bytes())}, nil
 }
-func (f *fakeFly) WriteAPIKey(id, key string) error { f.machines[id].apiKey = key; return nil }
-func (f *fakeFly) Init(id string) error             { f.machines[id].inited = true; return nil }
+func (f *fakeFly) WriteMachineFiles(id, key, coreKey string) error {
+	f.machines[id].apiKey, f.machines[id].coreKey = key, coreKey
+	return nil
+}
+func (f *fakeFly) Init(id string) error { f.machines[id].inited = true; return nil }
 func (f *fakeFly) Destroy(id string) error {
 	m, ok := f.machines[id]
 	if !ok {
@@ -178,6 +182,9 @@ func TestNewSessionUnlockAndPullSecrets(t *testing.T) {
 	c, f, p := setup(t)
 	cert, id := newLine(t, c, p, "default", "gmail")
 	m := f.machines[id]
+	if m.coreKey != c.signer.PublicKey() {
+		t.Fatal("the core's key wasn't delivered to the machine through fly")
+	}
 	if _, err := c.PullSecrets(&cert, m.apiKey); err == nil {
 		t.Fatal("pulled while locked")
 	}

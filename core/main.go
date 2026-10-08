@@ -11,11 +11,10 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"time"
 )
 
 func main() {
-	fly := &FlyAPI{base: "https://api.machines.dev/v1", http: &http.Client{Timeout: 90 * time.Second}}
+	fly := newFly()
 	c, err := NewCore(fly)
 	if err != nil {
 		log.Fatal(err)
@@ -29,7 +28,10 @@ func main() {
 	log.Fatal(http.ListenAndServe(addr, Handler(c, fly)))
 }
 
-func Handler(c *Core, fly *FlyAPI) http.Handler {
+// configurable: the Fly client the setup session hands the token to
+type configurable interface{ Configure(token, app string) }
+
+func Handler(c *Core, fly configurable) http.Handler {
 	mux := http.NewServeMux()
 	type body = map[string]json.RawMessage
 	h := func(pattern string, setup bool, fn func(r *http.Request, b body) (any, error)) {

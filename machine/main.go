@@ -1,0 +1,759 @@
+// jarvis2-machine: the session machine's side of Jarvis 2 (claude-env selfhost/SECRETS-CONTROLLER.md,
+// "Machine side"). It is the image's entry point and its fixed init entry point:
+//
+//	jarvis2-machine boot       ENTRYPOINT: make the machine's key pairs, wait for init, then check the
+//	                           succession cert, restore the predecessor's snapshot, pull the secrets and
+//	                           hand over to Jarvis 1's entrypoint (the harness). Any failed check → start
+//	                           nothing.
+//	jarvis2-machine init       what the core runs through Fly exec (no arguments): asks boot to go on.
+//	jarvis2-machine add-store <name>
+//	                           asks Deyao to add one store to this session; on approval re-pulls the
+//	                           secrets into ~/.secrets.
+//
+// It trusts only what it can check: the core's public key arrives through Fly exec (written by the core at
+// start), the cert and the secrets are core-signed, and the predecessor's snapshot is signed by the
+// predecessor's own key, taken from the predecessor's core-signed cert. The router only relays.
+package main
+
+import (
+	"archive/tar"
+	"bytes"
+	"compress/gzip"
+	"crypto/aes"
+	"crypto/cipher"
+	"crypto/ecdh"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/hkdf"
+	"crypto/rand"
+	"crypto/sha256"
+	"crypto/x509"
+	"encoding/base64"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"log"
+	"net/http"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"sort"
+	"strconv"
+	"strings"
+	"syscall"
+	"time"
+)
+
+const (
+	dir         = "/run/jarvis2"
+	keysPath    = dir + "/keys.json"    // public halves, read by the core through Fly exec
+	privPath    = dir + "/private.json" // private halves, never leave the machine
+	apiKeyPath  = dir + "/api-key"      // written by the core through Fly exec
+	coreKeyPath = dir + "/core-key"     // written by the core through Fly exec
+	goPath      = dir + "/init-requested"
+	certPath    = dir + "/cert.json"
+	jarvis1     = "/usr/local/bin/entrypoint.sh"
+)
+
+var b64 = base64.StdEncoding
+
+type SignedDoc struct {
+	Payload string `json:"payload"`
+	Sig     string `json:"sig"`
+}
+
+type Machine struct {
+	ID            string `json:"id"`
+	Image         string `json:"image"`
+	EncryptionKey string `json:"encryptionKey"`
+	SigningKey    string `json:"signingKey"`
+}
+
+type Cert struct {
+	Kind    string   `json:"kind"`
+	PredID  string   `json:"predecessorId"`
+	Machine *Machine `json:"machine"`
+	Stores  []string `json:"stores"`
+	Options struct {
+		Harness string `json:"harness"`
+	} `json:"options"`
+}
+
+type private struct {
+	Enc string `json:"enc"`
+	Sig string `json:"sig"`
+}
+
+func main() {
+	log.SetFlags(0)
+	log.SetPrefix("[jarvis2] ")
+	if len(os.Args) < 2 {
+		log.Fatal("usage: jarvis2-machine boot | init | add-store <name>")
+	}
+	var err error
+	switch os.Args[1] {
+	case "boot":
+		err = boot()
+	case "init":
+		err = os.WriteFile(goPath, []byte(time.Now().UTC().Format(time.RFC3339)), 0o644)
+	case "add-store":
+		if len(os.Args) != 3 {
+			log.Fatal("usage: jarvis2-machine add-store <name>")
+		}
+		err = addStore(os.Args[2])
+	case "agent":
+		err = agent()
+	default:
+		err = fmt.Errorf("unknown command %s", os.Args[1])
+	}
+	if err != nil {
+		log.Fatal(err)
+	}
+}
+
+// ---- boot -----------------------------------------------------------------------------------------
+
+func boot() error {
+	if err := keygen(); err != nil {
+		return fmt.Errorf("keygen: %w", err)
+	}
+	log.Printf("keys ready; waiting for init")
+	for {
+		if _, err := os.Stat(goPath); err == nil {
+			break
+		}
+		time.Sleep(time.Second)
+	}
+	if err := prepare(); err != nil {
+		// any failed check → start nothing; keep the machine up so the failure is visible in its log
+		log.Printf("REFUSING TO START: %v", err)
+		select {}
+	}
+	return nil // prepare execs the harness
+}
+
+func keygen() error {
+	if err := sudo("install", "-d", "-o", "claude", "-m", "755", dir); err != nil {
+		return err
+	}
+	enc, err := ecdh.P256().GenerateKey(rand.Reader)
+	if err != nil {
+		return err
+	}
+	sig, err := ecdh.P256().GenerateKey(rand.Reader)
+	if err != nil {
+		return err
+	}
+	p, _ := json.Marshal(private{b64.EncodeToString(enc.Bytes()), b64.EncodeToString(sig.Bytes())})
+	if err := os.WriteFile(privPath, p, 0o600); err != nil {
+		return err
+	}
+	pub, _ := json.Marshal(map[string]string{"encryptionKey": b64.EncodeToString(enc.PublicKey().Bytes()), "signingKey": b64.EncodeToString(sig.PublicKey().Bytes())})
+	return os.WriteFile(keysPath, pub, 0o644)
+}
+
+func sudo(args ...string) error {
+	if os.Geteuid() == 0 {
+		return exec.Command(args[0], args[1:]...).Run()
+	}
+	return exec.Command("sudo", append([]string{"-n"}, args...)...).Run()
+}
+
+func prepare() error {
+	me := os.Getenv("FLY_MACHINE_ID")
+	coreKey, err := readTrim(coreKeyPath)
+	if err != nil {
+		return fmt.Errorf("no core key from fly: %w", err)
+	}
+	keys, err := ownKeys()
+	if err != nil {
+		return err
+	}
+	c, err := newClient()
+	if err != nil {
+		return err
+	}
+
+	// 1. this machine's succession cert: core-signed, naming this machine and its own keys
+	var certs struct {
+		Cert            *SignedDoc `json:"cert"`
+		PredecessorCert *SignedDoc `json:"predecessorCert"`
+	}
+	for i := 0; ; i++ {
+		err = c.json("GET", "/m/cert", nil, &certs)
+		if err == nil && certs.Cert != nil {
+			break
+		}
+		if i > 300 {
+			return fmt.Errorf("no cert: %v", err)
+		}
+		time.Sleep(2 * time.Second)
+	}
+	var cert Cert
+	if err := verifyDoc(coreKey, certs.Cert, &cert); err != nil || cert.Kind != "succession-cert" || cert.Machine == nil {
+		return fmt.Errorf("the cert isn't a succession cert signed by the core (%v)", err)
+	}
+	if cert.Machine.ID != me || cert.Machine.EncryptionKey != keys["encryptionKey"] || cert.Machine.SigningKey != keys["signingKey"] {
+		return errors.New("the cert names another machine or other keys")
+	}
+	raw, _ := json.Marshal(certs.Cert)
+	os.WriteFile(certPath, raw, 0o644)
+	log.Printf("cert ok: stores %v, harness %s, predecessor %q", cert.Stores, cert.Options.Harness, cert.PredID)
+
+	// 2. the predecessor's snapshot, checked against the predecessor's own signing key
+	if cert.PredID != "" && cert.PredID != me {
+		var pc Cert
+		if err := verifyDoc(coreKey, certs.PredecessorCert, &pc); err != nil || pc.Kind != "succession-cert" || pc.Machine == nil || pc.Machine.ID != cert.PredID {
+			return fmt.Errorf("the predecessor's cert isn't core-signed for %s (%v)", cert.PredID, err)
+		}
+		if err := restore(c, pc.Machine.SigningKey); err != nil {
+			return fmt.Errorf("snapshot: %w", err)
+		}
+	}
+
+	// 3. the secrets, sealed to this machine's encryption key
+	secrets, err := pullSecrets(c, coreKey, me)
+	if err != nil {
+		return err
+	}
+	sj, _ := json.Marshal(secrets)
+	log.Printf("secrets ok: %d keys", len(secrets))
+
+	// 4. repos (cloned with the session's own GITHUB_TOKEN, when it has one)
+	cloneRepos(secrets["GITHUB_TOKEN"])
+
+	// 5. the agent (pause snapshots), then Jarvis 1's entrypoint runs the harness
+	agentCmd := exec.Command("/proc/self/exe", "agent")
+	agentCmd.Stdout, agentCmd.Stderr = os.Stdout, os.Stderr
+	agentCmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	if err := agentCmd.Start(); err != nil {
+		return fmt.Errorf("agent: %w", err)
+	}
+	env := []string{}
+	for _, kv := range os.Environ() {
+		if k := strings.SplitN(kv, "=", 2)[0]; strings.HasPrefix(k, "JARVIS2_ACCESS_") {
+			continue // the machine's tunnel token stays with this tool
+		}
+		env = append(env, kv)
+	}
+	env = append(env, "SESSION_SECRETS_JSON="+string(sj), "SESSION_HARNESS="+cert.Options.Harness, "SESSION_ID="+sessionID(me))
+	if v := secrets["CLAUDE_CREDENTIALS"]; v != "" {
+		env = append(env, "CLAUDE_CREDENTIALS="+v)
+	}
+	if v := secrets["CLAUDE_ACCOUNT"]; v != "" {
+		env = append(env, "CLAUDE_ACCOUNT="+v)
+	}
+	log.Printf("starting the harness")
+	return syscall.Exec(jarvis1, []string{jarvis1}, env)
+}
+
+func sessionID(me string) string {
+	if s := os.Getenv("JARVIS2_SESSION_ID"); s != "" {
+		return s
+	}
+	return me
+}
+
+func ownKeys() (map[string]string, error) {
+	b, err := os.ReadFile(keysPath)
+	if err != nil {
+		return nil, err
+	}
+	m := map[string]string{}
+	return m, json.Unmarshal(b, &m)
+}
+
+func readTrim(p string) (string, error) {
+	b, err := os.ReadFile(p)
+	if err != nil {
+		return "", err
+	}
+	s := strings.TrimSpace(string(b))
+	if s == "" {
+		return "", fmt.Errorf("%s is empty", p)
+	}
+	return s, nil
+}
+
+func pullSecrets(c *client, coreKey, me string) (map[string]string, error) {
+	apiKey, err := readTrim(apiKeyPath)
+	if err != nil {
+		return nil, fmt.Errorf("no API key from fly: %w", err)
+	}
+	var doc SignedDoc
+	var lastErr error
+	for i := 0; i < 150; i++ { // a store may still be locked; Deyao unlocks it in the app
+		if lastErr = c.json("POST", "/m/pull-secrets", map[string]string{"apiKey": apiKey}, &doc); lastErr == nil {
+			break
+		}
+		if i%15 == 0 {
+			log.Printf("pull secrets: %v (retrying)", lastErr)
+		}
+		time.Sleep(4 * time.Second)
+	}
+	if lastErr != nil {
+		return nil, fmt.Errorf("pull secrets: %w", lastErr)
+	}
+	var out struct {
+		Kind    string `json:"kind"`
+		Machine string `json:"machine"`
+		Sealed  struct {
+			E    string `json:"e"`
+			Data string `json:"data"`
+		} `json:"sealed"`
+	}
+	if err := verifyDoc(coreKey, &doc, &out); err != nil || out.Kind != "secrets" || out.Machine != me {
+		return nil, fmt.Errorf("the secrets answer isn't core-signed for this machine (%v)", err)
+	}
+	priv, err := loadPrivate()
+	if err != nil {
+		return nil, err
+	}
+	plain, err := openSealed(priv.enc, out.Sealed.E, out.Sealed.Data, "jarvis2/secrets")
+	if err != nil {
+		return nil, fmt.Errorf("the secrets don't decrypt with this machine's key: %w", err)
+	}
+	m := map[string]string{}
+	return m, json.Unmarshal(plain, &m)
+}
+
+func cloneRepos(token string) {
+	repos := strings.TrimSpace(os.Getenv("JARVIS2_REPOS"))
+	if repos == "" {
+		return
+	}
+	home, _ := os.UserHomeDir()
+	for _, url := range strings.Split(repos, ",") {
+		url = strings.TrimSpace(url)
+		if url == "" {
+			continue
+		}
+		name := strings.TrimSuffix(filepath.Base(url), ".git")
+		dst := filepath.Join(home, "workspace", name)
+		if _, err := os.Stat(filepath.Join(dst, ".git")); err == nil {
+			continue // restored from the snapshot
+		}
+		src := url
+		if token != "" && strings.HasPrefix(url, "https://github.com/") {
+			src = "https://x-access-token:" + token + "@" + strings.TrimPrefix(url, "https://")
+		}
+		cmd := exec.Command("git", "clone", "-q", src, dst)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			log.Printf("clone %s failed: %s", name, strings.ReplaceAll(string(out), token, "***"))
+			continue
+		}
+		exec.Command("git", "-C", dst, "remote", "set-url", "origin", url).Run()
+		if token != "" {
+			// pushes keep working through git's credential store, not the remote URL
+			exec.Command("git", "-C", dst, "config", "credential.helper", "store").Run()
+		}
+		log.Printf("cloned %s", name)
+	}
+}
+
+// ---- snapshots ------------------------------------------------------------------------------------
+
+// what a snapshot holds (relative to $HOME): the conversation, the work, the artefacts
+var snapshotPaths = []string{".claude/projects", ".claude.json", ".claude/.first-prompt-sent", "workspace", "artifacts"}
+
+func makeSnapshot() ([]byte, error) {
+	home, _ := os.UserHomeDir()
+	var buf bytes.Buffer
+	gz := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(gz)
+	for _, rel := range snapshotPaths {
+		root := filepath.Join(home, rel)
+		if _, err := os.Lstat(root); err != nil {
+			continue
+		}
+		err := filepath.Walk(root, func(p string, fi os.FileInfo, err error) error {
+			if err != nil {
+				return nil
+			}
+			name, _ := filepath.Rel(home, p)
+			link := ""
+			if fi.Mode()&os.ModeSymlink != 0 {
+				link, _ = os.Readlink(p)
+			}
+			h, err := tar.FileInfoHeader(fi, link)
+			if err != nil {
+				return nil
+			}
+			h.Name = name
+			if err := tw.WriteHeader(h); err != nil {
+				return err
+			}
+			if fi.Mode().IsRegular() {
+				f, err := os.Open(p)
+				if err != nil {
+					return nil
+				}
+				defer f.Close()
+				_, err = io.Copy(tw, f)
+				return err
+			}
+			return nil
+		})
+		if err != nil {
+			return nil, err
+		}
+	}
+	tw.Close()
+	gz.Close()
+	return buf.Bytes(), nil
+}
+
+func restore(c *client, predSigningKey string) error {
+	body, hdr, status, err := c.raw("GET", "/m/snapshot", nil)
+	if err != nil {
+		return err
+	}
+	if status == 404 {
+		log.Printf("the predecessor left no snapshot: starting fresh")
+		return nil
+	}
+	if status != 200 {
+		return fmt.Errorf("HTTP %d", status)
+	}
+	sum := sha256.Sum256(body)
+	if !verify(predSigningKey, []byte(hex.EncodeToString(sum[:])), hdr.Get("X-Snapshot-Sig")) {
+		return errors.New("the snapshot isn't signed by the predecessor")
+	}
+	home, _ := os.UserHomeDir()
+	gz, err := gzip.NewReader(bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	tr := tar.NewReader(gz)
+	n := 0
+	for {
+		h, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return err
+		}
+		name := filepath.Clean(h.Name)
+		if filepath.IsAbs(name) || strings.HasPrefix(name, "..") {
+			return fmt.Errorf("bad path in snapshot: %s", h.Name)
+		}
+		dst := filepath.Join(home, name)
+		switch h.Typeflag {
+		case tar.TypeDir:
+			os.MkdirAll(dst, os.FileMode(h.Mode)|0o700)
+		case tar.TypeSymlink:
+			os.MkdirAll(filepath.Dir(dst), 0o755)
+			os.Remove(dst)
+			os.Symlink(h.Linkname, dst)
+		case tar.TypeReg:
+			os.MkdirAll(filepath.Dir(dst), 0o755)
+			f, err := os.OpenFile(dst, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, os.FileMode(h.Mode)&0o777)
+			if err != nil {
+				return err
+			}
+			_, err = io.Copy(f, tr)
+			f.Close()
+			if err != nil {
+				return err
+			}
+			n++
+		}
+	}
+	log.Printf("restored the predecessor's snapshot (%d files)", n)
+	return nil
+}
+
+// ---- agent: the router's commands (pause = snapshot) -----------------------------------------------
+
+func agent() error {
+	c, err := newClient()
+	if err != nil {
+		return err
+	}
+	for {
+		var out struct {
+			Commands []string `json:"commands"`
+		}
+		if err := c.json("GET", "/m/commands", nil, &out); err != nil {
+			time.Sleep(5 * time.Second)
+			continue
+		}
+		for _, cmd := range out.Commands {
+			if cmd == "snapshot" {
+				if err := uploadSnapshot(c); err != nil {
+					log.Printf("snapshot failed: %v", err)
+				}
+			}
+		}
+	}
+}
+
+func uploadSnapshot(c *client) error {
+	body, err := makeSnapshot()
+	if err != nil {
+		return err
+	}
+	sum := sha256.Sum256(body)
+	priv, err := loadPrivate()
+	if err != nil {
+		return err
+	}
+	sig, err := sign(priv.sig, []byte(hex.EncodeToString(sum[:])))
+	if err != nil {
+		return err
+	}
+	_, _, status, err := c.raw("POST", "/m/snapshot", body, "X-Snapshot-Sig", sig)
+	if err != nil {
+		return err
+	}
+	if status != 200 {
+		return fmt.Errorf("HTTP %d", status)
+	}
+	log.Printf("snapshot uploaded (%d bytes)", len(body))
+	return nil
+}
+
+// ---- add a store ----------------------------------------------------------------------------------
+
+func addStore(name string) error {
+	coreKey, err := readTrim(coreKeyPath)
+	if err != nil {
+		return err
+	}
+	c, err := newClient()
+	if err != nil {
+		return err
+	}
+	if err := c.json("POST", "/m/add-store", map[string]string{"store": name}, nil); err != nil {
+		return err
+	}
+	fmt.Fprintf(os.Stderr, "asked Deyao to add %s to this session (approval in the Jarvis 2 app); waiting up to 1 h\n", name)
+	me := os.Getenv("FLY_MACHINE_ID")
+	keys, _ := ownKeys()
+	deadline := time.Now().Add(time.Hour)
+	for time.Now().Before(deadline) {
+		time.Sleep(5 * time.Second)
+		var certs struct {
+			Cert *SignedDoc `json:"cert"`
+		}
+		if c.json("GET", "/m/cert", nil, &certs) != nil || certs.Cert == nil {
+			continue
+		}
+		var cert Cert
+		if verifyDoc(coreKey, certs.Cert, &cert) != nil || cert.Kind != "succession-cert" || cert.Machine == nil ||
+			cert.Machine.ID != me || cert.Machine.SigningKey != keys["signingKey"] {
+			continue
+		}
+		if i := sort.SearchStrings(cert.Stores, name); i >= len(cert.Stores) || cert.Stores[i] != name {
+			continue
+		}
+		raw, _ := json.Marshal(certs.Cert)
+		os.WriteFile(certPath, raw, 0o644)
+		secrets, err := pullSecrets(c, coreKey, me)
+		if err != nil {
+			return err
+		}
+		if err := writeSecrets(secrets); err != nil {
+			return err
+		}
+		fmt.Fprintf(os.Stderr, "added %s: ~/.secrets rewritten (%d keys); run `set -a; . ~/.secrets; set +a` in a shell to load them\n", name, len(secrets))
+		return nil
+	}
+	return errors.New("no approval within 1 h")
+}
+
+// writeSecrets: ~/.secrets in the format Jarvis 1's entrypoint writes (shell-quoted export lines)
+func writeSecrets(m map[string]string) error {
+	home, _ := os.UserHomeDir()
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	var b strings.Builder
+	for _, k := range keys {
+		b.WriteString(k + "='" + strings.ReplaceAll(m[k], "'", `'\''`) + "'\n")
+	}
+	return os.WriteFile(filepath.Join(home, ".secrets"), []byte(b.String()), 0o600)
+}
+
+// ---- the router client (Access service token + this machine's signature) ---------------------------
+
+type client struct {
+	base, id, secret, me string
+	sig                  *ecdh.PrivateKey
+	http                 *http.Client
+}
+
+func newClient() (*client, error) {
+	priv, err := loadPrivate()
+	if err != nil {
+		return nil, err
+	}
+	base := strings.TrimSuffix(os.Getenv("JARVIS2_URL"), "/")
+	if base == "" {
+		return nil, errors.New("JARVIS2_URL is not set")
+	}
+	return &client{base: base, id: os.Getenv("JARVIS2_ACCESS_ID"), secret: os.Getenv("JARVIS2_ACCESS_SECRET"),
+		me: os.Getenv("FLY_MACHINE_ID"), sig: priv.sig, http: &http.Client{Timeout: 10 * time.Minute}}, nil
+}
+
+func (c *client) raw(method, path string, body []byte, hdr ...string) ([]byte, http.Header, int, error) {
+	t := strconv.FormatInt(time.Now().Unix(), 10)
+	sum := sha256.Sum256(body)
+	sig, err := sign(c.sig, []byte(method+" "+path+" "+t+" "+hex.EncodeToString(sum[:])))
+	if err != nil {
+		return nil, nil, 0, err
+	}
+	req, _ := http.NewRequest(method, c.base+path, bytes.NewReader(body))
+	req.Header.Set("X-Machine", c.me)
+	req.Header.Set("X-Time", t)
+	req.Header.Set("X-Sig", sig)
+	if c.id != "" {
+		req.Header.Set("CF-Access-Client-Id", c.id)
+		req.Header.Set("CF-Access-Client-Secret", c.secret)
+	}
+	for i := 0; i+1 < len(hdr); i += 2 {
+		req.Header.Set(hdr[i], hdr[i+1])
+	}
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return nil, nil, 0, err
+	}
+	defer resp.Body.Close()
+	b, err := io.ReadAll(resp.Body)
+	return b, resp.Header, resp.StatusCode, err
+}
+
+func (c *client) json(method, path string, in, out any) error {
+	var body []byte
+	if in != nil {
+		body, _ = json.Marshal(in)
+	}
+	b, _, status, err := c.raw(method, path, body)
+	if err != nil {
+		return err
+	}
+	if status != 200 {
+		return fmt.Errorf("%s %s: HTTP %d %s", method, path, status, strings.TrimSpace(string(b))[:min(200, len(strings.TrimSpace(string(b))))])
+	}
+	if out != nil {
+		return json.Unmarshal(b, out)
+	}
+	return nil
+}
+
+// ---- crypto (the core's formats, core/crypto.go) -----------------------------------------------------
+
+type keys struct{ enc, sig *ecdh.PrivateKey }
+
+func loadPrivate() (keys, error) {
+	b, err := os.ReadFile(privPath)
+	if err != nil {
+		return keys{}, err
+	}
+	var p private
+	if err := json.Unmarshal(b, &p); err != nil {
+		return keys{}, err
+	}
+	eb, _ := b64.DecodeString(p.Enc)
+	sb, _ := b64.DecodeString(p.Sig)
+	enc, err := ecdh.P256().NewPrivateKey(eb)
+	if err != nil {
+		return keys{}, err
+	}
+	sig, err := ecdh.P256().NewPrivateKey(sb)
+	if err != nil {
+		return keys{}, err
+	}
+	return keys{enc, sig}, nil
+}
+
+func ecdsaPriv(k *ecdh.PrivateKey) (*ecdsa.PrivateKey, error) {
+	return ecdsa.ParseRawPrivateKey(elliptic.P256(), k.Bytes())
+}
+
+func sign(k *ecdh.PrivateKey, payload []byte) (string, error) {
+	e, err := ecdsaPriv(k)
+	if err != nil {
+		return "", err
+	}
+	h := sha256.Sum256(payload)
+	s, err := ecdsa.SignASN1(rand.Reader, e, h[:])
+	if err != nil {
+		return "", err
+	}
+	return b64.EncodeToString(s), nil
+}
+
+func verify(pubRaw string, payload []byte, sigB64 string) bool {
+	b, err := b64.DecodeString(pubRaw)
+	if err != nil {
+		return false
+	}
+	pk, err := ecdh.P256().NewPublicKey(b)
+	if err != nil {
+		return false
+	}
+	der, _ := x509.MarshalPKIXPublicKey(pk)
+	anyKey, err := x509.ParsePKIXPublicKey(der)
+	if err != nil {
+		return false
+	}
+	k, ok := anyKey.(*ecdsa.PublicKey)
+	if !ok {
+		return false
+	}
+	sig, err := b64.DecodeString(sigB64)
+	if err != nil {
+		return false
+	}
+	h := sha256.Sum256(payload)
+	return ecdsa.VerifyASN1(k, h[:], sig)
+}
+
+func verifyDoc(pub string, d *SignedDoc, out any) error {
+	if d == nil || !verify(pub, []byte(d.Payload), d.Sig) {
+		return errors.New("bad signature")
+	}
+	return json.Unmarshal([]byte(d.Payload), out)
+}
+
+// openSealed: ephemeral ECDH + HKDF-SHA256 + AES-256-GCM (nonce ‖ ciphertext ‖ tag), as core.SealTo
+func openSealed(priv *ecdh.PrivateKey, eB64, dataB64, info string) ([]byte, error) {
+	eb, err := b64.DecodeString(eB64)
+	if err != nil {
+		return nil, err
+	}
+	e, err := ecdh.P256().NewPublicKey(eb)
+	if err != nil {
+		return nil, err
+	}
+	x, err := priv.ECDH(e)
+	if err != nil {
+		return nil, err
+	}
+	key, err := hkdf.Key(sha256.New, x, nil, info, 32)
+	if err != nil {
+		return nil, err
+	}
+	d, err := b64.DecodeString(dataB64)
+	if err != nil {
+		return nil, err
+	}
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return nil, err
+	}
+	g, err := cipher.NewGCM(block)
+	if err != nil {
+		return nil, err
+	}
+	if len(d) < g.NonceSize()+g.Overhead() {
+		return nil, errors.New("sealed data too short")
+	}
+	return g.Open(nil, d[:g.NonceSize()], d[g.NonceSize():], nil)
+}
