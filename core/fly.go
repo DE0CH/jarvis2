@@ -115,8 +115,17 @@ func (f *FlyAPI) Create(r StartRequest) (string, string, error) {
 	if err := f.call("POST", "/machines", body, &m); err != nil {
 		return "", "", err
 	}
-	if err := f.call("GET", "/machines/"+m.ID+"/wait?state=started&timeout=60", nil, nil); err != nil {
-		return m.ID, "", err
+	// the first pull of the session image on a Fly host takes minutes: wait up to 10, then give up and
+	// destroy the machine rather than leave it running unknown to anyone
+	var werr error
+	for i := 0; i < 10; i++ {
+		if werr = f.call("GET", "/machines/"+m.ID+"/wait?state=started&timeout=60", nil, nil); werr == nil {
+			break
+		}
+	}
+	if werr != nil {
+		f.call("DELETE", "/machines/"+m.ID+"?force=true", nil, nil)
+		return "", "", werr
 	}
 	image := m.Config.Image
 	if m.ImageRef.Digest != "" {
