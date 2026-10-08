@@ -63,7 +63,7 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	r := NewRouter(cfg, st, &CoreClient{base: cfg.CoreURL, http: &http.Client{Timeout: 3 * time.Minute}})
+	r := NewRouter(cfg, st, &CoreClient{base: cfg.CoreURL, http: &http.Client{Timeout: 15 * time.Minute}})
 	addr := env("ADDR", ":8080")
 	log.Printf("router on %s (core %s)", addr, cfg.CoreURL)
 	log.Fatal(http.ListenAndServe(addr, r.Handler()))
