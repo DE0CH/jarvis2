@@ -11,6 +11,7 @@ import (
 	"crypto/rand"
 	"fmt"
 	"log"
+	"strings"
 	"sync"
 )
 
@@ -45,7 +46,8 @@ func (f *FakeFly) Create(r StartRequest) (string, string, error) {
 	e, _ := ecdh.P256().GenerateKey(rand.Reader)
 	s, _ := ecdh.P256().GenerateKey(rand.Reader)
 	f.machines[id] = &fakeFlyMachine{enc: e, sig: s}
-	return id, r.Image + "@sha256:0000000000000000000000000000000000000000000000000000000000000000", nil
+	// a resume passes the pinned ref@digest: keep one digest, like Fly reports it
+	return id, strings.SplitN(r.Image, "@", 2)[0] + "@sha256:0000000000000000000000000000000000000000000000000000000000000000", nil
 }
 
 func (f *FakeFly) ReadKeys(id string) (MachineKeys, error) {
