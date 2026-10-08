@@ -166,15 +166,15 @@ jobs:
           ASC_PRIVATE_KEY: ${{ secrets.ASC_PRIVATE_KEY }}
         run: |
           mkdir -p ~/.asc && printf '%s\n' "$ASC_PRIVATE_KEY" > ~/.asc/AuthKey.p8 && chmod 600 ~/.asc/AuthKey.p8
-      - name: Archive (cloud signing)
+      - name: Archive (unsigned; the export signs with Apple's cloud-managed distribution certificate)
         working-directory: app/ios
         run: |
           set -o pipefail
+          # signing at archive time would mint a new development certificate on every runner (the team's
+          # limit is reached), so the archive stays unsigned and the export below signs it in the cloud
           xcodebuild archive -workspace Jarvis2.xcworkspace -scheme Jarvis2 -configuration Release \
             -destination 'generic/platform=iOS' -archivePath ../../Jarvis2.xcarchive \
-            -allowProvisioningUpdates -authenticationKeyPath ~/.asc/AuthKey.p8 \
-            -authenticationKeyID "$ASC_KEY_ID" -authenticationKeyIssuerID "$ASC_ISSUER_ID" \
-            CODE_SIGN_STYLE=Automatic DEVELOPMENT_TEAM=S64YL394S3 CODE_SIGN_IDENTITY="Apple Development" \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" DEVELOPMENT_TEAM=S64YL394S3 \
             CURRENT_PROJECT_VERSION=${{ github.run_number }} 2>&1 | tee ../../archive.log | grep -E "error:|warning: .*sign|\*\* " || true
           grep -q "ARCHIVE SUCCEEDED" ../../archive.log
       - name: Export + upload to App Store Connect
