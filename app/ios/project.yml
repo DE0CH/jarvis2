@@ -63,6 +63,7 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: dev.de0ch.jarvis2.ui
         PRODUCT_NAME: JarvisUI
+        INFOPLIST_KEY_CFBundleDisplayName: "Jarvis 2 UI"
         GENERATE_INFOPLIST_FILE: YES
         INFOPLIST_FILE: Extension/Info.plist
         OTHER_LDFLAGS: ["$(inherited)", "-lc++"]
