@@ -6,11 +6,18 @@ on:
   push:
     paths: [app/**, core/**, router/**, .github/workflows/app.yml]
   workflow_dispatch:
+    inputs:
+      only:
+        description: "all, or only the TestFlight job (to iterate on signing/upload)"
+        type: choice
+        options: [all, testflight]
+        default: all
 concurrency:
-  group: app-${{ github.ref }}
+  group: app-${{ github.ref }}-${{ github.event_name }}
   cancel-in-progress: false
 jobs:
   web:
+    if: inputs.only != 'testflight'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -26,6 +33,7 @@ jobs:
         with: { name: web, path: web }
 
   interop:
+    if: inputs.only != 'testflight'
     # Shell/CoreCrypto.swift (CryptoKit) against the real Go core: pairing strings, signed lists, split-key
     # unlock, approvals with and without burn certs, refusals
     runs-on: macos-26
@@ -43,6 +51,7 @@ jobs:
         run: swift run -c release Interop http://127.0.0.1:8090 "$(sed -n 's/.*SETUP TOKEN \([0-9a-f]*\).*/\1/p' ../../../core.log)"
 
   simulator:
+    if: inputs.only != 'testflight'
     runs-on: macos-26
     timeout-minutes: 150
     steps:
@@ -127,7 +136,9 @@ jobs:
   testflight:
     # main only, after the walkthrough and the interop test pass: archive (cloud signing with the ASC API
     # key), upload; the internal group "Owner" (all builds) gets it once Apple has processed it
-    if: github.ref == 'refs/heads/main'
+    if: >-
+      always() && github.ref == 'refs/heads/main' && (inputs.only == 'testflight' ||
+      (needs.simulator.result == 'success' && needs.interop.result == 'success' && needs.web.result == 'success'))
     needs: [simulator, interop, web]
     runs-on: macos-26
     timeout-minutes: 120
