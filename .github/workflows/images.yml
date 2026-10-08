@@ -71,13 +71,16 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: pin the new tags in k8s/ (Flux rolls them out)
+      - name: pin the new tags in k8s/ (Flux rolls them out); never over a newer pin
         run: |
           T="sha-${GITHUB_SHA::12}"
+          git fetch -q origin main && git reset -q --hard origin/main
           [ -d k8s ] || exit 0
-          sed -i -E "s#(ghcr.io/de0ch/jarvis2-(core|router)):sha-[0-9a-f]{12}#\1:$T#g" k8s/*/*.yaml
-          sed -i -E "s#(ghcr.io/de0ch/jarvis2-session):sha-[0-9a-f]{12}#\1:$T#g" k8s/*/*.yaml
+          cur="$(grep -ho 'jarvis2-router:sha-[0-9a-f]*' k8s/apps/router.yaml | head -1 | cut -d- -f3)"
+          if [ -n "$cur" ] && full="$(git rev-parse -q --verify "$cur^{commit}")" && [ "$full" != "$GITHUB_SHA" ] \
+             && git merge-base --is-ancestor "$GITHUB_SHA" "$full"; then echo "main already pins a newer build ($cur)"; exit 0; fi
+          sed -i -E "s#(ghcr.io/de0ch/jarvis2-(core|router|session)):sha-[0-9a-f]{12}#\1:$T#g" k8s/apps/*.yaml
           git diff --quiet && exit 0
           git config user.name "jarvis2-ci"; git config user.email "ci@jarvis2.invalid"
-          git commit -am "images: pin $T [skip ci]"
-          for i in 1 2 3; do git pull --rebase -q origin main && git push -q origin HEAD:main && break; sleep 5; done
+          git commit -qam "images: pin $T [skip ci]"
+          git push -q origin HEAD:main
