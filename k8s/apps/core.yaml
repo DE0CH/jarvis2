@@ -15,7 +15,7 @@ spec:
       enableServiceLinks: false
       containers:
         - name: core
-          image: ghcr.io/de0ch/jarvis2-core:sha-08c85a57942e
+          image: ghcr.io/de0ch/jarvis2-core:sha-63e8a1d5edaf
           ports: [{ containerPort: 8090 }]
           resources: { requests: { cpu: 20m, memory: 32Mi }, limits: { memory: 256Mi } }
           securityContext: { runAsNonRoot: true, runAsUser: 65532, runAsGroup: 65532, allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: { drop: [ALL] }, seccompProfile: { type: RuntimeDefault } }
