@@ -24,10 +24,10 @@ spec:
       securityContext: { fsGroup: 65532 }
       containers:
         - name: router
-          image: ghcr.io/de0ch/jarvis2-router:sha-63e8a1d5edaf
+          image: ghcr.io/de0ch/jarvis2-router:sha-5312443313df
           ports: [{ containerPort: 8080 }]
           env:
-            - { name: SESSION_IMAGE, value: "ghcr.io/de0ch/jarvis2-session:sha-63e8a1d5edaf" }
+            - { name: SESSION_IMAGE, value: "ghcr.io/de0ch/jarvis2-session:sha-5312443313df" }
             - { name: FLY_REGION, value: lhr }
             - { name: MACHINE_URL, value: "https://jarvis2.deyaochen.com" }
           envFrom: [{ secretRef: { name: router-env } }]
