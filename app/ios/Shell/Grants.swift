@@ -39,7 +39,8 @@ struct SecureGrant: View {
       : "until \(until.formatted(date: .abbreviated, time: .shortened))"
   }
   private var meaning: String {
-    "\(holderName(holder)) may run commands as the session's user in “\(label)” \(endText). \(HOLDERS.first { $0.id == holder }?.sub ?? "")."
+    let what = HOLDERS.first(where: { $0.id == holder })?.sub ?? ""
+    return "\(holderName(holder)) may run commands as the session's user in “\(label)” \(endText). \(what)."
   }
 
   var body: some View {

@@ -181,7 +181,7 @@ let cert1 = doc(c1d)
 
 // ---- grants: the session's cert, then the router's draft checked against what the grant page chose ----
 let sc = try? Checks.cert(cert1, coreKey: coreKey)
-check(sc != nil && sc!.line == m1.id && sc!.phone == phone.signingKey && sc!.sensitive == false && (sc!.stores ?? []) == ["claude-login", "default"],
+check(sc != nil && sc!.line == m1.id && sc!.phone == phone.signingKey && sc!.sensitive == false && Set(sc!.stores ?? []) == ["claude-login", "default"],
       "the session cert names its line, this phone and its stores (\(sc?.line ?? "?"))")
 check(throwsErr { _ = try Checks.cert(SignedDoc(payload: cert1.payload, sig: ch1.sig), coreKey: coreKey) }, "a cert with another signature is refused")
 let holderKey = P256.KeyAgreement.PrivateKey().publicKey.x963Representation.base64EncodedString()
@@ -189,9 +189,10 @@ func iso(_ d: Date) -> String { let f = ISO8601DateFormatter(); f.formatOptions 
 func grantText(_ f: [String: Any]) -> String { String(decoding: try! JSONSerialization.data(withJSONObject: f, options: [.sortedKeys]), as: UTF8.self) }
 let now = Date()
 let good: [String: Any] = ["kind": "grant", "holder": holderKey, "session": m1.id, "scope": "shell", "issued": iso(now), "expires": iso(now.addingTimeInterval(600))]
-func review(_ f: [String: Any], kind: String = "grant", minutes: Int = 10, until: Date? = nil, cert c: SessionCert? = sc, phoneKey: String = phone.signingKey) -> Bool {
-  guard let c else { return false }
-  return !throwsErr { _ = try Checks.reviewGrant(text: grantText(f), cert: c, phoneKey: phoneKey, holderKey: holderKey, kind: kind, minutes: minutes, until: until, now: now) }
+func review(_ f: [String: Any], kind: String = "grant", minutes: Int = 10, until: Date? = nil, cert: SessionCert? = nil, phoneKey: String? = nil) -> Bool {
+  guard let c = cert ?? sc else { return false }
+  let pk = phoneKey ?? phone.signingKey
+  return !throwsErr { _ = try Checks.reviewGrant(text: grantText(f), cert: c, phoneKey: pk, holderKey: holderKey, kind: kind, minutes: minutes, until: until, now: now) }
 }
 check(review(good), "a 10-minute grant for this line and holder passes")
 var g2 = good; g2["session"] = "other-line"
@@ -236,8 +237,9 @@ check(call("/certify", ["approval": docJSON(a3!), "machine": m2.id]).0 == 200, "
 
 // a sensitive line: no standing rule
 let ch4 = challenge(["predecessor": NSNull(), "stores": ["gmail"], "options": ["harness": "claude"], "image": "img"])
-if case (200, let a4?) = approve(ch4), case let (200, c4d) = call("/certify", ["approval": docJSON(a4), "machine": start("img").id]),
-   let sc4 = try? Checks.cert(doc(c4d), coreKey: coreKey) {
+let (a4s, a4) = approve(ch4)
+let (c4s, c4d) = a4 == nil ? (0, Data()) : call("/certify", ["approval": docJSON(a4!), "machine": start("img").id])
+if a4s == 200, c4s == 200, let sc4 = try? Checks.cert(doc(c4d), coreKey: coreKey) {
   check(sc4.sensitive == true, "a session with a sensitive store has a sensitive cert")
   var r4 = rule; r4["session"] = sc4.line
   check(!review(r4, kind: "rule", until: end, cert: sc4), "…and the grant page refuses a standing rule for it")
