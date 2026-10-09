@@ -61,7 +61,7 @@ s=call("POST","/servers",{"name":name,"server_type":stype,"image":"ubuntu-24.04"
 call("DELETE",f"/ssh_keys/{key}")
 print("server",s["id"],s["public_net"]["ipv4"]["ip"])
 PY
-echo "keys/box.pub and keys/box-age.pub are the new box's keys: re-run infra/router-secrets.sh (it encrypts to the new age key), then commit and push"
+echo "keys/box.pub and keys/box-age.pub are the new box's keys: re-run infra/router-secrets.py (it encrypts to the new age key), then commit and push"
 echo "waiting for the bootstrap (k3s + Flux + the core behind the tunnel)…"
 for i in $(seq 1 90); do
   python3 "$HERE/setup.py" identity >/dev/null 2>&1 && { echo "up: the core answers through the tunnel and its identity checks"; exit 0; }

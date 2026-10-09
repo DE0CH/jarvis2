@@ -30,6 +30,15 @@ exists.
 - The Fly token: `infra/fly-token.sh ~/.jarvis2/fly.tok` (narrowed to the app and to `jarvis2-init`), then
   `infra/setup.py backup-core ~/.jarvis2/fly.tok` — the `core` store reaches a core only through recovery.
 
+## The router's secrets
+
+Non-sensitive only (nothing that can reach a code push): `infra/router-secrets.py KEY[=SRC]…` writes
+`k8s/secrets/router.enc.yaml`, SOPS-encrypted to `keys/box-age.pub`; Flux decrypts it on the box with the age key
+the box got in user-data. Every run rewrites the whole Secret, so name every key:
+`LOBSTER_TOKEN STORAGEBOX_HOST STORAGEBOX_USER STORAGEBOX_PASSWORD FLY_READ_TOKEN=file:~/.jarvis2/fly-read.tok
+JARVIS1_CREDENTIALS_ID=file:… JARVIS1_CREDENTIALS_SECRET=file:…` (the read-only Fly token: `infra/fly-read-token.sh`).
+After a box rebuild, re-run it (the age key is new).
+
 ## Recovery (after a box rebuild or any core restart)
 
 1. `infra/setup.py identity` prints the new core's 8 words (checked against `keys/box.pub`).
@@ -42,8 +51,8 @@ exists.
 1. Delete the server in the jarvis2 Hetzner project (API or console).
 2. `infra/cloudflare.py ~/.jarvis2/cloudflare.env` (with `ROTATE=1` if that file is gone: a new setup service
    token; put it in the `default` store as JARVIS2_SETUP_ACCESS_ID/SECRET).
-3. `infra/create.sh` — a new box key (commit `keys/box.pub`), a new WireGuard peer, no SSH, no open port. It
-   waits until `setup.py identity` answers.
+3. `infra/create.sh` — a new box key and age key (commit `keys/box.pub`, `keys/box-age.pub`), a new WireGuard
+   peer, no SSH, no open port. Then `infra/router-secrets.py …` (above). It waits until `setup.py identity` answers.
 4. Recovery (above). Paused sessions are lost (their certs were signed by the old core).
 
 ## Testing
