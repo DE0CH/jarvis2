@@ -15,7 +15,7 @@ spec:
       enableServiceLinks: false
       containers:
         - name: core
-          image: ghcr.io/de0ch/jarvis2-core:sha-ea3d4bfe7aa2
+          image: ghcr.io/de0ch/jarvis2-core:sha-842c2562fe92
           ports: [{ containerPort: 8090 }]
           env:
             # the setup session's PUBLIC key (docs/API.md "Setup"); its private half is JARVIS2_SETUP_KEY in Jarvis 1's default store
