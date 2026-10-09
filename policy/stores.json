@@ -1,8 +1,23 @@
 {
-  "comment": "Which stores each harness brings (the router adds them to a session; the app hides them). Sensitivity and the Fly store live in the core, not here. `tunnel` holds CF_ACCESS_CLIENT_ID/SECRET = the Access service token jarvis2-tunnel, which the cf-tunnel Worker confines to registering Jarvis 2 session tunnels (the web UI of OpenCode/Paseo and OpenClaw). openclaw runs on the Claude subscription, hence `claude`.",
+  "comment": "Which stores each harness brings (the router adds them to a session; the app hides them). Sensitivity and the Fly store live in the core, not here. `tunnel` holds CF_ACCESS_CLIENT_ID/SECRET = the Access service token jarvis2-tunnel, which the cf-tunnel Worker confines to registering Jarvis 2 session tunnels (the web UI of OpenCode/Paseo and OpenClaw; tunnel pages and drops in Claude sessions, TUNNEL_ID = the session id). openclaw runs on the Claude subscription, hence `claude`.",
   "harnesses": {
-    "claude": { "stores": ["claude"] },
-    "opencode": { "stores": ["openrouter", "tunnel"] },
-    "openclaw": { "stores": ["claude", "tunnel"] }
+    "claude": {
+      "stores": [
+        "claude",
+        "tunnel"
+      ]
+    },
+    "opencode": {
+      "stores": [
+        "openrouter",
+        "tunnel"
+      ]
+    },
+    "openclaw": {
+      "stores": [
+        "claude",
+        "tunnel"
+      ]
+    }
   }
 }

@@ -130,11 +130,17 @@ func (r *Router) registerSessionAPI(app appRoute, m machineRoute) {
 const machineAPIURL = "http://127.0.0.1:7171"
 
 func init() {
-	envHooks = append(envHooks, func(_ *Router, s *Session, e map[string]string) { sessionAPIEnv(e, s.Harness) })
+	envHooks = append(envHooks, func(_ *Router, s *Session, e map[string]string) {
+		sessionAPIEnv(e, s.Harness)
+		// cf-tunnel/agent.js would otherwise name the tunnel after Claude's own conversation id, which the
+		// Worker refuses for Jarvis 2 (only s+16 hex, with this session's proof)
+		e["TUNNEL_ID"] = s.ID
+	})
 }
 
 func sessionAPIEnv(e map[string]string, harness string) {
 	e["JARVIS_URL"] = machineAPIURL
+
 	e["SESSION_API_TOKEN"] = "jarvis2-local-proxy"
 	if !harnessSend[harness] {
 		e["CF_ACCESS_CLIENT_ID"], e["CF_ACCESS_CLIENT_SECRET"] = "jarvis2-local-proxy", "jarvis2-local-proxy"
