@@ -46,6 +46,10 @@ def main():
     s = open(kz).read()
     if "router.enc.yaml" not in s:
         open(kz, "w").write(s.replace("resources: []", "resources:\n  - router.enc.yaml"))
-    print("wrote", os.path.relpath(OUT, ROOT), "with", ", ".join(sorted(data)))
+    import hashlib, re
+    rev = hashlib.sha256(enc).hexdigest()[:12]
+    rp = os.path.join(ROOT, "k8s/apps/router.yaml")
+    open(rp, "w").write(re.sub(r'jarvis2/secrets-rev: "[^"]*"', f'jarvis2/secrets-rev: "{rev}"', open(rp).read()))
+    print("wrote", os.path.relpath(OUT, ROOT), "with", ", ".join(sorted(data)), "; router secrets-rev", rev)
 
 main()
