@@ -154,6 +154,88 @@ func (r *Router) buildHandlers() {
 		writeJSON(w, 200, map[string]any{"records": recs})
 	})
 
+	// ---- grants (grants.go) and the terminal (terminal.go) ----------------------------------------------
+	app("GET /api/holders", func(w http.ResponseWriter, req *http.Request) {
+		pub, err := r.HolderPublicKeys()
+		if err != nil {
+			writeErr(w, err)
+			return
+		}
+		writeJSON(w, 200, map[string]any{"holders": pub})
+	})
+	app("POST /api/sessions/{id}/grants/draft", func(w http.ResponseWriter, req *http.Request) {
+		var in struct {
+			Holder  string    `json:"holder"`
+			Kind    string    `json:"kind"`
+			Minutes int       `json:"minutes"`
+			Until   time.Time `json:"until"`
+		}
+		json.NewDecoder(io.LimitReader(req.Body, 1<<16)).Decode(&in)
+		text, err := r.DraftGrant(req.PathValue("id"), in.Holder, in.Kind, in.Minutes, in.Until)
+		if err != nil {
+			writeErr(w, err)
+			return
+		}
+		writeJSON(w, 200, map[string]string{"text": text})
+	})
+	app("POST /api/sessions/{id}/grants", func(w http.ResponseWriter, req *http.Request) {
+		var in Doc
+		json.NewDecoder(io.LimitReader(req.Body, 1<<16)).Decode(&in)
+		g, err := r.AddGrant(req.PathValue("id"), &in)
+		if err != nil {
+			writeErr(w, err)
+			return
+		}
+		writeJSON(w, 200, g)
+	})
+	app("GET /api/sessions/{id}/grants", func(w http.ResponseWriter, req *http.Request) {
+		writeJSON(w, 200, map[string]any{"grants": r.Grants(req.PathValue("id"))})
+	})
+	app("DELETE /api/grants/{gid}", func(w http.ResponseWriter, req *http.Request) {
+		r.ForgetGrant(req.PathValue("gid"))
+		writeJSON(w, 200, map[string]bool{"ok": true})
+	})
+	app("POST /api/sessions/{id}/exec", func(w http.ResponseWriter, req *http.Request) {
+		var in struct {
+			Cmd     string `json:"cmd"`
+			Timeout int    `json:"timeout"`
+		}
+		json.NewDecoder(io.LimitReader(req.Body, 1<<20)).Decode(&in)
+		res, err := r.Exec(req.PathValue("id"), "terminal", in.Cmd, time.Duration(max(5, min(in.Timeout, 600)))*time.Second)
+		if err != nil {
+			writeErr(w, err)
+			return
+		}
+		writeJSON(w, 200, res)
+	})
+	app("GET /api/sessions/{id}/terminal", func(w http.ResponseWriter, req *http.Request) {
+		snap, err := r.TermSnapshot(req.PathValue("id"))
+		if err != nil {
+			writeErr(w, err)
+			return
+		}
+		writeJSON(w, 200, snap)
+	})
+	app("POST /api/sessions/{id}/terminal", func(w http.ResponseWriter, req *http.Request) {
+		var in struct {
+			Text       string   `json:"text"`
+			Keys       []string `json:"keys"`
+			Cols, Rows int
+		}
+		json.NewDecoder(io.LimitReader(req.Body, 1<<16)).Decode(&in)
+		var err error
+		if in.Cols > 0 {
+			err = r.TermResize(req.PathValue("id"), in.Cols, in.Rows)
+		} else {
+			err = r.TermInput(req.PathValue("id"), in.Text, in.Keys)
+		}
+		if err != nil {
+			writeErr(w, err)
+			return
+		}
+		writeJSON(w, 200, map[string]bool{"ok": true})
+	})
+
 	// ---- sessions ------------------------------------------------------------------------------------
 	app("POST /api/sessions", func(w http.ResponseWriter, req *http.Request) {
 		var in NewSession
@@ -324,13 +406,32 @@ func (r *Router) buildHandlers() {
 	})
 	m("GET /m/commands", func(w http.ResponseWriter, req *http.Request, machine string, _ []byte) {
 		q := r.queue(machine)
+		r.cmdMu.Lock()
+		eq := r.execQueue(machine)
+		r.cmdMu.Unlock()
 		select {
 		case c := <-q:
-			writeJSON(w, 200, map[string]any{"commands": []string{c}})
+			writeJSON(w, 200, map[string]any{"commands": []string{c}, "execs": []execItem{}})
+		case e := <-eq:
+			writeJSON(w, 200, map[string]any{"commands": []string{}, "execs": []execItem{e}})
 		case <-time.After(50 * time.Second):
-			writeJSON(w, 200, map[string]any{"commands": []string{}})
+			writeJSON(w, 200, map[string]any{"commands": []string{}, "execs": []execItem{}})
 		case <-req.Context().Done():
 		}
+	})
+	m("POST /m/exec-result", func(w http.ResponseWriter, req *http.Request, machine string, body []byte) {
+		var res ExecResult
+		json.Unmarshal(body, &res)
+		r.execResult(res)
+		writeJSON(w, 200, map[string]bool{"ok": true})
+	})
+	m("GET /m/holders", func(w http.ResponseWriter, req *http.Request, machine string, _ []byte) {
+		pub, err := r.HolderPublicKeys()
+		if err != nil {
+			writeErr(w, err)
+			return
+		}
+		writeJSON(w, 200, pub)
 	})
 	m("POST /m/add-store", func(w http.ResponseWriter, req *http.Request, machine string, body []byte) {
 		var in struct {

@@ -695,3 +695,35 @@ func ecdsaFromECDH(k *ecdh.PrivateKey) *ecdsa.PrivateKey {
 	d := new(big.Int).SetBytes(k.Bytes())
 	return &ecdsa.PrivateKey{PublicKey: ecdsa.PublicKey{Curve: elliptic.P256(), X: x, Y: y}, D: d}
 }
+
+// a machine checks grants itself (docs/DESIGN.md "Grants"): its cert names the phone's signing key and whether
+// any of its stores is sensitive
+func TestCertCarriesThePhoneAndSensitivity(t *testing.T) {
+	c, _, p := setup(t)
+	cert, _ := newLine(t, c, p, "default", "claude")
+	m := pl(t)(cert, nil)
+	if m["phone"] != p.signingKey() || m["sensitive"] != false {
+		t.Fatalf("phone %v sensitive %v", m["phone"] == p.signingKey(), m["sensitive"])
+	}
+	cert, _ = newLine(t, c, p, "default", "gmail")
+	if m := pl(t)(cert, nil); m["sensitive"] != true {
+		t.Fatal("a line with gmail (sensitive) isn't marked sensitive")
+	}
+}
+
+func TestTheLineIdSurvivesResume(t *testing.T) {
+	c, _, p := setup(t)
+	cert, first := newLine(t, c, p, "default")
+	if m := pl(t)(cert, nil); m["line"] != first {
+		t.Fatalf("a new line's id is its first machine: %v vs %s", m["line"], first)
+	}
+	var oc Cert
+	json.Unmarshal([]byte(cert.Payload), &oc)
+	c.Kill(first)
+	ch, _ := c.Succession(SuccessionInput{Predecessor: &cert, Image: oc.Machine.Image, Stores: []string{"default"}})
+	a, _ := c.ApproveByDeadMachine(&ch)
+	cert2, second := start(t, c, a)
+	if m := pl(t)(cert2, nil); m["line"] != first || second == first {
+		t.Fatalf("the successor's line is %v, want %s", m["line"], first)
+	}
+}

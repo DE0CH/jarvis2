@@ -60,6 +60,7 @@ type Request struct {
 	Kind        string          `json:"kind"`
 	Predecessor *SignedDoc      `json:"predecessor"` // the predecessor's succession cert; nil = new line
 	PredID      string          `json:"predecessorId"`
+	Line        string          `json:"line,omitempty"` // the line's first machine; "" = a new line
 	Machine     *StartedMachine `json:"machine,omitempty"`
 	Image       string          `json:"image,omitempty"` // the image the new machine runs
 	Stores      []string        `json:"stores"`
@@ -85,6 +86,25 @@ type Cert struct {
 	Options  Options         `json:"options"`
 	Nonce    string          `json:"nonce"`
 	IssuedAt string          `json:"issuedAt"`
+	// for the machine's own checks of grants (docs/DESIGN.md "Grants"): the phone's signing key, and whether
+	// any of the stores is sensitive (then only a fresh phone grant opens a shell)
+	Phone     string `json:"phone,omitempty"`
+	Sensitive bool   `json:"sensitive"`
+	Line      string `json:"line"` // the line's first machine: what grants name, stable across successions
+}
+
+// succession: the cert for a machine on a line (callers hold c.mu)
+func (c *Core) succession(r Request, m *StartedMachine, nonce, now string) Cert {
+	sensitive := false
+	for _, n := range r.Stores {
+		sensitive = sensitive || !c.notSensitive[n]
+	}
+	line := r.Line
+	if line == "" {
+		line = m.ID
+	}
+	return Cert{Kind: "succession-cert", PredID: r.PredID, Machine: m, Stores: r.Stores, Options: r.Options,
+		Nonce: nonce, IssuedAt: now, Phone: c.phoneSigning, Sensitive: sensitive, Line: line}
 }
 
 type unlocked struct {
@@ -481,8 +501,7 @@ func (c *Core) Certify(approval *SignedDoc, machine string) (SignedDoc, error) {
 		c.used[r.PredID] = true
 	}
 	c.logf("certified %s for %s (%s) %s → %v", machine, a.Nonce[:12], a.By, orNull(r.PredID), r.Stores)
-	return c.sign(Cert{Kind: "succession-cert", PredID: r.PredID, Machine: m, Stores: r.Stores, Options: r.Options,
-		Nonce: a.Nonce, IssuedAt: now})
+	return c.sign(c.succession(r, m, a.Nonce, now))
 }
 
 // Kill: Fly destroy, confirmed by Fly → killed
@@ -533,7 +552,7 @@ func (c *Core) Succession(in SuccessionInput) (SignedDoc, error) {
 		if err := c.verifyOwn(in.Predecessor, &pc); err != nil || pc.Kind != "succession-cert" || pc.Machine == nil {
 			return SignedDoc{}, fail(400, "predecessor is not a succession cert this core signed")
 		}
-		req.PredID = pc.Machine.ID
+		req.PredID, req.Line = pc.Machine.ID, pc.Line
 	}
 	if in.Image == NullImage {
 		if req.PredID == "" || len(in.Stores) != 0 || in.Options != (Options{}) || in.Machine != "" {
@@ -663,8 +682,7 @@ func (c *Core) answer(ch challenge, by string) (SignedDoc, error) {
 	r := ch.Request
 	now := c.now().UTC().Format(time.RFC3339)
 	if r.AddedStore != "" || r.Downgrade {
-		return c.sign(Cert{Kind: "succession-cert", PredID: r.PredID, Machine: r.Machine, Stores: r.Stores,
-			Options: r.Options, Nonce: ch.Nonce, IssuedAt: now})
+		return c.sign(c.succession(r, r.Machine, ch.Nonce, now))
 	}
 	return c.sign(Approval{Kind: "approval", Nonce: ch.Nonce, Request: r, By: by})
 }

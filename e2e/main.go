@@ -196,6 +196,23 @@ func main() {
 	expectOnMachine(m1, "grep -c E2E_SECRET /home/claude/.secrets", "1")
 	expectOnMachine(m1, "echo marker-"+secret+" > /home/claude/artifacts/e2e-marker && chown claude /home/claude/artifacts/e2e-marker && echo ok", "ok")
 
+	step("grants: no shell without one; a phone grant opens it; the session's own allow list too")
+	s, b = call(router, "POST", "/api/sessions/"+id+"/exec", map[string]any{"cmd": "echo hi"}, nil)
+	if s == 200 {
+		log.Fatalf("a shell without any grant: %s", b)
+	}
+	var draft struct{ Text string }
+	must2(call(router, "POST", "/api/sessions/"+id+"/grants/draft", map[string]any{"holder": "terminal", "kind": "grant", "minutes": 10}, &draft))
+	var grant struct{ ID string }
+	must2(call(router, "POST", "/api/sessions/"+id+"/grants", map[string]string{"payload": draft.Text, "sig": p.sign(draft.Text)}, &grant))
+	expectExec(id, "echo hi from $(whoami)", "hi from claude")
+	must2(call(router, "DELETE", "/api/grants/"+grant.ID, nil, nil))
+	expectOnMachine(m1, "su - claude -c 'jarvis2 allow terminal 1h' && echo ok", "ok")
+	expectExec(id, "echo allowed", "allowed")
+	expectOnMachine(m1, "su - claude -c 'jarvis2 allow --remove terminal' && echo ok", "ok")
+	must2(call(router, "POST", "/api/sessions/"+id+"/grants/draft", map[string]any{"holder": "terminal", "kind": "rule", "until": time.Now().Add(24 * time.Hour)}, &draft))
+	must2(call(router, "POST", "/api/sessions/"+id+"/grants", map[string]string{"payload": draft.Text, "sig": p.sign(draft.Text)}, &grant))
+
 	step("add a store from the machine (e2e-extra)")
 	go flyExec(m1, []string{"su", "-", "claude", "-c", "jarvis2 add-store e2e-extra"})
 	a = waitApproval("add-store", id)
@@ -221,6 +238,7 @@ func main() {
 	}
 	expectOnMachine(m2, "cat /home/claude/artifacts/e2e-marker", "marker-"+secret)
 	expectOnMachine(m2, "grep -c E2E_EXTRA /home/claude/.secrets || true", "0")
+	expectExec(id, "echo the rule still holds", "the rule still holds") // grants name the line, not the machine
 
 	step("pause, then resume with the latest image → the iPhone approves first, then the machine starts")
 	must2(call(router, "POST", "/api/sessions/"+id+"/pause", nil, nil))
@@ -494,4 +512,17 @@ func expectOnMachine(m, cmd, want string) {
 		time.Sleep(5 * time.Second)
 	}
 	log.Fatalf("on %s, %q gave %q (exit %d, %v), want %q", m, cmd, out, code, err, want)
+}
+
+// expectExec: a command through the router's grant relay (holder "terminal")
+func expectExec(id, cmd, want string) {
+	var res struct {
+		Stdout string
+		Code   int
+	}
+	s, b := call(router, "POST", "/api/sessions/"+id+"/exec", map[string]any{"cmd": cmd, "timeout": 30}, &res)
+	must(s, b, "exec "+cmd)
+	if strings.TrimSpace(res.Stdout) != want || res.Code != 0 {
+		log.Fatalf("exec %q: got %q (code %d), want %q", cmd, res.Stdout, res.Code, want)
+	}
 }

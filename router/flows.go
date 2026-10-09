@@ -22,7 +22,10 @@ type Router struct {
 	core *CoreClient
 
 	cmdMu    sync.Mutex
-	commands map[string]chan string // machine id → pending commands (snapshot)
+	commands map[string]chan string     // machine id → pending commands (snapshot)
+	execs    map[string]chan execItem   // machine id → holder-signed shell commands (grants.go)
+	results  map[string]chan ExecResult // exec request id → its waiting caller
+	hk       holders
 	snapped  map[string]chan struct{}
 	locks    sync.Map // session id → *sync.Mutex: one lifecycle action at a time
 
@@ -36,7 +39,7 @@ type Router struct {
 }
 
 func NewRouter(cfg Config, st *State, core *CoreClient, policy Policy) *Router {
-	return &Router{cfg: cfg, st: st, core: core, policy: policy, setupSeen: map[string]time.Time{}, commands: map[string]chan string{}, snapped: map[string]chan struct{}{}}
+	return &Router{cfg: cfg, st: st, core: core, policy: policy, setupSeen: map[string]time.Time{}, commands: map[string]chan string{}, execs: map[string]chan execItem{}, results: map[string]chan ExecResult{}, snapped: map[string]chan struct{}{}}
 }
 
 func randID() string {

@@ -59,13 +59,14 @@ type Started struct {
 }
 
 type persisted struct {
-	Sessions  map[string]*Session  `json:"sessions"`
-	Approvals map[string]*Approval `json:"approvals"`
-	Records   []*Record            `json:"records"`
-	Started   map[string]*Started  `json:"started"`
-	Certs     map[string]*Doc      `json:"certs"`    // machine id → its latest succession cert
-	Machines  map[string]string    `json:"machines"` // machine id → session id
-	SessCerts map[string]*Doc      `json:"sessionCerts"`
+	Sessions  map[string]*Session     `json:"sessions"`
+	Approvals map[string]*Approval    `json:"approvals"`
+	Records   []*Record               `json:"records"`
+	Started   map[string]*Started     `json:"started"`
+	Certs     map[string]*Doc         `json:"certs"`    // machine id → its latest succession cert
+	Machines  map[string]string       `json:"machines"` // machine id → session id
+	SessCerts map[string]*Doc         `json:"sessionCerts"`
+	Grants    map[string]*StoredGrant `json:"grants"` // id → a phone-signed grant or standing rule (grants.go)
 }
 
 type State struct {
@@ -103,6 +104,9 @@ func LoadState(dir string) (*State, error) {
 	}
 	if d.SessCerts == nil {
 		d.SessCerts = map[string]*Doc{}
+	}
+	if d.Grants == nil {
+		d.Grants = map[string]*StoredGrant{}
 	}
 	for id, c := range d.SessCerts {
 		if s := d.Sessions[id]; s != nil {

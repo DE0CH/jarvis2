@@ -80,6 +80,9 @@ type Cert struct {
 	Options struct {
 		Harness string `json:"harness"`
 	} `json:"options"`
+	Phone     string `json:"phone"`
+	Sensitive bool   `json:"sensitive"`
+	Line      string `json:"line"`
 }
 
 type private struct {
@@ -91,7 +94,7 @@ func main() {
 	log.SetFlags(0)
 	log.SetPrefix("[jarvis2] ")
 	if len(os.Args) < 2 {
-		log.Fatal("usage: jarvis2-machine boot | init | add-store <name> | downgrade [<store>…]")
+		log.Fatal("usage: jarvis2-machine boot | init | add-store <name> | downgrade [<store>…] | allow [<holder> <duration> | --remove <holder>]")
 	}
 	var err error
 	switch os.Args[1] {
@@ -108,6 +111,8 @@ func main() {
 		err = downgrade(os.Args[2:])
 	case "agent":
 		err = agent()
+	case "allow":
+		err = allowCmd(os.Args[2:])
 	default:
 		err = fmt.Errorf("unknown command %s", os.Args[1])
 	}
@@ -416,7 +421,7 @@ func cloneRepos(secrets map[string]string) {
 // ---- snapshots ------------------------------------------------------------------------------------
 
 // what a snapshot holds (relative to $HOME): the conversation, the work, the artefacts
-var snapshotPaths = []string{".claude/projects", ".claude.json", ".claude/.first-prompt-sent", "workspace", "artifacts"}
+var snapshotPaths = []string{".claude/projects", ".claude.json", ".claude/.first-prompt-sent", "workspace", "artifacts", allowFile}
 
 func makeSnapshot() ([]byte, error) {
 	home, _ := os.UserHomeDir()
@@ -536,10 +541,14 @@ func agent() error {
 	for {
 		var out struct {
 			Commands []string `json:"commands"`
+			Execs    []Exec   `json:"execs"`
 		}
 		if err := c.json("GET", "/m/commands", nil, &out); err != nil {
 			time.Sleep(5 * time.Second)
 			continue
+		}
+		for _, e := range out.Execs {
+			go runExec(c, e)
 		}
 		for _, cmd := range out.Commands {
 			if cmd == "snapshot" {
