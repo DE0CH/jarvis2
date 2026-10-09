@@ -1,0 +1,1 @@
+../../../UITests/SetupSigner.swift

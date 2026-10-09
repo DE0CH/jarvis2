@@ -101,5 +101,8 @@ export function ago(iso: string | Date) {
   if (s < 60) return "just now"; if (s < 3600) return Math.floor(s / 60) + " min ago"; if (s < 86400) return Math.floor(s / 3600) + " h ago"; return Math.floor(s / 86400) + " d ago";
 }
 export const sessionTitle = (m: Session) => m.title || m.label || m.name || m.id;
+// the store named `core` holds the core's own Fly token: listed on the Stores page (to unlock and lock it),
+// never offered to a session (the core refuses it in succession)
+export const CORE_STORE = "core";
 /** the stores a session (or a record) was given */
 export const storesOf = (m: Session) => (m.stores && m.stores.length ? m.stores : (m.environment || "").split(",").filter(Boolean));

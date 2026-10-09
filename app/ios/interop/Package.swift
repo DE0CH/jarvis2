@@ -1,6 +1,6 @@
 // swift-tools-version:5.9
 // The shell's crypto (Shell/CoreCrypto.swift, symlinked in) against the REAL core binary: CI builds the core
-// with -tags fakefly, starts it and runs `swift run Interop <core url> <setup token>`. On macOS this uses
+// with -tags fakefly, starts it and runs `swift run Interop <core url> <setup private key, base64 DER>`. On macOS this uses
 // CryptoKit (what the app uses); on Linux swift-crypto (same API) for running it locally.
 import PackageDescription
 #if os(Linux)

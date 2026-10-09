@@ -32,11 +32,16 @@ final class Jarvis2UITests: XCTestCase {
     return !e.exists
   }
 
-  /// the core's setup calls (the trusted setup session's job in production)
+  /// the core's calls; /setup/* ones are signed with the run's setup key (the trusted setup session's job
+  /// in production), which CI passes as JARVIS2_SETUP_KEY
   @discardableResult func coreCall(_ path: String, _ body: [String: Any]? = nil) -> (Int, Data) {
     var r = URLRequest(url: URL(string: core + path)!)
-    if let body { r.httpMethod = "POST"; r.httpBody = try! JSONSerialization.data(withJSONObject: body); r.setValue("application/json", forHTTPHeaderField: "Content-Type") }
-    r.setValue(env["JARVIS2_SETUP_TOKEN"] ?? "", forHTTPHeaderField: "X-Setup-Token")
+    var raw = Data()
+    if let body { raw = try! JSONSerialization.data(withJSONObject: body); r.httpMethod = "POST"; r.httpBody = raw; r.setValue("application/json", forHTTPHeaderField: "Content-Type") }
+    if path.hasPrefix("/setup/") {
+      guard let signer = SetupSigner(base64DER: env["JARVIS2_SETUP_KEY"] ?? "") else { XCTFail("JARVIS2_SETUP_KEY isn't a P-256 private key"); return (0, Data()) }
+      for (k, v) in signer.headers("POST", path, raw) { r.setValue(v, forHTTPHeaderField: k) }
+    }
     let sem = DispatchSemaphore(value: 0)
     var out: (Int, Data) = (0, Data())
     URLSession.shared.dataTask(with: r) { d, resp, _ in out = ((resp as? HTTPURLResponse)?.statusCode ?? 0, d ?? Data()); sem.signal() }.resume()
@@ -56,12 +61,15 @@ final class Jarvis2UITests: XCTestCase {
     let parts = phone.split(separator: ":").map(String.init)
     XCTAssertEqual(parts.count, 3, "phone string \(phone)")
     shot("pairing")
-    if parts.count == 3 {
-      XCTAssertEqual(coreCall("/setup/phone", ["signingKey": parts[1], "agreementKey": parts[2]]).0, 200, "core takes the phone's keys")
-      XCTAssertEqual(coreCall("/setup/store", ["name": "default", "values": ["GITHUB_TOKEN": "ci-dummy", "OTHER": "x"], "sensitive": false]).0, 200)
-      XCTAssertEqual(coreCall("/setup/store", ["name": "gmail", "values": ["GMAIL_TOKEN": "ci-dummy"], "sensitive": true]).0, 200)
-    }
     let key = (try? JSONSerialization.jsonObject(with: coreCall("/key").1)) as? [String: String] ?? [:]
+    if parts.count == 3, let ak = key["agreementKey"] {
+      XCTAssertEqual(coreCall("/setup/phone", ["signingKey": parts[1], "agreementKey": parts[2]]).0, 200, "core takes the phone's keys")
+      // store values travel sealed to the core's agreement key
+      XCTAssertEqual(coreCall("/setup/store", ["name": "default", "values": SetupSigner.seal(["GITHUB_TOKEN": "ci-dummy", "OTHER": "x"], to: ak), "sensitive": false]).0, 200)
+      XCTAssertEqual(coreCall("/setup/store", ["name": "gmail", "values": SetupSigner.seal(["GMAIL_TOKEN": "ci-dummy"], to: ak), "sensitive": true]).0, 200)
+      // the core's own store: listed on the Stores page, never offered to a session
+      XCTAssertEqual(coreCall("/setup/store", ["name": "core", "values": SetupSigner.seal(["FLY_API_TOKEN": "ci-dummy", "FLY_APP": "ci-dummy"], to: ak), "sensitive": true]).0, 200)
+    }
     let field = el("pair-core-field")
     wait(field, 10, "core key field")
     field.tap()
@@ -83,6 +91,7 @@ final class Jarvis2UITests: XCTestCase {
     wait(el("unlock-default"), 30, "secure stores page")
     sleep(1)
     shot("secure-stores")
+    XCTAssertTrue(el("unlock-core").exists, "[\(tag)] the core store is listed on the Stores page")
     el("unlock-default").tap()
     wait(el("lock-default"), 30, "default unlocked (core's signed unlocked list)")
     XCTAssertFalse(el("secure-error").exists, "[\(tag)] unlock error: \(el("secure-error").exists ? el("secure-error").label : "")")
@@ -103,6 +112,8 @@ final class Jarvis2UITests: XCTestCase {
     wait(el("secure-create"), 20, "secure new session page")
     sleep(2)
     shot("secure-new-session")
+    XCTAssertTrue(el("secure-store-default").exists, "[\(tag)] default offered")
+    XCTAssertFalse(el("secure-store-core").exists, "[\(tag)] the core store is not offered to a session")
     if el("secure-store-gmail").waitForExistence(timeout: 5) {
       el("secure-store-gmail").tap(); sleep(1)
       XCTAssertTrue(el("secure-sensitive-warning").exists, "[\(tag)] sensitive warning")

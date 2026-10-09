@@ -41,14 +41,23 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with: { go-version: "1.25" }
+      - name: setup key (a fresh pair per run; the core gets the public half)
+        run: |
+          openssl ecparam -name prime256v1 -genkey -noout -out "$RUNNER_TEMP/setup.pem"
+          priv=$(openssl pkcs8 -topk8 -nocrypt -in "$RUNNER_TEMP/setup.pem" -outform DER | base64 | tr -d '\n')
+          echo "::add-mask::$priv"
+          echo "SETUP_PRIVATE_KEY=$priv" >> "$GITHUB_ENV"
+          echo "SETUP_KEY=$(openssl ec -in "$RUNNER_TEMP/setup.pem" -pubout -outform DER 2>/dev/null | tail -c 65 | base64 | tr -d '\n')" >> "$GITHUB_ENV"
+          rm "$RUNNER_TEMP/setup.pem"
       - name: core (fakefly)
         run: |
           cd core && go build -tags fakefly -o ../core-bin .
           cd .. && (ADDR=127.0.0.1:8090 nohup ./core-bin > core.log 2>&1 &)
-          for i in $(seq 30); do grep -q "SETUP TOKEN" core.log && break; sleep 1; done
+          for i in $(seq 30); do curl -sf http://127.0.0.1:8090/key > /dev/null && break; sleep 1; done
+          cat core.log
       - name: swift run Interop
         working-directory: app/ios/interop
-        run: swift run -c release Interop http://127.0.0.1:8090 "$(sed -n 's/.*SETUP TOKEN \([0-9a-f]*\).*/\1/p' ../../../core.log)"
+        run: swift run -c release Interop http://127.0.0.1:8090 "$SETUP_PRIVATE_KEY"
 
   simulator:
     if: inputs.only != 'testflight'
@@ -65,6 +74,14 @@ jobs:
         run: |
           xcrun -sdk iphonesimulator swiftc -typecheck -parse-as-library -swift-version 5 \
             -target arm64-apple-ios26.0-simulator Shell/*.swift Shared/*.swift
+      - name: setup key (a fresh pair per run; the core gets the public half, the UI test the private one)
+        run: |
+          openssl ecparam -name prime256v1 -genkey -noout -out "$RUNNER_TEMP/setup.pem"
+          priv=$(openssl pkcs8 -topk8 -nocrypt -in "$RUNNER_TEMP/setup.pem" -outform DER | base64 | tr -d '\n')
+          echo "::add-mask::$priv"
+          echo "SETUP_PRIVATE_KEY=$priv" >> "$GITHUB_ENV"
+          echo "SETUP_KEY=$(openssl ec -in "$RUNNER_TEMP/setup.pem" -pubout -outform DER 2>/dev/null | tail -c 65 | base64 | tr -d '\n')" >> "$GITHUB_ENV"
+          rm "$RUNNER_TEMP/setup.pem"
       - name: core (fakefly) + router
         run: |
           mkdir -p bin out
@@ -105,15 +122,14 @@ jobs:
             pkill -x core || true; pkill -x router || true; sleep 1
             rm -rf data-$a && mkdir -p data-$a
             (ADDR=127.0.0.1:8090 nohup bin/core > out/core-$a.log 2>&1 &)
-            for i in $(seq 30); do grep -q "SETUP TOKEN" out/core-$a.log && break; sleep 1; done
+            for i in $(seq 30); do curl -sf http://127.0.0.1:8090/key > /dev/null && break; sleep 1; done
             (NO_ACCESS=1 CORE_URL=http://127.0.0.1:8090 DATA_DIR=$PWD/data-$a WEB_DIR=$PWD/web SNAPSHOT_WAIT_SECONDS=2 \
               SESSION_IMAGE=ghcr.io/de0ch/jarvis2-session:ci ADDR=127.0.0.1:18080 nohup bin/router > out/router-$a.log 2>&1 &)
             sleep 2 && curl -sf http://127.0.0.1:18080/api/state > /dev/null && echo "router up ($a)"
-            TOKEN=$(sed -n 's/.*SETUP TOKEN \([0-9a-f]*\).*/\1/p' out/core-$a.log)
             xcrun simctl keychain "iPhone 17" reset
             xcrun simctl uninstall "iPhone 17" dev.de0ch.jarvis2 || true
             xcrun simctl ui "iPhone 17" appearance $a
-            (cd app/ios && TEST_RUNNER_JARVIS2_APPEARANCE=$a TEST_RUNNER_JARVIS2_SETUP_TOKEN=$TOKEN TEST_RUNNER_JARVIS2_CORE=http://127.0.0.1:8090 \
+            (cd app/ios && TEST_RUNNER_JARVIS2_APPEARANCE=$a TEST_RUNNER_JARVIS2_SETUP_KEY=$SETUP_PRIVATE_KEY TEST_RUNNER_JARVIS2_CORE=http://127.0.0.1:8090 \
               xcodebuild test-without-building -workspace Jarvis2.xcworkspace -scheme Jarvis2 \
               -destination 'platform=iOS Simulator,name=iPhone 17' -derivedDataPath ../../dd \
               -resultBundlePath ../../result-$a.xcresult 2>&1 | tee ../../test-$a.log | grep -E "error:|Test Case|\*\* " || true)

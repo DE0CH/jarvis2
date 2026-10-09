@@ -124,15 +124,15 @@ struct SecureNewSession: View {
 
   private func toggle(_ n: String) { if picked.contains(n) { picked.remove(n) } else { picked.insert(n) } }
   private func apply(_ list: [StoreView]) {
-    stores = list
+    stores = list.filter { !$0.isCore }  // the core's own store never goes to a session
     // pre-selection from normal mode: known, NON-sensitive stores only
     let pre = (options["stores"] as? [String]) ?? []
-    if picked.isEmpty { picked = Set(pre.filter { n in list.contains { $0.name == n && !$0.sensitive } }) }
+    if picked.isEmpty { picked = Set(pre.filter { n in stores.contains { $0.name == n && !$0.sensitive } }) }
   }
   private func load() async {
     if let p = shell.prefetched { apply(p) }
     if (options["harness"] as? String) == "opencode" { harness = "opencode" }
-    do { let p = try await RouterClient.shared.stores(); shell.prefetched = p; let keep = picked; apply(p); if !keep.isEmpty { picked = keep.intersection(p.map(\.name)) } }
+    do { let p = try await RouterClient.shared.stores(); shell.prefetched = p; let keep = picked; apply(p); if !keep.isEmpty { picked = keep.intersection(stores.map(\.name)) } }
     catch { if stores.isEmpty { loadError = errText(error) } }
   }
 
@@ -267,7 +267,7 @@ struct SecureStores: View {
         ForEach(stores) { s in
           VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 6) {
-              Text(s.name).font(.system(size: K.fontSize[2], weight: .medium)).foregroundStyle(Radix.gray.s[12])
+              Text(s.title).font(.system(size: K.fontSize[2], weight: .medium)).foregroundStyle(Radix.gray.s[12])
               if s.sensitive { Badge(text: "Sensitive", color: .red) }
               Badge(text: s.unlocked ? "Unlocked" : "Locked", color: s.unlocked ? .blue : .gray)
               Spacer()

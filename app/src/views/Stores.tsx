@@ -6,6 +6,7 @@ import { useStore, loadStores, refresh } from "../lib/store";
 import { hasShell, requestSecure } from "../lib/shell";
 import { Button, Card, Flex, Heading, Muted, P, Pill, Spinner } from "../ui/kit";
 import { Cards } from "../ui/cards";
+import { CORE_STORE } from "../lib/api";
 
 export function Stores() {
   const r = useStore((s) => s.stores);
@@ -23,7 +24,7 @@ export function Stores() {
           {r.items.map((s) => (
             <Card key={s.name} data={{ store: s.name }}>
               <Flex justify="space-between" align="flex-start" gap={2} mb={1}>
-                <Heading size={3} style={{ flex: 1 }}>{s.name}</Heading>
+                <Heading size={3} style={{ flex: 1 }}>{s.name === CORE_STORE ? "core — the core's own Fly token" : s.name}</Heading>
                 <Flex gap={1}>{s.sensitive && <Pill kind="bad">sensitive</Pill>}{s.unlocked ? <Pill kind="ok">unlocked</Pill> : <Pill kind="dim">locked</Pill>}</Flex>
               </Flex>
               <Muted>{s.keys.length} key{s.keys.length === 1 ? "" : "s"}{s.keys.length ? ": " + s.keys.join(", ") : ""}</Muted>

@@ -1,7 +1,9 @@
 // Round trips between the shell's CoreCrypto and the real core (fakefly build): pairing strings, signed
 // store lists, split-key unlock, lock, the signed unlocked list, a new-session approval and a
 // resume-with-upgrade approval (burn cert) — plus the refusals: a forged signature, a wrong share, a
-// challenge for other stores, an upgrade without its burn cert.
+// challenge for other stores, an upgrade without its burn cert; and setup: signed by the setup key (unsigned,
+// replayed, stale or wrongly-signed calls refused), store values sealed to the core, the `core` store seeded
+// and unlocked but never given to a session.
 #if canImport(CryptoKit)
 import CryptoKit
 #else
@@ -13,23 +15,28 @@ import FoundationNetworking
 #endif
 
 let args = CommandLine.arguments
-guard args.count == 3 else { print("usage: Interop <core url> <setup token>"); exit(2) }
-let core = args[1].hasSuffix("/") ? String(args[1].dropLast()) : args[1], setupToken = args[2]
+guard args.count == 3 else { print("usage: Interop <core url> <setup private key, base64 DER>"); exit(2) }
+let core = args[1].hasSuffix("/") ? String(args[1].dropLast()) : args[1]
+guard let setupKey = SetupSigner(base64DER: args[2]) else { print("the setup key isn't a base64 DER P-256 private key"); exit(2) }
 var failures = 0
 setvbuf(stdout, nil, _IOLBF, 0)
 func check(_ ok: Bool, _ what: String) { print((ok ? "ok   " : "FAIL ") + what); if !ok { failures += 1 } }
 func throwsErr(_ fn: () throws -> Void) -> Bool { do { try fn(); return false } catch { return true } }
 
-func call(_ path: String, _ body: Any? = nil, setup: Bool = false) -> (Int, Data) {
+/// setup: nil = no signature; else the headers to send (from SetupSigner.headers over this exact body)
+func call(_ path: String, _ body: Any? = nil, headers: ((Data) -> [String: String])? = nil) -> (Int, Data) {
   var r = URLRequest(url: URL(string: core + path)!)
-  if let body { r.httpMethod = "POST"; r.httpBody = try! JSONSerialization.data(withJSONObject: body); r.setValue("application/json", forHTTPHeaderField: "Content-Type") }
-  if setup { r.setValue(setupToken, forHTTPHeaderField: "X-Setup-Token") }
+  var raw = Data()
+  if let body { raw = try! JSONSerialization.data(withJSONObject: body); r.httpMethod = "POST"; r.httpBody = raw; r.setValue("application/json", forHTTPHeaderField: "Content-Type") }
+  for (k, v) in headers?(raw) ?? [:] { r.setValue(v, forHTTPHeaderField: k) }
   let sem = DispatchSemaphore(value: 0)
   var out: (Int, Data) = (0, Data())
   URLSession.shared.dataTask(with: r) { d, resp, _ in out = ((resp as? HTTPURLResponse)?.statusCode ?? 0, d ?? Data()); sem.signal() }.resume()
   sem.wait()
   return out
 }
+let P256Other = SetupSigner(base64DER: P256.Signing.PrivateKey().derRepresentation.base64EncodedString())!
+func setup(_ path: String, _ body: Any) -> (Int, Data) { call(path, body, headers: { setupKey.headers("POST", path, $0) }) }
 func doc(_ d: Data) -> SignedDoc { try! JSONDecoder().decode(SignedDoc.self, from: d) }
 func docJSON(_ d: SignedDoc) -> [String: String] { ["payload": d.payload, "sig": d.sig] }
 
@@ -37,10 +44,25 @@ func docJSON(_ d: SignedDoc) -> [String: String] { ["payload": d.payload, "sig":
 let signing = P256.Signing.PrivateKey(), agreement = P256.KeyAgreement.PrivateKey()
 let phone = KeyPairString(role: "phone", signingKey: signing.publicKey.x963Representation.base64EncodedString(), agreementKey: agreement.publicKey.x963Representation.base64EncodedString())
 check((try? KeyPairString.parse(phone.text, role: "phone")) == phone, "phone string round-trips")
-check(call("/setup/phone", ["signingKey": phone.signingKey, "agreementKey": phone.agreementKey], setup: true).0 == 200, "core accepts the phone's keys")
-check(call("/setup/store", ["name": "default", "values": ["A": "1", "B": "2"], "sensitive": false], setup: true).0 == 200, "seed store default")
-check(call("/setup/store", ["name": "gmail", "values": ["G": "x"], "sensitive": true], setup: true).0 == 200, "seed store gmail (sensitive)")
 let key = try! JSONSerialization.jsonObject(with: call("/key").1) as! [String: String]
+
+// ---- setup: signed by the setup key, each signature once, within the clock window ----
+let phoneBody = ["signingKey": phone.signingKey, "agreementKey": phone.agreementKey]
+check(call("/setup/phone", phoneBody).0 == 401, "an unsigned setup call is refused")
+check(call("/setup/phone", phoneBody, headers: { P256Other.headers("POST", "/setup/phone", $0) }).0 == 401, "a setup call signed by another key is refused")
+check(call("/setup/phone", phoneBody, headers: { setupKey.headers("POST", "/setup/phone", $0, time: Int(Date().timeIntervalSince1970) - 600) }).0 == 401, "a setup call 10 minutes old is refused")
+check(call("/setup/phone", phoneBody, headers: { setupKey.headers("POST", "/setup/store", $0) }).0 == 401, "a signature for another path is refused")
+let phoneRaw = try! JSONSerialization.data(withJSONObject: phoneBody), phoneHdr = setupKey.headers("POST", "/setup/phone", phoneRaw)
+check(call("/setup/phone", phoneBody, headers: { raw in raw == phoneRaw ? phoneHdr : [:] }).0 == 200, "core accepts the phone's keys")
+check(call("/setup/phone", phoneBody, headers: { _ in phoneHdr }).0 == 401, "a replayed setup signature is refused")
+func seed(_ name: String, _ values: [String: String], sensitive: Bool) -> Int {
+  setup("/setup/store", ["name": name, "values": SetupSigner.seal(values, to: key["agreementKey"]!), "sensitive": sensitive]).0
+}
+check(setup("/setup/store", ["name": "plain", "values": ["A": "1"], "sensitive": false]).0 == 400, "unsealed store values are refused")
+check(setup("/setup/store", ["name": "plain", "values": SetupSigner.seal(["A": "1"], to: phone.agreementKey), "sensitive": false]).0 == 400, "values sealed to another key are refused")
+check(seed("default", ["A": "1", "B": "2"], sensitive: false) == 200, "seed store default (sealed)")
+check(seed("gmail", ["G": "x"], sensitive: true) == 200, "seed store gmail (sensitive)")
+check(seed("default", ["A": "3"], sensitive: false) != 200, "a store is never replaced")
 let coreStr = try! KeyPairString.parse("jarvis2-core:\(key["signingKey"]!):\(key["agreementKey"]!)", role: "core")
 let coreKey = coreStr.signingKey
 check(throwsErr { _ = try KeyPairString.parse(coreStr.text, role: "phone") }, "a core string is refused where the phone's belongs")
@@ -107,6 +129,21 @@ check(throwsErr { _ = try Checks.review(challenge: ch2, routerKind: "resume-upgr
 let r2 = try! Checks.review(challenge: ch2, routerKind: "resume-upgrade", burnCert: burn, coreKey: coreKey)
 let cert2 = doc(call("/respond/phone", ["challenge": docJSON(ch2), "signature": try! signing.signature(for: Data(ch2.payload.utf8)).derRepresentation.base64EncodedString()]).1)
 check(!throwsErr { try Checks.certFor(r2, cert: cert2, coreKey: coreKey) }, "core issues the resumed machine's cert")
+
+// ---- the core store: seeded and unlocked like any other, never given to a session ----
+check(seed("core", ["FLY_API_TOKEN": "ci-dummy", "FLY_APP": "ci-dummy"], sensitive: true) == 200, "seed the core store")
+let (cs, cb) = unlock("core") { b in
+  let e = try P256.KeyAgreement.PublicKey(x963Representation: Data(base64Encoded: b.e)!)
+  return try agreement.sharedSecretFromKeyAgreement(with: e).withUnsafeBytes { Data($0) }
+}
+check(cs == 200, "the core store unlocks (HTTP \(cs))")
+let m3 = start("img3")
+let (rs, _) = call("/succession", ["predecessor": NSNull(), "machine": m3.id, "stores": ["core"], "options": ["harness": "claude"]])
+check(rs == 400, "a new session asking for the core store is refused (HTTP \(rs))")
+let (rs2, _) = call("/succession", ["predecessor": NSNull(), "machine": m3.id, "stores": ["default", "core"], "options": ["harness": "claude"]])
+check(rs2 == 400, "…also alongside another store (HTTP \(rs2))")
+let cu = try! CoreCrypto.decode(doc(cb), by: coreKey, as: KindDoc.self, what: "unlocked")
+check((try? CoreCrypto.decode(doc(call("/lock", ["id": cu.id!]).1), by: coreKey, as: KindDoc.self, what: "locked"))?.kind == "locked", "the core store locks")
 
 // ---- lock ----
 let lk = try! CoreCrypto.decode(doc(call("/lock", ["id": u.id!]).1), by: coreKey, as: KindDoc.self, what: "locked")

@@ -89,7 +89,14 @@ struct Challenge: Codable { let kind: String; let nonce: String; let request: Su
 struct Cert: Codable {
   let kind: String; let predecessorId: String?; let machine: StartedMachine?; let stores: [String]?; let options: Options; let nonce: String; let issuedAt: String
 }
-struct StoreView: Codable, Identifiable, Equatable { let name: String; let keys: [String]; let sensitive: Bool; let unlocked: Bool; var id: String { name } }
+struct StoreView: Codable, Identifiable, Equatable {
+  let name: String; let keys: [String]; let sensitive: Bool; let unlocked: Bool; var id: String { name }
+  /// the store named `core` holds the core's own Fly token: unlocked and locked on the Stores page, never
+  /// offered to a session (the core refuses it in succession)
+  static let coreStore = "core"
+  var isCore: Bool { name == StoreView.coreStore }
+  var title: String { isCore ? "core — the core's own Fly token" : name }
+}
 struct StoresDoc: Codable { let kind: String; let nonce: String; let stores: [StoreView] }
 struct UnlockRow: Codable, Identifiable, Equatable { let id: String; let store: String; let since: String }
 struct UnlockedDoc: Codable { let kind: String; let nonce: String; let unlocked: [UnlockRow] }

@@ -3,7 +3,7 @@
 // stores and the harness are chosen for real and the iPhone signs. On the web the form only creates a
 // pending request (POST api/sessions); the approval happens in the app.
 import { useEffect, useRef, useState } from "react";
-import { api, newId } from "../lib/api";
+import { api, newId, CORE_STORE } from "../lib/api";
 import { useStore, loadStores, refresh, settle, toast, failed } from "../lib/store";
 import { hasShell, requestSecure } from "../lib/shell";
 import { Button, CheckboxCards, Flex, Lbl, Muted, RadioCards, Spinner, TextArea, TextField } from "../ui/kit";
@@ -13,8 +13,9 @@ import { Page, useDone } from "../ui/page";
 export function NewSession() {
   const SIZES = useStore((s) => s.sizes), MODELS = useStore((s) => s.models), stores = useStore((s) => s.stores);
   useEffect(() => { loadStores(); }, []);
-  // the normal-mode form never lists sensitive stores: those are only picked on the secure page
-  const plain = stores.items.filter((s) => !s.sensitive);
+  // the normal-mode form never lists sensitive stores (those are only picked on the secure page), nor the
+  // core's own store (it never goes to a session)
+  const plain = stores.items.filter((s) => !s.sensitive && s.name !== CORE_STORE);
   const [picked, setPicked] = useState<string[]>([]);
   const touched = useRef(false);
   useEffect(() => { if (!touched.current) setPicked(plain.some((s) => s.name === "default") ? ["default"] : []); }, [plain.map((s) => s.name).join(",")]);

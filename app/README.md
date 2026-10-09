@@ -34,7 +34,7 @@ reject an approval and pause/resume/destroy; approvals happen only in the app (i
 ## CI (`.github/workflows/app.yml`, GitHub's free macOS runners — the repo is public)
 
 - **web** — typecheck + the web export.
-- **interop** — the core built with `-tags fakefly`, then `swift run Interop <core> <setup token>` (CryptoKit).
+- **interop** — the core built with `-tags fakefly`, then `swift run Interop <core> <setup private key>` (CryptoKit; CI makes a fresh setup key pair per run and gives the core its public half as `SETUP_KEY`).
   Locally on Linux: `swift run` with a swift.org toolchain uses swift-crypto instead.
 - **simulator** — core (fakefly) + router (`NO_ACCESS=1`, `SNAPSHOT_WAIT_SECONDS=2`) on the runner, the app
   built with `JARVIS_BASE=http://127.0.0.1:18080/`, then the UI walkthrough once light, once dark (fresh core,
