@@ -264,6 +264,10 @@ func prepare() error {
 			return fmt.Errorf("snapshot: %w", err)
 		}
 	}
+	// 2b. a new line restoring a destroyed session's archived snapshot (restore.go)
+	if err := restoreArchived(c, coreKey, me, &cert); err != nil {
+		return fmt.Errorf("restore: %w", err)
+	}
 
 	// 3. the secrets, sealed to this machine's encryption key
 	secrets, err := pullSecrets(c, coreKey, me)
@@ -423,7 +427,7 @@ func cloneRepos(secrets map[string]string) {
 // ---- snapshots ------------------------------------------------------------------------------------
 
 // what a snapshot holds (relative to $HOME): the conversation, the work, the artefacts
-var snapshotPaths = []string{".claude/projects", ".claude.json", ".claude/.first-prompt-sent", "workspace", "artifacts", allowFile}
+var snapshotPaths = []string{".claude/projects", ".claude.json", ".claude/.first-prompt-sent", "workspace", "artifacts", allowFile, changesFile}
 
 func makeSnapshot() ([]byte, error) {
 	home, _ := os.UserHomeDir()
@@ -488,10 +492,20 @@ func restore(c *client, predSigningKey string) error {
 	if !verify(predSigningKey, []byte(hex.EncodeToString(sum[:])), hdr.Get("X-Snapshot-Sig")) {
 		return errors.New("the snapshot isn't signed by the predecessor")
 	}
+	n, err := unpack(body)
+	if err != nil {
+		return err
+	}
+	log.Printf("restored the predecessor's snapshot (%d files)", n)
+	return nil
+}
+
+// unpack: a snapshot (tar.gz relative to $HOME) into $HOME
+func unpack(body []byte) (int, error) {
 	home, _ := os.UserHomeDir()
 	gz, err := gzip.NewReader(bytes.NewReader(body))
 	if err != nil {
-		return err
+		return 0, err
 	}
 	tr := tar.NewReader(gz)
 	n := 0
@@ -501,11 +515,11 @@ func restore(c *client, predSigningKey string) error {
 			break
 		}
 		if err != nil {
-			return err
+			return n, err
 		}
 		name := filepath.Clean(h.Name)
 		if filepath.IsAbs(name) || strings.HasPrefix(name, "..") {
-			return fmt.Errorf("bad path in snapshot: %s", h.Name)
+			return n, fmt.Errorf("bad path in snapshot: %s", h.Name)
 		}
 		dst := filepath.Join(home, name)
 		switch h.Typeflag {
@@ -519,18 +533,17 @@ func restore(c *client, predSigningKey string) error {
 			os.MkdirAll(filepath.Dir(dst), 0o755)
 			f, err := os.OpenFile(dst, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, os.FileMode(h.Mode)&0o777)
 			if err != nil {
-				return err
+				return n, err
 			}
 			_, err = io.Copy(f, tr)
 			f.Close()
 			if err != nil {
-				return err
+				return n, err
 			}
 			n++
 		}
 	}
-	log.Printf("restored the predecessor's snapshot (%d files)", n)
-	return nil
+	return n, nil
 }
 
 // ---- agent: the router's commands (pause = snapshot) -----------------------------------------------
@@ -565,6 +578,7 @@ func agent() error {
 }
 
 func uploadSnapshot(c *client) error {
+	writeChanges() // restore.go: the repos' state, for the router's uncommitted-work check
 	body, err := makeSnapshot()
 	if err != nil {
 		return err

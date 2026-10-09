@@ -152,7 +152,11 @@ func (r *Router) buildHandlers() {
 			return sessions[i]["created"].(time.Time).After(sessions[j]["created"].(time.Time))
 		})
 		sort.Slice(approvals, func(i, j int) bool { return approvals[i].Created.Before(approvals[j].Created) })
-		writeJSON(w, 200, map[string]any{"sessions": orEmpty(sessions), "approvals": orEmptyA(approvals), "core": coreInfo})
+		out := map[string]any{"sessions": orEmpty(sessions), "approvals": orEmptyA(approvals), "core": coreInfo}
+		for _, h := range stateHooks {
+			h(r, out)
+		}
+		writeJSON(w, 200, out)
 	})
 	app("GET /api/sizes", func(w http.ResponseWriter, req *http.Request) {
 		writeJSON(w, 200, map[string]any{"sizes": []map[string]string{
@@ -297,7 +301,7 @@ func (r *Router) buildHandlers() {
 		writeJSON(w, 200, map[string]bool{"ok": true})
 	})
 	app("POST /api/sessions/{id}/destroy", func(w http.ResponseWriter, req *http.Request) {
-		if err := r.Destroy(req.PathValue("id")); err != nil {
+		if err := r.DestroyWith(req.PathValue("id"), req.URL.Query().Get("force") == "1"); err != nil {
 			writeErr(w, err)
 			return
 		}

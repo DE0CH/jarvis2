@@ -34,6 +34,9 @@ type Session struct {
 	UserTitle      string     `json:"userTitle,omitempty"`      // Deyao's own rename (the transcript's custom title): beats Label
 	DiscordChannel string     `json:"discordChannel,omitempty"` // the session's channel (discord.go), LOBSTER_CHANNEL on the machine
 	Live           *Liveness  `json:"live,omitempty"`           // reported status, auto-pause/one-shot settings (autopilot.go)
+	ArchiveDir     string     `json:"archiveDir,omitempty"`     // archive.go: fixed by the destroy that archives it
+	RestoreFrom    string     `json:"restoreFrom,omitempty"`    // restore.go: the record this session restores
+	RestoreCert    *Doc       `json:"restoreCert,omitempty"`    // restore.go: that record's signer cert
 }
 
 type Approval struct {
@@ -50,7 +53,10 @@ type Approval struct {
 
 type Record struct {
 	Session
-	DestroyedAt time.Time `json:"destroyedAt"`
+	DestroyedAt  time.Time     `json:"destroyedAt"`
+	Archive      *ArchiveInfo  `json:"archive,omitempty"`      // archive.go
+	ArchiveError string        `json:"archiveError,omitempty"` // a forced destroy whose archive failed
+	Restored     []RestoreMark `json:"restored,omitempty"`
 }
 
 // Started: what the core reported at start (the machine's keys authenticate its requests here)
@@ -72,6 +78,7 @@ type persisted struct {
 	Grants    map[string]*StoredGrant `json:"grants"` // id → a phone-signed grant or standing rule (grants.go)
 
 	Schedules map[string]*Schedule `json:"schedules,omitempty"` // session id → wakeups, crons, resume prompt (schedule.go)
+	Budget    *BudgetState         `json:"budget,omitempty"`    // budget.go: this month's Fly spend estimate
 }
 
 type State struct {

@@ -17,12 +17,12 @@ Facts: the router has no Fly token (it calls the core's start/kill/certify); its
 - **Restart / env patch / env-resync / transcript rollback** (FT, SB, FX): missing; re-pull secrets exists only inside add-store and downgrade.
 - **Permission-mode switch** (FX): missing; mode is unsigned env.
 - **Auto-pause + idle countdown**: present (machine-reported status, `POST /api/sessions/:id/auto-pause`, `pauseInMs`; `autoPauseVeto` hook for the scheduler). Not ported: Jarvis 1's "don't release if it moved during the snapshot" check.
-- **Destroy + archive + uncommitted-work check** (FX, SB, DT): partial; destroy burns, nothing is archived.
+- **Destroy + archive + uncommitted-work check** (SB): present. Destroy pauses a running session first (its final signed snapshot), the router archives it to the Storage Box with its own creds (`router/archive.go`: Jarvis 1 layout + `jarvis2/` signed snapshot, cert, core cert; index `.index/jarvis2-destroyed-sessions.json`), runs `onDestroy` hooks, then burns. A failed archive leaves it paused (`?force=1` destroys anyway). `GET /api/sessions/:id/changes`: running via the `archive` holder's grant, paused from the snapshot's `.jarvis2-changes.txt`.
 - **One-shot sessions**: present (`oneShot` → `SESSION_ONE_SHOT=1`; the router destroys on the supervisor's marker). Destroy doesn't archive yet, nor DM about lost work.
 - **First prompt**: present (unsigned env). **First-prompt attachments** (SB on machine): missing.
 
 ## Previous sessions
-- List: present (router-local). Transcript tail, restore a destroyed session, index/delete/purge: missing (restore after a burn needs a design).
+- List: present (router-local). Transcript tail (paused: the volume's snapshot; destroyed: the archive), delete/purge: present. Restore a destroyed session: present as a NEW line (phone-approved like a new session) whose first machine restores the archived snapshot, checking the old core-signed cert passed in its env and the snapshot's signature (`router/restore.go`, `machine/restore.go`). Not phone-signed: which old snapshot is restored (the core's Options can't carry it). Indexing an archive by hand (J1 `POST /api/records`): missing.
 
 ## Terminal, remote control, title
 - Registry read: present (the machine reports it: `/m/status {raw}`, `router/registry.go`). Live terminal (FX), remote page for opencode/openclaw (FX, CFA), `/api/remotes`, app title sync (AT), per-session tunnel origin (CFA): missing.
@@ -30,7 +30,7 @@ Facts: the router has no Fly token (it calls the core's start/kill/certify); its
 ## Automatic behaviour
 - Auto-pause, Escape-cancel of a stale prompt (holder `status`), "needs you"/idle/dead DMs (+ `notify-idle` mute), model-downgrade DM (incl. the dialog, holder `status`), stall nudge (via `Deliver`): present (`router/autopilot.go`). Refused commands set `needsGrant`.
 - Claude credential refresh: via Jarvis 1 (shared login). Fan-out: machine polls; login repair + "continue": present (router fetches the pair with `JARVIS1_CREDENTIALS_ID/SECRET`, holder `login`; no separate fast-repair timers, the 30 s tick covers them).
-- Fly budget cap and "Also on Fly" (FT read, DT): missing; the router has no Fly read.
+- Fly budget cap and "Also on Fly": present (`router/budget.go`, read-only `FLY_READ_TOKEN` on app jarvis2-sessions; estimate in router state, DM at `FLY_BUDGET_WARN_USD` 25, pause everything at `FLY_BUDGET_USD` 30; `/api/state` `budget`, `fly`).
 - Browserbase budget DM: missing (could stay in J1).
 - Discord channel per session (DT, SB): present (`router/discord.go`, Jarvis 1's bot lobster, category "Jarvis 2"): made at
   start/resume and passed as `LOBSTER_CHANNEL` (unsigned machine env), renamed as the title changes (2 edits per 10

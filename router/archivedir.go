@@ -9,6 +9,9 @@ import (
 // claude-records/<yyyy-mm-dd of creation> <title, unsafe characters → space, ≤60 chars>. The archive and the
 // Discord export (discord/…) both go here, so Jarvis 1's transcript search indexes them.
 func (r *Router) archiveDir(s Session) string {
+	if s.ArchiveDir != "" {
+		return s.ArchiveDir // picked (made unique) by the destroy that archives it (archive.go)
+	}
 	created := s.Created
 	if created.IsZero() {
 		created = time.Now()

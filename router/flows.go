@@ -363,7 +363,11 @@ func (r *Router) Resume(id string, upgrade bool) error {
 
 // ---- destroy ---------------------------------------------------------------------------------------------
 
-func (r *Router) Destroy(id string) error {
+func (r *Router) Destroy(id string) error { return r.DestroyWith(id, false) }
+
+// DestroyWith: a running session is paused first (its final snapshot), then archived (archive.go); a failed
+// archive leaves it paused with the error, unless force. Then the destroy hooks, the burn, the records.
+func (r *Router) DestroyWith(id string, force bool) error {
 	unlock, err := r.lock(id)
 	if err != nil {
 		return err
@@ -381,11 +385,13 @@ func (r *Router) Destroy(id string) error {
 	r.setState(id, "destroying", "")
 	go func() {
 		defer unlock()
-		if s.MachineID != "" {
-			if _, err := r.core.Call("/kill", map[string]string{"machine": s.MachineID}); err != nil {
-				r.setState(id, "failed", "kill: "+err.Error())
-				return
-			}
+		if s.MachineID != "" && !r.snapshotAndKill(id, s.MachineID) {
+			return
+		}
+		archived, aerr := r.archive(id)
+		if aerr != nil && !force {
+			r.setState(id, "paused", "archive: "+aerr.Error())
+			return
 		}
 		if s.Cert != nil {
 			// end the line: a succession to the null image, answered by the dead-machine responder → burn cert
@@ -410,6 +416,14 @@ func (r *Router) Destroy(id string) error {
 			h(r, s)
 		}
 		r.finish(id)
+		r.st.Do(func(d *persisted) {
+			if len(d.Records) > 0 && d.Records[0].ID == id {
+				d.Records[0].Archive = archived
+				if aerr != nil {
+					d.Records[0].ArchiveError = aerr.Error()
+				}
+			}
+		})
 	}()
 	return nil
 }

@@ -20,6 +20,7 @@ type (
 func (r *Router) registerFeatures(app appRoute, m machineRoute) {
 	r.registerAutopilot(app, m)
 	r.registerSessionAPI(app, m) // sessionapi.go: sets deliverHook (peer.go); wakeups, crons, /m/api
+	r.registerArchive(app, m)    // archive.go, restore.go (budget.go needs no routes: /api/state via stateHooks)
 }
 
 // startFeatures: called once from main after the router is built
@@ -27,7 +28,12 @@ func (r *Router) startFeatures() {
 	r.startDiscord()
 	r.startAutopilot()
 	go r.scheduleLoop() // schedule.go: wakeups, crons, resume prompts
+	go r.archiveLoop()  // archive.go: restore files tidied
+	go r.budgetLoop()   // budget.go: the Fly budget cap
 }
+
+// stateHooks: add fields to GET /api/state
+var stateHooks []func(r *Router, out map[string]any)
 
 // DM: a message to Deyao's Discord DM (filled in by discord.go); without a bot token it only logs
 var dmHook func(text string)

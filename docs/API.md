@@ -66,10 +66,28 @@ gone (moved to records); `failed` (with `error`).
 | `POST /api/sessions` | Body `{requestId, label, prompt, model, permissionMode, size, harness, stores: [], oneShot, autoPause}` (`oneShot`: the machine gets `SESSION_ONE_SHOT=1` and the session is destroyed when its prompt is done; `autoPause` defaults to true, false for one-shot; both show in the approval's `options`). The router adds the harness's stores and asks the core for a challenge (`succession(null, …)`, before any machine); the approval (kind `new-session`) appears at once. Answers `{id: null, requestId}`. |
 | `POST /api/sessions/:id/pause` | The machine snapshots itself (signed), then the core kills it. |
 | `POST /api/sessions/:id/resume` | Optional `prompt` (≤ 4000 chars): delivered into the session as a peer message once it is `started` again (dropped if the start fails or is rejected). Body `{upgrade: false}`: the same image, `approve_by_dead_machine`, then start + certify — no approval. `{upgrade: true}`: the newest session image; an approval of kind `resume-upgrade` first (reject = stays paused), then start + certify. |
-| `POST /api/sessions/:id/destroy` | Kill (if running), then a burn: a succession to the null image, approved by the dead-machine rule and certified. The session moves to `GET /api/records`. |
-| `GET /api/records` | Destroyed sessions `{records: [...]}` |
+| `POST /api/sessions/:id/destroy` | A running session is paused first (the machine's final signed snapshot, then the core's kill); the snapshot is archived to the Storage Box (below); then a burn: a succession to the null image, approved by the dead-machine rule and certified. The session moves to `GET /api/records`. A failed archive leaves the session `paused` with `error: "archive: …"`; `?force=1` destroys anyway (the record keeps `archiveError`). |
+| `GET /api/sessions/:id/changes` | Uncommitted / unpushed work per repo under `~/workspace`: `{checked, paused?, reason?, status?, repos: [{name, uncommitted, unpushed /* -1 = no upstream */}]}`. Running: a shell command under the `archive` holder (a grant, standing rule or the session's allow list); paused: as the last snapshot recorded it. |
+| `GET /api/sessions/:id/tail` | A paused session's conversation end, from its snapshot: `{title, sessionId, messages: [{role, text, at}]}` (409 while it runs, 404 without a snapshot). |
+| `GET /api/state` (extra fields) | `budget`: `{month, spentUsd, capUsd, warnUsd, warned, capped, cappedAt, ratePerHour, perMonth, running, volumes, sampledAt}` or null; `fly`: `{apps, app, machines, volumes, other: [{kind, app, id, name, state, region, created, detail}], error, checkedAt}` ("Also on Fly": machines in app jarvis2-sessions that are no running session of the router's, and volumes); `flyApp`. |
+| `GET /api/records` | Destroyed sessions `{records: [...]}`; each has `archive: {dir, title, transcripts, artifacts, signer, snapshotAt, last}` when it was archived, `archiveError`, `restored: [{sessionId, at}]`. |
+| `GET /api/records/:id/tail` | The archived conversation's end (a Range read of its newest transcript), same shape as the session tail. |
+| `DELETE /api/records/:id` | Off the list and the Storage Box index; `?purge=1` deletes its archive too (the whole dir, or only its own files when another record shares the dir). |
+| `POST /api/records/:id/restore` | Body `{requestId?}` → `{id, requestId}`. A NEW session (new line) with the record's options; an approval of kind `new-session` with `options.restore` naming the record. Its first machine restores the archived snapshot (below). |
 | `POST /api/sessions/:id/auto-pause` | Body `{on}` (Jarvis 1's `{enabled}` works too) → `{ok, autoPause: "on" | "off"}`; restarts the idle countdown. |
 | `POST /api/sessions/:id/notify-idle` | Body `{on}` → `{ok, notifyIdle}`: mutes only the idle DM; "needs you", dead and downgrade DMs still come. |
+
+### Archives (Storage Box, router env `STORAGEBOX_HOST/USER/PASSWORD`)
+
+`claude-records/<yyyy-mm-dd> <title>/` (Jarvis 1's layout; ` 2`, ` 3`… when taken): `transcript-<id>.jsonl`, `artifacts/**`,
+`session.json`, `restore-<session id>.json`, and `jarvis2/snapshot.tar.gz` + `snapshot.sig` (the machine's signature over the
+sha256 hex) + `cert.json` (the signer's core-signed cert) + `core-cert.json` (the master-signed core key). Index:
+`claude-records/.index/jarvis2-destroyed-sessions.json` (newest first). `RECORDS_OFF=1` (the e2e test) destroys without archiving.
+
+Restore trust: the router passes the old cert to the new line's first machine in `JARVIS2_RESTORE_CERT`; the machine accepts
+it only with no predecessor, checks it against the core key, the snapshot (`GET /m/restore-snapshot`) against the cert's
+machine key, and refuses a sensitive line's snapshot into a line without a sensitive store. Which snapshot is restored is the
+router's word, not the phone's (the core's options can't carry it).
 
 ## Approvals (the shell's secure pages)
 
@@ -128,6 +146,7 @@ off.
 | `GET /m/cert` | `{cert, predecessorCert, coreCert}` — this machine's latest succession cert, the predecessor's cert when it continues a real machine, and the master-signed recovery statement naming the core's key (the machine checks it against the master key built into its image). 404 until certified. |
 | `GET /m/snapshot` | The predecessor's snapshot: body = tar.gz, header `X-Snapshot-Sig` = base64 signature by the predecessor's signing key over the sha256 of the body. 404 = none. |
 | `POST /m/snapshot` | Upload this machine's snapshot (same format). |
+| `GET /m/restore-snapshot` | A restoring session's first machine only: the archived snapshot, same format, signed by the OLD machine named in `JARVIS2_RESTORE_CERT`. 404 otherwise. |
 | `POST /m/pull-secrets` | The router adds this machine's cert and relays to the core; answers the core's signed `secrets` doc (sealed to the machine's key). |
 | `GET /m/commands` | Long poll (≤ 50 s): `{commands: ["snapshot"]}` or `{commands: []}`. |
 | `POST /m/add-store` | Body `{store}`: asks Deyao (an `add-store` approval) to add one store to this session. |
