@@ -32,7 +32,11 @@ Facts: the router has no Fly token (it calls the core's start/kill/certify); its
 - Claude credential refresh: via Jarvis 1 (shared login). Fan-out: machine polls; login repair + "continue": missing.
 - Fly budget cap and "Also on Fly" (FT read, DT): missing; the router has no Fly read.
 - Browserbase budget DM: missing (could stay in J1).
-- Discord channel per session (DT, SB): missing.
+- Discord channel per session (DT, SB): present (`router/discord.go`, Jarvis 1's bot lobster, category "Jarvis 2"): made at
+  start/resume and passed as `LOBSTER_CHANNEL` (unsigned machine env), renamed as the title changes (2 edits per 10
+  min), exported to `claude-records/<date> <title>/discord/` and deleted on destroy (a failed export keeps it and
+  DMs). `r.DM` posts to the lobster DM. Topic has no Remote Control link (Jarvis 2 doesn't know it).
+  Deyao's own rename beats the label only once status reports fill `Session.UserTitle`.
 - Live transcript sync to SB: missing.
 
 ## Scheduling and devices

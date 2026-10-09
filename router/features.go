@@ -22,6 +22,7 @@ func (r *Router) registerFeatures(app appRoute, m machineRoute) {
 
 // startFeatures: called once from main after the router is built
 func (r *Router) startFeatures() {
+	r.startDiscord()
 }
 
 // DM: a message to Deyao's Discord DM (filled in by discord.go); without a bot token it only logs
@@ -47,3 +48,11 @@ func (r *Router) Deliver(session, from, text string) error {
 }
 
 var errNoDeliver = errors.New("message delivery isn't built yet")
+
+// envHooks: each adds to the env a machine starts with (start and resume; flows.go machineEnv). Not secret:
+// the env is unsigned.
+var envHooks []func(r *Router, s *Session, env map[string]string)
+
+// onDestroy: each runs once a session's machine is killed and its line burned, before it becomes a record
+// (flows.go Destroy), in order; they must not fail the destroy
+var onDestroy []func(r *Router, s Session)

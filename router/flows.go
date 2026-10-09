@@ -96,6 +96,9 @@ func (r *Router) machineEnv(s *Session) map[string]string {
 	if s.Prompt != "" {
 		e["SESSION_PROMPT"] = s.Prompt
 	}
+	for _, h := range envHooks {
+		h(r, s, e)
+	}
 	return e
 }
 
@@ -393,6 +396,14 @@ func (r *Router) Destroy(id string) error {
 			if err != nil {
 				log.Printf("session %s: burn: %v", id, err)
 			}
+		}
+		r.st.Do(func(d *persisted) {
+			if x := d.Sessions[id]; x != nil {
+				s = *x // the latest: titles and hook fields moved on since the destroy began
+			}
+		})
+		for _, h := range onDestroy {
+			h(r, s)
 		}
 		r.finish(id)
 	}()

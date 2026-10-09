@@ -31,6 +31,8 @@ type Session struct {
 	RequestID      string     `json:"createRequestId,omitempty"`
 	Title          string     `json:"aiTitle,omitempty"`
 	Status         string     `json:"status,omitempty"`
+	UserTitle      string     `json:"userTitle,omitempty"`      // Deyao's own rename (the transcript's custom title): beats Label
+	DiscordChannel string     `json:"discordChannel,omitempty"` // the session's channel (discord.go), LOBSTER_CHANNEL on the machine
 }
 
 type Approval struct {
