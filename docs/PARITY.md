@@ -16,20 +16,20 @@ Facts: the router has no Fly token (it calls the core's start/kill/certify); its
 - **Wake job status**: missing.
 - **Restart / env patch / env-resync / transcript rollback** (FT, SB, FX): missing; re-pull secrets exists only inside add-store and downgrade.
 - **Permission-mode switch** (FX): missing; mode is unsigned env.
-- **Auto-pause + idle countdown** (FX): missing; `/m/status` exists but is unused.
+- **Auto-pause + idle countdown**: present (machine-reported status, `POST /api/sessions/:id/auto-pause`, `pauseInMs`; `autoPauseVeto` hook for the scheduler). Not ported: Jarvis 1's "don't release if it moved during the snapshot" check.
 - **Destroy + archive + uncommitted-work check** (FX, SB, DT): partial; destroy burns, nothing is archived.
-- **One-shot sessions**: missing.
+- **One-shot sessions**: present (`oneShot` → `SESSION_ONE_SHOT=1`; the router destroys on the supervisor's marker). Destroy doesn't archive yet, nor DM about lost work.
 - **First prompt**: present (unsigned env). **First-prompt attachments** (SB on machine): missing.
 
 ## Previous sessions
 - List: present (router-local). Transcript tail, restore a destroyed session, index/delete/purge: missing (restore after a burn needs a design).
 
 ## Terminal, remote control, title
-- Live terminal (FX), registry read (FX), remote page for opencode/openclaw (FX, CFA), `/api/remotes`, app title sync (AT), per-session tunnel origin (CFA): missing.
+- Registry read: present (the machine reports it: `/m/status {raw}`, `router/registry.go`). Live terminal (FX), remote page for opencode/openclaw (FX, CFA), `/api/remotes`, app title sync (AT), per-session tunnel origin (CFA): missing.
 
 ## Automatic behaviour
-- Auto-pause, Escape-cancel of a stale prompt, "needs you"/idle/dead DMs, model-downgrade DM, stall nudge: missing.
-- Claude credential refresh: via Jarvis 1 (shared login). Fan-out: machine polls; login repair + "continue": missing.
+- Auto-pause, Escape-cancel of a stale prompt (holder `status`), "needs you"/idle/dead DMs (+ `notify-idle` mute), model-downgrade DM (incl. the dialog, holder `status`), stall nudge (via `Deliver`): present (`router/autopilot.go`). Refused commands set `needsGrant`.
+- Claude credential refresh: via Jarvis 1 (shared login). Fan-out: machine polls; login repair + "continue": present (router fetches the pair with `JARVIS1_CREDENTIALS_ID/SECRET`, holder `login`; no separate fast-repair timers, the 30 s tick covers them).
 - Fly budget cap and "Also on Fly" (FT read, DT): missing; the router has no Fly read.
 - Browserbase budget DM: missing (could stay in J1).
 - Discord channel per session (DT, SB): present (`router/discord.go`, Jarvis 1's bot lobster, category "Jarvis 2"): made at

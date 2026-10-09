@@ -488,17 +488,6 @@ func (r *Router) buildHandlers() {
 		}
 		writeJSON(w, 200, map[string]any{"cert": cert})
 	})
-	m("POST /m/status", func(w http.ResponseWriter, req *http.Request, machine string, body []byte) {
-		var in struct{ Status, Title string }
-		json.Unmarshal(body, &in)
-		r.st.Do(func(d *persisted) {
-			if s := d.Sessions[d.Machines[machine]]; s != nil && s.MachineID == machine {
-				s.Status, s.Title = in.Status, in.Title
-			}
-		})
-		writeJSON(w, 200, map[string]bool{"ok": true})
-	})
-
 	// ---- the web page ------------------------------------------------------------------------------------
 	web := http.FileServer(http.Dir(r.cfg.WebDir))
 	mux.Handle("GET /", r.requireDeyao(func(w http.ResponseWriter, req *http.Request) {
@@ -563,13 +552,15 @@ func sessionView(s *Session, d *persisted) map[string]any {
 	if name == "" {
 		name = s.Title
 	}
-	return map[string]any{
+	v := map[string]any{
 		"id": s.ID, "machineId": nullIfEmpty(s.MachineID), "released": s.MachineID == "" && s.State == "paused",
 		"name": name, "state": s.State, "status": s.Status, "error": s.Error, "created": s.Created, "region": "",
 		"environment": strings.Join(s.Stores, ","), "stores": s.Stores, "harness": s.Harness, "label": s.Label, "aiTitle": s.Title,
 		"model": s.Model, "permissionMode": s.PermissionMode, "guest": guest, "size": s.Size, "pausedAt": s.PausedAt,
 		"image": s.Image, "createRequestId": s.RequestID, "repos": s.Repos,
 	}
+	liveView(s, v)
+	return v
 }
 
 func nullIfEmpty(s string) any {

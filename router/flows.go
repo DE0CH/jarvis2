@@ -83,6 +83,8 @@ type NewSession struct {
 	Harness        string   `json:"harness"`
 	Stores         []string `json:"stores"`
 	Repos          string   `json:"repos"`
+	OneShot        bool     `json:"oneShot"`   // destroyed once its prompt is done (autopilot.go)
+	AutoPause      *bool    `json:"autoPause"` // default on
 }
 
 const nullImage = "null" // a succession to it burns the predecessor (core.NullImage)
@@ -189,16 +191,18 @@ func (r *Router) CreateSession(in NewSession) error {
 		return err
 	}
 	s := &Session{ID: "s" + randID(), State: "approval", Created: time.Now().UTC(), Label: in.Label, Prompt: in.Prompt, Model: in.Model,
-		PermissionMode: in.PermissionMode, Size: in.Size, Harness: in.Harness, Stores: stores, Repos: in.Repos, RequestID: in.RequestID}
+		PermissionMode: in.PermissionMode, Size: in.Size, Harness: in.Harness, Stores: stores, Repos: in.Repos, RequestID: in.RequestID, Live: newLiveness(in)}
 	r.st.Do(func(d *persisted) { d.Sessions[s.ID] = s })
 	ch, err := r.succession(nil, "", s.Stores, s.Harness, r.cfg.SessionImage)
 	if err != nil {
 		r.st.Do(func(d *persisted) { delete(d.Sessions, s.ID) })
 		return err
 	}
+	opts := map[string]string{"model": s.Model, "size": s.Size, "permissionMode": s.PermissionMode, "repos": s.Repos}
+	liveOptions(s, opts)
 	go func() {
 		r.addApproval(&Approval{Kind: "new-session", Session: s.ID, Label: s.Label, Challenge: ch,
-			Options: map[string]string{"model": s.Model, "size": s.Size, "permissionMode": s.PermissionMode, "repos": s.Repos}})
+			Options: opts})
 	}()
 	return nil
 }

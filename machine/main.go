@@ -538,6 +538,7 @@ func agent() error {
 	if err != nil {
 		return err
 	}
+	go statusReporter(c)
 	for {
 		var out struct {
 			Commands []string `json:"commands"`

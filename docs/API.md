@@ -33,8 +33,25 @@ same thing:
 
 ```
 { id, machineId, released, name, state, status, created, region, environment /* stores, comma-joined */,
-  stores, harness /* claude | opencode */, label, model, permissionMode, guest, pausedAt, error }
+  stores, harness /* claude | opencode */, label, model, permissionMode, guest, pausedAt, error,
+  autoPause /* "on" | "off" */, notifyIdle /* "on" | "off" */, oneShot, needsGrant /* a holder the machine refused */,
+  lastReport /* the machine's last status report */,
+  // while started, from the machine's report (fresh within 3 min), as in Jarvis 1:
+  status /* busy | idle | waiting | … */, aiTitle, liveName, nameSource, bgTasks, statusUpdatedAt, bridgeSessionId,
+  sessionId /* claude's conversation id */, authFailed, credsExpiresAt, sessionsInside, oneShotDone,
+  refusals: [{kind: "fallback" | "refusal", at, uuid, from, to, model, category}],
+  pauseInMs /* while the auto-pause countdown runs */ }
 ```
+
+What the router does by itself with a running session (`router/autopilot.go`, every 30 s), from that report:
+auto-pause after 1 h plain idle (unless `autoPause` is off, the session is one-shot, or another feature vetoes);
+destroy a one-shot session once `oneShotDone`; Escape a prompt left `waiting` for 1 h (holder `status`); DM
+"needs you" / idle / dead after 5 min in that state (the idle one muted by `notifyIdle` off); DM new safeguard
+refusals and the "switch model?" dialog (holder `status` reads the pane); a Jarvis watchdog peer message every
+15 min while idle with background jobs; and login repair: when the session's credentials expire before Jarvis
+1's shared pair (`JARVIS1_CREDENTIALS_ID/SECRET` in the router's env) or its transcript ends on "Please run
+/login", write the pair (holder `login`) and, for the latter, deliver "continue". A command the machine refuses
+sets `needsGrant` to that holder and the loop leaves it alone for 10 min.
 
 `state`: `approval` (waiting for the iPhone; no machine yet) → `starting` (the core makes the machine) →
 `initialising` → `started` (running) → `pausing` → `paused` (no machine) → `resuming` → … ; `destroying` →
@@ -46,11 +63,13 @@ gone (moved to records); `failed` (with `error`).
 | `GET /api/sizes` | `{sizes: [{id, label}]}` (small / medium / large) |
 | `GET /api/models` | `{models: [{id, label}]}` |
 | `GET /api/policy` | `{harnesses: {<harness>: {stores: […]}}}` — the stores each harness brings (the router adds them; the app hides them) |
-| `POST /api/sessions` | Body `{requestId, label, prompt, model, permissionMode, size, harness, stores: []}`. The router adds the harness's stores and asks the core for a challenge (`succession(null, …)`, before any machine); the approval (kind `new-session`) appears at once. Answers `{id: null, requestId}`. |
+| `POST /api/sessions` | Body `{requestId, label, prompt, model, permissionMode, size, harness, stores: [], oneShot, autoPause}` (`oneShot`: the machine gets `SESSION_ONE_SHOT=1` and the session is destroyed when its prompt is done; `autoPause` defaults to true, false for one-shot; both show in the approval's `options`). The router adds the harness's stores and asks the core for a challenge (`succession(null, …)`, before any machine); the approval (kind `new-session`) appears at once. Answers `{id: null, requestId}`. |
 | `POST /api/sessions/:id/pause` | The machine snapshots itself (signed), then the core kills it. |
 | `POST /api/sessions/:id/resume` | Body `{upgrade: false}`: the same image, `approve_by_dead_machine`, then start + certify — no approval. `{upgrade: true}`: the newest session image; an approval of kind `resume-upgrade` first (reject = stays paused), then start + certify. |
 | `POST /api/sessions/:id/destroy` | Kill (if running), then a burn: a succession to the null image, approved by the dead-machine rule and certified. The session moves to `GET /api/records`. |
 | `GET /api/records` | Destroyed sessions `{records: [...]}` |
+| `POST /api/sessions/:id/auto-pause` | Body `{on}` (Jarvis 1's `{enabled}` works too) → `{ok, autoPause: "on" | "off"}`; restarts the idle countdown. |
+| `POST /api/sessions/:id/notify-idle` | Body `{on}` → `{ok, notifyIdle}`: mutes only the idle DM; "needs you", dead and downgrade DMs still come. |
 
 ## Approvals (the shell's secure pages)
 
@@ -114,4 +133,4 @@ off.
 | `POST /m/add-store` | Body `{store}`: asks Deyao (an `add-store` approval) to add one store to this session. |
 | `POST /m/downgrade` | Body `{stores, newEncryptionKey, newSigningKey}` → `{challenge}`, which the machine signs with its OLD key. |
 | `POST /m/downgrade/finish` | Body `{challenge, signature}` → core `approve/by-old-key` → `{cert}`; from now on the router knows the machine by its new key. |
-| `POST /m/status` | Body `{status, title}` — idle/busy and the conversation's title, for the app. |
+| `POST /m/status` | Body `{raw}`: the output of Jarvis 1's registry command (`machine/status.go`), sent by the agent when it changes and at least every 60 s; parsed by the router (`router/registry.go`). |
