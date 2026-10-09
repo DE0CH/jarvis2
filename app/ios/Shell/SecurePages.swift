@@ -47,7 +47,10 @@ struct SecureFrame<Content: View>: View {
 }
 
 let HARNESSES: [(id: String, title: String, sub: String)] = [("claude", "Claude Code", "Claude subscription · Claude app"), ("opencode", "OpenCode · OpenRouter", "Paseo app + web UI"), ("openclaw", "claw-code · OpenClaw", "Claude subscription · OpenClaw app + Control UI")]
-func harnessName(_ h: String) -> String { HARNESSES.first { $0.id == h }?.title ?? h }
+func harnessName(_ h: String) -> String {
+  if h.hasPrefix("task:") { return "Task script “\(h.dropFirst(5))” (runs the template, no agent)" }
+  return HARNESSES.first { $0.id == h }?.title ?? h
+}
 func errText(_ e: Error) -> String { (e as? LocalizedError)?.errorDescription ?? e.localizedDescription }
 /// key use waits for Face ID: keep it off the main thread
 func offMain<T: Sendable>(_ fn: @escaping @Sendable () throws -> T) async throws -> T { try await Task.detached(priority: .userInitiated) { try fn() }.value }

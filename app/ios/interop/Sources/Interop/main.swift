@@ -221,6 +221,14 @@ check(!review(rule, kind: "grant"), "…refused as a grant")
 let sig = try! phoneSigning.signature(for: Data(grantText(good).utf8)).derRepresentation.base64EncodedString()
 check(CoreCrypto.valid(Data(grantText(good).utf8), sig: sig, by: sc?.phone ?? ""), "the phone's signature checks against the key in the cert (what the machine does)")
 
+// a task's line: an ordinary new-session challenge whose signed harness is task:<template>
+let chT = challenge(["predecessor": NSNull(), "stores": ["default"], "options": ["harness": "task:hello", "permissionMode": "auto"], "image": "img"])
+let rT = try? Checks.review(challenge: chT, coreKey: coreKey)
+check(rT?.kind == .newSession && rT?.harness == "task:hello" && rT?.permissionMode == "auto", "a task's challenge is a new session on harness task:hello (\(rT?.harness ?? "?"))")
+check(rT.map { !throwsErr { try Checks.matchesPicked($0, stores: ["default"], harnessStores: [], harness: "task:hello", permissionMode: "auto") } } == true, "…and matches its template's harness and stores")
+let (aTs, aT) = approve(chT)
+check(aTs == 200 && rT != nil && !throwsErr { try Checks.answerFor(rT!, answer: aT!, coreKey: coreKey) }, "the phone approves a task's line once")
+
 // add a store (the machine exists)
 let ch2 = challenge(["predecessor": docJSON(cert1), "machine": m1.id, "stores": ["claude-login", "default", "gmail"], "options": ["harness": "claude", "permissionMode": "bypass"]])
 let r2 = try! Checks.review(challenge: ch2, coreKey: coreKey)

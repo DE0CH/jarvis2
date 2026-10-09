@@ -46,9 +46,9 @@ Carried over from the mock (DE0CH/jarvis2-mock DECISIONS.md) unless marked new.
    router's "Access login required") opens the sheet again and retries once. No sign-in screen on launch:
    the first refused request opens the sheet.
 9. **Not in the React Native app yet** (the router doesn't have them, or they need a native module the extension
-   doesn't carry): tasks, content stores, devices, the Search tab, first-prompt attachments (a file picker),
+   doesn't carry): content stores, devices, the Search tab, first-prompt attachments (a file picker),
    copying to the clipboard in the app (links are selectable text instead). Everything else Jarvis 1's
-   dashboard has is back (items 23–33).
+   dashboard has is back (items 23–35).
 10. **The image** shows as the ref the core read from Fly (on approval pages); the GitHub build attestation
     ("CI build from <date>") isn't checked yet.
 11. **iPhone only** (`TARGETED_DEVICE_FAMILY = 1`), portrait + landscape.
@@ -161,6 +161,16 @@ Carried over from the mock (DE0CH/jarvis2-mock DECISIONS.md) unless marked new.
     More → Switch to bypass / auto mode: a paused session switches at its next resume; raising a running one to
     bypass needs a fresh phone grant for the terminal, so the router's 403 `{needsGrant, phoneGrant}` opens the
     grant page and the switch runs again once it is signed.
+
+35. **New: Tasks and Schedules tabs** (Jarvis 1's, on the router's `/api/tasks`). A task is its own session line on
+    harness `task:<template>`: **Make task** (name + the template's fields) creates it and the line's
+    `new-session` approval ("Task: <name>") opens by itself in the app — the secure page names the harness "Task
+    script “<template>”". Runs then need no phone: Run, the run list (queued → starting → running → result),
+    a run's output and log, Stop. **Run on latest image** is the task's resume-upgrade (the phone approves the
+    newer image, opened by itself); **New line…** asks the phone again when a task's line is gone or failed.
+    A store field (`optionsFrom: "stores"`) is filled from the core's store list (sensitive ones marked); sizes and
+    models from the router's lists; store fields can't change after creation (the router refuses, the form says
+    so). Daily schedules (HH:MM + time zone, on/off on the card). Task lines are left out of the Sessions list.
 
 ## Unfinished / known gaps
 

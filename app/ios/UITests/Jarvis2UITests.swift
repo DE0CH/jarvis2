@@ -277,6 +277,61 @@ final class Jarvis2UITests: XCTestCase {
     sleep(1)
     shot("settings-more")
 
+    // ---- tasks: make one from the hello template (the iPhone approves its line, opened by itself), run it,
+    // the run page (stop), a daily schedule, the Schedules tab
+    el("tab-tasks").tap()
+    if wait(el("new-hello"), 30, "tasks tab with the hello template") {
+      sleep(1)
+      shot("tasks")
+      el("new-hello").tap()
+      if wait(el("tf-message"), 15, "new task form") {
+        el("tf-message").tap(); el("tf-message").typeText("hello from CI")
+        shot("task-new")
+        el("te-save").tap()
+        if wait(el("secure-approve"), 90, "the task's approval (opened by itself)") {
+          sleep(1)
+          shot("task-approval")
+          el("secure-approve").tap()
+        }
+        if wait(el("td-schedule"), 60, "task page") {
+          sleep(2)
+          shot("task-page")
+          if el("td-run").waitForExistence(timeout: 30) {
+            el("td-run").tap()
+            if wait(prefixed("td-run-"), 30, "a run listed") {
+              sleep(1)
+              shot("task-run-queued")
+              el(prefixed("td-run-").identifier).tap()
+              if wait(el("tr-stop"), 20, "run page") {
+                sleep(1)
+                shot("task-run-page")
+                el("tr-stop").tap()
+                wait(el("ask-ok"), 10, "stop question")
+                el("ask-ok").tap()
+                XCTAssertTrue(gone(el("tr-stop"), 30), "[\(tag)] run stopped")
+                shot("task-run-stopped")
+              }
+              el("page-back").tap()
+            }
+          }
+          wait(el("td-schedule"), 10, "task page again")
+          el("td-schedule").tap()
+          if wait(el("se-save"), 15, "schedule form") {
+            shot("task-schedule-form")
+            el("se-save").tap()
+          }
+          sleep(2)
+          shot("task-page-scheduled")
+          el("page-back").tap()
+        }
+      }
+      el("tab-schedules").tap()
+      sleep(2)
+      shot("task-schedules")
+      el("tab-settings").tap()
+      sleep(1)
+    }
+
     // ---- the master key page (smoke): a fresh pair, the private kit and the public key
     el("open-master-key").tap()
     if wait(el("master-private"), 20, "master key page") {

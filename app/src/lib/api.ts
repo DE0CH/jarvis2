@@ -174,3 +174,18 @@ export const storesOf = (m: Session, p: Policy = {}) => {
   const h = new Set(p[m.harness || "claude"] || []);
   return all.filter((n) => !h.has(n) && n !== CORE_STORE);
 };
+
+// ---- tasks (docs/API.md "Tasks"): templates, instances (each a session line on harness task:<template>), runs,
+// daily schedules — Jarvis 1's shapes where the meaning is the same
+export type TaskOption = { value: string; label: string; sub?: string };
+export type TaskField = { name: string; label: string; type: "text" | "textarea" | "number" | "select" | "multiselect" | "checkbox"; required: boolean; default?: unknown; options?: TaskOption[]; optionsFrom?: string; help?: string; placeholder?: string };
+export type TaskTemplate = { name: string; title: string; description?: string; run?: string; prompt?: string; stores?: string[]; timeoutSeconds?: number; size?: string; fields: TaskField[]; files?: string[]; source?: string; error?: string };
+export type TaskRunPhase = "queued" | "starting" | "running" | "succeeded" | "failed" | "timedout" | "stopped" | "lost";
+export type TaskRun = { id: string; name: string; instance: string; instanceName?: string; template: string; trigger: "manual" | "schedule"; schedule?: string | null; slot?: string | number | null; upgrade?: boolean;
+  phase: TaskRunPhase; createdAt?: string | null; resumedAt?: string | null; startedAt?: string | null; ranAt?: string | null; finishedAt?: string | null; exitCode?: number | null; reason?: string | null; waiting?: string | null; tail?: string[] | null; logBytes?: number; outputBytes?: number };
+export type TaskInstance = { id: string; template: string; name: string; params: Record<string, unknown>; size?: string; stores?: string[]; session: string | null; createdAt: string; updatedAt?: string | null;
+  state: "approval" | "ready" | "running" | "busy" | "failed" | "gone"; detail?: string; sessionState?: string; image?: string | null; lastRun: TaskRun | null; activeRun: TaskRun | null; queued: number; schedules: number };
+export type TaskSchedule = { id: string; instance: string; time: string; tz: string; enabled: boolean; since: number; createdAt: string; nextAt: number | null };
+export type TasksOverview = { sessionImage?: string | null; templates: TaskTemplate[]; instances: TaskInstance[]; schedules: TaskSchedule[] };
+export const RUN_ACTIVE = (p: TaskRunPhase) => p === "queued" || p === "starting" || p === "running";
+export const isTaskLine = (m: Session) => (m.harness || "").startsWith("task:");

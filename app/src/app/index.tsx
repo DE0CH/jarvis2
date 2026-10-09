@@ -15,6 +15,8 @@ import { Records } from "../views/Records";
 import { Stores } from "../views/Stores";
 import { Settings } from "../views/Settings";
 import { Repos } from "../views/Repos";
+import { Tasks } from "../views/Tasks";
+import { TaskSchedules } from "../views/TaskSchedules";
 
 function Banners() {
   const st = useStore((s) => s.state);
@@ -41,6 +43,7 @@ export default function Dashboard() {
         <Heading size={4} lines={1} style={{ flex: 1, minWidth: 0 }}>{wide ? TABS.find(([k]) => k === tab)![1] : "Jarvis 2"}</Heading>
         <IconButton id="refreshBtn" variant="soft" color="gray" label="Refresh" onPress={() => refresh(true)}>{refreshing ? <Spinner /> : "↻"}</IconButton>
         {tab === "sessions" && <Button id="newBtn" onPress={() => openPage("new")}>+ New session</Button>}
+        {tab === "schedules" && <Button id="newScheduleBtn" onPress={() => openPage("task-schedule", {})}>+ New schedule</Button>}
       </TopBar>
       <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={{ paddingBottom: 24 + ins.bottom }}>
         <View style={{ width: "100%", maxWidth: wide ? 1320 : 820, alignSelf: "center", paddingHorizontal: wide ? 32 : 16, paddingTop: 16 }}>
@@ -50,6 +53,8 @@ export default function Dashboard() {
             {tab === "sessions" && <Sessions />}
             {tab === "stores" && <Stores />}
             {tab === "records" && <Records />}
+            {tab === "tasks" && <Tasks />}
+            {tab === "schedules" && <TaskSchedules />}
             {tab === "repos" && <Repos />}
             {tab === "settings" && <Settings />}
           </View>

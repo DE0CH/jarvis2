@@ -1,6 +1,6 @@
 import { useRef } from "react";
 import { Linking, View } from "react-native";
-import { api, ago, challengeRequest, cronEvery, holderTitle, HOLDERS, HARNESS, REGION, sessionTitle, storesOf, when, type Approval, type Session, type State } from "../lib/api";
+import { api, ago, isTaskLine, challengeRequest, cronEvery, holderTitle, HOLDERS, HARNESS, REGION, sessionTitle, storesOf, when, type Approval, type Session, type State } from "../lib/api";
 import { useStore, getStore, pend, refresh, refreshUntil, pendUntil, settle, ask, askText, toast, failed, exclusive, BUSY_LABEL } from "../lib/store";
 import { hasShell, requestSecure } from "../lib/shell";
 import { requestGrant } from "../lib/grants";
@@ -235,7 +235,8 @@ export function Sessions() {
   const policy = useStore((s) => s.policy);
   const models = useStore((s) => s.models);
   // within each group newest-first, so cards never swap between polls
-  const list = [...sessions].sort((a, b) => String(b.created || "").localeCompare(String(a.created || "")) || a.id.localeCompare(b.id));
+  // task lines show in the Tasks tab
+  const list = [...sessions].filter((m) => !isTaskLine(m)).sort((a, b) => String(b.created || "").localeCompare(String(a.created || "")) || a.id.localeCompare(b.id));
   const cool = useCoolAfterShift(list.map((m) => m.id).join("|"));
   if (!list.length && !approvals.length) return <><P size={3} color="gray" align="center" mt={8} mb={8}>{"No sessions.\n" + (mouse() ? "Click" : "Tap") + " “New session”."}</P><FlyAccountSection /></>;
   return (
