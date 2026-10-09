@@ -35,9 +35,12 @@ echo '{"harnesses":{"claude":{"stores":[]},"opencode":{"stores":[]}}}' > "$W/pol
 FLY_API_TOKEN="$JARVIS2_FLY_TOKEN" flyctl wireguard remove jarvis2-370 jarvis2-e2e >/dev/null 2>&1 || true
 (umask 077; FLY_API_TOKEN="$JARVIS2_FLY_TOKEN" flyctl wireguard create jarvis2-370 lhr jarvis2-e2e "$W/wg.conf" >/dev/null)
 
+# the test router must never reach Deyao's Discord, the Storage Box or Jarvis 1: none of their keys go in
 mkdir -p "$W/data" "$W/web"
 MASTER_KEY="$(cat "$ROOT/e2e/testdata/master-test.pub")" BOX_KEY_FILE="$W/box-key.pem" ADDR=127.0.0.1:28090 "$W/core" > "$W/core.log" 2>&1 & PIDS+=($!)
-CORE_URL=http://127.0.0.1:28090 NO_ACCESS=1 RECORDS_OFF=1 ADDR=127.0.0.1:28080 DATA_DIR="$W/data" WEB_DIR="$W/web" \
+env -u LOBSTER_TOKEN -u STORAGEBOX_HOST -u STORAGEBOX_USER -u STORAGEBOX_PASSWORD -u FLY_READ_TOKEN -u GITHUB_READ_TOKEN \
+  -u JARVIS1_CREDENTIALS_ID -u JARVIS1_CREDENTIALS_SECRET -u JARVIS1_SERVICES_ID -u JARVIS1_SERVICES_SECRET \
+  CORE_URL=http://127.0.0.1:28090 NO_ACCESS=1 RECORDS_OFF=1 ADDR=127.0.0.1:28080 DATA_DIR="$W/data" WEB_DIR="$W/web" \
   WG_CONFIG="$W/wg.conf" MACHINE_URL=http://jarvis2-e2e._peer.internal:8081 POLICY_FILE="$W/policy.json" \
   SESSION_IMAGE="${E2E_SESSION_IMAGE:-ghcr.io/de0ch/jarvis2-session-test:latest}" \
   "$W/router" > "$W/router.log" 2>&1 & PIDS+=($!)
