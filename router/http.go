@@ -85,6 +85,22 @@ func (r *Router) buildHandlers() {
 		}))
 	}
 	r.registerFeatures(app, m)
+	// the router's own health, for an operator with no way into the box: secret NAMES present, image, core up
+	mux.Handle("GET /setup/status", r.requireSetup(func(w http.ResponseWriter, req *http.Request) {
+		if err := r.checkSetupSig(req.Method, req.URL.Path, req.Header.Get("X-Setup-Time"), req.Header.Get("X-Setup-Sig"), nil); err != nil {
+			writeJSON(w, 401, map[string]string{"error": err.Error()})
+			return
+		}
+		present := []string{}
+		for _, k := range []string{"LOBSTER_TOKEN", "STORAGEBOX_HOST", "STORAGEBOX_USER", "STORAGEBOX_PASSWORD", "FLY_READ_TOKEN",
+			"JARVIS1_CREDENTIALS_ID", "JARVIS1_CREDENTIALS_SECRET", "JARVIS1_SERVICES_ID", "JARVIS1_SERVICES_SECRET"} {
+			if os.Getenv(k) != "" {
+				present = append(present, k)
+			}
+		}
+		_, coreErr := r.core.Key()
+		writeJSON(w, 200, map[string]any{"secrets": present, "sessionImage": r.cfg.SessionImage, "coreUp": coreErr == nil, "version": os.Getenv("VERSION")})
+	}))
 	setup("GET /setup/identity", "GET", "/identity")
 	setup("GET /setup/core-cert", "GET", "/core-cert")
 	setup("POST /setup/stores", "POST", "/stores")

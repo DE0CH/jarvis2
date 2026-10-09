@@ -7,6 +7,7 @@ both). Values never print.
   JARVIS2_SETUP_ACCESS_ID/SECRET  the Access service token for /setup; or ~/.jarvis2/cloudflare.env
   HETZNER_S3_*                    the backup bucket (jarvis2-backup-de0ch)
 
+  infra/setup.py status                the router's health: secret names present, session image, core up
   infra/setup.py identity              the core's identity (8 words), checked against keys/box.pub
   infra/setup.py stores                the core's signed store list
   infra/setup.py create NAME           a new, empty, NOT sensitive store (once per name)
@@ -202,7 +203,9 @@ def main():
     if len(sys.argv) < 2:
         raise SystemExit(__doc__)
     cmd, args = sys.argv[1], sys.argv[2:]
-    if cmd == "identity":
+    if cmd == "status":
+        print(json.dumps(call("GET", "/setup/status"), indent=1))
+    elif cmd == "identity":
         print(words(identity()))
     elif cmd == "stores":
         for n, s in sorted(store_list().items()):
