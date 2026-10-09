@@ -3,7 +3,8 @@
 # runs them here (ports 28090/28080) with the public TEST master key, a throwaway box key and a throwaway
 # WireGuard peer of the Fly
 # org (jarvis2-e2e) and the jarvis2-session-test image, so the machines reach this router over Fly's private network as they reach the box's.
-# Leaves nothing behind: the peer is removed, the processes stopped. Never touches the production core.
+# Leaves nothing behind but the core's and router's logs (in $E2E_LOGS, default /tmp/jarvis2-e2e-logs): the
+# peer is removed, the processes stopped. Never touches the production core.
 #   JARVIS2_FLY_TOKEN   the jarvis2-370 org token
 set -euo pipefail
 : "${JARVIS2_FLY_TOKEN:?}"
@@ -11,6 +12,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 W="$(mktemp -d)"; chmod 700 "$W"
 PIDS=()
 cleanup() {
+  mkdir -p "${E2E_LOGS:-/tmp/jarvis2-e2e-logs}" && cp "$W"/*.log "${E2E_LOGS:-/tmp/jarvis2-e2e-logs}/" 2>/dev/null || true
   for p in "${PIDS[@]}"; do kill "$p" 2>/dev/null || true; done
   FLY_API_TOKEN="$JARVIS2_FLY_TOKEN" flyctl wireguard remove jarvis2-370 jarvis2-e2e >/dev/null 2>&1 || true
   rm -rf "$W"
