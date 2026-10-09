@@ -84,6 +84,7 @@ struct SecureNewSession: View {
   @State private var harnessStores: [String: [String]] = [:]
   @State private var picked: Set<String> = []
   @State private var harness = "claude"
+  @State private var mode = "auto"
   @State private var loaded = false
   @State private var loadError: String?
   @State private var busy: String?
@@ -126,6 +127,11 @@ struct SecureNewSession: View {
         }
       }
       if let hs = harnessStores[harness], !hs.isEmpty { Muted(text: "The harness brings its own: \(hs.joined(separator: ", ")).").padding(.top, 8) }
+      Lbl(text: "Permission mode")
+      VStack(spacing: 8) {
+        ChoiceCard(on: mode == "auto", id: "secure-mode-auto", action: { mode = "auto" }) { ChoiceText(title: "Auto", sub: "Safe actions run; the permission classifier gates the rest") }
+        ChoiceCard(on: mode == "bypass", id: "secure-mode-bypass", action: { mode = "bypass" }) { ChoiceText(title: "Bypass", sub: "No permission prompts at all (--dangerously-skip-permissions)") }
+      }
       if let failure { Callout(text: failure, color: .red).padding(.top, 16).accessibilityIdentifier("secure-error") }
     }
     .task { await load() }
@@ -153,8 +159,8 @@ struct SecureNewSession: View {
     do {
       let key = try CoreTrust.key()
       busy = "Requesting…"
-      var body: [String: Any] = ["requestId": rid, "stores": want, "harness": harness]
-      for k in ["label", "prompt", "model", "permissionMode", "size", "oneShot", "autoPause", "repos", "apiProxy"] { if let v = options[k] { body[k] = v } }
+      var body: [String: Any] = ["requestId": rid, "stores": want, "harness": harness, "permissionMode": mode]
+      for k in ["label", "prompt", "model", "size", "oneShot", "autoPause", "repos", "apiProxy"] { if let v = options[k] { body[k] = v } }
       try await RouterClient.shared.createSession(body)
       // the core's challenge comes before any machine exists
       var found: RouterClient.ApprovalDTO?
@@ -169,7 +175,7 @@ struct SecureNewSession: View {
       }
       guard let a = found else { throw RouterError(message: "No approval yet — it will wait at the top of the session list.") }
       let r = try Checks.review(challenge: a.challenge, coreKey: key)
-      try Checks.matchesPicked(r, stores: want, harnessStores: harnessStores[harness] ?? [], harness: harness)  // sign only what was chosen here
+      try Checks.matchesPicked(r, stores: want, harnessStores: harnessStores[harness] ?? [], harness: harness, permissionMode: mode)  // sign only what was chosen here
       busy = "Signing…"
       let payload = a.challenge.payload, reason = "Create \"\(title)\""
       let sig = try await offMain { try PhoneKeys.shared.sign(payload, reason: reason) }
@@ -198,7 +204,7 @@ struct SecureApproval: View {
   @State private var failure: String?
 
   private var title: String {
-    switch r?.kind { case .resumeUpgrade: return "Resume on the latest image"; case .addStore: return "Add a store"; case .newSession: return "Approve new session"; default: return "Approve" }
+    switch r?.kind { case .resumeUpgrade: return "Approve resume"; case .addStore: return "Add a store"; case .newSession: return "Approve new session"; default: return "Approve" }
   }
   var body: some View {
     SecureFrame(shell: shell, title: title, action: ("Approve", "secure-approve", r == nil), busy: busy, run: { Task { await approve() } }) {
@@ -214,7 +220,7 @@ struct SecureApproval: View {
           Lbl(text: "It already has")
           StoreLines(stores: r.stores.filter { $0 != r.addedStore }, sensitive: r.sensitive, harness: harnessStores)
         case .resumeUpgrade:
-          Muted(text: "The paused session continues on a new machine running the image below, with the same stores and harness. Nothing happens until you approve; Reject leaves it paused.").padding(.top, 8)
+          Muted(text: "The paused session continues on a new machine running the image and in the permission mode below, with the same stores and harness. Nothing happens until you approve; Reject leaves it paused.").padding(.top, 8)
           Lbl(text: "Secret stores"); StoreLines(stores: r.stores, sensitive: r.sensitive, harness: harnessStores)
         case .newSession:
           if let rs = a.options?["restore"], !rs.isEmpty {
@@ -234,6 +240,14 @@ struct SecureApproval: View {
           Callout(text: "This session will hold sensitive secrets: \(warn.joined(separator: ", ")).", amber: true).padding(.top, 12).accessibilityIdentifier("secure-sensitive-warning")
         }
         Lbl(text: "Harness"); Muted(text: harnessName(r.harness))
+        if r.kind != .addStore {
+          Lbl(text: "Permission mode")
+          if r.permissionMode == "bypass" {
+            Callout(text: "Permission mode: bypass — no permission prompts at all", amber: true).accessibilityIdentifier("secure-mode")
+          } else {
+            Muted(text: "Permission mode: auto").accessibilityIdentifier("secure-mode")
+          }
+        }
         Lbl(text: "Session image"); Muted(text: r.image).textSelection(.enabled)
         HStack { KitButton(title: "Reject", variant: .soft, color: .red, disabled: busy != nil, id: "secure-reject") { Task { await reject() } }; Spacer() }.padding(.top, 20)
         if let failure { Callout(text: failure, color: .red).padding(.top, 16).accessibilityIdentifier("secure-error") }

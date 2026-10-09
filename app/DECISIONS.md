@@ -153,6 +153,15 @@ Carried over from the mock (DE0CH/jarvis2-mock DECISIONS.md) unless marked new.
     offers "Allow the remote page for 10 minutes". **Usage** (the Claude quota, read through Jarvis 1) is a
     Settings card. Cards show the router's own lock (`busy`, `wake`) as the action label on every device.
 
+34. **New: the permission mode is signed** (core Options carry `permissionMode`; Deyao: only raising to bypass
+    needs the phone). The secure New session page picks it for real (pre-filled from the form) and checks the
+    challenge carries it; every approval page reads it from the signed challenge, never the router's fields, and
+    shows "Permission mode: bypass" highlighted (amber) or "auto". A resume in another mode than the line's cert
+    comes as a `resume-upgrade` approval (titled "Approve resume"), and the app's Resume opens it by itself.
+    More → Switch to bypass / auto mode: a paused session switches at its next resume; raising a running one to
+    bypass needs a fresh phone grant for the terminal, so the router's 403 `{needsGrant, phoneGrant}` opens the
+    grant page and the switch runs again once it is signed.
+
 ## Unfinished / known gaps
 
 - **Keyboard avoidance for React Native forms** still comes only from React Native (lessons/73: the

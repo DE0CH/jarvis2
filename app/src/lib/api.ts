@@ -27,6 +27,7 @@ export function httpError(method: string, path: string, status: number, text: st
   const reason = reasonOf(text), hint = STATUS_HINT[status] || (status >= 500 ? "server error" : "request failed");
   const e: any = new Error(`${reason || hint} (HTTP ${status}${reason ? " " + hint : ""} · ${method} ${path})`);
   e.status = status;
+  try { e.body = JSON.parse(text); } catch {} // e.g. 403 {needsGrant, phoneGrant}
   return e;
 }
 export function networkError(method: string, path: string, e: any): Error {
@@ -123,11 +124,11 @@ export async function coreStores(): Promise<CoreStore[]> {
 }
 
 /** what a challenge asks for, read for display only (the shell checks it before signing) */
-export function challengeRequest(a: Approval, p: Policy = {}): { stores: string[]; sensitive: string[]; harness: string; addedStore?: string } {
+export function challengeRequest(a: Approval, p: Policy = {}): { stores: string[]; sensitive: string[]; harness: string; addedStore?: string; permissionMode?: string } {
   try {
     const r = JSON.parse(a.challenge.payload).request || {};
     const harness = r.options?.harness || "claude", h = new Set(p[harness] || []);
-    return { stores: (r.stores || []).filter((n: string) => !h.has(n)), sensitive: r.sensitive || [], harness, addedStore: r.addedStore || undefined };
+    return { stores: (r.stores || []).filter((n: string) => !h.has(n)), sensitive: r.sensitive || [], harness, addedStore: r.addedStore || undefined, permissionMode: r.options?.permissionMode === "bypass" ? "bypass" : "auto" };
   } catch { return { stores: [], sensitive: [], harness: "?" }; }
 }
 

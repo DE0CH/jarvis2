@@ -95,6 +95,7 @@ final class Jarvis2UITests: XCTestCase {
     wait(el("secure-create"), 20, "secure new session page")
     sleep(2)
     shot("secure-new-session")
+    XCTAssertTrue(el("secure-mode-bypass").exists, "[\(tag)] the secure page picks the permission mode")
     XCTAssertTrue(el("secure-store-default").exists, "[\(tag)] default offered")
     XCTAssertFalse(el("secure-store-core").exists, "[\(tag)] the core store is not offered to a session")
     XCTAssertFalse(el("secure-store-claude-login").exists, "[\(tag)] the harness's own store is not offered")
@@ -218,6 +219,15 @@ final class Jarvis2UITests: XCTestCase {
     // ---- resume with the latest image: pause, then More → the approval opens on the secure page
     el(prefixed("pause-").identifier).tap()
     guard wait(prefixed("resume-"), 90, "paused again") else { return }
+    // the permission mode (signed): a paused session switches at its next resume, which the iPhone approves
+    el(prefixed("more-").identifier).tap()
+    if wait(el("menu-switch-to-auto-mode"), 10, "switch mode item") {
+      el("menu-switch-to-auto-mode").tap()
+      wait(el("ask-ok"), 10, "switch mode question")
+      el("ask-ok").tap()
+      sleep(2)
+      shot("mode-switched-paused")
+    }
     el(prefixed("more-").identifier).tap()
     wait(el("menu-resume-with-latest-image"), 10, "menu")
     shot("more-menu")
@@ -228,6 +238,8 @@ final class Jarvis2UITests: XCTestCase {
     if wait(el("secure-approve"), 120, "resume-upgrade approval page") {
       sleep(2)
       shot("secure-approval-upgrade")
+      XCTAssertTrue(el("secure-mode").exists, "[\(tag)] the approval shows the signed permission mode")
+      if el("secure-mode").exists { note("\(tag)-approval-mode", el("secure-mode").label) }
       el("secure-approve").tap()
       XCTAssertTrue(el("newBtn").waitForExistence(timeout: 60), "[\(tag)] back after approving")
       if el("secure-error").exists { note("\(tag)-approve-error", el("secure-error").label); shot("approve-error") }

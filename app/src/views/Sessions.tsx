@@ -56,7 +56,10 @@ export const resumeSession = (id: string) => exclusive("s:" + id, async () => {
   pend("s:" + id, "Resuming…");
   try {
     await api("POST", `api/sessions/${id}/resume`, { upgrade: false, ...(prompt ? { prompt } : {}) });
-    await refreshUntil((s) => ["started", "initialising", "failed"].includes(find(s, id)?.state || ""), 120000);
+    // a resume in another permission mode than the line's cert is a change the iPhone approves (signed)
+    let a: Approval | undefined;
+    await refreshUntil((s) => !!(a = s.approvals.find((x) => x.kind === "resume-upgrade" && x.session === id)) || ["started", "initialising", "failed"].includes(find(s, id)?.state || ""), 120000);
+    if (a) review(a);
     settle(30000);
   } catch (e: any) { failed(e); await refresh(false); }
   finally { pend("s:" + id, null); }
@@ -124,6 +127,31 @@ export const destroySession = (id: string) => exclusive("s:" + id, async () => {
   finally { pend("s:" + id, null); }
 });
 const reject = (a: Approval) => pendUntil("a:" + a.id, "Rejecting…", () => api("POST", `api/approvals/${a.id}/reject`), (s) => !s.approvals.some((x) => x.id === a.id), 30000);
+// Permission mode (signed in the line's cert). Running: switched in place; raising to bypass needs a fresh
+// phone grant for the terminal feature, so a 403 {phoneGrant} opens the grant page and the switch runs again
+// once it is signed. Paused: kept for the next resume, which the iPhone approves.
+export const switchMode = (m: Session, mode: "auto" | "bypass") => exclusive("s:" + m.id, async () => {
+  const title = sessionTitle(m);
+  if (!(await ask({ title: `Switch “${title}” to ${mode === "bypass" ? "bypass" : "auto"}?`, detail: mode === "bypass"
+    ? "No permission prompts at all (--dangerously-skip-permissions). " + (m.state === "paused" ? "The iPhone approves it at the next resume." : "Claude relaunches in the new mode; the iPhone allows it with a fresh grant.")
+    : "Auto-approves safe actions; the permission classifier gates the rest." + (m.state === "paused" ? " Applies at the next resume." : ""), action: "Switch", danger: mode === "bypass" }))) return;
+  const run = async (): Promise<void> => {
+    pend("s:" + m.id, "Switching mode…");
+    try {
+      const j = await api<any>("POST", `api/sessions/${m.id}/permission-mode`, { mode });
+      if (j.nextStart) { toast(`Switches to ${mode} at the next resume${mode === "bypass" ? " (the iPhone approves it then)" : ""}.`, "ok"); await refresh(false); return; }
+      await refreshUntil((s) => { const x = find(s, m.id); return !!x && x.permissionMode === mode && !serverBusy(x); }, 120000);
+    } catch (e: any) {
+      if (e.status === 403 && e.body?.needsGrant && hasShell) {
+        pend("s:" + m.id, null);
+        requestGrant(m.id, title, { holder: e.body.needsGrant, kind: "grant", minutes: 10 }, (ok) => { if (ok) exclusive("s:" + m.id, run); });
+        return;
+      }
+      failed(e); await refresh(false);
+    } finally { pend("s:" + m.id, null); }
+  };
+  await run();
+});
 // the two switches: two-phase, the menu item shows the router's value
 const toggle = (m: Session, what: "auto-pause" | "notify-idle", on: boolean) =>
   pendUntil("s:" + m.id, on ? "Turning on…" : "Turning off…", () => api("POST", `api/sessions/${m.id}/${what}`, { on }),
@@ -136,6 +164,9 @@ function menuItems(m: Session): MenuItem[] {
   if (live) items.push({ label: "Schedules…", sub: "Wakeups and crons", onClick: () => openPage("schedules", { id: m.id }) });
   if (!m.oneShot && live) items.push({ label: "Auto-pause when idle", sub: "Pause after 1 h with nothing running", checked: m.autoPause !== "off", onClick: () => toggle(m, "auto-pause", m.autoPause === "off") });
   if (live) items.push({ label: "Idle notifications", sub: "A Discord DM when it sits idle", checked: m.notifyIdle !== "off", onClick: () => toggle(m, "notify-idle", m.notifyIdle === "off") });
+  if (m.state === "started" || m.state === "paused") items.push(m.permissionMode === "bypass"
+    ? { label: "Switch to auto mode", sub: "Permission prompts gated by the classifier", onClick: () => switchMode(m, "auto") }
+    : { label: "Switch to bypass mode", sub: "No permission prompts; the iPhone allows it", onClick: () => switchMode(m, "bypass") });
   if (m.state === "paused") items.push({ label: "Resume with latest image", sub: "Newest session image; the iPhone approves", onClick: () => upgrade(m.id) });
   items.push({ label: "Destroy", sub: "Archive transcripts + ~/artifacts, then burn the machine", danger: true, onClick: () => destroySession(m.id) });
   return items;
@@ -149,11 +180,11 @@ function MoreButton({ m, cool }: { m: Session; cool: boolean }) {
   );
 }
 
-const KIND_TITLE: Record<string, string> = { "new-session": "New session", "resume-upgrade": "Resume on the latest image", "add-store": "Add a store" };
+const KIND_TITLE: Record<string, string> = { "new-session": "New session", "resume-upgrade": "Resume (image or mode)", "add-store": "Add a store" };
 function ApprovalCard({ a }: { a: Approval }) {
   const r = challengeRequest(a, useStore((s) => s.policy));
   const restore = a.options && (a.options as any).restore;
-  const what = a.kind === "add-store" ? `Add ${r.addedStore || "?"}` : `Stores: ${r.stores.join(", ") || "none"} · ${HARNESS[r.harness] || r.harness}`;
+  const what = a.kind === "add-store" ? `Add ${r.addedStore || "?"}` : `Stores: ${r.stores.join(", ") || "none"} · ${HARNESS[r.harness] || r.harness} · ${r.permissionMode} mode`;
   return (
     <Card data={{ approval: a.id }}>
       <Flex justify="space-between" align="flex-start" gap={2} mb={1}>

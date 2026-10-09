@@ -150,7 +150,8 @@ struct S3Credentials {
 
 // ---- the core's documents (core/core.go) ----
 struct StartedMachine: Codable, Equatable { let id: String; let requested: String?; let image: String; let encryptionKey: String; let signingKey: String }
-struct Options: Codable, Equatable { let harness: String? }
+/// the core's signed options: the harness and the permission mode ("auto" | "bypass")
+struct Options: Codable, Equatable { let harness: String?; var permissionMode: String? = nil }
 struct SuccessionRequest: Codable {
   let kind: String
   let predecessor: SignedDoc?
@@ -183,7 +184,11 @@ struct KindDoc: Codable { let kind: String; let id: String?; let store: String?;
 /// router's label — and the checks that what comes back answers it.
 enum Checks {
   enum Kind: String { case newSession = "new-session", resumeUpgrade = "resume-upgrade", addStore = "add-store", other }
-  struct Reviewed { let kind: Kind; let challenge: Challenge; let stores: [String]; let sensitive: [String]; let harness: String; let image: String; let addedStore: String? }
+  struct Reviewed {
+    let kind: Kind; let challenge: Challenge; let stores: [String]; let sensitive: [String]; let harness: String; let image: String; let addedStore: String?
+    /// from the signed challenge itself: "bypass" or "auto" (an absent mode is auto, as the core normalises it)
+    var permissionMode: String { challenge.request.options.permissionMode == "bypass" ? "bypass" : "auto" }
+  }
 
   /// the challenge is core-signed; what it asks for comes from its own fields
   static func review(challenge doc: SignedDoc, coreKey: String) throws -> Reviewed {
@@ -200,11 +205,12 @@ enum Checks {
   }
 
   /// the secure New session page: the challenge carries exactly the stores picked there (plus the harness's
-  /// own, which the router adds) and the harness picked there
-  static func matchesPicked(_ r: Reviewed, stores picked: [String], harnessStores: [String], harness: String) throws {
+  /// own, which the router adds), the harness and the permission mode picked there
+  static func matchesPicked(_ r: Reviewed, stores picked: [String], harnessStores: [String], harness: String, permissionMode: String) throws {
     guard r.kind == .newSession else { throw TrustError.mismatch("not a new session") }
     guard r.stores == Array(Set(picked + harnessStores)).sorted() else { throw TrustError.mismatch("stores") }
     guard r.harness == harness else { throw TrustError.mismatch("harness") }
+    guard r.permissionMode == (permissionMode == "bypass" ? "bypass" : "auto") else { throw TrustError.mismatch("permission mode") }
   }
 
   /// the answer that came back is the core's, for this challenge
