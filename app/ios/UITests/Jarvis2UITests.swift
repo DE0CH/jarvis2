@@ -249,7 +249,8 @@ final class Jarvis2UITests: XCTestCase {
     el("tab-records").tap()
     sleep(3)
     shot("previous")
-    if wait(prefixed("rremove-"), 15, "previous session card") {
+    // the CI router has no Storage Box, so a destroy leaves no record unless it archived something
+    if prefixed("rremove-").waitForExistence(timeout: 10) {
       el(prefixed("rremove-").identifier).tap()
       wait(el("ask-ok"), 10, "remove question")
       shot("previous-remove-question")
