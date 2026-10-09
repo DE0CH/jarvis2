@@ -113,6 +113,8 @@ func main() {
 		err = agent()
 	case "allow":
 		err = allowCmd(os.Args[2:])
+	case "allow-at-least":
+		err = allowAtLeastCmd(os.Args[2:]) // apiproxy.go
 	default:
 		err = fmt.Errorf("unknown command %s", os.Args[1])
 	}
@@ -539,6 +541,7 @@ func agent() error {
 		return err
 	}
 	go statusReporter(c)
+	go serveAPIProxy(c) // apiproxy.go: $JARVIS_URL for Jarvis 1's session scripts
 	for {
 		var out struct {
 			Commands []string `json:"commands"`

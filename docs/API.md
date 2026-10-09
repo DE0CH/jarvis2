@@ -65,7 +65,7 @@ gone (moved to records); `failed` (with `error`).
 | `GET /api/policy` | `{harnesses: {<harness>: {stores: […]}}}` — the stores each harness brings (the router adds them; the app hides them) |
 | `POST /api/sessions` | Body `{requestId, label, prompt, model, permissionMode, size, harness, stores: [], oneShot, autoPause}` (`oneShot`: the machine gets `SESSION_ONE_SHOT=1` and the session is destroyed when its prompt is done; `autoPause` defaults to true, false for one-shot; both show in the approval's `options`). The router adds the harness's stores and asks the core for a challenge (`succession(null, …)`, before any machine); the approval (kind `new-session`) appears at once. Answers `{id: null, requestId}`. |
 | `POST /api/sessions/:id/pause` | The machine snapshots itself (signed), then the core kills it. |
-| `POST /api/sessions/:id/resume` | Body `{upgrade: false}`: the same image, `approve_by_dead_machine`, then start + certify — no approval. `{upgrade: true}`: the newest session image; an approval of kind `resume-upgrade` first (reject = stays paused), then start + certify. |
+| `POST /api/sessions/:id/resume` | Optional `prompt` (≤ 4000 chars): delivered into the session as a peer message once it is `started` again (dropped if the start fails or is rejected). Body `{upgrade: false}`: the same image, `approve_by_dead_machine`, then start + certify — no approval. `{upgrade: true}`: the newest session image; an approval of kind `resume-upgrade` first (reject = stays paused), then start + certify. |
 | `POST /api/sessions/:id/destroy` | Kill (if running), then a burn: a succession to the null image, approved by the dead-machine rule and certified. The session moves to `GET /api/records`. |
 | `GET /api/records` | Destroyed sessions `{records: [...]}` |
 | `POST /api/sessions/:id/auto-pause` | Body `{on}` (Jarvis 1's `{enabled}` works too) → `{ok, autoPause: "on" | "off"}`; restarts the idle countdown. |
@@ -134,3 +134,52 @@ off.
 | `POST /m/downgrade` | Body `{stores, newEncryptionKey, newSigningKey}` → `{challenge}`, which the machine signs with its OLD key. |
 | `POST /m/downgrade/finish` | Body `{challenge, signature}` → core `approve/by-old-key` → `{cert}`; from now on the router knows the machine by its new key. |
 | `POST /m/status` | Body `{raw}`: the output of Jarvis 1's registry command (`machine/status.go`), sent by the agent when it changes and at least every 60 s; parsed by the router (`router/registry.go`). |
+
+## Wakeups and crons (`router/schedule.go`)
+
+Jarvis 1's shapes. The app calls them under `/api/sessions/:id/…`; the session itself under `/m/api/sessions/:id/…`
+(through its machine's local proxy, below). At the due time the router delivers the prompt as a peer message
+(holder `scheduler`), resuming a paused session first. A wakeup or cron belongs to its session and ends with it.
+
+| Call | Does |
+|---|---|
+| `GET …/wakeup` | `{wakeup /* the soonest or null */, wakeups}`; `GET …/wakeups` → `{wakeups}`. Wakeup view `{name, at /* ms */, atIso, prompt}`. |
+| `POST …/wakeup` or `…/wakeups` | `{prompt, at? /* ISO or ms */, delaySeconds?, name? /* default "default" */}` → `{ok, wakeup}`. Arming a name again replaces it. ≤ 90 days, prompt ≤ 3500 chars (whitespace collapses). 409 when the session is destroying. |
+| `DELETE …/wakeup?name=X` (`?all=1`), `DELETE …/wakeups/:name` | `{ok, cancelled: [names]}` |
+| `GET …/crons` | `{crons}`; view `{name, prompt, everySeconds, tz, nextAt, nextAtIso, until, untilIso, armedAtIso, runs, lastFiredIso}` |
+| `POST …/crons` | `{name, prompt, everySeconds? /* 900–7776000, default 86400 */, time? "HH:MM" + tz?, at?, delaySeconds?, until?}` → `{ok, cron}` |
+| `DELETE …/crons/:name` | `{ok}` |
+| `POST …/notify-idle` | `{enabled}` → `{ok, notifyIdle: "on"|"off"}` (kept for the idle DMs) |
+
+Delivery failures: a grant refusal (the session hasn't allowed the scheduler, or holds a sensitive store) DMs
+Deyao once and stays pending, retried every 2 min; any other failure backs off and, after 5 attempts, drops a
+wakeup (a cron skips that occurrence) with a DM.
+
+## Session-facing API (`/m/api/*`)
+
+Jarvis 1's session scripts call `$JARVIS_URL/api/…`. A Jarvis 2 machine gets `JARVIS_URL=http://127.0.0.1:7171`
+(plus placeholder `CF_ACCESS_CLIENT_ID/SECRET` and `SESSION_API_TOKEN`, which the scripts insist on; not for
+OpenCode/OpenClaw, whose harness scripts read CF_ACCESS_* as "publish the web UI"). There `jarvis2-machine agent`
+serves a proxy that drops the scripts' headers and sends `/m/api/<rest>` (query kept, unsigned; the path is
+signed as every `/m` call). Any `:id` in the path must be the calling machine's session (403 otherwise).
+
+| Path | Served by |
+|---|---|
+| `GET /api/sessions/:id/secrets` | The machine itself: `/m/pull-secrets`, opened with its key → `{ok, environment, secrets}` (Jarvis 1's shape). |
+| `GET /api/sessions/:id/changes` | The machine itself: `{checked, repos: [{name, uncommitted, unpushed /* -1 no upstream */}], status}`. |
+| wakeups, crons, notify-idle | The router (above). Arming also puts holder `scheduler` on the session's allow list (a wakeup: due + 1 h; a cron: max(31 d, 2 periods + 1 h), renewed at each firing by `jarvis2-machine allow-at-least`). |
+| `DELETE /api/sessions/:id` | The router: the session retires itself (Destroy) → 202 `{started}`; 409 `{pending}` while it has wakeups or crons. |
+| `…/watches` | 501: not in Jarvis 2. |
+| Jarvis 1's services (below) | Forwarded to `JARVIS1_URL` (default `https://jarvis.deyaochen.com`) with the Access service token `JARVIS1_SERVICES_ID/SECRET` and header `X-Jarvis2-Session: <id>`; path, query, body, Content-Type/Accept/Range unchanged. |
+| anything else | 404 |
+
+Forwarded Jarvis 1 paths (what the cf-tunnel Worker must let the services token reach):
+`GET /api/search`, `GET /api/search/context`, `GET /api/search/status`, `GET /api/icloud/search`,
+`GET /api/icloud/file`, `GET /api/icloud/status`, `POST /api/icloud/relist`, `GET /api/leases`,
+`GET /api/leases/:name`, `POST|PUT|PATCH|DELETE /api/sessions/:id/leases/:name`,
+`POST /api/sessions/:id/leases/:name/seen`, `GET /api/sessions/:id/content`,
+`GET|PUT|DELETE /api/sessions/:id/content/:name/file`, `GET|POST /api/credentials`.
+
+The session routes among them carry the Jarvis 2 session id (`s…`) and no Jarvis 1 session token: Jarvis 1 checks
+`SESSION_API_TOKEN` against its own machine metadata (`requireSessionToken`, `sessionContentStore`), so until
+it accepts the services token + `X-Jarvis2-Session` as the session's identity they answer 401/403.

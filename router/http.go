@@ -278,12 +278,21 @@ func (r *Router) buildHandlers() {
 	})
 	app("POST /api/sessions/{id}/resume", func(w http.ResponseWriter, req *http.Request) {
 		var in struct {
-			Upgrade bool `json:"upgrade"`
+			Upgrade bool   `json:"upgrade"`
+			Prompt  string `json:"prompt"` // delivered once the session is back (schedule.go)
 		}
 		json.NewDecoder(io.LimitReader(req.Body, 1<<16)).Decode(&in)
+		prompt, err := cleanResumePrompt(in.Prompt)
+		if err != nil {
+			writeErr(w, err)
+			return
+		}
 		if err := r.Resume(req.PathValue("id"), in.Upgrade); err != nil {
 			writeErr(w, err)
 			return
+		}
+		if prompt != "" {
+			r.SetResumePrompt(req.PathValue("id"), prompt)
 		}
 		writeJSON(w, 200, map[string]bool{"ok": true})
 	})

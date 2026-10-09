@@ -19,12 +19,14 @@ type (
 // registerFeatures: called once from buildHandlers
 func (r *Router) registerFeatures(app appRoute, m machineRoute) {
 	r.registerAutopilot(app, m)
+	r.registerSessionAPI(app, m) // sessionapi.go: sets deliverHook (peer.go); wakeups, crons, /m/api
 }
 
 // startFeatures: called once from main after the router is built
 func (r *Router) startFeatures() {
 	r.startDiscord()
 	r.startAutopilot()
+	go r.scheduleLoop() // schedule.go: wakeups, crons, resume prompts
 }
 
 // DM: a message to Deyao's Discord DM (filled in by discord.go); without a bot token it only logs

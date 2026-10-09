@@ -70,6 +70,8 @@ type persisted struct {
 	Machines  map[string]string       `json:"machines"` // machine id → session id
 	SessCerts map[string]*Doc         `json:"sessionCerts"`
 	Grants    map[string]*StoredGrant `json:"grants"` // id → a phone-signed grant or standing rule (grants.go)
+
+	Schedules map[string]*Schedule `json:"schedules,omitempty"` // session id → wakeups, crons, resume prompt (schedule.go)
 }
 
 type State struct {

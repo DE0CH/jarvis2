@@ -11,7 +11,7 @@ Facts: the router has no Fly token (it calls the core's start/kill/certify); its
 ## Session lifecycle
 - **Create** (FT, AT): present. Idempotent `requestId`: stored, not deduplicated. Lifecycle lock: 409 present, no `busy` in state.
 - **Pause / resume / resume on newer image**: present (snapshot on the router volume, machine-signed, not encrypted).
-- **Resume prompt** (FX tmux): missing; needs a command verb and the free-text decision.
+- **Resume prompt**: present (`POST /api/sessions/:id/resume {prompt}`, delivered as a peer message once started; router/schedule.go). Jarvis 1 typed it as a user prompt instead.
 - **Start on another size**: missing; size is an option, so it needs approval.
 - **Wake job status**: missing.
 - **Restart / env patch / env-resync / transcript rollback** (FT, SB, FX): missing; re-pull secrets exists only inside add-store and downgrade.
@@ -40,15 +40,15 @@ Facts: the router has no Fly token (it calls the core's start/kill/certify); its
 - Live transcript sync to SB: missing.
 
 ## Scheduling and devices
-- Wakeups, crons (FX peer messages, DT): missing; unattended resume is allowed by design, delivery needs a command verb.
+- Wakeups, crons: present (router/schedule.go; same shapes as Jarvis 1, under `/api` and `/m/api`). Delivery through the `scheduler` grant; arming puts the scheduler on the session's allow list; a sensitive session needs a phone grant (DM, stays pending).
 - Watches (store plaintext on the box): missing; conflicts.
-- Device leases (iphone, mac, wechat-phone; via J1 API): missing.
+- Device leases (iphone, mac, wechat-phone): forwarded to Jarvis 1 (`/m/api` → JARVIS1_SERVICES token); needs Jarvis 1 to accept Jarvis 2 sessions (docs/API.md "Session-facing API").
 - Tasks + schedules (k8s Jobs, SOPS hidden params): missing; conflicts.
 
 ## Stores, repos, content
 - Store editor in the app: partial (values only from the setup session). Copy keys between stores: missing.
 - Multi-store merge conflict file: unverified. Repo picker: missing (API takes free text). Repo delivery: replaced by per-repo tokens.
-- Content stores and drop tokens (SB, CF): missing.
+- Content stores: forwarded to Jarvis 1 like leases (same Jarvis 1 change needed). Drop tokens: missing.
 
 ## Account and apps
 - Re-login: via J1. Usage quota: missing. Device pairing for OpenClaw/Paseo apps, device list/revoke: missing.
@@ -57,8 +57,9 @@ Facts: the router has no Fly token (it calls the core's start/kill/certify); its
 ## Harnesses and image
 - Claude: present. OpenCode + Paseo: partial (models list, Paseo UI needs a tunnel). OpenClaw + claw-code: missing. `harness-send`: missing. API proxy: missing.
 - Workspace layer: to verify. on-start hooks: present.
-- Peer-message delivery (FX): missing; it underlies wakeups, crons, watches, leases and relogin.
-- Transcript search (SB, OR), iCloud index: missing.
+- Peer-message delivery: present (`r.Deliver`, router/peer.go; Jarvis 1's lib/peer.js run through the `scheduler` grant, text base64 in argv).
+- Session-facing API (`$JARVIS_URL` for Jarvis 1's session scripts): present — the machine's local proxy (machine/apiproxy.go) signs to `/m/api`; pull-secrets and changes answered on the machine; notify-idle and self-retire (refused while wakeups/crons are pending) on the router; watches answer 501.
+- Transcript search, iCloud index: forwarded to Jarvis 1 (`/m/api` → JARVIS1_SERVICES token).
 
 ## Design questions parity forces
 1. A command channel replacing Fly exec (terminal, peer messages, status, relogin, mode, Escape, remote info, changes check): a fixed set of `/m/commands` verbs?
