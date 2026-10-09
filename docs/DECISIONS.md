@@ -63,5 +63,7 @@ made around it; the app's own list is `app/DECISIONS.md`.
     (the Claude login), `opencode` brings `openrouter`. A separate long-lived `claude setup-token` in the
     `claude` store avoids fighting Jarvis 1 over the refresh token.
 21. **Stores that can reach a code push are sensitive** (Deyao, 2026-10-09): one GitHub token per repo, each
-    limited to its repo — `github-claude-env` (DE0CH/claude-env, not sensitive) and `github-jarvis2`
-    (DE0CH/jarvis2, sensitive). claude-env holds no Jarvis 2 code or design.
+    limited to its repo (fine-grained, no expiry; contents, workflows, actions) — store `github-claude-env`
+    (key `GITHUB_TOKEN_CLAUDE_ENV`, not sensitive) and `github-jarvis2` (key `GITHUB_TOKEN_JARVIS2`,
+    sensitive). The machine gives each repo its own token (`GITHUB_TOKEN_<REPO>`), so a session with both keeps
+    both. claude-env holds no Jarvis 2 code or design.

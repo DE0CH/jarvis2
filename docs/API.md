@@ -15,7 +15,7 @@ that come from the core are relayed as the core's signed error document `{payloa
 | Prefix | Caller | Access |
 |---|---|---|
 | `/api/*`, `/` (web page) | Deyao's app / browser | Access app `jarvis2.deyaochen.com`, Deyao's email only. The iPhone app sends the Access token in the `cf-access-token` header (got once from `/api/auth/start`). The router also verifies the `Cf-Access-Jwt-Assertion` header itself. |
-| `/setup/*` | the trusted setup session | Access app `jarvis2.deyaochen.com/setup`, service token `jarvis2-setup` only (kept in Jarvis 1's `default` store, never on a machine). The core then checks the setup key's signature on each call (below). |
+| `/setup/*` | the trusted setup session | Access app `jarvis2.deyaochen.com/setup`, service token `jarvis2-setup` only (kept in Jarvis 1's `default` store, never on a machine). The router then checks the setup key's signature on each call (below). |
 | `/m/*` | session machines | Not on the public hostname at all: the router serves `/m` on a second port (8081) that only Fly's private network reaches (the box is a WireGuard peer of org `jarvis2-370`). The router checks the machine's own signature on each request. |
 
 ## App sign-in
@@ -27,53 +27,54 @@ Access (token expired), it runs sign-in again.
 
 ## Sessions
 
-A session's `id` is stable: its first machine's Fly id. `machineId` is the machine it is on now (null while
-paused). Session objects keep the Jarvis 1 shape where a field means the same thing:
+A session's `id` is the router's (`s…`), stable for the session's life. `machineId` is the machine it is on now
+(null before the first start and while paused). Session objects keep the Jarvis 1 shape where a field means the
+same thing:
 
 ```
 { id, machineId, released, name, state, status, created, region, environment /* stores, comma-joined */,
-  harness /* claude | opencode */, label, model, permissionMode, guest, pausedAt, error }
+  stores, harness /* claude | opencode */, label, model, permissionMode, guest, pausedAt, error }
 ```
 
-`state`: `starting` (core is creating the machine) → `approval` (waiting for the iPhone) → `initialising`
-→ `started` (running) → `pausing` → `paused` (no machine) → `resuming` → … ; `destroying` → gone (moved to
-records); `failed` (with `error`).
+`state`: `approval` (waiting for the iPhone; no machine yet) → `starting` (the core makes the machine) →
+`initialising` → `started` (running) → `pausing` → `paused` (no machine) → `resuming` → … ; `destroying` →
+gone (moved to records); `failed` (with `error`).
 
 | Call | Does |
 |---|---|
 | `GET /api/state` | `{sessions, approvals, core: {up, signingKey, agreementKey}}` |
 | `GET /api/sizes` | `{sizes: [{id, label}]}` (small / medium / large) |
 | `GET /api/models` | `{models: [{id, label}]}` |
-| `POST /api/sessions` | Body `{requestId, label, prompt, model, permissionMode, size, harness, stores: []}`. Starts the machine through the core and asks for a new line (`Succession(null → machine)`); answers at once `{id: null, requestId}`; the approval appears in `approvals` (kind `new-session`) once the machine is up (20–60 s). With `"wait": true` it holds the request until the challenge exists (≤ 55 s) and answers `{approval}`. |
-| `POST /api/sessions/:id/pause` | Machine snapshots itself (signed), then the core kills it. |
-| `POST /api/sessions/:id/resume` | Body `{upgrade: false}`: a new machine on the **same image**, answered by the core's dead-machine responder — no approval. `{upgrade: true}`: newest session image; burns the old machine and creates an approval of kind `resume-upgrade` (carries the burn cert). |
-| `POST /api/sessions/:id/destroy` | Kill (if running) + burn; the session moves to `GET /api/records`. |
+| `GET /api/policy` | `{harnesses: {<harness>: {stores: […]}}}` — the stores each harness brings (the router adds them; the app hides them) |
+| `POST /api/sessions` | Body `{requestId, label, prompt, model, permissionMode, size, harness, stores: []}`. The router adds the harness's stores and asks the core for a challenge (`succession(null, …)`, before any machine); the approval (kind `new-session`) appears at once. Answers `{id: null, requestId}`. |
+| `POST /api/sessions/:id/pause` | The machine snapshots itself (signed), then the core kills it. |
+| `POST /api/sessions/:id/resume` | Body `{upgrade: false}`: the same image, `approve_by_dead_machine`, then start + certify — no approval. `{upgrade: true}`: the newest session image; an approval of kind `resume-upgrade` first (reject = stays paused), then start + certify. |
+| `POST /api/sessions/:id/destroy` | Kill (if running), then a burn: a succession to the null image, approved by the dead-machine rule and certified. The session moves to `GET /api/records`. |
 | `GET /api/records` | Destroyed sessions `{records: [...]}` |
 
 ## Approvals (the shell's secure pages)
 
 ```
-approval = { id, kind: "new-session" | "resume-upgrade" | "add-store", created, session /* id or null */,
-             label, challenge /* the core-signed challenge doc */, burnCert /* resume-upgrade only */,
-             options /* the normal-mode form's fields, for display */ }
+approval = { id, kind: "new-session" | "resume-upgrade" | "add-store", created, session, machine /* add-store */,
+             label, challenge /* the core-signed challenge doc */, options /* the form's fields, for display */ }
 ```
 
 | Call | Does |
 |---|---|
 | `GET /api/approvals` | `{approvals: [...]}` |
-| `POST /api/approvals/:id/respond` | Body `{signature}` = base64 DER signature by the phone's signing key over **exactly** `challenge.payload`. Router → core `respond/phone` → cert → core `init`. Answers `{cert, session}`. |
-| `POST /api/approvals/:id/reject` | Drops it; a new session's machine is killed and burned. |
+| `POST /api/approvals/:id/respond` | Body `{signature}` = base64 DER signature by the phone's signing key over **exactly** `challenge.payload`. Router → core `approve/by-phone`. Answers `{answer, session}`: a core-signed `approval` (then the router starts and certifies the machine) or, for `add-store`, the new `succession-cert`. |
+| `POST /api/approvals/:id/reject` | Drops it; a new session disappears, a resume-upgrade stays paused. |
 
-The shell checks before signing: the challenge is core-signed; `request.machine` is present; `request.stores`
-and `request.options.harness` are exactly what Deyao picked on the secure page; for `resume-upgrade` the burn
-cert is core-signed, a `burn-cert` and names `request.predecessorId`; for `add-store`, `request.addedStore` is
-the one store shown.
+The phone may approve anything; it shows exactly what it signs (`request.stores`, `request.sensitive`,
+`request.options`, `request.image`, `request.addedStore`).
 
 ## The core, relayed (`/api/core/*`)
 
-Pass-through to the core's own endpoints, answers unchanged (signed): `GET key`, `POST stores {nonce}`, `POST
-sensitive {nonce}`, `POST mark-sensitive {name}`, `POST unlock/begin {store}`, `POST unlock/finish {pending,
-share}`, `POST lock {id}`, `POST unlocked {nonce}`, `POST log {nonce}`.
+Pass-through to the core's own endpoints, answers unchanged (signed): `GET identity`, `GET core-cert`,
+`POST recover {statement, masterSig, bundle}`, `POST stores {nonce}`, `POST stores/create {name}`, `POST
+stores/mark-sensitive {name}`, `POST stores/write {store}`, `POST unlock/begin {store}`, `POST unlock/finish
+{pending, share}`, `POST lock {id}`, `POST unlocked {nonce}`, `POST log {nonce}`. Formats: `docs/DESIGN.md`,
+`core/core.go`, and the reference client `e2e/main.go`.
 
 Unlock, phone side: verify `unlock/begin`'s doc (kind `unlock-begin`, fields `pending, store, e, t`); Face
 ID → Enclave key agreement of the phone's agreement key with `e` → the 32-byte x-coordinate; seal it to `t`:
@@ -83,41 +84,34 @@ base64(combined)}` → `unlock/finish {pending, share}`.
 
 ## Setup (`/setup/*`)
 
-The setup session initialises a fresh core through the router. The router relays these calls to the core
-unchanged; the core trusts them only because of the setup key, so the router can neither forge, replay nor
-read them.
+Every call carries `X-Setup-Time` (unix seconds) and `X-Setup-Sig` = base64 DER ECDSA-P256-SHA256 signature
+by the setup key over `"<METHOD> <path> <time> <sha256hex of body>"` (the router's path); the router checks it
+against `SETUP_KEY` (`k8s/apps/router.yaml`), within ±2 min, each signature once. Client: `infra/setup.py`.
 
-- **Signature:** headers `X-Setup-Time` (unix seconds) and `X-Setup-Sig` = base64 DER ECDSA-P256-SHA256
-  signature by the setup key over `"<METHOD> <path> <time> <sha256hex of body>"`, where `<path>` is the
-  core's path (`/setup/phone`, `/setup/store`). The core takes the setup key's public half from `SETUP_KEY`
-  (base64 x963, set in git in `k8s/apps/core.yaml`), accepts a time within ±2 min, and each signature once.
-- **Sealed secrets:** a store's values travel as `Sealed{e, data}` to the core's agreement key: ephemeral
-  P-256 `e`, `data` = AES-256-GCM (nonce‖ciphertext‖tag) under HKDF-SHA256(x(e·K), salt empty,
-  info `"jarvis2/setup"`) of the JSON object of values.
-
-| Call | Core path | Does |
-|---|---|---|
-| `GET /setup/key` | `/key` | The core's `{signingKey, agreementKey}` (no signature needed). |
-| `POST /setup/phone` | `/setup/phone` | Body `{signingKey, agreementKey}`: the phone's keys, once per core. |
-| `POST /setup/store` | `/setup/store` | Body `{name, values: Sealed, sensitive}`: a new store (never replaced). |
-| `POST /setup/stores` | `/stores` | Body `{nonce}`: the core's signed store list. |
-
-**The `core` store** holds the core's own secrets, `FLY_API_TOKEN` and `FLY_APP`. It is seeded and unlocked
-like any other store; while it is unlocked the core can start and stop machines, and when its last unlock
-is locked the core forgets the Fly token. It never goes to a session (the core refuses it in `succession`).
+| Call | Core path |
+|---|---|
+| `GET /setup/identity` | `/identity` |
+| `GET /setup/core-cert` | `/core-cert` |
+| `POST /setup/stores` | `/stores` |
+| `POST /setup/stores/create` | `/stores/create` |
+| `POST /setup/stores/write` | `/stores/write` |
+| `POST /setup/stores/mark-sensitive` | `/stores/mark-sensitive` |
 
 ## Machines (`/m/*`)
 
 Every request carries `X-Machine: <fly machine id>`, `X-Time: <unix seconds>`, `X-Sig: <base64 DER signature
 by the machine's signing key over "<method> <path> <time> <sha256 hex of body>">`; the router checks it
-against the key the core reported at `start` and refuses a time more than 120 s off.
+against the machine's current key (from `start`, or its latest downgrade) and refuses a time more than 120 s
+off.
 
 | Call | Does |
 |---|---|
-| `GET /m/cert` | `{cert, predecessorCert}` — this machine's succession cert and, when it continues a real machine, that machine's cert (core-signed; the machine takes the predecessor's signing key from it). 404 until approved. |
+| `GET /m/cert` | `{cert, predecessorCert, coreCert}` — this machine's latest succession cert, the predecessor's cert when it continues a real machine, and the master-signed recovery statement naming the core's key (the machine checks it against the master key built into its image). 404 until certified. |
 | `GET /m/snapshot` | The predecessor's snapshot: body = tar.gz, header `X-Snapshot-Sig` = base64 signature by the predecessor's signing key over the sha256 of the body. 404 = none. |
 | `POST /m/snapshot` | Upload this machine's snapshot (same format). |
-| `POST /m/pull-secrets` | Body `{apiKey}`; the router adds this machine's cert and relays to the core; answers the core's signed `secrets` doc. |
+| `POST /m/pull-secrets` | The router adds this machine's cert and relays to the core; answers the core's signed `secrets` doc (sealed to the machine's key). |
 | `GET /m/commands` | Long poll (≤ 50 s): `{commands: ["snapshot"]}` or `{commands: []}`. |
 | `POST /m/add-store` | Body `{store}`: asks Deyao (an `add-store` approval) to add one store to this session. |
+| `POST /m/downgrade` | Body `{stores, newEncryptionKey, newSigningKey}` → `{challenge}`, which the machine signs with its OLD key. |
+| `POST /m/downgrade/finish` | Body `{challenge, signature}` → core `approve/by-old-key` → `{cert}`; from now on the router knows the machine by its new key. |
 | `POST /m/status` | Body `{status, title}` — idle/busy and the conversation's title, for the app. |

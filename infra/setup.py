@@ -14,6 +14,9 @@ both). Values never print.
                                        or SRC: another env var name, or file:PATH. Written to the core wrapped
                                        to the phone + core key, and backed up to S3 (encrypted to the master key)
   infra/setup.py mark-sensitive NAME   the one-way upgrade, in the core and in the backup
+  infra/setup.py backup NAME KEY[=SRC]… [--not-sensitive]
+                                       a store's backup only, for the next recovery (before the first one,
+                                       this is how stores reach a core); sensitive unless --not-sensitive
   infra/setup.py backup-core FILE      the `core` store's backup only (it reaches a core only by recovery):
                                        FLY_API_TOKEN from FILE (infra/fly-token.sh), FLY_APP jarvis2-sessions
 
@@ -219,6 +222,11 @@ def main():
         call("POST", "/setup/stores/mark-sensitive", {"name": args[0]})
         mark_sensitive_backup(args[0])
         print(f"ok: {args[0]} is sensitive, in the core and in the backup")
+    elif cmd == "backup":
+        plain = "--not-sensitive" in args
+        args = [a for a in args if a != "--not-sensitive"]
+        backup(args[0], dict(value(a) for a in args[1:]), not plain)
+        print(f"ok: backup of {args[0]} written (sensitive={not plain}); it comes in at the next recovery")
     elif cmd == "backup-core":
         backup("core", {"FLY_API_TOKEN": open(os.path.expanduser(args[0])).read().strip(), "FLY_APP": "jarvis2-sessions"}, True)
         print("ok: the core store's backup is written (it comes in at the next recovery)")

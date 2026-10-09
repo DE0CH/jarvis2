@@ -266,8 +266,8 @@ func prepare() error {
 	sj, _ := json.Marshal(secrets)
 	log.Printf("secrets ok: %d keys", len(secrets))
 
-	// 4. repos (cloned with the session's own GITHUB_TOKEN, when it has one)
-	cloneRepos(secrets["GITHUB_TOKEN"])
+	// 4. repos (cloned with the session's own per-repo GitHub tokens, when it has them)
+	cloneRepos(secrets)
 
 	// 5. the agent (pause snapshots), then Jarvis 1's entrypoint runs the harness
 	agentCmd := exec.Command("/proc/self/exe", "agent")
@@ -355,12 +355,36 @@ func pullSecrets(c *client, coreKey, me string) (map[string]string, error) {
 	return m, json.Unmarshal(plain, &m)
 }
 
-func cloneRepos(token string) {
+// gitTokens: a GitHub token per repo of DE0CH. A store holds GITHUB_TOKEN_<REPO> (upper case, "-" as "_"),
+// so sessions with several repo stores keep every token; a plain GITHUB_TOKEN counts for any repo.
+func gitTokens(secrets map[string]string) map[string]string {
+	out := map[string]string{}
+	for k, v := range secrets {
+		if strings.HasPrefix(k, "GITHUB_TOKEN_") && v != "" {
+			out[strings.ReplaceAll(strings.ToLower(strings.TrimPrefix(k, "GITHUB_TOKEN_")), "_", "-")] = v
+		}
+	}
+	return out
+}
+
+// cloneRepos: JARVIS2_REPOS, each with its own repo's token; pushes go through git's credential store, which
+// holds one entry per repo path (credential.useHttpPath)
+func cloneRepos(secrets map[string]string) {
+	tokens := gitTokens(secrets)
+	home, _ := os.UserHomeDir()
+	var creds strings.Builder
+	for repo, t := range tokens {
+		creds.WriteString("https://x-access-token:" + t + "@github.com/DE0CH/" + repo + ".git\n")
+	}
+	if creds.Len() > 0 {
+		shredWrite(filepath.Join(home, ".git-credentials"), []byte(creds.String()), 0o600)
+		exec.Command("git", "config", "--global", "credential.helper", "store").Run()
+		exec.Command("git", "config", "--global", "credential.https://github.com.useHttpPath", "true").Run()
+	}
 	repos := strings.TrimSpace(os.Getenv("JARVIS2_REPOS"))
 	if repos == "" {
 		return
 	}
-	home, _ := os.UserHomeDir()
 	for _, url := range strings.Split(repos, ",") {
 		url = strings.TrimSpace(url)
 		if url == "" {
@@ -370,6 +394,10 @@ func cloneRepos(token string) {
 		dst := filepath.Join(home, "workspace", name)
 		if _, err := os.Stat(filepath.Join(dst, ".git")); err == nil {
 			continue // restored from the snapshot
+		}
+		token := tokens[strings.ToLower(name)]
+		if token == "" {
+			token = secrets["GITHUB_TOKEN"]
 		}
 		src := url
 		if token != "" && strings.HasPrefix(url, "https://github.com/") {
@@ -381,10 +409,6 @@ func cloneRepos(token string) {
 			continue
 		}
 		exec.Command("git", "-C", dst, "remote", "set-url", "origin", url).Run()
-		if token != "" {
-			// pushes keep working through git's credential store, not the remote URL
-			exec.Command("git", "-C", dst, "config", "credential.helper", "store").Run()
-		}
 		log.Printf("cloned %s", name)
 	}
 }
