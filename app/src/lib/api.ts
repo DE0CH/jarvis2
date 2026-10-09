@@ -65,8 +65,19 @@ export type Session = {
   aiTitle?: string; liveName?: string; userTitle?: string; bgTasks?: number; needsGrant?: string; pauseInMs?: number;
   autoPause?: "on" | "off"; notifyIdle?: "on" | "off"; oneShot?: boolean; oneShotDone?: boolean; authFailed?: boolean;
   credsExpiresAt?: string | number; discordChannel?: string; statusUpdatedAt?: string; lastReport?: string; refusals?: Refusal[];
-  wakeups?: Wakeup[]; crons?: Cron[]; resumePrompt?: string; createRequestId?: string;
+  wakeups?: Wakeup[]; crons?: Cron[]; resumePrompt?: string; createRequestId?: string; repos?: string;
+  // a lifecycle action holding the session (others are refused 409) and a permission-mode / restart job
+  busy?: { kind: string; since?: string } | null; wake?: { kind: string; phase: string; error?: string } | null; apiProxy?: "on" | "off";
 };
+export type RepoEntry = { name: string; url: string };
+export type GhRepo = { fullName: string; url: string; htmlUrl: string; description?: string; language?: string; private?: boolean; fork?: boolean; archived?: boolean; pushedAt?: string };
+export type UsageLimit = { kind: string; group: string; percent: number; severity?: string; resetsAt: string | null; model: string | null; surface: string | null; active: boolean };
+export type Usage = {
+  fetchedAt: string; cached?: boolean; stale?: boolean; error?: string;
+  limits: UsageLimit[];
+  extraUsage: { enabled: boolean; monthlyLimit: number; usedCredits: number; utilization: number; currency: string; decimalPlaces: number; disabledReason?: string | null; spendLimitReached: boolean } | null;
+};
+export function fromNow(iso: string | Date) { const d = new Date(iso).getTime() - Date.now(); return d < 0 ? ago(iso) : "in " + ago(new Date(Date.now() - d)).replace(" ago", "").replace("just now", "a moment"); }
 export type TailMessage = { role: "user" | "assistant"; text: string; at?: string };
 export type ArchiveInfo = { dir: string; title: string; transcripts: string[]; artifacts: number; signer?: string; snapshotAt?: string; last?: TailMessage | null };
 /** a destroyed session (GET api/records): the session's fields plus where its archive is */
@@ -84,7 +95,7 @@ export type Approval = {
 export type CoreStatus = { up: boolean; signingKey?: string; agreementKey?: string };
 export type State = {
   sessions: Session[]; approvals: Approval[]; core: CoreStatus;
-  budget?: Budget | null; fly?: FlyView | null; flyApp?: string;
+  budget?: Budget | null; fly?: FlyView | null; flyApp?: string; repos?: RepoEntry[];
   loadError?: string | null; // client-side: the last api/state fetch failed
   loaded?: boolean; // client-side: api/state has answered at least once
 };
@@ -150,6 +161,7 @@ export const HOLDERS: Record<string, { title: string; sub: string }> = {
   status: { title: "Status", sub: "read the screen, press Escape on a prompt left waiting" },
   login: { title: "Login repair", sub: "write fresh Claude credentials and send “continue”" },
   archive: { title: "Archive check", sub: "list uncommitted work before a destroy" },
+  remote: { title: "Remote page", sub: "read the web UI's link and the pairing offer or gateway token" },
 };
 export const holderTitle = (h: string) => HOLDERS[h]?.title || h;
 // the store named `core` holds the core's own Fly token: it never shows for sessions (the core keeps it out of

@@ -16,7 +16,7 @@ import { isWeb, mouse } from "./overlays";
 
 const payloads = new Map<string, unknown>();
 let seq = 0;
-export type PageKind = "new" | "terminal" | "transcript" | "grants" | "schedules";
+export type PageKind = "new" | "terminal" | "transcript" | "grants" | "schedules" | "remote";
 export function openPage(kind: PageKind, payload: unknown = null) {
   const k = String(++seq) + "-" + Date.now().toString(36);
   payloads.set(k, payload);

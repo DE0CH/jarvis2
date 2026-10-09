@@ -1,7 +1,7 @@
 import { useRef } from "react";
 import { Linking, View } from "react-native";
 import { api, ago, challengeRequest, cronEvery, holderTitle, HOLDERS, HARNESS, REGION, sessionTitle, storesOf, when, type Approval, type Session, type State } from "../lib/api";
-import { useStore, getStore, pend, refresh, refreshUntil, pendUntil, settle, ask, askText, toast, failed, exclusive } from "../lib/store";
+import { useStore, getStore, pend, refresh, refreshUntil, pendUntil, settle, ask, askText, toast, failed, exclusive, BUSY_LABEL } from "../lib/store";
 import { hasShell, requestSecure } from "../lib/shell";
 import { requestGrant } from "../lib/grants";
 import { Box, Button, Callout, CalloutText, Card, Flex, Heading, Lbl, Muted, P, Pill, Text } from "../ui/kit";
@@ -15,7 +15,18 @@ const MOVING: Record<string, string> = { starting: "starting…", approval: "wai
 const hasSchedule = (m: Session) => !!(m.wakeups || []).length || !!(m.crons || []).length;
 const clip = (t: string) => t.length > 90 ? t.slice(0, 90) + "…" : t;
 
+// what the router is doing to this session right now (its lifecycle lock, or a mode / restart job), as a
+// button label — seen on every device, not only the one that started it
+export function serverBusy(m: Session): string | null {
+  if (m.busy) return BUSY_LABEL[m.busy.kind] || "Working…";
+  if (m.wake && !["done", "failed"].includes(m.wake.phase)) return BUSY_LABEL[m.wake.kind] || "Working…";
+  return null;
+}
+// sessions the Claude app does not see: their primary action is the Remote page
+const hasRemote = (m: Session) => m.harness === "opencode" || m.harness === "openclaw";
 function SessionPill({ m }: { m: Session }) {
+  const sb = serverBusy(m);
+  if (sb && m.state !== "destroying") return <Pill kind="wait" spin>{sb.toLowerCase()}</Pill>;
   if (m.state === "failed") return <Pill kind="bad">failed</Pill>;
   if (m.state === "paused") return hasSchedule(m) ? <Pill kind="info">scheduled</Pill> : <Pill kind="dim">paused</Pill>;
   if (m.state === "approval") return <Pill kind="info">needs approval</Pill>;
@@ -204,7 +215,7 @@ export function Sessions() {
         if (!inGroup.length) return null;
         return <Box key={g} data={{ group: g }}><Lbl>{g}</Lbl><Cards>
           {inGroup.map((m) => {
-            const busy = pending.get("s:" + m.id) || null;
+            const busy = pending.get("s:" + m.id) || serverBusy(m);
             const moving = !!MOVING[m.state] && m.state !== "initialising";
             const paused = m.state === "paused";
             const own = storesOf(m, policy);
@@ -238,7 +249,8 @@ export function Sessions() {
                   {busy ? <BusyButton variant="soft" color="gray" label={busy} />
                     : moving ? null
                     : <>
-                      {(m.state === "started" || m.state === "initialising") && <Button id={"term-" + m.id} onPress={() => openPage("terminal", { id: m.id, title: sessionTitle(m) })}>Terminal</Button>}
+                      {m.state === "started" && hasRemote(m) ? <Button id={"remote-" + m.id} onPress={() => openPage("remote", { id: m.id, title: sessionTitle(m) })}>Remote</Button>
+                        : (m.state === "started" || m.state === "initialising") && <Button id={"term-" + m.id} onPress={() => openPage("terminal", { id: m.id, title: sessionTitle(m) })}>Terminal</Button>}
                       {(m.state === "started" || m.state === "initialising") && <PButton pkey={"s:" + m.id} id={"pause-" + m.id} variant="soft" onPress={() => pause(m.id)} label="Pause" />}
                       {paused && <PButton pkey={"s:" + m.id} id={"resume-" + m.id} color="green" onPress={() => resumeSession(m.id)} label="Resume" />}
                       {paused && <Button variant="soft" color="gray" id={"tail-" + m.id} onPress={() => openPage("transcript", { title: sessionTitle(m), note: "Paused " + (m.pausedAt ? ago(m.pausedAt) : ""), path: `api/sessions/${m.id}/tail`, action: { label: "Resume", run: () => resumeSession(m.id) } })}>Transcript</Button>}

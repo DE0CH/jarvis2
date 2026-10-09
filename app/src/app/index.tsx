@@ -14,6 +14,7 @@ import { Sessions } from "../views/Sessions";
 import { Records } from "../views/Records";
 import { Stores } from "../views/Stores";
 import { Settings } from "../views/Settings";
+import { Repos } from "../views/Repos";
 
 function Banners() {
   const st = useStore((s) => s.state);
@@ -49,6 +50,7 @@ export default function Dashboard() {
             {tab === "sessions" && <Sessions />}
             {tab === "stores" && <Stores />}
             {tab === "records" && <Records />}
+            {tab === "repos" && <Repos />}
             {tab === "settings" && <Settings />}
           </View>
         </View>

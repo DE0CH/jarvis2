@@ -46,8 +46,9 @@ Carried over from the mock (DE0CH/jarvis2-mock DECISIONS.md) unless marked new.
    router's "Access login required") opens the sheet again and retries once. No sign-in screen on launch:
    the first refused request opens the sheet.
 9. **Not in the React Native app yet** (the router doesn't have them, or they need a native module the extension
-   doesn't carry): tasks, content stores, devices, the Search tab, first-prompt attachments (a file picker).
-   Everything else Jarvis 1's dashboard has is back (items 23–31).
+   doesn't carry): tasks, content stores, devices, the Search tab, first-prompt attachments (a file picker),
+   copying to the clipboard in the app (links are selectable text instead). Everything else Jarvis 1's
+   dashboard has is back (items 23–33).
 10. **The image** shows as the ref the core read from Fly (on approval pages); the GitHub build attestation
     ("CI build from <date>") isn't checked yet.
 11. **iPhone only** (`TARGETED_DEVICE_FAMILY = 1`), portrait + landscape.
@@ -142,6 +143,15 @@ Carried over from the mock (DE0CH/jarvis2-mock DECISIONS.md) unless marked new.
 31. **New: Settings → Claude account** is a link to Jarvis 1 (re-login, usage and the token live there).
     New session has One-shot (needs a prompt) and the auto-pause switch, carried through the secure page; the
     approval page shows one-shot and a restore's source (the router's word, not signed).
+
+32. **New: Repos tab** (Jarvis 1's: the list, the GitHub picker over the router's read-only token, any git URL)
+    and **Repos** + **API proxy** in New session (carried through the secure page; repos go as the
+    comma-joined URLs the machine clones, each with its own token from the session's stores). Nothing is
+    pre-picked: a Jarvis 2 session can only clone a repo its stores hold a token for.
+33. **New: Remote page** for OpenCode / OpenClaw sessions (their primary action instead of Terminal): the web UI
+    link, the Paseo pairing link + QR. The router reads them in the machine as the `remote` feature, so a 403
+    offers "Allow the remote page for 10 minutes". **Usage** (the Claude quota, read through Jarvis 1) is a
+    Settings card. Cards show the router's own lock (`busy`, `wake`) as the action label on every device.
 
 ## Unfinished / known gaps
 

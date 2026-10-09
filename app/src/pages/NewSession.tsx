@@ -28,6 +28,9 @@ export function NewSession() {
   // one-shot: the session runs its prompt, then is archived and destroyed by itself (never auto-paused)
   const [mode, setMode] = useState("session"), [autoPause, setAutoPause] = useState<string[]>(["on"]);
   const oneShot = mode === "oneshot";
+  // repos from the Repos tab (cloned with the per-repo tokens in the session's stores) and the API proxy switch
+  const repoList = useStore((s) => s.state.repos) || [];
+  const [repos, setRepos] = useState<string[]>([]), [apiProxy, setApiProxy] = useState<string[]>([]);
   const [busy, setBusy] = useState<string | null>(null);
   const done = useDone();
   // one create per form: the router answers a repeat of this id with the first create
@@ -35,7 +38,8 @@ export function NewSession() {
   const canStart = !busy && (hasShell || picked.length > 0) && !(oneShot && !prompt.trim());
   function start() {
     if (!canStart) return;
-    const body = { requestId: requestId.current, label: label.trim(), prompt: prompt.trim(), model, permissionMode: perm, size, harness, stores: picked, oneShot, autoPause: !oneShot && autoPause.includes("on") };
+    const body = { requestId: requestId.current, label: label.trim(), prompt: prompt.trim(), model, permissionMode: perm, size, harness, stores: picked, oneShot, autoPause: !oneShot && autoPause.includes("on"),
+      repos: repoList.filter((r) => repos.includes(r.name)).map((r) => r.url).join(","), apiProxy: apiProxy.includes("on") };
     if (hasShell) {
       // the form stays underneath the shell's page: Back there returns to it as it was
       setBusy("Opening…");
@@ -74,6 +78,10 @@ export function NewSession() {
           { value: "openclaw", title: "claw-code · OpenClaw", sub: "Claude subscription · OpenClaw app + Control UI" },
         ]} />
       </>}
+      <Lbl>Repos</Lbl>
+      {repoList.length ? <CheckboxCards id="ns-repo" value={repos} onChange={setRepos} options={repoList.map((r) => ({ value: r.name, title: r.name, sub: r.url }))} />
+        : <Muted>No repos yet — add some in the Repos tab.</Muted>}
+      {!!repoList.length && !repos.length && <Muted mt={1}>No repo selected — the session starts with an empty workspace.</Muted>}
       <Lbl>Permission mode</Lbl>
       <RadioCards id="ns-perm" value={perm} onChange={setPerm} options={[
         { value: "auto", title: "Auto", sub: "Auto-approve safe actions; the permission classifier gates the rest." },
@@ -83,6 +91,8 @@ export function NewSession() {
         <RadioCards id="ns-model" value={model} onChange={setModel} options={models.map((m) => ({ value: m.id, title: m.label || m.id, sub: m.id }))} /></>}
       {!oneShot && <><Lbl>Idle</Lbl>
         <CheckboxCards id="ns-autopause" value={autoPause} onChange={setAutoPause} options={[{ value: "on", title: "Auto-pause when idle", sub: "Pauses the machine after 1 h with nothing running. Resume brings it back — the conversation and your files are kept." }]} /></>}
+      <Lbl>API proxy</Lbl>
+      <CheckboxCards id="ns-apiproxy" value={apiProxy} onChange={setApiProxy} options={[{ value: "on", title: "API proxy", sub: "Logs every request to and response from the Anthropic API into ~/artifacts/api-log, archived with the session." }]} />
       {SIZES.length > 0 && <><Lbl>Machine size</Lbl>
         <RadioCards id="ns-size" value={size} onChange={setSize} options={SIZES.map((s) => ({ value: s.id, title: s.id[0].toUpperCase() + s.id.slice(1), sub: s.label }))} /></>}
     </Page>

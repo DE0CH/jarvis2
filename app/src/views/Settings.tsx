@@ -1,14 +1,69 @@
 // Settings: the Claude account (Jarvis 1 holds it), the Fly spend against the cap, the core as the router
 // reports it, and the shell's recovery and master-key pages (the app only).
 import { Linking } from "react-native";
-import { usd } from "../lib/api";
-import { useStore, failed } from "../lib/store";
+import { useEffect, useRef, useState } from "react";
+import { api, fromNow, usd, type Usage, type UsageLimit } from "../lib/api";
+import { useStore, failed, pend } from "../lib/store";
+import { PButton } from "../ui/bits";
 import { hasShell, requestSecure } from "../lib/shell";
-import { Button, Card, Flex, Heading, Muted, P, Progress } from "../ui/kit";
+import { Box, Button, Card, Flex, Heading, Muted, P, Progress, Text } from "../ui/kit";
 import { Cards } from "../ui/cards";
 
 const short = (k?: string) => (k ? k.slice(0, 16) + "…" + k.slice(-8) : "—");
 const open = (u: string) => Linking.openURL(u).catch((e) => failed(e, "Could not open the link: "));
+
+// "Session (5 h)" / "Weekly · all models" / "Weekly · Fable" — the windows the CLI's /usage lists
+function limitLabel(l: UsageLimit) {
+  const scope = l.model || l.surface;
+  if (l.group === "session") return "Session (5 h)";
+  if (l.group === "weekly") return scope ? "Weekly · " + scope : "Weekly · all models";
+  return (scope ? scope + " · " : "") + l.kind.replace(/_/g, " ");
+}
+function money(v: number, currency: string, dp: number) {
+  try { return new Intl.NumberFormat(undefined, { style: "currency", currency, maximumFractionDigits: dp }).format(v / Math.pow(10, dp)); }
+  catch { return (v / Math.pow(10, dp)).toFixed(dp) + " " + currency; }
+}
+// the Claude quota (GET api/usage, forwarded to Jarvis 1, which holds the login)
+function UsageCard() {
+  const [u, setU] = useState<Usage | null>(null), [err, setErr] = useState<string | null>(null);
+  const seq = useRef(0); // latest request wins
+  async function load(force: boolean) {
+    const n = ++seq.current;
+    if (force) pend("usage", "Refreshing…");
+    try { const r = await api<Usage>("GET", "api/usage" + (force ? "?refresh=1" : "")); if (n === seq.current) { setU(r); setErr(null); } }
+    catch (e: any) { if (n === seq.current) setErr(e.message); }
+    if (force) pend("usage", null);
+  }
+  useEffect(() => { load(false); }, []);
+  return (
+    <Card data={{ settings: "usage" }}><Heading size={3} mb={1}>Usage</Heading>
+      {!u && !err ? <Muted>Loading…</Muted>
+        : !u ? <P size={2} color="red">{err}</P>
+        : <>
+          {u.limits.length === 0 && <Muted>No rate-limit windows reported.</Muted>}
+          {u.limits.map((l) => {
+            const used = Math.max(0, Math.min(100, l.percent));
+            const color = used >= 90 ? "red" : used >= 75 ? "amber" : "green";
+            return (
+              <Box key={l.kind + (l.model || "") + (l.surface || "")} mt={3}>
+                <Flex justify="space-between" align="baseline" gap={2}>
+                  <P size={2} weight="medium" style={{ flex: 1 }}>{limitLabel(l)}</P>
+                  <P size={2} color={color} weight="bold">{used}% used</P>
+                </Flex>
+                <Progress value={used} color={color} mt={1} />
+                <Muted mt={1}>{100 - used}% left{l.resetsAt ? " · resets " + fromNow(l.resetsAt) : ""}</Muted>
+              </Box>
+            );
+          })}
+          {u.extraUsage && <Muted mt={3}>Extra usage: {u.extraUsage.enabled
+            ? `${money(u.extraUsage.usedCredits, u.extraUsage.currency, u.extraUsage.decimalPlaces)} of ${money(u.extraUsage.monthlyLimit, u.extraUsage.currency, u.extraUsage.decimalPlaces)} this month${u.extraUsage.spendLimitReached ? " · spend limit reached" : ""}`
+            : `off${u.extraUsage.disabledReason ? " (" + u.extraUsage.disabledReason.replace(/_/g, " ") + ")" : ""}`}</Muted>}
+          <Muted mt={2}>Fetched {fromNow(u.fetchedAt)}{u.stale ? <> · <Text color="red">showing the last good reading — refresh failed: {u.error}</Text></> : ""}{err && !u.stale ? <> · <Text color="red">{err}</Text></> : ""}</Muted>
+        </>}
+      <Flex mt={3}><PButton pkey="usage" variant="soft" color="gray" onPress={() => load(true)} label="Refresh" id="usage-refresh" /></Flex>
+    </Card>
+  );
+}
 
 function FlyCard() {
   const b = useStore((s) => s.state.budget), fly = useStore((s) => s.state.fly), app = useStore((s) => s.state.flyApp);
@@ -37,9 +92,10 @@ export function Settings() {
     <Cards>
       <Card data={{ settings: "claude" }}>
         <Heading size={3} mb={1}>Claude account</Heading>
-        <Muted>Jarvis 2 sessions use Jarvis 1's Claude login: the router fetches its credential pair and writes it into a session whose login expired. Re-login, usage and the token live in Jarvis 1's Settings.</Muted>
+        <Muted>Jarvis 2 sessions use Jarvis 1's Claude login: the router fetches its credential pair and writes it into a session whose login expired. Re-login and the token live in Jarvis 1's Settings; the quota below is read through it.</Muted>
         <Flex mt={3}><Button variant="soft" id="open-jarvis1" onPress={() => open("https://jarvis.deyaochen.com/")}>Jarvis 1 ↗</Button></Flex>
       </Card>
+      <UsageCard />
       <FlyCard />
       <Card data={{ settings: "core" }}>
         <Heading size={3} mb={1}>Core</Heading>

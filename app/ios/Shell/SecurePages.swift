@@ -154,7 +154,7 @@ struct SecureNewSession: View {
       let key = try CoreTrust.key()
       busy = "Requesting…"
       var body: [String: Any] = ["requestId": rid, "stores": want, "harness": harness]
-      for k in ["label", "prompt", "model", "permissionMode", "size", "oneShot", "autoPause"] { if let v = options[k] { body[k] = v } }
+      for k in ["label", "prompt", "model", "permissionMode", "size", "oneShot", "autoPause", "repos", "apiProxy"] { if let v = options[k] { body[k] = v } }
       try await RouterClient.shared.createSession(body)
       // the core's challenge comes before any machine exists
       var found: RouterClient.ApprovalDTO?

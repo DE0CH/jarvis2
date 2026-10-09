@@ -14,6 +14,7 @@ let HOLDERS: [(id: String, title: String, sub: String)] = [
   ("status", "Status", "Read the screen, press Escape on a prompt left waiting, answer the model-switch dialog"),
   ("login", "Login repair", "Write fresh Claude credentials into the session and send “continue”"),
   ("archive", "Archive check", "List uncommitted and unpushed work before a destroy"),
+  ("remote", "Remote page", "Read the web UI's link and the pairing offer or gateway token (OpenCode, OpenClaw)"),
 ]
 func holderName(_ h: String) -> String { HOLDERS.first { $0.id == h }?.title ?? h }
 
