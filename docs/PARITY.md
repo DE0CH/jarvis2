@@ -25,7 +25,16 @@ Facts: the router has no Fly token (it calls the core's start/kill/certify); its
 - List: present (router-local). Transcript tail (paused: the volume's snapshot; destroyed: the archive), delete/purge: present. Restore a destroyed session: present as a NEW line (phone-approved like a new session) whose first machine restores the archived snapshot, checking the old core-signed cert passed in its env and the snapshot's signature (`router/restore.go`, `machine/restore.go`). Not phone-signed: which old snapshot is restored (the core's Options can't carry it). Indexing an archive by hand (J1 `POST /api/records`): missing.
 
 ## Terminal, remote control, title
-- Registry read: present (the machine reports it: `/m/status {raw}`, `router/registry.go`). Live terminal (FX), remote page for opencode/openclaw (FX, CFA), `/api/remotes`, app title sync (AT), per-session tunnel origin (CFA): missing.
+- Registry read: present (the machine reports it: `/m/status {raw}`, `router/registry.go`). Live terminal (FX), app title sync (AT): missing.
+- Remote page for opencode/openclaw: present (`GET /api/sessions/:id/remote`, `router/remote.go`): the Paseo pair URL or
+  the OpenClaw gateway token, read through holder `remote` (its own key: a phone grant, standing rule or allow-list
+  entry for `remote` opens it; refused → 403 `needsGrant: "remote"`), cached a minute per machine.
+- `/api/remotes?harness=`: present on the router (Deyao's login, or the one service token `JARVIS2_REMOTES_CLIENT_ID`).
+  Deyao's OpenClaw/Paseo apps don't see it yet: they pair with and poll only `jarvis.deyaochen.com` (below, "Device pairing").
+- Per-session tunnel origin (CFA): built on the router side — harnesses opencode/openclaw bring the store `tunnel`
+  (`CF_ACCESS_CLIENT_ID/SECRET` = Access service token `jarvis2-tunnel`); the machine fetches a proof for its own session id at boot (`GET /m/tunnel-proof` → `TUNNEL_AGENT_SECRET`, sent by agent.js
+  as `x-agent-secret`). Needs the Worker + Access changes in "Tunnel token" below before it works. A paused Jarvis 2
+  session's link gives the Worker's bare 503 (its Unpause page is for Jarvis 1 ids only).
 
 ## Automatic behaviour
 - Auto-pause, Escape-cancel of a stale prompt (holder `status`), "needs you"/idle/dead DMs (+ `notify-idle` mute), model-downgrade DM (incl. the dialog, holder `status`), stall nudge (via `Deliver`): present (`router/autopilot.go`). Refused commands set `needsGrant`.
@@ -51,11 +60,18 @@ Facts: the router has no Fly token (it calls the core's start/kill/certify); its
 - Content stores: forwarded to Jarvis 1 like leases (same Jarvis 1 change needed). Drop tokens: missing.
 
 ## Account and apps
-- Re-login: via J1. Usage quota: missing. Device pairing for OpenClaw/Paseo apps, device list/revoke: missing.
+- Re-login: via J1. Usage quota: missing. Device pairing for OpenClaw/Paseo apps, device list/revoke: missing
+  (design question 14, below).
 - Dashboard: Sessions, Stores, Records, Settings, New session present; Search, Tasks, Schedules, Devices, Content, Repos, usage, banners, lease pills, "Also on Fly": missing.
 
 ## Harnesses and image
-- Claude: present. OpenCode + Paseo: partial (models list, Paseo UI needs a tunnel). OpenClaw + claw-code: missing. `harness-send`: missing. API proxy: missing.
+- Claude: present. OpenCode + Paseo, OpenClaw + claw-code: present on the router (policy: opencode brings
+  `openrouter` + `tunnel`, openclaw brings `claude` + `tunnel`; `GET /api/models[?harness=]` lists Jarvis 1's models
+  per harness; the harness is signed in the cert's options → `SESSION_HARNESS`, the model goes as `SESSION_MODEL`,
+  a model of another harness becomes the harness's default, an unknown one is refused). Their web UI needs the
+  tunnel token (above). `harness-send`: present (`router/peer.go` queues prompts with `harness-send --queue` for
+  both harnesses, holder `scheduler`). API proxy: missing (openclaw runs its own api-proxy.js; the per-session
+  claude option is not ported).
 - Workspace layer: to verify. on-start hooks: present.
 - Peer-message delivery: present (`r.Deliver`, router/peer.go; Jarvis 1's lib/peer.js run through the `scheduler` grant, text base64 in argv).
 - Session-facing API (`$JARVIS_URL` for Jarvis 1's session scripts): present — the machine's local proxy (machine/apiproxy.go) signs to `/m/api`; pull-secrets and changes answered on the machine; notify-idle and self-retire (refused while wakeups/crons are pending) on the router; watches answer 501.
@@ -69,14 +85,46 @@ Facts: the router has no Fly token (it calls the core's start/kill/certify); its
 5. Secrets outside sessions (watches, tasks, Discord/Browserbase/budget DMs).
 6. Fly read access for the budget cap.
 7. Where the Discord bot token lives; does it need a narrower bot?
-8. Per-session tunnel origins without opening Jarvis 1's Access.
+8. Per-session tunnel origins without opening Jarvis 1's Access: answered by the confined `jarvis2-tunnel` token +
+   per-id proof ("Tunnel token" below); waiting for the Worker deploy.
 9. Cross-Jarvis services (leases, search, iCloud, content, schedule scripts): Worker-confined J1 tokens, or reimplement on `/m`?
 10. Which options are signed (mode, model, size, auto-pause, one-shot, API proxy, repos).
 11. Arbitrary env injection: allowed at all?
 12. Store authoring in the app (the app as trusted writer), copy between stores.
 13. Attachments and content stores without SB creds on every machine.
-14. Device pairing for OpenClaw/Paseo.
+14. Device pairing for OpenClaw/Paseo: open ("Device pairing" below).
 15. A machine reporting "busy" forever defeats auto-pause and the budget.
 
 Deyao's direction (2026-10-09): features learn trust and are approved through the core in time-limited grants
 (10 minutes at a time), so not everything goes through the core.
+
+## Tunnel token (what the cf-tunnel Worker and Access need; not deployed from here)
+
+1. Mint an Access service token `jarvis2-tunnel` (duration forever). Write the store `tunnel` (not sensitive) with
+   `CF_ACCESS_CLIENT_ID` / `CF_ACCESS_CLIENT_SECRET` = its client id / secret, BEFORE the router with the new policy
+   rolls out (the core refuses a session with an unknown store).
+2. Access app `tunnel.deyaochen.com` ("Claude Tunnel"): its `allow-agent-service-token` policy includes the agent's
+   token only; add `{service_token: {token_id: <jarvis2-tunnel's UUID>}}` to that policy's `include` (and to
+   cf-tunnel/deploy.sh `ensure_app`, or a re-run drops it). The session hosts `*-s.deyaochen.com` already admit
+   any token; `jarvis.deyaochen.com` too, which is why the Worker must confine it.
+3. Worker: `CONFINED_TOKENS["<jarvis2-tunnel client id>"] = ["AGENT jarvis2"]`, a new rule kind: the token may
+   only open `wss://tunnel.deyaochen.com/__agent/<id>` with `<id>` matching `^s[0-9a-f]{16}$` (the router's ids,
+   `"s" + randID()`), nothing on jarvis.deyaochen.com or any session host, and only with `x-agent-secret` = hex
+   HMAC-SHA256(Worker secret `JARVIS2_TUNNEL_KEY`, `"jarvis2-tunnel:" + id`) (fails closed without the secret;
+   the header is stripped before the Durable Object). The same key goes in the router's env `JARVIS2_TUNNEL_KEY`.
+   The token is shared by every Jarvis 2 session; the proof is what stops one session from registering
+   another's id.
+4. Deyao opens `https://<id>-s.deyaochen.com/` with his own login, as in Jarvis 1.
+
+## Device pairing for OpenClaw/Paseo (open)
+
+Jarvis 1 mints one Access service token per paired app (`CF_DEVICE_TOKENS_API`); the apps then call only
+`jarvis.deyaochen.com` (`/api/devices/pair`, `/api/remotes`, Start) and reach `<id>-s.deyaochen.com` with that
+token. The Jarvis 2 router can't mint tokens and shouldn't. Smallest design, no app change: Jarvis 1's
+`/api/remotes` appends Jarvis 2's list, fetched from `jarvis2.deyaochen.com/api/remotes` with one service token
+(`jarvis2-remotes`: router env `JARVIS2_REMOTES_CLIENT_ID` = its client id; Access admits it on a path-scoped app
+`jarvis2.deyaochen.com/api/remotes`, audience in router env `ACCESS_REMOTES_AUD`, policies Deyao's email + that token).
+The apps' own device tokens already reach Jarvis 2 session hosts. Costs: a Jarvis 1 change; Jarvis 1 then holds a
+token that reads every Jarvis 2 session's gateway token / pair link (as far as the `remote` grants allow); Start of a
+paused Jarvis 2 session from the Paseo app stays Jarvis 1-only. The alternative is a second server in each app,
+paired with Jarvis 2, which needs app work and a token story of its own.

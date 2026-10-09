@@ -21,7 +21,9 @@ export function NewSession() {
   const touched = useRef(false);
   useEffect(() => { if (!touched.current) setPicked(plain.some((s) => s.name === "default") ? ["default"] : []); }, [plain.map((s) => s.name).join(",")]);
   const [perm, setPerm] = useState("bypass"), [model, setModel] = useState(""), [size, setSize] = useState("medium"), [harness, setHarness] = useState("claude");
-  useEffect(() => { setModel((m) => m || MODELS[0]?.id || ""); }, [MODELS[0]?.id]);
+  // the models of the chosen harness (the router swaps a model of another harness for that harness's default)
+  const models = MODELS.filter((m) => hasShell || (m.harness || "claude") === harness);
+  useEffect(() => { setModel((m) => (models.some((x) => x.id === m) ? m : models[0]?.id || "")); }, [harness, models.map((m) => m.id).join(",")]);
   const [label, setLabel] = useState(""), [prompt, setPrompt] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
   const done = useDone();
@@ -64,6 +66,7 @@ export function NewSession() {
         <RadioCards id="ns-harness" value={harness} onChange={setHarness} options={[
           { value: "claude", title: "Claude Code", sub: "Claude subscription · Claude app" },
           { value: "opencode", title: "OpenCode · OpenRouter", sub: "Paseo app + web UI" },
+          { value: "openclaw", title: "claw-code · OpenClaw", sub: "Claude subscription · OpenClaw app + Control UI" },
         ]} />
       </>}
       <Lbl>Permission mode</Lbl>
@@ -71,8 +74,8 @@ export function NewSession() {
         { value: "auto", title: "Auto", sub: "Auto-approve safe actions; the permission classifier gates the rest." },
         { value: "bypass", title: "Dangerously skip permissions", sub: "No prompts at all (--dangerously-skip-permissions)." },
       ]} />
-      {MODELS.length > 0 && <><Lbl>Model</Lbl>
-        <RadioCards id="ns-model" value={model} onChange={setModel} options={MODELS.map((m) => ({ value: m.id, title: m.label || m.id, sub: m.id }))} /></>}
+      {models.length > 0 && <><Lbl>Model</Lbl>
+        <RadioCards id="ns-model" value={model} onChange={setModel} options={models.map((m) => ({ value: m.id, title: m.label || m.id, sub: m.id }))} /></>}
       {SIZES.length > 0 && <><Lbl>Machine size</Lbl>
         <RadioCards id="ns-size" value={size} onChange={setSize} options={SIZES.map((s) => ({ value: s.id, title: s.id[0].toUpperCase() + s.id.slice(1), sub: s.label }))} /></>}
     </Page>

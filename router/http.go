@@ -84,7 +84,7 @@ func (r *Router) buildHandlers() {
 			r.relay(w, method, corePath, b)
 		}))
 	}
-	r.registerFeatures(app, m)
+	r.registerFeatures(app, m, mux.Handle)
 	// the router's own health, for an operator with no way into the box: secret NAMES present, image, core up
 	mux.Handle("GET /setup/status", r.requireSetup(func(w http.ResponseWriter, req *http.Request) {
 		if err := r.checkSetupSig(req.Method, req.URL.Path, req.Header.Get("X-Setup-Time"), req.Header.Get("X-Setup-Sig"), nil); err != nil {
@@ -93,7 +93,7 @@ func (r *Router) buildHandlers() {
 		}
 		present := []string{}
 		for _, k := range []string{"LOBSTER_TOKEN", "STORAGEBOX_HOST", "STORAGEBOX_USER", "STORAGEBOX_PASSWORD", "FLY_READ_TOKEN",
-			"JARVIS1_CREDENTIALS_ID", "JARVIS1_CREDENTIALS_SECRET", "JARVIS1_SERVICES_ID", "JARVIS1_SERVICES_SECRET"} {
+			"JARVIS1_CREDENTIALS_ID", "JARVIS1_CREDENTIALS_SECRET", "JARVIS1_SERVICES_ID", "JARVIS1_SERVICES_SECRET", "JARVIS2_TUNNEL_KEY", "JARVIS2_REMOTES_CLIENT_ID"} {
 			if os.Getenv(k) != "" {
 				present = append(present, k)
 			}
@@ -161,10 +161,6 @@ func (r *Router) buildHandlers() {
 	app("GET /api/sizes", func(w http.ResponseWriter, req *http.Request) {
 		writeJSON(w, 200, map[string]any{"sizes": []map[string]string{
 			{"id": "small", "label": "2×shared · 2 GB"}, {"id": "medium", "label": "4×shared · 4 GB"}, {"id": "large", "label": "8×shared · 8 GB"}}})
-	})
-	app("GET /api/models", func(w http.ResponseWriter, req *http.Request) {
-		writeJSON(w, 200, map[string]any{"models": []map[string]string{
-			{"id": "claude-opus-5-5", "label": "Opus 5.5"}, {"id": "claude-fable-5-1", "label": "Fable 5.1"}}})
 	})
 	app("GET /api/records", func(w http.ResponseWriter, req *http.Request) {
 		var recs []*Record
@@ -698,10 +694,11 @@ func verifyP256(pubRaw string, payload []byte, sigB64 string) bool {
 }
 
 type accessClaims struct {
-	Aud   any    `json:"aud"`
-	Email string `json:"email"`
-	Exp   int64  `json:"exp"`
-	Iss   string `json:"iss"`
+	Aud        any    `json:"aud"`
+	Email      string `json:"email"`
+	CommonName string `json:"common_name"` // a service token's client id (no email)
+	Exp        int64  `json:"exp"`
+	Iss        string `json:"iss"`
 }
 
 type accessKeys struct {

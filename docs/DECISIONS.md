@@ -60,7 +60,9 @@ made around it; the app's own list is `app/DECISIONS.md`.
     yet).
 19. **Repos for a session** are cloned by the machine with the session's own `GITHUB_TOKEN`.
 20. **Harness stores** (`policy/stores.json`, baked into the router image): `claude` brings the store `claude`,
-    `opencode` brings `openrouter`.
+    `opencode` brings `openrouter` + `tunnel`, `openclaw` brings `claude` + `tunnel` (`tunnel` = the confined Access
+    service token `jarvis2-tunnel` for the web UI's cf-tunnel agent: a store, not the router's machine env, so the
+    router never holds it and it never sits in a Fly machine config; the per-id proof comes over `/m`).
 21. **Stores that can reach a code push are sensitive** (Deyao, 2026-10-09): one GitHub token per repo, each
     limited to its repo (fine-grained, no expiry; contents, workflows, actions) — store `github-claude-env`
     (key `GITHUB_TOKEN_CLAUDE_ENV`, not sensitive) and `github-jarvis2` (key `GITHUB_TOKEN_JARVIS2`,

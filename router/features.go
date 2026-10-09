@@ -14,13 +14,17 @@ import (
 type (
 	appRoute     func(pattern string, fn http.HandlerFunc)
 	machineRoute func(pattern string, fn func(w http.ResponseWriter, req *http.Request, machine string, body []byte))
+	// publicRoute: a route on the public listener with the feature's own Access check (not requireDeyao)
+	publicRoute func(pattern string, h http.Handler)
 )
 
 // registerFeatures: called once from buildHandlers
-func (r *Router) registerFeatures(app appRoute, m machineRoute) {
+func (r *Router) registerFeatures(app appRoute, m machineRoute, public publicRoute) {
 	r.registerAutopilot(app, m)
-	r.registerSessionAPI(app, m) // sessionapi.go: sets deliverHook (peer.go); wakeups, crons, /m/api
-	r.registerArchive(app, m)    // archive.go, restore.go (budget.go needs no routes: /api/state via stateHooks)
+	r.registerHarnesses(app)         // harness.go: /api/models
+	r.registerRemote(app, m, public) // remote.go: remote pages, /api/remotes, tunnel proofs
+	r.registerSessionAPI(app, m)     // sessionapi.go: sets deliverHook (peer.go); wakeups, crons, /m/api
+	r.registerArchive(app, m)        // archive.go, restore.go (budget.go needs no routes: /api/state via stateHooks)
 }
 
 // startFeatures: called once from main after the router is built

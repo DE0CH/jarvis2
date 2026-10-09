@@ -33,7 +33,7 @@ same thing:
 
 ```
 { id, machineId, released, name, state, status, created, region, environment /* stores, comma-joined */,
-  stores, harness /* claude | opencode */, label, model, permissionMode, guest, pausedAt, error,
+  stores, harness /* claude | opencode | openclaw */, label, model, permissionMode, guest, pausedAt, error,
   autoPause /* "on" | "off" */, notifyIdle /* "on" | "off" */, oneShot, needsGrant /* a holder the machine refused */,
   lastReport /* the machine's last status report */,
   // while started, from the machine's report (fresh within 3 min), as in Jarvis 1:
@@ -63,7 +63,7 @@ gone (moved to records); `failed` (with `error`).
 |---|---|
 | `GET /api/state` | `{sessions, approvals, core: {up, signingKey, agreementKey}}` |
 | `GET /api/sizes` | `{sizes: [{id, label}]}` (small / medium / large) |
-| `GET /api/models` | `{models: [{id, label}]}` |
+| `GET /api/models` | `?harness=` optional → `{models: [{id, label, harness}], default, defaults: {<harness>: id}, harnesses: {<harness>: {label, detail}}}` — Jarvis 1's list (Claude, OpenRouter via OpenCode, Claude via OpenClaw), only harnesses the policy has. In `POST /api/sessions` an empty model or one of another harness becomes the harness's default; an unknown one is refused (400). |
 | `GET /api/policy` | `{harnesses: {<harness>: {stores: […]}}}` — the stores each harness brings (the router adds them; the app hides them) |
 | `POST /api/sessions` | Body `{requestId, label, prompt, model, permissionMode, size, harness, stores: [], oneShot, autoPause}` (`oneShot`: the machine gets `SESSION_ONE_SHOT=1` and the session is destroyed when its prompt is done; `autoPause` defaults to true, false for one-shot; both show in the approval's `options`). The router adds the harness's stores and asks the core for a challenge (`succession(null, …)`, before any machine); the approval (kind `new-session`) appears at once. Answers `{id: null, requestId}`. |
 | `POST /api/sessions/:id/pause` | The machine snapshots itself (signed), then the core kills it. |
@@ -84,6 +84,8 @@ gone (moved to records); `failed` (with `error`).
 | `POST /api/records/:id/restore` | Body `{requestId?}` → `{id, requestId}`. A NEW session (new line) with the record's options; an approval of kind `new-session` with `options.restore` naming the record. Its first machine restores the archived snapshot (below). |
 | `POST /api/sessions/:id/auto-pause` | Body `{on}` (Jarvis 1's `{enabled}` works too) → `{ok, autoPause: "on" | "off"}`; restarts the idle countdown. |
 | `POST /api/sessions/:id/notify-idle` | Body `{on}` → `{ok, notifyIdle}`: mutes only the idle DM; "needs you", dead and downgrade DMs still come. |
+| `GET /api/sessions/:id/remote` | OpenCode/OpenClaw only (400 otherwise; 409 unless `started`): `{webUrl, harness, pairUrl, relay}` (opencode: the Paseo app's pairing link) or `{webUrl /* …#token= */, harness, url /* wss://<id>-s.deyaochen.com */, token}` (openclaw: the gateway token). Read in the machine as holder `remote` (a grant, standing rule or allow-list entry); refused → 403 `{error, needsGrant: "remote"}`; front end not up → 503 `{error}`. Cached 1 min per machine. `webUrl` = `https://<session id>-s.deyaochen.com/` (suffix: router env `SESSION_TUNNEL_SUFFIX`). |
+| `GET /api/remotes?harness=openclaw\|opencode` | Jarvis 1's shape: `{sessions: [{id, title, state, model, + url, token, webUrl (openclaw) \| pairUrl (opencode), or error (+ needsGrant)}]}`; secrets only for a started session. Also admits one Access service token: client id `JARVIS2_REMOTES_CLIENT_ID` (JWT `common_name`), audience the app's or `ACCESS_REMOTES_AUD`. |
 
 ### Archives (Storage Box, router env `STORAGEBOX_HOST/USER/PASSWORD`)
 
@@ -160,6 +162,7 @@ off.
 | `POST /m/add-store` | Body `{store}`: asks Deyao (an `add-store` approval) to add one store to this session. |
 | `POST /m/downgrade` | Body `{stores, newEncryptionKey, newSigningKey}` → `{challenge}`, which the machine signs with its OLD key. |
 | `POST /m/downgrade/finish` | Body `{challenge, signature}` → core `approve/by-old-key` → `{cert}`; from now on the router knows the machine by its new key. |
+| `GET /m/tunnel-proof` | `{proof, id}`: hex HMAC-SHA256(`JARVIS2_TUNNEL_KEY`, `"jarvis2-tunnel:" + <this machine's session id>`), which the cf-tunnel Worker checks when the `jarvis2-tunnel` token registers that id. The machine puts it in `TUNNEL_AGENT_SECRET` at boot (never in the Fly config). 404 without the key; 403 for a machine with no running session. |
 | `POST /m/status` | Body `{raw}`: the output of Jarvis 1's registry command (`machine/status.go`), sent by the agent when it changes and at least every 60 s; parsed by the router (`router/registry.go`). |
 
 ## Wakeups and crons (`router/schedule.go`)

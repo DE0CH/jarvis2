@@ -289,6 +289,9 @@ func prepare() error {
 	}
 	env := os.Environ()
 	env = append(env, "SESSION_SECRETS_JSON="+string(sj), "SESSION_HARNESS="+cert.Options.Harness, "SESSION_ID="+sessionID(me))
+	if p := tunnelProof(c); p != "" { // tunnelproof.go
+		env = append(env, "TUNNEL_AGENT_SECRET="+p)
+	}
 	if v := secrets["CLAUDE_CREDENTIALS"]; v != "" {
 		env = append(env, "CLAUDE_CREDENTIALS="+v)
 	}

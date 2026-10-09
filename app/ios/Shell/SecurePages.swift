@@ -46,7 +46,7 @@ struct SecureFrame<Content: View>: View {
   }
 }
 
-let HARNESSES: [(id: String, title: String, sub: String)] = [("claude", "Claude Code", "Claude subscription · Claude app"), ("opencode", "OpenCode · OpenRouter", "Paseo app + web UI")]
+let HARNESSES: [(id: String, title: String, sub: String)] = [("claude", "Claude Code", "Claude subscription · Claude app"), ("opencode", "OpenCode · OpenRouter", "Paseo app + web UI"), ("openclaw", "claw-code · OpenClaw", "Claude subscription · OpenClaw app + Control UI")]
 func harnessName(_ h: String) -> String { HARNESSES.first { $0.id == h }?.title ?? h }
 func errText(_ e: Error) -> String { (e as? LocalizedError)?.errorDescription ?? e.localizedDescription }
 /// key use waits for Face ID: keep it off the main thread
@@ -140,7 +140,7 @@ struct SecureNewSession: View {
     else { picked = picked.intersection(offered.map(\.name)) }
   }
   private func load() async {
-    if (options["harness"] as? String) == "opencode" { harness = "opencode" }
+    if let h = options["harness"] as? String, HARNESSES.contains(where: { $0.id == h }) { harness = h }
     harnessStores = await RouterClient.shared.harnessStores()
     if let p = shell.prefetched { apply(p); loaded = true }
     do { let p = try await RouterClient.shared.stores(); shell.prefetched = p; apply(p); loaded = true }

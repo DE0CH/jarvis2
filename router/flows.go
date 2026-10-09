@@ -182,6 +182,10 @@ func (r *Router) CreateSession(in NewSession) error {
 	if in.Size == "" {
 		in.Size = "medium"
 	}
+	var err error
+	if in.Model, err = sessionModel(in.Harness, in.Model); err != nil { // harness.go
+		return err
+	}
 	if in.PermissionMode != "bypass" {
 		in.PermissionMode = "auto"
 	}

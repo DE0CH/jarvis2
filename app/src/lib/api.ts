@@ -71,7 +71,7 @@ export type State = {
   loadError?: string | null; // client-side: the last api/state fetch failed
   loaded?: boolean; // client-side: api/state has answered at least once
 };
-export type Choice = { id: string; label: string };
+export type Choice = { id: string; label: string; harness?: string };
 // a store as the core lists it (payload of POST api/core/stores). Read here only for display and
 // pre-selection; the shell verifies the core's signature before anything is signed.
 export type CoreStore = { name: string; sensitive: boolean; empty: boolean; unlocked: boolean };
@@ -106,7 +106,7 @@ export function challengeRequest(a: Approval, p: Policy = {}): { stores: string[
 export const newId = () => (globalThis.crypto?.randomUUID ? globalThis.crypto.randomUUID() : String(Date.now()) + Math.random().toString(16).slice(2));
 
 export const REGION: Record<string, string> = { arn: "Stockholm", fra: "Frankfurt", ams: "Amsterdam", lhr: "London", cdg: "Paris", waw: "Warsaw", mad: "Madrid", iad: "Virginia", ord: "Chicago", sjc: "San Jose", lax: "Los Angeles", sin: "Singapore", nrt: "Tokyo", hkg: "Hong Kong", syd: "Sydney" };
-export const HARNESS: Record<string, string> = { claude: "Claude Code", opencode: "OpenCode" };
+export const HARNESS: Record<string, string> = { claude: "Claude Code", opencode: "OpenCode", openclaw: "OpenClaw" };
 export function ago(iso: string | Date) {
   const s = Math.max(0, (Date.now() - new Date(iso).getTime()) / 1000);
   if (s < 60) return "just now"; if (s < 3600) return Math.floor(s / 60) + " min ago"; if (s < 86400) return Math.floor(s / 3600) + " h ago"; return Math.floor(s / 86400) + " d ago";
