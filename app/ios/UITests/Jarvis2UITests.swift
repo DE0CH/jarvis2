@@ -221,8 +221,10 @@ final class Jarvis2UITests: XCTestCase {
     guard wait(prefixed("resume-"), 90, "paused again") else { return }
     // the permission mode (signed): a paused session switches at its next resume, which the iPhone approves
     el(prefixed("more-").identifier).tap()
-    if wait(el("menu-switch-to-auto-mode"), 10, "switch mode item") {
-      el("menu-switch-to-auto-mode").tap()
+    let toAuto = el("menu-switch-to-auto-mode"), toBypass = el("menu-switch-to-bypass-mode")
+    XCTAssertTrue(toAuto.waitForExistence(timeout: 10), "[\(tag)] the session was made in bypass (the form's pick reached the secure page): switch to auto offered")
+    if toAuto.exists || toBypass.exists {
+      (toAuto.exists ? toAuto : toBypass).tap()
       wait(el("ask-ok"), 10, "switch mode question")
       el("ask-ok").tap()
       sleep(2)

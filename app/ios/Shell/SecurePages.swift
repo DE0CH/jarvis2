@@ -150,6 +150,7 @@ struct SecureNewSession: View {
   }
   private func load() async {
     if let h = options["harness"] as? String, HARNESSES.contains(where: { $0.id == h }) { harness = h }
+    if (options["permissionMode"] as? String) == "bypass" { mode = "bypass" }
     harnessStores = await RouterClient.shared.harnessStores()
     if let p = shell.prefetched { apply(p); loaded = true }
     do { let p = try await RouterClient.shared.stores(); shell.prefetched = p; apply(p); loaded = true }
