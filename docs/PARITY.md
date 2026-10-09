@@ -62,7 +62,11 @@ Facts: the router has no Fly token (it calls the core's start/kill/certify); its
 ## Account and apps
 - Re-login: via J1. Usage quota: forwarded to J1 (`GET /api/usage`, services token). Device pairing for OpenClaw/Paseo apps, device list/revoke: missing
   (design question 14, below).
-- Dashboard: Sessions, Stores, Records, Settings, New session present; Search, Tasks, Schedules, Devices, Content, Repos, usage, banners, lease pills, "Also on Fly": missing.
+- Dashboard (app/DECISIONS.md 23–33): Sessions (live status, auto-pause/idle switches, resume prompt, destroy with the
+  changes check, transcript, Discord link, needsGrant one-tap), Grants (secure page, phone-signed), Terminal, Remote,
+  per-session wakeups/crons, Previous (restore/tail/remove/delete), Stores, Repos, Settings (usage, Fly spend), New session
+  (one-shot, auto-pause, repos, API proxy), banners, "Also on Fly": present. Search, Tasks, task Schedules, Devices,
+  Content, lease pills, first-prompt attachments: missing.
 
 ## Harnesses and image
 - Claude: present. OpenCode + Paseo, OpenClaw + claw-code: present on the router (policy: opencode brings
