@@ -322,6 +322,24 @@ func cronView(c *Cron) map[string]any {
 	return v
 }
 
+// scheduleView: a session's wakeups, crons and queued resume prompt in its /api/state view (Jarvis 1 lists
+// them on the card; callers hold the state lock)
+func scheduleView(d *persisted, sid string, v map[string]any) {
+	ws, cs := []map[string]any{}, []map[string]any{}
+	if sc := d.Schedules[sid]; sc != nil {
+		for _, w := range sortedWakeups(sc) {
+			ws = append(ws, wakeupView(w))
+		}
+		for _, c := range sortedCrons(sc) {
+			cs = append(cs, cronView(c))
+		}
+		if sc.ResumePrompt != "" {
+			v["resumePrompt"] = sc.ResumePrompt
+		}
+	}
+	v["wakeups"], v["crons"] = ws, cs
+}
+
 func sortedWakeups(s *Schedule) []*Wakeup {
 	out := []*Wakeup{}
 	if s != nil {

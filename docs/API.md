@@ -40,7 +40,9 @@ same thing:
   status /* busy | idle | waiting | … */, aiTitle, liveName, nameSource, bgTasks, statusUpdatedAt, bridgeSessionId,
   sessionId /* claude's conversation id */, authFailed, credsExpiresAt, sessionsInside, oneShotDone,
   refusals: [{kind: "fallback" | "refusal", at, uuid, from, to, model, category}],
-  pauseInMs /* while the auto-pause countdown runs */ }
+  pauseInMs /* while the auto-pause countdown runs */,
+  discordChannel /* the session's Discord channel id */, wakeups: [wakeup view], crons: [cron view] /* below */,
+  resumePrompt /* a prompt queued for delivery once started */ }
 ```
 
 What the router does by itself with a running session (`router/autopilot.go`, every 30 s), from that report:
@@ -68,6 +70,12 @@ gone (moved to records); `failed` (with `error`).
 | `POST /api/sessions/:id/resume` | Optional `prompt` (≤ 4000 chars): delivered into the session as a peer message once it is `started` again (dropped if the start fails or is rejected). Body `{upgrade: false}`: the same image, `approve_by_dead_machine`, then start + certify — no approval. `{upgrade: true}`: the newest session image; an approval of kind `resume-upgrade` first (reject = stays paused), then start + certify. |
 | `POST /api/sessions/:id/destroy` | A running session is paused first (the machine's final signed snapshot, then the core's kill); the snapshot is archived to the Storage Box (below); then a burn: a succession to the null image, approved by the dead-machine rule and certified. The session moves to `GET /api/records`. A failed archive leaves the session `paused` with `error: "archive: …"`; `?force=1` destroys anyway (the record keeps `archiveError`). |
 | `GET /api/sessions/:id/changes` | Uncommitted / unpushed work per repo under `~/workspace`: `{checked, paused?, reason?, status?, repos: [{name, uncommitted, unpushed /* -1 = no upstream */}]}`. Running: a shell command under the `archive` holder (a grant, standing rule or the session's allow list); paused: as the last snapshot recorded it. |
+| `GET /api/sessions/:id/cert` | The line's latest core-signed succession cert `{payload, sig}` (404 before the first certify). The app's grant page reads `line`, `phone`, `stores` and `sensitive` from it after checking the core's signature. |
+| `GET /api/holders` | `{holders: {<name>: <public key>}}`: the router's features that may hold grants (terminal, scheduler, status, login, archive). |
+| `POST /api/sessions/:id/grants/draft` | Body `{holder, kind: "grant" \| "rule", minutes /* grant: 1–10 */, until /* rule: RFC 3339 */}` → `{text}`: exactly what the phone signs, `{kind, holder /* its public key */, session /* the line */, scope: "shell", issued, expires \| until}`. |
+| `POST /api/sessions/:id/grants` | Body `{payload: text, sig}` (the phone's signature) → the stored grant `{id, session, holder, kind, ends, doc}`; refused unless the cert's phone key signed it for this line. |
+| `GET /api/sessions/:id/grants` | `{grants: [...]}` (live ones; ended ones are dropped). `DELETE /api/grants/:gid` forgets one (the router stops using it; the signed text stays valid on the machine until it ends). |
+| `GET /api/sessions/:id/terminal` | `{screen /* tmux capture-pane -e */, cursor: "x,y,width,height,visible"}` — an exec under holder `terminal`. `POST` `{text?, keys?: [tmux key names]}` types, `{cols, rows}` resizes the window. |
 | `GET /api/sessions/:id/tail` | A paused session's conversation end, from its snapshot: `{title, sessionId, messages: [{role, text, at}]}` (409 while it runs, 404 without a snapshot). |
 | `GET /api/state` (extra fields) | `budget`: `{month, spentUsd, capUsd, warnUsd, warned, capped, cappedAt, ratePerHour, perMonth, running, volumes, sampledAt}` or null; `fly`: `{apps, app, machines, volumes, other: [{kind, app, id, name, state, region, created, detail}], error, checkedAt}` ("Also on Fly": machines in app jarvis2-sessions that are no running session of the router's, and volumes); `flyApp`. |
 | `GET /api/records` | Destroyed sessions `{records: [...]}`; each has `archive: {dir, title, transcripts, artifacts, signer, snapshotAt, last}` when it was archived, `archiveError`, `restored: [{sessionId, at}]`. |

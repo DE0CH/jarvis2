@@ -209,6 +209,21 @@ func (r *Router) buildHandlers() {
 		}
 		writeJSON(w, 200, g)
 	})
+	// the line's latest core-signed succession cert: the phone's grant page reads the line, its own key and the
+	// stores from it (the router can't forge it)
+	app("GET /api/sessions/{id}/cert", func(w http.ResponseWriter, req *http.Request) {
+		var c *Doc
+		r.st.Do(func(d *persisted) {
+			if s := d.Sessions[req.PathValue("id")]; s != nil {
+				c = s.Cert
+			}
+		})
+		if c == nil {
+			writeJSON(w, 404, map[string]string{"error": "the session has no certified machine yet"})
+			return
+		}
+		writeJSON(w, 200, c)
+	})
 	app("GET /api/sessions/{id}/grants", func(w http.ResponseWriter, req *http.Request) {
 		writeJSON(w, 200, map[string]any{"grants": r.Grants(req.PathValue("id"))})
 	})
@@ -570,9 +585,10 @@ func sessionView(s *Session, d *persisted) map[string]any {
 		"name": name, "state": s.State, "status": s.Status, "error": s.Error, "created": s.Created, "region": "",
 		"environment": strings.Join(s.Stores, ","), "stores": s.Stores, "harness": s.Harness, "label": s.Label, "aiTitle": s.Title,
 		"model": s.Model, "permissionMode": s.PermissionMode, "guest": guest, "size": s.Size, "pausedAt": s.PausedAt,
-		"image": s.Image, "createRequestId": s.RequestID, "repos": s.Repos,
+		"image": s.Image, "createRequestId": s.RequestID, "repos": s.Repos, "discordChannel": s.DiscordChannel,
 	}
 	liveView(s, v)
+	scheduleView(d, s.ID, v)
 	return v
 }
 
