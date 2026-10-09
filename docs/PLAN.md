@@ -44,3 +44,13 @@ Recovery after a core restart: designed only when needed.
 - End-to-end test on real Fly with a software phone: passed (every flow).
 - App: `app/` — see app/DECISIONS.md.
 - Decisions to review: docs/DECISIONS.md.
+
+## Later (Deyao, 2026-10-09)
+
+- **Device leases and content stores for Jarvis 2 sessions.** Jarvis 1 accepts a Jarvis 2 session's identity from
+  the confined `jarvis2-services` token (`X-Jarvis2-Session`), and wakes a queued Jarvis 2 session through a new
+  Jarvis 2 router endpoint behind its own confined token. The router already forwards the paths
+  (`router/sessionapi.go`); add them to the Worker's `CONFINED_TOKENS` when Jarvis 1 accepts them.
+- **Device pairing for Deyao's OpenClaw/Paseo apps** (`/api/remotes`): Jarvis 1's list could include Jarvis 2's,
+  or the apps get Jarvis 2 as a second server.
+

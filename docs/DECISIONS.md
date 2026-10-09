@@ -55,7 +55,8 @@ made around it; the app's own list is `app/DECISIONS.md`.
 16. **Box**: Hetzner cx23 (2 vCPU, 4 GB, 40 GB) in fsn1, EUR 6.588/month gross plus its IPv4, in the
     `jarvis2-mock` project (renaming a Hetzner project needs the console).
 17. **Fly**: app `jarvis2-sessions` in org `jarvis2-370`, region `lhr`, sizes small/medium/large = 2/4/8 shared
-    CPUs with 2/4/8 GB. No budget cap yet.
+    CPUs with 2/4/8 GB. The router's budget cap (Jarvis 1's: DM at USD 25, pause all at USD 30) reads the app with a
+    read-only Fly token (`infra/fly-read-token.sh`).
 18. **Images** on GHCR (public, like the repo), with GitHub build attestations (the phone doesn't check them
     yet).
 19. **Repos for a session** are cloned by the machine with the session's own `GITHUB_TOKEN`.
@@ -74,3 +75,28 @@ made around it; the app's own list is `app/DECISIONS.md`.
     hosts. The machine takes the pair at boot and every 30 s pushes its own refreshed copy and takes Jarvis 1's
     when that expires later (`machine/claudelogin.go`). Holding the store gives the Claude login and nothing
     else in Jarvis 1. Not sensitive.
+23. **Jarvis 1 stays a push path into jarvis2** (Deyao, 2026-10-09, "leave it"): Jarvis 1's `default` store holds
+    the account-wide GitHub token, so whoever can start a Jarvis 1 session can push Jarvis 2's code.
+24. **Grants** (Deyao, 2026-10-09; DESIGN "Grants"): router features get a shell in a session through a phone
+    grant (≤ 10 min), a standing rule, or the session's own allow list; the machine checks them against its
+    core-signed cert. Holders are per feature. Shell is arbitrary (as Fly exec was in Jarvis 1). A session with a
+    sensitive store accepts only a phone grant.
+25. **The router's secrets live in git, SOPS-encrypted to the box's age key** (`k8s/secrets`, `infra/router-secrets.py`):
+    lobster's token, the Storage Box keys, a read-only Fly token, a GitHub token that only lists repos, and the
+    Jarvis 1 tokens the cf-tunnel Worker confines (`CONFINED_TOKENS`): `jarvis2-claude-credentials`,
+    `jarvis2-services` (credentials, search, iCloud, usage), `jarvis2-tunnel` (Jarvis 2 tunnel agents, per-id proof).
+26. **Discord**: lobster (shared with Jarvis 1, Deyao's answer), channels under a "Jarvis 2" category.
+27. **Archives** go to the Storage Box in Jarvis 1's layout (`claude-records/<date> <title>/`), so Jarvis 1's
+    transcript search indexes them, with the machine-signed snapshot and its cert chain under `jarvis2/`; Jarvis 2's
+    own index is `.index/jarvis2-destroyed-sessions.json`.
+28. **Restore of a destroyed session** is a new line (phone approval) whose first machine restores the archived
+    snapshot after checking it against the old core-signed cert. Which snapshot is the router's choice, not
+    signed; the router already holds every snapshot, so a wrong choice exposes nothing new.
+29. **Tasks are one-shot sessions** (Deyao, 2026-10-09): a task is a session line approved once; each run resumes
+    it (approve_by_dead_machine, no phone), runs, and pauses again. Its secrets come from stores.
+30. **Only raising to bypass needs the phone** (Deyao, 2026-10-09): permission mode is a signed option (a resume
+    that changes it needs the phone), and switching a running session to bypass needs a fresh phone grant. Size,
+    model, one-shot, auto-pause and the API proxy stay unsigned.
+31. **Env patches on restart** are allowed for non-secret-looking names only (a name filter, not a guarantee).
+    **Rollback** is the router's unsigned word, applied by the new machine after it verified the snapshot.
+
