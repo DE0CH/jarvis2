@@ -225,7 +225,9 @@ check(CoreCrypto.valid(Data(grantText(good).utf8), sig: sig, by: sc?.phone ?? ""
 let chT = challenge(["predecessor": NSNull(), "stores": ["default"], "options": ["harness": "task:hello", "permissionMode": "auto"], "image": "img"])
 let rT = try? Checks.review(challenge: chT, coreKey: coreKey)
 check(rT?.kind == .newSession && rT?.harness == "task:hello" && rT?.permissionMode == "auto", "a task's challenge is a new session on harness task:hello (\(rT?.harness ?? "?"))")
-check(rT.map { !throwsErr { try Checks.matchesPicked($0, stores: ["default"], harnessStores: [], harness: "task:hello", permissionMode: "auto") } } == true, "…and matches its template's harness and stores")
+if let rt = rT {
+  check(!throwsErr { try Checks.matchesPicked(rt, stores: ["default"], harnessStores: [], harness: "task:hello", permissionMode: "auto") }, "…and matches its template's harness and stores")
+} else { check(false, "…and matches its template's harness and stores") }
 let (aTs, aT) = approve(chT)
 check(aTs == 200 && rT != nil && !throwsErr { try Checks.answerFor(rT!, answer: aT!, coreKey: coreKey) }, "the phone approves a task's line once")
 
