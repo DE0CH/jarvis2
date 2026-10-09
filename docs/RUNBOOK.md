@@ -36,7 +36,8 @@ Non-sensitive only (nothing that can reach a code push): `infra/router-secrets.p
 `k8s/secrets/router.enc.yaml`, SOPS-encrypted to `keys/box-age.pub`; Flux decrypts it on the box with the age key
 the box got in user-data. Every run rewrites the whole Secret, so name every key:
 `LOBSTER_TOKEN STORAGEBOX_HOST STORAGEBOX_USER STORAGEBOX_PASSWORD FLY_READ_TOKEN=file:~/.jarvis2/fly-read.tok
-JARVIS1_CREDENTIALS_ID=file:… JARVIS1_CREDENTIALS_SECRET=file:… JARVIS1_SERVICES_ID=file:… JARVIS1_SERVICES_SECRET=file:…`
+JARVIS1_CREDENTIALS_ID=file:… JARVIS1_CREDENTIALS_SECRET=file:… JARVIS1_SERVICES_ID=file:… JARVIS1_SERVICES_SECRET=file:… GITHUB_READ_TOKEN=file:…` (a fine-grained token listing repos only:
+`github-web pat-create-read`)
 (`jarvis2-claude-credentials` and `jarvis2-services` are Jarvis 1 Access service tokens that claude-env's cf-tunnel
 Worker confines to their own paths, `CONFINED_TOKENS`) (the read-only Fly token: `infra/fly-read-token.sh`).
 After a box rebuild, re-run it (the age key is new).
