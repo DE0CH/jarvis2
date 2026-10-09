@@ -386,3 +386,21 @@ func TestAddAStoreToARunningSession(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+type flyConf struct{ token, app string }
+
+func (f *flyConf) Configure(token, app string) { f.token, f.app = token, app }
+
+func TestSetupFlyOnce(t *testing.T) {
+	c, _, _ := setup(t)
+	f := &flyConf{}
+	if _, err := c.SetupFly(f, "tok1", "app1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.SetupFly(f, "tok2", "evil"); err == nil {
+		t.Fatal("a second Fly token was accepted")
+	}
+	if f.token != "tok1" || f.app != "app1" {
+		t.Fatalf("Fly config changed to %q/%q", f.token, f.app)
+	}
+}

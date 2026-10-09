@@ -87,6 +87,7 @@ type Core struct {
 	SetupToken string
 
 	phoneSigning, phoneAgreement string
+	flyApp                       string // set once, like the phone's keys
 
 	stores  map[string]*Store
 	started map[string]*StartedMachine
@@ -186,6 +187,23 @@ func (c *Core) SetupPhone(signingKey, agreementKey string) (SignedDoc, error) {
 }
 
 // SeedStore: a new store (never replaces one) with its values encrypted to phone + core
+// SetupFly hands the core its Fly token, once. A second call is refused, so whoever later reads the setup
+// token can't point the core at another Fly account (where they could exec into the machines it starts).
+func (c *Core) SetupFly(fly configurable, token, app string) (SignedDoc, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.flyApp != "" {
+		return SignedDoc{}, fail(409, "the Fly token is already set")
+	}
+	if token == "" || app == "" {
+		return SignedDoc{}, fail(400, "token and app are required")
+	}
+	fly.Configure(token, app)
+	c.flyApp = app
+	c.logf("fly token set for app %s", app)
+	return c.sign(map[string]any{"kind": "fly-set", "app": app})
+}
+
 func (c *Core) SeedStore(name string, values map[string]string, sensitive bool) (SignedDoc, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()

@@ -42,7 +42,10 @@ is listed here, numbered; the app's own list is `app/DECISIONS.md`.
 10. **Resume with the latest image burns the old machine before asking the iPhone** (as the design says);
     rejecting that approval therefore ends the session. The app should say so before Deyao starts it.
 11. **The core still prints its one-time setup token in its log**, read with the box's admin token (in the
-    `default` store as `JARVIS2_K8S_ADMIN_TOKEN`). Whoever holds that token can set up a fresh core.
+    `default` store as `JARVIS2_K8S_ADMIN_TOKEN`). The phone's keys and the Fly token can each be set only
+    once (Deyao, 2026-10-09), so a later reader of the token can only add stores (which it can't read); it
+    can't re-point the core at another Fly account. Restarting the core gives a fresh, empty core whose key
+    the app doesn't accept.
 12. **The k8s API (6443) and SSH (22) are open to the internet** on the box (token / key auth only), like
     Jarvis 1, so a session can manage it. Option: restrict to Tailscale or close SSH.
 13. **Flux applies as a limited identity** (admin in the three Jarvis 2 namespaces only); the bootstrap

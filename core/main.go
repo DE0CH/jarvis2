@@ -86,11 +86,7 @@ func Handler(c *Core, fly configurable) http.Handler {
 		return c.SeedStore(str(b, "name"), vals, sens)
 	})
 	h("POST /setup/fly", true, func(r *http.Request, b body) (any, error) {
-		fly.Configure(str(b, "token"), str(b, "app"))
-		c.mu.Lock()
-		c.logf("fly token set for app %s", str(b, "app"))
-		c.mu.Unlock()
-		return c.sign(map[string]any{"kind": "fly-set", "app": str(b, "app")})
+		return c.SetupFly(fly, str(b, "token"), str(b, "app"))
 	})
 
 	// ---- stores ----
