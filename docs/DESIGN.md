@@ -53,91 +53,84 @@ changes nobody can see — no single compromised component is enough.
 
 ## Records
 
-- **Approval** — a succession challenge (predecessor, key-store set, start options, image) answered by a
-  responder. Used by exactly one machine.
+- **Store blob** — a key store as it lives **outside** the core: its name, its values under a data key (the
+  name as associated data), and that key wrapped to the combined key `P + K`. Written and replaced by the
+  router's API, not by the core; the core sees one only when it is unlocked, and only a blob that decrypts
+  with both shares counts. Which stores are special and what they attach to is the **policy document** in git
+  (`policy/stores.json`): the store that carries the Fly token, the stores each harness brings (added to a
+  session by the router, hidden in the app), sensitive marks. The core never reads it.
+- **Approval** — a succession challenge (predecessor, store names, options, image) answered by a responder.
+  Certifies exactly one machine.
 - **Started machine** — (Fly machine id, image, public encryption key, public signing key). The core creates it
-  from an approval and reads its public keys from the output of the image's init command through Fly, so their
-  trust chains to Fly.
-- **Succession cert** — (predecessor → started machine, **key-store set**, **start options**): the started
-  machine continues the predecessor and may run with that store set and those options (which harness). It is
-  the machine's only permission document.
-- **Null machine** — the special endpoint of every succession line; nothing associated with it is valid.
-  - A new machine is a **succession from null**. Null is never consumed (it can start any number of lines).
-  - A succession **to** null **burns** a machine so it can never have another successor (a **burn cert**).
-- **Adding a store** — a machine can succeed **itself**: succession(machine → the same live machine, its store
-  set plus exactly one store, same options). The new cert supersedes the old one for that machine; nothing is
-  consumed, so the line stays one machine long.
+  on anyone's request and reads its public keys from the output of the image's init command through Fly, so
+  their trust chains to Fly. A started machine without a cert gets nothing.
+- **Succession cert** — (predecessor → started machine, store names, options): the machine's only permission
+  document.
+- **Null machine / null image** — a new line is a succession **from** null (never consumed). A succession to
+  the **null image** (a predecessor, no stores, no options) **burns** the predecessor: certify takes no
+  machine, only marks it used (a **burn cert**), so it can never be continued.
+- **Adding a store** — a machine succeeds **itself**: (machine → the same live machine, its stores plus exactly
+  one, same options). The new cert supersedes the old; nothing is consumed.
 
 ## Core primitives
 
-The core trusts itself: it does what it signs and needs no checks against itself. Its Fly token is narrowed
-(a Fly macaroon caveat) to app `jarvis2-sessions`: create, read, stop and destroy machines, and run exactly one
-command inside a machine, `/usr/local/bin/jarvis2-init` with no arguments. A leaked token can start or destroy
-machines but never read a session's secrets (a machine without a cert gets none).
+The core trusts itself: it does what it signs. Its Fly token is narrowed (a Fly macaroon caveat) to app
+`jarvis2-sessions`: create, read, stop and destroy machines, and run exactly one command inside a machine,
+`/usr/local/bin/jarvis2-init` with no arguments.
 
 | Primitive | Does |
 |---|---|
-| `Succession(predecessor, store set, options, image)` | Issues a challenge (signed by the core) **before any machine exists**; a valid response → an approval. For adding a store the "predecessor" is the running machine itself and the answer is directly a new cert. |
-| `start(approval)` | Creates the Fly machine with the approved image, runs `jarvis2-init` (the machine prints its public keys and goes on), binds the machine to the approval → succession cert. Consumes the approval; if Fly fails, the core destroys what it made and the router asks again. |
-| `kill(machine)` | Rejects null. Destroys the machine through Fly, immediately, no cleanup; once Fly confirms it destroyed that existing machine, reports it to respond by dead machine (which records it killed). A "not found" from Fly is not a confirmation. |
-| `unlock_begin(store)` | Makes a one-off key pair for this unlock (private half kept in memory) → returns (store, the store's `E`, one-off public key `T`), signed by the core |
-| `unlock_finish(pending id, encrypted share)` | Decrypts the iPhone's share with the one-off private key and deletes that key; adds its own share `k·E`, recovers the store key, decrypts the store into memory → unlock id. A wrong share just fails to decrypt. |
-| `lock(unlock id)` | Releases that id. A store's plaintext is deleted from memory only when no unlock id for it remains. No automatic lock. |
-| `list_unlocked(nonce)` | Read-only: every open unlock id with its store and unlock time (never values), signed with the caller's nonce. |
-| `Pull secrets(cert)` | Only while each store in its set is unlocked. Returns the store set's current values encrypted to the machine's public encryption key named in a valid succession cert — so nobody else can open them and no other authentication is needed. Refreshes need no approval. |
-| `add_store(sealed store)` | A new store, created outside the core (below): its values sealed to the core, signed by its creator; the core wraps it to `P + K` at once and keeps no plaintext. Stores are never replaced. |
+| `identity()` | Its public keys, signed with the box key. |
+| `recover(statement, masterSig, bundle)` | Once per core. The master key's signature over a statement naming this core and the phone's keys; the bundle (sealed to the core) carries the Fly token, kept for the core's whole life. |
+| `succession(predecessor or null, stores, options, image)` | A signed challenge, before any machine exists. |
+| `respond_phone(challenge, sig)` / `respond_dead(challenge)` | A yes → an approval; for adding a store (phone only) the new cert at once. |
+| `start(image)` | Anyone may call it (normally the router, which guards it; it can't lead to a secret): Fly create → `jarvis2-init` (its output: the machine's keys) → a started machine. If init fails, the core destroys the machine. |
+| `certify(approval, machine)` | The approval and a started machine running the approved image → the succession cert. One machine per approval, one line per machine, one successor per predecessor (killed and not used). The null image: no machine, a burn cert. |
+| `kill(machine)` | Fly destroy, confirmed by Fly → killed. |
+| `unlock_begin(store blob)` / `unlock_finish(pending, phone share)` | The split-key unlock of a blob from outside; the plaintext stays in memory until locked. |
+| `lock(unlock id)` / `list_unlocked(nonce)` | Release; the signed list of open unlocks. |
+| `pull_secrets(cert)` | The cert's stores, while unlocked, sealed to that machine's encryption key — so no other proof is needed. |
+| `log(nonce)` | Its signed log. |
 
-**`Succession` accepts any valid signature over its challenge from a recognised responder; the responders check
-the conditions.**
+**Responders.** The iPhone: Deyao's click on a plain-language summary. Respond by dead machine (core,
+automatic): the predecessor is killed (Fly-confirmed) and not used; for a successor, store names, image and
+options are identical to the predecessor's; it also answers burns; never an add-a-store. A succession from
+null is answered only by the iPhone: every new line starts with Deyao's click.
 
-| Responder | Checks before signing |
-|---|---|
-| iPhone approval | Deyao's click on a plain-language summary; for a predecessor that is a real machine, a core-signed **burn cert** of it (none needed from null). For adding a store, no burn cert: the screen shows the session and the one added store. |
-| Respond by dead machine (core, automatic) | Predecessor is recorded killed (Fly-confirmed) and not recorded used; store set + image + options identical. On signing, records the predecessor used. Never answers an add-a-store. |
+**State, in memory only:** its own key pairs, the phone's public keys, the Fly token, the unlocked stores'
+plaintext, the pending unlocks, and three append-only sets — **killed** (Fly-confirmed), **used**
+(predecessors continued or burnt; marked by certify), **spent** approvals, **certified** machines. What it **trusts** about others (the
+phone's and the master's public keys, the box key's signature) needs no secrecy; what it uses to **prove
+itself** (its private keys, the Fly token) never leaves it.
 
-Null is never in the list of killed machines, so a succession from null can only be answered by the iPhone:
-every new line starts with Deyao's click. Every cert is signed by the core, so every cert originates from the
-core and is logged. Since the approval comes before the machine, Deyao approves at once; the machine starts
-afterwards (its first image pull can take minutes).
+**Restart = a new core,** brought back by recovery. Nothing is reloaded from the box's disk.
 
-**State.** All the state the core depends on lives **in memory only**: respond by dead machine's two
-append-only sets (**killed**, **used**), the approvals not yet started, the unlock table, the known stores with
-their sensitive marks (each wrapped to `P + K`), the phone's public keys, the Fly token and the core's own
-keys. Two kinds of things: what it **trusts** about others (the phone's and the master's public keys, the box
-key's signature on itself) needs no secrecy; what it uses to **prove itself** (its private keys, the Fly
-token) never leaves it.
+## Stores outside the core: writing and backup
 
-**Restart = a new core.** A restarted core has new keys and knows nothing; it is brought back by **recovery**
-(below). Nothing is reloaded from the box's disk, so nothing on the untrusted box can feed it altered state.
-
-**Known stores.** The core only acts on key stores it knows (learned in recovery, or added with `add_store`).
-A store it doesn't know is rejected, so a restarted core can't be led to believe a sensitive store is not
-sensitive. Sensitive marks arrive with the stores, or are added later with `mark_sensitive`.
-
-## Stores outside the core: creation and backup
-
-A store is created **outside the core** by a trusted creator (the setup session today, later the app). The
-creator encrypts it twice: to the **master public key**, as the backup, and sealed to the core, for
-`add_store`. It signs both. The backup goes to Deyao's Hetzner Object Storage, bucket `jarvis2-backup-de0ch`,
-**versioned**: an overwrite or a delete keeps every old version. No true wipe is designed; if one is ever
-needed, Deyao deletes versions in S3 by hand.
+A store is written **outside the core** by a trusted creator (the setup session today, later the app): the
+values under a fresh data key, the key wrapped to `P + K` (the phone's and the core's public agreement keys,
+from the master-signed core cert). The router's API keeps the blobs; writing and replacing them is protected by
+that API's own checks — important, but not the core's job. The creator also writes the backup: the store
+encrypted to the **master public key** and signed, in Deyao's Hetzner Object Storage, bucket
+`jarvis2-backup-de0ch`, **versioned** (an overwrite or a delete keeps every old version; no true wipe is
+designed — if one is ever needed, Deyao deletes versions in S3 by hand).
 
 ## Recovery (a fresh core, on the iPhone)
 
 1. The new core makes its keys and signs its public keys with the box key.
 2. The app's **recovery page** fetches that statement (through the router), checks the box-key signature
-   against the box's public key in git, and shows the core's identity as **8 words** (a fixed word list over
+   against the box's public key in git, and shows the core's identity as **8 words** (BIP39 English list over
    the SHA-256 of its public keys). Nothing goes on unless the signature checks.
-3. Deyao pastes the **master private key** from his password manager.
-4. The phone signs the core's public keys with the master key (machines and the app now trust that core), gets
-   the latest backup from S3, checks its creator's signature, decrypts it with the master key and re-encrypts
-   the whole key store to the core, together with the phone's own public keys.
-5. The core holds the plaintext key store **for at most 10 minutes** (the phone may drop offline at any time):
-   it wraps every store to `P + K` with the phone, keeps the `core` store's Fly token in memory, and wipes the
-   rest. If the split isn't done in 10 minutes it wipes everything and recovery starts again.
-6. The phone forgets the master key. Stores are locked; Deyao unlocks them as usual.
+3. Deyao pastes the **recovery kit** from his password manager: the master private key and the backup
+   bucket's read credentials.
+4. The phone signs a statement naming the core's keys and its own with the master key, and sends it with the
+   Fly token (sealed to the core) — machines and the app now trust that core. It fetches the backups, checks
+   their signatures, decrypts them with the master key and re-wraps every store to `P + K_new` itself, giving
+   the blobs to the router. Plaintext stores never enter the core; on the phone they live only for the
+   recovery (at most 10 minutes, the phone may drop offline).
+5. The phone forgets the master key. Stores are locked; Deyao unlocks them as usual.
 
-The first setup is a recovery from an empty backup plus the `core` store.
+The first setup is a recovery from empty backups plus the Fly token.
 
 ## The box
 
@@ -162,23 +155,9 @@ failing.
 
 ## Sensitive stores
 
-A key store can carry a **sensitive** mark.
-
-- `list_sensitive(nonce)` returns every store carrying the mark, signed by the core together with the caller's
-  nonce (genuine, complete, fresh).
-- `mark_sensitive(store)` is a core primitive anyone may call (it only adds protection). There is **no**
-  primitive to remove the mark. The only way to have the same secrets unmarked is to create a new store with
-  them.
-- The mark is part of the core-signed store list, so the iPhone learns it from the core, never from the
-  router.
-- **Entering secure mode with options:** anything (the normal-mode UI, the web) may ask for secure mode with
-  pre-selected options, and may freely pre-select non-sensitive stores. A sensitive store must be chosen by
-  Deyao himself inside the secure sheet. (Open: never pre-selectable, or pre-selectable but only with the
-  warning below.)
-- **Approving a request that came from the web:** if it includes a sensitive store, the approval shows an
-  obvious warning before Face ID.
-
-The mark is part of the core's in-memory known-stores list; it only grows (see State).
+A store can be marked **sensitive** in the policy document (git). The app reads the policy from GitHub, never
+from the router: a sensitive store is never pre-selected by the normal-mode UI or the web, is chosen by Deyao
+himself on the secure page, and any approval that includes one shows an obvious warning before Face ID.
 
 ## Unlocking a store (split key agreement)
 
@@ -186,7 +165,7 @@ Each store's key is encrypted to the **combined public key** `P + K`: `P = p·G`
 key, `K = k·G` the core's. Writing a store picks a fresh one-off `e` and stores `E = e·G`; the shared secret is
 `e·(P + K)`. It's Diffie–Hellman with the recipient split in two: `p·E + k·E = (p + k)·E = e·(P + K)`.
 
-1. `unlock_begin(store)` → core returns (store, `E`, one-off `T`), signed.
+1. `unlock_begin(store blob)` → core returns (store name, `E`, one-off `T`), signed.
 2. iPhone checks the signature, shows "Unlock <store>?", and on Face ID the Enclave computes its share `p·E`.
    The phone encrypts the share to `T`, so the router relaying it never sees it.
 3. `unlock_finish` → core decrypts the share, deletes the one-off key, adds `k·E`, decrypts the store.
@@ -198,18 +177,20 @@ one that decrypts.
 
 ## Flows (router, outside the core)
 
-- **New session:** `Succession(null, …)` ← iPhone approval → `start(approval)` → succession cert.
+- **New session:** the router adds the harness's stores (policy) → `succession(null, …)` ← iPhone approval →
+  `start(image)` → `certify(approval, machine)` → succession cert. (The router may start the machine while
+  Deyao is still deciding, and destroy it on a reject.)
 - **Pause:** the machine signs its snapshot (artefacts + transcript) with its signing key and uploads it →
   `kill`. Skipped/failed snapshot = nothing to resume; no secret moves.
-- **Resume, nothing changed (also unattended, e.g. scheduled):** `Succession(old, …)` ← respond by dead machine
-  → `start` → succession cert.
-- **Resume with a change (e.g. newer image), approved:** `Succession(old, …)` ← iPhone (shows the difference,
-  Deyao clicks) → burn (`Succession(old → null)` ← respond by dead machine) → `start`. Rejecting leaves the
-  session paused as it was.
+- **Resume, nothing changed (also unattended, e.g. scheduled):** `succession(old, …)` ← respond by dead machine
+  → `start` → `certify` → succession cert.
+- **Resume with a change (e.g. newer image), approved:** `succession(old, …)` ← iPhone (shows the difference,
+  Deyao clicks) → `start` → `certify`. Rejecting leaves the session paused as it was.
 - **Add a store to a running session:** the session asks through the router (signed with its machine key) for
-  one more store → `Succession(machine → same machine, set + store)` → iPhone approval → new cert → the
+  one more store → `succession(machine → same machine, set + store)` → iPhone approval → new cert → the
   machine pulls its secrets again.
-- **End a session:** `kill`, then burn.
+- **End a session:** `kill`, then burn: `succession(old, no stores, no options, null image)` ← respond by
+  dead machine → `certify(approval, none)` → burn cert.
 
 ## Machine side (in the image)
 
