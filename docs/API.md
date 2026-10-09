@@ -172,6 +172,7 @@ off.
 | `POST /m/downgrade/finish` | Body `{challenge, signature}` → core `approve/by-old-key` → `{cert}`; from now on the router knows the machine by its new key. |
 | `GET /m/tunnel-proof` | `{proof, id}`: hex HMAC-SHA256(`JARVIS2_TUNNEL_KEY`, `"jarvis2-tunnel:" + <this machine's session id>`), which the cf-tunnel Worker checks when the `jarvis2-tunnel` token registers that id. The machine puts it in `TUNNEL_AGENT_SECRET` at boot (never in the Fly config). 404 without the key; 403 for a machine with no running session. |
 | `GET /m/attachments` | `{files: [{name, size, isImage}]}`: the first-prompt attachments bound to this machine's session (404 none). `GET /m/attachments/:name` the bytes; `DELETE /m/attachments` drops the router's copy once fetched. |
+| `POST /m/task-result` | A task line's machine (harness `task:<template>`, below) after its run: `{run, exitCode, timedOut, error, startedAt, finishedAt, log /* tail ≤ 256 KB */, output /* ≤ 64 KB */}`, store values already redacted by the machine. `run: ""` = a boot with no run (the line's first machine). The router records the run and pauses the line. 403 for a machine that isn't a running task line. |
 | `POST /m/status` | Body `{raw}`: the output of Jarvis 1's registry command (`machine/status.go`), sent by the agent when it changes and at least every 60 s; parsed by the router (`router/registry.go`). |
 
 ## Wakeups and crons (`router/schedule.go`)
@@ -193,6 +194,74 @@ Jarvis 1's shapes. The app calls them under `/api/sessions/:id/…`; the session
 Delivery failures: a grant refusal (the session hasn't allowed the scheduler, or holds a sensitive store) DMs
 Deyao once and stays pending, retried every 2 min; any other failure backs off and, after 5 attempts, drops a
 wakeup (a cron skips that occurrence) with a DM.
+
+## Tasks (`router/tasks.go`, `machine/task.go`, templates in `tasks/`)
+
+Jarvis 1's Tasks and Schedules tabs, same shapes where the meaning is the same (`selfhost/jarvis/lib/tasks.js`). A task
+**instance** is a session **line** whose signed harness is `task:<template>` (DECISIONS 32): creating one asks the phone
+once (an ordinary `new-session` approval, label `Task: <name>`, stores = the template's + the ones picked in its store
+fields). Each **run** resumes that line with no phone (`approve_by_dead_machine`); its machine runs the template from the
+session image instead of a harness, reports to `/m/task-result`, and the router pauses the line again. Task lines also
+show in `/api/state` `sessions` (harness `task:…`); the autopilot and Discord channels leave them alone.
+
+**Template** (`tasks/<name>/task.json` + its files; the router image has a copy for the forms, the session image the copy
+that runs — `/opt/jarvis2/tasks/<name>`, fixed by the line's image digest):
+
+```
+{ title, description?, run? /* "run.py" | "run.sh" | "run.js" | an executable; default: the first that exists */,
+  prompt? /* "prompt.md": `claude -p` with {{field}} filled in, in the cert's permission mode (needs store claude) */,
+  model? /* prompt only */, stores?: [store…], timeoutSeconds? /* 10–21600, default 600 */,
+  size? /* small (default) | medium | large */,
+  fields: [{ name /* [a-z][a-z0-9_]* */, label?, type: text|textarea|number|select|multiselect|checkbox, required?,
+             default?, help?, placeholder?, options?: ["a", {value, label, sub?}], optionsFrom?: stores|sizes|models }] }
+```
+
+A (multi)select with `optionsFrom: "stores"` adds the picked store(s) to the line; `options` comes back empty for it —
+the app fills the list from the core's store list (`/api/core/stores`). Jarvis 1's `secretKeys`, `image`, `memory` and
+hidden values don't exist here (a picked store brings all its keys; secrets live only in stores).
+
+**What a run sees** (machine/task.go): cwd `~/task-work` (fresh each run); env = PATH/HOME/LANG/…, `JARVIS_URL`,
+`SESSION_ID`, `LOBSTER_CHANNEL`, the router's `TASK_PARAMS` (all values as JSON), `PARAM_<FIELD>` (lists comma-joined,
+booleans `true`/`false`), `TASK_INSTANCE`, `TASK_NAME`, `TASK_RUN`, `TASK_TRIGGER` (manual | schedule), then `TASK_DIR`
+(the template's files), `TASK_TEMPLATE`, `TASK_OUTPUT` (a file whose first 64 KB is the run's output in the app),
+`TASK_STATE_DIR` (`~/workspace/task-state`, kept between runs by the snapshot), `TASK_WORK`, `TASK_TIMEOUT`, and last the
+line's store values (also in `~/.secrets`). Parameters are NOT secret: they are in the machine's Fly config and unsigned,
+so a script treats them as data. The log is `~/artifacts/task-runs/<run>.log` (20 kept, archived with the line); store
+values of 6+ characters are replaced by `[secret NAME]` in the log and the output before they leave the machine.
+A run past `timeoutSeconds` is killed with its process group (`timedOut`).
+
+```
+instance = { id, template, name, params, size, stores, session /* the line, null once gone */, createdAt, updatedAt,
+             state: approval | ready | running | busy | failed | gone, detail, sessionState, image,
+             lastRun /* the newest finished run */, activeRun, queued /* count */, schedules /* count */ }
+run      = { id, name /* = id, Jarvis 1's Job name */, instance, instanceName, template, trigger: manual | schedule,
+             schedule, slot, upgrade, phase: queued | starting | running | succeeded | failed | timedout | stopped | lost,
+             createdAt, resumedAt, startedAt /* machine up, secrets pulled */, ranAt /* script start */, finishedAt, exitCode, reason,
+             waiting /* e.g. the phone must approve a newer image */, tail /* last 15 lines */, logBytes, outputBytes,
+             machine, image }
+schedule = { id, instance, time "HH:MM", tz, enabled, since /* ms */, createdAt, nextAt /* ms or null */ }
+```
+
+| Call | Does |
+|---|---|
+| `GET /api/tasks` | `{sessionImage, templates /* parsed, broken ones with `error`; `source` = the run/prompt file */, instances, schedules}` |
+| `POST /api/tasks/instances` | `{template, name, params, size?, requestId?}` → the instance (state `approval`); the phone's approval is in `/api/approvals`. 400 for bad values (`hide` is refused). |
+| `PUT /api/tasks/instances/:id` | `{name?, params?, size?}` → the instance. Values that change the line's stores → 400 (make a new task). |
+| `DELETE /api/tasks/instances/:id` | Drops it with its schedules and runs; its line is destroyed (archived like any session) or its pending approval rejected. |
+| `POST /api/tasks/instances/:id/approve` | A new line (phone approval) for an instance whose line is gone or failed; 409 otherwise. |
+| `POST /api/tasks/instances/:id/run` | `{upgrade?}` → `{name, run}` (phase `queued`; it starts once the line is paused). `upgrade: true` resumes on the newest session image, which the phone approves first (`resume-upgrade`) — how a changed template reaches an existing task. 409: waiting for the first approval, line gone, or 3 runs queued. |
+| `GET /api/tasks/instances/:id/runs` | `{runs}` newest first (20 finished kept). |
+| `GET /api/tasks/runs/:id` | `{run, log, output}`. |
+| `POST /api/tasks/runs/:id/stop` | Queued: dropped. Starting/running: `stopped`, the line is paused (a machine already up may have started the script). 409 when finished. |
+| `POST /api/tasks/schedules` | `{instance, time, tz? /* default Europe/London */, enabled?}` → schedule. Daily at `time` in `tz`; a change never fires a slot already past; a slot missed by more than 2 h (router down) is skipped. |
+| `PUT /api/tasks/schedules/:id` | `{time?, tz?, enabled?}` |
+| `DELETE /api/tasks/schedules/:id` | `{ok}` |
+
+DMs (lobster, as Jarvis 1): a scheduled run that failed, timed out or was lost (with the log's tail), and a scheduled
+slot that could not start (line gone, waiting for approval, queue full). A run is `lost` when its line stopped (a manual
+pause, the budget cap) before the machine reported, and `timedout` by the router when no result came 15 min past the
+template's timeout. A run needs its line's stores **unlocked** in the core, as any start does: a run whose machine
+isn't up 30 min after the resume (a locked store keeps it `initialising`; `waiting` says so) fails and the line is paused.
 
 ## Session-facing API (`/m/api/*`)
 

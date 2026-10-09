@@ -52,7 +52,10 @@ Facts: the router has no Fly token (it calls the core's start/kill/certify); its
 - Wakeups, crons: present (router/schedule.go; same shapes as Jarvis 1, under `/api` and `/m/api`). Delivery through the `scheduler` grant; arming puts the scheduler on the session's allow list; a sensitive session needs a phone grant (DM, stays pending).
 - Watches (store plaintext on the box): missing; conflicts.
 - Device leases (iphone, mac, wechat-phone): forwarded to Jarvis 1 (`/m/api` → JARVIS1_SERVICES token); needs Jarvis 1 to accept Jarvis 2 sessions (docs/API.md "Session-facing API").
-- Tasks + schedules (k8s Jobs, SOPS hidden params): missing; conflicts.
+- Tasks + schedules: present on the router (`router/tasks.go`, `machine/task.go`, templates in `tasks/`; docs/API.md
+  "Tasks"; DECISIONS 32–37). Jarvis 1's k8s Job becomes a resume of a session line approved once on the phone; its
+  SOPS hidden params become stores. Jarvis 1's templates aren't ported yet (they need content stores, which are
+  forwarded to Jarvis 1). App screens: missing.
 
 ## Stores, repos, content
 - Store editor in the app: partial (values only from the setup session). Copy keys between stores: missing.
@@ -86,7 +89,7 @@ Facts: the router has no Fly token (it calls the core's start/kill/certify); its
 2. Free text into machines (wakeup/cron/resume prompts, nudges): who signs it?
 3. Where archives and transcripts live durably, encrypted to what, and who holds the bucket creds.
 4. Restore after a burn: what the restored machine trusts its snapshot by.
-5. Secrets outside sessions (watches, tasks, Discord/Browserbase/budget DMs).
+5. Secrets outside sessions (watches, Discord/Browserbase/budget DMs; tasks: answered, their secrets are the line's stores, DECISIONS 32–34).
 6. Fly read access for the budget cap.
 7. Where the Discord bot token lives; does it need a narrower bot?
 8. Per-session tunnel origins without opening Jarvis 1's Access: answered by the confined `jarvis2-tunnel` token +

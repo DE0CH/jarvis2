@@ -639,7 +639,7 @@ func (r *Router) startDiscord() {
 // machine's env as LOBSTER_CHANNEL. Best effort: Discord being down mustn't stop a session (the session's
 // lobster-send.sh then DMs).
 func discordEnv(r *Router, s *Session, env map[string]string) {
-	if disc == nil {
+	if disc == nil || isTaskHarness(s.Harness) { // task lines report to their run records and the DM
 		return
 	}
 	ch, created, err := disc.ensureChannel(s.DiscordChannel, s.ID, sessionTitle(*s))
@@ -671,7 +671,7 @@ func (r *Router) discordTick() {
 		}
 	})
 	for _, s := range list {
-		if s.State == "destroying" || s.State == "destroyed" || s.State == "approval" {
+		if s.State == "destroying" || s.State == "destroyed" || s.State == "approval" || isTaskHarness(s.Harness) {
 			continue
 		}
 		if s.DiscordChannel == "" {

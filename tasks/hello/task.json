@@ -1,0 +1,11 @@
+{
+  "title": "Hello",
+  "description": "The example template: prints its message, counts its runs in the task's state dir (kept between runs), writes a one-line output. Tick \"Fail\" to see a failed run.",
+  "run": "run.sh",
+  "timeoutSeconds": 60,
+  "size": "small",
+  "fields": [
+    { "name": "message", "label": "Message", "type": "text", "required": true, "placeholder": "e.g. good morning" },
+    { "name": "fail", "label": "Fail", "type": "checkbox", "default": false, "help": "Exit 1 instead of 0." }
+  ]
+}

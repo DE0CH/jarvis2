@@ -183,6 +183,9 @@ func (r *Router) addApproval(a *Approval) {
 // CreateSession → the session's id. A requestId already on a session answers that session (idempotent).
 func (r *Router) CreateSession(in NewSession) (string, error) {
 	h, ok := r.policy.Harnesses[in.Harness]
+	if !ok && isTaskHarness(in.Harness) {
+		ok = true // a task line (tasks.go): the template's stores only, no harness stores
+	}
 	if !ok {
 		in.Harness = "claude"
 		if h, ok = r.policy.Harnesses[in.Harness]; !ok {

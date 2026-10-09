@@ -332,6 +332,9 @@ func planTick(d *persisted, now time.Time, storedExp int64, c pilotConfig, busy,
 			}
 			continue
 		}
+		if isTaskHarness(s.Harness) {
+			continue // a task line runs a script, not a harness: tasks.go pauses it once the run reports
+		}
 		g := l.Reg
 		if l.LastReport.IsZero() || now.Sub(l.LastReport) > c.StaleReport {
 			g = nil // no report lately: the machine (or its agent) isn't answering

@@ -100,3 +100,30 @@ made around it; the app's own list is `app/DECISIONS.md`.
 31. **Env patches on restart** are allowed for non-secret-looking names only (a name filter, not a guarantee).
     **Rollback** is the router's unsigned word, applied by the new machine after it verified the snapshot.
 
+
+## Tasks (2026-10-09)
+
+32. **A task's code is fixed by its cert** (building on 29): the instance's line has harness `task:<template>` (the
+    core signs the harness string as it is), and the template is baked into the session image (`/opt/jarvis2/tasks`),
+    whose digest the cert pins. The machine runs that template instead of a harness. So the router can't change what
+    runs (cloning templates at run time would have let it, through the unsigned repo list), and a changed template
+    reaches an existing task only through `run {upgrade: true}`, which the phone approves.
+33. **Script mode, no delivery**: a run is a resume whose machine runs the script by itself at boot and reports to
+    `/m/task-result`; nothing is delivered into a harness and no holder needs a grant. A line holding a sensitive store
+    therefore runs unattended like any other: the rule "a sensitive session accepts only a phone grant" guards the
+    router's shell, and here no router-chosen command runs. Prompt templates (`prompt.md`) are the same with
+    `claude -p` as the script. What still needs Deyao: the line's stores must be unlocked in the core when it runs
+    (a locked store fails the run after 30 min, with a DM for a scheduled one).
+34. **Task parameters are unsigned, non-secret env** (`TASK_PARAMS`, `PARAM_<FIELD>`): the router could change them, so
+    scripts treat them as data; the script's env is built by the machine (no router `LD_PRELOAD`, `BASH_ENV` …) with
+    the store values last. Secrets only in stores; Jarvis 1's hidden values are refused. A picked store joins the line
+    at creation; changing it needs a new task (a new approval).
+35. **Task schedules are the router's own daily tick**, not the scheduler's crons: a cron delivers a prompt through the
+    `scheduler` grant, which a script line has no harness for and a sensitive line refuses. Same shape and rules as
+    Jarvis 1 (HH:MM in a zone, `since`, 2 h grace), one firing per slot.
+36. **One machine per task at a time**: runs queue (at most 3) and start when the line is paused; the router pauses the
+    line once the machine reports, after 15 min on a started line with no run, or 15 min past the timeout with no
+    result. Results (log tail, output, exit code) live in the router (`<data>/task-runs/`, 20 per task); the run's log
+    also sits in `~/artifacts/task-runs`, archived with the line. Store values are redacted on the machine.
+37. **Task lines have no Discord channel and skip the autopilot** (no harness to watch: no "dead" DMs, no auto-pause);
+    failure DMs follow Jarvis 1 (scheduled runs only).

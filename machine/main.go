@@ -289,6 +289,9 @@ func prepare() error {
 	if err := agentCmd.Start(); err != nil {
 		return fmt.Errorf("agent: %w", err)
 	}
+	if t, ok := strings.CutPrefix(cert.Options.Harness, taskHarnessPrefix); ok {
+		runTask(c, t, secrets, certMode(cert)) // task.go: the template instead of a harness; never returns
+	}
 	env := os.Environ()
 	env = withoutEnv(env, "SESSION_HARNESS", "SESSION_PERMISSION_MODE") // the signed values below replace the router's
 	env = append(env, "SESSION_SECRETS_JSON="+string(sj), "SESSION_HARNESS="+cert.Options.Harness, "SESSION_PERMISSION_MODE="+certMode(cert), "SESSION_ID="+sessionID(me))

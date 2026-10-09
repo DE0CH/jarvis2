@@ -81,6 +81,7 @@ type persisted struct {
 	Schedules map[string]*Schedule `json:"schedules,omitempty"` // session id → wakeups, crons, resume prompt (schedule.go)
 	Budget    *BudgetState         `json:"budget,omitempty"`    // budget.go: this month's Fly spend estimate
 	Uploads   map[string]*Upload   `json:"uploads,omitempty"`   // uploads.go: first-prompt attachments staged on the volume
+	Tasks     *TaskState           `json:"tasks,omitempty"`     // tasks.go: task instances (session lines), runs, daily schedules
 }
 
 type State struct {
