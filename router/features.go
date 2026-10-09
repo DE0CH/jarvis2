@@ -6,6 +6,7 @@ package main
 // the router's own flows and through grants (grants.go); none talks to the core directly.
 
 import (
+	"errors"
 	"log"
 	"net/http"
 )
@@ -33,3 +34,16 @@ func (r *Router) DM(text string) {
 	}
 	log.Printf("[dm] %s", text)
 }
+
+// Deliver: a message into the session's harness as a peer message (filled in by the scheduler feature); it
+// runs through a grant, so it fails when the session hasn't allowed it
+var deliverHook func(r *Router, session, from, text string) error
+
+func (r *Router) Deliver(session, from, text string) error {
+	if deliverHook == nil {
+		return errNoDeliver
+	}
+	return deliverHook(r, session, from, text)
+}
+
+var errNoDeliver = errors.New("message delivery isn't built yet")
