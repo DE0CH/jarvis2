@@ -227,6 +227,39 @@ func (r *Router) ForgetGrant(id string) {
 // Exec runs cmd as holder in the session's machine: with a live phone grant if one exists, else a standing
 // rule, else no grant (the session's own allow list). The machine decides.
 func (r *Router) Exec(session, holder, cmd string, timeout time.Duration) (ExecResult, error) {
+	return r.execWith(session, holder, cmd, timeout, false)
+}
+
+// GrantNeeded: no grant that allows this; Phone = only a fresh phone grant would
+type GrantNeeded struct {
+	Holder string
+	Phone  bool
+}
+
+func (e *GrantNeeded) Error() string {
+	if e.Phone {
+		return "this needs a fresh phone grant for " + e.Holder
+	}
+	return "no grant for " + e.Holder
+}
+
+// HasPhoneGrant: a live phone grant (not a rule) for holder on the session
+func (r *Router) HasPhoneGrant(session, holder string) bool {
+	for _, g := range r.Grants(session) {
+		if g.Holder == holder && g.Kind == "grant" {
+			return true
+		}
+	}
+	return false
+}
+
+// ExecPhone: like Exec, but only under a live phone grant, and the machine is told so (it refuses a rule or its
+// allow list for this request). For raising a session to bypass (Deyao, 2026-10-09).
+func (r *Router) ExecPhone(session, holder, cmd string, timeout time.Duration) (ExecResult, error) {
+	return r.execWith(session, holder, cmd, timeout, true)
+}
+
+func (r *Router) execWith(session, holder, cmd string, timeout time.Duration, phoneOnly bool) (ExecResult, error) {
 	ks, err := r.holderKeys()
 	if err != nil {
 		return ExecResult{}, err
@@ -247,13 +280,16 @@ func (r *Router) Exec(session, holder, cmd string, timeout time.Duration) (ExecR
 	var grant *Doc
 	best := ""
 	for _, g := range r.Grants(session) {
-		if g.Holder == holder && (best == "" || (best == "rule" && g.Kind == "grant")) {
+		if g.Holder == holder && (!phoneOnly || g.Kind == "grant") && (best == "" || (best == "rule" && g.Kind == "grant")) {
 			grant, best = g.Doc, g.Kind
 		}
 	}
+	if phoneOnly && grant == nil {
+		return ExecResult{}, &GrantNeeded{Holder: holder, Phone: true}
+	}
 	secs := int(timeout / time.Second)
 	req, _ := json.Marshal(map[string]any{"id": randID(), "session": line, "holder": base64.StdEncoding.EncodeToString(k.PublicKey().Bytes()),
-		"cmd": cmd, "timeout": secs, "at": time.Now().Unix()})
+		"cmd": cmd, "timeout": secs, "at": time.Now().Unix(), "phoneOnly": phoneOnly})
 	var id struct{ ID string }
 	json.Unmarshal(req, &id)
 	sig, err := signP256(k, req)

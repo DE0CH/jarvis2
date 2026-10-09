@@ -38,6 +38,8 @@ type ExecRequest struct {
 	Cmd     string `json:"cmd"`
 	Timeout int    `json:"timeout"` // seconds
 	At      int64  `json:"at"`      // unix seconds
+	// PhoneOnly: only a phone grant may allow this request (raising the session to bypass)
+	PhoneOnly bool `json:"phoneOnly,omitempty"`
 }
 
 // Session in requests and grants is the line id from the core-signed cert (the line's first machine), not the
@@ -139,6 +141,9 @@ func authorise(e Exec, now time.Time) (ExecRequest, error) {
 	if me == "" || r.Session != me {
 		return r, fmt.Errorf("request is for line %s, this is %s", r.Session, me)
 	}
+	if r.PhoneOnly && e.Grant == nil {
+		return r, errors.New("this request needs a phone grant")
+	}
 	if e.Grant == nil {
 		if cert.Sensitive {
 			return r, errors.New("this session holds a sensitive store: only a phone grant opens a shell")
@@ -165,6 +170,9 @@ func authorise(e Exec, now time.Time) (ExecRequest, error) {
 			return r, errors.New("the grant is expired, or longer than 10 minutes")
 		}
 	case "rule":
+		if r.PhoneOnly {
+			return r, errors.New("this request needs a phone grant, not a standing rule")
+		}
 		if cert.Sensitive {
 			return r, errors.New("this session holds a sensitive store: standing rules don't apply")
 		}

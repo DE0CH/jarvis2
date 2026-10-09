@@ -270,6 +270,11 @@ func (r *Router) SetPermissionMode(id, mode string) (map[string]any, error) {
 		})
 		return map[string]any{"ok": true, "permissionMode": mode, "nextStart": true}, nil
 	}
+	// raising a running session to bypass needs a fresh phone grant (Deyao, 2026-10-09), checked here and by
+	// the machine (ExecPhone)
+	if mode == "bypass" && !r.HasPhoneGrant(id, "terminal") {
+		return nil, &GrantNeeded{Holder: "terminal", Phone: true}
+	}
 	unlock, err := r.lock(id, "mode")
 	if err != nil {
 		return nil, err
@@ -282,7 +287,11 @@ func (r *Router) SetPermissionMode(id, mode string) (map[string]any, error) {
 	go func() {
 		defer unlock()
 		r.ops.phase(j, "switching", nil)
-		res, err := r.Exec(id, "terminal", setPermissionModeCmd+mode, 30*time.Second)
+		exec := r.Exec
+		if mode == "bypass" {
+			exec = r.ExecPhone
+		}
+		res, err := exec(id, "terminal", setPermissionModeCmd+mode, 30*time.Second)
 		if err == nil && res.Code != 0 {
 			err = fmt.Errorf("set-permission-mode exited %d: %s", res.Code, clip(res.Stderr+res.Stdout, 200))
 		}

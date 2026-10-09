@@ -81,6 +81,21 @@ func TestGrants(t *testing.T) {
 	os.WriteFile(filepath.Join(home, allowFile), b, 0o600)
 	ok("own allow list", req(holder, "m1"), true)
 
+	po := req(holder, "m1")
+	var pr ExecRequest
+	json.Unmarshal([]byte(po.Request), &pr)
+	pr.PhoneOnly = true
+	po = holder.req(pr)
+	po.Grant = grant("rule", time.Hour)
+	ok("phone-only request under a rule", po, false)
+	pr.ID = "phone-only-2"
+	po = holder.req(pr)
+	ok("phone-only request on the allow list", po, false)
+	pr.ID = "phone-only-3"
+	po = holder.req(pr)
+	po.Grant = grant("grant", 5*time.Minute)
+	ok("phone-only request under a phone grant", po, true)
+
 	cert.Sensitive = true
 	ok("allow list on a sensitive session", req(holder, "m1"), false)
 	e = req(holder, "m1")

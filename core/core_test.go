@@ -727,3 +727,23 @@ func TestTheLineIdSurvivesResume(t *testing.T) {
 		t.Fatalf("the successor's line is %v, want %s", m["line"], first)
 	}
 }
+
+func TestRaisingToBypassOnResumeNeedsThePhone(t *testing.T) {
+	c, _, p := setup(t)
+	cert, first := newLine(t, c, p, "default")
+	if m := pl(t)(cert, nil); m["options"].(map[string]any)["permissionMode"] != "auto" {
+		t.Fatalf("a line without a mode is auto: %v", m["options"])
+	}
+	var oc Cert
+	json.Unmarshal([]byte(cert.Payload), &oc)
+	c.Kill(first)
+	ch, _ := c.Succession(SuccessionInput{Predecessor: &cert, Image: oc.Machine.Image, Stores: []string{"default"},
+		Options: Options{Harness: "claude", PermissionMode: "bypass"}})
+	if _, err := c.ApproveByDeadMachine(&ch); err == nil {
+		t.Fatal("a dead machine approved raising the mode to bypass")
+	}
+	a := pl(t)(c.ApproveByPhone(&ch, p.sign(ch.Payload)))
+	if a["kind"] != "approval" {
+		t.Fatalf("the phone's approval: %v", a)
+	}
+}

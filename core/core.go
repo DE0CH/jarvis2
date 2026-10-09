@@ -52,6 +52,9 @@ type StartedMachine struct {
 
 type Options struct {
 	Harness string `json:"harness"`
+	// the harness's permission mode (auto | bypass): signed, so a resume that changes it — above all raising to
+	// bypass — isn't approved by a dead machine and needs the phone (Deyao, 2026-10-09)
+	PermissionMode string `json:"permissionMode,omitempty"`
 }
 
 // a succession request, made before any machine exists. Machine is set only when a running machine succeeds
@@ -546,6 +549,9 @@ func (c *Core) Succession(in SuccessionInput) (SignedDoc, error) {
 	req := Request{Kind: "succession", Predecessor: in.Predecessor, Options: in.Options}
 	if in.Image != NullImage && req.Options.Harness == "" {
 		req.Options.Harness = "claude"
+	}
+	if in.Image != NullImage && req.Options.PermissionMode != "bypass" {
+		req.Options.PermissionMode = "auto"
 	}
 	var pc Cert
 	if in.Predecessor != nil {

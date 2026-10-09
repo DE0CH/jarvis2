@@ -6,6 +6,7 @@ package main
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -110,12 +111,15 @@ func (r *Router) machineEnv(s *Session) map[string]string {
 }
 
 // succession: a challenge, before any machine exists. machine is set only for adding a store.
-func (r *Router) succession(pred *Doc, machine string, stores []string, harness, image string) (*Doc, error) {
+func (r *Router) succession(pred *Doc, machine string, stores []string, harness, mode, image string) (*Doc, error) {
 	var predecessor any // JSON null = from null
 	if pred != nil {
 		predecessor = pred
 	}
-	opts := map[string]string{"harness": harness}
+	if mode != "bypass" {
+		mode = "auto"
+	}
+	opts := map[string]string{"harness": harness, "permissionMode": mode} // both signed (core Options)
 	if image == nullImage {
 		opts = map[string]string{}
 	}
@@ -211,7 +215,7 @@ func (r *Router) CreateSession(in NewSession) (string, error) {
 	if err != nil || dup != "" {
 		return dup, err
 	}
-	ch, err := r.succession(nil, "", s.Stores, s.Harness, r.cfg.SessionImage)
+	ch, err := r.succession(nil, "", s.Stores, s.Harness, s.PermissionMode, r.cfg.SessionImage)
 	if err != nil {
 		r.st.Do(func(d *persisted) { delete(d.Sessions, s.ID) })
 		return "", err
@@ -359,9 +363,17 @@ func (r *Router) Resume(id string, upgrade bool) error {
 		if upgrade {
 			image = r.cfg.SessionImage
 		}
-		ch, err := r.succession(s.Cert, "", s.Stores, s.Harness, image)
+		ch, err := r.succession(s.Cert, "", s.Stores, s.Harness, s.PermissionMode, image)
 		if err != nil {
 			r.setState(id, "paused", "resume: "+err.Error())
+			return
+		}
+		// the permission mode is signed: a resume in another mode than the line's cert (raising to bypass) is a
+		// change the iPhone approves, like a newer image
+		if certMode(s.Cert) != normMode(s.PermissionMode) {
+			r.setState(id, "approval", "")
+			r.addApproval(&Approval{Kind: "resume-upgrade", Session: id, Label: s.Label, Challenge: ch,
+				Options: map[string]string{"permissionMode": normMode(s.PermissionMode)}})
 			return
 		}
 		if upgrade {
@@ -414,7 +426,7 @@ func (r *Router) DestroyWith(id string, force bool) error {
 		}
 		if s.Cert != nil {
 			// end the line: a succession to the null image, answered by the dead-machine responder → burn cert
-			ch, err := r.succession(s.Cert, "", nil, "", nullImage)
+			ch, err := r.succession(s.Cert, "", nil, "", "", nullImage)
 			var a *Doc
 			if err == nil {
 				a, err = r.core.Call("/approve/by-dead-machine", map[string]any{"challenge": ch})
@@ -487,7 +499,7 @@ func (r *Router) AddStore(machine, store string) error {
 	if err != nil {
 		return err
 	}
-	ch, err := r.succession(s.Cert, machine, stores, s.Harness, "")
+	ch, err := r.succession(s.Cert, machine, stores, s.Harness, certMode(s.Cert), "")
 	if err != nil {
 		return err
 	}
@@ -511,7 +523,7 @@ func (r *Router) DowngradeBegin(machine string, stores []string, encKey, sigKey 
 		return nil, fmt.Errorf("this machine isn't a running session")
 	}
 	return r.core.Call("/succession", map[string]any{"predecessor": s.Cert, "machine": machine, "stores": stores,
-		"options": map[string]string{"harness": s.Harness}, "newEncryptionKey": encKey, "newSigningKey": sigKey})
+		"options": map[string]string{"harness": s.Harness, "permissionMode": certMode(s.Cert)}, "newEncryptionKey": encKey, "newSigningKey": sigKey})
 }
 
 // DowngradeFinish: the challenge signed with the machine's old key → its new cert; from now on the router
@@ -573,4 +585,25 @@ func (r *Router) snapshotArrived(machine string) {
 		close(c)
 		delete(r.snapped, machine)
 	}
+}
+
+func normMode(m string) string {
+	if m == "bypass" {
+		return "bypass"
+	}
+	return "auto"
+}
+
+// certMode: the permission mode the line's cert signs (a machine succeeding itself keeps it)
+func certMode(c *Doc) string {
+	if c == nil {
+		return "auto"
+	}
+	var x struct {
+		Options struct {
+			PermissionMode string `json:"permissionMode"`
+		} `json:"options"`
+	}
+	json.Unmarshal([]byte(c.Payload), &x)
+	return normMode(x.Options.PermissionMode)
 }

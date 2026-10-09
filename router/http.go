@@ -32,6 +32,11 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 }
 
 func writeErr(w http.ResponseWriter, err error) {
+	var gn *GrantNeeded
+	if errors.As(err, &gn) {
+		writeJSON(w, 403, map[string]any{"error": err.Error(), "needsGrant": gn.Holder, "phoneGrant": gn.Phone})
+		return
+	}
 	var ce *CoreError
 	if errors.As(err, &ce) {
 		w.Header().Set("Content-Type", "application/json")

@@ -63,7 +63,17 @@ func TestPermissionModeInPlaceAndPaused(t *testing.T) {
 	defer close(stop)
 	cmds := answerExecs(r, "mA", 0, stop)
 
+	// raising to bypass needs a fresh phone grant (a rule or the allow list isn't enough)
 	code, out := appDo(t, r, "POST", "/api/sessions/sA/permission-mode", `{"mode":"bypass"}`)
+	if code != 403 || out["needsGrant"] != "terminal" || out["phoneGrant"] != true {
+		t.Fatalf("without a phone grant: %d %v", code, out)
+	}
+	addGrant(r, "sA", "terminal", "rule")
+	if code, _ := appDo(t, r, "POST", "/api/sessions/sA/permission-mode", `{"mode":"bypass"}`); code != 403 {
+		t.Fatalf("a standing rule raised to bypass: %d", code)
+	}
+	addGrant(r, "sA", "terminal", "grant")
+	code, out = appDo(t, r, "POST", "/api/sessions/sA/permission-mode", `{"mode":"bypass"}`)
 	if code != 202 || out["inPlace"] != true {
 		t.Fatalf("%d %v", code, out)
 	}
@@ -98,6 +108,7 @@ func TestPermissionModeFailureKeepsMode(t *testing.T) {
 	stop := make(chan struct{})
 	defer close(stop)
 	answerExecs(r, "mA", 1, stop)
+	addGrant(r, "sA", "terminal", "grant")
 	if code, _ := appDo(t, r, "POST", "/api/sessions/sA/permission-mode", `{"mode":"bypass"}`); code != 202 {
 		t.Fatal(code)
 	}
@@ -452,4 +463,12 @@ func TestUsageForwardsToJarvis1(t *testing.T) {
 		got.Header.Values("X-Jarvis2-Session") != nil {
 		t.Fatalf("%s %s %v", got.URL.Path, got.URL.RawQuery, got.Header)
 	}
+}
+
+// addGrant: a stored grant as if the phone had signed it (the machine's checks are tested in machine/)
+func addGrant(r *Router, session, holder, kind string) {
+	r.st.Do(func(d *persisted) {
+		id := randID()
+		d.Grants[id] = &StoredGrant{ID: id, Session: session, Holder: holder, Kind: kind, Ends: time.Now().Add(5 * time.Minute), Doc: &Doc{Payload: "{}"}}
+	})
 }

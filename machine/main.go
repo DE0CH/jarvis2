@@ -78,7 +78,8 @@ type Cert struct {
 	Machine *Machine `json:"machine"`
 	Stores  []string `json:"stores"`
 	Options struct {
-		Harness string `json:"harness"`
+		Harness        string `json:"harness"`
+		PermissionMode string `json:"permissionMode"`
 	} `json:"options"`
 	Phone     string `json:"phone"`
 	Sensitive bool   `json:"sensitive"`
@@ -289,7 +290,8 @@ func prepare() error {
 		return fmt.Errorf("agent: %w", err)
 	}
 	env := os.Environ()
-	env = append(env, "SESSION_SECRETS_JSON="+string(sj), "SESSION_HARNESS="+cert.Options.Harness, "SESSION_ID="+sessionID(me))
+	env = withoutEnv(env, "SESSION_HARNESS", "SESSION_PERMISSION_MODE") // the signed values below replace the router's
+	env = append(env, "SESSION_SECRETS_JSON="+string(sj), "SESSION_HARNESS="+cert.Options.Harness, "SESSION_PERMISSION_MODE="+certMode(cert), "SESSION_ID="+sessionID(me))
 	if p := tunnelProof(c); p != "" { // tunnelproof.go
 		env = append(env, "TUNNEL_AGENT_SECRET="+p)
 	}
@@ -948,4 +950,27 @@ func openSealed(priv *ecdh.PrivateKey, eB64, dataB64, info string) ([]byte, erro
 		return nil, errors.New("sealed data too short")
 	}
 	return g.Open(nil, d[:g.NonceSize()], d[g.NonceSize():], nil)
+}
+
+// certMode: the signed permission mode (it replaces the router's env value);
+// a running session raised in place keeps bypass until its next cert, which then signs it
+func certMode(c Cert) string {
+	if c.Options.PermissionMode == "bypass" {
+		return "bypass"
+	}
+	return "auto"
+}
+
+func withoutEnv(env []string, names ...string) []string {
+	out := env[:0:0]
+	for _, kv := range env {
+		drop := false
+		for _, n := range names {
+			drop = drop || strings.HasPrefix(kv, n+"=")
+		}
+		if !drop {
+			out = append(out, kv)
+		}
+	}
+	return out
 }
