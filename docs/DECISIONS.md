@@ -59,11 +59,16 @@ made around it; the app's own list is `app/DECISIONS.md`.
 18. **Images** on GHCR (public, like the repo), with GitHub build attestations (the phone doesn't check them
     yet).
 19. **Repos for a session** are cloned by the machine with the session's own `GITHUB_TOKEN`.
-20. **Harness stores** (`policy/stores.json`, baked into the router image): `claude` brings the store `claude`
-    (the Claude login), `opencode` brings `openrouter`. A separate long-lived `claude setup-token` in the
-    `claude` store avoids fighting Jarvis 1 over the refresh token.
+20. **Harness stores** (`policy/stores.json`, baked into the router image): `claude` brings the store `claude`,
+    `opencode` brings `openrouter`.
 21. **Stores that can reach a code push are sensitive** (Deyao, 2026-10-09): one GitHub token per repo, each
     limited to its repo (fine-grained, no expiry; contents, workflows, actions) — store `github-claude-env`
     (key `GITHUB_TOKEN_CLAUDE_ENV`, not sensitive) and `github-jarvis2` (key `GITHUB_TOKEN_JARVIS2`,
     sensitive). The machine gives each repo its own token (`GITHUB_TOKEN_<REPO>`), so a session with both keeps
     both. claude-env holds no Jarvis 2 code or design.
+22. **The Claude login is shared with Jarvis 1** (Deyao, 2026-10-09). The store `claude` holds an Access service
+    token (`jarvis2-claude-credentials`, keys `JARVIS1_CREDENTIALS_ID/SECRET`) that Jarvis 1's Worker lets
+    reach only `GET/POST jarvis.deyaochen.com/api/credentials`; tested: 403 on any other path and on session
+    hosts. The machine takes the pair at boot and every 30 s pushes its own refreshed copy and takes Jarvis 1's
+    when that expires later (`machine/claudelogin.go`). Holding the store gives the Claude login and nothing
+    else in Jarvis 1. Not sensitive.
