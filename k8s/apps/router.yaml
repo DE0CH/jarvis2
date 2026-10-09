@@ -24,7 +24,7 @@ spec:
       securityContext: { fsGroup: 65532 }
       containers:
         - name: router
-          image: ghcr.io/de0ch/jarvis2-router:sha-d0fca7828f92
+          image: ghcr.io/de0ch/jarvis2-router:sha-ab8fe05b308c
           ports: [{ containerPort: 8080 }]
           env:
             - { name: SESSION_IMAGE, value: "ghcr.io/de0ch/jarvis2-session:sha-05dcb34f4627" }
