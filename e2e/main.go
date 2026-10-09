@@ -213,6 +213,26 @@ func main() {
 	must2(call(router, "POST", "/api/sessions/"+id+"/grants/draft", map[string]any{"holder": "terminal", "kind": "rule", "until": time.Now().Add(24 * time.Hour)}, &draft))
 	must2(call(router, "POST", "/api/sessions/"+id+"/grants", map[string]string{"payload": draft.Text, "sig": p.sign(draft.Text)}, &grant))
 
+	step("status: the machine reports itself; the session's local Jarvis API arms a wakeup (scheduler on its allow list)")
+	for i := 0; ; i++ {
+		if lr, _ := session(id)["lastReport"].(string); lr != "" && !strings.HasPrefix(lr, "0001") {
+			break
+		}
+		if i > 45 {
+			log.Fatal("no status report from the machine in 90 s")
+		}
+		time.Sleep(2 * time.Second)
+	}
+	expectOnMachine(m1, "su - claude -c \"curl -s -X POST -H 'Content-Type: application/json' -d '{\\\"prompt\\\":\\\"e2e wake\\\",\\\"delaySeconds\\\":3600,\\\"name\\\":\\\"e2e\\\"}' http://127.0.0.1:7171/api/sessions/"+id+"/wakeups\" | grep -c '\"ok\":true'", "1")
+	expectOnMachine(m1, "su - claude -c 'jarvis2 allow' | grep -c '\"scheduler\"'", "1")
+	expectOnMachine(m1, "su - claude -c 'curl -s -o /dev/null -w %{http_code} http://127.0.0.1:7171/api/sessions/s0000000000000000/wakeups'", "403")
+	var wk struct{ Wakeups []map[string]any }
+	must2(call(router, "GET", "/api/sessions/"+id+"/wakeups", nil, &wk))
+	if len(wk.Wakeups) != 1 || wk.Wakeups[0]["name"] != "e2e" {
+		log.Fatalf("the router doesn't list the wakeup: %v", wk.Wakeups)
+	}
+	must2(call(router, "DELETE", "/api/sessions/"+id+"/wakeups/e2e", nil, nil))
+
 	step("add a store from the machine (e2e-extra)")
 	go flyExec(m1, []string{"su", "-", "claude", "-c", "jarvis2 add-store e2e-extra"})
 	a = waitApproval("add-store", id)
@@ -252,7 +272,7 @@ func main() {
 
 	step("destroy → killed + burned (a succession to the null image), moved to records")
 	must2(call(router, "POST", "/api/sessions/"+id+"/destroy", nil, nil))
-	deadline := time.Now().Add(5 * time.Minute)
+	deadline := time.Now().Add(12 * time.Minute) // destroy waits for the final snapshot
 	for {
 		var recs struct {
 			Records []map[string]any `json:"records"`
@@ -380,7 +400,7 @@ type approval struct {
 }
 
 func waitApproval(kind, session string) approval {
-	deadline := time.Now().Add(5 * time.Minute)
+	deadline := time.Now().Add(12 * time.Minute) // destroy waits for the final snapshot
 	for time.Now().Before(deadline) {
 		var out struct {
 			Approvals []approval `json:"approvals"`
