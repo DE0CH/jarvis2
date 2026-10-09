@@ -738,6 +738,10 @@ func newClient() (*client, error) {
 }
 
 func (c *client) raw(method, path string, body []byte, hdr ...string) ([]byte, http.Header, int, error) {
+	// the keys can change under a running process (a downgrade): sign with the current ones
+	if k, err := loadPrivate(); err == nil {
+		c.sig = k.sig
+	}
 	t := strconv.FormatInt(time.Now().Unix(), 10)
 	sum := sha256.Sum256(body)
 	sig, err := sign(c.sig, []byte(method+" "+path+" "+t+" "+hex.EncodeToString(sum[:])))
