@@ -1,9 +1,10 @@
 # Jarvis 2 box bootstrap (create.sh prepends a shebang and the variables). Blank Ubuntu → single-node k3s
 # → Flux reconciling ./k8s/apps from the public repo. After this the box takes changes only from git:
 # no SSH, no k8s API from outside (the firewall has no inbound rules at all), no admin token. A box that
-# git can't fix is replaced, not repaired. Secrets (the tunnel token, the router's WireGuard peer, the box key) arrive
+# git can't fix is replaced, not repaired. Secrets (the tunnel token, the router's WireGuard peer, the box key, the age key) arrive
 # in user-data and become k8s Secrets here; the user-data is shredded at the end.
 # Injected: TUNNEL_TOKEN WG_CONF (the wg-quick file of `fly wireguard create`) BOX_KEY (the box key, PEM)
+#           AGE_KEY (Flux decrypts k8s/secrets with it)
 set -uo pipefail
 export DEBIAN_FRONTEND=noninteractive
 exec > >(tee -a /var/log/jarvis2-bootstrap.log) 2>&1
@@ -31,6 +32,9 @@ shred -u /root/wg.conf
 printf '%s\n' "$BOX_KEY" > /root/box-key.pem
 kubectl -n jarvis2-core create secret generic core-box-key --from-file=box-key.pem=/root/box-key.pem
 shred -u /root/box-key.pem
+printf '%s\n' "$AGE_KEY" > /root/age.agekey
+kubectl -n flux-system create secret generic sops-age --from-file=age.agekey=/root/age.agekey
+shred -u /root/age.agekey
 kubectl apply -f /root/jarvis2/k8s/flux/sync.yaml || exit 1
 rm -rf /root/jarvis2
 echo "bootstrap COMPLETE $(date -u +%FT%TZ)" > /var/log/jarvis2-bootstrap.done

@@ -84,6 +84,7 @@ func (r *Router) buildHandlers() {
 			r.relay(w, method, corePath, b)
 		}))
 	}
+	r.registerFeatures(app, m)
 	setup("GET /setup/identity", "GET", "/identity")
 	setup("GET /setup/core-cert", "GET", "/core-cert")
 	setup("POST /setup/stores", "POST", "/stores")

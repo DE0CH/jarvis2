@@ -1,0 +1,35 @@
+package main
+
+// Features outside the lifecycle (Jarvis 1 parity, docs/PARITY.md). Each lives in its own file, registers its
+// routes in registerFeatures and its background loop in startFeatures, and reads its own settings from the
+// environment (secrets come from k8s/secrets/router.enc.yaml via envFrom). They act on sessions only through
+// the router's own flows and through grants (grants.go); none talks to the core directly.
+
+import (
+	"log"
+	"net/http"
+)
+
+type (
+	appRoute     func(pattern string, fn http.HandlerFunc)
+	machineRoute func(pattern string, fn func(w http.ResponseWriter, req *http.Request, machine string, body []byte))
+)
+
+// registerFeatures: called once from buildHandlers
+func (r *Router) registerFeatures(app appRoute, m machineRoute) {
+}
+
+// startFeatures: called once from main after the router is built
+func (r *Router) startFeatures() {
+}
+
+// DM: a message to Deyao's Discord DM (filled in by discord.go); without a bot token it only logs
+var dmHook func(text string)
+
+func (r *Router) DM(text string) {
+	if dmHook != nil {
+		dmHook(text)
+		return
+	}
+	log.Printf("[dm] %s", text)
+}

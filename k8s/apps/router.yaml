@@ -37,6 +37,9 @@ spec:
             # JARVIS2_SETUP_KEY in Jarvis 1's default store)
             - { name: SETUP_KEY, value: "BEhYIkmGeCkg7D8vdKhRe8b00asMI8a9EyXNW41eBbIphkf6lZmy/c9FsRlqoXLD5JyRZgVOxLzM7OBv47Uy2Ms=" }
             - { name: ACCESS_SETUP_AUD, value: fdd80d914f37f8f73409c3e44c11282cffefa5e20663d2d9de50bb087159ee89 }
+          # the router's non-sensitive secrets (lobster's token, Storage Box keys, …): k8s/secrets/router.enc.yaml,
+          # SOPS-encrypted to the box's age key (infra/router-secrets.py)
+          envFrom: [{ secretRef: { name: router-secrets, optional: true } }]
           volumeMounts: [{ name: data, mountPath: /data }, { name: wg, mountPath: /wg, readOnly: true }]
           resources: { requests: { cpu: 20m, memory: 64Mi }, limits: { memory: 1Gi } }
           securityContext: { runAsNonRoot: true, runAsUser: 65532, runAsGroup: 65532, allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: { drop: [ALL] }, seccompProfile: { type: RuntimeDefault } }

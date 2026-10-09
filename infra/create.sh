@@ -30,8 +30,12 @@ k = ec.generate_private_key(ec.SECP256R1())
 open(sys.argv[1] + "/box-key.pem", "wb").write(k.private_bytes(s.Encoding.PEM, s.PrivateFormat.PKCS8, s.NoEncryption()))
 open(sys.argv[2], "w").write(base64.b64encode(k.public_key().public_bytes(s.Encoding.X962, s.PublicFormat.UncompressedPoint)).decode() + "\n")
 PY
+# the box's age key: Flux decrypts the SOPS-encrypted secrets in k8s/secrets with it (infra/router-secrets.sh
+# encrypts to keys/box-age.pub). Its private half goes only into the box (user-data).
+age-keygen -o "$KEY/age.key" 2>/dev/null
+age-keygen -y "$KEY/age.key" > "$HERE/../keys/box-age.pub"
 { echo '#!/bin/bash'
-  printf 'TUNNEL_TOKEN=%q\nWG_CONF=%q\nBOX_KEY=%q\n' "$TUNNEL_TOKEN" "$(cat "$D/wg-box.conf")" "$(cat "$KEY/box-key.pem")"
+  printf 'TUNNEL_TOKEN=%q\nWG_CONF=%q\nBOX_KEY=%q\nAGE_KEY=%q\n' "$TUNNEL_TOKEN" "$(cat "$D/wg-box.conf")" "$(cat "$KEY/box-key.pem")" "$(cat "$KEY/age.key")"
   cat "$HERE/cloud-init.sh"; } > "$UD"
 # Hetzner mails a root password when a server has no SSH key: give it a throwaway key whose private half
 # is deleted with this script (sshd is off and port 22 closed anyway)
@@ -57,7 +61,7 @@ s=call("POST","/servers",{"name":name,"server_type":stype,"image":"ubuntu-24.04"
 call("DELETE",f"/ssh_keys/{key}")
 print("server",s["id"],s["public_net"]["ipv4"]["ip"])
 PY
-echo "keys/box.pub is the new box's key: commit and push it (the app checks the core against it)"
+echo "keys/box.pub and keys/box-age.pub are the new box's keys: re-run infra/router-secrets.sh (it encrypts to the new age key), then commit and push"
 echo "waiting for the bootstrap (k3s + Flux + the core behind the tunnel)…"
 for i in $(seq 1 90); do
   python3 "$HERE/setup.py" identity >/dev/null 2>&1 && { echo "up: the core answers through the tunnel and its identity checks"; exit 0; }

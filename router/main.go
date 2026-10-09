@@ -69,6 +69,7 @@ func main() {
 		log.Fatal(err)
 	}
 	r := NewRouter(cfg, st, &CoreClient{base: cfg.CoreURL, http: &http.Client{Timeout: 15 * time.Minute}}, policy)
+	r.startFeatures()
 	addr, maddr := env("ADDR", ":8080"), env("MACHINE_ADDR", ":8081")
 	log.Printf("router on %s (core %s)", addr, cfg.CoreURL)
 	// two listeners: the public one (cloudflared → app, web, setup) and the machines' one, which only
