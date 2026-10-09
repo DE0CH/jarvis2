@@ -68,3 +68,6 @@ is listed here, numbered; the app's own list is `app/DECISIONS.md`.
     session gets. Which stores move over, and with which keys, is Deyao's call (PLAN). Note: sharing Jarvis
     1's refreshing OAuth pair with Jarvis 2 sessions can make the two fight over the refresh token; a
     long-lived `claude setup-token` token in its own store avoids that.
+21. **Anything that can reach a code push is a sensitive store** (Deyao, 2026-10-09). `GITHUB_TOKEN` lives
+    alone in the sensitive store `github`; `default` holds `LOBSTER_TOKEN`, `OPENROUTER_API`, `EXA_API`. A session
+    without `github` clones only public repos and cannot push.
