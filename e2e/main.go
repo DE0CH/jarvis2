@@ -3,10 +3,13 @@
 // accepts only once — so run it against a fresh core and restart the core afterwards (a restart = a new
 // controller) before pairing the real iPhone.
 //
-//	E2E_ROUTER=http://127.0.0.1:18080 E2E_CORE=http://127.0.0.1:18090 E2E_SETUP_TOKEN=… \
+//	E2E_ROUTER=http://127.0.0.1:28080 E2E_CORE=http://127.0.0.1:28090 E2E_MASTER_KEY_FILE=testdata/master-test.pem E2E_BOX_PUB=… \
 //	E2E_FLY_TOKEN=… E2E_FLY_APP=jarvis2-sessions go run .
 //
-// The router must run with NO_ACCESS=1 (reached by port-forward, not through Cloudflare).
+// It plays the iPhone, recovery included, with the public TEST master key (e2e/testdata): run a core
+// (MASTER_KEY = its public half, BOX_KEY_FILE = a throwaway box key) and a router (NO_ACCESS=1, WG_CONFIG = a
+// WireGuard peer of the Fly org, the jarvis2-session-test image) locally, so the machines reach this router over
+// Fly's private network as in production. infra/e2e.sh does all that.
 package main
 
 import (
@@ -19,9 +22,11 @@ import (
 	"crypto/hkdf"
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/x509"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"encoding/pem"
 	"fmt"
 	"io"
 	"log"
@@ -54,7 +59,7 @@ func (p *phone) sign(payload string) string {
 	return b64.EncodeToString(s)
 }
 
-var router, core, setupToken string
+var router, core string
 var coreKey string
 
 func call(base, method, path string, in any, out any, hdr ...string) (int, []byte) {
@@ -107,32 +112,81 @@ func step(f string, a ...any) { log.Printf("== "+f, a...) }
 
 func main() {
 	log.SetFlags(log.Ltime)
-	router, core, setupToken = os.Getenv("E2E_ROUTER"), os.Getenv("E2E_CORE"), os.Getenv("E2E_SETUP_TOKEN")
+	router, core = os.Getenv("E2E_ROUTER"), os.Getenv("E2E_CORE")
+	pemb, err := os.ReadFile(os.Getenv("E2E_MASTER_KEY_FILE"))
+	if err != nil {
+		log.Fatal(err)
+	}
+	master := parseKey(pemb)
 	sk, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	ak, _ := ecdh.P256().GenerateKey(rand.Reader)
 	p := &phone{sk, ak}
-	var key map[string]string
-	call(core, "GET", "/key", nil, &key)
-	coreKey = key["signingKey"]
 
-	step("setup: phone keys, two stores, the Fly token")
-	st := []string{"X-Setup-Token", setupToken}
-	s, b := call(core, "POST", "/setup/phone", map[string]string{"signingKey": p.signingKey(), "agreementKey": b64.EncodeToString(ak.PublicKey().Bytes())}, nil, st...)
-	must(s, b, "setup phone")
+	step("the core's identity, checked against the box key")
+	var id0 map[string]string
+	must2(call(router, "GET", "/api/core/identity", nil, &id0))
+	if !verifyRaw(os.Getenv("E2E_BOX_PUB"), "jarvis2-core-identity "+id0["signingKey"]+" "+id0["agreementKey"], id0["boxSig"]) {
+		log.Fatal("the core's identity isn't signed by the box key")
+	}
+	coreKey = id0["signingKey"]
+
+	step("recovery: the master key vouches for the core and the phone; every store comes in")
 	secret := hex.EncodeToString(randBytes(8))
-	s, b = call(core, "POST", "/setup/store", map[string]any{"name": "e2e", "values": map[string]string{"E2E_SECRET": secret}}, nil, st...)
-	must(s, b, "seed e2e")
-	s, b = call(core, "POST", "/setup/store", map[string]any{"name": "e2e-extra", "values": map[string]string{"E2E_EXTRA": "extra-" + secret}, "sensitive": true}, nil, st...)
-	must(s, b, "seed e2e-extra")
-	s, b = call(core, "POST", "/setup/fly", map[string]string{"token": os.Getenv("E2E_FLY_TOKEN"), "app": os.Getenv("E2E_FLY_APP")}, nil, st...)
-	must(s, b, "setup fly")
+	bundle, _ := json.Marshal(map[string]any{
+		"stores": []map[string]any{
+			{"name": "core", "values": map[string]string{"FLY_API_TOKEN": os.Getenv("E2E_FLY_TOKEN"), "FLY_APP": os.Getenv("E2E_FLY_APP")}},
+			{"name": "e2e", "values": map[string]string{"E2E_SECRET": secret}},
+			{"name": "e2e-extra", "values": map[string]string{"E2E_EXTRA": "extra-" + secret}},
+		},
+		"notSensitive": []string{"e2e"},
+	})
+	sum := sha256.Sum256(bundle)
+	stmt, _ := json.Marshal(map[string]any{"kind": "recovery",
+		"core":         map[string]string{"signingKey": id0["signingKey"], "agreementKey": id0["agreementKey"]},
+		"phone":        map[string]string{"signingKey": p.signingKey(), "agreementKey": b64.EncodeToString(ak.PublicKey().Bytes())},
+		"bundleSha256": hex.EncodeToString(sum[:])})
+	h := sha256.Sum256(stmt)
+	msig, _ := ecdsa.SignASN1(rand.Reader, master, h[:])
+	var rec Doc
+	must2(call(router, "POST", "/api/core/recover", map[string]any{"statement": string(stmt), "masterSig": b64.EncodeToString(msig),
+		"bundle": sealTo(id0["agreementKey"], bundle, "jarvis2/recover")}, &rec))
+	verify(rec, nil)
+
+	step("stores: e2e not sensitive, e2e-extra sensitive; a created store is not; the upgrade is one-way")
+	stores := func() map[string]bool {
+		var d Doc
+		must2(call(router, "POST", "/api/core/stores", map[string]string{"nonce": "n"}, &d))
+		var l struct {
+			Stores []struct {
+				Name      string
+				Sensitive bool
+			}
+		}
+		verify(d, &l)
+		m := map[string]bool{}
+		for _, x := range l.Stores {
+			m[x.Name] = x.Sensitive
+		}
+		return m
+	}
+	must2(call(router, "POST", "/api/core/stores/create", map[string]string{"name": "e2e-notes"}, nil))
+	if st := stores(); st["e2e"] || !st["e2e-extra"] || st["e2e-notes"] {
+		log.Fatalf("sensitivity: %v", st)
+	}
+	if _, ok := stores()["core"]; ok {
+		log.Fatal("the Fly store is a session store")
+	}
+	must2(call(router, "POST", "/api/core/stores/mark-sensitive", map[string]string{"name": "e2e-notes"}, nil))
+	if s, _ := call(router, "POST", "/api/core/stores/create", map[string]string{"name": "e2e-notes"}, nil); s == 200 {
+		log.Fatal("re-created a sensitive store")
+	}
 
 	step("unlock e2e and e2e-extra (split key, through the router)")
 	unlock(p, "e2e")
 	unlock(p, "e2e-extra")
 
 	step("new session (stores [e2e])")
-	s, b = call(router, "POST", "/api/sessions", map[string]any{"label": "e2e test", "stores": []string{"e2e"}, "size": "small", "harness": "claude"}, nil)
+	s, b := call(router, "POST", "/api/sessions", map[string]any{"label": "e2e test", "stores": []string{"e2e"}, "size": "small", "harness": "claude"}, nil)
 	must(s, b, "create")
 	a := waitApproval("new-session", "")
 	checkChallenge(a, []string{"e2e"}, "")
@@ -149,6 +203,9 @@ func main() {
 	approve(p, a)
 	expectOnMachine(m1, "for i in $(seq 1 30); do grep -q E2E_EXTRA /home/claude/.secrets && break; sleep 2; done; grep -c E2E_EXTRA /home/claude/.secrets", "1")
 
+	step("downgrade in place: back to [e2e], new keys, the extra secret shredded")
+	expectOnMachine(m1, "su - claude -c 'jarvis2 downgrade e2e' >/dev/null 2>&1 && grep -c E2E_SECRET /home/claude/.secrets && grep -c E2E_EXTRA /home/claude/.secrets || true", "1\n0")
+
 	step("pause → paused (snapshot uploaded, machine killed)")
 	s, b = call(router, "POST", "/api/sessions/"+id+"/pause", nil, nil)
 	must(s, b, "pause")
@@ -163,27 +220,19 @@ func main() {
 		log.Fatal("resume reused the old machine")
 	}
 	expectOnMachine(m2, "cat /home/claude/artifacts/e2e-marker", "marker-"+secret)
-	expectOnMachine(m2, "grep -c E2E_EXTRA /home/claude/.secrets", "1")
+	expectOnMachine(m2, "grep -c E2E_EXTRA /home/claude/.secrets || true", "0")
 
-	step("pause, then resume with the latest image → burn + iPhone approval")
+	step("pause, then resume with the latest image → the iPhone approves first, then the machine starts")
 	must2(call(router, "POST", "/api/sessions/"+id+"/pause", nil, nil))
 	waitState(id, "paused", 12*time.Minute)
 	must2(call(router, "POST", "/api/sessions/"+id+"/resume", map[string]bool{"upgrade": true}, nil))
 	a = waitApproval("resume-upgrade", id)
-	var burn struct {
-		Kind   string `json:"kind"`
-		PredID string `json:"predecessorId"`
-	}
-	verify(*a.BurnCert, &burn)
-	if burn.Kind != "burn-cert" || burn.PredID != m2 {
-		log.Fatalf("burn cert: %+v", burn)
-	}
 	approve(p, a)
 	waitState(id, "started", 8*time.Minute)
 	m3 := machineOf(id)
 	expectOnMachine(m3, "cat /home/claude/artifacts/e2e-marker", "marker-"+secret)
 
-	step("destroy → killed + burned, moved to records")
+	step("destroy → killed + burned (a succession to the null image), moved to records")
 	must2(call(router, "POST", "/api/sessions/"+id+"/destroy", nil, nil))
 	deadline := time.Now().Add(5 * time.Minute)
 	for {
@@ -220,6 +269,53 @@ func main() {
 }
 
 func must2(s int, b []byte) { must(s, b, "request") }
+
+// verifyRaw: an ECDSA P-256 signature (base64 DER) by a base64 x963 public key
+func verifyRaw(pubB64, payload, sigB64 string) bool {
+	kb, err := b64.DecodeString(strings.TrimSpace(pubB64))
+	if err != nil {
+		return false
+	}
+	x, y := elliptic.Unmarshal(elliptic.P256(), kb)
+	if x == nil {
+		return false
+	}
+	sig, _ := b64.DecodeString(sigB64)
+	h := sha256.Sum256([]byte(payload))
+	return ecdsa.VerifyASN1(&ecdsa.PublicKey{Curve: elliptic.P256(), X: x, Y: y}, h[:], sig)
+}
+
+func parseKey(pemBytes []byte) *ecdsa.PrivateKey {
+	blk, _ := pem.Decode(pemBytes)
+	if blk == nil {
+		log.Fatal("E2E_SETUP_KEY_FILE: not PEM")
+	}
+	k, err := x509.ParsePKCS8PrivateKey(blk.Bytes)
+	if err != nil {
+		log.Fatal(err)
+	}
+	ek, ok := k.(*ecdsa.PrivateKey)
+	if !ok {
+		log.Fatal("E2E_SETUP_KEY_FILE: not an EC key")
+	}
+	return ek
+}
+
+// sealTo: Sealed{e, data} to a P-256 public key (HKDF-SHA256 empty salt, AES-256-GCM nonce||ct||tag)
+func sealTo(recipient string, plain []byte, info string) map[string]string {
+	rb, _ := b64.DecodeString(recipient)
+	R, err := ecdh.P256().NewPublicKey(rb)
+	if err != nil {
+		log.Fatal(err)
+	}
+	e, _ := ecdh.P256().GenerateKey(rand.Reader)
+	x, _ := e.ECDH(R)
+	k, _ := hkdf.Key(sha256.New, x, nil, info, 32)
+	blk, _ := aes.NewCipher(k)
+	g, _ := cipher.NewGCM(blk)
+	nonce := randBytes(g.NonceSize())
+	return map[string]string{"e": b64.EncodeToString(e.PublicKey().Bytes()), "data": b64.EncodeToString(append(nonce, g.Seal(nil, nonce, plain, nil)...))}
+}
 
 func randBytes(n int) []byte {
 	b := make([]byte, n)
@@ -263,7 +359,6 @@ type approval struct {
 	Kind      string `json:"kind"`
 	Session   string `json:"session"`
 	Challenge *Doc   `json:"challenge"`
-	BurnCert  *Doc   `json:"burnCert"`
 }
 
 func waitApproval(kind, session string) approval {
@@ -297,7 +392,7 @@ func checkChallenge(a approval, stores []string, added string) {
 		} `json:"request"`
 	}
 	verify(*a.Challenge, &ch)
-	if ch.Kind != "challenge" || ch.Request.Machine == nil || strings.Join(ch.Request.Stores, ",") != strings.Join(stores, ",") ||
+	if ch.Kind != "challenge" || (added != "") != (ch.Request.Machine != nil) || strings.Join(ch.Request.Stores, ",") != strings.Join(stores, ",") ||
 		ch.Request.AddedStore != added || ch.Request.Options.Harness != "claude" {
 		log.Fatalf("challenge doesn't match: %s", a.Challenge.Payload)
 	}
@@ -305,15 +400,15 @@ func checkChallenge(a approval, stores []string, added string) {
 
 func approve(p *phone, a approval) string {
 	var out struct {
-		Cert    Doc    `json:"cert"`
+		Answer  Doc    `json:"answer"`
 		Session string `json:"session"`
 	}
 	s, b := call(router, "POST", "/api/approvals/"+a.ID+"/respond", map[string]string{"signature": p.sign(a.Challenge.Payload)}, &out)
 	must(s, b, "respond")
 	var c struct{ Kind string }
-	verify(out.Cert, &c)
-	if c.Kind != "succession-cert" {
-		log.Fatalf("cert kind %s", c.Kind)
+	verify(out.Answer, &c)
+	if c.Kind != "approval" && c.Kind != "succession-cert" { // a new line: an approval; adding a store: the cert at once
+		log.Fatalf("answer kind %s", c.Kind)
 	}
 	return out.Session
 }

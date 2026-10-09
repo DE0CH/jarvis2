@@ -7,5 +7,6 @@ RUN CGO_ENABLED=0 go vet ./... && CGO_ENABLED=0 go build -trimpath -o /out/route
 FROM gcr.io/distroless/static-debian12:nonroot
 COPY --from=build /out/router /router
 COPY web/ /web/
+COPY policy/stores.json /policy/stores.json
 USER nonroot
 ENTRYPOINT ["/router"]

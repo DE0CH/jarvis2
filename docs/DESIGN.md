@@ -83,7 +83,7 @@ The core trusts itself: it does what it signs. Its Fly token is narrowed (a Fly 
 | `identity()` | Its public keys, signed with the box key. |
 | `recover(statement, masterSig, bundle)` | Once per core. The master key's signature over a statement naming this core and the phone's keys; the bundle (sealed to the core) carries the Fly token, kept for the core's whole life. |
 | `succession(predecessor or null, stores, options, image)` | A signed challenge, before any machine exists. |
-| `respond_phone(challenge, sig)` / `respond_dead(challenge)` | A yes → an approval; for adding a store (phone only) the new cert at once. |
+| `approve_by_phone(challenge, sig)` / `approve_by_dead_machine(challenge)` | A yes → an approval; for adding a store (phone only) the new cert at once. |
 | `start(image)` | Anyone may call it (normally the router, which guards it; it can't lead to a secret): Fly create → `jarvis2-init` (its output: the machine's keys) → a started machine. If init fails, the core destroys the machine. |
 | `certify(approval, machine)` | The approval and a started machine running the approved image → the succession cert. One machine per approval, one line per machine, one successor per predecessor (killed and not used). The null image: no machine, a burn cert. |
 | `kill(machine)` | Fly destroy, confirmed by Fly → killed. |
@@ -92,7 +92,7 @@ The core trusts itself: it does what it signs. Its Fly token is narrowed (a Fly 
 | `pull_secrets(cert)` | The cert's stores, while unlocked, sealed to that machine's encryption key — so no other proof is needed. |
 | `log(nonce)` | Its signed log. |
 
-**Responders.** The iPhone: Deyao's click on a plain-language summary. Respond by dead machine (core,
+**Responders.** The iPhone: Deyao's click on a plain-language summary. approve_by_dead_machine (core,
 automatic): the predecessor is killed (Fly-confirmed) and not used; for a successor, store names, image and
 options are identical to the predecessor's; it also answers burns; never an add-a-store. A succession from
 null is answered only by the iPhone: every new line starts with Deyao's click.
@@ -182,7 +182,7 @@ one that decrypts.
   Deyao is still deciding, and destroy it on a reject.)
 - **Pause:** the machine signs its snapshot (artefacts + transcript) with its signing key and uploads it →
   `kill`. Skipped/failed snapshot = nothing to resume; no secret moves.
-- **Resume, nothing changed (also unattended, e.g. scheduled):** `succession(old, …)` ← respond by dead machine
+- **Resume, nothing changed (also unattended, e.g. scheduled):** `succession(old, …)` ← approve_by_dead_machine
   → `start` → `certify` → succession cert.
 - **Resume with a change (e.g. newer image), approved:** `succession(old, …)` ← iPhone (shows the difference,
   Deyao clicks) → `start` → `certify`. Rejecting leaves the session paused as it was.

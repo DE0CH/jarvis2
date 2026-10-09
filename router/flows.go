@@ -1,6 +1,6 @@
 package main
 
-// The session flows of SECRETS-CONTROLLER.md ("Flows (router, outside the core)"), each a chain of core
+// The session flows of docs/DESIGN.md ("Flows (router, outside the core)"), each a chain of core
 // primitives. Every long step runs in its own goroutine; the session's `state` says where it is.
 
 import (
@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net/http"
 	"os"
 	"sort"
 	"sync"
@@ -24,10 +25,18 @@ type Router struct {
 	commands map[string]chan string // machine id → pending commands (snapshot)
 	snapped  map[string]chan struct{}
 	locks    sync.Map // session id → *sync.Mutex: one lifecycle action at a time
+
+	policy Policy
+
+	setupMu   sync.Mutex
+	setupSeen map[string]time.Time
+
+	muxOnce               sync.Once
+	publicMux, machineMux *http.ServeMux
 }
 
-func NewRouter(cfg Config, st *State, core *CoreClient) *Router {
-	return &Router{cfg: cfg, st: st, core: core, commands: map[string]chan string{}, snapped: map[string]chan struct{}{}}
+func NewRouter(cfg Config, st *State, core *CoreClient, policy Policy) *Router {
+	return &Router{cfg: cfg, st: st, core: core, policy: policy, setupSeen: map[string]time.Time{}, commands: map[string]chan string{}, snapped: map[string]chan struct{}{}}
 }
 
 func randID() string {
@@ -59,7 +68,7 @@ func (r *Router) setState(id, state, errMsg string) {
 	}
 }
 
-// ---- start a machine through the core ------------------------------------------------------------
+// ---- the core's primitives, as the router chains them ----------------------------------------------
 
 type NewSession struct {
 	RequestID      string   `json:"requestId"`
@@ -73,14 +82,13 @@ type NewSession struct {
 	Repos          string   `json:"repos"`
 }
 
+const nullImage = "null" // a succession to it burns the predecessor (core.NullImage)
+
 func (r *Router) machineEnv(s *Session) map[string]string {
 	e := map[string]string{
 		"JARVIS2_URL": r.cfg.MachineURL, "JARVIS2_SESSION_ID": s.ID,
 		"SESSION_LABEL": s.Label, "SESSION_MODEL": s.Model, "SESSION_PERMISSION_MODE": s.PermissionMode,
 		"JARVIS2_REPOS": s.Repos,
-	}
-	if r.cfg.MachineAccessID != "" {
-		e["JARVIS2_ACCESS_ID"], e["JARVIS2_ACCESS_SECRET"] = r.cfg.MachineAccessID, r.cfg.MachineSecret
 	}
 	if s.Prompt != "" {
 		e["SESSION_PROMPT"] = s.Prompt
@@ -88,28 +96,64 @@ func (r *Router) machineEnv(s *Session) map[string]string {
 	return e
 }
 
-func (r *Router) start(s *Session, image string) (*Started, error) {
-	d, err := r.core.Call("/start", map[string]any{"image": image, "region": r.cfg.Region, "size": s.Size, "env": r.machineEnv(s)})
-	if err != nil {
-		return nil, err
-	}
-	var p struct {
-		Kind    string   `json:"kind"`
-		Machine *Started `json:"machine"`
-	}
-	if err := d.Decode(&p); err != nil || p.Kind != "started" || p.Machine == nil {
-		return nil, fmt.Errorf("core /start: unexpected answer")
-	}
-	r.st.Do(func(d *persisted) { d.Started[p.Machine.ID] = p.Machine })
-	return p.Machine, nil
-}
-
-func (r *Router) succession(pred *Doc, machine string, stores []string, harness string) (*Doc, error) {
+// succession: a challenge, before any machine exists. machine is set only for adding a store.
+func (r *Router) succession(pred *Doc, machine string, stores []string, harness, image string) (*Doc, error) {
 	var predecessor any // JSON null = from null
 	if pred != nil {
 		predecessor = pred
 	}
-	return r.core.Call("/succession", map[string]any{"predecessor": predecessor, "machine": machine, "stores": stores, "options": map[string]string{"harness": harness}})
+	opts := map[string]string{"harness": harness}
+	if image == nullImage {
+		opts = map[string]string{}
+	}
+	return r.core.Call("/succession", map[string]any{"predecessor": predecessor, "machine": machine, "stores": stores, "options": opts, "image": image})
+}
+
+// startAndCertify: an approval → a machine on the approved image → its cert. The core's start is open (it
+// can't lead to a secret); certify binds the approval to that one machine.
+func (r *Router) startAndCertify(sid string, approval *Doc) {
+	var a struct {
+		Request struct {
+			Image string `json:"image"`
+		} `json:"request"`
+	}
+	approval.Decode(&a)
+	var s Session
+	r.st.Do(func(d *persisted) {
+		if x := d.Sessions[sid]; x != nil {
+			s = *x
+		}
+	})
+	r.setState(sid, "starting", "")
+	d, err := r.core.Call("/start", map[string]any{"image": a.Request.Image, "region": r.cfg.Region, "size": s.Size, "env": r.machineEnv(&s)})
+	if err != nil {
+		r.setState(sid, "failed", "start: "+err.Error())
+		return
+	}
+	var st struct {
+		Machine *Started `json:"machine"`
+	}
+	if d.Decode(&st) != nil || st.Machine == nil {
+		r.setState(sid, "failed", "start: unexpected answer")
+		return
+	}
+	m := st.Machine
+	r.st.Do(func(d *persisted) {
+		d.Started[m.ID] = m
+		d.Machines[m.ID] = sid
+	})
+	cert, err := r.core.Call("/certify", map[string]any{"approval": approval, "machine": m.ID})
+	if err != nil {
+		r.core.Call("/kill", map[string]string{"machine": m.ID})
+		r.setState(sid, "failed", "certify: "+err.Error())
+		return
+	}
+	r.st.Do(func(d *persisted) {
+		d.Certs[m.ID] = cert
+		if x := d.Sessions[sid]; x != nil {
+			x.Cert, x.MachineID, x.Image, x.State, x.Error, x.PausedAt = cert, m.ID, m.Image, "initialising", "", nil
+		}
+	})
 }
 
 func (r *Router) addApproval(a *Approval) {
@@ -119,9 +163,13 @@ func (r *Router) addApproval(a *Approval) {
 
 // ---- new session ------------------------------------------------------------------------------------
 
-func (r *Router) CreateSession(in NewSession) {
-	if in.Harness != "opencode" {
+func (r *Router) CreateSession(in NewSession) error {
+	h, ok := r.policy.Harnesses[in.Harness]
+	if !ok {
 		in.Harness = "claude"
+		if h, ok = r.policy.Harnesses[in.Harness]; !ok {
+			return fmt.Errorf("no harness %s in the policy", in.Harness)
+		}
 	}
 	if in.Size == "" {
 		in.Size = "medium"
@@ -129,33 +177,41 @@ func (r *Router) CreateSession(in NewSession) {
 	if in.PermissionMode != "bypass" {
 		in.PermissionMode = "auto"
 	}
-	sort.Strings(in.Stores)
-	// a placeholder until the machine has its id (the session id)
-	tmp := "pending-" + randID()
-	s := &Session{ID: tmp, State: "starting", Created: time.Now().UTC(), Label: in.Label, Prompt: in.Prompt, Model: in.Model,
-		PermissionMode: in.PermissionMode, Size: in.Size, Harness: in.Harness, Stores: in.Stores, Repos: in.Repos, RequestID: in.RequestID}
-	r.st.Do(func(d *persisted) { d.Sessions[tmp] = s })
+	// the harness's stores come with it (the policy document); the app doesn't list them
+	stores, err := r.withHarnessStores(in.Stores, h.Stores)
+	if err != nil {
+		return err
+	}
+	s := &Session{ID: "s" + randID(), State: "approval", Created: time.Now().UTC(), Label: in.Label, Prompt: in.Prompt, Model: in.Model,
+		PermissionMode: in.PermissionMode, Size: in.Size, Harness: in.Harness, Stores: stores, Repos: in.Repos, RequestID: in.RequestID}
+	r.st.Do(func(d *persisted) { d.Sessions[s.ID] = s })
+	ch, err := r.succession(nil, "", s.Stores, s.Harness, r.cfg.SessionImage)
+	if err != nil {
+		r.st.Do(func(d *persisted) { delete(d.Sessions, s.ID) })
+		return err
+	}
 	go func() {
-		m, err := r.start(s, r.cfg.SessionImage)
-		if err != nil {
-			r.setState(tmp, "failed", err.Error())
-			return
-		}
-		r.st.Do(func(d *persisted) {
-			delete(d.Sessions, tmp)
-			s.ID, s.MachineID, s.Image, s.State = m.ID, m.ID, m.Image, "approval"
-			d.Sessions[s.ID] = s
-			d.Machines[m.ID] = s.ID
-		})
-		ch, err := r.succession(nil, m.ID, s.Stores, s.Harness)
-		if err != nil {
-			r.setState(s.ID, "failed", err.Error())
-			r.core.Call("/kill", map[string]string{"machine": m.ID})
-			return
-		}
-		r.addApproval(&Approval{Kind: "new-session", Session: s.ID, Machine: m.ID, Label: s.Label, Challenge: ch,
+		r.addApproval(&Approval{Kind: "new-session", Session: s.ID, Label: s.Label, Challenge: ch,
 			Options: map[string]string{"model": s.Model, "size": s.Size, "permissionMode": s.PermissionMode, "repos": s.Repos}})
 	}()
+	return nil
+}
+
+// withHarnessStores: the chosen stores plus the harness's, sorted (the core refuses unknown ones)
+func (r *Router) withHarnessStores(chosen, harness []string) ([]string, error) {
+	set := map[string]bool{}
+	for _, n := range append(append([]string{}, chosen...), harness...) {
+		if n == flyStore {
+			return nil, fmt.Errorf("store %s holds the core's Fly token and never goes to a session", n)
+		}
+		set[n] = true
+	}
+	out := make([]string, 0, len(set))
+	for n := range set {
+		out = append(out, n)
+	}
+	sort.Strings(out)
+	return out, nil
 }
 
 // ---- approvals ---------------------------------------------------------------------------------------
@@ -166,39 +222,25 @@ func (r *Router) Respond(id, signature string) (*Doc, string, error) {
 	if a == nil {
 		return nil, "", fmt.Errorf("no such approval")
 	}
-	cert, err := r.core.Call("/respond/phone", map[string]any{"challenge": a.Challenge, "signature": signature})
+	ans, err := r.core.Call("/approve/by-phone", map[string]any{"challenge": a.Challenge, "signature": signature})
 	if err != nil {
 		return nil, "", err
 	}
-	r.st.Do(func(d *persisted) {
-		delete(d.Approvals, id)
-		d.Certs[a.Machine] = cert
-		if s := d.Sessions[a.Session]; s != nil {
-			s.Cert = cert
-			s.MachineID = a.Machine
-			if st := d.Started[a.Machine]; st != nil {
-				s.Image = st.Image
-			}
-			if a.Kind == "add-store" {
+	r.st.Do(func(d *persisted) { delete(d.Approvals, id) })
+	if a.Kind == "add-store" {
+		// adding a store answers with the machine's new cert at once
+		r.st.Do(func(d *persisted) {
+			d.Certs[a.Machine] = ans
+			if s := d.Sessions[a.Session]; s != nil {
 				var c struct{ Stores []string }
-				cert.Decode(&c)
-				s.Stores = c.Stores
-			} else {
-				s.State = "initialising"
+				ans.Decode(&c)
+				s.Cert, s.Stores = ans, c.Stores
 			}
-		}
-		d.Machines[a.Machine] = a.Session
-	})
-	if a.Kind != "add-store" {
-		go r.init(a.Session, a.Machine)
+		})
+		return ans, a.Session, nil
 	}
-	return cert, a.Session, nil
-}
-
-func (r *Router) init(sessionID, machine string) {
-	if _, err := r.core.Call("/init", map[string]string{"machine": machine}); err != nil {
-		r.setState(sessionID, "failed", err.Error())
-	}
+	go r.startAndCertify(a.Session, ans)
+	return ans, a.Session, nil
 }
 
 func (r *Router) Reject(id string) error {
@@ -210,19 +252,16 @@ func (r *Router) Reject(id string) error {
 	if a == nil {
 		return fmt.Errorf("no such approval")
 	}
-	switch a.Kind {
-	case "new-session", "resume-upgrade":
-		// the machine never got a cert: kill it; a new session without a line just disappears
-		go func() {
-			r.core.Call("/kill", map[string]string{"machine": a.Machine})
-			if a.Kind == "new-session" {
-				r.st.Do(func(d *persisted) { delete(d.Sessions, a.Session) })
-			} else {
-				// the old machine was burned before asking: the line has ended
-				r.finish(a.Session)
-			}
-		}()
-	}
+	r.st.Do(func(d *persisted) {
+		s := d.Sessions[a.Session]
+		switch {
+		case s == nil:
+		case a.Kind == "new-session":
+			delete(d.Sessions, a.Session) // no machine was made
+		case a.Kind == "resume-upgrade":
+			s.State, s.Error = "paused", "" // nothing happened to the old machine
+		}
+	})
 	return nil
 }
 
@@ -287,56 +326,27 @@ func (r *Router) Resume(id string, upgrade bool) error {
 	r.setState(id, "resuming", "")
 	go func() {
 		defer unlock()
-		fail := func(err error) { r.setState(id, "paused", "resume: "+err.Error()) }
-		var burn *Doc
-		image := s.Image
+		image := s.Image // the same image, pinned by digest
 		if upgrade {
-			// burn the old machine first (the dead-machine responder consumes it), then ask the iPhone
-			ch, err := r.succession(s.Cert, "", s.Stores, s.Harness)
-			if err != nil {
-				fail(err)
-				return
-			}
-			if burn, err = r.core.Call("/respond/dead", map[string]any{"challenge": ch}); err != nil {
-				fail(err)
-				return
-			}
 			image = r.cfg.SessionImage
 		}
-		m, err := r.start(&s, image)
+		ch, err := r.succession(s.Cert, "", s.Stores, s.Harness, image)
 		if err != nil {
-			if upgrade {
-				r.setState(id, "failed", "the old machine is burned and the new one didn't start: "+err.Error())
-				return
-			}
-			fail(err)
+			r.setState(id, "paused", "resume: "+err.Error())
 			return
 		}
-		ch, err := r.succession(s.Cert, m.ID, s.Stores, s.Harness)
-		if err != nil {
-			r.core.Call("/kill", map[string]string{"machine": m.ID})
-			fail(err)
-			return
-		}
-		r.st.Do(func(d *persisted) { d.Machines[m.ID] = id })
 		if upgrade {
+			// a change: the iPhone approves first; nothing happens to the old machine until then
 			r.setState(id, "approval", "")
-			r.addApproval(&Approval{Kind: "resume-upgrade", Session: id, Machine: m.ID, Label: s.Label, Challenge: ch, BurnCert: burn})
+			r.addApproval(&Approval{Kind: "resume-upgrade", Session: id, Label: s.Label, Challenge: ch})
 			return
 		}
-		cert, err := r.core.Call("/respond/dead", map[string]any{"challenge": ch})
+		a, err := r.core.Call("/approve/by-dead-machine", map[string]any{"challenge": ch})
 		if err != nil {
-			r.core.Call("/kill", map[string]string{"machine": m.ID})
-			fail(err)
+			r.setState(id, "paused", "resume: "+err.Error())
 			return
 		}
-		r.st.Do(func(d *persisted) {
-			d.Certs[m.ID] = cert
-			if x := d.Sessions[id]; x != nil {
-				x.Cert, x.MachineID, x.Image, x.State, x.PausedAt = cert, m.ID, m.Image, "initialising", nil
-			}
-		})
-		r.init(id, m.ID)
+		r.startAndCertify(id, a)
 	}()
 	return nil
 }
@@ -368,10 +378,14 @@ func (r *Router) Destroy(id string) error {
 			}
 		}
 		if s.Cert != nil {
-			// end the line: burn the last machine (a succession to null, answered by the dead-machine responder)
-			ch, err := r.succession(s.Cert, "", s.Stores, s.Harness)
+			// end the line: a succession to the null image, answered by the dead-machine responder → burn cert
+			ch, err := r.succession(s.Cert, "", nil, "", nullImage)
+			var a *Doc
 			if err == nil {
-				_, err = r.core.Call("/respond/dead", map[string]any{"challenge": ch})
+				a, err = r.core.Call("/approve/by-dead-machine", map[string]any{"challenge": ch})
+			}
+			if err == nil {
+				_, err = r.core.Call("/certify", map[string]any{"approval": a, "machine": ""})
 			}
 			if err != nil {
 				log.Printf("session %s: burn: %v", id, err)
@@ -418,15 +432,59 @@ func (r *Router) AddStore(machine, store string) error {
 	if s.ID == "" || s.MachineID != machine || s.Cert == nil {
 		return fmt.Errorf("this machine isn't a running session")
 	}
-	stores := append(append([]string{}, s.Stores...), store)
-	sort.Strings(stores)
-	ch, err := r.succession(s.Cert, machine, stores, s.Harness)
+	stores, err := r.withHarnessStores(append(append([]string{}, s.Stores...), store), nil)
+	if err != nil {
+		return err
+	}
+	ch, err := r.succession(s.Cert, machine, stores, s.Harness, "")
 	if err != nil {
 		return err
 	}
 	r.addApproval(&Approval{Kind: "add-store", Session: s.ID, Machine: machine, Label: s.Label, Challenge: ch,
 		Options: map[string]string{"store": store}})
 	return nil
+}
+
+// ---- downgrade in place (asked by the machine) -------------------------------------------------------------
+
+// DowngradeBegin: the machine names a subset of its stores and its new key pair → the challenge it must sign
+// with its old key
+func (r *Router) DowngradeBegin(machine string, stores []string, encKey, sigKey string) (*Doc, error) {
+	var s Session
+	r.st.Do(func(d *persisted) {
+		if x := d.Sessions[d.Machines[machine]]; x != nil {
+			s = *x
+		}
+	})
+	if s.ID == "" || s.MachineID != machine || s.Cert == nil {
+		return nil, fmt.Errorf("this machine isn't a running session")
+	}
+	return r.core.Call("/succession", map[string]any{"predecessor": s.Cert, "machine": machine, "stores": stores,
+		"options": map[string]string{"harness": s.Harness}, "newEncryptionKey": encKey, "newSigningKey": sigKey})
+}
+
+// DowngradeFinish: the challenge signed with the machine's old key → its new cert; from now on the router
+// knows the machine by its new signing key
+func (r *Router) DowngradeFinish(machine string, challenge *Doc, signature string) (*Doc, error) {
+	cert, err := r.core.Call("/approve/by-old-key", map[string]any{"challenge": challenge, "signature": signature})
+	if err != nil {
+		return nil, err
+	}
+	var c struct {
+		Machine *Started `json:"machine"`
+		Stores  []string `json:"stores"`
+	}
+	if cert.Decode(&c) != nil || c.Machine == nil || c.Machine.ID != machine {
+		return nil, fmt.Errorf("the core's cert names another machine")
+	}
+	r.st.Do(func(d *persisted) {
+		d.Certs[machine] = cert
+		d.Started[machine] = c.Machine
+		if s := d.Sessions[d.Machines[machine]]; s != nil {
+			s.Cert, s.Stores = cert, c.Stores
+		}
+	})
+	return cert, nil
 }
 
 // ---- commands to machines ---------------------------------------------------------------------------------

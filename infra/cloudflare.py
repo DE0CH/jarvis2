@@ -1,14 +1,17 @@
 #!/usr/bin/env python3
-"""Cloudflare side of Jarvis 2 (idempotent): the tunnel, its DNS name, the two Access apps, the machines'
-service token. Writes the values the box needs to OUT (mode 600) as KEY=VALUE lines; prints nothing secret.
+"""Cloudflare side of Jarvis 2 (idempotent): the tunnel, its DNS name, the two Access apps, the setup
+session's service token. Writes TUNNEL_TOKEN (for the box) and SETUP_ACCESS_ID/SECRET (for the setup
+session, Jarvis 1's default store as JARVIS2_SETUP_ACCESS_ID/SECRET) to OUT (mode 600); prints nothing secret.
+The apps' audiences are not secret: they are in k8s/apps/router.yaml (the script prints them to check).
 
   CF_JARVIS2_INFRA_TOKEN  tunnel + Access apps + DNS (scoped token "jarvis2-infra")
-  CLOUDFLARE_API          only to mint the machines' Access service token (the scoped token can't)
+  CLOUDFLARE_API          only to mint the setup service token (the scoped token can't)
 
   infra/cloudflare.py OUT
 Access apps (created Access first, then DNS, so the hostname is never reachable ungated):
-  "Jarvis 2"           jarvis2.deyaochen.com      Deyao's email only (the app + web page)
-  "Jarvis 2 machines"  jarvis2.deyaochen.com/m    service token jarvis2-machines only (session machines)
+  "Jarvis 2"        jarvis2.deyaochen.com         Deyao's email only (the app + web page)
+  "Jarvis 2 setup"  jarvis2.deyaochen.com/setup   service token jarvis2-setup only (the setup session)
+Session machines don't come through Cloudflare at all (Fly's private network, docs/API.md).
 """
 import json, os, sys, urllib.request, urllib.error
 
@@ -50,26 +53,27 @@ def main():
     out = sys.argv[1]
     vals = {}
 
-    # 1. the machines' service token (needs the broader token; never rotated by a re-run unless ROTATE=1)
+    # 1. the setup session's service token (needs the broader token; kept unless ROTATE=1)
     toks = call("GET", f"/accounts/{ACCOUNT}/access/service_tokens", token=os.environ["CLOUDFLARE_API"])
-    tok = next((t for t in toks if t["name"] == "jarvis2-machines"), None)
+    tok = next((t for t in toks if t["name"] == "jarvis2-setup"), None)
     prev = {}
     if os.path.exists(out):
         prev = dict(l.rstrip("\n").split("=", 1) for l in open(out) if "=" in l)
-    if tok and not os.environ.get("ROTATE") and prev.get("MACHINE_ACCESS_SECRET"):
-        vals["MACHINE_ACCESS_ID"], vals["MACHINE_ACCESS_SECRET"] = prev["MACHINE_ACCESS_ID"], prev["MACHINE_ACCESS_SECRET"]
+    if tok and not os.environ.get("ROTATE") and prev.get("SETUP_ACCESS_SECRET"):
+        vals["SETUP_ACCESS_ID"], vals["SETUP_ACCESS_SECRET"] = prev["SETUP_ACCESS_ID"], prev["SETUP_ACCESS_SECRET"]
         tok_id = tok["id"]
     else:
         if tok:
             call("DELETE", f"/accounts/{ACCOUNT}/access/service_tokens/{tok['id']}", token=os.environ["CLOUDFLARE_API"])
-        t = call("POST", f"/accounts/{ACCOUNT}/access/service_tokens", {"name": "jarvis2-machines", "duration": "8760h"},
+        t = call("POST", f"/accounts/{ACCOUNT}/access/service_tokens", {"name": "jarvis2-setup", "duration": "8760h"},
                  token=os.environ["CLOUDFLARE_API"])
-        vals["MACHINE_ACCESS_ID"], vals["MACHINE_ACCESS_SECRET"], tok_id = t["client_id"], t["client_secret"], t["id"]
+        vals["SETUP_ACCESS_ID"], vals["SETUP_ACCESS_SECRET"], tok_id = t["client_id"], t["client_secret"], t["id"]
 
     # 2. Access apps first
-    vals["ACCESS_APP_AUD"] = access_app("Jarvis 2", HOST, {"name": "Deyao", "decision": "allow", "include": [{"email": {"email": EMAIL}}]})
-    vals["ACCESS_MACHINE_AUD"] = access_app("Jarvis 2 machines", HOST + "/m", {
-        "name": "session machines", "decision": "non_identity", "include": [{"service_token": {"token_id": tok_id}}]})
+    aud = access_app("Jarvis 2", HOST, {"name": "Deyao", "decision": "allow", "include": [{"email": {"email": EMAIL}}]})
+    setup_aud = access_app("Jarvis 2 setup", HOST + "/setup", {
+        "name": "setup session", "decision": "non_identity", "include": [{"service_token": {"token_id": tok_id}}]})
+    print(f"audiences (k8s/apps/router.yaml): ACCESS_APP_AUD={aud} ACCESS_SETUP_AUD={setup_aud}")
 
     # 3. the tunnel (remotely managed) and its ingress
     tunnels = call("GET", f"/accounts/{ACCOUNT}/cfd_tunnel?name=jarvis2&is_deleted=false")
@@ -90,7 +94,7 @@ def main():
     with os.fdopen(fd, "w") as f:
         for k, v in vals.items():
             f.write(f"{k}={v}\n")
-    print(f"ok: tunnel {tun['id']}, Access apps + service token ready; values in {out}")
+    print(f"ok: tunnel {tun['id']}, Access apps + setup service token ready; values in {out}")
 
 
 if __name__ == "__main__":

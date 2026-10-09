@@ -1,8 +1,9 @@
 package main
 
-// The Fly Machines API, used only by start / init / kill. The token is held by the core alone (set at
-// setup). A machine's keys and its API key travel over Fly's own exec channel, so their link to the
-// machine is Fly's guarantee, not anything the machine or the router says.
+// The Fly Machines API, used only by start and kill. The token is held by the core alone (from the core
+// store, at recovery) and is narrowed to this app and to one command inside a machine: jarvis2-init, with
+// no arguments. Its output is the machine's public keys, so their link to the machine is Fly's guarantee,
+// not anything the machine or the router says.
 
 import (
 	"bytes"
@@ -21,22 +22,15 @@ type MachineKeys struct {
 }
 
 type Fly interface {
-	Configure(token, app string) // from the unlocked `core` store; empty = locked
+	Configure(token, app string) // from the core store, at recovery
 	Create(r StartRequest) (id, image string, err error)
-	ReadKeys(id string) (MachineKeys, error)
-	WriteMachineFiles(id, apiKey, coreKey string) error
-	Init(id string) error
+	Init(id string) (MachineKeys, error) // runs jarvis2-init; its output is the machine's public keys
 	Destroy(id string) error
 	ConfirmDestroyed(id string) (bool, error)
 }
 
-// paths inside the session image (session-image/jarvis2-init)
-const (
-	keysPath    = "/run/jarvis2/keys.json"
-	apiKeyPath  = "/run/jarvis2/api-key"
-	coreKeyPath = "/run/jarvis2/core-key"
-	initPath    = "/usr/local/bin/jarvis2-init"
-)
+// the session image's one command the core may run (session-image/Dockerfile); the Fly token allows only it
+const initPath = "/usr/local/bin/jarvis2-init"
 
 var sizes = map[string]map[string]any{
 	"small":  {"cpu_kind": "shared", "cpus": 2, "memory_mb": 2048},
@@ -150,31 +144,19 @@ func (f *FlyAPI) exec(id string, cmd []string, timeout int) (string, error) {
 	return out.Stdout, nil
 }
 
-func (f *FlyAPI) ReadKeys(id string) (MachineKeys, error) {
+// Init: jarvis2-init waits for the machine's keys (made at boot), prints them and lets boot go on
+func (f *FlyAPI) Init(id string) (MachineKeys, error) {
 	var k MachineKeys
 	var last error
-	for i := 0; i < 30; i++ { // the image writes its keys at boot
-		out, err := f.exec(id, []string{"cat", keysPath}, 10)
-		if err == nil && json.Unmarshal([]byte(out), &k) == nil && k.EncryptionKey != "" {
+	for i := 0; i < 10; i++ {
+		out, err := f.exec(id, []string{initPath}, 60)
+		if err == nil && json.Unmarshal([]byte(strings.TrimSpace(out)), &k) == nil && k.EncryptionKey != "" && k.SigningKey != "" {
 			return k, nil
 		}
 		last = err
-		time.Sleep(2 * time.Second)
+		time.Sleep(3 * time.Second)
 	}
-	return k, fmt.Errorf("no keys at %s: %v", keysPath, last)
-}
-
-// WriteMachineFiles: the machine's API key and the core's public signing key, through Fly exec — so the
-// machine learns the core's key from Fly, never from the router
-func (f *FlyAPI) WriteMachineFiles(id, apiKey, coreKey string) error {
-	_, err := f.exec(id, []string{"/bin/sh", "-c", "umask 077; mkdir -p /run/jarvis2; printf %s \"$1\" > " + apiKeyPath +
-		"; umask 022; printf %s \"$2\" > " + coreKeyPath + "; chown -R claude /run/jarvis2 2>/dev/null; true", "_", apiKey, coreKey}, 10)
-	return err
-}
-
-func (f *FlyAPI) Init(id string) error {
-	_, err := f.exec(id, []string{initPath}, 30)
-	return err
+	return k, fmt.Errorf("jarvis2-init gave no keys: %v", last)
 }
 
 func (f *FlyAPI) Destroy(id string) error {

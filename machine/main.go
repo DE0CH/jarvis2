@@ -1,4 +1,4 @@
-// jarvis2-machine: the session machine's side of Jarvis 2 (claude-env selfhost/SECRETS-CONTROLLER.md,
+// jarvis2-machine: the session machine's side of Jarvis 2 (docs/DESIGN.md,
 // "Machine side"). It is the image's entry point and its fixed init entry point:
 //
 //	jarvis2-machine boot       ENTRYPOINT: make the machine's key pairs, wait for init, then check the
@@ -48,13 +48,13 @@ import (
 
 const (
 	dir         = "/run/jarvis2"
-	keysPath    = dir + "/keys.json"    // public halves, read by the core through Fly exec
-	privPath    = dir + "/private.json" // private halves, never leave the machine
-	apiKeyPath  = dir + "/api-key"      // written by the core through Fly exec
-	coreKeyPath = dir + "/core-key"     // written by the core through Fly exec
+	keysPath    = dir + "/keys.json"        // public halves, printed by init for the core (through Fly exec)
+	privPath    = dir + "/private.json"     // private halves, never leave the machine
+	coreKeyPath = dir + "/core-key"         // the core's key, once the master key's signature on it checked
+	masterPath  = "/etc/jarvis2/master.pub" // the master public key, built into the image
 	goPath      = dir + "/init-requested"
 	certPath    = dir + "/cert.json"
-	clientPath  = dir + "/client.json" // the router URL + the machines' Access token, for later commands
+	clientPath  = dir + "/client.json" // the router URL + this machine's id, for later commands
 	jarvis1     = "/usr/local/bin/entrypoint.sh"
 )
 
@@ -91,19 +91,21 @@ func main() {
 	log.SetFlags(0)
 	log.SetPrefix("[jarvis2] ")
 	if len(os.Args) < 2 {
-		log.Fatal("usage: jarvis2-machine boot | init | add-store <name>")
+		log.Fatal("usage: jarvis2-machine boot | init | add-store <name> | downgrade [<store>…]")
 	}
 	var err error
 	switch os.Args[1] {
 	case "boot":
 		err = boot()
 	case "init":
-		err = os.WriteFile(goPath, []byte(time.Now().UTC().Format(time.RFC3339)), 0o644)
+		err = initCmd()
 	case "add-store":
 		if len(os.Args) != 3 {
 			log.Fatal("usage: jarvis2-machine add-store <name>")
 		}
 		err = addStore(os.Args[2])
+	case "downgrade":
+		err = downgrade(os.Args[2:])
 	case "agent":
 		err = agent()
 	default:
@@ -135,6 +137,27 @@ func boot() error {
 	return nil // prepare execs the harness
 }
 
+// initCmd: the one command the core runs through Fly (no arguments). It prints this machine's public keys
+// (the core binds them into the cert) and lets boot go on.
+func initCmd() error {
+	var b []byte
+	var err error
+	for i := 0; i < 60; i++ { // boot makes the keys first
+		if b, err = os.ReadFile(keysPath); err == nil {
+			break
+		}
+		time.Sleep(time.Second)
+	}
+	if err != nil {
+		return fmt.Errorf("no keys yet: %w", err)
+	}
+	if err := os.WriteFile(goPath, []byte(time.Now().UTC().Format(time.RFC3339)), 0o644); err != nil {
+		return err
+	}
+	_, err = os.Stdout.Write(b)
+	return err
+}
+
 func keygen() error {
 	if err := sudo("install", "-d", "-o", "claude", "-m", "755", dir); err != nil {
 		return err
@@ -164,9 +187,9 @@ func sudo(args ...string) error {
 
 func prepare() error {
 	me := os.Getenv("FLY_MACHINE_ID")
-	coreKey, err := readTrim(coreKeyPath)
+	master, err := readTrim(masterPath)
 	if err != nil {
-		return fmt.Errorf("no core key from fly: %w", err)
+		return fmt.Errorf("no master key in the image: %w", err)
 	}
 	keys, err := ownKeys()
 	if err != nil {
@@ -181,6 +204,10 @@ func prepare() error {
 	var certs struct {
 		Cert            *SignedDoc `json:"cert"`
 		PredecessorCert *SignedDoc `json:"predecessorCert"`
+		CoreCert        *struct {
+			Statement string `json:"statement"`
+			MasterSig string `json:"masterSig"`
+		} `json:"coreCert"`
 	}
 	for i := 0; ; i++ {
 		err = c.json("GET", "/m/cert", nil, &certs)
@@ -191,6 +218,23 @@ func prepare() error {
 			return fmt.Errorf("no cert: %v", err)
 		}
 		time.Sleep(2 * time.Second)
+	}
+	// the core: trusted because the master key (built into this image) signed its key in recovery
+	if certs.CoreCert == nil || !verify(master, []byte(certs.CoreCert.Statement), certs.CoreCert.MasterSig) {
+		return errors.New("the core's key isn't signed by the master key")
+	}
+	var st struct {
+		Kind string `json:"kind"`
+		Core struct {
+			SigningKey string `json:"signingKey"`
+		} `json:"core"`
+	}
+	if json.Unmarshal([]byte(certs.CoreCert.Statement), &st) != nil || st.Kind != "recovery" || st.Core.SigningKey == "" {
+		return errors.New("bad core cert")
+	}
+	coreKey := st.Core.SigningKey
+	if err := os.WriteFile(coreKeyPath, []byte(coreKey), 0o644); err != nil {
+		return err
 	}
 	var cert Cert
 	if err := verifyDoc(coreKey, certs.Cert, &cert); err != nil || cert.Kind != "succession-cert" || cert.Machine == nil {
@@ -232,13 +276,7 @@ func prepare() error {
 	if err := agentCmd.Start(); err != nil {
 		return fmt.Errorf("agent: %w", err)
 	}
-	env := []string{}
-	for _, kv := range os.Environ() {
-		if k := strings.SplitN(kv, "=", 2)[0]; strings.HasPrefix(k, "JARVIS2_ACCESS_") {
-			continue // the machine's tunnel token stays with this tool
-		}
-		env = append(env, kv)
-	}
+	env := os.Environ()
 	env = append(env, "SESSION_SECRETS_JSON="+string(sj), "SESSION_HARNESS="+cert.Options.Harness, "SESSION_ID="+sessionID(me))
 	if v := secrets["CLAUDE_CREDENTIALS"]; v != "" {
 		env = append(env, "CLAUDE_CREDENTIALS="+v)
@@ -278,15 +316,12 @@ func readTrim(p string) (string, error) {
 	return s, nil
 }
 
+// pullSecrets: the core seals the answer to this machine's encryption key, so it needs no other proof
 func pullSecrets(c *client, coreKey, me string) (map[string]string, error) {
-	apiKey, err := readTrim(apiKeyPath)
-	if err != nil {
-		return nil, fmt.Errorf("no API key from fly: %w", err)
-	}
 	var doc SignedDoc
 	var lastErr error
 	for i := 0; i < 150; i++ { // a store may still be locked; Deyao unlocks it in the app
-		if lastErr = c.json("POST", "/m/pull-secrets", map[string]string{"apiKey": apiKey}, &doc); lastErr == nil {
+		if lastErr = c.json("POST", "/m/pull-secrets", map[string]string{}, &doc); lastErr == nil {
 			break
 		}
 		if i%15 == 0 {
@@ -566,6 +601,98 @@ func addStore(name string) error {
 	return errors.New("no approval within 1 h")
 }
 
+// downgrade: keep only the named stores, in place. A new key pair; the core's challenge signed with the old
+// key; the new cert checked; only then the old keys and the secrets of the dropped stores are shredded (the
+// old cert still pulls, but sealed to a key that no longer exists).
+func downgrade(keep []string) error {
+	coreKey, err := readTrim(coreKeyPath)
+	if err != nil {
+		return err
+	}
+	c, err := newClient()
+	if err != nil {
+		return err
+	}
+	enc, err := ecdh.P256().GenerateKey(rand.Reader)
+	if err != nil {
+		return err
+	}
+	sig, err := ecdh.P256().GenerateKey(rand.Reader)
+	if err != nil {
+		return err
+	}
+	encPub, sigPub := b64.EncodeToString(enc.PublicKey().Bytes()), b64.EncodeToString(sig.PublicKey().Bytes())
+	sort.Strings(keep)
+	if keep == nil {
+		keep = []string{}
+	}
+	var begin struct {
+		Challenge *SignedDoc `json:"challenge"`
+	}
+	if err := c.json("POST", "/m/downgrade", map[string]any{"stores": keep, "newEncryptionKey": encPub, "newSigningKey": sigPub}, &begin); err != nil {
+		return err
+	}
+	var ch struct {
+		Kind    string `json:"kind"`
+		Request struct {
+			Downgrade bool     `json:"downgrade"`
+			Machine   *Machine `json:"machine"`
+			Stores    []string `json:"stores"`
+		} `json:"request"`
+	}
+	if err := verifyDoc(coreKey, begin.Challenge, &ch); err != nil || ch.Kind != "challenge" || !ch.Request.Downgrade ||
+		ch.Request.Machine == nil || ch.Request.Machine.ID != c.me || ch.Request.Machine.SigningKey != sigPub || ch.Request.Machine.EncryptionKey != encPub {
+		return fmt.Errorf("the challenge isn't a core-signed downgrade of this machine to the new keys (%v)", err)
+	}
+	signature, err := sign(c.sig, []byte(begin.Challenge.Payload))
+	if err != nil {
+		return err
+	}
+	var fin struct {
+		Cert *SignedDoc `json:"cert"`
+	}
+	if err := c.json("POST", "/m/downgrade/finish", map[string]any{"challenge": begin.Challenge, "signature": signature}, &fin); err != nil {
+		return err
+	}
+	var cert Cert
+	if err := verifyDoc(coreKey, fin.Cert, &cert); err != nil || cert.Kind != "succession-cert" || cert.Machine == nil ||
+		cert.Machine.ID != c.me || cert.Machine.SigningKey != sigPub || cert.Machine.EncryptionKey != encPub {
+		return fmt.Errorf("the new cert isn't core-signed for the new keys (%v)", err)
+	}
+	// the new cert is in hand: switch to the new keys, shred the old ones, re-pull the remaining secrets
+	p, _ := json.Marshal(private{b64.EncodeToString(enc.Bytes()), b64.EncodeToString(sig.Bytes())})
+	if err := shredWrite(privPath, p, 0o600); err != nil {
+		return err
+	}
+	pub, _ := json.Marshal(map[string]string{"encryptionKey": encPub, "signingKey": sigPub})
+	os.WriteFile(keysPath, pub, 0o644)
+	raw, _ := json.Marshal(fin.Cert)
+	os.WriteFile(certPath, raw, 0o644)
+	c2, err := newClient()
+	if err != nil {
+		return err
+	}
+	secrets, err := pullSecrets(c2, coreKey, c.me)
+	if err != nil {
+		secrets = map[string]string{} // locked or empty: nothing kept
+	}
+	if err := writeSecrets(secrets); err != nil {
+		return err
+	}
+	fmt.Fprintf(os.Stderr, "downgraded to %v: old keys shredded, ~/.secrets rewritten (%d keys). Values already loaded in running processes stay there until they exit.\n", cert.Stores, len(secrets))
+	return nil
+}
+
+// shredWrite: overwrite the file's old bytes before replacing its contents
+func shredWrite(path string, data []byte, mode os.FileMode) error {
+	if fi, err := os.Stat(path); err == nil {
+		z := make([]byte, fi.Size())
+		rand.Read(z)
+		os.WriteFile(path, z, mode)
+	}
+	return os.WriteFile(path, data, mode)
+}
+
 // writeSecrets: ~/.secrets in the format Jarvis 1's entrypoint writes (shell-quoted export lines)
 func writeSecrets(m map[string]string) error {
 	home, _ := os.UserHomeDir()
@@ -578,27 +705,26 @@ func writeSecrets(m map[string]string) error {
 	for _, k := range keys {
 		b.WriteString(k + "='" + strings.ReplaceAll(m[k], "'", `'\''`) + "'\n")
 	}
-	return os.WriteFile(filepath.Join(home, ".secrets"), []byte(b.String()), 0o600)
+	return shredWrite(filepath.Join(home, ".secrets"), []byte(b.String()), 0o600)
 }
 
-// ---- the router client (Access service token + this machine's signature) ---------------------------
+// ---- the router client (over Fly's private network; every request signed by this machine) -----------
 
 type client struct {
-	base, id, secret, me string
-	sig                  *ecdh.PrivateKey
-	http                 *http.Client
+	base, me string
+	sig      *ecdh.PrivateKey
+	http     *http.Client
 }
 
-type clientConf struct{ URL, AccessID, AccessSecret, Machine string }
+type clientConf struct{ URL, Machine string }
 
-// newClient: from the machine's env at boot (saved to clientPath, mode 600), from that file later — the
-// harness's env doesn't carry the machines' Access token
+// newClient: from the machine's env at boot (saved to clientPath, mode 600), from that file later
 func newClient() (*client, error) {
 	priv, err := loadPrivate()
 	if err != nil {
 		return nil, err
 	}
-	conf := clientConf{os.Getenv("JARVIS2_URL"), os.Getenv("JARVIS2_ACCESS_ID"), os.Getenv("JARVIS2_ACCESS_SECRET"), os.Getenv("FLY_MACHINE_ID")}
+	conf := clientConf{os.Getenv("JARVIS2_URL"), os.Getenv("FLY_MACHINE_ID")}
 	if conf.URL != "" && conf.Machine != "" {
 		b, _ := json.Marshal(conf)
 		os.WriteFile(clientPath, b, 0o600)
@@ -608,8 +734,7 @@ func newClient() (*client, error) {
 	if conf.URL == "" {
 		return nil, errors.New("no router URL (JARVIS2_URL)")
 	}
-	return &client{base: strings.TrimSuffix(conf.URL, "/"), id: conf.AccessID, secret: conf.AccessSecret,
-		me: conf.Machine, sig: priv.sig, http: &http.Client{Timeout: 10 * time.Minute}}, nil
+	return &client{base: strings.TrimSuffix(conf.URL, "/"), me: conf.Machine, sig: priv.sig, http: &http.Client{Timeout: 10 * time.Minute}}, nil
 }
 
 func (c *client) raw(method, path string, body []byte, hdr ...string) ([]byte, http.Header, int, error) {
@@ -623,10 +748,6 @@ func (c *client) raw(method, path string, body []byte, hdr ...string) ([]byte, h
 	req.Header.Set("X-Machine", c.me)
 	req.Header.Set("X-Time", t)
 	req.Header.Set("X-Sig", sig)
-	if c.id != "" {
-		req.Header.Set("CF-Access-Client-Id", c.id)
-		req.Header.Set("CF-Access-Client-Secret", c.secret)
-	}
 	for i := 0; i+1 < len(hdr); i += 2 {
 		req.Header.Set(hdr[i], hdr[i+1])
 	}

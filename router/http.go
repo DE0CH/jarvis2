@@ -46,12 +46,59 @@ func writeErr(w http.ResponseWriter, err error) {
 	writeJSON(w, status, map[string]string{"error": err.Error()})
 }
 
+// MachineHandler: /m only, for the listener that only Fly's private network reaches
+func (r *Router) MachineHandler() http.Handler {
+	r.handlers()
+	return r.machineMux
+}
+
+// Handler: the public listener behind cloudflared — the app, the web page and setup
 func (r *Router) Handler() http.Handler {
-	mux := http.NewServeMux()
+	r.handlers()
+	return r.publicMux
+}
+
+func (r *Router) handlers() {
+	r.muxOnce.Do(r.buildHandlers)
+}
+
+func (r *Router) buildHandlers() {
+	mux, mmux := http.NewServeMux(), http.NewServeMux()
+	r.publicMux, r.machineMux = mux, mmux
 	app := func(pattern string, fn http.HandlerFunc) { mux.Handle(pattern, r.requireDeyao(fn)) }
 	m := func(pattern string, fn func(w http.ResponseWriter, req *http.Request, machine string, body []byte)) {
-		mux.Handle(pattern, r.requireMachine(fn))
+		mmux.Handle(pattern, r.requireMachine(fn))
 	}
+	// setup: the setup session's Access token AND its key's signature (checked here, by the router: the
+	// core's store calls are open, the router decides who uses them)
+	setup := func(pattern, method, corePath string) {
+		mux.Handle(pattern, r.requireSetup(func(w http.ResponseWriter, req *http.Request) {
+			b, _ := io.ReadAll(io.LimitReader(req.Body, 1<<20))
+			if err := r.checkSetupSig(req.Method, req.URL.Path, req.Header.Get("X-Setup-Time"), req.Header.Get("X-Setup-Sig"), b); err != nil {
+				writeJSON(w, 401, map[string]string{"error": err.Error()})
+				return
+			}
+			if method == "GET" {
+				b = nil
+			}
+			r.relay(w, method, corePath, b)
+		}))
+	}
+	setup("GET /setup/identity", "GET", "/identity")
+	setup("GET /setup/core-cert", "GET", "/core-cert")
+	setup("POST /setup/stores", "POST", "/stores")
+	setup("POST /setup/stores/create", "POST", "/stores/create")
+	setup("POST /setup/stores/write", "POST", "/stores/write")
+	setup("POST /setup/stores/mark-sensitive", "POST", "/stores/mark-sensitive")
+
+	// ---- recovery (the app, with the master key) and the core's identity --------------------------------
+	app("GET /api/core/identity", func(w http.ResponseWriter, req *http.Request) { r.relay(w, "GET", "/identity", nil) })
+	app("GET /api/core/core-cert", func(w http.ResponseWriter, req *http.Request) { r.relay(w, "GET", "/core-cert", nil) })
+	app("POST /api/core/recover", func(w http.ResponseWriter, req *http.Request) {
+		b, _ := io.ReadAll(io.LimitReader(req.Body, 16<<20))
+		r.relay(w, "POST", "/recover", b)
+	})
+	app("GET /api/policy", func(w http.ResponseWriter, req *http.Request) { writeJSON(w, 200, r.policy) })
 
 	// ---- sign-in -----------------------------------------------------------------------------------
 	app("GET /api/auth/start", func(w http.ResponseWriter, req *http.Request) {
@@ -117,7 +164,10 @@ func (r *Router) Handler() http.Handler {
 		if in.RequestID == "" {
 			in.RequestID = randID()
 		}
-		r.CreateSession(in)
+		if err := r.CreateSession(in); err != nil {
+			writeErr(w, err)
+			return
+		}
 		writeJSON(w, 200, map[string]any{"id": nil, "requestId": in.RequestID})
 	})
 	app("POST /api/sessions/{id}/pause", func(w http.ResponseWriter, req *http.Request) {
@@ -167,7 +217,7 @@ func (r *Router) Handler() http.Handler {
 			writeErr(w, err)
 			return
 		}
-		writeJSON(w, 200, map[string]any{"cert": cert, "session": sid})
+		writeJSON(w, 200, map[string]any{"answer": cert, "session": sid})
 	})
 	app("POST /api/approvals/{id}/reject", func(w http.ResponseWriter, req *http.Request) {
 		if err := r.Reject(req.PathValue("id")); err != nil {
@@ -179,7 +229,7 @@ func (r *Router) Handler() http.Handler {
 
 	// ---- the core, relayed unchanged ------------------------------------------------------------------
 	app("GET /api/core/key", func(w http.ResponseWriter, req *http.Request) { r.relay(w, "GET", "/key", nil) })
-	for _, p := range []string{"stores", "sensitive", "mark-sensitive", "unlock/begin", "unlock/finish", "lock", "unlocked", "log"} {
+	for _, p := range []string{"stores", "stores/create", "stores/mark-sensitive", "stores/write", "unlock/begin", "unlock/finish", "lock", "unlocked", "log"} {
 		path := "/" + p
 		app("POST /api/core"+path, func(w http.ResponseWriter, req *http.Request) {
 			b, _ := io.ReadAll(io.LimitReader(req.Body, 1<<20))
@@ -206,7 +256,11 @@ func (r *Router) Handler() http.Handler {
 			writeJSON(w, 404, map[string]string{"error": "no cert yet"})
 			return
 		}
-		writeJSON(w, 200, map[string]any{"cert": cert, "predecessorCert": pred})
+		var coreCert json.RawMessage
+		if st, b, err := r.core.Raw("GET", "/core-cert", nil); err == nil && st == 200 {
+			coreCert = b
+		}
+		writeJSON(w, 200, map[string]any{"cert": cert, "predecessorCert": pred, "coreCert": coreCert})
 	})
 	m("GET /m/snapshot", func(w http.ResponseWriter, req *http.Request, machine string, _ []byte) {
 		var pred string
@@ -250,17 +304,13 @@ func (r *Router) Handler() http.Handler {
 		writeJSON(w, 200, map[string]bool{"ok": true})
 	})
 	m("POST /m/pull-secrets", func(w http.ResponseWriter, req *http.Request, machine string, body []byte) {
-		var in struct {
-			APIKey string `json:"apiKey"`
-		}
-		json.Unmarshal(body, &in)
 		var cert *Doc
 		r.st.Do(func(d *persisted) { cert = d.Certs[machine] })
 		if cert == nil {
 			writeJSON(w, 404, map[string]string{"error": "no cert"})
 			return
 		}
-		d, err := r.core.Call("/pull-secrets", map[string]any{"cert": cert, "apiKey": in.APIKey})
+		d, err := r.core.Call("/pull-secrets", map[string]any{"cert": cert})
 		if err != nil {
 			writeErr(w, err)
 			return
@@ -293,6 +343,33 @@ func (r *Router) Handler() http.Handler {
 		}
 		writeJSON(w, 200, map[string]bool{"ok": true})
 	})
+	m("POST /m/downgrade", func(w http.ResponseWriter, req *http.Request, machine string, body []byte) {
+		var in struct {
+			Stores           []string `json:"stores"`
+			NewEncryptionKey string   `json:"newEncryptionKey"`
+			NewSigningKey    string   `json:"newSigningKey"`
+		}
+		json.Unmarshal(body, &in)
+		ch, err := r.DowngradeBegin(machine, in.Stores, in.NewEncryptionKey, in.NewSigningKey)
+		if err != nil {
+			writeErr(w, err)
+			return
+		}
+		writeJSON(w, 200, map[string]any{"challenge": ch})
+	})
+	m("POST /m/downgrade/finish", func(w http.ResponseWriter, req *http.Request, machine string, body []byte) {
+		var in struct {
+			Challenge *Doc   `json:"challenge"`
+			Signature string `json:"signature"`
+		}
+		json.Unmarshal(body, &in)
+		cert, err := r.DowngradeFinish(machine, in.Challenge, in.Signature)
+		if err != nil {
+			writeErr(w, err)
+			return
+		}
+		writeJSON(w, 200, map[string]any{"cert": cert})
+	})
 	m("POST /m/status", func(w http.ResponseWriter, req *http.Request, machine string, body []byte) {
 		var in struct{ Status, Title string }
 		json.Unmarshal(body, &in)
@@ -317,7 +394,6 @@ func (r *Router) Handler() http.Handler {
 		}
 		web.ServeHTTP(w, req)
 	}))
-	return mux
 }
 
 func (r *Router) relay(w http.ResponseWriter, method, path string, body []byte) {
@@ -329,6 +405,38 @@ func (r *Router) relay(w http.ResponseWriter, method, path string, body []byte) 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	w.Write(b)
+}
+
+// checkSetupSig: a setup call is signed by the setup key over "<METHOD> <path> <unix time> <sha256hex body>",
+// within two minutes, each signature once
+func (r *Router) checkSetupSig(method, path, t, sig string, body []byte) error {
+	if r.cfg.NoAccess && r.cfg.SetupKey == "" {
+		return nil // CI without a setup key
+	}
+	ts, err := strconv.ParseInt(t, 10, 64)
+	if err != nil {
+		return fmt.Errorf("setup signature required")
+	}
+	if d := time.Since(time.Unix(ts, 0)); d > 2*time.Minute || d < -2*time.Minute {
+		return fmt.Errorf("X-Setup-Time too far off")
+	}
+	sum := sha256.Sum256(body)
+	msg := fmt.Sprintf("%s %s %d %s", method, path, ts, hex.EncodeToString(sum[:]))
+	if r.cfg.SetupKey == "" || !verifyP256(r.cfg.SetupKey, []byte(msg), sig) {
+		return fmt.Errorf("bad setup signature")
+	}
+	r.setupMu.Lock()
+	defer r.setupMu.Unlock()
+	for k, at := range r.setupSeen {
+		if time.Since(at) > 5*time.Minute {
+			delete(r.setupSeen, k)
+		}
+	}
+	if _, ok := r.setupSeen[sig]; ok {
+		return fmt.Errorf("setup signature already used")
+	}
+	r.setupSeen[sig] = time.Now()
+	return nil
 }
 
 func sessionView(s *Session, d *persisted) map[string]any {
@@ -383,14 +491,24 @@ func (r *Router) requireDeyao(fn http.HandlerFunc) http.Handler {
 	})
 }
 
-func (r *Router) requireMachine(fn func(w http.ResponseWriter, req *http.Request, machine string, body []byte)) http.Handler {
+// requireSetup: the setup session's Access service token (app jarvis2.deyaochen.com/setup); the core then
+// checks the setup key's own signature, so this gate only keeps strangers away from the code
+func (r *Router) requireSetup(fn http.HandlerFunc) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		if !r.cfg.NoAccess {
-			if _, err := r.access().verify(req.Header.Get("Cf-Access-Jwt-Assertion"), r.cfg.MachineAUD); err != nil {
+			if _, err := r.access().verify(req.Header.Get("Cf-Access-Jwt-Assertion"), r.cfg.SetupAUD); err != nil {
 				writeJSON(w, 403, map[string]string{"error": "Access service token required"})
 				return
 			}
 		}
+		fn(w, req)
+	})
+}
+
+// requireMachine: no Access here — this listener is reachable only over Fly's private network; every
+// request must be signed by a machine the core started
+func (r *Router) requireMachine(fn func(w http.ResponseWriter, req *http.Request, machine string, body []byte)) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		body, err := io.ReadAll(io.LimitReader(req.Body, 4<<30))
 		if err != nil {
 			writeErr(w, err)

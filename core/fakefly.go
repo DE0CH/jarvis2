@@ -45,15 +45,12 @@ func (f *FakeFly) Create(r StartRequest) (string, string, error) {
 	return id, strings.SplitN(r.Image, "@", 2)[0] + "@sha256:0000000000000000000000000000000000000000000000000000000000000000", nil
 }
 
-func (f *FakeFly) ReadKeys(id string) (MachineKeys, error) {
+func (f *FakeFly) Init(id string) (MachineKeys, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	m := f.machines[id]
 	return MachineKeys{b64.EncodeToString(m.enc.PublicKey().Bytes()), b64.EncodeToString(m.sig.PublicKey().Bytes())}, nil
 }
-
-func (f *FakeFly) WriteMachineFiles(id, apiKey, coreKey string) error { return nil }
-func (f *FakeFly) Init(id string) error                               { return nil }
 
 func (f *FakeFly) Destroy(id string) error {
 	f.mu.Lock()

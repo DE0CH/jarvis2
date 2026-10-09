@@ -1,18 +1,17 @@
 # Jarvis 2 box bootstrap (create.sh prepends a shebang and the variables). Blank Ubuntu → single-node k3s
-# → Flux reconciling ./k8s/apps from the public repo. Secrets (the tunnel token, the router's settings)
-# arrive in user-data and become k8s Secrets here; the user-data is shredded at the end.
-# Injected: K8S_ADMIN_TOKEN TUNNEL_TOKEN ROUTER_ENV (KEY=VALUE lines)
+# → Flux reconciling ./k8s/apps from the public repo. After this the box takes changes only from git:
+# no SSH, no k8s API from outside (the firewall has no inbound rules at all), no admin token. A box that
+# git can't fix is replaced, not repaired. Secrets (the tunnel token, the router's WireGuard peer, the box key) arrive
+# in user-data and become k8s Secrets here; the user-data is shredded at the end.
+# Injected: TUNNEL_TOKEN WG_CONF (the wg-quick file of `fly wireguard create`) BOX_KEY (the box key, PEM)
 set -uo pipefail
 export DEBIAN_FRONTEND=noninteractive
 exec > >(tee -a /var/log/jarvis2-bootstrap.log) 2>&1
 echo "=== jarvis2 bootstrap $(date -u +%FT%TZ) ==="
 apt-get update -y && apt-get install -y --no-install-recommends ca-certificates curl git
-PUBLIC_IP="$(curl -fsS --max-time 5 http://169.254.169.254/hetzner/v1/metadata/public-ipv4)"
+systemctl disable --now ssh.socket ssh.service 2>/dev/null || true
 
-mkdir -p /etc/rancher/k3s
-printf '%s,jarvis2-admin,jarvis2-admin,"system:masters"\n' "$K8S_ADMIN_TOKEN" > /etc/rancher/k3s/tokens.csv
-chmod 600 /etc/rancher/k3s/tokens.csv
-curl -sfL https://get.k3s.io | INSTALL_K3S_EXEC="server --disable traefik --tls-san $PUBLIC_IP --kube-apiserver-arg=token-auth-file=/etc/rancher/k3s/tokens.csv" sh - || exit 1
+curl -sfL https://get.k3s.io | INSTALL_K3S_EXEC="server --disable traefik" sh - || exit 1
 export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
 for i in $(seq 1 60); do kubectl get nodes 2>/dev/null | grep -q ' Ready' && break; sleep 5; done
 
@@ -26,9 +25,12 @@ kubectl -n flux-system rollout status deployment/kustomize-controller --timeout=
 git clone --depth 1 https://github.com/DE0CH/jarvis2.git /root/jarvis2 || exit 1
 kubectl apply -k /root/jarvis2/k8s/bootstrap || exit 1
 kubectl -n jarvis2-edge create secret generic tunnel-token --from-literal=token="$TUNNEL_TOKEN"
-printf '%s\n' "$ROUTER_ENV" > /root/router.env
-kubectl -n jarvis2-router create secret generic router-env --from-env-file=/root/router.env
-shred -u /root/router.env
+printf '%s\n' "$WG_CONF" > /root/wg.conf
+kubectl -n jarvis2-router create secret generic router-wg --from-file=wg.conf=/root/wg.conf
+shred -u /root/wg.conf
+printf '%s\n' "$BOX_KEY" > /root/box-key.pem
+kubectl -n jarvis2-core create secret generic core-box-key --from-file=box-key.pem=/root/box-key.pem
+shred -u /root/box-key.pem
 kubectl apply -f /root/jarvis2/k8s/flux/sync.yaml || exit 1
 rm -rf /root/jarvis2
 echo "bootstrap COMPLETE $(date -u +%FT%TZ)" > /var/log/jarvis2-bootstrap.done

@@ -1,7 +1,7 @@
-# The router: the app's API, the web page, the machines' API. Reached only from the tunnel (jarvis2-edge);
-# reaches the core and the internet (Access certs). Its records live on a volume; its settings that are
-# secrets (the machines' Access service token, the Access audiences) come from the router-env Secret,
-# created by infra/cloud-init.sh, never in git.
+# The router: the app's API, the web page and setup (through the tunnel, from jarvis2-edge) and the
+# machines' API (/m, only on its own WireGuard peer in Fly's private network, router/wg.go). Reaches the
+# core, the internet (Access certs) and Fly's WireGuard gateway. Its records live on a volume; its one
+# secret, the WireGuard peer's config, is the router-wg Secret made by infra/cloud-init.sh, never in git.
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata: { name: router-data, namespace: jarvis2-router }
@@ -29,12 +29,20 @@ spec:
           env:
             - { name: SESSION_IMAGE, value: "ghcr.io/de0ch/jarvis2-session:sha-05dcb34f4627" }
             - { name: FLY_REGION, value: lhr }
-            - { name: MACHINE_URL, value: "https://jarvis2.deyaochen.com" }
-          envFrom: [{ secretRef: { name: router-env } }]
-          volumeMounts: [{ name: data, mountPath: /data }]
+            # the box's WireGuard peer in Fly org jarvis2-370 (fly wireguard create jarvis2-370 lhr jarvis2-box)
+            - { name: MACHINE_URL, value: "http://jarvis2-box._peer.internal:8081" }
+            - { name: WG_CONFIG, value: /wg/wg.conf }
+            - { name: ACCESS_APP_AUD, value: f19ca5e19727b6b7b7a48800c6681fec1f450b53020752715e1a2012d06da9fe }
+            # the setup session's PUBLIC key: the router checks it on every /setup call (its private half is
+            # JARVIS2_SETUP_KEY in Jarvis 1's default store)
+            - { name: SETUP_KEY, value: "BEhYIkmGeCkg7D8vdKhRe8b00asMI8a9EyXNW41eBbIphkf6lZmy/c9FsRlqoXLD5JyRZgVOxLzM7OBv47Uy2Ms=" }
+            - { name: ACCESS_SETUP_AUD, value: fdd80d914f37f8f73409c3e44c11282cffefa5e20663d2d9de50bb087159ee89 }
+          volumeMounts: [{ name: data, mountPath: /data }, { name: wg, mountPath: /wg, readOnly: true }]
           resources: { requests: { cpu: 20m, memory: 64Mi }, limits: { memory: 1Gi } }
           securityContext: { runAsNonRoot: true, runAsUser: 65532, runAsGroup: 65532, allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: { drop: [ALL] }, seccompProfile: { type: RuntimeDefault } }
-      volumes: [{ name: data, persistentVolumeClaim: { claimName: router-data } }]
+      volumes:
+        - { name: data, persistentVolumeClaim: { claimName: router-data } }
+        - { name: wg, secret: { secretName: router-wg, defaultMode: 0440 } }
 ---
 apiVersion: v1
 kind: Service
@@ -59,3 +67,6 @@ spec:
       ports: [{ port: 8090 }]
     - to: [{ ipBlock: { cidr: 0.0.0.0/0, except: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16] } }]
       ports: [{ port: 443 }]
+    # Fly's WireGuard gateway (lhr1.gateway.6pn.dev)
+    - to: [{ ipBlock: { cidr: 0.0.0.0/0, except: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16] } }]
+      ports: [{ port: 51820, protocol: UDP }]

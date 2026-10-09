@@ -1,0 +1,7 @@
+{
+  "comment": "Which stores each harness brings (the router adds them to a session; the app hides them). Sensitivity and the Fly store live in the core, not here.",
+  "harnesses": {
+    "claude": { "stores": ["claude"] },
+    "opencode": { "stores": ["openrouter"] }
+  }
+}
