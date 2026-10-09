@@ -15,7 +15,7 @@ spec:
       enableServiceLinks: false
       containers:
         - name: core
-          image: ghcr.io/de0ch/jarvis2-core:sha-842c2562fe92
+          image: ghcr.io/de0ch/jarvis2-core:sha-4e6e2e9be0d7
           ports: [{ containerPort: 8090 }]
           env:
             # the master PUBLIC key (keys/master.pub; its private half is in Deyao's password manager): it signs
