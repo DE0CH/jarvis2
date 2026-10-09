@@ -57,7 +57,7 @@ Carried over from the mock (DE0CH/jarvis2-mock DECISIONS.md) unless marked new.
     it with Apple's cloud-managed distribution certificate (App Store Connect API key in repo secrets) —
     signing at archive time would mint a development certificate per runner, and the team is at its limit.
     Build number = the workflow's run number; internal group "Owner" (all builds). App record "Jarvis 2"
-    (6820459076); icon = the Jarvis icon unchanged. `workflow_dispatch` with `only=testflight` ships without
+    (6820459076); icon = the Jarvis ring with a "2" at its centre (`app/scripts/make-icon.py`). `workflow_dispatch` with `only=testflight` ships without
     rerunning the walkthrough.
 15. **React Native's frameworks sit in the app's `Frameworks/`**, not inside the extension (App Store
     validation refuses an extension that carries its own); the extension loads them via its rpath. The shell
