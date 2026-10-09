@@ -63,7 +63,7 @@ export type SignedDoc = { payload: string; sig: string };
 export type ApprovalKind = "new-session" | "resume-upgrade" | "add-store";
 export type Approval = {
   id: string; kind: ApprovalKind; created?: string; session?: string | null; label?: string;
-  challenge: SignedDoc; burnCert?: SignedDoc | null; options?: Record<string, unknown>;
+  challenge: SignedDoc; machine?: string; options?: Record<string, unknown>;
 };
 export type CoreStatus = { up: boolean; signingKey?: string; agreementKey?: string };
 export type State = {
@@ -74,7 +74,17 @@ export type State = {
 export type Choice = { id: string; label: string };
 // a store as the core lists it (payload of POST api/core/stores). Read here only for display and
 // pre-selection; the shell verifies the core's signature before anything is signed.
-export type CoreStore = { name: string; keys: string[]; sensitive: boolean; unlocked: boolean };
+export type CoreStore = { name: string; sensitive: boolean; empty: boolean; unlocked: boolean };
+// which stores each harness brings (GET api/policy): the router adds them to a session, so the app
+// doesn't offer them in pickers or list them in summaries
+export type Policy = Record<string, string[]>;
+export async function loadPolicy(): Promise<Policy> {
+  const j = await api<{ harnesses?: Record<string, { stores?: string[] }> }>("GET", "api/policy");
+  const out: Policy = {};
+  for (const [h, v] of Object.entries(j.harnesses || {})) out[h] = v.stores || [];
+  return out;
+}
+export const harnessStoreSet = (p: Policy) => new Set(Object.values(p).flat());
 
 /** the core's store list, unverified (the web page and the normal-mode UI only show it) */
 export async function coreStores(): Promise<CoreStore[]> {
@@ -85,10 +95,11 @@ export async function coreStores(): Promise<CoreStore[]> {
 }
 
 /** what a challenge asks for, read for display only (the shell checks it before signing) */
-export function challengeRequest(a: Approval): { stores: string[]; sensitive: string[]; harness: string; addedStore?: string } {
+export function challengeRequest(a: Approval, p: Policy = {}): { stores: string[]; sensitive: string[]; harness: string; addedStore?: string } {
   try {
     const r = JSON.parse(a.challenge.payload).request || {};
-    return { stores: r.stores || [], sensitive: r.sensitive || [], harness: r.options?.harness || "claude", addedStore: r.addedStore || undefined };
+    const harness = r.options?.harness || "claude", h = new Set(p[harness] || []);
+    return { stores: (r.stores || []).filter((n: string) => !h.has(n)), sensitive: r.sensitive || [], harness, addedStore: r.addedStore || undefined };
   } catch { return { stores: [], sensitive: [], harness: "?" }; }
 }
 
@@ -101,8 +112,12 @@ export function ago(iso: string | Date) {
   if (s < 60) return "just now"; if (s < 3600) return Math.floor(s / 60) + " min ago"; if (s < 86400) return Math.floor(s / 3600) + " h ago"; return Math.floor(s / 86400) + " d ago";
 }
 export const sessionTitle = (m: Session) => m.title || m.label || m.name || m.id;
-// the store named `core` holds the core's own Fly token: listed on the Stores page (to unlock and lock it),
-// never offered to a session (the core refuses it in succession)
+// the store named `core` holds the core's own Fly token: it never shows for sessions (the core keeps it out of
+// its store list; the filter is only a second guard)
 export const CORE_STORE = "core";
-/** the stores a session (or a record) was given */
-export const storesOf = (m: Session) => (m.stores && m.stores.length ? m.stores : (m.environment || "").split(",").filter(Boolean));
+/** the stores a session (or a record) was given, without the ones its harness brought */
+export const storesOf = (m: Session, p: Policy = {}) => {
+  const all = m.stores && m.stores.length ? m.stores : (m.environment || "").split(",").filter(Boolean);
+  const h = new Set(p[m.harness || "claude"] || []);
+  return all.filter((n) => !h.has(n) && n !== CORE_STORE);
+};

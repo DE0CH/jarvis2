@@ -1,5 +1,5 @@
 // The shell's own client of the router (docs/API.md) — an ordinary network path: integrity comes from the
-// core's signatures (checked here against the paired core key) and the phone's (made here). The shell also
+// core's signatures (checked here against the core keys pinned at recovery) and the phone's (made here). The shell also
 // owns sign-in: ASWebAuthenticationSession on /api/auth/start → jarvis2://auth#token=<Access JWT>, kept in
 // the shell's Keychain, sent as `cf-access-token`, and handed to the React Native UI over XPC.
 import AuthenticationServices
@@ -86,7 +86,7 @@ final class RouterClient: NSObject, ASWebAuthenticationPresentationContextProvid
     return j["error"] as? String
   }
 
-  // ---- the core, relayed: every answer checked against the paired core key ----
+  // ---- the core, relayed: every answer checked against the pinned core key ----
   func stores() async throws -> [StoreView] {
     let n = CoreCrypto.nonce()
     let d = try CoreCrypto.decode(try await json("POST", "api/core/stores", ["nonce": n], as: SignedDoc.self), by: try CoreTrust.key(), as: StoresDoc.self, what: "the store list")
@@ -113,16 +113,36 @@ final class RouterClient: NSObject, ASWebAuthenticationPresentationContextProvid
     guard d.kind == "locked", d.id == id else { throw TrustError.stale("lock") }
   }
   func markSensitive(_ name: String) async throws {
-    let d = try CoreCrypto.decode(try await json("POST", "api/core/mark-sensitive", ["name": name], as: SignedDoc.self), by: try CoreTrust.key(), as: KindDoc.self, what: "the mark")
+    let d = try CoreCrypto.decode(try await json("POST", "api/core/stores/mark-sensitive", ["name": name], as: SignedDoc.self), by: try CoreTrust.key(), as: KindDoc.self, what: "the mark")
     guard d.kind == "marked-sensitive", d.name == name else { throw TrustError.stale("mark") }
   }
-  func coreKeyNow() async -> String? { (try? await json("GET", "api/core/key", as: [String: String].self))?["signingKey"] }
+  func createStore(_ name: String) async throws {
+    let d = try CoreCrypto.decode(try await json("POST", "api/core/stores/create", ["name": name], as: SignedDoc.self), by: try CoreTrust.key(), as: KindDoc.self, what: "the new store")
+    guard d.kind == "store-created", d.name == name else { throw TrustError.stale("create") }
+  }
+
+  // ---- identity + recovery ----
+  struct IdentityDTO: Decodable { let signingKey: String; let agreementKey: String; let boxSig: String }
+  /// the core's keys and the box key's signature over them (checked by the caller against keys/box.pub)
+  func identity() async throws -> IdentityDTO { try await json("GET", "api/core/identity") }
+  /// POST api/core/recover; the answer must be the recovered core's signed "recovered"
+  func recover(_ body: [String: Any], core: PublicKeys) async throws -> Int {
+    let d = try CoreCrypto.decode(try await json("POST", "api/core/recover", body, as: SignedDoc.self), by: core.signingKey, as: KindDoc.self, what: "the recovery answer")
+    guard d.kind == "recovered" else { throw TrustError.stale("recovery") }
+    return d.stores ?? 0
+  }
+  /// the stores each harness brings (the router adds them to a session; the app doesn't offer them)
+  struct PolicyDTO: Decodable { struct H: Decodable { let stores: [String]? }; let harnesses: [String: H] }
+  func harnessStores() async -> [String: [String]] {
+    guard let p = try? await json("GET", "api/policy", as: PolicyDTO.self) else { return [:] }
+    return p.harnesses.mapValues { $0.stores ?? [] }
+  }
 
   // ---- sessions + approvals ----
-  struct ApprovalDTO: Decodable { let id: String; let kind: String; let session: String?; let label: String?; let challenge: SignedDoc; let burnCert: SignedDoc?; let options: [String: String]? }
+  struct ApprovalDTO: Decodable { let id: String; let kind: String; let session: String?; let label: String?; let challenge: SignedDoc; let options: [String: String]? }
   struct SessionDTO: Decodable { let id: String; let state: String; let createRequestId: String?; let label: String?; let name: String? }
   struct StateDTO: Decodable { let sessions: [SessionDTO]; let approvals: [ApprovalDTO] }
-  struct RespondDTO: Decodable { let cert: SignedDoc; let session: String }
+  struct RespondDTO: Decodable { let answer: SignedDoc; let session: String }
   func state() async throws -> StateDTO { try await json("GET", "api/state") }
   func approval(_ id: String) async throws -> ApprovalDTO? { try await state().approvals.first { $0.id == id } }
   func createSession(_ body: [String: Any]) async throws { let _: [String: String?] = try await json("POST", "api/sessions", body) }

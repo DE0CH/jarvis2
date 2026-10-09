@@ -16,11 +16,22 @@ settings:
     # the router the shell talks to (and hands to the React Native UI); CI's simulator build overrides it
     # on the xcodebuild command line with the router running on the runner
     JARVIS_BASE: "https://jarvis2.deyaochen.com/"
+    # CI only (the simulator walkthrough's xcodebuild sets these): JARVIS_CI_FLAG=JARVIS_CI compiles in the
+    # code that reads the stand-ins' addresses (KeySource.swift); release builds leave all of them empty
+    JARVIS_CI_FLAG: ""
+    JARVIS_CI_KEYS_BASE: ""
+    JARVIS_CI_BACKUP_ENDPOINT: ""
+    JARVIS_CI_BACKUP_BUCKET: ""
 targets:
   Jarvis2:
     type: application
     platform: iOS
-    sources: [Shell, Shared]
+    sources:
+      - Shell
+      - Shared
+      # the BIP39 English list the core's identity words come from (the same file the core embeds)
+      - path: ../../core/words.txt
+        buildPhase: resources
     dependencies:
       - target: JarvisUI
     postBuildScripts:
@@ -38,6 +49,7 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: dev.de0ch.jarvis2
+        SWIFT_ACTIVE_COMPILATION_CONDITIONS: "$(inherited) $(JARVIS_CI_FLAG)"
         PRODUCT_NAME: Jarvis2
         GENERATE_INFOPLIST_FILE: YES
         INFOPLIST_FILE: Shell/Info.plist

@@ -6,10 +6,11 @@ import { useStore, loadStores, refresh } from "../lib/store";
 import { hasShell, requestSecure } from "../lib/shell";
 import { Button, Card, Flex, Heading, Muted, P, Pill, Spinner } from "../ui/kit";
 import { Cards } from "../ui/cards";
-import { CORE_STORE } from "../lib/api";
+import { CORE_STORE, harnessStoreSet } from "../lib/api";
 
 export function Stores() {
   const r = useStore((s) => s.stores);
+  const harness = harnessStoreSet(useStore((s) => s.policy));
   useEffect(() => { loadStores(); }, []);
   const manage = () => requestSecure("stores", {}, () => { loadStores(); refresh(false); });
   return (
@@ -21,13 +22,13 @@ export function Stores() {
       {!r.loaded ? (r.err ? <P size={2} color="red">{r.err}</P> : <Flex gap={2} align="center"><Spinner /><Muted>Loading stores…</Muted></Flex>)
         : !r.items.length ? <P size={3} color="gray" align="center" mt={8} mb={8}>The core holds no stores yet.</P>
         : <Cards>
-          {r.items.map((s) => (
+          {r.items.filter((s) => s.name !== CORE_STORE).map((s) => (
             <Card key={s.name} data={{ store: s.name }}>
               <Flex justify="space-between" align="flex-start" gap={2} mb={1}>
-                <Heading size={3} style={{ flex: 1 }}>{s.name === CORE_STORE ? "core — the core's own Fly token" : s.name}</Heading>
+                <Heading size={3} style={{ flex: 1 }}>{s.name}</Heading>
                 <Flex gap={1}>{s.sensitive && <Pill kind="bad">sensitive</Pill>}{s.unlocked ? <Pill kind="ok">unlocked</Pill> : <Pill kind="dim">locked</Pill>}</Flex>
               </Flex>
-              <Muted>{s.keys.length} key{s.keys.length === 1 ? "" : "s"}{s.keys.length ? ": " + s.keys.join(", ") : ""}</Muted>
+              <Muted>{[s.empty ? "empty" : "", harness.has(s.name) ? "brought by its harness" : ""].filter(Boolean).join(" · ") || "holds values"}</Muted>
             </Card>
           ))}
         </Cards>}

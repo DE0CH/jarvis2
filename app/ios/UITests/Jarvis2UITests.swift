@@ -1,16 +1,16 @@
 import XCTest
 
-/// Walks Jarvis 2 on a simulator against the REAL core (built with -tags fakefly) and router running on the
-/// CI runner, keeping a screenshot of every step. CI runs it once per appearance (light, then dark), each
-/// time against a fresh core and router and a reset simulator keychain, so each pass pairs from scratch:
-/// pairing → unlock a store → new session (secure page, software key) → pause → resume → resume with the
-/// latest image (approval) → destroy → records.
+/// Walks Jarvis 2 on a simulator against the REAL core (built with -tags fakefly, the public TEST master key)
+/// and router running on the CI runner, with the backups on a local S3 stand-in, keeping a screenshot of every
+/// step. CI runs it once per appearance (light, then dark), each time against a fresh core and router and a
+/// reset simulator keychain, so each pass recovers from scratch: recovery (8 words, the test master key, the
+/// stand-in bucket's keys) → stores (create, unlock) → new session (secure page, software key) → pause →
+/// resume → resume with the latest image (approval) → destroy → records → the master key page.
 final class Jarvis2UITests: XCTestCase {
   let app = XCUIApplication()
   var tag = "run"
   var step = 0
   let env = ProcessInfo.processInfo.environment
-  var core: String { env["JARVIS2_CORE"] ?? "http://127.0.0.1:8090" }
 
   func shot(_ name: String) {
     step += 1
@@ -32,50 +32,24 @@ final class Jarvis2UITests: XCTestCase {
     return !e.exists
   }
 
-  /// the core's calls; /setup/* ones are signed with the run's setup key (the trusted setup session's job
-  /// in production), which CI passes as JARVIS2_SETUP_KEY
-  @discardableResult func coreCall(_ path: String, _ body: [String: Any]? = nil) -> (Int, Data) {
-    var r = URLRequest(url: URL(string: core + path)!)
-    var raw = Data()
-    if let body { raw = try! JSONSerialization.data(withJSONObject: body); r.httpMethod = "POST"; r.httpBody = raw; r.setValue("application/json", forHTTPHeaderField: "Content-Type") }
-    if path.hasPrefix("/setup/") {
-      guard let signer = SetupSigner(base64DER: env["JARVIS2_SETUP_KEY"] ?? "") else { XCTFail("JARVIS2_SETUP_KEY isn't a P-256 private key"); return (0, Data()) }
-      for (k, v) in signer.headers("POST", path, raw) { r.setValue(v, forHTTPHeaderField: k) }
-    }
-    let sem = DispatchSemaphore(value: 0)
-    var out: (Int, Data) = (0, Data())
-    URLSession.shared.dataTask(with: r) { d, resp, _ in out = ((resp as? HTTPURLResponse)?.statusCode ?? 0, d ?? Data()); sem.signal() }.resume()
-    sem.wait()
-    return out
-  }
-
   func testWalkthrough() {
     continueAfterFailure = true
     tag = env["JARVIS2_APPEARANCE"] ?? "run"
     app.launch()
 
-    // ---- pairing: the app shows its keys; the setup session gives them to the core; the core's key goes in
-    guard wait(el("pair-phone"), 60, "pairing page") else { return }
-    var phone = el("pair-phone").label
-    for _ in 0..<20 where !phone.hasPrefix("jarvis2-phone:") { usleep(250_000); phone = el("pair-phone").label }
-    let parts = phone.split(separator: ":").map(String.init)
-    XCTAssertEqual(parts.count, 3, "phone string \(phone)")
-    shot("pairing")
-    let key = (try? JSONSerialization.jsonObject(with: coreCall("/key").1)) as? [String: String] ?? [:]
-    if parts.count == 3, let ak = key["agreementKey"] {
-      XCTAssertEqual(coreCall("/setup/phone", ["signingKey": parts[1], "agreementKey": parts[2]]).0, 200, "core takes the phone's keys")
-      // store values travel sealed to the core's agreement key
-      XCTAssertEqual(coreCall("/setup/store", ["name": "default", "values": SetupSigner.seal(["GITHUB_TOKEN": "ci-dummy", "OTHER": "x"], to: ak), "sensitive": false]).0, 200)
-      XCTAssertEqual(coreCall("/setup/store", ["name": "gmail", "values": SetupSigner.seal(["GMAIL_TOKEN": "ci-dummy"], to: ak), "sensitive": true]).0, 200)
-      // the core's own store: listed on the Stores page, never offered to a session
-      XCTAssertEqual(coreCall("/setup/store", ["name": "core", "values": SetupSigner.seal(["FLY_API_TOKEN": "ci-dummy", "FLY_APP": "ci-dummy"], to: ak), "sensitive": true]).0, 200)
-    }
-    let field = el("pair-core-field")
-    wait(field, 10, "core key field")
-    field.tap()
-    field.typeText("jarvis2-core:\(key["signingKey"] ?? ""):\(key["agreementKey"] ?? "")")
-    shot("pairing-core-pasted")
-    el("pair-save").tap()
+    // ---- recovery: the core's 8 words (checked against the box key), then the kit
+    guard wait(el("recovery-words"), 60, "recovery page with the core's words") else { return }
+    XCTAssertEqual(el("recovery-words").label, env["JARVIS2_WORDS"] ?? "", "[\(tag)] the 8 words are the core's own")
+    shot("recovery")
+    let master = el("recovery-master")
+    wait(master, 10, "master key field")
+    master.tap(); master.typeText(env["JARVIS2_MASTER_KIT"] ?? "")
+    let s3 = el("recovery-s3")
+    s3.tap(); s3.typeText(env["JARVIS2_S3_KIT"] ?? "")
+    shot("recovery-kit-pasted")
+    el("recovery-go").tap()
+    sleep(1)
+    shot("recovering")
 
     // ---- the React Native list (in the extension)
     guard wait(el("newBtn"), 120, "session list") else { return }
@@ -91,7 +65,14 @@ final class Jarvis2UITests: XCTestCase {
     wait(el("unlock-default"), 30, "secure stores page")
     sleep(1)
     shot("secure-stores")
-    XCTAssertTrue(el("unlock-core").exists, "[\(tag)] the core store is listed on the Stores page")
+    XCTAssertFalse(el("unlock-core").exists, "[\(tag)] the core's own store is not a store anyone sees")
+    XCTAssertFalse(el("mark-marked").exists, "[\(tag)] a store with a sensitive marker in the backups came back sensitive")
+    XCTAssertTrue(el("mark-default").exists, "[\(tag)] default came back not sensitive")
+    // a new, empty store
+    let nm = el("store-new-name")
+    nm.tap(); nm.typeText("ci-notes")
+    el("store-create").tap()
+    wait(el("mark-ci-notes"), 20, "created store listed (empty, not sensitive)")
     el("unlock-default").tap()
     wait(el("lock-default"), 30, "default unlocked (core's signed unlocked list)")
     XCTAssertFalse(el("secure-error").exists, "[\(tag)] unlock error: \(el("secure-error").exists ? el("secure-error").label : "")")
@@ -114,6 +95,7 @@ final class Jarvis2UITests: XCTestCase {
     shot("secure-new-session")
     XCTAssertTrue(el("secure-store-default").exists, "[\(tag)] default offered")
     XCTAssertFalse(el("secure-store-core").exists, "[\(tag)] the core store is not offered to a session")
+    XCTAssertFalse(el("secure-store-claude-login").exists, "[\(tag)] the harness's own store is not offered")
     if el("secure-store-gmail").waitForExistence(timeout: 5) {
       el("secure-store-gmail").tap(); sleep(1)
       XCTAssertTrue(el("secure-sensitive-warning").exists, "[\(tag)] sensitive warning")
@@ -180,6 +162,16 @@ final class Jarvis2UITests: XCTestCase {
     el("tab-settings").tap()
     sleep(2)
     shot("settings")
+
+    // ---- the master key page (smoke): a fresh pair, the private kit and the public key
+    el("open-master-key").tap()
+    if wait(el("master-private"), 20, "master key page") {
+      XCTAssertTrue(el("master-private").label.hasPrefix("jarvis2-master:MIG"), "[\(tag)] private kit \(el("master-private").label.prefix(20))")
+      XCTAssertTrue(el("master-public").label.hasPrefix("B"), "[\(tag)] public key (x963 base64)")
+      shot("master-key")
+      el("secure-back").tap()
+      wait(el("open-master-key"), 20, "back to settings")
+    }
     app.terminate()
   }
 }

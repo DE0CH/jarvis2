@@ -77,7 +77,7 @@ function MoreButton({ m, cool }: { m: Session; cool: boolean }) {
 
 const KIND_TITLE: Record<string, string> = { "new-session": "New session", "resume-upgrade": "Resume on the latest image", "add-store": "Add a store" };
 function ApprovalCard({ a }: { a: Approval }) {
-  const r = challengeRequest(a);
+  const r = challengeRequest(a, useStore((s) => s.policy));
   const what = a.kind === "add-store" ? `Add ${r.addedStore || "?"}` : `Stores: ${r.stores.join(", ") || "none"} · ${HARNESS[r.harness] || r.harness}`;
   return (
     <Card data={{ approval: a.id }}>
@@ -99,6 +99,7 @@ export function Sessions() {
   const sessions = useStore((s) => s.state.sessions);
   const approvals = useStore((s) => s.state.approvals);
   const pending = useStore((s) => s.pending);
+  const policy = useStore((s) => s.policy);
   // within each group newest-first, so cards never swap between polls
   const list = [...sessions].sort((a, b) => String(b.created || "").localeCompare(String(a.created || "")) || a.id.localeCompare(b.id));
   const cool = useCoolAfterShift(list.map((m) => m.id).join("|"));
@@ -113,7 +114,8 @@ export function Sessions() {
           {inGroup.map((m) => {
             const busy = pending.get("s:" + m.id) || null;
             const moving = !!MOVING[m.state] && m.state !== "initialising";
-            const line1 = [storesOf(m).length ? "stores: " + storesOf(m).join(", ") : "no stores", HARNESS[m.harness || ""] || m.harness, m.model].filter(Boolean).join(" · ");
+            const own = storesOf(m, policy);
+            const line1 = [own.length ? "stores: " + own.join(", ") : "no stores", HARNESS[m.harness || ""] || m.harness, m.model].filter(Boolean).join(" · ");
             return (
               <Card key={m.id} dim={!!busy} data={{ session: m.id }} style={{ flex: 1 }}>
                 <Flex justify="space-between" align="flex-start" gap={2} mb={1}>

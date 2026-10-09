@@ -8,6 +8,7 @@ import { Cards } from "../ui/cards";
 
 export function Records() {
   const r = useStore((s) => s.records);
+  const policy = useStore((s) => s.policy);
   useEffect(() => { loadRecords(); }, []);
   if (!r.loaded) return r.err ? <P size={2} color="red">{r.err}</P> : <Flex gap={2} align="center" mt={4}><Spinner /><Muted>Loading records…</Muted></Flex>;
   const list = [...r.items].sort((a, b) => String(b.destroyedAt || b.created || "").localeCompare(String(a.destroyedAt || a.created || "")));
@@ -22,7 +23,7 @@ export function Records() {
               <Heading size={3} style={{ flex: 1 }}>{sessionTitle(m)}</Heading>
               <Pill kind="dim">destroyed</Pill>
             </Flex>
-            <Muted>{[storesOf(m).length ? "stores: " + storesOf(m).join(", ") : "no stores", HARNESS[m.harness || ""] || m.harness, m.model].filter(Boolean).join(" · ")}</Muted>
+            <Muted>{[storesOf(m, policy).length ? "stores: " + storesOf(m, policy).join(", ") : "no stores", HARNESS[m.harness || ""] || m.harness, m.model].filter(Boolean).join(" · ")}</Muted>
             <Muted>{[m.created ? "created " + ago(m.created) : "", m.destroyedAt ? "destroyed " + ago(m.destroyedAt) : ""].filter(Boolean).join(" · ")}</Muted>
           </Card>
         ))}

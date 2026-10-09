@@ -1,7 +1,7 @@
 // Jarvis 2: a small native shell that owns the window. The whole Jarvis React Native UI runs in the
 // bundled ExtensionKit extension (JarvisUI), in its own process, shown full-screen in normal mode. Anything
 // may ask to ENTER secure mode (XPC requestSecureMode) on one of the shell's pages — new session, an
-// approval, stores, pairing; only this shell's own code leaves it. In secure mode the extension's view is
+// approval, stores, recovery, the master key; only this shell's own code leaves it. In secure mode the extension's view is
 // removed — it cannot draw or receive taps — and the shell pushes its own page over a still snapshot of the
 // app with the native push motion (no sheets: forms are pages), so the switch looks seamless. Back pops it
 // to the right; a finished action leaves to the left. The shell also owns sign-in (RouterClient) and hands
@@ -25,12 +25,12 @@ struct Jarvis2App: App {
 
 enum Mode: Equatable { case normal, secure }
 /// the shell's secure pages
-enum Route: Equatable { case newSession, approval(String), stores, pairing }
+enum Route: Equatable { case newSession, approval(String), stores, recovery, masterKey }
 
 @Observable
 final class Shell {
   var mode: Mode = .normal
-  var route: Route = .pairing
+  var route: Route = .recovery
   var secureOptions: [String: Any] = [:]
   var identity: AppExtensionIdentity?
   var snapshot: UIImage?
@@ -55,11 +55,17 @@ final class Shell {
   var prefetched: [StoreView]?
 
   func load() async {
-    if CoreTrust.paired == nil {
-      // not paired yet: the pairing page comes first (Back leaves it for the app, which can still view)
-      route = .pairing; mode = .secure
+    if CoreTrust.pinned == nil {
+      // no core recovered yet: the recovery page comes first (Later leaves it for the app, which can still view)
+      route = .recovery; mode = .secure
     } else {
       Task { @MainActor in
+        // a restarted core is a new core: until it is recovered nothing can be signed, so recovery comes up
+        if let x = try? await RouterClient.shared.identity(), x.signingKey != CoreTrust.pinned?.signingKey {
+          log("the router reports another core: recovery")
+          enterSecure(#"{"kind":"recovery"}"#)
+          return
+        }
         let t = Date()
         do { prefetched = try await RouterClient.shared.stores(); log(String(format: "core stores prefetched in %.2fs", Date().timeIntervalSince(t))) }
         catch { log("core stores prefetch failed: \(error.localizedDescription)") }
@@ -91,7 +97,8 @@ final class Shell {
       guard let id = opts["approvalId"] as? String else { log("approval without an id refused"); return }
       route = .approval(id)
     case "stores": route = .stores
-    case "pairing": route = .pairing
+    case "recovery": route = .recovery
+    case "master-key": route = .masterKey
     default: log("secure request of unknown kind refused"); return
     }
     log("enter secure \(opts["kind"] ?? "")")
@@ -193,7 +200,8 @@ struct SecurePageFor: View {
     case .newSession: SecureNewSession(shell: shell, options: shell.secureOptions)
     case .approval(let id): SecureApproval(shell: shell, approvalId: id)
     case .stores: SecureStores(shell: shell)
-    case .pairing: PairingPage(shell: shell)
+    case .recovery: RecoveryPage(shell: shell)
+    case .masterKey: MasterKeyPage(shell: shell)
     }
   }
 }

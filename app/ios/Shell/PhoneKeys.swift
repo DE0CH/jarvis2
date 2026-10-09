@@ -52,8 +52,8 @@ final class PhoneKeys {
   }
 
   // ---- the public halves (no Face ID needed); made on first use ----
-  func publicString() throws -> KeyPairString {
-    KeyPairString(role: "phone", signingKey: try signingPublic().base64EncodedString(), agreementKey: try agreementPublic().base64EncodedString())
+  func publicKeys() throws -> PublicKeys {
+    PublicKeys(signingKey: try signingPublic().base64EncodedString(), agreementKey: try agreementPublic().base64EncodedString())
   }
   private func signingPublic() throws -> Data {
     if usesEnclave {
@@ -110,10 +110,11 @@ final class PhoneKeys {
   }
 }
 
-/// The core this phone is paired with: the string Deyao pasted on the pairing page, kept in the shell's
-/// Keychain. Every core document is verified against it — it is never learned from the network.
+/// The core this phone recovered: its keys, pinned in the shell's Keychain when the core accepted the
+/// master-signed recovery statement naming them. Every core document is verified against them — they are
+/// never learned from the network.
 enum CoreTrust {
-  static var paired: KeyPairString? { Keychain.string("core").flatMap { try? KeyPairString.parse($0, role: "core") } }
-  static func save(_ s: KeyPairString) { Keychain.setString("core", s.text) }
-  static func key() throws -> String { guard let p = paired else { throw TrustError.notPaired }; return p.signingKey }
+  static var pinned: PublicKeys? { Keychain.get("core-keys").flatMap { try? JSONDecoder().decode(PublicKeys.self, from: $0) } }
+  static func pin(_ k: PublicKeys) { Keychain.set("core-keys", try? JSONEncoder().encode(k)) }
+  static func key() throws -> String { guard let p = pinned else { throw TrustError.notRecovered }; return p.signingKey }
 }

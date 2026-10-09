@@ -3,7 +3,7 @@
 // stores and the harness are chosen for real and the iPhone signs. On the web the form only creates a
 // pending request (POST api/sessions); the approval happens in the app.
 import { useEffect, useRef, useState } from "react";
-import { api, newId, CORE_STORE } from "../lib/api";
+import { api, newId, CORE_STORE, harnessStoreSet } from "../lib/api";
 import { useStore, loadStores, refresh, settle, toast, failed } from "../lib/store";
 import { hasShell, requestSecure } from "../lib/shell";
 import { Button, CheckboxCards, Flex, Lbl, Muted, RadioCards, Spinner, TextArea, TextField } from "../ui/kit";
@@ -15,7 +15,8 @@ export function NewSession() {
   useEffect(() => { loadStores(); }, []);
   // the normal-mode form never lists sensitive stores (those are only picked on the secure page), nor the
   // core's own store (it never goes to a session)
-  const plain = stores.items.filter((s) => !s.sensitive && s.name !== CORE_STORE);
+  const hidden = harnessStoreSet(useStore((s) => s.policy));
+  const plain = stores.items.filter((s) => !s.sensitive && s.name !== CORE_STORE && !hidden.has(s.name));
   const [picked, setPicked] = useState<string[]>([]);
   const touched = useRef(false);
   useEffect(() => { if (!touched.current) setPicked(plain.some((s) => s.name === "default") ? ["default"] : []); }, [plain.map((s) => s.name).join(",")]);
@@ -54,7 +55,7 @@ export function NewSession() {
       <Lbl>Secret stores</Lbl>
       {hasShell && <Muted style={{ marginBottom: 8 }}>Pre-selection only — you confirm the stores on the next, secure screen. Sensitive stores can only be picked there.</Muted>}
       {!hasShell && <Muted style={{ marginBottom: 8 }}>Sensitive stores can only be picked in the app.</Muted>}
-      {plain.length ? <CheckboxCards id="ns-stores" value={picked} onChange={(v) => { touched.current = true; setPicked(v); }} options={plain.map((s) => ({ value: s.name, title: s.name, sub: `${s.keys.length} key${s.keys.length === 1 ? "" : "s"}${s.unlocked ? "" : " · locked"}` }))} />
+      {plain.length ? <CheckboxCards id="ns-stores" value={picked} onChange={(v) => { touched.current = true; setPicked(v); }} options={plain.map((s) => ({ value: s.name, title: s.name, sub: [s.empty ? "empty" : "", s.unlocked ? "" : "locked"].filter(Boolean).join(" · ") || "unlocked" }))} />
         : stores.loaded ? <Muted>No (non-sensitive) stores.</Muted>
         : stores.err ? <Muted>{"Could not list the stores: " + stores.err}</Muted>
         : <Flex gap={2} align="center"><Spinner /><Muted>Loading stores…</Muted></Flex>}

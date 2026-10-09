@@ -3,7 +3,7 @@
 // actions show as PENDING labels on their buttons.
 import { useSyncExternalStore } from "react";
 import { AppState, Platform } from "react-native";
-import { api, coreStores, type Choice, type CoreStore, type Session, type State } from "./api";
+import { api, coreStores, loadPolicy, type Choice, type CoreStore, type Policy, type Session, type State } from "./api";
 
 export type Tab = "sessions" | "stores" | "records" | "settings";
 export const TABS: [Tab, string][] = [["sessions", "Sessions"], ["stores", "Stores"], ["records", "Records"], ["settings", "Settings"]];
@@ -17,13 +17,13 @@ export type AskInput = { heading: string; label: string; placeholder?: string; n
 export type Confirm = { title: string; detail?: string; action: string; danger?: boolean; input?: AskInput; resolve: (ok: boolean, text: string) => void };
 type Store = {
   state: State; tab: Tab; pending: Map<string, string>; records: Loaded<Session>; stores: Loaded<CoreStore>;
-  toasts: Toast[]; confirm: (Confirm & { id: number }) | null; sizes: Choice[]; models: Choice[]; refreshing: boolean;
+  toasts: Toast[]; confirm: (Confirm & { id: number }) | null; sizes: Choice[]; models: Choice[]; refreshing: boolean; policy: Policy;
 };
 const empty = <T,>(): Loaded<T> => ({ loading: false, loaded: false, items: [], err: null });
 const S: Store = {
   state: { sessions: [], approvals: [], core: { up: false } },
   tab: "sessions", pending: new Map(), records: empty(), stores: empty(),
-  sizes: [], models: [], refreshing: false, toasts: [], confirm: null,
+  sizes: [], models: [], refreshing: false, toasts: [], confirm: null, policy: {},
 };
 const listeners = new Set<() => void>();
 let snap = { ...S };
@@ -123,6 +123,7 @@ export function start() {
   AppState.addEventListener("change", (st) => { if (st === "active") refresh(false); });
   api<{ sizes: Choice[] }>("GET", "api/sizes").then((j) => { S.sizes = j.sizes || []; emit(); }).catch(() => {});
   api<{ models: Choice[] }>("GET", "api/models").then((j) => { S.models = j.models || []; emit(); }).catch(() => {});
+  loadPolicy().then((p) => { S.policy = p; emit(); }).catch(() => {});
   refresh(true);
 }
 
