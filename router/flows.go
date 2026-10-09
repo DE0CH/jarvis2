@@ -28,6 +28,7 @@ type Router struct {
 	hk       holders
 	snapped  map[string]chan struct{}
 	locks    sync.Map // session id → *sync.Mutex: one lifecycle action at a time
+	ops      opsState // sessionops.go: busy marks, permission-mode/restart jobs, uploads, repos
 
 	policy Policy
 
@@ -50,14 +51,16 @@ func randID() string {
 
 var errBusy = errors.New("the session is in the middle of another action")
 
-// lock: a session's lifecycle actions don't overlap; a clash is refused (409), not queued
-func (r *Router) lock(id string) (func(), error) {
+// lock: a session's lifecycle actions don't overlap; a clash is refused (409), not queued. kind names the
+// action in /api/state's `busy` (sessionops.go).
+func (r *Router) lock(id, kind string) (func(), error) {
 	m, _ := r.locks.LoadOrStore(id, &sync.Mutex{})
 	mu := m.(*sync.Mutex)
 	if !mu.TryLock() {
 		return nil, errBusy
 	}
-	return mu.Unlock, nil
+	r.ops.setBusy(id, kind)
+	return func() { r.ops.setBusy(id, ""); mu.Unlock() }, nil
 }
 
 func (r *Router) setState(id, state, errMsg string) {
@@ -74,17 +77,19 @@ func (r *Router) setState(id, state, errMsg string) {
 // ---- the core's primitives, as the router chains them ----------------------------------------------
 
 type NewSession struct {
-	RequestID      string   `json:"requestId"`
-	Label          string   `json:"label"`
-	Prompt         string   `json:"prompt"`
-	Model          string   `json:"model"`
-	PermissionMode string   `json:"permissionMode"`
-	Size           string   `json:"size"`
-	Harness        string   `json:"harness"`
-	Stores         []string `json:"stores"`
-	Repos          string   `json:"repos"`
-	OneShot        bool     `json:"oneShot"`   // destroyed once its prompt is done (autopilot.go)
-	AutoPause      *bool    `json:"autoPause"` // default on
+	RequestID      string         `json:"requestId"`
+	Label          string         `json:"label"`
+	Prompt         string         `json:"prompt"`
+	Model          string         `json:"model"`
+	PermissionMode string         `json:"permissionMode"`
+	Size           string         `json:"size"`
+	Harness        string         `json:"harness"`
+	Stores         []string       `json:"stores"`
+	Repos          string         `json:"repos"`
+	OneShot        bool           `json:"oneShot"`     // destroyed once its prompt is done (autopilot.go)
+	AutoPause      *bool          `json:"autoPause"`   // default on
+	APIProxy       bool           `json:"apiProxy"`    // SESSION_API_PROXY (sessionops.go)
+	Attachments    *AttachmentsIn `json:"attachments"` // first-prompt attachments (uploads.go)
 }
 
 const nullImage = "null" // a succession to it burns the predecessor (core.NullImage)
@@ -171,12 +176,13 @@ func (r *Router) addApproval(a *Approval) {
 
 // ---- new session ------------------------------------------------------------------------------------
 
-func (r *Router) CreateSession(in NewSession) error {
+// CreateSession → the session's id. A requestId already on a session answers that session (idempotent).
+func (r *Router) CreateSession(in NewSession) (string, error) {
 	h, ok := r.policy.Harnesses[in.Harness]
 	if !ok {
 		in.Harness = "claude"
 		if h, ok = r.policy.Harnesses[in.Harness]; !ok {
-			return fmt.Errorf("no harness %s in the policy", in.Harness)
+			return "", fmt.Errorf("no harness %s in the policy", in.Harness)
 		}
 	}
 	if in.Size == "" {
@@ -184,7 +190,7 @@ func (r *Router) CreateSession(in NewSession) error {
 	}
 	var err error
 	if in.Model, err = sessionModel(in.Harness, in.Model); err != nil { // harness.go
-		return err
+		return "", err
 	}
 	if in.PermissionMode != "bypass" {
 		in.PermissionMode = "auto"
@@ -192,23 +198,32 @@ func (r *Router) CreateSession(in NewSession) error {
 	// the harness's stores come with it (the policy document); the app doesn't list them
 	stores, err := r.withHarnessStores(in.Stores, h.Stores)
 	if err != nil {
-		return err
+		return "", err
 	}
 	s := &Session{ID: "s" + randID(), State: "approval", Created: time.Now().UTC(), Label: in.Label, Prompt: in.Prompt, Model: in.Model,
 		PermissionMode: in.PermissionMode, Size: in.Size, Harness: in.Harness, Stores: stores, Repos: in.Repos, RequestID: in.RequestID, Live: newLiveness(in)}
-	r.st.Do(func(d *persisted) { d.Sessions[s.ID] = s })
+	var dup string
+	r.st.Do(func(d *persisted) {
+		if dup, err = admitSession(d, s, in); err == nil && dup == "" {
+			d.Sessions[s.ID] = s
+		}
+	})
+	if err != nil || dup != "" {
+		return dup, err
+	}
 	ch, err := r.succession(nil, "", s.Stores, s.Harness, r.cfg.SessionImage)
 	if err != nil {
 		r.st.Do(func(d *persisted) { delete(d.Sessions, s.ID) })
-		return err
+		return "", err
 	}
 	opts := map[string]string{"model": s.Model, "size": s.Size, "permissionMode": s.PermissionMode, "repos": s.Repos}
 	liveOptions(s, opts)
+	opsOptions(s, opts)
 	go func() {
 		r.addApproval(&Approval{Kind: "new-session", Session: s.ID, Label: s.Label, Challenge: ch,
 			Options: opts})
 	}()
-	return nil
+	return s.ID, nil
 }
 
 // withHarnessStores: the chosen stores plus the harness's, sorted (the core refuses unknown ones)
@@ -282,7 +297,7 @@ func (r *Router) Reject(id string) error {
 // ---- pause ---------------------------------------------------------------------------------------------
 
 func (r *Router) Pause(id string) error {
-	unlock, err := r.lock(id)
+	unlock, err := r.lock(id, "pausing")
 	if err != nil {
 		return err
 	}
@@ -323,7 +338,7 @@ func (r *Router) Pause(id string) error {
 // ---- resume ----------------------------------------------------------------------------------------------
 
 func (r *Router) Resume(id string, upgrade bool) error {
-	unlock, err := r.lock(id)
+	unlock, err := r.lock(id, "starting")
 	if err != nil {
 		return err
 	}
@@ -372,7 +387,7 @@ func (r *Router) Destroy(id string) error { return r.DestroyWith(id, false) }
 // DestroyWith: a running session is paused first (its final snapshot), then archived (archive.go); a failed
 // archive leaves it paused with the error, unless force. Then the destroy hooks, the burn, the records.
 func (r *Router) DestroyWith(id string, force bool) error {
-	unlock, err := r.lock(id)
+	unlock, err := r.lock(id, "destroying")
 	if err != nil {
 		return err
 	}

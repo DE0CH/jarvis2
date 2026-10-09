@@ -263,6 +263,7 @@ func prepare() error {
 		if err := restore(c, pc.Machine.SigningKey); err != nil {
 			return fmt.Errorf("snapshot: %w", err)
 		}
+		applyRollback(cert.PredID) // rollback.go: a restart's transcript rollback, on the verified snapshot
 	}
 	// 2b. a new line restoring a destroyed session's archived snapshot (restore.go)
 	if err := restoreArchived(c, coreKey, me, &cert); err != nil {
@@ -298,6 +299,7 @@ func prepare() error {
 	if v := secrets["CLAUDE_ACCOUNT"]; v != "" {
 		env = append(env, "CLAUDE_ACCOUNT="+v)
 	}
+	env = append(env, fetchAttachments(c)...) // attachments.go: first-prompt attachments, before the harness
 	log.Printf("starting the harness")
 	return syscall.Exec(jarvis1, []string{jarvis1}, env)
 }

@@ -9,17 +9,17 @@ Facts: the router has no Fly token (it calls the core's start/kill/certify); its
 `/m/commands` poll, which carries just `snapshot`.
 
 ## Session lifecycle
-- **Create** (FT, AT): present. Idempotent `requestId`: stored, not deduplicated. Lifecycle lock: 409 present, no `busy` in state.
+- **Create** (FT, AT): present. Idempotent `requestId`: present (a repeat answers the session it made). Lifecycle lock: 409 and `busy {kind, since}` in `/api/state`.
 - **Pause / resume / resume on newer image**: present (snapshot on the router volume, machine-signed, not encrypted).
 - **Resume prompt**: present (`POST /api/sessions/:id/resume {prompt}`, delivered as a peer message once started; router/schedule.go). Jarvis 1 typed it as a user prompt instead.
-- **Start on another size**: missing; size is an option, so it needs approval.
-- **Wake job status**: missing.
-- **Restart / env patch / env-resync / transcript rollback** (FT, SB, FX): missing; re-pull secrets exists only inside add-store and downgrade.
-- **Permission-mode switch** (FX): missing; mode is unsigned env.
+- **Start on another size / model**: present (`POST …/resume {size, model, apiProxy}`). Size goes to the core's open `start`, model to the env; neither is in the core's Options (only the harness is), so the dead-machine rule approves it with no phone step.
+- **Wake job status**: present for permission-mode and restart (`wake {kind, phase, error, finishedAt}` in `/api/state`).
+- **Restart / env patch / transcript rollback**: present (`router/sessionops.go`): restart = pause + resume on the same image; `env` takes NON-secret keys only (names that look like secrets, and Jarvis's own, are refused) and stays for later starts; the rollback is applied by the next machine after it verified the snapshot (`machine/rollback.go`, `JARVIS2_ROLLBACK`/`_PRED`). env-resync: every resume already re-pulls the stores; re-pull without a restart exists only inside add-store and downgrade.
+- **Permission-mode switch**: present. Running: Jarvis 1's `set-permission-mode` in place through the `terminal` holder (any grant, standing rule or the allow list); paused: the next start's env. Mode stays unsigned env.
 - **Auto-pause + idle countdown**: present (machine-reported status, `POST /api/sessions/:id/auto-pause`, `pauseInMs`; `autoPauseVeto` hook for the scheduler). Not ported: Jarvis 1's "don't release if it moved during the snapshot" check.
 - **Destroy + archive + uncommitted-work check** (SB): present. Destroy pauses a running session first (its final signed snapshot), the router archives it to the Storage Box with its own creds (`router/archive.go`: Jarvis 1 layout + `jarvis2/` signed snapshot, cert, core cert; index `.index/jarvis2-destroyed-sessions.json`), runs `onDestroy` hooks, then burns. A failed archive leaves it paused (`?force=1` destroys anyway). `GET /api/sessions/:id/changes`: running via the `archive` holder's grant, paused from the snapshot's `.jarvis2-changes.txt`.
 - **One-shot sessions**: present (`oneShot` → `SESSION_ONE_SHOT=1`; the router destroys on the supervisor's marker). Destroy doesn't archive yet, nor DM about lost work.
-- **First prompt**: present (unsigned env). **First-prompt attachments** (SB on machine): missing.
+- **First prompt**: present (unsigned env). **First-prompt attachments**: present without SB on machines (`router/uploads.go`: `POST /api/uploads` staged on the router's volume, bound to the session at create; the first machine fetches them over `/m/attachments` and Jarvis 1's `session-attachments` reads them from a local `file://` staging dir into `~/uploads`).
 
 ## Previous sessions
 - List: present (router-local). Transcript tail (paused: the volume's snapshot; destroyed: the archive), delete/purge: present. Restore a destroyed session: present as a NEW line (phone-approved like a new session) whose first machine restores the archived snapshot, checking the old core-signed cert passed in its env and the snapshot's signature (`router/restore.go`, `machine/restore.go`). Not phone-signed: which old snapshot is restored (the core's Options can't carry it). Indexing an archive by hand (J1 `POST /api/records`): missing.
@@ -56,11 +56,11 @@ Facts: the router has no Fly token (it calls the core's start/kill/certify); its
 
 ## Stores, repos, content
 - Store editor in the app: partial (values only from the setup session). Copy keys between stores: missing.
-- Multi-store merge conflict file: unverified. Repo picker: missing (API takes free text). Repo delivery: replaced by per-repo tokens.
+- Multi-store merge conflict file: unverified. Repo picker: present (`router/repos.go`: `GET /api/github/repos` with a metadata-read-only `GITHUB_READ_TOKEN`; `GET|POST /api/repos`, `DELETE /api/repos/:name`, `repos` in `/api/state`). Repo delivery: replaced by per-repo tokens.
 - Content stores: forwarded to Jarvis 1 like leases (same Jarvis 1 change needed). Drop tokens: missing.
 
 ## Account and apps
-- Re-login: via J1. Usage quota: missing. Device pairing for OpenClaw/Paseo apps, device list/revoke: missing
+- Re-login: via J1. Usage quota: forwarded to J1 (`GET /api/usage`, services token). Device pairing for OpenClaw/Paseo apps, device list/revoke: missing
   (design question 14, below).
 - Dashboard: Sessions, Stores, Records, Settings, New session present; Search, Tasks, Schedules, Devices, Content, Repos, usage, banners, lease pills, "Also on Fly": missing.
 
@@ -70,8 +70,8 @@ Facts: the router has no Fly token (it calls the core's start/kill/certify); its
   per harness; the harness is signed in the cert's options → `SESSION_HARNESS`, the model goes as `SESSION_MODEL`,
   a model of another harness becomes the harness's default, an unknown one is refused). Their web UI needs the
   tunnel token (above). `harness-send`: present (`router/peer.go` queues prompts with `harness-send --queue` for
-  both harnesses, holder `scheduler`). API proxy: missing (openclaw runs its own api-proxy.js; the per-session
-  claude option is not ported).
+  both harnesses, holder `scheduler`). API proxy: present (`apiProxy` at New session and resume →
+  `SESSION_API_PROXY=1`, read by Jarvis 1's claude supervisor; openclaw runs its own api-proxy.js).
 - Workspace layer: to verify. on-start hooks: present.
 - Peer-message delivery: present (`r.Deliver`, router/peer.go; Jarvis 1's lib/peer.js run through the `scheduler` grant, text base64 in argv).
 - Session-facing API (`$JARVIS_URL` for Jarvis 1's session scripts): present — the machine's local proxy (machine/apiproxy.go) signs to `/m/api`; pull-secrets and changes answered on the machine; notify-idle and self-retire (refused while wakeups/crons are pending) on the router; watches answer 501.
@@ -88,8 +88,8 @@ Facts: the router has no Fly token (it calls the core's start/kill/certify); its
 8. Per-session tunnel origins without opening Jarvis 1's Access: answered by the confined `jarvis2-tunnel` token +
    per-id proof ("Tunnel token" below); waiting for the Worker deploy.
 9. Cross-Jarvis services (leases, search, iCloud, content, schedule scripts): Worker-confined J1 tokens, or reimplement on `/m`?
-10. Which options are signed (mode, model, size, auto-pause, one-shot, API proxy, repos).
-11. Arbitrary env injection: allowed at all?
+10. Which options are signed (mode, model, size, auto-pause, one-shot, API proxy, repos). Today only the harness; raising the mode to bypass in place takes any `terminal` grant — should it need a fresh phone grant?
+11. Arbitrary env injection: allowed at all? Today non-secret names only (a name filter, not a guarantee).
 12. Store authoring in the app (the app as trusted writer), copy between stores.
 13. Attachments and content stores without SB creds on every machine.
 14. Device pairing for OpenClaw/Paseo: open ("Device pairing" below).

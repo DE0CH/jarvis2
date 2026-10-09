@@ -345,7 +345,9 @@ func (r *Router) forwardJarvis1(w http.ResponseWriter, req *http.Request, sid st
 	out.Header.Set("CF-Access-Client-Id", id)
 	out.Header.Set("CF-Access-Client-Secret", sec)
 	out.Header.Set("User-Agent", "jarvis2-router/1") // Cloudflare 1010-blocks some default user agents
-	out.Header.Set("X-Jarvis2-Session", sid)
+	if sid != "" {
+		out.Header.Set("X-Jarvis2-Session", sid)
+	}
 	for _, h := range []string{"Content-Type", "Accept", "Range"} {
 		if v := req.Header.Get(h); v != "" {
 			out.Header.Set(h, v)

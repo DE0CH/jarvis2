@@ -25,6 +25,7 @@ func (r *Router) registerFeatures(app appRoute, m machineRoute, public publicRou
 	r.registerRemote(app, m, public) // remote.go: remote pages, /api/remotes, tunnel proofs
 	r.registerSessionAPI(app, m)     // sessionapi.go: sets deliverHook (peer.go); wakeups, crons, /m/api
 	r.registerArchive(app, m)        // archive.go, restore.go (budget.go needs no routes: /api/state via stateHooks)
+	r.registerSessionOps(app, m)     // sessionops.go, uploads.go, repos.go
 }
 
 // startFeatures: called once from main after the router is built
@@ -34,6 +35,7 @@ func (r *Router) startFeatures() {
 	go r.scheduleLoop() // schedule.go: wakeups, crons, resume prompts
 	go r.archiveLoop()  // archive.go: restore files tidied
 	go r.budgetLoop()   // budget.go: the Fly budget cap
+	go r.uploadsLoop()  // uploads.go: stale attachments
 }
 
 // stateHooks: add fields to GET /api/state

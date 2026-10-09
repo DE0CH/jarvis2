@@ -93,7 +93,8 @@ func (r *Router) buildHandlers() {
 		}
 		present := []string{}
 		for _, k := range []string{"LOBSTER_TOKEN", "STORAGEBOX_HOST", "STORAGEBOX_USER", "STORAGEBOX_PASSWORD", "FLY_READ_TOKEN",
-			"JARVIS1_CREDENTIALS_ID", "JARVIS1_CREDENTIALS_SECRET", "JARVIS1_SERVICES_ID", "JARVIS1_SERVICES_SECRET", "JARVIS2_TUNNEL_KEY", "JARVIS2_REMOTES_CLIENT_ID"} {
+			"JARVIS1_CREDENTIALS_ID", "JARVIS1_CREDENTIALS_SECRET", "JARVIS1_SERVICES_ID", "JARVIS1_SERVICES_SECRET", "JARVIS2_TUNNEL_KEY", "JARVIS2_REMOTES_CLIENT_ID",
+			"GITHUB_READ_TOKEN"} {
 			if os.Getenv(k) != "" {
 				present = append(present, k)
 			}
@@ -278,11 +279,12 @@ func (r *Router) buildHandlers() {
 		if in.RequestID == "" {
 			in.RequestID = randID()
 		}
-		if err := r.CreateSession(in); err != nil {
-			writeErr(w, err)
+		id, err := r.CreateSession(in)
+		if err != nil {
+			scheduleErr(w, err)
 			return
 		}
-		writeJSON(w, 200, map[string]any{"id": nil, "requestId": in.RequestID})
+		writeJSON(w, 200, map[string]any{"id": id, "requestId": in.RequestID})
 	})
 	app("POST /api/sessions/{id}/pause", func(w http.ResponseWriter, req *http.Request) {
 		if err := r.Pause(req.PathValue("id")); err != nil {
@@ -295,9 +297,13 @@ func (r *Router) buildHandlers() {
 		var in struct {
 			Upgrade bool   `json:"upgrade"`
 			Prompt  string `json:"prompt"` // delivered once the session is back (schedule.go)
+			ResumeOptions
 		}
 		json.NewDecoder(io.LimitReader(req.Body, 1<<16)).Decode(&in)
 		prompt, err := cleanResumePrompt(in.Prompt)
+		if err == nil {
+			err = r.applyResumeOptions(req.PathValue("id"), in.ResumeOptions) // sessionops.go: size, model, apiProxy
+		}
 		if err != nil {
 			writeErr(w, err)
 			return
@@ -585,6 +591,7 @@ func sessionView(s *Session, d *persisted) map[string]any {
 	}
 	liveView(s, v)
 	scheduleView(d, s.ID, v)
+	opsView(s, v)
 	return v
 }
 

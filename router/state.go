@@ -12,31 +12,32 @@ import (
 )
 
 type Session struct {
-	ID             string     `json:"id"`        // stable: the first machine's id
-	MachineID      string     `json:"machineId"` // "" while paused
-	State          string     `json:"state"`
-	Error          string     `json:"error,omitempty"`
-	Created        time.Time  `json:"created"`
-	PausedAt       *time.Time `json:"pausedAt,omitempty"`
-	Label          string     `json:"label"`
-	Prompt         string     `json:"-"`
-	Model          string     `json:"model"`
-	PermissionMode string     `json:"permissionMode"`
-	Size           string     `json:"size"`
-	Harness        string     `json:"harness"`
-	Stores         []string   `json:"stores"`
-	Repos          string     `json:"repos"`
-	Image          string     `json:"image"` // what the current line runs (ref@digest), pinned on resume
-	Cert           *Doc       `json:"-"`     // the line's latest succession cert
-	RequestID      string     `json:"createRequestId,omitempty"`
-	Title          string     `json:"aiTitle,omitempty"`
-	Status         string     `json:"status,omitempty"`
-	UserTitle      string     `json:"userTitle,omitempty"`      // Deyao's own rename (the transcript's custom title): beats Label
-	DiscordChannel string     `json:"discordChannel,omitempty"` // the session's channel (discord.go), LOBSTER_CHANNEL on the machine
-	Live           *Liveness  `json:"live,omitempty"`           // reported status, auto-pause/one-shot settings (autopilot.go)
-	ArchiveDir     string     `json:"archiveDir,omitempty"`     // archive.go: fixed by the destroy that archives it
-	RestoreFrom    string     `json:"restoreFrom,omitempty"`    // restore.go: the record this session restores
-	RestoreCert    *Doc       `json:"restoreCert,omitempty"`    // restore.go: that record's signer cert
+	ID             string      `json:"id"`        // stable: the first machine's id
+	MachineID      string      `json:"machineId"` // "" while paused
+	State          string      `json:"state"`
+	Error          string      `json:"error,omitempty"`
+	Created        time.Time   `json:"created"`
+	PausedAt       *time.Time  `json:"pausedAt,omitempty"`
+	Label          string      `json:"label"`
+	Prompt         string      `json:"-"`
+	Model          string      `json:"model"`
+	PermissionMode string      `json:"permissionMode"`
+	Size           string      `json:"size"`
+	Harness        string      `json:"harness"`
+	Stores         []string    `json:"stores"`
+	Repos          string      `json:"repos"`
+	Image          string      `json:"image"` // what the current line runs (ref@digest), pinned on resume
+	Cert           *Doc        `json:"-"`     // the line's latest succession cert
+	RequestID      string      `json:"createRequestId,omitempty"`
+	Title          string      `json:"aiTitle,omitempty"`
+	Status         string      `json:"status,omitempty"`
+	UserTitle      string      `json:"userTitle,omitempty"`      // Deyao's own rename (the transcript's custom title): beats Label
+	DiscordChannel string      `json:"discordChannel,omitempty"` // the session's channel (discord.go), LOBSTER_CHANNEL on the machine
+	Live           *Liveness   `json:"live,omitempty"`           // reported status, auto-pause/one-shot settings (autopilot.go)
+	ArchiveDir     string      `json:"archiveDir,omitempty"`     // archive.go: fixed by the destroy that archives it
+	RestoreFrom    string      `json:"restoreFrom,omitempty"`    // restore.go: the record this session restores
+	RestoreCert    *Doc        `json:"restoreCert,omitempty"`    // restore.go: that record's signer cert
+	Ops            *SessionOps `json:"ops,omitempty"`            // sessionops.go: API proxy, env patch, rollback, attachments
 }
 
 type Approval struct {
@@ -79,6 +80,7 @@ type persisted struct {
 
 	Schedules map[string]*Schedule `json:"schedules,omitempty"` // session id → wakeups, crons, resume prompt (schedule.go)
 	Budget    *BudgetState         `json:"budget,omitempty"`    // budget.go: this month's Fly spend estimate
+	Uploads   map[string]*Upload   `json:"uploads,omitempty"`   // uploads.go: first-prompt attachments staged on the volume
 }
 
 type State struct {
