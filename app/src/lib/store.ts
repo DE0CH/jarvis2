@@ -3,10 +3,10 @@
 // actions show as PENDING labels on their buttons.
 import { useSyncExternalStore } from "react";
 import { AppState, Platform } from "react-native";
-import { api, coreStores, loadPolicy, type Choice, type CoreStore, type Policy, type Session, type State } from "./api";
+import { api, coreStores, loadPolicy, type Choice, type CoreStore, type Policy, type Rec, type State } from "./api";
 
 export type Tab = "sessions" | "stores" | "records" | "settings";
-export const TABS: [Tab, string][] = [["sessions", "Sessions"], ["stores", "Stores"], ["records", "Records"], ["settings", "Settings"]];
+export const TABS: [Tab, string][] = [["sessions", "Sessions"], ["stores", "Stores"], ["records", "Previous"], ["settings", "Settings"]];
 // a list loaded on demand (records, the core's store list), not part of the 15 s poll
 export type Loaded<T> = { loading: boolean; loaded: boolean; items: T[]; err: string | null };
 export type Toast = { id: number; text: string; kind: "info" | "ok" | "error" };
@@ -16,7 +16,7 @@ export type Toast = { id: number; text: string; kind: "info" | "ok" | "error" };
 export type AskInput = { heading: string; label: string; placeholder?: string; note?: string; max?: number; match?: string };
 export type Confirm = { title: string; detail?: string; action: string; danger?: boolean; input?: AskInput; resolve: (ok: boolean, text: string) => void };
 type Store = {
-  state: State; tab: Tab; pending: Map<string, string>; records: Loaded<Session>; stores: Loaded<CoreStore>;
+  state: State; tab: Tab; pending: Map<string, string>; records: Loaded<Rec>; stores: Loaded<CoreStore>;
   toasts: Toast[]; confirm: (Confirm & { id: number }) | null; sizes: Choice[]; models: Choice[]; refreshing: boolean; policy: Policy;
 };
 const empty = <T,>(): Loaded<T> => ({ loading: false, loaded: false, items: [], err: null });
@@ -50,6 +50,10 @@ function enqueue(c: Confirm) { asks.push({ ...c, id: ++askSeq }); if (!S.confirm
 /** Ask a yes/no question; resolves true when the action button is tapped, false on Cancel/dismiss. */
 export function ask(q: Omit<Confirm, "resolve" | "input">): Promise<boolean> {
   return new Promise((resolve) => enqueue({ ...q, resolve: (ok) => resolve(ok) }));
+}
+/** Ask with a text box in the dialog; resolves the text (trimmed, maybe empty) or null on Cancel. */
+export function askText(q: Omit<Confirm, "resolve"> & { input: AskInput }): Promise<string | null> {
+  return new Promise((resolve) => enqueue({ ...q, resolve: (ok, text) => resolve(ok ? text.trim() : null) }));
 }
 export function answer(ok: boolean, text = "") {
   const c = S.confirm; if (!c) return;
@@ -101,7 +105,7 @@ let fastUntil = 0;
 const pollState = coalesce(async () => {
   try {
     const st = await api<State>("GET", "api/state");
-    S.state = { sessions: st.sessions || [], approvals: st.approvals || [], core: st.core || { up: false }, loaded: true, loadError: null };
+    S.state = { sessions: st.sessions || [], approvals: st.approvals || [], core: st.core || { up: false }, budget: st.budget ?? null, fly: st.fly ?? null, flyApp: st.flyApp, loaded: true, loadError: null };
   } catch (e: any) { S.state = { ...S.state, loadError: e.message }; }
   S.refreshing = false; emit();
   // a session is on its way somewhere: follow it closely
@@ -129,7 +133,7 @@ export function start() {
 
 export const loadRecords = coalesce(async () => {
   S.records = { ...S.records, loading: true }; emit();
-  try { const j = await api<{ records: Session[] }>("GET", "api/records"); S.records = { ...S.records, items: j.records || [], err: null, loaded: true }; }
+  try { const j = await api<{ records: Rec[] }>("GET", "api/records"); S.records = { ...S.records, items: j.records || [], err: null, loaded: true }; }
   catch (e: any) { S.records = { ...S.records, err: e.message }; }
   S.records = { ...S.records, loading: false }; emit();
 });

@@ -5,6 +5,7 @@
 import { ScrollView, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useStore, setTab, refresh, TABS, type Tab } from "../lib/store";
+import { sessionTitle, usd } from "../lib/api";
 import { useTheme } from "../theme";
 import { Button, Callout, Heading, IconButton, Spinner, Tabs } from "../ui/kit";
 import { TopBar, openPage } from "../ui/page";
@@ -16,10 +17,15 @@ import { Settings } from "../views/Settings";
 
 function Banners() {
   const st = useStore((s) => s.state);
+  const b = st.budget, dead = st.sessions.filter((m) => m.authFailed);
   return (
     <View nativeID="banners">
       {!!st.loadError && <Callout color="red" mb={3}>{"Can't reach the router: " + st.loadError}</Callout>}
       {st.loaded && !st.core.up && <Callout color="amber" mb={3}>The core is not answering — sessions can't be created, resumed or approved until it is back.</Callout>}
+      {dead.length > 0 && <Callout color="red" mb={3} id="banner-creds">{`Claude's login failed in ${dead.length === 1 ? "“" + sessionTitle(dead[0]) + "”" : dead.length + " sessions"}. The router writes Jarvis 1's credentials into a session whose login expired; if this stays, re-login in Jarvis 1's Settings.`}</Callout>}
+      {b?.capped ? <Callout color="red" mb={3} id="banner-budget">{`Fly spend reached the ${usd(b.capUsd)} cap for ${b.month} (${usd(b.spentUsd)}): the router paused every running session.`}</Callout>
+        : b?.warned ? <Callout color="amber" mb={3} id="banner-budget">{`Fly spend this month: ${usd(b.spentUsd)} of the ${usd(b.capUsd)} cap. At the cap every running session is paused.`}</Callout> : null}
+      {!!st.fly?.error && st.fly.error !== "FLY_READ_TOKEN not set" && <Callout color="red" mb={3}>{"Fly: " + st.fly.error}</Callout>}
     </View>
   );
 }

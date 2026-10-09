@@ -2,7 +2,8 @@
 // a throwaway box key) and the backup bucket on a local S3 stand-in seeded by infra/setup.py's own code
 // (ios/ci/standin.py): the identity and its 8 words, the recovery kit formats, reading + checking + decrypting
 // the backups, recovery itself, the signed store list (sensitivity), create / mark sensitive, split-key
-// unlock, approvals (new session, add a store, resume on the latest image) — and the refusals: a box
+// unlock, approvals (new session, add a store, resume on the latest image), grants (the session cert, the
+// draft checks) — and the refusals: a box
 // signature by another key, a tampered backup, wrong bucket credentials, a wrong master key, no core store,
 // a statement for another core or bundle, a second recovery, a forged phone signature, a wrong share.
 // Configuration (env): INTEROP_CORE, INTEROP_S3_ENDPOINT, INTEROP_S3_KIT ("jarvis2-s3:<access>:<secret>"),
@@ -178,6 +179,43 @@ let (c1s, c1d) = call("/certify", ["approval": docJSON(a1!), "machine": m1.id])
 check(c1s == 200, "the approval certifies the started machine")
 let cert1 = doc(c1d)
 
+// ---- grants: the session's cert, then the router's draft checked against what the grant page chose ----
+let sc = try? Checks.cert(cert1, coreKey: coreKey)
+check(sc != nil && sc!.line == m1.id && sc!.phone == phone.signingKey && sc!.sensitive == false && (sc!.stores ?? []) == ["claude-login", "default"],
+      "the session cert names its line, this phone and its stores (\(sc?.line ?? "?"))")
+check(throwsErr { _ = try Checks.cert(SignedDoc(payload: cert1.payload, sig: ch1.sig), coreKey: coreKey) }, "a cert with another signature is refused")
+let holderKey = P256.KeyAgreement.PrivateKey().publicKey.x963Representation.base64EncodedString()
+func iso(_ d: Date) -> String { let f = ISO8601DateFormatter(); f.formatOptions = [.withInternetDateTime]; return f.string(from: d) }
+func grantText(_ f: [String: Any]) -> String { String(decoding: try! JSONSerialization.data(withJSONObject: f, options: [.sortedKeys]), as: UTF8.self) }
+let now = Date()
+let good: [String: Any] = ["kind": "grant", "holder": holderKey, "session": m1.id, "scope": "shell", "issued": iso(now), "expires": iso(now.addingTimeInterval(600))]
+func review(_ f: [String: Any], kind: String = "grant", minutes: Int = 10, until: Date? = nil, cert c: SessionCert? = sc, phoneKey: String = phone.signingKey) -> Bool {
+  guard let c else { return false }
+  return !throwsErr { _ = try Checks.reviewGrant(text: grantText(f), cert: c, phoneKey: phoneKey, holderKey: holderKey, kind: kind, minutes: minutes, until: until, now: now) }
+}
+check(review(good), "a 10-minute grant for this line and holder passes")
+var g2 = good; g2["session"] = "other-line"
+check(!review(g2), "…refused for another line")
+g2 = good; g2["holder"] = phone.signingKey
+check(!review(g2), "…refused for another holder")
+g2 = good; g2["expires"] = iso(now.addingTimeInterval(1200))
+check(!review(g2), "…refused when longer than chosen")
+check(!review(good, minutes: 11), "…refused beyond 10 minutes")
+g2 = good; g2["scope"] = "root"
+check(!review(g2), "…refused with another scope")
+g2 = good; g2["extra"] = "x"
+check(!review(g2), "…refused with an extra field")
+g2 = good; g2["issued"] = iso(now.addingTimeInterval(-3600)); g2["expires"] = iso(now.addingTimeInterval(-3000))
+check(!review(g2), "…refused when not issued now")
+check(!review(good, phoneKey: P256.Signing.PrivateKey().publicKey.x963Representation.base64EncodedString()), "…refused when the cert names another phone")
+let end = now.addingTimeInterval(30 * 86400)
+let rule: [String: Any] = ["kind": "rule", "holder": holderKey, "session": m1.id, "scope": "shell", "issued": iso(now), "until": iso(end)]
+check(review(rule, kind: "rule", until: end), "a standing rule until the chosen date passes")
+check(!review(rule, kind: "rule", until: end.addingTimeInterval(86400)), "…refused for another date")
+check(!review(rule, kind: "grant"), "…refused as a grant")
+let sig = try! phoneSigning.signature(for: Data(grantText(good).utf8)).derRepresentation.base64EncodedString()
+check(CoreCrypto.valid(Data(grantText(good).utf8), sig: sig, by: sc?.phone ?? ""), "the phone's signature checks against the key in the cert (what the machine does)")
+
 // add a store (the machine exists)
 let ch2 = challenge(["predecessor": docJSON(cert1), "machine": m1.id, "stores": ["claude-login", "default", "gmail"], "options": ["harness": "claude"]])
 let r2 = try! Checks.review(challenge: ch2, coreKey: coreKey)
@@ -195,6 +233,15 @@ let (a3s, a3) = approve(ch3)
 check(a3s == 200 && !throwsErr { try Checks.answerFor(r3, answer: a3!, coreKey: coreKey) }, "the phone approves the resume")
 let m2 = start("img2")
 check(call("/certify", ["approval": docJSON(a3!), "machine": m2.id]).0 == 200, "…and the new machine is certified")
+
+// a sensitive line: no standing rule
+let ch4 = challenge(["predecessor": NSNull(), "stores": ["gmail"], "options": ["harness": "claude"], "image": "img"])
+if case (200, let a4?) = approve(ch4), case let (200, c4d) = call("/certify", ["approval": docJSON(a4), "machine": start("img").id]),
+   let sc4 = try? Checks.cert(doc(c4d), coreKey: coreKey) {
+  check(sc4.sensitive == true, "a session with a sensitive store has a sensitive cert")
+  var r4 = rule; r4["session"] = sc4.line
+  check(!review(r4, kind: "rule", until: end, cert: sc4), "…and the grant page refuses a standing rule for it")
+} else { check(false, "a sensitive session certifies") }
 
 // ---- lock ----
 let lk = try? CoreCrypto.decode(doc(call("/lock", ["id": u?.id ?? ""]).1), by: coreKey, as: KindDoc.self, what: "locked")

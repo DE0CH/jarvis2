@@ -6,7 +6,7 @@ import { useEffect, useRef, useState } from "react";
 import { api, newId, CORE_STORE, harnessStoreSet } from "../lib/api";
 import { useStore, loadStores, refresh, settle, toast, failed } from "../lib/store";
 import { hasShell, requestSecure } from "../lib/shell";
-import { Button, CheckboxCards, Flex, Lbl, Muted, RadioCards, Spinner, TextArea, TextField } from "../ui/kit";
+import { Button, CheckboxCards, Flex, Lbl, Muted, RadioCards, Segmented, Spinner, TextArea, TextField } from "../ui/kit";
 import { BtnLabel } from "../ui/bits";
 import { Page, useDone } from "../ui/page";
 
@@ -25,14 +25,17 @@ export function NewSession() {
   const models = MODELS.filter((m) => hasShell || (m.harness || "claude") === harness);
   useEffect(() => { setModel((m) => (models.some((x) => x.id === m) ? m : models[0]?.id || "")); }, [harness, models.map((m) => m.id).join(",")]);
   const [label, setLabel] = useState(""), [prompt, setPrompt] = useState("");
+  // one-shot: the session runs its prompt, then is archived and destroyed by itself (never auto-paused)
+  const [mode, setMode] = useState("session"), [autoPause, setAutoPause] = useState<string[]>(["on"]);
+  const oneShot = mode === "oneshot";
   const [busy, setBusy] = useState<string | null>(null);
   const done = useDone();
   // one create per form: the router answers a repeat of this id with the first create
   const requestId = useRef(newId());
-  const canStart = !busy && (hasShell || picked.length > 0);
+  const canStart = !busy && (hasShell || picked.length > 0) && !(oneShot && !prompt.trim());
   function start() {
     if (!canStart) return;
-    const body = { requestId: requestId.current, label: label.trim(), prompt: prompt.trim(), model, permissionMode: perm, size, harness, stores: picked };
+    const body = { requestId: requestId.current, label: label.trim(), prompt: prompt.trim(), model, permissionMode: perm, size, harness, stores: picked, oneShot, autoPause: !oneShot && autoPause.includes("on") };
     if (hasShell) {
       // the form stays underneath the shell's page: Back there returns to it as it was
       setBusy("Opening…");
@@ -50,8 +53,10 @@ export function NewSession() {
   return (
     <Page title="New session" onSubmit={canStart ? start : undefined}
       right={<Button id="ns-start" disabled={!canStart} onPress={start}>{busy ? <><Spinner /><BtnLabel>{busy}</BtnLabel></> : hasShell ? "Continue" : "Start"}</Button>}>
-      <Lbl>First prompt (optional)</Lbl>
-      <TextArea id="ns-prompt" rows={4} autoCapitalize="sentences" placeholder="Typed into the session as its first message once it is up." value={prompt} onChangeText={setPrompt} />
+      <Segmented id="ns-mode" value={mode} onChange={setMode} items={[["session", "Session"], ["oneshot", "One-shot"]]} />
+      <Lbl>{oneShot ? "Prompt" : "First prompt (optional)"}</Lbl>
+      <TextArea id="ns-prompt" rows={4} autoCapitalize="sentences" placeholder={oneShot ? "The one job for this session. Claude runs it, then the session is archived and destroyed." : "Typed into the session as its first message once it is up."} value={prompt} onChangeText={setPrompt} />
+      {oneShot && <Muted mt={1}>Needs a prompt. If Claude asks you something, the session waits (“needs you”) until you answer, then finishes.</Muted>}
       <Lbl>Session title (optional)</Lbl>
       <TextField id="ns-title" autoComplete="off" autoCorrect={false} autoCapitalize="sentences" placeholder="e.g. refactor billing module" value={label} onChangeText={setLabel} />
       <Lbl>Secret stores</Lbl>
@@ -76,6 +81,8 @@ export function NewSession() {
       ]} />
       {models.length > 0 && <><Lbl>Model</Lbl>
         <RadioCards id="ns-model" value={model} onChange={setModel} options={models.map((m) => ({ value: m.id, title: m.label || m.id, sub: m.id }))} /></>}
+      {!oneShot && <><Lbl>Idle</Lbl>
+        <CheckboxCards id="ns-autopause" value={autoPause} onChange={setAutoPause} options={[{ value: "on", title: "Auto-pause when idle", sub: "Pauses the machine after 1 h with nothing running. Resume brings it back — the conversation and your files are kept." }]} /></>}
       {SIZES.length > 0 && <><Lbl>Machine size</Lbl>
         <RadioCards id="ns-size" value={size} onChange={setSize} options={SIZES.map((s) => ({ value: s.id, title: s.id[0].toUpperCase() + s.id.slice(1), sub: s.label }))} /></>}
     </Page>

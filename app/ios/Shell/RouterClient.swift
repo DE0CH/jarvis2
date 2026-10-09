@@ -148,4 +148,22 @@ final class RouterClient: NSObject, ASWebAuthenticationPresentationContextProvid
   func createSession(_ body: [String: Any]) async throws { let _: [String: String?] = try await json("POST", "api/sessions", body) }
   func respond(_ id: String, signature: Data) async throws -> RespondDTO { try await json("POST", "api/approvals/\(id)/respond", ["signature": signature.base64EncodedString()]) }
   func reject(_ id: String) async throws { let _: [String: Bool] = try await json("POST", "api/approvals/\(id)/reject") }
+
+  // ---- grants (the session's cert is checked against the pinned core key) ----
+  func sessionCert(_ session: String) async throws -> SessionCert {
+    try Checks.cert(try await json("GET", "api/sessions/\(session)/cert", as: SignedDoc.self), coreKey: try CoreTrust.key())
+  }
+  /// the router's features and their public keys (the router owns every one of them)
+  func holders() async throws -> [String: String] {
+    struct H: Decodable { let holders: [String: String] }
+    return try await json("GET", "api/holders", as: H.self).holders
+  }
+  func draftGrant(_ session: String, _ body: [String: Any]) async throws -> String {
+    struct T: Decodable { let text: String }
+    return try await json("POST", "api/sessions/\(session)/grants/draft", body, as: T.self).text
+  }
+  struct StoredGrantDTO: Decodable { let id: String; let holder: String; let kind: String; let ends: String }
+  func addGrant(_ session: String, payload: String, sig: Data) async throws -> StoredGrantDTO {
+    try await json("POST", "api/sessions/\(session)/grants", ["payload": payload, "sig": sig.base64EncodedString()])
+  }
 }

@@ -1,7 +1,7 @@
 // Jarvis 2: a small native shell that owns the window. The whole Jarvis React Native UI runs in the
 // bundled ExtensionKit extension (JarvisUI), in its own process, shown full-screen in normal mode. Anything
 // may ask to ENTER secure mode (XPC requestSecureMode) on one of the shell's pages — new session, an
-// approval, stores, recovery, the master key; only this shell's own code leaves it. In secure mode the extension's view is
+// approval, stores, recovery, the master key, a grant; only this shell's own code leaves it. In secure mode the extension's view is
 // removed — it cannot draw or receive taps — and the shell pushes its own page over a still snapshot of the
 // app with the native push motion (no sheets: forms are pages), so the switch looks seamless. Back pops it
 // to the right; a finished action leaves to the left. The shell also owns sign-in (RouterClient) and hands
@@ -25,7 +25,7 @@ struct Jarvis2App: App {
 
 enum Mode: Equatable { case normal, secure }
 /// the shell's secure pages
-enum Route: Equatable { case newSession, approval(String), stores, recovery, masterKey }
+enum Route: Equatable { case newSession, approval(String), stores, recovery, masterKey, grant(String) }
 
 @Observable
 final class Shell {
@@ -97,6 +97,9 @@ final class Shell {
       guard let id = opts["approvalId"] as? String else { log("approval without an id refused"); return }
       route = .approval(id)
     case "stores": route = .stores
+    case "grant":
+      guard let id = opts["sessionId"] as? String else { log("grant without a session refused"); return }
+      route = .grant(id)
     case "recovery": route = .recovery
     case "master-key": route = .masterKey
     default: log("secure request of unknown kind refused"); return
@@ -202,6 +205,7 @@ struct SecurePageFor: View {
     case .stores: SecureStores(shell: shell)
     case .recovery: RecoveryPage(shell: shell)
     case .masterKey: MasterKeyPage(shell: shell)
+    case .grant(let id): SecureGrant(shell: shell, sessionId: id, options: shell.secureOptions)
     }
   }
 }

@@ -45,9 +45,9 @@ Carried over from the mock (DE0CH/jarvis2-mock DECISIONS.md) unless marked new.
    source: the shell's Info.plist). A refusal (ended on cloudflareaccess.com, a non-JSON 401/403, or the
    router's "Access login required") opens the sheet again and retries once. No sign-in screen on launch:
    the first refused request opens the sheet.
-9. **Cut from the React Native app** (the router doesn't have them): tasks, schedules, terminal, content,
-   search, wakeups, remotes, devices, repos, environments editor, usage, transcripts, attachments, one-shot,
-   auto-pause, API proxy, Fly account. Their code and dependencies are gone, not hidden.
+9. **Not in the React Native app yet** (the router doesn't have them, or they need a native module the extension
+   doesn't carry): tasks, content stores, devices, the Search tab, first-prompt attachments (a file picker).
+   Everything else Jarvis 1's dashboard has is back (items 23–31).
 10. **The image** shows as the ref the core read from Fly (on approval pages); the GitHub build attestation
     ("CI build from <date>") isn't checked yet.
 11. **iPhone only** (`TARGETED_DEVICE_FAMILY = 1`), portrait + landscape.
@@ -65,7 +65,9 @@ Carried over from the mock (DE0CH/jarvis2-mock DECISIONS.md) unless marked new.
 14. **CI walkthrough** runs twice (light, dark), each against a fresh core + router and a reset simulator
     keychain, because a core is recovered once: recovery (words checked against the core's log) → stores
     (create, unlock; the core's own and the harness's stores hidden, a marker-sensitive store sensitive) → new
-    session → pause → resume → resume with the latest image → destroy → records → the master key page.
+    session → grants (a 10-minute grant and a standing rule signed on the grant page, one forgotten) →
+    schedules (a wakeup, a cron) → terminal → pause → transcript → resume with a prompt → resume with the latest
+    image → destroy → previous (remove) → settings → the master key page.
 
 16. **New: the recovery kit formats** (what Deyao keeps in the password manager, two entries):
     `jarvis2-master:<base64 PKCS#8 DER of the P-256 private key>` (the body of a PEM "PRIVATE KEY" block, so
@@ -96,6 +98,50 @@ Carried over from the mock (DE0CH/jarvis2-mock DECISIONS.md) unless marked new.
 22. **Backups are refused whole** when any object under `stores/` or `sensitive/` isn't signed by the setup
     key, names another store, or doesn't open with the master key: a tampered bucket stops the recovery rather
     than quietly dropping a store.
+
+23. **New: grants are signed on a shell page, never from text the React Native UI hands over.** There is no
+    generic "sign this text" call: the UI only opens the secure **grant page** (kind `grant`, with a
+    pre-selection: session, feature, minutes or standing rule). The page reads the session's **core-signed
+    cert** (`GET api/sessions/:id/cert`, checked against the pinned core key) for the line, the stores, whether
+    the session is sensitive and which phone it trusts; Deyao picks the feature (terminal, scheduler, status,
+    login repair, archive check — each described in words), 1/2/5/10 minutes or a standing rule with an end date
+    (offered only when the cert says the session isn't sensitive, since the machine would refuse it), and reads
+    one sentence of what it means ("Terminal may run commands as the session's user in “X” for 10 minutes (until
+    14:32)"). Allow asks the router for the draft, checks it field for field against those choices
+    (`Checks.reviewGrant`: kind, the holder's key, the cert's line, scope `shell`, issued now, exactly the minutes
+    or the end date, no extra fields, and that the cert names this phone), signs it with the same Secure Enclave
+    key as approvals (one Face ID, whose prompt says the same sentence) and stores it (`POST …/grants`); the
+    stored grant must come back for that feature and kind. Interop covers the cert and the checks against the
+    real core.
+24. **New: the feature→key list (`GET api/holders`) is the router's word.** Every holder key belongs to the
+    router, so a router that lied about which key is "terminal" could only hand a grant to another of its own
+    features; the line (from the core's cert) and the duration are what bind the grant, and those are checked.
+25. **New: the session's card** carries what `/api/state` reports: Jarvis 1's status pill (working / needs you /
+    idle · N background / booting / done · archiving), the auto-pause line (countdown, off, one-shot), Claude's
+    failed login, the queued resume prompt, wakeups and crons (a blue box; a paused session with any is in
+    the "Scheduled" group), a `needsGrant` box with **Allow <feature> for 10 minutes** and **Make a standing rule**
+    (both open the grant page), and a link to its Discord channel. More: Grants…, Schedules…, Auto-pause when
+    idle and Idle notifications (two-phase switches with a check mark), Resume with latest image, Destroy.
+26. **New: Resume asks for an optional prompt** in the same dialog (delivered as a message once the session is
+    up); **Destroy** first lists uncommitted / unpushed work (`/changes`), and when the archive fails offers
+    "Destroy anyway" (`?force=1`). A paused session has **Transcript** (its snapshot's tail).
+27. **New: the terminal draws the tmux capture as React Native text** (ui/ansi.ts parses the colour escapes; the
+    cursor cell is inverted) instead of Jarvis 1's xterm.js in a WebView: the extension carries no WebView, and
+    the router only sends snapshots anyway. Same page otherwise (always dark, key row, input bar on the keyboard,
+    one snapshot a second, resize to fit). When the phone hasn't granted the terminal it says so and offers
+    "Allow terminal for 10 minutes". It is offered while initialising too.
+28. **New: Schedules page per session** (More → Schedules…): the armed wakeups and crons with Cancel, and a form
+    to arm one (once in N minutes, or daily at HH:MM in the device's zone / every N hours), plus a shortcut to a
+    standing rule for the scheduler. Jarvis 1 only listed them; the router has the app routes, so the page can.
+29. **New: "Records" is called Previous again** (Jarvis 1's name). Each card: Restore (a new line; the phone
+    approves it like a new session, and the approval opens by itself), Transcript (the archive's tail), Remove
+    (off the list, the archive stays) and Delete (the archive too; type the title).
+30. **New: Fly spend** in Settings (spent / cap, rate, running machines, the DM and pause thresholds) and as a
+    banner when warned or capped; "Also on Fly" under the sessions as in Jarvis 1. Banners also for a Claude
+    login that failed in a session and a Fly read error.
+31. **New: Settings → Claude account** is a link to Jarvis 1 (re-login, usage and the token live there).
+    New session has One-shot (needs a prompt) and the auto-pause switch, carried through the secure page; the
+    approval page shows one-shot and a restore's source (the router's word, not signed).
 
 ## Unfinished / known gaps
 

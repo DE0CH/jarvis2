@@ -7,7 +7,8 @@ extension** (its own process) — claude-env `selfhost/SECRETS-CONTROLLER.md`, l
 router exactly as `docs/API.md` says. Design choices to review: [DECISIONS.md](DECISIONS.md).
 
 ```
-src/                 React Native UI (expo-router): sessions + approvals, stores, records, settings, new session
+src/                 React Native UI (expo-router): sessions + approvals, stores, previous sessions, settings, new
+                     session, and the pages: terminal, transcript, grants, schedules
 ios/Shell/           the shell (Swift, Apple frameworks only)
   CoreCrypto.swift   the core's formats, the identity words, the kit, the checks around signing (no UI/network)
                      — also compiled into ios/interop
@@ -18,6 +19,7 @@ ios/Shell/           the shell (Swift, Apple frameworks only)
   RouterClient.swift sign-in (ASWebAuthenticationSession) + the router/core calls, every core answer verified
   SecurePages.swift  New session, approvals (new-session / resume-upgrade / add-store), stores, recovery,
                      the master key
+  Grants.swift       the grant page: a feature in a session for minutes, or a standing rule (signed here)
   Jarvis2App.swift   window, normal ⇄ secure mode, XPC with the extension
 ios/Extension/       the extension: React Native started like Expo's AppDelegate; ShellBridge (JS ⇄ shell)
 ios/Shared/          the XPC protocols
@@ -46,7 +48,8 @@ reject an approval and pause/resume/destroy; approvals happen only in the app (i
   the runner, the app built with `JARVIS_BASE=http://127.0.0.1:18080/` and `JARVIS_CI_FLAG=JARVIS_CI` (keys
   and bucket from the stand-ins), then the UI walkthrough once light, once dark (fresh core, router and
   simulator keychain each time): recovery → stores → new session (secure page, software key) → pause →
-  resume → resume with the latest image (approval) → destroy → records → master key page. Screenshots: the
+  grants → schedules → terminal → resume (prompt) → resume with the latest image (approval) → destroy →
+  previous → settings → master key page. Screenshots: the
   run's `results` artifact (`light/`, `dark/`).
 - **testflight** (main only, after the others pass) — archive with cloud signing (App Store Connect API key:
   repo secrets `ASC_KEY_ID` / `ASC_ISSUER_ID` / `ASC_PRIVATE_KEY`), upload; build number = the run number.

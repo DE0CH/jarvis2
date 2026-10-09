@@ -241,14 +241,14 @@ export function Switch({ on, onChange, label, id }: { on: boolean; onChange: (v:
     </Pressable>
   );
 }
-export function Segmented({ value, onChange, items, style }: { value: string; onChange: (v: string) => void; items: [string, string][]; style?: StyleProp<ViewStyle> }) {
+export function Segmented({ value, onChange, items, style, id }: { value: string; onChange: (v: string) => void; items: [string, string][]; style?: StyleProp<ViewStyle>; id?: string }) {
   const t = useTheme();
   return (
     <View style={[{ flexDirection: "row", height: 24, borderRadius: radius[2], backgroundColor: t.gray.a[3], padding: 0, width: "100%", maxWidth: 420 }, style]}>
       {items.map(([v, l]) => {
         const on = v === value;
         return (
-          <Pressable key={v} {...ids(undefined, { value: v })} accessibilityRole="tab" accessibilityState={{ selected: on }} onPress={() => onChange(v)}
+          <Pressable key={v} {...ids(id ? id + "-" + v : undefined, { value: v })} accessibilityRole="tab" accessibilityState={{ selected: on }} onPress={() => onChange(v)}
             style={{ flex: 1, alignItems: "center", justifyContent: "center", borderRadius: radius[2], backgroundColor: on ? (t.scheme === "dark" ? t.gray.a[4] : t.panel) : "transparent", borderWidth: on ? 1 : 0, borderColor: t.gray.a[5] }}>
             <RNText style={{ fontSize: 12, lineHeight: 16, color: on ? t.gray[12] : t.gray.a[11], fontWeight: on ? "500" : "400" }}>{l}</RNText>
           </Pressable>

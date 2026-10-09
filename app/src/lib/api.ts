@@ -54,11 +54,27 @@ export async function api<T = any>(method: string, path: string, body?: unknown)
 
 // ---- the router's shapes (docs/API.md) ----
 export type SessionState = "starting" | "approval" | "initialising" | "started" | "pausing" | "paused" | "resuming" | "destroying" | "failed";
+export type Wakeup = { name: string; at: number; atIso?: string; prompt: string };
+export type Cron = { name: string; prompt: string; everySeconds: number; tz?: string; nextAt: number; nextAtIso?: string; until?: number | null; untilIso?: string | null; runs?: number; lastFiredIso?: string | null };
+export type Refusal = { kind: "fallback" | "refusal"; at?: string; from?: string; to?: string; model?: string; category?: string };
 export type Session = {
   id: string; machineId?: string | null; released?: boolean; name?: string; state: SessionState | string; status?: string | null;
   created?: string; region?: string; environment?: string; harness?: string; label?: string; model?: string;
   permissionMode?: string; guest?: string; stores?: string[] | null; size?: string; image?: string; pausedAt?: string | null; error?: string | null; title?: string; destroyedAt?: string;
+  // live fields (docs/API.md "Sessions"): the machine's report, the autopilot's settings, the schedule
+  aiTitle?: string; liveName?: string; userTitle?: string; bgTasks?: number; needsGrant?: string; pauseInMs?: number;
+  autoPause?: "on" | "off"; notifyIdle?: "on" | "off"; oneShot?: boolean; oneShotDone?: boolean; authFailed?: boolean;
+  credsExpiresAt?: string | number; discordChannel?: string; statusUpdatedAt?: string; lastReport?: string; refusals?: Refusal[];
+  wakeups?: Wakeup[]; crons?: Cron[]; resumePrompt?: string; createRequestId?: string;
 };
+export type TailMessage = { role: "user" | "assistant"; text: string; at?: string };
+export type ArchiveInfo = { dir: string; title: string; transcripts: string[]; artifacts: number; signer?: string; snapshotAt?: string; last?: TailMessage | null };
+/** a destroyed session (GET api/records): the session's fields plus where its archive is */
+export type Rec = Session & { destroyedAt: string; archive?: ArchiveInfo | null; archiveError?: string; restored?: { sessionId: string; at: string }[]; live?: { oneShot?: boolean } };
+export type Grant = { id: string; session: string; holder: string; kind: "grant" | "rule"; ends: string };
+export type Budget = { month: string; spentUsd: number; capUsd: number; warnUsd: number; warned: boolean; capped: boolean; cappedAt?: string | null; ratePerHour: number; perMonth: number; running: number; volumes: number; sampledAt?: string | null };
+export type FlyOther = { kind: string; app: string; id: string; name?: string; state?: string; region?: string; created?: string; detail?: string };
+export type FlyView = { apps: number; machines: number; volumes: number; other: FlyOther[]; error?: string | null; checkedAt?: string | null };
 export type SignedDoc = { payload: string; sig: string };
 export type ApprovalKind = "new-session" | "resume-upgrade" | "add-store";
 export type Approval = {
@@ -68,6 +84,7 @@ export type Approval = {
 export type CoreStatus = { up: boolean; signingKey?: string; agreementKey?: string };
 export type State = {
   sessions: Session[]; approvals: Approval[]; core: CoreStatus;
+  budget?: Budget | null; fly?: FlyView | null; flyApp?: string;
   loadError?: string | null; // client-side: the last api/state fetch failed
   loaded?: boolean; // client-side: api/state has answered at least once
 };
@@ -111,7 +128,30 @@ export function ago(iso: string | Date) {
   const s = Math.max(0, (Date.now() - new Date(iso).getTime()) / 1000);
   if (s < 60) return "just now"; if (s < 3600) return Math.floor(s / 60) + " min ago"; if (s < 86400) return Math.floor(s / 3600) + " h ago"; return Math.floor(s / 86400) + " d ago";
 }
-export const sessionTitle = (m: Session) => m.title || m.label || m.name || m.id;
+export const sessionTitle = (m: Session) => m.userTitle || m.label || m.aiTitle || m.title || m.name || m.id;
+export const usd = (n: number) => "USD " + (Math.round(n * 100) / 100).toFixed(2);
+/** "at 07:52" / "Oct 12 07:52", with how far away it is */
+export function when(at: number | string) {
+  const t = typeof at === "number" ? at : Date.parse(at);
+  const d = new Date(t), now = new Date();
+  const hm = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  const mins = Math.round((t - Date.now()) / 60000);
+  const rel = mins < 1 ? "now" : mins < 120 ? `in ${mins} min` : mins < 48 * 60 ? `in ${Math.round(mins / 60)} h` : `in ${Math.round(mins / 1440)} d`;
+  return `${d.toDateString() === now.toDateString() ? "at " + hm : d.toLocaleDateString([], { month: "short", day: "numeric" }) + " " + hm} (${rel})`;
+}
+/** "daily" / "every 6 h" / "every 3 d" */
+export function cronEvery(sec: number) {
+  return sec === 86400 ? "daily" : sec === 604800 ? "weekly" : sec % 86400 === 0 ? `every ${sec / 86400} d` : sec % 3600 === 0 ? `every ${sec / 3600} h` : `every ${Math.round(sec / 60)} min`;
+}
+// the features that may hold a grant (router/grants.go), in words — the shell's grant page says the same
+export const HOLDERS: Record<string, { title: string; sub: string }> = {
+  terminal: { title: "Terminal", sub: "read the screen and type into the session" },
+  scheduler: { title: "Scheduler", sub: "deliver wakeups and crons as messages" },
+  status: { title: "Status", sub: "read the screen, press Escape on a prompt left waiting" },
+  login: { title: "Login repair", sub: "write fresh Claude credentials and send “continue”" },
+  archive: { title: "Archive check", sub: "list uncommitted work before a destroy" },
+};
+export const holderTitle = (h: string) => HOLDERS[h]?.title || h;
 // the store named `core` holds the core's own Fly token: it never shows for sessions (the core keeps it out of
 // its store list; the filter is only a second guard)
 export const CORE_STORE = "core";

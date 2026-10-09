@@ -4,8 +4,10 @@ import XCTest
 /// and router running on the CI runner, with the backups on a local S3 stand-in, keeping a screenshot of every
 /// step. CI runs it once per appearance (light, then dark), each time against a fresh core and router and a
 /// reset simulator keychain, so each pass recovers from scratch: recovery (8 words, the test master key, the
-/// stand-in bucket's keys) → stores (create, unlock) → new session (secure page, software key) → pause →
-/// resume → resume with the latest image (approval) → destroy → records → the master key page.
+/// stand-in bucket's keys) → stores (create, unlock) → new session (secure page, software key) → grants (a
+/// 10-minute grant and a standing rule on the secure grant page, forget one) → schedules (a wakeup and a cron)
+/// → terminal → pause → transcript → resume (with a prompt) → resume with the latest image (approval) →
+/// destroy (the changes check) → previous sessions → settings (Fly) → the master key page.
 final class Jarvis2UITests: XCTestCase {
   let app = XCUIApplication()
   var tag = "run"
@@ -110,7 +112,83 @@ final class Jarvis2UITests: XCTestCase {
     sleep(3)
     shot("session-created")
 
-    // ---- pause → resume (same image: the core's dead-machine responder, no approval)
+    // ---- grants: More → Grants… → the shell's grant page (a 10-minute terminal grant, then a standing rule
+    // for the scheduler) → listed → forget the terminal one
+    guard wait(prefixed("more-"), 60, "more button") else { return }
+    el(prefixed("more-").identifier).tap()
+    wait(el("menu-grants-"), 10, "menu grants")
+    shot("more-menu-running")
+    el("menu-grants-").tap()
+    if wait(el("grant-new-grant"), 20, "grants page") {
+      sleep(1)
+      shot("grants-empty")
+      el("grant-new-grant").tap()
+      if wait(el("grant-meaning"), 30, "secure grant page") {
+        el("grant-holder-terminal").tap()
+        el("grant-min-10").tap()
+        sleep(1)
+        note("\(tag)-grant-meaning", el("grant-meaning").label)
+        XCTAssertTrue(el("grant-meaning").label.contains("Terminal"), "[\(tag)] the grant page says which feature: \(el("grant-meaning").label)")
+        shot("secure-grant")
+        el("secure-grant-allow").tap()
+        wait(el("grant-forget-terminal"), 60, "terminal grant listed")
+        if el("secure-error").exists { note("\(tag)-grant-error", el("secure-error").label); shot("grant-error"); el("secure-back").tap() }
+        sleep(1)
+        shot("grants-one")
+      }
+      el("grant-new-rule").tap()
+      if wait(el("grant-meaning"), 30, "secure grant page (rule)") {
+        el("grant-holder-scheduler").tap()
+        if el("grant-kind-rule").exists { el("grant-kind-rule").tap() }
+        sleep(1)
+        shot("secure-grant-rule")
+        el("secure-grant-allow").tap()
+        wait(el("grant-forget-scheduler"), 60, "standing rule listed")
+        if el("secure-error").exists { note("\(tag)-rule-error", el("secure-error").label); shot("rule-error"); el("secure-back").tap() }
+        sleep(1)
+        shot("grants-two")
+      }
+      if el("grant-forget-terminal").exists {
+        el("grant-forget-terminal").tap()
+        wait(el("ask-ok"), 10, "forget question")
+        el("ask-ok").tap()
+        XCTAssertTrue(gone(el("grant-forget-terminal"), 30), "[\(tag)] forgotten grant gone")
+        shot("grants-forgot")
+      }
+      el("page-back").tap()
+    }
+
+    // ---- schedules: a wakeup in an hour and a daily cron
+    guard wait(prefixed("more-"), 30, "more button (schedules)") else { return }
+    el(prefixed("more-").identifier).tap()
+    wait(el("menu-schedules-"), 10, "menu schedules")
+    el("menu-schedules-").tap()
+    if wait(el("sch-prompt"), 20, "schedules page") {
+      el("sch-prompt").tap(); el("sch-prompt").typeText("CI wakeup: check the build")
+      el("sch-save").tap()
+      wait(el("sch-cancel-w-default"), 20, "wakeup armed")
+      el("sch-kind-cron").tap()
+      el("sch-prompt").tap(); el("sch-prompt").typeText("CI cron: daily summary")
+      el("sch-save").tap()
+      wait(el("sch-cancel-c-daily"), 20, "cron armed")
+      sleep(1)
+      shot("schedules")
+      el("page-back").tap()
+    }
+    sleep(2)
+    shot("session-scheduled")
+
+    // ---- the terminal page (a fake machine answers nothing: the page's chrome, status and key row)
+    if wait(prefixed("term-"), 20, "terminal button") {
+      el(prefixed("term-").identifier).tap()
+      if wait(el("term-in"), 20, "terminal page") {
+        sleep(3)
+        shot("terminal")
+        el("term-close").tap()
+      }
+    }
+
+    // ---- pause → transcript → resume with a prompt (same image: the core's dead-machine responder)
     guard wait(prefixed("pause-"), 60, "pause button") else { return }
     el(prefixed("pause-").identifier).tap()
     sleep(1)
@@ -118,7 +196,19 @@ final class Jarvis2UITests: XCTestCase {
     guard wait(prefixed("resume-"), 90, "paused session") else { return }
     sleep(1)
     shot("paused")
+    if wait(prefixed("tail-"), 10, "transcript button") {
+      el(prefixed("tail-").identifier).tap()
+      wait(el("page-back"), 10, "transcript page")
+      sleep(2)
+      shot("paused-transcript")
+      el("page-back").tap()
+    }
     el(prefixed("resume-").identifier).tap()
+    if wait(el("ask-text"), 10, "resume question") {
+      el("ask-text").tap(); el("ask-text").typeText("carry on")
+      shot("resume-question")
+      el("ask-ok").tap()
+    }
     sleep(1)
     shot("resuming")
     guard wait(prefixed("pause-"), 120, "resumed session") else { return }
@@ -150,7 +240,7 @@ final class Jarvis2UITests: XCTestCase {
     el(prefixed("more-").identifier).tap()
     wait(el("menu-destroy"), 10, "menu destroy")
     el("menu-destroy").tap()
-    wait(el("ask-ok"), 10, "destroy question")
+    wait(el("ask-ok"), 30, "destroy question (after the changes check)")
     shot("destroy-question")
     el("ask-ok").tap()
     XCTAssertTrue(gone(prefixed("more-"), 90), "[\(tag)] session gone from the list")
@@ -158,10 +248,21 @@ final class Jarvis2UITests: XCTestCase {
     shot("destroyed")
     el("tab-records").tap()
     sleep(3)
-    shot("records")
+    shot("previous")
+    if wait(prefixed("rremove-"), 15, "previous session card") {
+      el(prefixed("rremove-").identifier).tap()
+      wait(el("ask-ok"), 10, "remove question")
+      shot("previous-remove-question")
+      el("ask-ok").tap()
+      XCTAssertTrue(gone(prefixed("rremove-"), 30), "[\(tag)] removed from the list")
+      shot("previous-removed")
+    }
     el("tab-settings").tap()
     sleep(2)
     shot("settings")
+    app.swipeUp()
+    sleep(1)
+    shot("settings-more")
 
     // ---- the master key page (smoke): a fresh pair, the private kit and the public key
     el("open-master-key").tap()

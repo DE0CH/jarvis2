@@ -154,7 +154,7 @@ struct SecureNewSession: View {
       let key = try CoreTrust.key()
       busy = "Requesting…"
       var body: [String: Any] = ["requestId": rid, "stores": want, "harness": harness]
-      for k in ["label", "prompt", "model", "permissionMode", "size"] { if let v = options[k] { body[k] = v } }
+      for k in ["label", "prompt", "model", "permissionMode", "size", "oneShot", "autoPause"] { if let v = options[k] { body[k] = v } }
       try await RouterClient.shared.createSession(body)
       // the core's challenge comes before any machine exists
       var found: RouterClient.ApprovalDTO?
@@ -217,7 +217,12 @@ struct SecureApproval: View {
           Muted(text: "The paused session continues on a new machine running the image below, with the same stores and harness. Nothing happens until you approve; Reject leaves it paused.").padding(.top, 8)
           Lbl(text: "Secret stores"); StoreLines(stores: r.stores, sensitive: r.sensitive, harness: harnessStores)
         case .newSession:
-          Muted(text: "Requested outside this app (the web page or another device): check it is yours.").padding(.top, 8)
+          if let rs = a.options?["restore"], !rs.isEmpty {
+            Muted(text: "Restores the archived session \(rs): its first machine restores that snapshot (the router's word — not part of what you sign).").padding(.top, 8).accessibilityIdentifier("secure-restore")
+          } else {
+            Muted(text: "Requested outside this app (the web page or another device): check it is yours.").padding(.top, 8)
+          }
+          if a.options?["oneShot"] == "1" { Muted(text: "One-shot: it runs its prompt, then is archived and destroyed.").padding(.top, 4) }
           Lbl(text: "Secret stores"); StoreLines(stores: r.stores, sensitive: r.sensitive, harness: harnessStores)
         case .other:
           Muted(text: "A request this page has no special view for — what you sign is below.").padding(.top, 8)

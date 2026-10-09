@@ -218,3 +218,63 @@ enum Checks {
     }
   }
 }
+
+// ---- grants (docs/DESIGN.md "Grants"): what the phone signs to let a router feature into a session --------
+/// a line's succession cert (core/core.go Cert): the line grants name, the phone key the machine checks them
+/// against, and the stores the session holds
+struct SessionCert: Codable {
+  let kind: String
+  let stores: [String]?
+  let options: Options?
+  let phone: String?
+  let sensitive: Bool?
+  let line: String
+  let issuedAt: String?
+}
+/// the grant text (router/grants.go grantText) — exactly the router's draft, field for field
+struct GrantText: Codable, Equatable {
+  let kind: String, holder: String, session: String, scope: String, issued: String
+  let expires: String?, until: String?
+}
+
+extension Checks {
+  static let grantFields: Set<String> = ["kind", "holder", "session", "scope", "issued", "expires", "until"]
+  static func isoDate(_ s: String?) -> Date? {
+    guard let s else { return nil }
+    let f = ISO8601DateFormatter(); f.formatOptions = [.withInternetDateTime]
+    return f.date(from: s)
+  }
+
+  /// the session's cert, core-signed; it must name a line
+  static func cert(_ doc: SignedDoc, coreKey: String) throws -> SessionCert {
+    let c = try CoreCrypto.decode(doc, by: coreKey, as: SessionCert.self, what: "the session's cert")
+    guard c.kind == "succession-cert", !c.line.isEmpty else { throw TrustError.mismatch("not a session cert") }
+    return c
+  }
+
+  /// The router's draft must say exactly what was chosen on the grant page: this kind, this holder's key, the
+  /// cert's line, scope "shell", issued now, and `minutes` (1–10) for a grant or `until` for a standing rule.
+  /// The cert must name this phone (the machine checks the signature against it). Nothing else may be in it.
+  static func reviewGrant(text: String, cert: SessionCert, phoneKey: String, holderKey: String, kind: String,
+                          minutes: Int, until: Date?, now: Date = Date()) throws -> GrantText {
+    guard let obj = try? JSONSerialization.jsonObject(with: Data(text.utf8)) as? [String: Any],
+          Set(obj.keys).isSubset(of: grantFields),
+          let g = try? JSONDecoder().decode(GrantText.self, from: Data(text.utf8)) else { throw TrustError.mismatch("the grant text") }
+    guard cert.phone == phoneKey else { throw TrustError.mismatch("this session's cert names another phone") }
+    guard g.kind == kind else { throw TrustError.mismatch("kind") }
+    guard g.holder == holderKey else { throw TrustError.mismatch("feature") }
+    guard g.session == cert.line else { throw TrustError.mismatch("session") }
+    guard g.scope == "shell" else { throw TrustError.mismatch("scope") }
+    guard let issued = isoDate(g.issued), abs(issued.timeIntervalSince(now)) < 300 else { throw TrustError.mismatch("issued time") }
+    switch kind {
+    case "grant":
+      guard (1...10).contains(minutes), g.until == nil, let end = isoDate(g.expires),
+            abs(end.timeIntervalSince(issued) - Double(minutes * 60)) < 1 else { throw TrustError.mismatch("duration") }
+    case "rule":
+      guard cert.sensitive != true else { throw TrustError.mismatch("a sensitive session takes only a phone grant") }
+      guard g.expires == nil, let end = isoDate(g.until), let until, abs(end.timeIntervalSince(until)) < 2, end > now else { throw TrustError.mismatch("end date") }
+    default: throw TrustError.mismatch("kind")
+    }
+    return g
+  }
+}
