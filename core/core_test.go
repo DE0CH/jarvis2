@@ -1,15 +1,21 @@
 package main
 
 import (
+	"bytes"
 	"crypto/ecdh"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 // ---- fakes -------------------------------------------------------------------------------------
@@ -23,9 +29,12 @@ type fakeMachine struct {
 }
 
 type fakeFly struct {
-	n        int
-	machines map[string]*fakeMachine
+	n          int
+	machines   map[string]*fakeMachine
+	token, app string
 }
+
+func (f *fakeFly) Configure(token, app string) { f.token, f.app = token, app }
 
 func newFakeFly() *fakeFly { return &fakeFly{machines: map[string]*fakeMachine{}} }
 
@@ -387,20 +396,92 @@ func TestAddAStoreToARunningSession(t *testing.T) {
 	}
 }
 
-type flyConf struct{ token, app string }
+// the setup session's side, over HTTP through Handler: signed requests, sealed secrets
+func setupReq(t *testing.T, h http.Handler, key *phone, path string, body any, at time.Time) (int, []byte) {
+	t.Helper()
+	raw, _ := json.Marshal(body)
+	sum := sha256.Sum256(raw)
+	msg := fmt.Sprintf("POST %s %d %s", path, at.Unix(), hex.EncodeToString(sum[:]))
+	req := httptest.NewRequest("POST", path, bytes.NewReader(raw))
+	req.Header.Set("X-Setup-Time", strconv.FormatInt(at.Unix(), 10))
+	req.Header.Set("X-Setup-Sig", key.sign(msg))
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	return w.Code, w.Body.Bytes()
+}
 
-func (f *flyConf) Configure(token, app string) { f.token, f.app = token, app }
-
-func TestSetupFlyOnce(t *testing.T) {
-	c, _, _ := setup(t)
-	f := &flyConf{}
-	if _, err := c.SetupFly(f, "tok1", "app1"); err != nil {
+func TestSetupNeedsTheSetupKeysSignatureOnce(t *testing.T) {
+	c, err := NewCore(newFakeFly())
+	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := c.SetupFly(f, "tok2", "evil"); err == nil {
-		t.Fatal("a second Fly token was accepted")
+	setupKey, other := newPhone(), newPhone()
+	c.SetupKey = setupKey.signingKey()
+	h := Handler(c)
+	p := newPhone()
+	body := map[string]string{"signingKey": p.signingKey(), "agreementKey": p.agreementKey()}
+	if code, _ := setupReq(t, h, other, "/setup/phone", body, time.Now()); code != 401 {
+		t.Fatalf("another key's signature: %d", code)
 	}
-	if f.token != "tok1" || f.app != "app1" {
-		t.Fatalf("Fly config changed to %q/%q", f.token, f.app)
+	if code, _ := setupReq(t, h, setupKey, "/setup/phone", body, time.Now().Add(-10*time.Minute)); code != 401 {
+		t.Fatalf("an old signature: %d", code)
+	}
+	if code, b := setupReq(t, h, setupKey, "/setup/phone", body, time.Now()); code != 200 {
+		t.Fatalf("setup phone: %d %s", code, b)
+	}
+	// secrets must arrive sealed; a plain store is refused
+	if code, _ := setupReq(t, h, setupKey, "/setup/store", map[string]any{"name": "x", "values": map[string]string{"A": "1"}}, time.Now()); code != 400 {
+		t.Fatalf("plain values: %d", code)
+	}
+	k := c.Key()
+	vals, _ := json.Marshal(map[string]string{"A": "1"})
+	sv, _ := SealTo(k["agreementKey"], vals, infoSetup)
+	if code, b := setupReq(t, h, setupKey, "/setup/store", map[string]any{"name": "default", "values": sv}, time.Now()); code != 200 {
+		t.Fatalf("seed: %d %s", code, b)
+	}
+	if c.stores["default"] == nil || len(c.stores["default"].Keys) != 1 {
+		t.Fatal("store not seeded")
+	}
+}
+
+func TestASetupSignatureCantBeReplayed(t *testing.T) {
+	c, _ := NewCore(newFakeFly())
+	key := newPhone()
+	c.SetupKey = key.signingKey()
+	now := time.Now()
+	sum := sha256.Sum256([]byte("{}"))
+	m := fmt.Sprintf("POST /setup/phone %d %s", now.Unix(), hex.EncodeToString(sum[:]))
+	s := key.sign(m)
+	if err := c.checkSetupSig("POST", "/setup/phone", strconv.FormatInt(now.Unix(), 10), s, []byte("{}")); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.checkSetupSig("POST", "/setup/phone", strconv.FormatInt(now.Unix(), 10), s, []byte("{}")); err == nil {
+		t.Fatal("a used setup signature was accepted again")
+	}
+	if err := c.checkSetupSig("POST", "/setup/store", strconv.FormatInt(now.Unix(), 10), key.sign(m), []byte("{}")); err == nil {
+		t.Fatal("a signature for another path was accepted")
+	}
+}
+
+func TestTheCoreStoreConfiguresFlyWhileUnlocked(t *testing.T) {
+	c, f, p := setup(t)
+	if _, err := c.SeedStore(CoreStore, map[string]string{"FLY_API_TOKEN": "fly-secret", "FLY_APP": "jarvis2-sessions"}, false); err != nil {
+		t.Fatal(err)
+	}
+	if f.token != "" {
+		t.Fatal("Fly configured before the core store was unlocked")
+	}
+	id := unlock(t, c, p, CoreStore)
+	if f.token != "fly-secret" || f.app != "jarvis2-sessions" {
+		t.Fatalf("Fly not configured from the core store: %q %q", f.token, f.app)
+	}
+	st := pl(t)(c.Start(StartRequest{Image: "ghcr.io/de0ch/jarvis2-session:1"}))
+	m := st["machine"].(map[string]any)["id"].(string)
+	if _, err := c.Succession(SuccessionInput{Machine: m, Stores: []string{CoreStore}}); err == nil {
+		t.Fatal("the core store was offered to a session")
+	}
+	pl(t)(c.Lock(id))
+	if f.token != "" || f.app != "" {
+		t.Fatal("locking the core store left the Fly token in place")
 	}
 }

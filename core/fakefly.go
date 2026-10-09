@@ -15,11 +15,6 @@ import (
 	"sync"
 )
 
-type flyClient interface {
-	Fly
-	configurable
-}
-
 type fakeFlyMachine struct {
 	enc, sig  *ecdh.PrivateKey
 	destroyed bool
@@ -31,7 +26,7 @@ type FakeFly struct {
 	machines map[string]*fakeFlyMachine
 }
 
-func newFly() flyClient {
+func newFly() Fly {
 	log.Printf("FAKE FLY: built with -tags fakefly; no real machines")
 	return &FakeFly{machines: map[string]*fakeFlyMachine{}}
 }

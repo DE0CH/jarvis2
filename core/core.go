@@ -15,6 +15,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strconv"
 	"sync"
 	"time"
 )
@@ -80,14 +81,14 @@ type unlocked struct {
 }
 
 type Core struct {
-	mu         sync.Mutex
-	signer     *Signer
-	agreement  *ecdh.PrivateKey // the core's share K of every store's key
-	nonceKey   []byte
-	SetupToken string
+	mu        sync.Mutex
+	signer    *Signer
+	agreement *ecdh.PrivateKey // the core's share K of every store's key
+	nonceKey  []byte
+	SetupKey  string               // the setup session's public signing key (SETUP_KEY)
+	setupSeen map[string]time.Time // setup signatures already used (replay guard)
 
 	phoneSigning, phoneAgreement string
-	flyApp                       string // set once, like the phone's keys
 
 	stores  map[string]*Store
 	started map[string]*StartedMachine
@@ -118,9 +119,7 @@ func NewCore(fly Fly) (*Core, error) {
 	}
 	nk := make([]byte, 32)
 	rand.Read(nk)
-	tok := make([]byte, 24)
-	rand.Read(tok)
-	return &Core{signer: s, agreement: a, nonceKey: nk, SetupToken: hex.EncodeToString(tok),
+	return &Core{signer: s, agreement: a, nonceKey: nk, setupSeen: map[string]time.Time{},
 		stores: map[string]*Store{}, started: map[string]*StartedMachine{}, killed: map[string]bool{}, used: map[string]bool{},
 		pending: map[string]pendingUnlock{}, unlocked: map[string]*unlocked{}, fly: fly, now: time.Now}, nil
 }
@@ -165,7 +164,52 @@ func (c *Core) Key() map[string]string {
 	return map[string]string{"signingKey": c.signer.PublicKey(), "agreementKey": b64.EncodeToString(pub)}
 }
 
-// ---- setup (the trusted setup session, with the setup token) ------------------------------------
+// ---- setup (the trusted setup session, signing with the setup key) ------------------------------------
+
+const infoSetup = "jarvis2/setup"
+
+// CoreStore holds the core's own secrets, seeded and unlocked like any other store: while it is
+// unlocked the core can start and stop machines (FLY_API_TOKEN, FLY_APP); it never goes to a session.
+const CoreStore = "core"
+
+// checkSetupSig: a setup request must be signed by the setup key over
+// "<METHOD> <path> <unix time> <sha256hex body>", within two minutes, and never seen before.
+func (c *Core) checkSetupSig(method, path, t, sig string, body []byte) error {
+	ts, err := strconv.ParseInt(t, 10, 64)
+	if err != nil {
+		return fail(401, "setup signature required")
+	}
+	now := c.now()
+	if d := now.Sub(time.Unix(ts, 0)); d > 2*time.Minute || d < -2*time.Minute {
+		return fail(401, "X-Setup-Time too far off")
+	}
+	h := sha256.Sum256(body)
+	msg := fmt.Sprintf("%s %s %d %s", method, path, ts, hex.EncodeToString(h[:]))
+	if c.SetupKey == "" || !VerifyWith(c.SetupKey, []byte(msg), sig) {
+		return fail(401, "bad setup signature")
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for s, at := range c.setupSeen {
+		if now.Sub(at) > 5*time.Minute {
+			delete(c.setupSeen, s)
+		}
+	}
+	if _, ok := c.setupSeen[sig]; ok {
+		return fail(401, "setup signature already used")
+	}
+	c.setupSeen[sig] = now
+	return nil
+}
+
+// OpenSetup: a secret the setup session sealed to the core's agreement key
+func (c *Core) OpenSetup(s Sealed) ([]byte, error) {
+	p, err := OpenSealed(c.agreement, s, infoSetup)
+	if err != nil {
+		return nil, fail(400, "can't open the sealed value")
+	}
+	return p, nil
+}
 
 func (c *Core) SetupPhone(signingKey, agreementKey string) (SignedDoc, error) {
 	c.mu.Lock()
@@ -187,23 +231,6 @@ func (c *Core) SetupPhone(signingKey, agreementKey string) (SignedDoc, error) {
 }
 
 // SeedStore: a new store (never replaces one) with its values encrypted to phone + core
-// SetupFly hands the core its Fly token, once. A second call is refused, so whoever later reads the setup
-// token can't point the core at another Fly account (where they could exec into the machines it starts).
-func (c *Core) SetupFly(fly configurable, token, app string) (SignedDoc, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.flyApp != "" {
-		return SignedDoc{}, fail(409, "the Fly token is already set")
-	}
-	if token == "" || app == "" {
-		return SignedDoc{}, fail(400, "token and app are required")
-	}
-	fly.Configure(token, app)
-	c.flyApp = app
-	c.logf("fly token set for app %s", app)
-	return c.sign(map[string]any{"kind": "fly-set", "app": app})
-}
-
 func (c *Core) SeedStore(name string, values map[string]string, sensitive bool) (SignedDoc, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -370,6 +397,9 @@ func (c *Core) Succession(in SuccessionInput) (SignedDoc, error) {
 		req.Machine = m
 		set := map[string]bool{}
 		for _, n := range in.Stores {
+			if n == CoreStore {
+				return SignedDoc{}, fail(400, "the core store holds the core's own secrets and never goes to a session")
+			}
 			s, ok := c.stores[n]
 			if !ok {
 				return SignedDoc{}, fail(400, "unknown store %s", n)
@@ -547,6 +577,12 @@ func (c *Core) UnlockFinish(pending string, share Sealed) (SignedDoc, error) {
 		u = &unlocked{values: vals, ids: map[string]time.Time{}}
 		c.unlocked[s.Name] = u
 	}
+	if s.Name == CoreStore {
+		if vals["FLY_API_TOKEN"] == "" || vals["FLY_APP"] == "" {
+			return SignedDoc{}, fail(400, "the core store needs FLY_API_TOKEN and FLY_APP")
+		}
+		c.fly.Configure(vals["FLY_API_TOKEN"], vals["FLY_APP"])
+	}
 	id := randID()
 	u.ids[id] = c.now()
 	c.logf("store %s unlocked (%s)", s.Name, id)
@@ -561,6 +597,9 @@ func (c *Core) Lock(id string) (SignedDoc, error) {
 			delete(u.ids, id)
 			if len(u.ids) == 0 {
 				delete(c.unlocked, name) // plaintext gone with the last id
+				if name == CoreStore {
+					c.fly.Configure("", "")
+				}
 			}
 			c.logf("unlock %s released (%s)", id, name)
 			return c.sign(map[string]any{"kind": "locked", "id": id, "store": name})

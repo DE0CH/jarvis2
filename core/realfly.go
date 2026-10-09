@@ -7,11 +7,6 @@ import (
 	"time"
 )
 
-type flyClient interface {
-	Fly
-	configurable
-}
-
-func newFly() flyClient {
+func newFly() Fly {
 	return &FlyAPI{base: "https://api.machines.dev/v1", http: &http.Client{Timeout: 90 * time.Second}}
 }

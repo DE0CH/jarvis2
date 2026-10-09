@@ -21,6 +21,7 @@ type MachineKeys struct {
 }
 
 type Fly interface {
+	Configure(token, app string) // from the unlocked `core` store; empty = locked
 	Create(r StartRequest) (id, image string, err error)
 	ReadKeys(id string) (MachineKeys, error)
 	WriteMachineFiles(id, apiKey, coreKey string) error
@@ -61,7 +62,7 @@ func (f *FlyAPI) ready() error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.token == "" || f.app == "" {
-		return fmt.Errorf("no Fly token set (setup)")
+		return fmt.Errorf("the core store is locked: unlock it to start or stop machines")
 	}
 	return nil
 }

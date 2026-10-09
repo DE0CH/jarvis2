@@ -17,6 +17,9 @@ spec:
         - name: core
           image: ghcr.io/de0ch/jarvis2-core:sha-ea3d4bfe7aa2
           ports: [{ containerPort: 8090 }]
+          env:
+            # the setup session's PUBLIC key (docs/API.md "Setup"); its private half is JARVIS2_SETUP_KEY in Jarvis 1's default store
+            - { name: SETUP_KEY, value: "BEhYIkmGeCkg7D8vdKhRe8b00asMI8a9EyXNW41eBbIphkf6lZmy/c9FsRlqoXLD5JyRZgVOxLzM7OBv47Uy2Ms=" }
           resources: { requests: { cpu: 20m, memory: 32Mi }, limits: { memory: 256Mi } }
           securityContext: { runAsNonRoot: true, runAsUser: 65532, runAsGroup: 65532, allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: { drop: [ALL] }, seccompProfile: { type: RuntimeDefault } }
 ---

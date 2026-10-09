@@ -1,13 +1,14 @@
 package main
 
 // HTTP surface of the core. It listens only inside the cluster (the router reaches it; NetworkPolicy
-// keeps everything else out). Setup calls need the one-time setup token printed at start, which only
-// the setup session (with cluster access to this pod's log) reads.
+// keeps everything else out). Setup calls come through the router too, so each is signed by the setup
+// session's key (SETUP_KEY, the public half, from git) over its method, path, time and body, and any
+// secret in it is sealed to the core's agreement key: the router relays them but can't read or replay them.
 
 import (
-	"crypto/subtle"
 	"encoding/json"
 	"errors"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -19,30 +20,39 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	if c.SetupKey = os.Getenv("SETUP_KEY"); c.SetupKey == "" {
+		log.Fatal("SETUP_KEY (the setup session's public key) is required")
+	}
+	if _, err := parseSigningKey(c.SetupKey); err != nil {
+		log.Fatalf("SETUP_KEY: %v", err)
+	}
 	log.Printf("core up; signing key %s", c.signer.PublicKey())
-	log.Printf("SETUP TOKEN %s", c.SetupToken)
 	addr := os.Getenv("ADDR")
 	if addr == "" {
 		addr = ":8090"
 	}
-	log.Fatal(http.ListenAndServe(addr, Handler(c, fly)))
+	log.Fatal(http.ListenAndServe(addr, Handler(c)))
 }
 
-// configurable: the Fly client the setup session hands the token to
-type configurable interface{ Configure(token, app string) }
-
-func Handler(c *Core, fly configurable) http.Handler {
+func Handler(c *Core) http.Handler {
 	mux := http.NewServeMux()
 	type body = map[string]json.RawMessage
 	h := func(pattern string, setup bool, fn func(r *http.Request, b body) (any, error)) {
 		mux.HandleFunc(pattern, func(w http.ResponseWriter, r *http.Request) {
-			if setup && subtle.ConstantTimeCompare([]byte(r.Header.Get("X-Setup-Token")), []byte(c.SetupToken)) != 1 {
-				writeErr(c, w, fail(403, "setup token required"))
+			raw, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 4<<20))
+			if err != nil {
+				writeErr(c, w, fail(400, "body: %v", err))
 				return
 			}
+			if setup {
+				if err := c.checkSetupSig(r.Method, r.URL.Path, r.Header.Get("X-Setup-Time"), r.Header.Get("X-Setup-Sig"), raw); err != nil {
+					writeErr(c, w, err)
+					return
+				}
+			}
 			b := body{}
-			if r.Body != nil && r.ContentLength != 0 {
-				if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4<<20)).Decode(&b); err != nil {
+			if len(raw) != 0 {
+				if err := json.Unmarshal(raw, &b); err != nil {
 					writeErr(c, w, fail(400, "bad JSON: %v", err))
 					return
 				}
@@ -74,19 +84,29 @@ func Handler(c *Core, fly configurable) http.Handler {
 
 	h("GET /key", false, func(r *http.Request, b body) (any, error) { return c.Key(), nil })
 
-	// ---- setup (token) ----
+	// ---- setup (signed by the setup key; secrets sealed to the core) ----
+	sealed := func(b body, k string) ([]byte, error) {
+		var s Sealed
+		if json.Unmarshal(b[k], &s) != nil || s.E == "" {
+			return nil, fail(400, "%s must be sealed to the core's agreement key", k)
+		}
+		return c.OpenSetup(s)
+	}
 	h("POST /setup/phone", true, func(r *http.Request, b body) (any, error) {
 		return c.SetupPhone(str(b, "signingKey"), str(b, "agreementKey"))
 	})
 	h("POST /setup/store", true, func(r *http.Request, b body) (any, error) {
+		plain, err := sealed(b, "values")
+		if err != nil {
+			return nil, err
+		}
 		var vals map[string]string
-		json.Unmarshal(b["values"], &vals)
+		if json.Unmarshal(plain, &vals) != nil {
+			return nil, fail(400, "values: not a JSON object of strings")
+		}
 		var sens bool
 		json.Unmarshal(b["sensitive"], &sens)
 		return c.SeedStore(str(b, "name"), vals, sens)
-	})
-	h("POST /setup/fly", true, func(r *http.Request, b body) (any, error) {
-		return c.SetupFly(fly, str(b, "token"), str(b, "app"))
 	})
 
 	// ---- stores ----

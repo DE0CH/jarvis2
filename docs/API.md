@@ -15,7 +15,8 @@ that come from the core are relayed as the core's signed error document `{payloa
 | Prefix | Caller | Access |
 |---|---|---|
 | `/api/*`, `/` (web page) | Deyao's app / browser | Access app `jarvis2.deyaochen.com`, Deyao's email only. The iPhone app sends the Access token in the `cf-access-token` header (got once from `/api/auth/start`). The router also verifies the `Cf-Access-Jwt-Assertion` header itself. |
-| `/m/*` | session machines | Access app `jarvis2.deyaochen.com/m`, service token `jarvis2-machines` only (in every machine's env). The router then checks the machine's own signature on each request. |
+| `/setup/*` | the trusted setup session | Access app `jarvis2.deyaochen.com/setup`, service token `jarvis2-setup` only (kept in Jarvis 1's `default` store, never on a machine). The core then checks the setup key's signature on each call (below). |
+| `/m/*` | session machines | Not on the public hostname at all: the router serves `/m` on a second port (8081) that only Fly's private network reaches (the box is a WireGuard peer of org `jarvis2-370`). The router checks the machine's own signature on each request. |
 
 ## App sign-in
 
@@ -79,6 +80,31 @@ ID → Enclave key agreement of the phone's agreement key with `e` → the 32-by
 ephemeral P-256 key `r`, `x' = x(r·t)`, key = HKDF-SHA256(ikm `x'`, salt empty, info `"jarvis2/unlock-share"`,
 32 bytes), AES-256-GCM combined (`nonce‖ciphertext‖tag`) → `share = {e: base64(r.pub x963), data:
 base64(combined)}` → `unlock/finish {pending, share}`.
+
+## Setup (`/setup/*`)
+
+The setup session initialises a fresh core through the router. The router relays these calls to the core
+unchanged; the core trusts them only because of the setup key, so the router can neither forge, replay nor
+read them.
+
+- **Signature:** headers `X-Setup-Time` (unix seconds) and `X-Setup-Sig` = base64 DER ECDSA-P256-SHA256
+  signature by the setup key over `"<METHOD> <path> <time> <sha256hex of body>"`, where `<path>` is the
+  core's path (`/setup/phone`, `/setup/store`). The core takes the setup key's public half from `SETUP_KEY`
+  (base64 x963, set in git in `k8s/apps/core.yaml`), accepts a time within ±2 min, and each signature once.
+- **Sealed secrets:** a store's values travel as `Sealed{e, data}` to the core's agreement key: ephemeral
+  P-256 `e`, `data` = AES-256-GCM (nonce‖ciphertext‖tag) under HKDF-SHA256(x(e·K), salt empty,
+  info `"jarvis2/setup"`) of the JSON object of values.
+
+| Call | Core path | Does |
+|---|---|---|
+| `GET /setup/key` | `/key` | The core's `{signingKey, agreementKey}` (no signature needed). |
+| `POST /setup/phone` | `/setup/phone` | Body `{signingKey, agreementKey}`: the phone's keys, once per core. |
+| `POST /setup/store` | `/setup/store` | Body `{name, values: Sealed, sensitive}`: a new store (never replaced). |
+| `POST /setup/stores` | `/stores` | Body `{nonce}`: the core's signed store list. |
+
+**The `core` store** holds the core's own secrets, `FLY_API_TOKEN` and `FLY_APP`. It is seeded and unlocked
+like any other store; while it is unlocked the core can start and stop machines, and when its last unlock
+is locked the core forgets the Fly token. It never goes to a session (the core refuses it in `succession`).
 
 ## Machines (`/m/*`)
 
