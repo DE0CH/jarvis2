@@ -41,7 +41,7 @@ MASTER_KEY="$(cat "$ROOT/e2e/testdata/master-test.pub")" BOX_KEY_FILE="$W/box-ke
 env -u LOBSTER_TOKEN -u STORAGEBOX_HOST -u STORAGEBOX_USER -u STORAGEBOX_PASSWORD -u FLY_READ_TOKEN -u GITHUB_READ_TOKEN \
   -u JARVIS1_CREDENTIALS_ID -u JARVIS1_CREDENTIALS_SECRET -u JARVIS1_SERVICES_ID -u JARVIS1_SERVICES_SECRET \
   CORE_URL=http://127.0.0.1:28090 NO_ACCESS=1 RECORDS_OFF=1 ADDR=127.0.0.1:28080 DATA_DIR="$W/data" WEB_DIR="$W/web" \
-  WG_CONFIG="$W/wg.conf" MACHINE_URL=http://jarvis2-e2e._peer.internal:8081 POLICY_FILE="$W/policy.json" \
+  WG_CONFIG="$W/wg.conf" MACHINE_URL=http://jarvis2-e2e._peer.internal:8081 POLICY_FILE="$W/policy.json" TASKS_DIR="$ROOT/tasks" \
   SESSION_IMAGE="${E2E_SESSION_IMAGE:-ghcr.io/de0ch/jarvis2-session-test:latest}" \
   "$W/router" > "$W/router.log" 2>&1 & PIDS+=($!)
 sleep 3

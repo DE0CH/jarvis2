@@ -260,6 +260,18 @@ func main() {
 	expectOnMachine(m2, "grep -c E2E_EXTRA /home/claude/.secrets || true", "0")
 	expectExec(id, "echo the rule still holds", "the rule still holds") // grants name the line, not the machine
 
+	step("the permission mode is signed: resuming in bypass is a change the iPhone approves")
+	must2(call(router, "POST", "/api/sessions/"+id+"/pause", nil, nil))
+	waitState(id, "paused", 12*time.Minute)
+	must2(call(router, "POST", "/api/sessions/"+id+"/permission-mode", map[string]string{"mode": "bypass"}, nil))
+	must2(call(router, "POST", "/api/sessions/"+id+"/resume", map[string]bool{"upgrade": false}, nil))
+	a = waitApproval("resume-upgrade", id)
+	if !strings.Contains(a.Challenge.Payload, `"permissionMode":"bypass"`) {
+		log.Fatal("the challenge doesn't carry the bypass mode")
+	}
+	approve(p, a)
+	waitState(id, "started", 8*time.Minute)
+
 	step("pause, then resume with the latest image → the iPhone approves first, then the machine starts")
 	must2(call(router, "POST", "/api/sessions/"+id+"/pause", nil, nil))
 	waitState(id, "paused", 12*time.Minute)
@@ -286,6 +298,36 @@ func main() {
 		}
 		time.Sleep(3 * time.Second)
 	}
+
+	step("a task: the iPhone approves its line once; a run resumes it with no phone, runs the script, pauses it")
+	var inst map[string]any
+	must2(call(router, "POST", "/api/tasks/instances", map[string]any{"template": "hello", "name": "e2e hello", "params": map[string]any{"message": "hi from e2e"}}, &inst))
+	iid := fmt.Sprint(inst["id"])
+	approve(p, waitApproval("new-session", fmt.Sprint(inst["session"])))
+	waitTask(iid, "ready", 10*time.Minute)
+	var run struct{ Name string }
+	must2(call(router, "POST", "/api/tasks/instances/"+iid+"/run", map[string]any{}, &run))
+	deadline = time.Now().Add(10 * time.Minute)
+	for {
+		var rr struct {
+			Run    map[string]any
+			Output string
+		}
+		call(router, "GET", "/api/tasks/runs/"+run.Name, nil, &rr)
+		ph := fmt.Sprint(rr.Run["phase"])
+		if ph == "succeeded" {
+			if !strings.Contains(rr.Output, "hi from e2e") {
+				log.Fatalf("the run's output: %q", rr.Output)
+			}
+			break
+		}
+		if ph == "failed" || ph == "timedout" || ph == "lost" || time.Now().After(deadline) {
+			log.Fatalf("the task run ended %s: %v", ph, rr.Run)
+		}
+		time.Sleep(5 * time.Second)
+	}
+	waitTask(iid, "ready", 5*time.Minute) // paused again for the next run
+	must2(call(router, "DELETE", "/api/tasks/instances/"+iid, nil, nil))
 
 	step("lock both stores; the unlocked list is signed and empty")
 	var ul struct {
@@ -544,5 +586,22 @@ func expectExec(id, cmd, want string) {
 	must(s, b, "exec "+cmd)
 	if strings.TrimSpace(res.Stdout) != want || res.Code != 0 {
 		log.Fatalf("exec %q: got %q (code %d), want %q", cmd, res.Stdout, res.Code, want)
+	}
+}
+
+func waitTask(id, want string, d time.Duration) {
+	deadline := time.Now().Add(d)
+	for {
+		var t struct{ Instances []map[string]any }
+		call(router, "GET", "/api/tasks", nil, &t)
+		for _, i := range t.Instances {
+			if i["id"] == id && i["state"] == want {
+				return
+			}
+		}
+		if time.Now().After(deadline) {
+			log.Fatalf("task %s never %s: %v", id, want, t.Instances)
+		}
+		time.Sleep(5 * time.Second)
 	}
 }
