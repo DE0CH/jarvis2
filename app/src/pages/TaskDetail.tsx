@@ -20,7 +20,7 @@ export function TaskDetail({ spec }: { spec: TaskSpec }) {
   const tmpl = inst && data.templates.find((x) => x.name === inst.template);
   const schedules = data.schedules.filter((s) => s.instance === id);
   const [runs, setRuns] = useState<TaskRun[] | null>(null), [err, setErr] = useState("");
-  const key = (inst?.activeRun?.name || "") + "|" + (inst?.activeRun?.phase || "") + "|" + (inst?.lastRun?.name || "");
+  const key = (inst?.activeRun?.name || "") + "|" + (inst?.activeRun?.phase || "") + "|" + (inst?.lastRun?.name || "") + "|" + (inst?.queued || 0);
   // the run list follows api/tasks (a new run, a phase change) and polls itself while one is active
   useEffect(() => {
     let live = true, timer: any;

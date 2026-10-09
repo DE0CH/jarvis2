@@ -19,7 +19,7 @@ export function runInstance(id: string, upgrade = false) {
   let name = "";
   return pendTasks("task:" + id, upgrade ? "Asking the phone…" : "Starting…", async () => {
     name = (await api<{ name: string }>("POST", `api/tasks/instances/${id}/run`, upgrade ? { upgrade: true } : {})).name;
-  }, (d) => d.instances.some((i) => i.id === id && (i.activeRun?.name === name || i.lastRun?.name === name))).then(async () => {
+  }, (d) => d.instances.some((i) => i.id === id && (i.queued > 0 || i.activeRun?.name === name || i.lastRun?.name === name))).then(async () => {
     if (upgrade) await openApprovalFor(getStore().tasks.data.instances.find((i) => i.id === id)?.session, "resume-upgrade");
   });
 }

@@ -23,12 +23,12 @@ const norm = (o: TaskOption | string): TaskOption => (typeof o === "string" ? { 
 export function FieldInput({ f, value, onChange, opts }: { f: TaskField; value: any; onChange: (v: any) => void; opts: TaskOption[] }) {
   const choices = opts.map((o) => ({ value: o.value, title: o.label, sub: o.sub }));
   switch (f.type) {
-    case "textarea": return <TextArea id={"tf-" + f.name} rows={4} placeholder={f.placeholder} value={value} onChangeText={onChange} />;
-    case "number": return <TextField id={"tf-" + f.name} keyboardType="numeric" placeholder={f.placeholder} value={value} onChangeText={onChange} />;
+    case "textarea": return <TextArea id={"tf-" + f.name} rows={4} placeholder={f.placeholder} defaultValue={value} onChangeText={onChange} />;
+    case "number": return <TextField id={"tf-" + f.name} keyboardType="numeric" placeholder={f.placeholder} defaultValue={value} onChangeText={onChange} />;
     case "select": return choices.length ? <RadioCards id={"tf-" + f.name} value={value} onChange={onChange} options={choices} /> : <Muted>No options available.</Muted>;
     case "multiselect": return choices.length ? <CheckboxCards id={"tf-" + f.name} value={value} onChange={onChange} options={choices} /> : <Muted>No options available.</Muted>;
     case "checkbox": return <Switch id={"tf-" + f.name} on={!!value} onChange={onChange} label={value ? "Yes" : "No"} />;
-    default: return <TextField id={"tf-" + f.name} autoComplete="off" autoCorrect={false} placeholder={f.placeholder} value={value} onChangeText={onChange} />;
+    default: return <TextField id={"tf-" + f.name} autoComplete="off" autoCorrect={false} placeholder={f.placeholder} defaultValue={value} onChangeText={onChange} />;
   }
 }
 
@@ -69,7 +69,7 @@ export function TaskEdit({ spec }: { spec: TaskEditSpec }) {
       right={<Button id="te-save" disabled={!!busy} onPress={save}>{busy ? <><Spinner /><BtnLabel>{busy}</BtnLabel></> : inst ? "Save" : "Make task"}</Button>}>
       <Muted mt={2}>From the template “{t.title}”{t.description ? ` — ${t.description}` : ""}</Muted>
       <Lbl>Name</Lbl>
-      <TextField id="te-name" autoComplete="off" value={name} onChangeText={setName} placeholder="What this task is for" />
+      <TextField id="te-name" autoComplete="off" defaultValue={name} onChangeText={setName} placeholder="What this task is for" />
       {t.fields.map((f) => (
         <View key={f.name}>
           <Lbl>{f.label + (f.required ? " *" : "")}</Lbl>
