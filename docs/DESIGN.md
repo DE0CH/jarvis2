@@ -255,6 +255,28 @@ limit and start-up time.
 - A bug or compromise outside the core (router, Jarvis, the box) can block or fail actions, never move a store
   to a machine not approved for it.
 
+## Grants (shell access for router features, checked by the machine)
+
+Features outside the core (terminal, scheduler, status, login repair, archive) need a shell in a session, as
+Jarvis 1 got through Fly exec. The core's Fly token can exec only `jarvis2-init`, so the machine itself decides
+(Deyao, 2026-10-09); the core only adds three fields to every succession cert: the phone's signing key, whether
+any of the line's stores is sensitive, and the **line id** (the line's first machine; a successor inherits it).
+
+- Each feature is a **holder** with its own key pair on the router's volume (`router/grants.go`).
+- A holder's request (`{id, session: line, holder, cmd, timeout, at}`) is signed by its key and reaches the
+  machine through `/m/commands`; the result goes back signed by the machine (`/m/exec-result`).
+- The machine runs it (`bash -lc` as the session user) when one of these allows it:
+  - a **phone grant**: the phone signs `{kind "grant", holder, session, scope "shell", issued, expires}`,
+    at most 10 minutes long;
+  - a **standing rule**: the phone signs `{kind "rule", …, until}` once, for things that happen while Deyao is
+    away (wakeups, crons, auto-pause);
+  - the session's **own allow list** (`jarvis2-machine allow <holder> <duration>`, kept in the snapshot): the
+    machine approving for itself.
+- A session holding a **sensitive** store accepts only a fresh phone grant.
+- Grants name the line, which the machine reads from its core-signed cert, so the router can't make one line's
+  grant open another line's machine. Request ids are single-use and at most 2 minutes old.
+- Re-pairing the phone: running machines trust the old phone key until their line's next cert.
+
 ## Open
 
 - Where the core's log lives. Plan: AWS CloudWatch Logs (append-only: no API deletes a single event; only a whole stream/group; the core's credential gets append rights only; free tier 5 GB/month covers it), added AFTER the core is running. Until then the log is local to the core.
