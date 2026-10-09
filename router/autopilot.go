@@ -86,8 +86,9 @@ const pilotTick = 30 * time.Second
 
 var routerStarted = time.Now()
 
-// autoPauseVeto: another feature (the scheduler: a wakeup or cron due soon) can hold off an auto-pause
-var autoPauseVeto func(r *Router, session string) bool
+// autoPauseVeto: another feature (the scheduler: a wakeup or cron due soon) can hold off an auto-pause. It runs
+// inside the tick's r.st.Do, so it gets the locked state and must not take the lock itself.
+var autoPauseVeto func(d *persisted, session string) bool
 
 // ---- create, env and view hooks ---------------------------------------------------------------------------
 
@@ -260,7 +261,9 @@ func (r *Router) autopilotTick() {
 		log.Printf("[login] Jarvis 1's credentials: %v", err)
 	}
 	var acts []pilotAction
-	r.st.Do(func(d *persisted) { acts = planTick(d, time.Now(), storedExp, defaultPilot, r.busy, r.vetoPause) })
+	r.st.Do(func(d *persisted) {
+		acts = planTick(d, time.Now(), storedExp, defaultPilot, r.busy, func(id string) bool { return autoPauseVeto != nil && autoPauseVeto(d, id) })
+	})
 	for _, a := range acts {
 		r.runAction(a)
 	}
@@ -279,8 +282,6 @@ func (r *Router) busy(id string) bool {
 	}
 	return true
 }
-
-func (r *Router) vetoPause(id string) bool { return autoPauseVeto != nil && autoPauseVeto(r, id) }
 
 func idleEligible(g *Registry) bool { return g != nil && g.Status == "idle" && g.BgTasks == 0 }
 

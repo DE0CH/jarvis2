@@ -41,10 +41,13 @@ var jarvis1Routes = []string{
 
 var jarvis1Client = &http.Client{Timeout: 5 * time.Minute}
 
+// auto-pause (autopilot.go) leaves a session running when a wakeup or cron fires within 10 minutes
+func init() {
+	autoPauseVeto = func(d *persisted, sid string) bool { return scheduleDueWithin(d, sid, 10*time.Minute) }
+}
+
 func (r *Router) registerSessionAPI(app appRoute, m machineRoute) {
 	deliverHook = deliverPeer
-	// auto-pause (autopilot.go) leaves a session running when a wakeup or cron fires within 10 minutes
-	autoPauseVeto = func(r *Router, sid string) bool { return r.ScheduleDueWithin(sid, 10*time.Minute) }
 	// ---- the app (Deyao) -------------------------------------------------------------------------------
 	app("GET /api/sessions/{id}/wakeup", func(w http.ResponseWriter, req *http.Request) { r.getWakeups(w, req.PathValue("id"), true) })
 	app("GET /api/sessions/{id}/wakeups", func(w http.ResponseWriter, req *http.Request) { r.getWakeups(w, req.PathValue("id"), false) })

@@ -328,3 +328,21 @@ func TestScheduleGoesWithItsSession(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// the autopilot asks the scheduler's veto while it holds the state lock: the veto must not take it again
+// (it did, and the first tick with a started session froze the whole router)
+func TestAutopilotVetoDoesNotDeadlock(t *testing.T) {
+	r := newTestRouter(t)
+	addSession(r, "s9", "started", "m9", false)
+	r.st.Do(func(d *persisted) {
+		d.Sessions["s9"].Live = &Liveness{Reg: &Registry{Status: "idle"}, LastReport: time.Now()}
+	})
+	r.ArmWakeup("s9", &Wakeup{Name: "default", At: time.Now().Add(5 * time.Minute).UnixMilli(), Prompt: "x", ArmedAt: 1})
+	done := make(chan struct{})
+	go func() { r.autopilotTick(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("autopilotTick deadlocked on the scheduler's veto")
+	}
+}

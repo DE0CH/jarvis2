@@ -513,18 +513,26 @@ func (r *Router) PendingSchedule(sid string) []string {
 
 // ScheduleDueWithin: a wakeup or cron fires within d (auto-pause should leave such a session running)
 func (r *Router) ScheduleDueWithin(sid string, d time.Duration) bool {
-	lim := time.Now().Add(d).UnixMilli()
 	due := false
-	r.st.Do(func(p *persisted) {
-		s := p.Schedules[sid]
-		for _, w := range sortedWakeups(s) {
-			due = due || w.At < lim
-		}
-		for _, c := range sortedCrons(s) {
-			due = due || c.NextAt < lim
-		}
-	})
+	r.st.Do(func(p *persisted) { due = scheduleDueWithin(p, sid, d) })
 	return due
+}
+
+// scheduleDueWithin: the same, for callers that hold the state lock (the autopilot's veto)
+func scheduleDueWithin(p *persisted, sid string, d time.Duration) bool {
+	lim := time.Now().Add(d).UnixMilli()
+	s := p.Schedules[sid]
+	for _, w := range sortedWakeups(s) {
+		if w.At < lim {
+			return true
+		}
+	}
+	for _, c := range sortedCrons(s) {
+		if c.NextAt < lim {
+			return true
+		}
+	}
+	return false
 }
 
 // ---- firing -------------------------------------------------------------------------------------------
