@@ -20,7 +20,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 NAME="${REHEARSAL_NAME:-jarvis2-rehearsal}"
 case "$NAME" in jarvis2-rehearsal*) ;; *) echo "REHEARSAL_NAME must start with jarvis2-rehearsal"; exit 2 ;; esac
 # a new bucket name per run (Hetzner's S3 refuses a name for a while after its bucket was deleted); teardown
-# removes every bucket named $NAME-*
+# removes every bucket named $NAME-<digits>
 HOST="$NAME.deyaochen.com"; BUCKET="$NAME-$(date +%s)"
 : "${HCLOUD_TOKEN:?}" "${JARVIS2_FLY_TOKEN:?}" "${JARVIS2_SETUP_KEY:?}" "${CF_JARVIS2_INFRA_TOKEN:?}" "${CLOUDFLARE_API:?}"
 : "${HETZNER_S3_ENDPOINT:?}" "${HETZNER_S3_REGION:?}" "${HETZNER_S3_ACCESS_KEY:?}" "${HETZNER_S3_SECRET_KEY:?}"
@@ -64,7 +64,9 @@ import os, sys, boto3
 prefix = sys.argv[1]
 s3 = boto3.client("s3", endpoint_url=os.environ["HETZNER_S3_ENDPOINT"], region_name=os.environ["HETZNER_S3_REGION"],
                   aws_access_key_id=os.environ["HETZNER_S3_ACCESS_KEY"], aws_secret_access_key=os.environ["HETZNER_S3_SECRET_KEY"])
-for b in [x["Name"] for x in s3.list_buckets()["Buckets"] if x["Name"].startswith(prefix)]:
+import re
+# exactly NAME-<unix time>: jarvis2-rehearsal-* must not take jarvis2-rehearsal-replica-*'s bucket
+for b in [x["Name"] for x in s3.list_buckets()["Buckets"] if re.fullmatch(re.escape(prefix) + r"[0-9]+", x["Name"])]:
     n = 0
     for page in s3.get_paginator("list_object_versions").paginate(Bucket=b):
         for v in page.get("Versions", []) + page.get("DeleteMarkers", []):
