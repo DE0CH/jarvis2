@@ -89,8 +89,9 @@ final class ReplicaUITests: XCTestCase {
     let email = [safari.textFields.firstMatch, app.webViews.textFields.firstMatch]
     guard let field = waitAny(email, 60) else { XCTFail("the Access login page didn't show"); shot("signin-blank"); return }
     shot("signin-page")
-    field.tap(); field.typeText(env["REPLICA_EMAIL"] ?? "")
-    tapButton(["Send login code", "Send me a code", "Send code", "Continue"])
+    field.tap(); field.typeText((env["REPLICA_EMAIL"] ?? "") + "\n")   // Return sends the form (the button sits under the keyboard)
+    sleep(2)
+    if field.exists && (field.value as? String ?? "").contains("@") { tapButton(["Send login code", "Send me a code", "Send code", "Continue"]) }
     // the code page's field (the email field is gone by then; never type the code into it)
     let notEmail = NSPredicate(format: "label != 'Email' AND placeholderValue != 'example@email.com'")
     let codeField = [safari.textFields.matching(notEmail).firstMatch, app.webViews.textFields.matching(notEmail).firstMatch]
@@ -100,7 +101,9 @@ final class ReplicaUITests: XCTestCase {
     guard let cf = waitAny(codeField, 30) else { XCTFail("no code field"); return }
     cf.tap(); cf.typeText(code)
     shot("signin-code")
-    tapButton(["Sign in", "Log in", "Verify", "Submit", "Continue"])
+    cf.typeText("\n")
+    sleep(2)
+    if cf.exists { tapButton(["Sign in", "Log in", "Verify", "Submit", "Continue"]) }
   }
   func waitAny(_ es: [XCUIElement], _ s: TimeInterval) -> XCUIElement? {
     let until = Date().addingTimeInterval(s)
@@ -112,6 +115,15 @@ final class ReplicaUITests: XCTestCase {
       for b in [safari.buttons[l], app.webViews.buttons[l]] where b.exists { b.tap(); return }
     }
     XCTFail("no button \(labels) on the login page"); note("login-tree", safari.debugDescription)
+  }
+
+  /// + New session opens the shell's one-page New session (an older app: the React Native form first, then Start)
+  func openNewSession() -> Bool {
+    el("newBtn").tap()
+    if el("ns-start").waitForExistence(timeout: 5) && !el("secure-create").exists { shot("new-session-form"); el("ns-start").tap() }
+    let ok = wait(el("secure-create"), 60, "the New session page")
+    if ok { sleep(1); shot("new-session") }
+    return ok
   }
 
   func testReplica() throws {
@@ -166,11 +178,7 @@ final class ReplicaUITests: XCTestCase {
     // ---- new session: one page, its stores (and the harness's) unlocked with Face ID, running on Fly ----
     el("tab-sessions").tap()
     try must(wait(el("newBtn"), 30, "sessions tab"))
-    el("newBtn").tap()
-    try must(wait(el("ns-start"), 30, "new session form"))
-    shot("new-session")
-    el("ns-start").tap()
-    try must(wait(el("secure-create"), 60, "secure new session page"))
+    try must(openNewSession())
     if wait(el("secure-store-rh-plain"), 30, "rh-plain offered") { el("secure-store-rh-plain").tap() }
     XCTAssertFalse(el("secure-store-claude").exists, "the harness's own store isn't offered")
     shot("secure-new-session")
@@ -266,10 +274,8 @@ final class ReplicaUITests: XCTestCase {
     // ---- a session stuck at boot (its store locked again right after Create) is destroyed at once ----
     el("tab-sessions").tap()
     _ = wait(el("newBtn"), 30, "sessions tab")
-    el("newBtn").tap()
-    if wait(el("ns-start"), 30, "new session form (stuck)") {
-      el("ns-start").tap()
-      if wait(el("secure-create"), 60, "secure page (stuck)") {
+    do {
+      if openNewSession() {
         if wait(el("secure-store-rh-secret"), 30, "rh-secret offered") { el("secure-store-rh-secret").tap() }
         faceIDMatches(90)
         el("secure-create").tap()
