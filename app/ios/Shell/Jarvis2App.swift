@@ -56,11 +56,12 @@ final class Shell {
   private var monitor: AppExtensionPoint.Monitor?
   private let t0 = Date()
   /// the result to tell React Native once the re-added extension's connection is up
-  private var pendingFinish: String?
-  private var onSettled: (() -> Void)?
-  private var popDone = false, settled = false
+  @ObservationIgnored private var pendingFinish: String?
+  @ObservationIgnored private var onSettled: (() -> Void)?
+  @ObservationIgnored private var popDone = false
+  @ObservationIgnored private var settled = false
   /// a secure page asked for while one is still leaving: it comes once that one is gone
-  private var queuedEnter: String?
+  @ObservationIgnored private var queuedEnter: String?
 
   func log(_ s: String) {
     let line = String(format: "%.1f ", Date().timeIntervalSince(t0)) + s

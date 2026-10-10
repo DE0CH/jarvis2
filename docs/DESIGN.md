@@ -283,13 +283,29 @@ can rewrite anything in its own process.
 - **Everything else in Jarvis (React Native, the terminal, all dependencies) runs in a bundled ExtensionKit
   extension, in its own process** (iOS 26+), displayed by the shell through `EXHostViewController`.
 - **Normal mode:** the shell shows the extension's view full-screen; the app looks and feels as before.
-- **Secure mode:** the shell removes the extension's view and shows its own sheet. The extension can only draw
-  inside the area the shell gives it — none — so it can't overlay or redirect taps. The sheet shows only
+- **Secure mode:** the shell removes the extension's view and shows its own page. The extension can only draw
+  inside the area the shell gives it — none — so it can't overlay or redirect taps. The page shows only
   trusted data (core-signed store list, built-in harness choices, the image as "latest CI build" via GitHub's
-  build attestation); on Create, the shell checks the returned challenge contains exactly those choices, then
-  signs under one Face ID. (Face ID shows no custom text, so the sheet, not the system prompt, is what must be
+  build attestation); on Start, the shell checks the returned challenge contains exactly those choices, then
+  signs under one Face ID. (Face ID shows no custom text, so the page, not the system prompt, is what must be
   trustworthy.)
+- **Where choices are made (Deyao, 2026-10-10):** a secure page where Deyao *chooses* keeps its choices, so the
+  flow is one page: **New session is one page in the shell** (prompt, title, stores, harness, repos, permission
+  mode, model and the other options), and its **Start** signs the session and, under the same Face ID, unlocks
+  every store the session gets that is locked (harness stores included), so no session waits at boot on a locked
+  store. When the request comes from the non-secure side with no choosing step (a button in the terminal page's
+  banner, the Grants page's own chooser, a card's "Unlock…"), the secure page is a **review stop**: it shows in
+  plain words exactly what will be signed (checked field for field against the router's draft or the core's signed
+  documents), with **Allow** (Face ID) and **Deny**, and nothing on it can be changed.
+- **The switch looks native:** entering pushes the shell's page over a still picture of the app (the extension's
+  view goes once the picture is on screen); Back pops it over that picture and the re-added extension replaces it
+  once React Native has drawn again; a finished action lets React Native show the result under the page first,
+  then pops over the live app. The extension is back in the window only after the shell has decided to leave, under
+  the page, taking no taps until the page is gone.
 - **Web:** the web page only creates a pending request; approval happens in the app's secure mode.
+- **A session waiting on a locked store says so:** the router notes the core's 423 on the machine's secrets pull
+  (`lockedStore`); the card and the terminal page show "Waiting for store X to be unlocked" with Unlock…, a review
+  stop that unlocks exactly the locked stores of the session's core-signed cert. The machine retries every 2 s.
 
 Test build (2026-10-05, simulator; DE0CH/ios-shell-spike, lessons/73): React Native runs inside the extension
 in its own process (taps, typing, a WebView, XPC both ways, background/resume); secure mode removes the
@@ -332,10 +348,13 @@ any of the line's stores is sensitive, and the **line id** (the line's first mac
 - Grants name the line, which the machine reads from its core-signed cert, so the router can't make one line's
   grant open another line's machine. Request ids are single-use and at most 2 minutes old.
 - Re-pairing the phone: running machines trust the old phone key until their line's next cert.
+- **Asking for one** (Deyao, 2026-10-10): the app's Grants page (feature; 1–10 minutes or a standing rule until a
+  date) or a one-tap button where a feature was turned away builds the whole request; the shell's grant page only
+  reviews it (Allow with Face ID, or Deny).
 
 ## Open
 
 - Where the core's log lives. Plan: AWS CloudWatch Logs (append-only: no API deletes a single event; only a whole stream/group; the core's credential gets append rights only; free tier 5 GB/month covers it), added AFTER the core is running. Until then the log is local to the core.
-- The secure sheets' exact design.
+- The secure pages' exact design (New session one page, review stops: 2026-10-10).
 - Free text (prompts, wakeups) into high-privilege machines.
 - Layer 1 hardening (CI-only builds and deploys) — see `SECURITY.md` PENDING 5–6.

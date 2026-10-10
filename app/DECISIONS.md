@@ -2,12 +2,17 @@
 
 Carried over from the mock (DE0CH/jarvis2-mock DECISIONS.md) unless marked new.
 
-1. **New session is split.** The React Native form (normal mode) keeps prompt, title, permission mode, model
-   and size; its button says **Continue** and pushes the shell's secure page, where the **secret stores** and
-   the **harness** are chosen for real, then **Create**. Create asks the router for the session, waits for
-   the core's challenge (it comes before any machine exists, so in about a second), checks it carries
-   exactly the stores picked on that page plus the harness's own (policy) and the harness picked there, and
-   signs it (one Face ID). The router then starts the machine. The form's other fields travel along unsigned.
+1. **New session is ONE page in the shell** (Deyao, 2026-10-10: "new session page should just be one page").
+   **+ New session** opens it directly: Session / One-shot, the prompt, the title, the **secret stores**, the
+   **harness**, repos (picking one picks its deploy-key store when that isn't sensitive), permission mode, model
+   (the harness's), auto-pause, API proxy and machine size, laid out like Jarvis 1's page (`SecureNewSession`). The
+   page opens filled: the shell fetches the core's store list and the router's lists (models, sizes, repos, harness
+   stores) at launch and after every secure page. **Start** asks the router for the session, waits for the core's
+   challenge (it comes before any machine exists, so in about a second), checks it carries exactly the stores picked
+   on that page plus the harness's own (policy), the harness and the permission mode picked there, then under **one
+   Face ID** signs it and unlocks every store in it that is locked and not empty, harness stores included
+   (`PhoneKeys.signAndShares`, one LAContext; the page says so above Start). The prompt, title and other options
+   travel unsigned, as before. The web keeps its own form (pending request, non-sensitive stores).
 2. **Sensitive stores:** the React Native form (and the web form) never lists them; normal mode may
    pre-select non-sensitive stores only. A sensitive store is added only by a tap on the secure page, which
    then shows an amber warning. Any approval whose challenge includes a sensitive store shows the warning
@@ -106,15 +111,15 @@ Carried over from the mock (DE0CH/jarvis2-mock DECISIONS.md) unless marked new.
     key, names another store, comes twice, or doesn't open with the master key: a tampered bucket stops the Recover rather
     than quietly dropping a store.
 
-23. **New: grants are signed on a shell page, never from text the React Native UI hands over.** There is no
-    generic "sign this text" call: the UI only opens the secure **grant page** (kind `grant`, with a
-    pre-selection: session, feature, minutes or standing rule). The page reads the session's **core-signed
-    cert** (`GET api/sessions/:id/cert`, checked against the pinned core key) for the line, the stores, whether
-    the session is sensitive and which phone it trusts; Deyao picks the feature (terminal, scheduler, status,
-    login repair, archive check — each described in words), 1/2/5/10 minutes or a standing rule with an end date
-    (offered only when the cert says the session isn't sensitive, since the machine would refuse it), and reads
-    one sentence of what it means ("Terminal may run commands as the session's user in “X” for 10 minutes (until
-    14:32)"). Allow asks the router for the draft, checks it field for field against those choices
+23. **Grants: chosen in the app, reviewed on a shell page** (Deyao, 2026-10-10: the grant page is a safety review
+    stop). There is no generic "sign this text" call: the React Native UI builds the whole request — the Grants
+    page's chooser (feature; 1/2/5/10 minutes or a standing rule until 7/30/90/365 days), or a one-tap button where a
+    feature was turned away (the terminal page's banner, a card's box: 10 minutes, or a rule for 30 days) — and opens
+    the secure **grant page** (kind `grant`: session, feature, minutes or `until`). The page has nothing to change:
+    it reads the session's **core-signed cert** (`GET api/sessions/:id/cert`, checked against the pinned core key)
+    for the line, the stores, whether the session is sensitive and which phone it trusts, refuses a standing rule
+    for a sensitive session (the machine would) or an unknown feature, and shows one sentence of what it means ("Terminal may run commands as the session's user in “X” for 10 minutes (until
+    14:32)") with **Allow** and **Deny**. Allow asks the router for the draft, checks it field for field against those choices
     (`Checks.reviewGrant`: kind, the holder's key, the cert's line, scope `shell`, issued now, exactly the minutes
     or the end date, no extra fields, and that the cert names this phone), signs it with the same Secure Enclave
     key as approvals (one Face ID, whose prompt says the same sentence) and stores it (`POST …/grants`); the
@@ -226,6 +231,41 @@ Carried over from the mock (DE0CH/jarvis2-mock DECISIONS.md) unless marked new.
     page otherwise. The walkthrough adds `DE0CH/china-train` against the CI core's fake GitHub, sees `DE0CH/jarvis2`
     come up sensitive, and removes the first; interop covers the checks and the refusals against the real core and
     router.
+
+42. **Switching between the app and the secure pages looks native** (Deyao, TestFlight build 57: "some animations
+    are broken, like the ones that exit secure mode"; "many blank screens now and then, like after creating a
+    session"). Recorded frame by frame on the simulator (`.github/workflows/transitions.yml`: `TransitionsUITests`
+    under `simctl io recordVideo`, light and dark; `ios/ci/transition-frames.py` cuts the video into a sheet per
+    switch). What was wrong, and the fix (`Shell` in `Jarvis2App.swift`):
+    - **Every exit had no motion**: SwiftUI drew the re-inserted extension (and its cover picture) above the
+      leaving page, so the page vanished in one frame. Now one explicit `progress` (0 = app, 1 = page) drives the
+      page's offset, the app sliding back a third and its dim; no `if/else` transitions.
+    - **Create**: the page left to the leading edge while the picture under it moved right, the button flipped
+      back to "Opening…", then React Native slid its form off again (a double motion, with a frame of the old
+      screen). A finished action now tells React Native first, with the extension re-added under the page;
+      React Native answers once it has drawn the result (`secureSettled`, new on `HostService`; the shell gives
+      up waiting after 2 s), and the page pops over the live app. Every exit is a pop to the right.
+    - **Entering** showed ~70 ms of blank screen (the full-size picture decoded on its first draw) and the push
+      then jumped to its end: the picture is decoded beforehand (`preparingForDisplay`) and the extension's view
+      goes 50 ms later, once the picture is on screen.
+    - **Done at first launch** (Reset or recover) showed a blank screen for seconds while the bundle started: the
+      page stays (its button busy) until React Native has drawn real content (`markAppReady` in the root layout:
+      the list with its first state, its error, or sign-in), at most 15 s.
+    - `secureFinished` was sent 0.5 s after leaving on whatever connection the shell held, often the removed
+      extension's dead one (a form could stay "Opening…"): it now goes right after the new connection's hello, and
+      events that arrive before JavaScript listens wait in `ShellBridge`.
+    The page's own data comes from the lists fetched ahead (no spinner then a jump). Security is unchanged: the
+    extension's view is never in the window while a page takes input; it is re-added only once the shell has
+    decided to leave, under the opaque page, taking no taps. The walkthrough fails when a switch leaves the
+    screen blank for over 1.5 s (`arrives`). Evidence: `~/artifacts/away/animations/` of the session.
+
+43. **A session waiting on a locked store says so.** The router notes the core's 423 on a machine's secrets pull
+    (`session.lockedStore`, cleared by the next pull that goes through); the card and the terminal page say
+    "Waiting for store X to be unlocked." with **Unlock…**, which opens the shell's unlock review (kind `unlock`:
+    the session's stores from its core-signed cert, the locked ones from the core's signed list; Allow unlocks
+    them all under one Face ID, Deny leaves). The machine retries the pull every 2 s (was 4 s, logged every
+    minute), so it carries on within seconds. One Start already unlocks the stores a new session gets (item 1);
+    the walkthrough checks the harness store `claude-login`, locked before, is open after Start.
 
 ## Unfinished / known gaps
 

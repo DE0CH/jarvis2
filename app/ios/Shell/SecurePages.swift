@@ -284,6 +284,7 @@ struct SecureNewSession: View {
 
 /// Opening locked stores (each: the core's signed begin naming the store, this phone's share x(p·E) sealed to the
 /// core's one-off key) together with an optional signature, all under ONE Face ID.
+@MainActor
 enum StoreUnlock {
   @discardableResult
   static func signAndUnlock(payload: String?, stores: [String], reason: String) async throws -> Data? {

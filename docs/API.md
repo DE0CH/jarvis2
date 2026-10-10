@@ -45,7 +45,7 @@ same thing:
   userTitle /* a name pinned in the CLI */, title /* what the card, channel and archive use: serverTitle → userTitle →
   label → aiTitle → id, Jarvis 1's pickTitle */, liveSync /* {at, files: {<name>: bytes}, stored, error} — the last live
   transcript copy (below) */,
-  discordChannel /* the session's Discord channel id */, waiting /* what a pause or destroy waits on, plain words, or "" */, wakeups: [wakeup view], crons: [cron view] /* below */,
+  discordChannel /* the session's Discord channel id */, waiting /* what a pause or destroy waits on, plain words, or "" */, lockedStore /* the store the machine waits on at boot: its secrets pull got the core's 423 "store X is locked"; cleared by the next pull that goes through */, wakeups: [wakeup view], crons: [cron view] /* below */,
   resumePrompt /* a prompt queued for delivery once started */ }
 ```
 
