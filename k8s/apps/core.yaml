@@ -20,7 +20,7 @@ spec:
           env:
             # the master PUBLIC key (keys/master.pub; its private half is in Deyao's password manager): it signs
             # recovery. Empty until Deyao makes the master key pair on his iPhone — the core refuses to start without it.
-            - { name: MASTER_KEY, value: "BIEzAIPjVrW9ansSfRdDazpIcMnfMQ67g+QNMaGdoJm6XvcRNbhGAd2WVgEe9ePbJhDTwrJtd7mN4K1wCtBUyE0=" }
+            - { name: MASTER_KEY, value: "BJjNDXK7O6fd7mZeWlea5ZmhSc/jWX3ejaHhIL3rDlHRCOYuU9AH9RA+EhnggU+nzcM5QQfMjZg4kWmxBElBt4w=" }
             # the box key (made when the box was created, a Secret only this namespace has): it signs the core's identity
             - { name: BOX_KEY_FILE, value: /box/box-key.pem }
           volumeMounts: [{ name: box-key, mountPath: /box, readOnly: true }]
