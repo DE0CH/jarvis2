@@ -8,24 +8,24 @@ both). Values never print.
   HETZNER_S3_*                    the backup bucket (jarvis2-backup-de0ch)
 
   infra/setup.py status                the router's health: secret names present, session image, core up
-  infra/setup.py identity              the core's identity (8 words), checked against keys/box.pub
+  infra/setup.py identity              whether the core is empty or set up (and with which master public key),
+                                       checked against keys/box.pub and the core's own signature
   infra/setup.py stores                the core's signed store list
   infra/setup.py create NAME           a new, empty, NOT sensitive store (once per name)
   infra/setup.py write NAME KEY[=SRC]… new contents for a store; each value from this session's env var KEY,
                                        or SRC: another env var name, or file:PATH. Written to the core wrapped
-                                       to the phone + core key, and backed up to S3 (encrypted to the master key)
+                                       to the phone + core key, and backed up to S3 (encrypted to the master key
+                                       the core was set up with)
   infra/setup.py mark-sensitive NAME   the one-way upgrade, in the core and in the backup
   infra/setup.py backup NAME KEY[=SRC]… [--not-sensitive]
-                                       a store's backup only, for the next recovery (before the first one,
-                                       this is how stores reach a core); sensitive unless --not-sensitive
-  infra/setup.py backup-core FILE      the `core` store's backup only (it reaches a core only by recovery):
-                                       FLY_API_TOKEN from FILE (infra/fly-token.sh), FLY_APP jarvis2-sessions
-  infra/setup.py recovery-keys FILE --credential=NAME
-                                       the backup bucket's read keys (FILE: ACCESS_KEY=…, SECRET_KEY=… lines)
-                                       sealed to the master key, signed by the setup key, kept by the router
-                                       for the app's Recovery kit page (the router can't open them)
+                                       a store's backup only, for the next Recover; sensitive unless
+                                       --not-sensitive
+  infra/setup.py backup-core FILE      the core's Fly token, FLY_API_TOKEN from FILE (infra/fly-token.sh):
+                                       sent to the core sealed to its key, and backed up as the `core` store
 
-A store the core never created (no `create` first) is sensitive.
+Everything is sealed to the master public key the core was set up with (Reset or Recover in the app), which
+this script reads from the core's signed state, after checking the core's keys against keys/box.pub — so it
+works only once the core is set up. A store the core never created (no `create` first) is sensitive.
 """
 import base64, hashlib, json, os, sys, time, urllib.error, urllib.request
 
@@ -124,32 +124,27 @@ def keyfile(name):
 
 
 def identity():
-    """the core's keys, checked against the box key (keys/box.pub)"""
+    """the core's keys (checked against the box key, keys/box.pub) and its own signed state: {signingKey,
+    agreementKey, master: the master public key it was set up with ("" while empty), phone: its keys or None}"""
     k = call("GET", "/setup/identity")
     text = f"jarvis2-core-identity {k['signingKey']} {k['agreementKey']}".encode()
     if not _verify(keyfile("box.pub"), text, k.get("boxSig", "")):
         raise SystemExit("the core's identity isn't signed by this box's key (keys/box.pub)")
-    return k
+    d = k.get("state") or {}
+    if not _verify(k["signingKey"], (d.get("payload") or "").encode(), d.get("sig") or ""):
+        raise SystemExit("the core's state isn't signed by the core")
+    st = json.loads(d["payload"])
+    if st.get("kind") != "core-state":
+        raise SystemExit("not the core's state")
+    return {"signingKey": k["signingKey"], "agreementKey": k["agreementKey"], "master": st.get("master") or "", "phone": st.get("phone")}
 
 
-def recovered():
-    """the master-signed statement: this core's and the phone's keys (setup.py writes stores only to a
-    recovered core, wrapped to the phone + core key it names)"""
-    cc = call("GET", "/setup/core-cert")
-    if not _verify(keyfile("master.pub"), cc["statement"].encode(), cc["masterSig"]):
-        raise SystemExit("the core cert isn't signed by the master key (keys/master.pub)")
-    st = json.loads(cc["statement"])
+def set_up():
+    """the core, only once it is set up (Reset or Recover in the app): the master key and the phone it names"""
     me = identity()
-    if st["core"]["agreementKey"] != me["agreementKey"] or st["core"]["signingKey"] != me["signingKey"]:
-        raise SystemExit("the core cert names another core")
-    return st
-
-
-def words(k):
-    wl = open(os.path.join(ROOT, "core", "words.txt")).read().split()
-    h = hashlib.sha256(f"jarvis2-core-identity {k['signingKey']} {k['agreementKey']}".encode()).digest()
-    bits = int.from_bytes(h, "big") >> (256 - 88)
-    return " ".join(wl[(bits >> (11 * (7 - i))) & 2047] for i in range(8))
+    if not me["master"] or not me["phone"]:
+        raise SystemExit("the core is empty: Deyao sets it up in the app first (Reset or Recover)")
+    return me
 
 
 # ---- stores ---------------------------------------------------------------------------------------------
@@ -171,12 +166,12 @@ def s3():
                         aws_access_key_id=os.environ["HETZNER_S3_ACCESS_KEY"], aws_secret_access_key=os.environ["HETZNER_S3_SECRET_KEY"])
 
 
-def seal_to_master(plain, aad):
-    """{e, data}: sealed to the master public key (keys/master.pub) — ECDH P-256, HKDF info "jarvis2/backup", AES-GCM"""
-    master = ec.EllipticCurvePublicKey.from_encoded_point(ec.SECP256R1(), base64.b64decode(keyfile("master.pub")))
+def seal_to(pub_b64, plain, info, aad=None):
+    """{e, data}: sealed to a P-256 public key — ECDH with a one-off key, HKDF-SHA256 (info), AES-256-GCM"""
+    to = ec.EllipticCurvePublicKey.from_encoded_point(ec.SECP256R1(), base64.b64decode(pub_b64))
     e = ec.generate_private_key(ec.SECP256R1())
     return {"e": base64.b64encode(_x963(e.public_key())).decode(),
-            "data": base64.b64encode(_gcm(_kdf(e.exchange(ec.ECDH(), master), "jarvis2/backup"), plain, aad)).decode()}
+            "data": base64.b64encode(_gcm(_kdf(e.exchange(ec.ECDH(), to), info), plain, aad)).decode()}
 
 
 def signed(doc):
@@ -184,35 +179,16 @@ def signed(doc):
     return {"doc": doc, "sig": base64.b64encode(setup_key().sign(doc.encode(), ec.ECDSA(hashes.SHA256()))).decode()}
 
 
-def backup(name, values, sensitive):
-    """stores/<name>.json in the versioned bucket: the values sealed to the master key, signed by the setup key"""
-    sealed = seal_to_master(json.dumps(values).encode(), name.encode())
+def backup(name, values, sensitive, master):
+    """stores/<name>.json in the versioned bucket: the values sealed to the master key (info "jarvis2/backup",
+    the store's name as associated data), signed by the setup key"""
+    sealed = seal_to(master, json.dumps(values).encode(), "jarvis2/backup", name.encode())
     doc = json.dumps({"kind": "store-backup", "name": name, "sensitive": sensitive, "sealed": sealed, "at": int(time.time())})
     s3().put_object(Bucket=BUCKET, Key=f"stores/{name}.json", Body=json.dumps(signed(doc)).encode())
 
 
-RECOVERY_KEYS_AAD = b"jarvis2/recovery-keys"
-
-
-def recovery_keys_doc(access_key, secret_key, credential):
-    """the backup bucket's read keys for the iPhone's recovery kit: sealed to the master key (associated data
-    "jarvis2/recovery-keys", so no store backup can pass for it), signed by the setup key"""
-    plain = json.dumps({"accessKey": access_key, "secretKey": secret_key}).encode()
-    doc = json.dumps({"kind": "recovery-keys", "bucket": BUCKET, "credential": credential,
-                      "sealed": seal_to_master(plain, RECOVERY_KEYS_AAD), "at": int(time.time())})
-    return signed(doc)
-
-
-def read_keys_file(path):
-    """ACCESS_KEY=… / SECRET_KEY=… lines (never printed)"""
-    v = dict(l.strip().split("=", 1) for l in open(os.path.expanduser(path)) if "=" in l)
-    if not v.get("ACCESS_KEY") or not v.get("SECRET_KEY"):
-        raise SystemExit(f"{path}: needs ACCESS_KEY= and SECRET_KEY= lines")
-    return v["ACCESS_KEY"], v["SECRET_KEY"]
-
-
 def mark_sensitive_backup(name):
-    """sensitive/<name>.json: a signed marker; at recovery a store with one is sensitive whatever its backup says"""
+    """sensitive/<name>.json: a signed marker; at a Recover a store with one is sensitive whatever its backup says"""
     doc = json.dumps({"kind": "store-sensitive", "name": name, "at": int(time.time())})
     s3().put_object(Bucket=BUCKET, Key=f"sensitive/{name}.json", Body=json.dumps(signed(doc)).encode())
 
@@ -239,7 +215,8 @@ def main():
     if cmd == "status":
         print(json.dumps(call("GET", "/setup/status"), indent=1))
     elif cmd == "identity":
-        print(words(identity()))
+        me = identity()
+        print(f"set up with master key {me['master'][:16]}…" if me["master"] else "empty: waiting for Reset or Recover in the app")
     elif cmd == "stores":
         for n, s in sorted(store_list().items()):
             print(n, "sensitive" if s["sensitive"] else "not-sensitive", "empty" if s["empty"] else "", "unlocked" if s["unlocked"] else "")
@@ -248,36 +225,28 @@ def main():
         print(f"ok: store {args[0]} created (empty, not sensitive)")
     elif cmd == "write":
         name, vals = args[0], dict(value(a) for a in args[1:])
-        st = recovered()
-        b = blob(name, vals, st["phone"]["agreementKey"], st["core"]["agreementKey"])
+        me = set_up()
+        b = blob(name, vals, me["phone"]["agreementKey"], me["agreementKey"])
         d = call("POST", "/setup/stores/write", {"store": b})
         sens = json.loads(d["payload"])["sensitive"]
-        backup(name, vals, sens)
+        backup(name, vals, sens, me["master"])
         print(f"ok: store {name} written with {len(vals)} keys (sensitive={sens}), backed up")
     elif cmd == "mark-sensitive":
+        set_up()
         call("POST", "/setup/stores/mark-sensitive", {"name": args[0]})
         mark_sensitive_backup(args[0])
         print(f"ok: {args[0]} is sensitive, in the core and in the backup")
     elif cmd == "backup":
         plain = "--not-sensitive" in args
         args = [a for a in args if a != "--not-sensitive"]
-        backup(args[0], dict(value(a) for a in args[1:]), not plain)
-        print(f"ok: backup of {args[0]} written (sensitive={not plain}); it comes in at the next recovery")
+        backup(args[0], dict(value(a) for a in args[1:]), not plain, set_up()["master"])
+        print(f"ok: backup of {args[0]} written (sensitive={not plain}); it comes in at the next Recover")
     elif cmd == "backup-core":
-        backup("core", {"FLY_API_TOKEN": open(os.path.expanduser(args[0])).read().strip(), "FLY_APP": "jarvis2-sessions"}, True)
-        print("ok: the core store's backup is written (it comes in at the next recovery)")
-    elif cmd == "recovery-keys":
-        cred = next((a.split("=", 1)[1] for a in args if a.startswith("--credential=")), "")
-        files = [a for a in args if not a.startswith("--")]
-        if len(files) != 1 or not cred:
-            raise SystemExit("usage: setup.py recovery-keys FILE --credential=NAME")
-        ak, sk = read_keys_file(files[0])
-        k = recovery_keys_doc(ak, sk, cred)
-        call("POST", "/setup/recovery-keys", k)
-        back = call("GET", "/setup/recovery-keys")
-        if back.get("doc") != k["doc"] or back.get("sig") != k["sig"]:
-            raise SystemExit("the router doesn't give the sealed keys back unchanged")
-        print(f"ok: the read keys of {cred} are sealed to the master key and waiting at the router for the app's recovery kit")
+        me = set_up()
+        tok = {"FLY_API_TOKEN": open(os.path.expanduser(args[0])).read().strip()}
+        call("POST", "/setup/fly-token", {"sealed": seal_to(me["agreementKey"], json.dumps(tok).encode(), "jarvis2/fly-token")})
+        backup("core", tok, True, me["master"])
+        print("ok: the core has its Fly token, and the core store's backup is written")
     else:
         raise SystemExit(__doc__)
 

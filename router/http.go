@@ -100,7 +100,7 @@ func (r *Router) buildHandlers() {
 		present := []string{}
 		for _, k := range []string{"LOBSTER_TOKEN", "STORAGEBOX_HOST", "STORAGEBOX_USER", "STORAGEBOX_PASSWORD", "FLY_READ_TOKEN",
 			"JARVIS1_CREDENTIALS_ID", "JARVIS1_CREDENTIALS_SECRET", "JARVIS1_SERVICES_ID", "JARVIS1_SERVICES_SECRET", "JARVIS2_TUNNEL_KEY", "JARVIS2_REMOTES_CLIENT_ID",
-			"GITHUB_READ_TOKEN"} {
+			"GITHUB_READ_TOKEN", "BACKUP_READ_ACCESS_KEY", "BACKUP_READ_SECRET_KEY"} {
 			if os.Getenv(k) != "" {
 				present = append(present, k)
 			}
@@ -109,21 +109,30 @@ func (r *Router) buildHandlers() {
 		writeJSON(w, 200, map[string]any{"secrets": present, "sessionImage": r.cfg.SessionImage, "coreUp": coreErr == nil, "version": os.Getenv("VERSION")})
 	}))
 	setup("GET /setup/identity", "GET", "/identity")
-	setup("GET /setup/core-cert", "GET", "/core-cert")
 	setup("POST /setup/stores", "POST", "/stores")
 	setup("POST /setup/stores/create", "POST", "/stores/create")
 	setup("POST /setup/stores/write", "POST", "/stores/write")
 	setup("POST /setup/stores/mark-sensitive", "POST", "/stores/mark-sensitive")
-	// the backup bucket's read keys, sealed to the master key by the setup session (recoverykeys.go)
-	r.registerRecoveryKeys(app, mux.Handle)
+	// the core's Fly token, sealed to the core (after a Reset; a Recover brings it from the backups)
+	setup("POST /setup/fly-token", "POST", "/fly-token")
 
-	// ---- recovery (the app, with the master key) and the core's identity --------------------------------
+	// ---- setting the core up: Reset and Recover (the app, with the master key) -----------------------------
 	app("GET /api/core/identity", func(w http.ResponseWriter, req *http.Request) { r.relay(w, "GET", "/identity", nil) })
-	app("GET /api/core/core-cert", func(w http.ResponseWriter, req *http.Request) { r.relay(w, "GET", "/core-cert", nil) })
-	app("POST /api/core/recover", func(w http.ResponseWriter, req *http.Request) {
-		b, _ := io.ReadAll(io.LimitReader(req.Body, 16<<20))
-		r.relay(w, "POST", "/recover", b)
-	})
+	// claim and wipe come only from the app's own device login (the cf-access-token header the shell sends),
+	// not from a browser tab
+	device := func(pattern, corePath string) {
+		app(pattern, func(w http.ResponseWriter, req *http.Request) {
+			if !r.cfg.NoAccess && req.Header.Get("cf-access-token") == "" {
+				writeJSON(w, 403, map[string]string{"error": "only the iPhone app sets the core up"})
+				return
+			}
+			b, _ := io.ReadAll(io.LimitReader(req.Body, 16<<20))
+			r.relay(w, "POST", corePath, b)
+		})
+	}
+	device("POST /api/core/claim", "/claim")
+	device("POST /api/core/wipe", "/wipe")
+	r.registerBackups(app)
 	app("GET /api/policy", func(w http.ResponseWriter, req *http.Request) { writeJSON(w, 200, r.policy) })
 
 	// ---- sign-in -----------------------------------------------------------------------------------
@@ -393,11 +402,7 @@ func (r *Router) buildHandlers() {
 			writeJSON(w, 404, map[string]string{"error": "no cert yet"})
 			return
 		}
-		var coreCert json.RawMessage
-		if st, b, err := r.core.Raw("GET", "/core-cert", nil); err == nil && st == 200 {
-			coreCert = b
-		}
-		writeJSON(w, 200, map[string]any{"cert": cert, "predecessorCert": pred, "coreCert": coreCert})
+		writeJSON(w, 200, map[string]any{"cert": cert, "predecessorCert": pred})
 	})
 	m("GET /m/snapshot", func(w http.ResponseWriter, req *http.Request, machine string, _ []byte) {
 		var pred string
@@ -544,8 +549,8 @@ func (r *Router) buildHandlers() {
 func (r *Router) relay(w http.ResponseWriter, method, path string, body []byte) {
 	status, b, err := r.core.Raw(method, path, body)
 	if err != nil {
-		// no core to talk to: before the first recovery (no master key yet) the core's pod isn't running at
-		// all, so this is a state, not a fault — the app shows it as a plain note (coreDown)
+		// no core to talk to (its pod is restarting, e.g. after a wipe): a state, not a fault — the app waits
+		// and shows it as a plain note (coreDown)
 		log.Printf("core %s %s: %v", method, path, err)
 		writeJSON(w, 503, map[string]any{"error": "the core isn't running", "coreDown": true})
 		return

@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
-"""A new read credential for the backup bucket (docs/RUNBOOK.md "The backup bucket's read keys"). Values never print.
+"""A new read credential for the backup bucket, for the router (docs/RUNBOOK.md "The backup bucket's read
+credential"). Values never print.
 
 S3 credentials exist only in the Hetzner Console (no API), so the Console steps drive a Chrome over CDP
 (CDP, default http://127.0.0.1:9333 — e.g. a headed google-chrome on Xvfb with --remote-debugging-port=9333),
 logged in as HETZNER_USER / HETZNER_PASSWORD (run under `pull-secrets --exec` when they aren't in the env).
 The admin key HETZNER_S3_* does the bucket policies and the cleanup. The new keys live in FILE
-(~/.jarvis2/backup-read.env, mode 600: ACCESS_KEY=… / SECRET_KEY=…) until `seal` is done; then shred it.
+(~/.jarvis2/backup-read.env, mode 600: ACCESS_KEY=… / SECRET_KEY=…) until `install` is done; then shred it.
 
   backup-read-key.py login       log the Console in (project "Cloud Code", 2827255)
   backup-read-key.py generate    a new credential "jarvis2-backup-read" → FILE (refuses if FILE exists)
@@ -15,7 +16,9 @@ The admin key HETZNER_S3_* does the bucket policies and the cleanup. The new key
   backup-read-key.py test        what the new key may do (wait ~1 min after `policies`: a multi-delete went through
                                  once seconds after a policy write); throwaway names only, cleaned up by the admin key
   backup-read-key.py delete-old  delete the old credential in the Console (its row's ⋯ → Delete → OK)
-  backup-read-key.py seal        infra/setup.py recovery-keys FILE --credential=jarvis2-backup-read, then shred FILE
+  backup-read-key.py install     the router's secrets: infra/router-secrets.py --part backup (SOPS to the box's
+                                 age key, k8s/secrets/router-backup.enc.yaml), then shred FILE; commit and push
+                                 that file and k8s/apps/router.yaml (the router restarts with it)
 """
 import json, os, re, secrets, subprocess, sys, time
 
@@ -82,7 +85,7 @@ def login():
 def generate():
     from playwright.sync_api import sync_playwright
     if os.path.exists(FILE):
-        raise SystemExit(f"{FILE} exists: seal or shred it first")
+        raise SystemExit(f"{FILE} exists: install or shred it first")
     os.makedirs(os.path.dirname(FILE), mode=0o700, exist_ok=True)
     with sync_playwright() as pw:
         pg = page(pw)
@@ -216,14 +219,17 @@ def delete_old():
     print("ok: the old credential is deleted")
 
 
-def seal():
-    subprocess.run([sys.executable, os.path.join(ROOT, "infra/setup.py"), "recovery-keys", FILE, f"--credential={NAME}"], check=True)
+def install():
+    ak, sk = newkey()
+    env = dict(os.environ, BACKUP_READ_ACCESS_KEY=ak, BACKUP_READ_SECRET_KEY=sk)
+    subprocess.run([sys.executable, os.path.join(ROOT, "infra/router-secrets.py"), "--part", "backup",
+                    "BACKUP_READ_ACCESS_KEY", "BACKUP_READ_SECRET_KEY"], check=True, env=env)
     subprocess.run(["shred", "-u", FILE], check=True)
-    print(f"ok: {FILE} shredded")
+    print(f"ok: in k8s/secrets/router-backup.enc.yaml (commit and push it with k8s/apps/router.yaml); {FILE} shredded")
 
 
 if __name__ == "__main__":
-    cmds = {"login": login, "generate": generate, "policies": policies, "test": test, "delete-old": delete_old, "seal": seal}
+    cmds = {"login": login, "generate": generate, "policies": policies, "test": test, "delete-old": delete_old, "install": install}
     if len(sys.argv) != 2 or sys.argv[1] not in cmds:
         raise SystemExit(__doc__)
     cmds[sys.argv[1]]()

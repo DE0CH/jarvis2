@@ -2,21 +2,35 @@
 """router-secrets.py — write the router's non-sensitive secrets into git, SOPS-encrypted to the box's age key
 (keys/box-age.pub); Flux decrypts them on the box (k8s/flux/sync.yaml, Kustomization jarvis2-secrets).
 
-    infra/router-secrets.py KEY[=SRC] …
+    infra/router-secrets.py [--part backup] KEY[=SRC] …
 
-SRC is `env:VAR` (default `env:KEY`) or `file:PATH`. The whole Secret is rewritten each run, so name every key.
+SRC is `env:VAR` (default `env:KEY`) or `file:PATH`. A part is one Secret, rewritten whole each run, so name
+every key of that part (nobody can read the old values back: only the box holds the age key):
+  (default)      k8s/secrets/router.enc.yaml, Secret router-secrets — LOBSTER_TOKEN, Storage Box, tokens…
+  --part backup  k8s/secrets/router-backup.enc.yaml, Secret router-secrets-backup — the backup bucket's read
+                 credential (BACKUP_READ_ACCESS_KEY, BACKUP_READ_SECRET_KEY), set once per box / credential
 Only for secrets that can't reach a code push (Deyao, 2026-10-09); the router's pod gets them as env
-(k8s/apps/router.yaml envFrom router-secrets). Prints names only, never a value."""
-import json, os, subprocess, sys, tempfile
+(k8s/apps/router.yaml envFrom). Prints names only, never a value."""
+import hashlib, json, os, re, subprocess, sys, tempfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-OUT = os.path.join(ROOT, "k8s/secrets/router.enc.yaml")
+PARTS = {  # part → (file, Secret name, router.yaml annotation)
+    "": ("router.enc.yaml", "router-secrets", "jarvis2/secrets-rev"),
+    "backup": ("router-backup.enc.yaml", "router-secrets-backup", "jarvis2/secrets-rev-backup"),
+}
+
 
 def main():
-    if len(sys.argv) < 2:
+    args = sys.argv[1:]
+    part = ""
+    if args[:1] == ["--part"]:
+        part, args = args[1], args[2:]
+    if not args or part not in PARTS:
         sys.exit(__doc__)
+    fname, secret, annotation = PARTS[part]
+    out = os.path.join(ROOT, "k8s/secrets", fname)
     data = {}
-    for arg in sys.argv[1:]:
+    for arg in args:
         key, _, src = arg.partition("=")
         src = src or "env:" + key
         kind, _, ref = src.partition(":")
@@ -30,9 +44,9 @@ def main():
             sys.exit(f"{key}: {src} is empty")
         data[key] = v
     recipient = open(os.path.join(ROOT, "keys/box-age.pub")).read().strip()
-    doc = {"apiVersion": "v1", "kind": "Secret", "metadata": {"name": "router-secrets", "namespace": "jarvis2-router"},
+    doc = {"apiVersion": "v1", "kind": "Secret", "metadata": {"name": secret, "namespace": "jarvis2-router"},
            "type": "Opaque", "stringData": data}
-    with tempfile.NamedTemporaryFile("w", suffix=".yaml", delete=False, dir=os.path.dirname(OUT)) as f:
+    with tempfile.NamedTemporaryFile("w", suffix=".yaml", delete=False, dir=os.path.dirname(out)) as f:
         os.chmod(f.name, 0o600)
         json.dump(doc, f)  # JSON is YAML
         tmp = f.name
@@ -41,18 +55,19 @@ def main():
                               "--input-type", "yaml", "--output-type", "yaml", tmp], check=True, capture_output=True).stdout
     finally:
         os.remove(tmp)
-    open(OUT, "wb").write(enc)
+    open(out, "wb").write(enc)
     kz = os.path.join(ROOT, "k8s/secrets/kustomization.yaml")
     s = open(kz).read()
-    if "router.enc.yaml" not in s:
-        open(kz, "w").write(s.replace("resources: []", "resources:\n  - router.enc.yaml"))
-    import hashlib, re
+    if "  - " + fname not in s:
+        s = s.replace("resources: []", "resources:")
+        open(kz, "w").write(s.rstrip("\n") + "\n  - " + fname + "\n")
     rev = hashlib.sha256(enc).hexdigest()[:12]
     rp = os.path.join(ROOT, "k8s/apps/router.yaml")
     y = open(rp).read()  # read before opening for write: open(rp, "w") first would empty it
-    if 'jarvis2/secrets-rev: "' not in y:
-        sys.exit(f"{rp}: no secrets-rev annotation")
-    open(rp, "w").write(re.sub(r'jarvis2/secrets-rev: "[^"]*"', f'jarvis2/secrets-rev: "{rev}"', y))
-    print("wrote", os.path.relpath(OUT, ROOT), "with", ", ".join(sorted(data)), "; router secrets-rev", rev)
+    if annotation + ': "' not in y:
+        sys.exit(f"{rp}: no {annotation} annotation")
+    open(rp, "w").write(re.sub(re.escape(annotation) + r': "[^"]*"', f'{annotation}: "{rev}"', y))
+    print("wrote", os.path.relpath(out, ROOT), "with", ", ".join(sorted(data)), ";", annotation, rev)
+
 
 main()

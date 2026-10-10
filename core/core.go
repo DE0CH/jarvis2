@@ -1,7 +1,7 @@
 package main
 
 // The secrets-controller core (docs/DESIGN.md). Every answer that leaves it is signed; all of its state
-// lives in memory (a restart = a new core, brought back by recovery from the iPhone). It accepts or rejects
+// lives in memory (a restart = a new, empty core, set up again from the iPhone: Reset or Recover). It accepts or rejects
 // — the orchestration (which approval applies, retries, the session flows) lives in the router outside it.
 
 import (
@@ -123,11 +123,12 @@ type Core struct {
 	signer    *Signer
 	agreement *ecdh.PrivateKey // the core's share K of every store's key
 	nonceKey  []byte
-	MasterKey string // the master public key (MASTER_KEY): it signs recovery
+	MasterKey string // the master public key it was claimed with ("" = empty, waiting for Reset or Recover)
 	BoxSig    string // the box key's signature over this core's identity
+	exit      func() // Wipe ends the process (main: os.Exit; tests: a stub)
 
 	phoneSigning, phoneAgreement string
-	coreCert                     *MasterCert // the master's signature on this core (from recovery)
+	coreCert                     *MasterCert // the master's signature on this core (from the claim)
 
 	approvalsUsed map[string]bool // approval nonces already certified
 	certified     map[string]bool // started machines that already have a line
@@ -208,33 +209,48 @@ func (c *Core) Key() map[string]string {
 	return map[string]string{"signingKey": c.signer.PublicKey(), "agreementKey": b64.EncodeToString(pub)}
 }
 
-// IdentityText: what the box key signs, and what the 8 words on the recovery page are made from
+// IdentityText: what the box key signs (keys/box.pub checks it: the app, the setup session)
 func IdentityText(signingKey, agreementKey string) string {
 	return "jarvis2-core-identity " + signingKey + " " + agreementKey
 }
 
-// Identity: the core's public keys with the box key's signature over them (it travels as plain text)
-func (c *Core) Identity() map[string]string {
+// Identity: the core's public keys with the box key's signature over them (it travels as plain text), and
+// the core's own signed state: the master public key it was claimed with ("" while empty) and the phone's
+// keys. The app reads from it whether the core is empty and whose master key it holds; the setup session
+// learns the master public key from it (after checking the box key, then this signature).
+func (c *Core) Identity() (map[string]any, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	st := map[string]any{"kind": "core-state", "master": c.MasterKey, "phone": nil}
+	if c.phoneSigning != "" {
+		st["phone"] = map[string]string{"signingKey": c.phoneSigning, "agreementKey": c.phoneAgreement}
+	}
+	d, err := c.sign(st)
+	if err != nil {
+		return nil, err
+	}
 	k := c.Key()
-	k["boxSig"] = c.BoxSig
-	return k
+	return map[string]any{"signingKey": k["signingKey"], "agreementKey": k["agreementKey"], "boxSig": c.BoxSig, "state": d}, nil
 }
 
-// ---- recovery (the iPhone, holding the master key) --------------------------------------------------
+// ---- claim: an empty core takes a master key (Reset or Recover, both from the app) ------------------------
 
 const (
-	infoRecover = "jarvis2/recover" // recovery: the Fly token sealed to the core by the phone
+	infoClaim    = "jarvis2/claim"     // the claim's bundle, sealed to the core by the phone
+	infoFlyToken = "jarvis2/fly-token" // the Fly token, sealed to the core by the setup session
 )
 
-// MasterCert: the master key's signature over a recovery statement (machines check the core with it)
+// MasterCert: the master key's signature over the claim statement (the archive keeps it next to a session's
+// snapshot: master key → core key → cert)
 type MasterCert struct {
 	Statement string `json:"statement"`
 	MasterSig string `json:"masterSig"`
 }
 
-type recoveryStatement struct {
-	Kind string `json:"kind"` // "recovery"
-	Core struct {
+type claimStatement struct {
+	Kind   string `json:"kind"`   // "claim"
+	Master string `json:"master"` // the master public key: it signs this statement; the core keeps it for its life
+	Core   struct {
 		SigningKey   string `json:"signingKey"`
 		AgreementKey string `json:"agreementKey"`
 	} `json:"core"`
@@ -245,15 +261,15 @@ type recoveryStatement struct {
 	BundleSha256 string `json:"bundleSha256"`
 }
 
-// FlyStore: the key store holding the core's own Fly token (FLY_API_TOKEN, FLY_APP). It arrives in recovery
-// like any store, but the core keeps only the token, for its whole life, and the store itself never exists
-// for a session.
+// FlyStore: the key store holding the core's own Fly token (FLY_API_TOKEN). It arrives in a Recover bundle
+// like any store (or through SetFlyToken), but the core keeps only the token, for its whole life, and the
+// store itself never exists for a session.
 const FlyStore = "core"
 
-// the recovery bundle: every store, and the names of the stores that are NOT sensitive — every other store
-// comes back sensitive, since nothing can downgrade one later (the master key signed the bundle's hash, so
-// the list comes from Deyao)
-type recoveryBundle struct {
+// the claim bundle: every store, and the names of the stores that are NOT sensitive — every other store comes
+// back sensitive, since nothing can downgrade one later (the master key signed the bundle's hash). A Reset's
+// bundle is empty.
+type claimBundle struct {
 	Stores       []storeData `json:"stores"`
 	NotSensitive []string    `json:"notSensitive"`
 }
@@ -263,27 +279,31 @@ type storeData struct {
 	Values map[string]string `json:"values"`
 }
 
-// Recover: once per core. The statement (signed by the master key) names this core and the phone; the
-// bundle, sealed to this core, carries every store, the Fly store among them (its token is kept for the
-// core's whole life). The
-// plaintext stores live only inside this call: each is wrapped to phone + core at once (well inside the
-// design's 10-minute cap) and only the wrapped blob is kept.
-func (c *Core) Recover(statement, masterSig string, bundle Sealed) (SignedDoc, error) {
+// Claim: once per core, on an empty core. The statement names the master public key, this core and the
+// phone, and is signed by that master key; from then on the core trusts that master key and that phone.
+// The bundle, sealed to this core, carries the stores (Recover: every store from the backups, the Fly store
+// among them; Reset: none). Who may claim is the router's business (Deyao's logged-in app only); the app
+// refuses a core claimed with a master key that isn't its own. The plaintext stores live only inside this
+// call: each is wrapped to phone + core at once and only the wrapped blob is kept.
+func (c *Core) Claim(statement, masterSig string, bundle Sealed) (SignedDoc, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.coreCert != nil {
-		return SignedDoc{}, fail(409, "this core is already recovered")
+	if c.MasterKey != "" {
+		return SignedDoc{}, fail(409, "this core is already set up")
 	}
-	if c.MasterKey == "" || !VerifyWith(c.MasterKey, []byte(statement), masterSig) {
-		return SignedDoc{}, fail(403, "the recovery statement isn't signed by the master key")
+	var st claimStatement
+	if json.Unmarshal([]byte(statement), &st) != nil || st.Kind != "claim" {
+		return SignedDoc{}, fail(400, "not a claim statement")
 	}
-	var st recoveryStatement
-	if json.Unmarshal([]byte(statement), &st) != nil || st.Kind != "recovery" {
-		return SignedDoc{}, fail(400, "not a recovery statement")
+	if _, err := parseSigningKey(st.Master); err != nil {
+		return SignedDoc{}, fail(400, "bad master key: %v", err)
+	}
+	if !VerifyWith(st.Master, []byte(statement), masterSig) {
+		return SignedDoc{}, fail(403, "the claim isn't signed by the master key it names")
 	}
 	k := c.Key()
 	if st.Core.SigningKey != k["signingKey"] || st.Core.AgreementKey != k["agreementKey"] {
-		return SignedDoc{}, fail(403, "the recovery statement names another core")
+		return SignedDoc{}, fail(403, "the claim names another core")
 	}
 	if _, err := parseSigningKey(st.Phone.SigningKey); err != nil {
 		return SignedDoc{}, fail(400, "bad phone signing key: %v", err)
@@ -293,58 +313,107 @@ func (c *Core) Recover(statement, masterSig string, bundle Sealed) (SignedDoc, e
 	} else if _, err := ecdh.P256().NewPublicKey(b); err != nil {
 		return SignedDoc{}, fail(400, "bad phone agreement key: %v", err)
 	}
-	plain, err := OpenSealed(c.agreement, bundle, infoRecover)
+	plain, err := OpenSealed(c.agreement, bundle, infoClaim)
 	if err != nil {
-		return SignedDoc{}, fail(400, "can't open the key store")
+		return SignedDoc{}, fail(400, "can't open the bundle")
 	}
 	sum := sha256.Sum256(plain)
 	if hex.EncodeToString(sum[:]) != st.BundleSha256 {
-		return SignedDoc{}, fail(403, "the key store isn't the one the master key signed")
+		return SignedDoc{}, fail(403, "the bundle isn't the one the master key signed")
 	}
-	var b recoveryBundle
+	var b claimBundle
 	if json.Unmarshal(plain, &b) != nil {
 		return SignedDoc{}, fail(400, "bad bundle")
 	}
-	var token, app string
+	stores := map[string]*StoreBlob{}
+	token := ""
 	for _, sd := range b.Stores {
 		if sd.Name == FlyStore {
-			token, app = sd.Values["FLY_API_TOKEN"], sd.Values["FLY_APP"]
-		}
-	}
-	if token == "" || app == "" {
-		return SignedDoc{}, fail(400, "the bundle needs the %s store with FLY_API_TOKEN and FLY_APP", FlyStore)
-	}
-	c.phoneSigning, c.phoneAgreement = st.Phone.SigningKey, st.Phone.AgreementKey
-	for _, sd := range b.Stores {
-		if sd.Name == FlyStore {
+			token = sd.Values["FLY_API_TOKEN"]
 			continue
 		}
-		if _, seen := c.stores[sd.Name]; !storeName(sd.Name) || seen {
+		if _, seen := stores[sd.Name]; !storeName(sd.Name) || seen {
 			return SignedDoc{}, fail(400, "bad or repeated store %q in the bundle", sd.Name)
 		}
 		blob, err := c.wrap(sd.Name, sd.Values, st.Phone.AgreementKey)
 		if err != nil {
 			return SignedDoc{}, err
 		}
-		c.stores[sd.Name] = blob
+		stores[sd.Name] = blob
 	}
+	c.MasterKey = st.Master
+	c.phoneSigning, c.phoneAgreement = st.Phone.SigningKey, st.Phone.AgreementKey
+	c.stores = stores
 	for _, n := range b.NotSensitive {
 		if _, ok := c.stores[n]; ok {
 			c.notSensitive[n] = true
 		}
 	}
-	c.fly.Configure(token, app)
+	if token != "" {
+		c.fly.Configure(token)
+	}
 	c.coreCert = &MasterCert{Statement: statement, MasterSig: masterSig}
-	c.logf("recovered: phone keys, the Fly token and %d stores", len(c.stores))
-	return c.sign(map[string]any{"kind": "recovered", "stores": len(c.stores)})
+	c.logf("claimed: master key, phone keys, %d stores, Fly token %v", len(c.stores), token != "")
+	return c.sign(map[string]any{"kind": "claimed", "stores": len(c.stores)})
 }
 
-// CoreCert: the master's signature on this core, for machines (404 before recovery)
+// Wipe: the current master key (from Deyao's kit) ends this core: it answers, then exits, and Kubernetes
+// starts a new, empty core in its place (new keys, nothing kept — the same as an infra restart). Without the
+// current master key a set-up core is never emptied from the app.
+func (c *Core) Wipe(statement, masterSig string) (SignedDoc, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.MasterKey == "" {
+		return SignedDoc{}, fail(409, "this core is empty")
+	}
+	if !VerifyWith(c.MasterKey, []byte(statement), masterSig) {
+		return SignedDoc{}, fail(403, "the wipe isn't signed by this core's master key")
+	}
+	var st struct {
+		Kind string `json:"kind"`
+		Core string `json:"core"` // the core's signing key
+	}
+	if json.Unmarshal([]byte(statement), &st) != nil || st.Kind != "wipe" || st.Core != c.signer.PublicKey() {
+		return SignedDoc{}, fail(403, "the wipe names another core")
+	}
+	c.logf("wipe: the master key ends this core")
+	d, err := c.sign(map[string]any{"kind": "wiping", "core": st.Core})
+	if err == nil && c.exit != nil {
+		go c.exit()
+	}
+	return d, err
+}
+
+// SetFlyToken: the core's Fly token, sealed to this core. Open: the core calls Fly only for its own app
+// (FlyApp), which only Deyao's Fly org reaches, so a wrong token can only fail. The setup session sends it
+// after a Reset; a Recover brings it in the bundle.
+func (c *Core) SetFlyToken(sealed Sealed) (SignedDoc, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.MasterKey == "" {
+		return SignedDoc{}, fail(409, "this core isn't set up yet")
+	}
+	plain, err := OpenSealed(c.agreement, sealed, infoFlyToken)
+	if err != nil {
+		return SignedDoc{}, fail(400, "can't open the Fly token")
+	}
+	var v struct {
+		Token string `json:"FLY_API_TOKEN"`
+	}
+	if json.Unmarshal(plain, &v) != nil || v.Token == "" {
+		return SignedDoc{}, fail(400, "no FLY_API_TOKEN")
+	}
+	c.fly.Configure(v.Token)
+	c.logf("Fly token set")
+	return c.sign(map[string]any{"kind": "fly-token-set"})
+}
+
+// CoreCert: the master's signature on this core (404 while empty)
 func (c *Core) CoreCert() (*MasterCert, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.coreCert == nil {
-		return nil, fail(404, "not recovered yet")
+		return nil, fail(404, "this core isn't set up yet")
 	}
 	return c.coreCert, nil
 }
@@ -363,7 +432,7 @@ func storeName(n string) bool {
 	return true
 }
 
-// wrap: values → a blob under a fresh data key wrapped to P + K (recovery only; writers outside do the same)
+// wrap: values → a blob under a fresh data key wrapped to P + K (the claim only; writers outside do the same)
 func (c *Core) wrap(name string, values map[string]string, phoneAgreement string) (*StoreBlob, error) {
 	dk := make([]byte, 32)
 	rand.Read(dk)
@@ -376,7 +445,7 @@ func (c *Core) wrap(name string, values map[string]string, phoneAgreement string
 }
 
 // CreateStore: once per name — an empty, non-sensitive store (the only way a store is ever not sensitive,
-// besides recovery)
+// besides a Recover bundle)
 func (c *Core) CreateStore(name string) (SignedDoc, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -442,7 +511,7 @@ type StartRequest struct {
 	Image  string            `json:"image"`
 	Region string            `json:"region"`
 	Size   string            `json:"size"`
-	Env    map[string]string `json:"env"` // non-secret settings (the router's), never secrets
+	Env    map[string]string `json:"env"` // non-secret settings (the router's), never secrets; the core adds its key
 }
 
 // Start: anyone may ask (normally the router): it makes a machine and reads its keys, nothing more — a
@@ -452,6 +521,12 @@ func (c *Core) Start(r StartRequest) (SignedDoc, error) {
 	if r.Image == "" || r.Image == NullImage {
 		return SignedDoc{}, fail(400, "start needs an image")
 	}
+	env := map[string]string{}
+	for k, v := range r.Env {
+		env[k] = v
+	}
+	env[coreKeyEnv] = c.signer.PublicKey() // the machine's one trust anchor, set by the core, never the router
+	r.Env = env
 	id, image, err := c.fly.Create(r)
 	if err != nil {
 		return SignedDoc{}, fail(502, "fly create: %v", err)

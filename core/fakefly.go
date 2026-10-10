@@ -31,7 +31,7 @@ func newFly() Fly {
 	return &FakeFly{machines: map[string]*fakeFlyMachine{}}
 }
 
-func (f *FakeFly) Configure(token, app string) {}
+func (f *FakeFly) Configure(token string) {}
 
 func (f *FakeFly) Create(r StartRequest) (string, string, error) {
 	f.mu.Lock()

@@ -1,8 +1,8 @@
 #!/bin/bash
 # e2e.sh — the end-to-end test against real Fly machines, from a session: builds the core and the router,
-# runs them here (ports 28090/28080) with the public TEST master key, a throwaway box key and a throwaway
-# WireGuard peer of the Fly
-# org (jarvis2-e2e) and the jarvis2-session-test image, so the machines reach this router over Fly's private network as they reach the box's.
+# runs them here (ports 28090/28080) with a throwaway box key, a throwaway WireGuard peer of the Fly org
+# (jarvis2-e2e) and the session image, so the machines reach this router over Fly's private network as they reach
+# the box's; the test sets its core up with the public TEST master key (e2e/testdata).
 # Leaves nothing behind but the core's and router's logs (in $E2E_LOGS, default /tmp/jarvis2-e2e-logs): the
 # peer is removed, the processes stopped. Never touches the production core.
 #   JARVIS2_FLY_TOKEN   the jarvis2-370 org token
@@ -37,13 +37,13 @@ FLY_API_TOKEN="$JARVIS2_FLY_TOKEN" flyctl wireguard remove jarvis2-370 jarvis2-e
 
 # the test router must never reach Deyao's Discord, the Storage Box or Jarvis 1: none of their keys go in
 mkdir -p "$W/data" "$W/web"
-MASTER_KEY="$(cat "$ROOT/e2e/testdata/master-test.pub")" BOX_KEY_FILE="$W/box-key.pem" ADDR=127.0.0.1:28090 "$W/core" > "$W/core.log" 2>&1 & PIDS+=($!)
+BOX_KEY_FILE="$W/box-key.pem" ADDR=127.0.0.1:28090 "$W/core" > "$W/core.log" 2>&1 & PIDS+=($!)
 env -u LOBSTER_TOKEN -u STORAGEBOX_HOST -u STORAGEBOX_USER -u STORAGEBOX_PASSWORD -u FLY_READ_TOKEN -u GITHUB_READ_TOKEN \
   -u JARVIS1_CREDENTIALS_ID -u JARVIS1_CREDENTIALS_SECRET -u JARVIS1_SERVICES_ID -u JARVIS1_SERVICES_SECRET \
   CORE_URL=http://127.0.0.1:28090 NO_ACCESS=1 RECORDS_OFF=1 LIVE_SYNC_SECONDS=20 ADDR=127.0.0.1:28080 DATA_DIR="$W/data" WEB_DIR="$W/web" \
   WG_CONFIG="$W/wg.conf" MACHINE_URL=http://jarvis2-e2e._peer.internal:8081 POLICY_FILE="$W/policy.json" TASKS_DIR="$ROOT/tasks" \
-  SESSION_IMAGE="${E2E_SESSION_IMAGE:-ghcr.io/de0ch/jarvis2-session-test:latest}" \
+  SESSION_IMAGE="${E2E_SESSION_IMAGE:-ghcr.io/de0ch/jarvis2-session:latest}" \
   "$W/router" > "$W/router.log" 2>&1 & PIDS+=($!)
 sleep 3
 (cd "$ROOT/e2e" && E2E_ROUTER_LOG="$W/router.log" E2E_ROUTER=http://127.0.0.1:28080 E2E_CORE=http://127.0.0.1:28090 E2E_MASTER_KEY_FILE="$ROOT/e2e/testdata/master-test.pem" E2E_BOX_PUB="$(cat "$W/box.pub")" \
-  E2E_FLY_TOKEN="$JARVIS2_FLY_TOKEN" E2E_FLY_APP=jarvis2-sessions go run .) || { echo "--- router log"; tail -40 "$W/router.log"; exit 1; }
+  E2E_FLY_TOKEN="$JARVIS2_FLY_TOKEN" go run .) || { echo "--- router log"; tail -40 "$W/router.log"; exit 1; }

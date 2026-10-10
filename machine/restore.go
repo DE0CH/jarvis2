@@ -5,8 +5,8 @@ package main
 //
 // A new line (a cert with no predecessor) whose machine env carries JARVIS2_RESTORE_CERT restores the
 // snapshot the router serves at /m/restore-snapshot, after checking:
-//   - the old cert is a succession cert signed by the core (the key this machine already checked against
-//     the master key), for another machine;
+//   - the old cert is a succession cert signed by the core (the key the core put in this machine's Fly
+//     config), for another machine;
 //   - the snapshot is signed by that cert's machine signing key (same format as a pause snapshot);
 //   - a snapshot from a line that held a sensitive store doesn't land in a line that holds none.
 // The env is the router's word, so which old snapshot comes back is not phone-approved: a malicious router

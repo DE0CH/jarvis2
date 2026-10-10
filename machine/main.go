@@ -50,8 +50,8 @@ const (
 	dir         = "/run/jarvis2"
 	keysPath    = dir + "/keys.json"        // public halves, printed by init for the core (through Fly exec)
 	privPath    = dir + "/private.json"     // private halves, never leave the machine
-	coreKeyPath = dir + "/core-key"         // the core's key, once the master key's signature on it checked
-	masterPath  = "/etc/jarvis2/master.pub" // the master public key, built into the image
+	coreKeyPath = dir + "/core-key"         // the core's key, from the machine's Fly config (the core set it)
+	coreKeyEnv  = "JARVIS2_CORE_KEY"        // the core that created this machine puts its signing key here
 	goPath      = dir + "/init-requested"
 	certPath    = dir + "/cert.json"
 	clientPath  = dir + "/client.json" // the router URL + this machine's id, for later commands
@@ -195,9 +195,12 @@ func sudo(args ...string) error {
 
 func prepare() error {
 	me := os.Getenv("FLY_MACHINE_ID")
-	master, err := readTrim(masterPath)
-	if err != nil {
-		return fmt.Errorf("no master key in the image: %w", err)
+	// the core: the one that created this machine. It sets its signing key in the machine's Fly config, and only
+	// the core's Fly token (besides the setup session's org token) can create or change machines in this app —
+	// the router's is read-only — so the key comes from the core through Fly, never from the router.
+	coreKey := strings.TrimSpace(os.Getenv(coreKeyEnv))
+	if coreKey == "" {
+		return errors.New("no core key in the machine's config (" + coreKeyEnv + ")")
 	}
 	keys, err := ownKeys()
 	if err != nil {
@@ -212,10 +215,6 @@ func prepare() error {
 	var certs struct {
 		Cert            *SignedDoc `json:"cert"`
 		PredecessorCert *SignedDoc `json:"predecessorCert"`
-		CoreCert        *struct {
-			Statement string `json:"statement"`
-			MasterSig string `json:"masterSig"`
-		} `json:"coreCert"`
 	}
 	for i := 0; ; i++ {
 		err = c.json("GET", "/m/cert", nil, &certs)
@@ -227,20 +226,6 @@ func prepare() error {
 		}
 		time.Sleep(2 * time.Second)
 	}
-	// the core: trusted because the master key (built into this image) signed its key in recovery
-	if certs.CoreCert == nil || !verify(master, []byte(certs.CoreCert.Statement), certs.CoreCert.MasterSig) {
-		return errors.New("the core's key isn't signed by the master key")
-	}
-	var st struct {
-		Kind string `json:"kind"`
-		Core struct {
-			SigningKey string `json:"signingKey"`
-		} `json:"core"`
-	}
-	if json.Unmarshal([]byte(certs.CoreCert.Statement), &st) != nil || st.Kind != "recovery" || st.Core.SigningKey == "" {
-		return errors.New("bad core cert")
-	}
-	coreKey := st.Core.SigningKey
 	if err := os.WriteFile(coreKeyPath, []byte(coreKey), 0o644); err != nil {
 		return err
 	}

@@ -6,10 +6,6 @@
 	<string>$(JARVIS_BASE)</string>
 	<key>JarvisCIKeysBase</key>
 	<string>$(JARVIS_CI_KEYS_BASE)</string>
-	<key>JarvisCIBackupEndpoint</key>
-	<string>$(JARVIS_CI_BACKUP_ENDPOINT)</string>
-	<key>JarvisCIBackupBucket</key>
-	<string>$(JARVIS_CI_BACKUP_BUCKET)</string>
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<key>NSAllowsLocalNetworking</key>

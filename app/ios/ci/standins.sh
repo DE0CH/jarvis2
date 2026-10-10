@@ -3,11 +3,11 @@
 #   - a box key and a setup key (standin.py keys); their public halves served at :18099 in place of GitHub
 #     (the CI build only — KeySource.swift);
 #   - the backup bucket on rclone's S3 server at :18098 (it checks SigV4), seeded with infra/setup.py's own
-#     code, encrypted to the public TEST master key; read keys in W/s3.env (ACCESS_KEY=/SECRET_KEY=), sealed as
-#     infra/setup.py recovery-keys seals them in W/recovery-keys.json; the public TEST master key's private half
-#     (base64 PKCS#8) in W/master-test.pkcs8, which the CI build holds as if the simulator had made the pair;
-#   - the core binary (fakefly, MASTER_KEY = the test master key, BOX_KEY_FILE = the throwaway box key) at
-#     W/core, and unless NO_CORE=1 started on :8090 (its identity words in W/words).
+#     code, encrypted to the public TEST master key; read keys in W/s3.env (ACCESS_KEY=/SECRET_KEY=), which the
+#     router gets as BACKUP_READ_*; every bucket's objects also in W/backups.json;
+#   - the core (fakefly) and router binaries at W/core, W/router, and W/core-loop.sh, which runs the core again
+#     whenever it ends (as Kubernetes does: a wipe ends the core and a new, empty one takes its place).
+#     Unless NO_CORE=1 the core (:8090, empty) and a router (:18080, reading the stand-in bucket) are started.
 # usage: standins.sh W
 set -euo pipefail
 W="$1"; ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
@@ -25,13 +25,25 @@ nohup "$W/venv/bin/python" -m http.server --bind 127.0.0.1 --directory "$W/keys"
 for i in $(seq 30); do curl -s -o /dev/null http://127.0.0.1:18098/ && curl -sf -o /dev/null http://127.0.0.1:18099/box.pub && break; sleep 1; done
 HETZNER_S3_ENDPOINT=http://127.0.0.1:18098 HETZNER_S3_REGION=fsn1 HETZNER_S3_ACCESS_KEY=ciaccess HETZNER_S3_SECRET_KEY="$secret" \
   $PY "$ROOT/app/ios/ci/standin.py" seed "$W"
-$PY "$ROOT/app/ios/ci/standin.py" sealkeys "$W"
-openssl pkcs8 -topk8 -nocrypt -in "$ROOT/e2e/testdata/master-test.pem" -outform DER | base64 | tr -d '\n' > "$W/master-test.pkcs8"
 
 (cd "$ROOT/core" && go build -tags fakefly -o "$W/core" .)
+(cd "$ROOT/router" && go build -o "$W/router" .)
+cat > "$W/core-loop.sh" <<EOF
+#!/bin/bash
+# the core, started again whenever it ends (a wipe); log to \$1
+while true; do BOX_KEY_FILE="$W/box-key.pem" ADDR=127.0.0.1:8090 "$W/core" >> "\$1" 2>&1; sleep 1; done
+EOF
+chmod +x "$W/core-loop.sh"
+# the router's env for the stand-in bucket (sourced by app.yml)
+printf 'BACKUP_READ_ACCESS_KEY=ciaccess\nBACKUP_READ_SECRET_KEY=%s\nBACKUP_ENDPOINT=http://127.0.0.1:18098\nBACKUP_BUCKET=jarvis2-backup-ci\n' "$secret" > "$W/router-backup.env"
 if [ "${NO_CORE:-}" != 1 ]; then
-  MASTER_KEY="$(cat "$ROOT/e2e/testdata/master-test.pub")" BOX_KEY_FILE="$W/box-key.pem" ADDR="${CORE_ADDR:-127.0.0.1:8090}" nohup "$W/core" > "$W/core.log" 2>&1 &
-  for i in $(seq 30); do curl -sf -o /dev/null "http://${CORE_ADDR:-127.0.0.1:8090}/key" && break; sleep 1; done
-  sed -n 's/.*core up; identity //p' "$W/core.log" > "$W/words"
-  echo "core up: $(cat "$W/words")"
+  BOX_KEY_FILE="$W/box-key.pem" ADDR=127.0.0.1:8090 nohup "$W/core" > "$W/core.log" 2>&1 &
+  for i in $(seq 30); do curl -sf -o /dev/null http://127.0.0.1:8090/key && break; sleep 1; done
+  mkdir -p "$W/router-data" "$W/web"
+  echo '{"harnesses":{"claude":{"stores":["claude-login"]}}}' > "$W/policy.json"
+  (set -a; . "$W/router-backup.env"; set +a
+   NO_ACCESS=1 CORE_URL=http://127.0.0.1:8090 DATA_DIR="$W/router-data" WEB_DIR="$W/web" POLICY_FILE="$W/policy.json" TASKS_DIR="$ROOT/tasks" \
+     ADDR=127.0.0.1:18080 MACHINE_ADDR=127.0.0.1:18081 nohup "$W/router" > "$W/router.log" 2>&1 &)
+  for i in $(seq 30); do curl -sf -o /dev/null http://127.0.0.1:18080/api/state && break; sleep 1; done
+  echo "core and router up"
 fi

@@ -17,8 +17,8 @@ spec:
   strategy: { type: Recreate }
   selector: { matchLabels: { app: router } }
   template:
-    # secrets-rev: bumped by infra/router-secrets.py so a changed Secret restarts the pod (envFrom is read at start)
-    metadata: { labels: { app: router }, annotations: { jarvis2/secrets-rev: "043246abae2f" } }
+    # secrets-rev(-backup): bumped by infra/router-secrets.py so a changed Secret restarts the pod (envFrom is read at start)
+    metadata: { labels: { app: router }, annotations: { jarvis2/secrets-rev: "043246abae2f", jarvis2/secrets-rev-backup: "" } }
     spec:
       automountServiceAccountToken: false
       enableServiceLinks: false
@@ -39,8 +39,9 @@ spec:
             - { name: SETUP_KEY, value: "BEhYIkmGeCkg7D8vdKhRe8b00asMI8a9EyXNW41eBbIphkf6lZmy/c9FsRlqoXLD5JyRZgVOxLzM7OBv47Uy2Ms=" }
             - { name: ACCESS_SETUP_AUD, value: fdd80d914f37f8f73409c3e44c11282cffefa5e20663d2d9de50bb087159ee89 }
           # the router's non-sensitive secrets (lobster's token, Storage Box keys, …): k8s/secrets/router.enc.yaml,
-          # SOPS-encrypted to the box's age key (infra/router-secrets.py)
-          envFrom: [{ secretRef: { name: router-secrets, optional: true } }]
+          # and the backup bucket's read credential (it serves the locked backups to the app's Recover):
+          # k8s/secrets/router-backup.enc.yaml — both SOPS-encrypted to the box's age key (infra/router-secrets.py)
+          envFrom: [{ secretRef: { name: router-secrets, optional: true } }, { secretRef: { name: router-secrets-backup, optional: true } }]
           volumeMounts: [{ name: data, mountPath: /data }, { name: wg, mountPath: /wg, readOnly: true }]
           resources: { requests: { cpu: 20m, memory: 64Mi }, limits: { memory: 1Gi } }
           securityContext: { runAsNonRoot: true, runAsUser: 65532, runAsGroup: 65532, allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: { drop: [ALL] }, seccompProfile: { type: RuntimeDefault } }

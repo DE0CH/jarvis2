@@ -1,15 +1,14 @@
-// Settings: the Claude account (Jarvis 1 holds it), the Fly spend against the cap, the core as the router
-// reports it, and the shell's recovery, recovery-kit and master-key pages (the app only).
+// Settings: the Claude account (Jarvis 1 holds it), the Fly spend against the cap, and whether Jarvis 2 runs, with
+// the way into the shell's Reset or recover page (the app only).
 import { Linking } from "react-native";
 import { useEffect, useRef, useState } from "react";
 import { api, fromNow, usd, type Usage, type UsageLimit } from "../lib/api";
 import { useStore, failed, pend } from "../lib/store";
-import { CopyButton, PButton } from "../ui/bits";
+import { PButton } from "../ui/bits";
 import { hasShell, requestSecure } from "../lib/shell";
 import { Box, Button, Card, Flex, Heading, Muted, P, Progress, Text } from "../ui/kit";
 import { Cards } from "../ui/cards";
 
-const short = (k?: string) => (k ? k.slice(0, 16) + "…" + k.slice(-8) : "—");
 const open = (u: string) => Linking.openURL(u).catch((e) => failed(e, "Could not open the link: "));
 
 // "Session (5 h)" / "Weekly · all models" / "Weekly · Fable" — the windows the CLI's /usage lists
@@ -97,30 +96,14 @@ export function Settings() {
       </Card>
       <UsageCard />
       <FlyCard />
-      <Card data={{ settings: "core" }}>
-        <Heading size={3} mb={1}>Core</Heading>
-        <Muted>{core.up ? "Answering." : "Not answering."}</Muted>
-        <Flex mt={2} gap={2} align="center"><P size={2} style={{ flex: 1 }}>Signing key</P>{!!core.signingKey && <CopyButton id="copy-core-signing" value={core.signingKey} what="Signing key" />}</Flex>
-        <P size={1} mono color="gray" selectable>{short(core.signingKey)}</P>
-        <Flex mt={1} gap={2} align="center"><P size={2} style={{ flex: 1 }}>Agreement key</P>{!!core.agreementKey && <CopyButton id="copy-core-agreement" value={core.agreementKey} what="Agreement key" />}</Flex>
-        <P size={1} mono color="gray" selectable>{short(core.agreementKey)}</P>
-        <Muted mt={2}>As the router reports them. The app trusts only the core it recovered (its 8 words checked against the box key in git).</Muted>
+      <Card data={{ settings: "setup" }}>
+        <Heading size={3} mb={1}>Jarvis 2</Heading>
+        <Muted>{core.up ? "Running." : "Not answering."}</Muted>
+        {hasShell && <>
+          <Muted mt={2}>Start fresh with a new recovery kit, or bring everything back with yours.</Muted>
+          <Flex mt={3}><Button id="open-setup" variant="soft" onPress={() => requestSecure("setup", {})}>Reset or recover…</Button></Flex>
+        </>}
       </Card>
-      {hasShell && <Card data={{ settings: "recovery" }}>
-        <Heading size={3} mb={1}>Recovery</Heading>
-        <Muted>A new or restarted core gets every store back from the backups: its 8 words, then the recovery kit from your password manager.</Muted>
-        <Flex mt={3}><Button id="open-recovery" variant="soft" onPress={() => requestSecure("recovery", {})}>Open recovery</Button></Flex>
-      </Card>}
-      {hasShell && <Card data={{ settings: "recovery-kit" }}>
-        <Heading size={3} mb={1}>Recovery kit</Heading>
-        <Muted>The one string your password manager keeps: the master private key (held on the iPhone that made it, until the kit is saved) plus the backup bucket's read keys, which the setup session sealed to the master key.</Muted>
-        <Flex mt={3}><Button id="open-recovery-kit" variant="soft" color="gray" onPress={() => requestSecure("recovery-kit", {})}>Make the recovery kit…</Button></Flex>
-      </Card>}
-      {hasShell && <Card data={{ settings: "master-key" }}>
-        <Heading size={3} mb={1}>Master key</Heading>
-        <Muted>A new setup starts here: this iPhone makes the pair and shows only the public half, for you to send to Claude (it goes into the repo). The private half stays on this iPhone until it goes into your recovery kit.</Muted>
-        <Flex mt={3}><Button id="open-master-key" variant="soft" color="gray" onPress={() => requestSecure("master-key", {})}>Make a master key pair…</Button></Flex>
-      </Card>}
     </Cards>
   );
 }

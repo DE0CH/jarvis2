@@ -11,6 +11,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"time"
 )
 
 func main() {
@@ -19,13 +20,9 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	// the one trust anchor, public and from git (k8s/apps/core.yaml): the master key (signs recovery)
-	if c.MasterKey = os.Getenv("MASTER_KEY"); c.MasterKey == "" {
-		log.Fatal("MASTER_KEY is required")
-	}
-	if _, err := parseSigningKey(c.MasterKey); err != nil {
-		log.Fatalf("MASTER_KEY: %v", err)
-	}
+	// a new core is empty: no master key until the app sets it up (Reset or Recover). A wipe, authorised by
+	// that master key, ends the process; Kubernetes starts a new, empty core.
+	c.exit = func() { time.Sleep(500 * time.Millisecond); log.Printf("wiped: exiting"); os.Exit(0) }
 	// the box key (planted when the box was made) vouches for this core's fresh keys
 	bk, err := os.ReadFile(os.Getenv("BOX_KEY_FILE"))
 	if err != nil {
@@ -39,7 +36,7 @@ func main() {
 	if c.BoxSig, err = box.Sign([]byte(IdentityText(k["signingKey"], k["agreementKey"]))); err != nil {
 		log.Fatal(err)
 	}
-	log.Printf("core up; identity %s", IdentityWords(k["signingKey"], k["agreementKey"]))
+	log.Printf("core up, empty; signing key %s", k["signingKey"])
 	addr := os.Getenv("ADDR")
 	if addr == "" {
 		addr = ":8090"
@@ -99,15 +96,23 @@ func Handler(c *Core) http.Handler {
 		return s, nil
 	}
 
-	// ---- identity and recovery (the iPhone, with the master key) ----
-	h("GET /identity", func(r *http.Request, b body) (any, error) { return c.Identity(), nil })
+	// ---- identity, and setting the core up (the iPhone, with the master key) ----
+	h("GET /identity", func(r *http.Request, b body) (any, error) { return c.Identity() })
 	h("GET /core-cert", func(r *http.Request, b body) (any, error) { return c.CoreCert() })
-	h("POST /recover", func(r *http.Request, b body) (any, error) {
+	h("POST /claim", func(r *http.Request, b body) (any, error) {
 		s, err := sealed(b, "bundle")
 		if err != nil {
 			return nil, err
 		}
-		return c.Recover(str(b, "statement"), str(b, "masterSig"), s)
+		return c.Claim(str(b, "statement"), str(b, "masterSig"), s)
+	})
+	h("POST /wipe", func(r *http.Request, b body) (any, error) { return c.Wipe(str(b, "statement"), str(b, "masterSig")) })
+	h("POST /fly-token", func(r *http.Request, b body) (any, error) {
+		s, err := sealed(b, "sealed")
+		if err != nil {
+			return nil, err
+		}
+		return c.SetFlyToken(s)
 	})
 
 	// ---- stores (open: create and mark only add protection; a write can't reveal a secret) ----

@@ -1,7 +1,7 @@
 #!/bin/bash
-# rebackup.sh — after a new master key (docs/RUNBOOK.md "A new master key", step 2): re-make every store backup
-# sealed to keys/master.pub, minting or rotating every token whose value lived only in the old backups, then
-# delete the local copies. Values are never printed.
+# fill-stores.sh — after a Reset (docs/RUNBOOK.md "After a Reset"): fill every store in the core and its backup
+# (sealed to the master key the core was set up with), minting or rotating every token whose value lived only in
+# the old stores and backups, then delete the local copies. Values are never printed.
 #
 #   github-jarvis2     GITHUB_TOKEN_JARVIS2       a new fine-grained PAT jarvis2-sessions-jarvis2-push (sensitive)
 #   github-claude-env  GITHUB_TOKEN_CLAUDE_ENV    a new PAT jarvis2-sessions-claude-env-push
@@ -70,11 +70,18 @@ c() { curl -s -o /dev/null -w "%{http_code}" -H "CF-Access-Client-Id: $(cat "$D/
 bash infra/fly-token.sh "$D/fly.tok"
 
 S="python3 infra/setup.py"
-$S backup default LOBSTER_TOKEN OPENROUTER_API EXA_API --not-sensitive
-$S backup openrouter OPENROUTER_API --not-sensitive
-$S backup github-claude-env GITHUB_TOKEN_CLAUDE_ENV=file:$D/gh-claude-env.token --not-sensitive
-$S backup github-jarvis2 GITHUB_TOKEN_JARVIS2=file:$D/gh-jarvis2.token
-$S backup claude JARVIS1_CREDENTIALS_ID=file:$D/j1creds.id JARVIS1_CREDENTIALS_SECRET=file:$D/j1creds.secret --not-sensitive
-$S backup tunnel CF_ACCESS_CLIENT_ID=file:$D/j2tunnel.id CF_ACCESS_CLIENT_SECRET=file:$D/j2tunnel.secret --not-sensitive
+$S identity | grep -q '^set up' || { echo "the core is empty: Reset in the app first"; exit 1; }
+# not sensitive: created first (a store the core never created is sensitive); a store that exists is kept
+have="$($S stores | cut -d' ' -f1)"
+for n in default openrouter github-claude-env claude tunnel; do
+  grep -qx "$n" <<<"$have" || $S create "$n"
+done
+$S write default LOBSTER_TOKEN OPENROUTER_API EXA_API
+$S write openrouter OPENROUTER_API
+$S write github-claude-env GITHUB_TOKEN_CLAUDE_ENV=file:$D/gh-claude-env.token
+$S write github-jarvis2 GITHUB_TOKEN_JARVIS2=file:$D/gh-jarvis2.token
+$S write claude JARVIS1_CREDENTIALS_ID=file:$D/j1creds.id JARVIS1_CREDENTIALS_SECRET=file:$D/j1creds.secret
+$S write tunnel CF_ACCESS_CLIENT_ID=file:$D/j2tunnel.id CF_ACCESS_CLIENT_SECRET=file:$D/j2tunnel.secret
 $S backup-core "$D/fly.tok"
-echo "ok: every store backup re-made, sealed to $(cut -c1-12 keys/master.pub)…; local copies deleted"
+$S stores
+echo "ok: every store written to the core and backed up; local copies deleted"

@@ -4,10 +4,10 @@
 //   - public keys are base64 of the 65-byte uncompressed X9.63 point;
 //   - Sealed {e, data}: ephemeral P-256 e, x(e·R) → HKDF-SHA256(salt empty, info, 32 bytes) → AES-256-GCM
 //     combined (nonce‖ct‖tag). Infos: "jarvis2/unlock-share" (the phone's share x(p·E) to the core's one-off
-//     key T), "jarvis2/recover" (the recovery bundle to the core), "jarvis2/backup" (a store backup to the
+//     key T), "jarvis2/claim" (the claim's bundle to the core), "jarvis2/backup" (a store backup to the
 //     master key, the store's name as associated data).
-// The core's identity: "jarvis2-core-identity <signingKey> <agreementKey>", signed by the box key, shown as
-// 8 words (BIP39 English, the first 88 bits of its SHA-256, 11 bits per word — core/identity.go).
+// The core's identity: "jarvis2-core-identity <signingKey> <agreementKey>", signed by the box key (keys/box.pub),
+// which the app checks itself before it trusts a core.
 #if canImport(CryptoKit)
 import CryptoKit
 #else
@@ -18,10 +18,10 @@ import Foundation
 struct SignedDoc: Codable, Equatable { let payload: String; let sig: String }
 
 enum TrustError: LocalizedError, Equatable {
-  case notRecovered, badKit(String), badSignature(String), mismatch(String), stale(String), backup(String)
+  case notSetUp, badKit(String), badSignature(String), mismatch(String), stale(String), backup(String)
   var errorDescription: String? {
     switch self {
-    case .notRecovered: return "This iPhone hasn't recovered a core yet — open Recovery."
+    case .notSetUp: return "Jarvis 2 isn't set up on this iPhone yet — open Settings → Reset or recover."
     case .badKit(let s): return s
     case .badSignature(let s): return "The signature on \(s) didn't check out — refusing to continue."
     case .mismatch(let s): return "The core's answer doesn't match what you chose (\(s)) — refusing to sign."
@@ -62,7 +62,7 @@ enum CoreCrypto {
   }
 
   // ---- sealing ----
-  static let shareInfo = "jarvis2/unlock-share", recoverInfo = "jarvis2/recover", backupInfo = "jarvis2/backup"
+  static let shareInfo = "jarvis2/unlock-share", claimInfo = "jarvis2/claim", backupInfo = "jarvis2/backup"
   static func seal(_ plain: Data, to recipient: String, info: String, aad: Data? = nil) throws -> [String: String] {
     guard let rb = Data(base64Encoded: recipient) else { throw TrustError.badSignature("the recipient key") }
     let rk = try P256.KeyAgreement.PublicKey(x963Representation: rb)
@@ -93,16 +93,6 @@ enum CoreCrypto {
 
   // ---- the core's identity ----
   static func identityText(_ k: PublicKeys) -> String { "jarvis2-core-identity \(k.signingKey) \(k.agreementKey)" }
-  /// 8 words from `words` (the BIP39 English list, core/words.txt)
-  static func identityWords(_ k: PublicKeys, words: [String]) -> String {
-    guard words.count == 2048 else { return "(no word list)" }
-    let h = Array(SHA256.hash(data: Data(identityText(k).utf8)))
-    return (0..<8).map { i -> String in
-      var idx = 0
-      for b in 0..<11 { let bit = i * 11 + b; idx = idx << 1 | Int(h[bit / 8] >> (7 - UInt8(bit % 8)) & 1) }
-      return words[idx]
-    }.joined(separator: " ")
-  }
   /// the box key (keys/box.pub, from GitHub) vouches for this core's keys
   static func identityVouched(_ k: PublicKeys, boxSig: String, boxKey: String) -> Bool {
     PublicKeys.valid(k) && valid(Data(identityText(k).utf8), sig: boxSig, by: boxKey)
@@ -110,8 +100,8 @@ enum CoreCrypto {
 }
 
 // ---- the recovery kit: what Deyao keeps in his password manager --------------------------------------
-/// The master private key. It exists in two places only: on the iPhone that made it (the shell's Keychain,
-/// HeldMaster, until the recovery kit is made from it) and inside the recovery kit. It is never shown on its own.
+/// The master private key. It exists only inside the recovery kit: Reset makes it and shows the kit, Recover
+/// reads it from the pasted kit; either way the app keeps it in memory just long enough to set the core up.
 struct MasterKey {
   let signing: P256.Signing.PrivateKey
   var agreement: P256.KeyAgreement.PrivateKey { try! P256.KeyAgreement.PrivateKey(rawRepresentation: signing.rawRepresentation) }
@@ -123,42 +113,31 @@ struct MasterKey {
   init(signing: P256.Signing.PrivateKey) { self.signing = signing }
   init(pkcs8 b64: String) throws {
     guard let d = Data(base64Encoded: b64.filter { !$0.isWhitespace }), let k = try? P256.Signing.PrivateKey(derRepresentation: d) else {
-      throw TrustError.badKit("That isn't a P-256 private key (base64 PKCS#8).")
+      throw TrustError.badKit("That isn't a recovery kit.")
     }
     signing = k
   }
   func sign(_ text: String) throws -> String { try signing.signature(for: Data(text.utf8)).derRepresentation.base64EncodedString() }
-  /// the public half is `pub` (keys/master.pub: base64 X9.63)
+  /// the public half is `pub` (base64 X9.63)
   func matches(_ pub: String) -> Bool { MasterKey.same(publicKey, pub) }
   static func same(_ a: String, _ b: String) -> Bool {
-    guard let x = Data(base64Encoded: a.trimmingCharacters(in: .whitespacesAndNewlines)) else { return false }
+    guard let x = Data(base64Encoded: a.trimmingCharacters(in: .whitespacesAndNewlines)), !x.isEmpty else { return false }
     return x == Data(base64Encoded: b.trimmingCharacters(in: .whitespacesAndNewlines))
   }
 }
 
-/// read credentials for the backup bucket (the Hetzner S3 credential narrowed to reads by bucket policies)
-struct S3Credentials: Codable, Equatable {
-  let accessKey: String, secretKey: String
-}
-
-/// The recovery kit: the ONE string Deyao keeps in his password manager —
-/// `jarvis2-kit:1:<master private key, base64 PKCS#8 DER>:<bucket access key>:<bucket secret key>`.
-/// The app's Recovery kit page makes it (the master key held in this iPhone's Keychain since it made the pair, the
-/// read keys from the setup session's sealed document); the Recovery page takes only this.
+/// The recovery kit: the ONE string Deyao keeps in his password manager — `jarvis2-kit:2:<master private key,
+/// base64 PKCS#8 DER>`. Reset shows it; Recover takes it. Version 1 (which carried the backup bucket's read keys)
+/// is refused: the router reads the backups now, and no core trusts a version-1 key.
 struct RecoveryKit {
-  let master: MasterKey, bucket: S3Credentials
-  static let prefix = "jarvis2-kit:1:"
-  var string: String {
-    RecoveryKit.prefix + master.pkcs8 + ":" + bucket.accessKey + ":" + bucket.secretKey
-  }
+  let master: MasterKey
+  static let prefix = "jarvis2-kit:2:"
+  var string: String { RecoveryKit.prefix + master.pkcs8 }
   static func parse(_ raw: String) throws -> RecoveryKit {
     let s = raw.filter { !$0.isWhitespace }
-    let bad = TrustError.badKit("That isn't a recovery kit (jarvis2-kit:1:… from the app's Recovery kit page).")
-    guard s.hasPrefix(prefix) else { throw bad }
-    // base64 has no ":", nor does an S3 access key; the secret is the rest, whatever it holds
-    let p = s.dropFirst(prefix.count).split(separator: ":", maxSplits: 2, omittingEmptySubsequences: false).map(String.init)
-    guard p.count == 3, !p[1].isEmpty, !p[2].isEmpty, let m = try? MasterKey(pkcs8: p[0]) else { throw bad }
-    return RecoveryKit(master: m, bucket: S3Credentials(accessKey: p[1], secretKey: p[2]))
+    if s.hasPrefix("jarvis2-kit:1:") { throw TrustError.badKit("This recovery kit is from an older Jarvis 2 and doesn't work any more.") }
+    guard s.hasPrefix(prefix), let m = try? MasterKey(pkcs8: String(s.dropFirst(prefix.count))) else { throw TrustError.badKit("That isn't a recovery kit.") }
+    return RecoveryKit(master: m)
   }
 }
 
@@ -192,7 +171,7 @@ struct StoresDoc: Codable { let kind: String; let nonce: String; let stores: [St
 struct UnlockRow: Codable, Identifiable, Equatable { let id: String; let store: String; let since: String }
 struct UnlockedDoc: Codable { let kind: String; let nonce: String; let unlocked: [UnlockRow] }
 struct UnlockBegin: Codable { let kind: String; let pending: String; let store: String; let e: String; let t: String }
-struct KindDoc: Codable { let kind: String; let id: String?; let store: String?; let name: String?; let stores: Int? }
+struct KindDoc: Codable { let kind: String; let id: String?; let store: String?; let name: String?; let stores: Int?; let core: String? }
 
 /// What a secure page shows for a challenge — read from the core-signed challenge itself, never from the
 /// router's label — and the checks that what comes back answers it.

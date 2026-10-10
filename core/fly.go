@@ -1,9 +1,11 @@
 package main
 
-// The Fly Machines API, used only by start and kill. The token is held by the core alone (from the core
-// store, at recovery) and is narrowed to this app and to one command inside a machine: jarvis2-init, with
-// no arguments. Its output is the machine's public keys, so their link to the machine is Fly's guarantee,
-// not anything the machine or the router says.
+// The Fly Machines API, used only by start and kill. The token is held by the core alone (from a Recover
+// bundle, or sealed to the core by the setup session) and is narrowed to this app and to one command inside a
+// machine: jarvis2-init, with no arguments. Its output is the machine's public keys, so their link to the
+// machine is Fly's guarantee, not anything the machine or the router says. The app is fixed here, in git: a
+// token for any other app can't reach it (Fly app names are global, and only Deyao's org holds this one), so
+// whoever hands the core a token can at worst hand it one that fails.
 
 import (
 	"bytes"
@@ -22,7 +24,7 @@ type MachineKeys struct {
 }
 
 type Fly interface {
-	Configure(token, app string) // from the core store, at recovery
+	Configure(token string) // from the core store (Recover) or SetFlyToken
 	Create(r StartRequest) (id, image string, err error)
 	Init(id string) (MachineKeys, error) // runs jarvis2-init; its output is the machine's public keys
 	Destroy(id string) error
@@ -38,25 +40,31 @@ var sizes = map[string]map[string]any{
 	"large":  {"cpu_kind": "shared", "cpus": 8, "memory_mb": 8192},
 }
 
+// FlyApp: the one Fly app the core makes machines in
+const FlyApp = "jarvis2-sessions"
+
+// the core's own signing key goes into every machine it creates (Fly config env): the machine trusts the
+// core that made it, through Fly, which only the core's token can create machines with
+const coreKeyEnv = "JARVIS2_CORE_KEY"
+
 type FlyAPI struct {
 	mu    sync.Mutex
 	token string
-	app   string
 	base  string
 	http  *http.Client
 }
 
-func (f *FlyAPI) Configure(token, app string) {
+func (f *FlyAPI) Configure(token string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.token, f.app = token, app
+	f.token = token
 }
 
 func (f *FlyAPI) ready() error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if f.token == "" || f.app == "" {
-		return fmt.Errorf("the core store is locked: unlock it to start or stop machines")
+	if f.token == "" {
+		return fmt.Errorf("the core has no Fly token yet (infra/setup.py backup-core sends it)")
 	}
 	return nil
 }
@@ -70,7 +78,7 @@ func (f *FlyAPI) call(method, path string, body any, out any) error {
 		b, _ := json.Marshal(body)
 		rd = bytes.NewReader(b)
 	}
-	req, _ := http.NewRequest(method, f.base+"/apps/"+f.app+path, rd)
+	req, _ := http.NewRequest(method, f.base+"/apps/"+FlyApp+path, rd)
 	f.mu.Lock()
 	req.Header.Set("Authorization", "Bearer "+f.token)
 	f.mu.Unlock()

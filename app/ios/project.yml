@@ -17,11 +17,9 @@ settings:
     # on the xcodebuild command line with the router running on the runner
     JARVIS_BASE: "https://jarvis2.deyaochen.com/"
     # CI only (the simulator walkthrough's xcodebuild sets these): JARVIS_CI_FLAG=JARVIS_CI compiles in the
-    # code that reads the stand-ins' addresses (KeySource.swift); release builds leave all of them empty
+    # code that reads the key stand-in's address (KeySource.swift); release builds leave both empty
     JARVIS_CI_FLAG: ""
     JARVIS_CI_KEYS_BASE: ""
-    JARVIS_CI_BACKUP_ENDPOINT: ""
-    JARVIS_CI_BACKUP_BUCKET: ""
 targets:
   Jarvis2:
     type: application
@@ -29,9 +27,6 @@ targets:
     sources:
       - Shell
       - Shared
-      # the BIP39 English list the core's identity words come from (the same file the core embeds)
-      - path: ../../core/words.txt
-        buildPhase: resources
     dependencies:
       - target: JarvisUI
     postBuildScripts:

@@ -1,15 +1,14 @@
 import XCTest
 
-/// Walks Jarvis 2 on a simulator against the REAL core (built with -tags fakefly, the public TEST master key)
-/// and router running on the CI runner, with the backups on a local S3 stand-in, keeping a screenshot of every
-/// step. CI runs it once per appearance (light, then dark), each time against a fresh core and router and a
-/// reset simulator keychain, so each pass recovers from scratch: the recovery kit (the test master key held as if
-/// made on this simulator, the bucket's read keys sealed by infra/setup.py through the router; then the held key
-/// deleted) → recovery (8 words, the kit) → stores (create, unlock) → new session (secure page, software key) → grants (a
-/// 10-minute grant and a standing rule on the secure grant page, forget one) → schedules (a wakeup and a cron)
-/// → terminal → pause → transcript → resume (with a prompt) → resume with the latest image (approval) →
-/// destroy (the changes check) → previous sessions → search → settings (Fly, a copy) → the master key page (a new
-/// pair: only its public half shown; the kit page refuses it as not keys/master.pub).
+/// Walks Jarvis 2 on a simulator against the REAL core (built with -tags fakefly) and router running on the CI
+/// runner, with the backups on a local S3 stand-in that the router reads, keeping a screenshot of every step. CI
+/// runs it once per appearance (light, then dark), each time against a fresh, empty core, a fresh router and a
+/// reset simulator keychain: Reset or recover (the core is empty; an old kit is refused; Recover with the public
+/// TEST kit) → stores (create, unlock) → new session (secure page, software key) → grants (a 10-minute grant and a
+/// standing rule on the secure grant page, forget one) → schedules (a wakeup and a cron) → terminal → pause →
+/// transcript → resume (with a prompt) → resume with the latest image (approval) → destroy (the changes check) →
+/// previous sessions → search → settings (Fly) → Reset (the current kit ends the core, a new empty one
+/// comes up, a new kit is shown and saved, the core is set up with it and its stores are empty).
 final class Jarvis2UITests: XCTestCase {
   let app = XCUIApplication()
   var tag = "run"
@@ -39,40 +38,32 @@ final class Jarvis2UITests: XCTestCase {
   func testWalkthrough() {
     continueAfterFailure = true
     tag = env["JARVIS2_APPEARANCE"] ?? "run"
-    // CI build only (JARVIS_CI): the shell holds this key as if the simulator had made the pair (HeldMaster.ciSeed)
-    app.launchEnvironment["JARVIS2_CI_HELD_MASTER"] = env["JARVIS2_CI_HELD_MASTER"] ?? ""
+    let kit = env["JARVIS2_KIT"] ?? ""
     app.launch()
 
-    // ---- recovery: the core's 8 words (checked against the box key), then the kit
-    guard wait(el("recovery-words"), 60, "recovery page with the core's words") else { return }
-    XCTAssertEqual(el("recovery-words").label, env["JARVIS2_WORDS"] ?? "", "[\(tag)] the 8 words are the core's own")
-    shot("recovery")
-    // the recovery kit first: the master key this simulator holds (CI: the public TEST pair, held as if made here)
-    // + the read keys the setup session sealed to it; no master key is ever pasted or shown on its own
-    XCTAssertTrue(el("recovery-holds-master").waitForExistence(timeout: 20), "[\(tag)] the recovery page says this iPhone holds the master key")
-    el("recovery-make-kit").tap()
-    guard wait(el("kit-held-master"), 20, "recovery kit page with the held master key") else { return }
-    XCTAssertFalse(el("kit-master").exists, "[\(tag)] no field to paste a master key")
-    shot("kit-held-master")
-    el("kit-make").tap()
-    guard wait(el("kit-string"), 60, "the recovery kit") else { return }
-    let kit = el("kit-string").label
-    XCTAssertTrue(kit.hasPrefix("jarvis2-kit:1:MIG"), "[\(tag)] the kit string \(kit.prefix(16))…")
-    shot("kit")
-    // saved → the held key is deleted; the kit is its only copy
-    el("kit-saved").tap()
-    wait(el("kit-key-deleted"), 10, "the held master key deleted once the kit is saved")
-    XCTAssertFalse(el("kit-string").exists, "[\(tag)] the kit is no longer on the page")
-    shot("kit-saved")
-    el("secure-back").tap() // Done → back to the recovery page
-    wait(el("recovery-no-master"), 20, "the recovery page says no master key is held any more")
-    let kitField = el("recovery-kit")
-    guard wait(kitField, 15, "recovery kit field") else { return }
-    kitField.tap(); kitField.typeText(kit)
-    shot("recovery-kit-pasted")
-    el("recovery-go").tap()
-    sleep(1)
-    shot("recovering")
+    // ---- Reset or recover: the core is empty (checked against the box key by the app itself)
+    guard wait(el("setup-state-empty"), 60, "setup page: the core is empty") else { return }
+    shot("setup-empty")
+    // an old (version 1) kit gets one plain sentence, details folded away
+    el("setup-choose-recover").tap()
+    guard wait(el("setup-kit-field"), 15, "recovery kit field") else { return }
+    el("setup-kit-field").tap(); el("setup-kit-field").typeText("jarvis2-kit:1:AAAA:ak:sk")
+    el("setup-recover-go").tap()
+    if wait(el("secure-error"), 15, "an old kit is refused") {
+      XCTAssertTrue(el("secure-error").label.contains("older Jarvis 2"), "[\(tag)] plain message: \(el("secure-error").label)")
+      XCTAssertFalse(el("secure-error-detail").exists, "[\(tag)] details folded")
+      shot("setup-old-kit")
+    }
+    el("secure-back").tap() // back to the choice: the field is forgotten
+    guard wait(el("setup-choose-recover"), 15, "the choice again") else { return }
+    el("setup-choose-recover").tap()
+    guard wait(el("setup-kit-field"), 15, "recovery kit field") else { return }
+    el("setup-kit-field").tap(); el("setup-kit-field").typeText(kit)
+    shot("setup-recover-kit")
+    el("setup-recover-go").tap()
+    guard wait(el("setup-done"), 120, "recovered") else { return }
+    shot("setup-recovered")
+    el("secure-back").tap() // Done
 
     // ---- the React Native list (in the extension)
     guard wait(el("newBtn"), 120, "session list") else { return }
@@ -308,14 +299,6 @@ final class Jarvis2UITests: XCTestCase {
     el("tab-settings").tap()
     sleep(2)
     shot("settings")
-    // copy (through the shell's clipboard): the button says Copied and a toast says what
-    if el("copy-core-signing").waitForExistence(timeout: 5) {
-      el("copy-core-signing").tap()
-      let toastEl = app.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS %@", "Signing key copied")).firstMatch
-      wait(toastEl, 4, "copied toast")
-      XCTAssertEqual(el("copy-core-signing").label, "Copied", "[\(tag)] the copy button confirms")
-      shot("settings-copied")
-    }
     app.swipeUp()
     sleep(1)
     shot("settings-more")
@@ -375,28 +358,38 @@ final class Jarvis2UITests: XCTestCase {
       sleep(1)
     }
 
-    // ---- the master key page: none held (deleted with the saved kit) → a new pair shows only its public half;
-    // the kit page then says the held key isn't keys/master.pub and offers no kit
-    el("open-master-key").tap()
-    if wait(el("master-make"), 20, "master key page with no key held") {
-      shot("master-key-none")
-      el("master-make").tap()
-      if wait(el("master-public"), 10, "the new pair's public key") {
-        XCTAssertTrue(el("master-public").label.hasPrefix("B"), "[\(tag)] public key (x963 base64)")
-        XCTAssertTrue(el("master-not-in-repo").exists, "[\(tag)] the page says it isn't keys/master.pub yet")
-        XCTAssertFalse(el("master-private").exists, "[\(tag)] no private key element")
-        let privLike = app.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS 'MIG'")).firstMatch
-        XCTAssertFalse(privLike.exists, "[\(tag)] nothing on the page looks like a private key")
-        shot("master-key")
-        el("master-make-kit").tap()
-        if wait(el("kit-no-master"), 20, "kit page: the held key isn't keys/master.pub") {
-          XCTAssertFalse(el("kit-make").exists, "[\(tag)] no Make kit without the key for keys/master.pub")
-          XCTAssertTrue(el("kit-make-master").exists, "[\(tag)] it offers a new master key pair")
-          shot("kit-wrong-master")
+    // ---- Reset on a set-up core: only with the kit it was set up with; a new, empty core, then a new kit
+    el("open-setup").tap()
+    if wait(el("setup-state-mine"), 30, "setup page: set up on this iPhone") {
+      shot("setup-mine")
+      el("setup-choose-reset").tap()
+      if wait(el("setup-kit-field"), 15, "the current kit's field") {
+        el("setup-kit-field").tap(); el("setup-kit-field").typeText(kit)
+        shot("reset-current-kit")
+        el("setup-reset-go").tap()
+        if wait(el("setup-kit"), 180, "the new kit, after the core restarted empty") {
+          let newKit = el("setup-kit").label
+          XCTAssertTrue(newKit.hasPrefix("jarvis2-kit:2:MIG") && newKit != kit, "[\(tag)] a new kit \(newKit.prefix(18))…")
+          XCTAssertFalse(newKit.dropFirst(14).contains(":"), "[\(tag)] the kit is the master key only")
+          shot("reset-new-kit")
+          el("setup-kit-copy").tap()
+          el("setup-kit-saved").tap()
+          if wait(el("setup-done"), 60, "reset done") {
+            shot("reset-done")
+            el("secure-back").tap()
+            // the stores start empty
+            el("tab-stores").tap()
+            if wait(el("stores-manage"), 20, "stores tab") {
+              el("stores-manage").tap()
+              if wait(el("store-new-name"), 30, "secure stores page") {
+                XCTAssertFalse(el("unlock-default").exists, "[\(tag)] no stores after a Reset")
+                shot("reset-stores-empty")
+                el("secure-back").tap()
+              }
+            }
+          }
         }
       }
-      el("secure-back").tap()
-      wait(el("open-master-key"), 20, "back to settings")
     }
     app.terminate()
   }

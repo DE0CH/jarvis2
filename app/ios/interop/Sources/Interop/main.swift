@@ -1,17 +1,15 @@
-// The shell's CoreCrypto + Recovery against the REAL core binary (fakefly build, the public TEST master key,
-// a throwaway box key) and the backup bucket on a local S3 stand-in seeded by infra/setup.py's own code
-// (ios/ci/standin.py): the identity and its 8 words, the backup bucket's read keys as infra/setup.py seals
-// them (setup-key signature, master-key sealing), the recovery kit string (round trip, old formats refused),
-// reading + checking + decrypting the backups with the kit, recovery itself from the kit string, the signed store list (sensitivity), create / mark sensitive, split-key
-// unlock, approvals (new session, add a store, resume on the latest image), grants (the session cert, the
-// draft checks) — and the refusals: a box
-// signature by another key, sealed read keys signed by another key or sealed as a store backup, a tampered
-// backup, wrong bucket credentials, a wrong master key, no core store,
-// a statement for another core or bundle, a second recovery, a forged phone signature, a wrong share.
-// Configuration (env): INTEROP_CORE, INTEROP_S3_ENDPOINT, INTEROP_S3_ENV (the stand-in bucket's read keys,
-// ACCESS_KEY=/SECRET_KEY= lines), INTEROP_RECOVERY_KEYS (standin.py sealkeys: good / forged / wrongAad),
-// INTEROP_KEYS (the dir with box.pub + setup.pub + master.pub), INTEROP_WORDS (core/words.txt), INTEROP_WORDS_EXPECTED
-// (what the core logged), INTEROP_MASTER_PEM (e2e/testdata/master-test.pem).
+// The shell's CoreCrypto + CoreSetup against the REAL core binary (fakefly build, a throwaway box key) and the
+// backups as the router serves them (a router on the runner reading a local S3 stand-in that infra/setup.py's own
+// code seeded, ios/ci/standin.py): the core's identity and signed state (empty, then set up), the recovery kit
+// string (round trip, the old version refused), reading + checking + decrypting the backups with the kit's master
+// key, Recover itself (the claim), the signed store list (sensitivity), create / mark sensitive, split-key unlock,
+// approvals (new session, add a store, resume on the latest image), grants (the session cert, the draft checks),
+// the Fly token sealed to the core, and Reset's wipe at the end — and the refusals: a box signature by another key,
+// a state not signed by the core, a tampered backup, a wrong master key, a claim for another core or bundle or
+// signed by another key, a second claim, a forged phone signature, a wrong share, a wipe by another key.
+// Configuration (env): INTEROP_CORE, INTEROP_ROUTER (its /api/backups reads the stand-in bucket jarvis2-backup-ci),
+// INTEROP_KEYS (the dir with box.pub + setup.pub), INTEROP_BACKUPS (standin.py's dump: {bucket: [{key, body}]}),
+// INTEROP_MASTER_PEM (e2e/testdata/master-test.pem).
 #if canImport(CryptoKit)
 import CryptoKit
 #else
@@ -28,21 +26,13 @@ let core = need("INTEROP_CORE")
 let keysDir = need("INTEROP_KEYS")
 let boxKey = try! String(contentsOfFile: keysDir + "/box.pub", encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines)
 let setupKey = try! String(contentsOfFile: keysDir + "/setup.pub", encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines)
-let words = try! String(contentsOfFile: need("INTEROP_WORDS"), encoding: .utf8).split(whereSeparator: \.isWhitespace).map(String.init)
 var failures = 0
 setvbuf(stdout, nil, _IOLBF, 0)
 func check(_ ok: Bool, _ what: String) { print((ok ? "ok   " : "FAIL ") + what); if !ok { failures += 1 } }
 func throwsErr(_ fn: () throws -> Void) -> Bool { do { try fn(); return false } catch { return true } }
-func asyncResult<T>(_ fn: @escaping () async throws -> T) -> Result<T, Error> {
-  let sem = DispatchSemaphore(value: 0)
-  nonisolated(unsafe) var out: Result<T, Error>!
-  Task { do { out = .success(try await fn()) } catch { out = .failure(error) }; sem.signal() }
-  sem.wait()
-  return out
-}
 
-func call(_ path: String, _ body: Any? = nil) -> (Int, Data) {
-  var r = URLRequest(url: URL(string: core + path)!)
+func call(_ path: String, _ body: Any? = nil, base: String = core) -> (Int, Data) {
+  var r = URLRequest(url: URL(string: base + path)!)
   if let body { r.httpBody = try! JSONSerialization.data(withJSONObject: body); r.httpMethod = "POST"; r.setValue("application/json", forHTTPHeaderField: "Content-Type") }
   let sem = DispatchSemaphore(value: 0)
   nonisolated(unsafe) var out: (Int, Data) = (0, Data())
@@ -53,94 +43,86 @@ func call(_ path: String, _ body: Any? = nil) -> (Int, Data) {
 func doc(_ d: Data) -> SignedDoc { try! JSONDecoder().decode(SignedDoc.self, from: d) }
 func docJSON(_ d: SignedDoc) -> [String: String] { ["payload": d.payload, "sig": d.sig] }
 
-// ---- the core's identity ----
-let idj = try! JSONSerialization.jsonObject(with: call("/identity").1) as! [String: String]
-let coreKeys = PublicKeys(signingKey: idj["signingKey"]!, agreementKey: idj["agreementKey"]!)
-check(CoreCrypto.identityVouched(coreKeys, boxSig: idj["boxSig"]!, boxKey: boxKey), "the core's identity is signed by the box key")
-check(!CoreCrypto.identityVouched(coreKeys, boxSig: idj["boxSig"]!, boxKey: setupKey), "…and not by another key")
-check(!CoreCrypto.identityVouched(PublicKeys(signingKey: coreKeys.agreementKey, agreementKey: coreKeys.signingKey), boxSig: idj["boxSig"]!, boxKey: boxKey), "…and not for other keys")
-let w = CoreCrypto.identityWords(coreKeys, words: words)
-check(w == need("INTEROP_WORDS_EXPECTED"), "the 8 words match the core's own (\(w))")
+// ---- the core's identity: box-signed keys, its own signed state ----
+func identity() -> CoreSetup.Identity { try! JSONDecoder().decode(CoreSetup.Identity.self, from: call("/identity").1) }
+let id0 = identity()
+let checked = try? CoreSetup.check(id0, boxKey: boxKey)
+check(checked != nil, "the core's keys are signed by the box key and its state by the core")
+let coreKeys = checked?.keys ?? PublicKeys(signingKey: "", agreementKey: "")
+check(checked?.state.master == "" && checked?.state.phone == nil, "a new core is empty")
+check(throwsErr { _ = try CoreSetup.check(id0, boxKey: setupKey) }, "…not with another box key")
+check(throwsErr { _ = try CoreSetup.check(CoreSetup.Identity(signingKey: id0.agreementKey, agreementKey: id0.signingKey, boxSig: id0.boxSig, state: id0.state), boxKey: boxKey) }, "…not for other keys")
+let otherSigner = P256.Signing.PrivateKey()
+let forgedState = SignedDoc(payload: id0.state.payload, sig: try! otherSigner.signature(for: Data(id0.state.payload.utf8)).derRepresentation.base64EncodedString())
+check(throwsErr { _ = try CoreSetup.check(CoreSetup.Identity(signingKey: id0.signingKey, agreementKey: id0.agreementKey, boxSig: id0.boxSig, state: forgedState), boxKey: boxKey) }, "…not with a state the core didn't sign")
 
-// ---- the master key ----
+// ---- the master key and the recovery kit (the ONE string) ----
 let pem = try! String(contentsOfFile: need("INTEROP_MASTER_PEM"), encoding: .utf8)
 let master = MasterKey(signing: try! P256.Signing.PrivateKey(pemRepresentation: pem))
-let masterPub = try! String(contentsOfFile: keysDir + "/master.pub", encoding: .utf8)
 check((try? MasterKey(pkcs8: master.pkcs8))?.publicKey == master.publicKey, "the master key's PKCS#8 part round-trips (\(master.pkcs8.prefix(8))…)")
 let fresh = MasterKey.generate()
-check((try? MasterKey(pkcs8: fresh.pkcs8))?.publicKey == fresh.publicKey, "a generated master key's PKCS#8 parses back")
-check(fresh.pkcs8.hasPrefix("MIG"), "it is PKCS#8 DER (starts MIG…)")
+check((try? MasterKey(pkcs8: fresh.pkcs8))?.publicKey == fresh.publicKey && fresh.pkcs8.hasPrefix("MIG"), "a generated master key is PKCS#8 DER and parses back")
 check(throwsErr { _ = try MasterKey(pkcs8: "AAAA") }, "a broken master key is refused")
-check(MasterKey.same(master.publicKey, masterPub) && !MasterKey.same(fresh.publicKey, masterPub) && !MasterKey.same("", masterPub), "public keys compare by their bytes")
-check(master.matches(masterPub) && !fresh.matches(masterPub), "the master key matches keys/master.pub; another doesn't")
-
-// ---- the backup bucket's read keys, sealed by the setup session (infra/setup.py recovery-keys) ----
-let s3env = Dictionary(uniqueKeysWithValues: try! String(contentsOfFile: need("INTEROP_S3_ENV"), encoding: .utf8)
-  .split(separator: "\n").compactMap { l -> (String, String)? in let p = l.split(separator: "=", maxSplits: 1); return p.count == 2 ? (String(p[0]), String(p[1])) : nil })
-let sealedAll = try! JSONDecoder().decode([String: Recovery.SealedKeys].self, from: Data(contentsOf: URL(fileURLWithPath: need("INTEROP_RECOVERY_KEYS"))))
-let opened = try? Recovery.openKeys(sealedAll["good"]!, setupKey: setupKey, master: master)
-check(opened?.creds == S3Credentials(accessKey: s3env["ACCESS_KEY"] ?? "?", secretKey: s3env["SECRET_KEY"] ?? "?"), "the sealed read keys check against the setup key and open with the master key")
-check(opened?.doc.kind == "recovery-keys" && opened?.doc.credential == "ci-read", "…and name their credential (\(opened?.doc.credential ?? "?"))")
-check(throwsErr { _ = try Recovery.openKeys(sealedAll["forged"]!, setupKey: setupKey, master: master) }, "sealed read keys signed by another key are refused")
-check(throwsErr { _ = try Recovery.openKeys(sealedAll["wrongAad"]!, setupKey: setupKey, master: master) }, "keys sealed as a store backup (another associated data) don't open")
-check(throwsErr { _ = try Recovery.openKeys(sealedAll["good"]!, setupKey: setupKey, master: fresh) }, "another master key doesn't open them")
-check(throwsErr { _ = try Recovery.openKeys(Recovery.SealedKeys(doc: sealedAll["good"]!.doc.replacingOccurrences(of: "ci-read", with: "ci-reax"), sig: sealedAll["good"]!.sig), setupKey: setupKey, master: master) }, "an altered document is refused")
-guard let creds = opened?.creds else { print("FAIL no read keys"); exit(1) }
-
-// ---- the recovery kit: the ONE string ----
-let kitString = RecoveryKit(master: master, bucket: creds).string
-check(kitString.hasPrefix("jarvis2-kit:1:MIG"), "the kit string (\(kitString.prefix(20))…)")
+check(MasterKey.same(master.publicKey, master.publicKey) && !MasterKey.same(fresh.publicKey, master.publicKey) && !MasterKey.same("", ""), "public keys compare by their bytes")
+let kitString = RecoveryKit(master: master).string
+check(kitString.hasPrefix("jarvis2-kit:2:MIG") && !kitString.dropFirst(14).contains(":"), "the kit string is the version and the master key only (\(kitString.prefix(20))…)")
 let kit = try? RecoveryKit.parse(kitString)
-check(kit?.master.publicKey == master.publicKey && kit?.bucket == creds, "the kit round-trips: the master key and the read keys")
+check(kit?.master.publicKey == master.publicKey, "the kit round-trips")
 let wrapped = String(kitString.enumerated().map { $0.offset > 0 && $0.offset % 64 == 0 ? "\n\($0.element)" : "\($0.element)" }.joined()) + "\n"
-check((try? RecoveryKit.parse("  " + wrapped))?.bucket == creds, "a kit pasted with line breaks and spaces still parses")
-check(throwsErr { _ = try RecoveryKit.parse("jarvis2-s3:\(creds.accessKey):\(creds.secretKey)") }, "the old jarvis2-s3: format is refused")
-check(throwsErr { _ = try RecoveryKit.parse(master.pkcs8) }, "a bare master key is not a kit")
-check(throwsErr { _ = try RecoveryKit.parse("jarvis2-master:" + master.pkcs8) }, "the old bare master key string is not a kit")
-check(throwsErr { _ = try RecoveryKit.parse("jarvis2-kit:1:AAAA:\(creds.accessKey):\(creds.secretKey)") }, "a kit with a broken master key is refused")
-check(throwsErr { _ = try RecoveryKit.parse(String(kitString.prefix(kitString.count - creds.secretKey.count - creds.accessKey.count - 2))) }, "a kit without its read keys is refused")
-check(throwsErr { _ = try RecoveryKit.parse(kitString.replacingOccurrences(of: "jarvis2-kit:1:", with: "jarvis2-kit:2:")) }, "another kit version is refused")
-let kitCreds = kit?.bucket ?? creds
-func reader(_ bucket: String, _ c: S3Credentials = kitCreds) -> S3Reader { S3Reader(bucket: S3Bucket(endpoint: need("INTEROP_S3_ENDPOINT"), region: "fsn1", bucket: bucket), creds: c) }
-
-// ---- the backups ----
-// from the kit string alone: its read keys read the bucket, its master key opens the backups
+check((try? RecoveryKit.parse("  " + wrapped))?.master.publicKey == master.publicKey, "a kit pasted with line breaks and spaces still parses")
+func kitError(_ s: String) -> String { do { _ = try RecoveryKit.parse(s); return "" } catch { return (error as? LocalizedError)?.errorDescription ?? "?" } }
+check(kitError("jarvis2-kit:1:\(master.pkcs8):AK:SK").contains("older Jarvis 2"), "a version-1 kit is refused with a plain message (\(kitError("jarvis2-kit:1:x")))")
+check(kitError(master.pkcs8) == "That isn't a recovery kit.", "a bare master key is not a kit")
+check(!kitError("jarvis2-kit:2:AAAA").isEmpty, "a kit with a broken master key is refused")
+check(!kitError("jarvis2-kit:3:" + master.pkcs8).isEmpty, "another kit version is refused")
 let kitMaster = kit?.master ?? fresh
-let readOK = asyncResult { try await Recovery.readBackups(reader("jarvis2-backup-ci"), master: kitMaster, setupKey: setupKey) }
-guard case .success(let stores) = readOK else { print("FAIL reading the backups: \(readOK)"); exit(1) }
+
+// ---- the backups, as the router serves them ----
+let dumps = try! JSONDecoder().decode([String: [CoreSetup.BackupObject]].self, from: Data(contentsOf: URL(fileURLWithPath: need("INTEROP_BACKUPS"))))
+struct Served: Decodable { let objects: [CoreSetup.BackupObject] }
+let (bs, bd) = call("/api/backups", base: need("INTEROP_ROUTER"))
+let served = (try? JSONDecoder().decode(Served.self, from: bd))?.objects ?? []
+check(bs == 200 && Set(served.map { $0.key + $0.body }) == Set((dumps["jarvis2-backup-ci"] ?? []).map { $0.key + $0.body }), "the router serves the bucket's objects unchanged (HTTP \(bs), \(served.count) objects)")
+let stores: [RecoveredStore]
+do { stores = try CoreSetup.readBackups(served, master: kitMaster, setupKey: setupKey) } catch { print("FAIL reading the backups: \(error)"); exit(1) }
 check(stores.map(\.name) == ["claude-login", "core", "default", "gmail", "marked"], "every store comes back (\(stores.map(\.name)))")
 let sens = Dictionary(uniqueKeysWithValues: stores.map { ($0.name, $0.sensitive) })
 check(sens["default"] == false && sens["claude-login"] == false && sens["gmail"] == true && sens["core"] == true, "sensitivity from the backups")
 check(sens["marked"] == true, "a sensitive/ marker makes a store sensitive whatever its backup says")
 check(stores.first { $0.name == "default" }?.values == ["GITHUB_TOKEN": "ci-dummy", "OTHER": "x"], "values decrypt with the master key")
-func fails(_ r: Result<[RecoveredStore], Error>, _ what: String) {
-  if case .failure(let e) = r { check(true, "\(what): \((e as? LocalizedError)?.errorDescription ?? "\(e)")") } else { check(false, what) }
-}
-fails(asyncResult { try await Recovery.readBackups(reader("jarvis2-backup-tampered"), master: master, setupKey: setupKey) }, "a backup signed by another key is refused")
-fails(asyncResult { try await Recovery.readBackups(reader("jarvis2-backup-ci", S3Credentials(accessKey: creds.accessKey, secretKey: "wrong")), master: master, setupKey: setupKey) }, "wrong bucket credentials are refused by the bucket")
-fails(asyncResult { try await Recovery.readBackups(reader("jarvis2-backup-ci"), master: fresh, setupKey: setupKey) }, "another master key doesn't open the backups")
-if case .success(let nc) = asyncResult({ try await Recovery.readBackups(reader("jarvis2-backup-nocore"), master: master, setupKey: setupKey) }) {
-  check(throwsErr { _ = try Recovery.bundle(nc) }, "backups without the core store can't make a bundle")
-} else { check(false, "the no-core bucket reads") }
+check(throwsErr { _ = try CoreSetup.readBackups(dumps["jarvis2-backup-tampered"] ?? [], master: master, setupKey: setupKey) }, "a backup signed by another key is refused")
+check(throwsErr { _ = try CoreSetup.readBackups(served, master: fresh, setupKey: setupKey) }, "another master key doesn't open the backups")
+check(throwsErr { _ = try CoreSetup.readBackups(served + [served[0]], master: master, setupKey: setupKey) }, "a backup served twice is refused")
+let nocore = try? CoreSetup.readBackups(dumps["jarvis2-backup-nocore"] ?? [], master: master, setupKey: setupKey)
+check(nocore?.map(\.name) == ["default"] && (try? CoreSetup.bundle(nocore ?? [])) != nil, "backups without the core store still make a bundle (the token comes later)")
 
-// ---- recovery, signed with the kit's master key ----
+// ---- Recover: the claim, signed with the kit's master key ----
 let phoneSigning = P256.Signing.PrivateKey(), phoneAgreement = P256.KeyAgreement.PrivateKey()
 let phone = PublicKeys(signingKey: phoneSigning.publicKey.x963Representation.base64EncodedString(), agreementKey: phoneAgreement.publicKey.x963Representation.base64EncodedString())
-let bundle = try! Recovery.bundle(stores)
-func recover(_ body: [String: Any]) -> (Int, Data) { call("/recover", body) }
-var bad = try! Recovery.request(core: coreKeys, phone: phone, master: fresh, bundle: bundle)
-check(recover(bad).0 == 403, "a statement signed by another master key is refused")
-bad = try! Recovery.request(core: phone, phone: phone, master: master, bundle: bundle)
-bad["bundle"] = try! CoreCrypto.seal(bundle, to: coreKeys.agreementKey, info: CoreCrypto.recoverInfo)
-check(recover(bad).0 == 403, "a statement naming another core is refused")
-bad = try! Recovery.request(core: coreKeys, phone: phone, master: master, bundle: bundle)
-bad["bundle"] = try! CoreCrypto.seal(bundle + Data(" ".utf8), to: coreKeys.agreementKey, info: CoreCrypto.recoverInfo)
-check(recover(bad).0 == 403, "a bundle other than the signed one is refused")
-let (rs, rb) = recover(try! Recovery.request(core: coreKeys, phone: phone, master: kitMaster, bundle: bundle))
-check(rs == 200, "the core recovers (HTTP \(rs) \(String(decoding: rb.prefix(200), as: UTF8.self)))")
-let rec = try? CoreCrypto.decode(doc(rb), by: coreKeys.signingKey, as: KindDoc.self, what: "recovered")
-check(rec?.kind == "recovered" && rec?.stores == 4, "the answer is the core's signed 'recovered' (4 stores, core's own excluded)")
-check(recover(try! Recovery.request(core: coreKeys, phone: phone, master: master, bundle: bundle)).0 == 409, "a second recovery is refused")
+let bundle = try! CoreSetup.bundle(stores)
+func claim(_ body: [String: Any]) -> (Int, Data) { call("/claim", body) }
+var bad = try! CoreSetup.claim(core: coreKeys, phone: phone, master: kitMaster, bundle: bundle)
+bad["masterSig"] = try! fresh.sign(bad["statement"] as! String)
+check(claim(bad).0 == 403, "a claim signed by another key than the master key it names is refused")
+bad = try! CoreSetup.claim(core: phone, phone: phone, master: kitMaster, bundle: bundle)
+bad["bundle"] = try! CoreCrypto.seal(bundle, to: coreKeys.agreementKey, info: CoreCrypto.claimInfo)
+check(claim(bad).0 == 403, "a claim naming another core is refused")
+bad = try! CoreSetup.claim(core: coreKeys, phone: phone, master: kitMaster, bundle: bundle)
+bad["bundle"] = try! CoreCrypto.seal(bundle + Data(" ".utf8), to: coreKeys.agreementKey, info: CoreCrypto.claimInfo)
+check(claim(bad).0 == 403, "a bundle other than the signed one is refused")
+check(call("/wipe", try! CoreSetup.wipe(core: coreKeys, master: kitMaster)).0 == 409, "an empty core can't be wiped")
+let (rs, rb) = claim(try! CoreSetup.claim(core: coreKeys, phone: phone, master: kitMaster, bundle: bundle))
+check(rs == 200, "the core is set up (HTTP \(rs) \(String(decoding: rb.prefix(200), as: UTF8.self)))")
+let rec = try? CoreCrypto.decode(doc(rb), by: coreKeys.signingKey, as: KindDoc.self, what: "claimed")
+check(rec?.kind == "claimed" && rec?.stores == 4, "the answer is the core's signed 'claimed' (4 stores, the core's own excluded)")
+check(claim(try! CoreSetup.claim(core: coreKeys, phone: phone, master: kitMaster, bundle: bundle)).0 == 409, "a second claim is refused")
+check(claim(try! CoreSetup.claim(core: coreKeys, phone: phone, master: fresh, bundle: try! CoreSetup.bundle([]))).0 == 409, "…and a Reset's claim with a new key too")
+let st1 = (try? CoreSetup.check(identity(), boxKey: boxKey))?.state
+check(st1 != nil && CoreSetup.status(st1!, myMaster: kitMaster.publicKey, myPhone: phone) == .mine, "the core's state now names this master key and this phone (mine)")
+check(st1 != nil && CoreSetup.status(st1!, myMaster: fresh.publicKey, myPhone: phone) == .foreign, "…a phone with another master key sees it as foreign")
+check(st1 != nil && CoreSetup.status(st1!, myMaster: kitMaster.publicKey, myPhone: PublicKeys(signingKey: phone.agreementKey, agreementKey: phone.signingKey)) == .otherPhone, "…and another phone with the same kit as set up for another iPhone")
+check(st1 != nil && CoreSetup.status(st1!, myMaster: nil, myPhone: phone) == .foreign, "…and a phone with no master key as foreign")
+
 let coreKey = coreKeys.signingKey
 
 // ---- stores (signed, with the caller's nonce) ----
@@ -296,5 +278,22 @@ if a4s == 200, c4s == 200, let sc4 = try? Checks.cert(doc(c4d), coreKey: coreKey
 // ---- lock ----
 let lk = try? CoreCrypto.decode(doc(call("/lock", ["id": u?.id ?? ""]).1), by: coreKey, as: KindDoc.self, what: "locked")
 check(lk?.kind == "locked", "lock releases the unlock id")
+
+// ---- the Fly token, sealed to the core (infra/setup.py backup-core) ----
+let tok = try! CoreCrypto.seal(Data(#"{"FLY_API_TOKEN":"ci-token"}"#.utf8), to: coreKeys.agreementKey, info: "jarvis2/fly-token")
+let ft = try? CoreCrypto.decode(doc(call("/fly-token", ["sealed": tok]).1), by: coreKey, as: KindDoc.self, what: "fly token")
+check(ft?.kind == "fly-token-set", "the core takes a Fly token sealed to it")
+check(call("/fly-token", ["sealed": try! CoreCrypto.seal(Data(#"{"FLY_API_TOKEN":"x"}"#.utf8), to: coreKeys.agreementKey, info: CoreCrypto.shareInfo)]).0 == 400, "…not one sealed for something else")
+
+// ---- Reset on a set-up core: only the master key it was set up with ends it ----
+check(call("/wipe", try! CoreSetup.wipe(core: coreKeys, master: fresh)).0 == 403, "a wipe signed by another key is refused")
+var w2 = try! CoreSetup.wipe(core: phone, master: kitMaster)
+check(call("/wipe", w2).0 == 403, "a wipe naming another core is refused")
+w2 = try! CoreSetup.wipe(core: coreKeys, master: kitMaster)
+let (ws, wd) = call("/wipe", w2)
+let wiping = try? CoreCrypto.decode(doc(wd), by: coreKey, as: KindDoc.self, what: "wiping")
+check(ws == 200 && wiping?.kind == "wiping" && wiping?.core == coreKey, "the master key ends the core (a signed 'wiping')")
+sleep(3)
+check(call("/key").0 == 0, "…and the core process is gone (Kubernetes starts a new, empty one)")
 print(failures == 0 ? "ALL OK" : "\(failures) FAILED")
 exit(failures == 0 ? 0 : 1)

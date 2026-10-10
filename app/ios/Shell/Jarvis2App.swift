@@ -1,7 +1,7 @@
 // Jarvis 2: a small native shell that owns the window. The whole Jarvis React Native UI runs in the
 // bundled ExtensionKit extension (JarvisUI), in its own process, shown full-screen in normal mode. Anything
 // may ask to ENTER secure mode (XPC requestSecureMode) on one of the shell's pages — new session, an
-// approval, stores, recovery, the master key, the recovery kit, a grant; only this shell's own code leaves it. In secure mode the extension's view is
+// approval, stores, Reset or recover, a grant; only this shell's own code leaves it. In secure mode the extension's view is
 // removed — it cannot draw or receive taps — and the shell pushes its own page over a still snapshot of the
 // app with the native push motion (no sheets: forms are pages), so the switch looks seamless. Back pops it
 // to the right; a finished action leaves to the left. The shell also owns sign-in (RouterClient) and hands
@@ -26,12 +26,12 @@ struct Jarvis2App: App {
 
 enum Mode: Equatable { case normal, secure }
 /// the shell's secure pages
-enum Route: Equatable { case newSession, approval(String), stores, recovery, masterKey, recoveryKit, grant(String) }
+enum Route: Equatable { case newSession, approval(String), stores, setup, grant(String) }
 
 @Observable
 final class Shell {
   var mode: Mode = .normal
-  var route: Route = .recovery
+  var route: Route = .setup
   var secureOptions: [String: Any] = [:]
   var identity: AppExtensionIdentity?
   var snapshot: UIImage?
@@ -42,8 +42,6 @@ final class Shell {
   var extensionProxy: ExtensionService?
   weak var hostVC: EXHostViewController?
   var lines: [String] = []
-  /// the recovery kit page was opened from the recovery page: its Back/Done goes back there
-  var kitReturnsToRecovery = false
   private var monitor: AppExtensionPoint.Monitor?
   private let t0 = Date()
 
@@ -58,18 +56,18 @@ final class Shell {
   var prefetched: [StoreView]?
 
   func load() async {
-    #if JARVIS_CI
-    HeldMaster.ciSeed()
-    #endif
+    // the master private key an earlier build held in the Keychain (it went into the version-1 kit): no core
+    // trusts it any more, so it goes
+    Keychain.set("held-master", nil); Keychain.set("held-master-public", nil)
     if CoreTrust.pinned == nil {
-      // no core recovered yet: the recovery page comes first (Later leaves it for the app, which can still view)
-      route = .recovery; mode = .secure
+      // not set up from this iPhone yet: Reset or recover comes first (Back leaves it for the app, which can still view)
+      route = .setup; mode = .secure
     } else {
       Task { @MainActor in
-        // a restarted core is a new core: until it is recovered nothing can be signed, so recovery comes up
+        // a restarted core is a new, empty core: until it is set up again nothing can be signed, so the page comes up
         if let x = try? await RouterClient.shared.identity(), x.signingKey != CoreTrust.pinned?.signingKey {
-          log("the router reports another core: recovery")
-          enterSecure(#"{"kind":"recovery"}"#)
+          log("the router reports another core: Reset or recover")
+          enterSecure(#"{"kind":"setup"}"#)
           return
         }
         let t = Date()
@@ -106,9 +104,7 @@ final class Shell {
     case "grant":
       guard let id = opts["sessionId"] as? String else { log("grant without a session refused"); return }
       route = .grant(id)
-    case "recovery": route = .recovery
-    case "master-key": route = .masterKey
-    case "recovery-kit": route = .recoveryKit
+    case "setup": route = .setup
     default: log("secure request of unknown kind refused"); return
     }
     log("enter secure \(opts["kind"] ?? "")")
@@ -122,7 +118,6 @@ final class Shell {
   /// issued, an unlock the core confirmed…); `id` = the session it concerned, if any.
   func exitSecure(_ why: String, done: Bool = false, id: String? = nil) {
     log("exit secure: \(why)")
-    kitReturnsToRecovery = false
     exitForward = done
     coverWithSnapshot = snapshot != nil
     withAnimation(Shell.push) { mode = .normal }
@@ -160,7 +155,7 @@ final class HostServiceImpl: NSObject, HostService {
   /// runs the sign-in sheet; replies the new token, "" when it didn't complete
   func signIn(_ reply: @escaping (String) -> Void) { Task { @MainActor in reply(await RouterClient.shared.signIn()) } }
   /// plain text onto the clipboard for the React Native UI (links, ids, paths — never anything the shell
-  /// guards: the master kit has its own local-only, expiring copy). At most 64 KB.
+  /// guards: the recovery kit has its own local-only, expiring copy). At most 64 KB.
   func copyText(_ text: String) {
     guard text.utf8.count <= 65536 else { return }
     DispatchQueue.main.async { UIPasteboard.general.string = text }
@@ -217,9 +212,7 @@ struct SecurePageFor: View {
     case .newSession: SecureNewSession(shell: shell, options: shell.secureOptions)
     case .approval(let id): SecureApproval(shell: shell, approvalId: id)
     case .stores: SecureStores(shell: shell)
-    case .recovery: RecoveryPage(shell: shell)
-    case .masterKey: MasterKeyPage(shell: shell)
-    case .recoveryKit: RecoveryKitPage(shell: shell)
+    case .setup: SetupPage(shell: shell)
     case .grant(let id): SecureGrant(shell: shell, sessionId: id, options: shell.secureOptions)
     }
   }

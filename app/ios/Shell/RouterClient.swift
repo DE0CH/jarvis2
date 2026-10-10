@@ -1,5 +1,6 @@
 // The shell's own client of the router (docs/API.md) — an ordinary network path: integrity comes from the
-// core's signatures (checked here against the core keys pinned at recovery) and the phone's (made here). The shell also
+// core's signatures (checked here against the core keys pinned when this iPhone set the core up) and the phone's
+// (made here). The shell also
 // owns sign-in: ASWebAuthenticationSession on /api/auth/start → jarvis2://auth#token=<Access JWT>, kept in
 // the shell's Keychain, sent as `cf-access-token`, and handed to the React Native UI over XPC.
 import AuthenticationServices
@@ -121,31 +122,32 @@ final class RouterClient: NSObject, ASWebAuthenticationPresentationContextProvid
     guard d.kind == "store-created", d.name == name else { throw TrustError.stale("create") }
   }
 
-  // ---- identity + recovery ----
-  struct IdentityDTO: Decodable { let signingKey: String; let agreementKey: String; let boxSig: String }
-  /// the core's keys and the box key's signature over them (checked by the caller against keys/box.pub)
-  /// throws CoreNotRunning when there is no core to ask (before the first setup its pod doesn't run: the router
-  /// answers 503 {coreDown}; a 502/504 from the edge means the same to this page)
-  func identity() async throws -> IdentityDTO {
+  // ---- setting the core up: Reset and Recover ----
+  /// the core's keys, the box key's signature over them and its signed state (the caller checks both:
+  /// CoreSetup.check). Throws CoreNotRunning when there is no core to ask (its pod restarting, e.g. after a wipe:
+  /// the router answers 503 {coreDown}; a 502/504 from the edge means the same)
+  func identity() async throws -> CoreSetup.Identity {
     let (status, data) = try await raw("GET", "api/core/identity", nil)
     if status == 503 || status == 502 || status == 504 { throw CoreNotRunning() }
     guard status == 200 else { throw RouterError(message: Self.reason(data) ?? "HTTP \(status) from api/core/identity") }
-    return try JSONDecoder().decode(IdentityDTO.self, from: data)
+    return try JSONDecoder().decode(CoreSetup.Identity.self, from: data)
   }
   struct CoreNotRunning: Error {}
-  /// POST api/core/recover; the answer must be the recovered core's signed "recovered"
-  func recover(_ body: [String: Any], core: PublicKeys) async throws -> Int {
-    let d = try CoreCrypto.decode(try await json("POST", "api/core/recover", body, as: SignedDoc.self), by: core.signingKey, as: KindDoc.self, what: "the recovery answer")
-    guard d.kind == "recovered" else { throw TrustError.stale("recovery") }
+  /// POST api/core/claim; the answer must be that core's signed "claimed"
+  func claim(_ body: [String: Any], core: PublicKeys) async throws -> Int {
+    let d = try CoreCrypto.decode(try await json("POST", "api/core/claim", body, as: SignedDoc.self), by: core.signingKey, as: KindDoc.self, what: "the core's answer")
+    guard d.kind == "claimed" else { throw TrustError.stale("claim") }
     return d.stores ?? 0
   }
-  /// the backup bucket's read keys as the setup session sealed them (nil: none sent yet); the caller checks
-  /// the setup key's signature and opens them with the master key (Recovery.openKeys)
-  func recoveryKeys() async throws -> Recovery.SealedKeys? {
-    let (status, data) = try await raw("GET", "api/recovery-keys", nil)
-    if status == 404 { return nil }
-    guard status == 200 else { throw RouterError(message: Self.reason(data) ?? "HTTP \(status) from api/recovery-keys") }
-    return try JSONDecoder().decode(Recovery.SealedKeys.self, from: data)
+  /// POST api/core/wipe; the answer must be that core's signed "wiping" (it then ends; a new, empty core follows)
+  func wipe(_ body: [String: Any], core: PublicKeys) async throws {
+    let d = try CoreCrypto.decode(try await json("POST", "api/core/wipe", body, as: SignedDoc.self), by: core.signingKey, as: KindDoc.self, what: "the core's answer")
+    guard d.kind == "wiping", d.core == core.signingKey else { throw TrustError.stale("wipe") }
+  }
+  /// the locked store backups, as the router reads them from the bucket (the caller checks and opens them)
+  func backups() async throws -> [CoreSetup.BackupObject] {
+    struct B: Decodable { let objects: [CoreSetup.BackupObject] }
+    return try await json("GET", "api/backups", as: B.self).objects
   }
   /// the stores each harness brings (the router adds them to a session; the app doesn't offer them)
   struct PolicyDTO: Decodable { struct H: Decodable { let stores: [String]? }; let harnesses: [String: H] }

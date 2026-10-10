@@ -1,15 +1,14 @@
 // e2e: drives a real Jarvis 2 (core + router + Fly machines running the session image) through every
-// flow with a SOFTWARE phone standing in for the iPhone. It sets the phone key on the core, which a core
-// accepts only once — so run it against a fresh core and restart the core afterwards (a restart = a new
-// controller) before pairing the real iPhone.
+// flow with a SOFTWARE phone standing in for the iPhone. It sets the core up (a Recover with test stores),
+// which an empty core accepts once — so run it against a fresh core of its own, never the production one.
 //
 //	E2E_ROUTER=http://127.0.0.1:28080 E2E_CORE=http://127.0.0.1:28090 E2E_MASTER_KEY_FILE=testdata/master-test.pem E2E_BOX_PUB=… \
-//	E2E_FLY_TOKEN=… E2E_FLY_APP=jarvis2-sessions go run .
+//	E2E_FLY_TOKEN=… go run .
 //
-// It plays the iPhone, recovery included, with the public TEST master key (e2e/testdata): run a core
-// (MASTER_KEY = its public half, BOX_KEY_FILE = a throwaway box key) and a router (NO_ACCESS=1, WG_CONFIG = a
-// WireGuard peer of the Fly org, the jarvis2-session-test image) locally, so the machines reach this router over
-// Fly's private network as in production. infra/e2e.sh does all that.
+// It plays the iPhone, the Recover included, with the public TEST master key (e2e/testdata): run a core
+// (BOX_KEY_FILE = a throwaway box key) and a router (NO_ACCESS=1, WG_CONFIG = a WireGuard peer of the Fly org,
+// the session image) locally, so the machines reach this router over Fly's private network as in production.
+// infra/e2e.sh does all that.
 package main
 
 import (
@@ -122,35 +121,50 @@ func main() {
 	ak, _ := ecdh.P256().GenerateKey(rand.Reader)
 	p := &phone{sk, ak}
 
-	step("the core's identity, checked against the box key")
-	var id0 map[string]string
+	step("the core's identity, checked against the box key; it is empty")
+	var id0 struct {
+		SigningKey   string `json:"signingKey"`
+		AgreementKey string `json:"agreementKey"`
+		BoxSig       string `json:"boxSig"`
+		State        Doc    `json:"state"`
+	}
 	must2(call(router, "GET", "/api/core/identity", nil, &id0))
-	if !verifyRaw(os.Getenv("E2E_BOX_PUB"), "jarvis2-core-identity "+id0["signingKey"]+" "+id0["agreementKey"], id0["boxSig"]) {
+	if !verifyRaw(os.Getenv("E2E_BOX_PUB"), "jarvis2-core-identity "+id0.SigningKey+" "+id0.AgreementKey, id0.BoxSig) {
 		log.Fatal("the core's identity isn't signed by the box key")
 	}
-	coreKey = id0["signingKey"]
+	coreKey = id0.SigningKey
+	var state struct{ Kind, Master string }
+	verify(id0.State, &state)
+	if state.Kind != "core-state" || state.Master != "" {
+		log.Fatalf("not an empty core: %+v", state)
+	}
 
-	step("recovery: the master key vouches for the core and the phone; every store comes in")
+	step("Recover: the master key sets the core up, naming the core and the phone; every store comes in")
 	secret := hex.EncodeToString(randBytes(8))
 	bundle, _ := json.Marshal(map[string]any{
 		"stores": []map[string]any{
-			{"name": "core", "values": map[string]string{"FLY_API_TOKEN": os.Getenv("E2E_FLY_TOKEN"), "FLY_APP": os.Getenv("E2E_FLY_APP")}},
+			{"name": "core", "values": map[string]string{"FLY_API_TOKEN": os.Getenv("E2E_FLY_TOKEN")}},
 			{"name": "e2e", "values": map[string]string{"E2E_SECRET": secret}},
 			{"name": "e2e-extra", "values": map[string]string{"E2E_EXTRA": "extra-" + secret}},
 		},
 		"notSensitive": []string{"e2e"},
 	})
 	sum := sha256.Sum256(bundle)
-	stmt, _ := json.Marshal(map[string]any{"kind": "recovery",
-		"core":         map[string]string{"signingKey": id0["signingKey"], "agreementKey": id0["agreementKey"]},
+	mpub, _ := master.PublicKey.ECDH()
+	stmt, _ := json.Marshal(map[string]any{"kind": "claim", "master": b64.EncodeToString(mpub.Bytes()),
+		"core":         map[string]string{"signingKey": id0.SigningKey, "agreementKey": id0.AgreementKey},
 		"phone":        map[string]string{"signingKey": p.signingKey(), "agreementKey": b64.EncodeToString(ak.PublicKey().Bytes())},
 		"bundleSha256": hex.EncodeToString(sum[:])})
 	h := sha256.Sum256(stmt)
 	msig, _ := ecdsa.SignASN1(rand.Reader, master, h[:])
 	var rec Doc
-	must2(call(router, "POST", "/api/core/recover", map[string]any{"statement": string(stmt), "masterSig": b64.EncodeToString(msig),
-		"bundle": sealTo(id0["agreementKey"], bundle, "jarvis2/recover")}, &rec))
+	must2(call(router, "POST", "/api/core/claim", map[string]any{"statement": string(stmt), "masterSig": b64.EncodeToString(msig),
+		"bundle": sealTo(id0.AgreementKey, bundle, "jarvis2/claim")}, &rec))
 	verify(rec, nil)
+	if s, _ := call(router, "POST", "/api/core/claim", map[string]any{"statement": string(stmt), "masterSig": b64.EncodeToString(msig),
+		"bundle": sealTo(id0.AgreementKey, bundle, "jarvis2/claim")}, nil); s == 200 {
+		log.Fatal("a set-up core was claimed again")
+	}
 
 	step("stores: e2e not sensitive, e2e-extra sensitive; a created store is not; the upgrade is one-way")
 	stores := func() map[string]bool {
@@ -589,7 +603,7 @@ func dumpState() {
 // flyExec: a command on a machine through the Machines API → its stdout and exit code
 func flyExec(m string, cmd []string) (string, int, error) {
 	body, _ := json.Marshal(map[string]any{"command": cmd, "timeout": 60})
-	req, _ := http.NewRequest("POST", "https://api.machines.dev/v1/apps/"+os.Getenv("E2E_FLY_APP")+"/machines/"+m+"/exec", bytes.NewReader(body))
+	req, _ := http.NewRequest("POST", "https://api.machines.dev/v1/apps/jarvis2-sessions/machines/"+m+"/exec", bytes.NewReader(body))
 	req.Header.Set("Authorization", "Bearer "+os.Getenv("E2E_FLY_TOKEN"))
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := http.DefaultClient.Do(req)

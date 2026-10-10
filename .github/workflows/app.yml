@@ -34,27 +34,25 @@ jobs:
 
   interop:
     if: inputs.only != 'testflight'
-    # Shell/CoreCrypto.swift + Shell/Recovery.swift (CryptoKit) against the real Go core (fakefly, the public
-    # TEST master key, a throwaway box key) and backups on a local S3 stand-in (rclone serve s3, which checks
-    # SigV4) seeded by infra/setup.py's own code: identity + words, the sealed read keys, the recovery kit string,
-    # backups, recovery from the kit, stores,
-    # unlock, approvals, refusals
+    # Shell/CoreCrypto.swift + Shell/CoreSetup.swift (CryptoKit) against the real Go core (fakefly, a throwaway
+    # box key) and the backups as a real router serves them from a local S3 stand-in (rclone serve s3, which checks
+    # SigV4) seeded by infra/setup.py's own code: identity + state, the kit string, the backups, Recover with the
+    # public TEST master key, stores, unlock, approvals, the Fly token, the wipe, refusals
     runs-on: macos-26
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with: { go-version: "1.25" }
-      - name: stand-ins (keys, S3 with seeded backups, core)
+      - name: stand-ins (keys, S3 with seeded backups, core, router)
         run: bash app/ios/ci/standins.sh "$RUNNER_TEMP/w"
       - name: swift run Interop
         working-directory: app/ios/interop
         run: |
           W="$RUNNER_TEMP/w"
-          INTEROP_CORE=http://127.0.0.1:8090 INTEROP_S3_ENDPOINT=http://127.0.0.1:18098 INTEROP_S3_ENV="$W/s3.env" INTEROP_RECOVERY_KEYS="$W/recovery-keys.json" \
-          INTEROP_KEYS="$W/keys" INTEROP_WORDS="$GITHUB_WORKSPACE/core/words.txt" INTEROP_WORDS_EXPECTED="$(cat "$W/words")" \
+          INTEROP_CORE=http://127.0.0.1:8090 INTEROP_ROUTER=http://127.0.0.1:18080 INTEROP_KEYS="$W/keys" INTEROP_BACKUPS="$W/backups.json" \
           INTEROP_MASTER_PEM="$GITHUB_WORKSPACE/e2e/testdata/master-test.pem" swift run -c release Interop
       - if: always()
-        run: cat "$RUNNER_TEMP/w/core.log" || true
+        run: cat "$RUNNER_TEMP/w/core.log" "$RUNNER_TEMP/w/router.log" || true
 
   simulator:
     if: inputs.only != 'testflight'
@@ -73,12 +71,11 @@ jobs:
             xcrun -sdk iphonesimulator swiftc -typecheck -parse-as-library -swift-version 5 $d \
               -target arm64-apple-ios26.0-simulator Shell/*.swift Shared/*.swift
           done
-      - name: stand-ins (keys + their server, S3 with seeded backups) and the router
+      - name: stand-ins (keys + their server, S3 with seeded backups, the core and router binaries)
         run: |
           W="$RUNNER_TEMP/w"
           NO_CORE=1 bash app/ios/ci/standins.sh "$W"
           mkdir -p out
-          (cd router && go build -o "$W/router" .)
           # the test policy: the claude harness brings claude-login (hidden in the app's pickers)
           echo '{"harnesses":{"claude":{"stores":["claude-login"]},"opencode":{"stores":[]}}}' > "$W/policy.json"
       - name: Install
@@ -108,31 +105,28 @@ jobs:
           xcodebuild build-for-testing -workspace Jarvis2.xcworkspace -scheme Jarvis2 \
             -destination 'platform=iOS Simulator,name=iPhone 17' -derivedDataPath ../../dd \
             JARVIS_BASE=http://127.0.0.1:18080/ JARVIS_CI_FLAG=JARVIS_CI JARVIS_CI_KEYS_BASE=http://127.0.0.1:18099/ \
-            JARVIS_CI_BACKUP_ENDPOINT=http://127.0.0.1:18098 JARVIS_CI_BACKUP_BUCKET=jarvis2-backup-ci \
             2>&1 | tee ../../xcodebuild.log | grep -E "error:|\*\* " || true
           grep -q "TEST BUILD SUCCEEDED" ../../xcodebuild.log
       - name: UI test, light then dark (fresh core, router and keychain each time)
         run: |
           W="$RUNNER_TEMP/w"
+          # the kit the walkthrough recovers with: the public TEST master key (the stand-in backups are sealed to it)
+          kit="jarvis2-kit:2:$(openssl pkcs8 -topk8 -nocrypt -in e2e/testdata/master-test.pem -outform DER | base64 | tr -d '\n')"
           ok=0
           for a in light dark; do
-            kill $(cat "$W/core.pid" "$W/router.pid" 2>/dev/null) 2>/dev/null || true; sleep 1
+            kill $(cat "$W/core.pid" "$W/router.pid" 2>/dev/null) 2>/dev/null || true; pkill -x core || true; sleep 1
             rm -rf data-$a && mkdir -p data-$a
-            (MASTER_KEY="$(cat e2e/testdata/master-test.pub)" BOX_KEY_FILE="$W/box-key.pem" ADDR=127.0.0.1:8090 nohup "$W/core" > out/core-$a.log 2>&1 & echo $! > "$W/core.pid")
+            # the core runs again whenever it ends, as under Kubernetes: the walkthrough's Reset wipes it
+            (nohup "$W/core-loop.sh" "$PWD/out/core-$a.log" > /dev/null 2>&1 & echo $! > "$W/core.pid")
             for i in $(seq 30); do curl -sf http://127.0.0.1:8090/key > /dev/null && break; sleep 1; done
-            words=$(sed -n 's/.*core up; identity //p' out/core-$a.log)
-            echo "core words ($a): $words"
-            (NO_ACCESS=1 SETUP_KEY="$(cat "$W/keys/setup.pub")" CORE_URL=http://127.0.0.1:8090 DATA_DIR=$PWD/data-$a WEB_DIR=$PWD/web TASKS_DIR=$PWD/tasks SNAPSHOT_WAIT_SECONDS=2 POLICY_FILE="$W/policy.json" \
+            (set -a; . "$W/router-backup.env"; set +a
+             NO_ACCESS=1 SETUP_KEY="$(cat "$W/keys/setup.pub")" CORE_URL=http://127.0.0.1:8090 DATA_DIR=$PWD/data-$a WEB_DIR=$PWD/web TASKS_DIR=$PWD/tasks SNAPSHOT_WAIT_SECONDS=2 POLICY_FILE="$W/policy.json" \
               SESSION_IMAGE=ghcr.io/de0ch/jarvis2-session:ci ADDR=127.0.0.1:18080 MACHINE_ADDR=127.0.0.1:18081 nohup "$W/router" > out/router-$a.log 2>&1 & echo $! > "$W/router.pid")
             sleep 2 && curl -sf http://127.0.0.1:18080/api/state > /dev/null && echo "router up ($a)"
-            # the setup session's step: the bucket's read keys sealed to the (test) master key, through the router
-            JARVIS2_URL=http://127.0.0.1:18080 JARVIS2_SETUP_KEY="$(cat "$W/setup-key.pem")" JARVIS2_SETUP_ACCESS_ID=ci JARVIS2_SETUP_ACCESS_SECRET=ci \
-              JARVIS2_KEYS_DIR="$W/keys" JARVIS2_BACKUP_BUCKET=jarvis2-backup-ci "$W/venv/bin/python" infra/setup.py recovery-keys "$W/s3.env" --credential=ci-read
             xcrun simctl keychain "iPhone 17" reset
             xcrun simctl uninstall "iPhone 17" dev.de0ch.jarvis2 || true
             xcrun simctl ui "iPhone 17" appearance $a
-            (cd app/ios && TEST_RUNNER_JARVIS2_APPEARANCE=$a TEST_RUNNER_JARVIS2_WORDS="$words" \
-              TEST_RUNNER_JARVIS2_CI_HELD_MASTER="$(cat "$W/master-test.pkcs8")" \
+            (cd app/ios && TEST_RUNNER_JARVIS2_APPEARANCE=$a TEST_RUNNER_JARVIS2_KIT="$kit" \
               xcodebuild test-without-building -workspace Jarvis2.xcworkspace -scheme Jarvis2 \
               -destination 'platform=iOS Simulator,name=iPhone 17' -derivedDataPath ../../dd \
               -resultBundlePath ../../result-$a.xcresult 2>&1 | tee ../../test-$a.log | grep -E "error:|Test Case|\*\* " || true)
@@ -197,9 +191,9 @@ jobs:
             CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" DEVELOPMENT_TEAM=S64YL394S3 \
             CURRENT_PROJECT_VERSION=${{ github.run_number }} 2>&1 | tee ../../archive.log | grep -E "error:|warning: .*sign|\*\* " || true
           grep -q "ARCHIVE SUCCEEDED" ../../archive.log
-          # a release build never carries the CI stand-ins' addresses (KeySource.swift reads them only when
+          # a release build never carries the CI stand-in's address (KeySource.swift reads it only when
           # compiled with JARVIS_CI, which this archive isn't)
-          for k in JarvisCIKeysBase JarvisCIBackupEndpoint JarvisCIBackupBucket; do
+          for k in JarvisCIKeysBase; do
             v=$(/usr/libexec/PlistBuddy -c "Print :$k" ../../Jarvis2.xcarchive/Products/Applications/Jarvis2.app/Info.plist 2>/dev/null || true)
             [ -z "$v" ] || { echo "release Info.plist has $k=$v"; exit 1; }
           done

@@ -12,6 +12,7 @@ import (
 	"math/big"
 	"strings"
 	"testing"
+	"time"
 )
 
 // ---- fakes -------------------------------------------------------------------------------------
@@ -23,21 +24,23 @@ type fakeMachine struct {
 }
 
 type fakeFly struct {
-	n          int
-	machines   map[string]*fakeMachine
-	token, app string
-	failInit   bool
+	n        int
+	machines map[string]*fakeMachine
+	token    string
+	env      map[string]string // the last created machine's env
+	failInit bool
 }
 
 func newFakeFly() *fakeFly { return &fakeFly{machines: map[string]*fakeMachine{}} }
 
-func (f *fakeFly) Configure(token, app string) { f.token, f.app = token, app }
+func (f *fakeFly) Configure(token string) { f.token = token }
 func (f *fakeFly) Create(r StartRequest) (string, string, error) {
 	f.n++
 	id := fmt.Sprintf("m%d", f.n)
 	e, _ := ecdh.P256().GenerateKey(rand.Reader)
 	s, _ := ecdh.P256().GenerateKey(rand.Reader)
 	f.machines[id] = &fakeMachine{enc: e, sig: s}
+	f.env = r.Env
 	return id, strings.SplitN(r.Image, "@", 2)[0] + "@sha256:abc", nil
 }
 func (f *fakeFly) Init(id string) (MachineKeys, error) {
@@ -138,38 +141,42 @@ func newCore(t *testing.T) (*Core, *fakeFly, *phone) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	master := newPhone()
-	c.MasterKey = master.signingKey()
-	return c, f, master
+	return c, f, newPhone() // the master key: the app makes it at Reset, or takes it from the kit at Recover
 }
 
-// recoveryFor: what the iPhone sends in recovery — a statement signed by the master key and the key store
-// sealed to the core
-func recoveryFor(c *Core, master, p *phone, flyToken string) (string, string, Sealed) {
-	rb := recoveryBundle{NotSensitive: []string{"default", "claude", "openrouter"}}
-	rb.Stores = append(rb.Stores, storeData{Name: FlyStore, Values: map[string]string{"FLY_API_TOKEN": flyToken, "FLY_APP": "jarvis2-sessions"}})
-	for _, n := range []string{"claude", "default", "gmail", "openrouter"} {
-		rb.Stores = append(rb.Stores, storeData{Name: n, Values: testValues[n]})
-	}
+// claimFor: what the iPhone sends to set up an empty core — a statement naming the master key, the core and
+// the phone, signed by that master key, and the bundle sealed to the core (Recover: the stores from the
+// backups, the Fly store among them; Reset: no stores at all)
+func claimFor(c *Core, master, p *phone, rb claimBundle) (string, string, Sealed) {
 	plain, _ := json.Marshal(rb)
 	sum := sha256.Sum256(plain)
-	var st recoveryStatement
-	st.Kind = "recovery"
+	var st claimStatement
+	st.Kind, st.Master = "claim", master.signingKey()
 	k := c.Key()
 	st.Core.SigningKey, st.Core.AgreementKey = k["signingKey"], k["agreementKey"]
 	st.Phone.SigningKey, st.Phone.AgreementKey = p.signingKey(), p.agreementKey()
 	st.BundleSha256 = hex.EncodeToString(sum[:])
 	sb, _ := json.Marshal(st)
-	bundle, _ := SealTo(k["agreementKey"], plain, infoRecover)
+	bundle, _ := SealTo(k["agreementKey"], plain, infoClaim)
 	return string(sb), master.sign(string(sb)), bundle
+}
+
+// recoverBundle: every test store and the Fly store
+func recoverBundle(flyToken string) claimBundle {
+	rb := claimBundle{NotSensitive: []string{"default", "claude", "openrouter"}}
+	rb.Stores = append(rb.Stores, storeData{Name: FlyStore, Values: map[string]string{"FLY_API_TOKEN": flyToken}})
+	for _, n := range []string{"claude", "default", "gmail", "openrouter"} {
+		rb.Stores = append(rb.Stores, storeData{Name: n, Values: testValues[n]})
+	}
+	return rb
 }
 
 func setup(t *testing.T) (*Core, *fakeFly, *phone) {
 	t.Helper()
 	c, f, master := newCore(t)
 	p := newPhone()
-	s, sig, b := recoveryFor(c, master, p, "fly-secret")
-	pl(t)(c.Recover(s, sig, b))
+	s, sig, b := claimFor(c, master, p, recoverBundle("fly-secret"))
+	pl(t)(c.Claim(s, sig, b))
 	return c, f, p
 }
 
@@ -246,38 +253,50 @@ func TestEverythingLeavingIsSignedByTheCore(t *testing.T) {
 	}
 }
 
-func TestRecoveryOnceOnlyWithTheMasterKey(t *testing.T) {
+func TestRecoverOnceOnlyOnAnEmptyCore(t *testing.T) {
 	c, f, master := newCore(t)
 	p := newPhone()
-	s, sig, b := recoveryFor(c, master, p, "fly-secret")
-	if _, err := c.Recover(s, newPhone().sign(s), b); err == nil {
-		t.Fatal("recovered without the master key")
+	s, sig, b := claimFor(c, master, p, recoverBundle("fly-secret"))
+	if _, err := c.Claim(s, newPhone().sign(s), b); err == nil {
+		t.Fatal("claimed with a signature by another key than the master key it names")
 	}
 	other, _, _ := newCore(t)
-	s2, _, b2 := recoveryFor(other, master, p, "fly-secret")
-	if _, err := c.Recover(s2, master.sign(s2), b2); err == nil {
-		t.Fatal("recovered with a statement naming another core")
+	s2, sig2, b2 := claimFor(other, master, p, recoverBundle("fly-secret"))
+	if _, err := c.Claim(s2, sig2, b2); err == nil {
+		t.Fatal("claimed with a statement naming another core")
 	}
-	_, _, b3 := recoveryFor(c, master, p, "another")
-	if _, err := c.Recover(s, sig, b3); err == nil {
-		t.Fatal("recovered a key store the master didn't sign")
+	_, _, b3 := claimFor(c, master, p, recoverBundle("another"))
+	if _, err := c.Claim(s, sig, b3); err == nil {
+		t.Fatal("claimed with a bundle the master didn't sign")
 	}
 	if _, err := c.CoreCert(); err == nil {
-		t.Fatal("a core cert before recovery")
+		t.Fatal("a core cert while empty")
 	}
-	pl(t)(c.Recover(s, sig, b))
-	if f.token != "fly-secret" || f.app != "jarvis2-sessions" {
+	if _, err := c.SetFlyToken(Sealed{}); err == nil {
+		t.Fatal("an empty core took a Fly token")
+	}
+	pl(t)(c.Claim(s, sig, b))
+	if f.token != "fly-secret" {
 		t.Fatal("the core store's Fly token wasn't taken")
 	}
-	if _, err := c.Recover(s, sig, b); err == nil {
-		t.Fatal("recovered twice")
+	if c.MasterKey != master.signingKey() {
+		t.Fatal("the core doesn't hold the master key it was claimed with")
+	}
+	// a second claim, even by the same master key, or a Reset with a new one: refused
+	if _, err := c.Claim(s, sig, b); err == nil {
+		t.Fatal("claimed twice")
+	}
+	m2 := newPhone()
+	s4, sig4, b4 := claimFor(c, m2, p, claimBundle{})
+	if _, err := c.Claim(s4, sig4, b4); err == nil {
+		t.Fatal("a set-up core took a new master key")
 	}
 	cc, err := c.CoreCert()
 	if err != nil || !VerifyWith(c.MasterKey, []byte(cc.Statement), cc.MasterSig) {
-		t.Fatal("no master-signed core cert after recovery")
+		t.Fatal("no master-signed core cert after the claim")
 	}
 	if len(c.unlocked) != 0 {
-		t.Fatal("recovery left plaintext in memory")
+		t.Fatal("the claim left plaintext in memory")
 	}
 	if _, ok := c.stores[FlyStore]; ok {
 		t.Fatal("the Fly store is kept as a session store")
@@ -288,15 +307,98 @@ func TestRecoveryOnceOnlyWithTheMasterKey(t *testing.T) {
 	}
 }
 
-func TestIdentityWords(t *testing.T) {
-	c, _, _ := newCore(t)
-	k := c.Key()
-	w := IdentityWords(k["signingKey"], k["agreementKey"])
-	if len(strings.Fields(w)) != 8 || w != IdentityWords(k["signingKey"], k["agreementKey"]) {
-		t.Fatalf("got %q", w)
+func TestResetStartsEmptyAndTakesTheFlyTokenSealed(t *testing.T) {
+	c, f, master := newCore(t)
+	p := newPhone()
+	id := func() (string, map[string]any) {
+		x, err := c.Identity()
+		if err != nil {
+			t.Fatal(err)
+		}
+		d := x["state"].(SignedDoc)
+		if !VerifyWith(c.Key()["signingKey"], []byte(d.Payload), d.Sig) {
+			t.Fatal("the core's state isn't signed by the core")
+		}
+		var st map[string]any
+		json.Unmarshal([]byte(d.Payload), &st)
+		return st["master"].(string), st
 	}
-	if len(words) != 2048 || words[0] != "abandon" || words[2047] != "zoo" {
-		t.Fatal("not the BIP39 English list")
+	if m, _ := id(); m != "" {
+		t.Fatal("a new core isn't empty")
+	}
+	s, sig, b := claimFor(c, master, p, claimBundle{})
+	pl(t)(c.Claim(s, sig, b))
+	if m, st := id(); m != master.signingKey() || st["phone"].(map[string]any)["signingKey"] != p.signingKey() {
+		t.Fatalf("the state doesn't name the master key and the phone: %v", st)
+	}
+	if l := pl(t)(c.Stores("n")); fmt.Sprint(l["stores"]) != "[]" {
+		t.Fatalf("a Reset core has stores: %v", l["stores"])
+	}
+	if _, err := c.Start(StartRequest{Image: img}); err == nil && f.token != "" {
+		t.Fatal("a token out of nowhere")
+	}
+	seal := func(info string) Sealed {
+		x, _ := SealTo(c.Key()["agreementKey"], []byte(`{"FLY_API_TOKEN":"tok"}`), info)
+		return x
+	}
+	if _, err := c.SetFlyToken(seal(infoShare)); err == nil {
+		t.Fatal("took a token sealed for another purpose")
+	}
+	pl(t)(c.SetFlyToken(seal(infoFlyToken)))
+	if f.token != "tok" {
+		t.Fatal("the Fly token wasn't set")
+	}
+}
+
+func TestWipeOnlyByTheCurrentMasterKey(t *testing.T) {
+	c, _, master := newCore(t)
+	exited := make(chan bool, 1)
+	c.exit = func() { exited <- true }
+	stmt := func(core string) string { b, _ := json.Marshal(map[string]string{"kind": "wipe", "core": core}); return string(b) }
+	w := stmt(c.Key()["signingKey"])
+	if _, err := c.Wipe(w, master.sign(w)); err == nil {
+		t.Fatal("wiped an empty core")
+	}
+	p := newPhone()
+	s, sig, b := claimFor(c, master, p, claimBundle{})
+	pl(t)(c.Claim(s, sig, b))
+	if _, err := c.Wipe(w, newPhone().sign(w)); err == nil {
+		t.Fatal("wiped with another key")
+	}
+	if _, err := c.Wipe(w, p.sign(w)); err == nil {
+		t.Fatal("wiped with the phone's key (only the master key ends a core)")
+	}
+	o := stmt(newPhone().signingKey())
+	if _, err := c.Wipe(o, master.sign(o)); err == nil {
+		t.Fatal("wiped with a statement naming another core")
+	}
+	select {
+	case <-exited:
+		t.Fatal("exited on a refused wipe")
+	default:
+	}
+	if m := pl(t)(c.Wipe(w, master.sign(w))); m["kind"] != "wiping" {
+		t.Fatalf("got %v", m)
+	}
+	select {
+	case <-exited:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the core didn't end")
+	}
+}
+
+func TestMachinesGetTheCoreKeyFromTheCore(t *testing.T) {
+	c, f, p := setup(t)
+	newLine(t, c, p, "default")
+	if f.env[coreKeyEnv] != c.Key()["signingKey"] {
+		t.Fatal("the machine wasn't given the core's key")
+	}
+	// the router can't plant another one
+	if _, err := c.Start(StartRequest{Image: img, Env: map[string]string{coreKeyEnv: "evil", "X": "1"}}); err != nil {
+		t.Fatal(err)
+	}
+	if f.env[coreKeyEnv] != c.Key()["signingKey"] || f.env["X"] != "1" {
+		t.Fatalf("got %v", f.env)
 	}
 }
 
