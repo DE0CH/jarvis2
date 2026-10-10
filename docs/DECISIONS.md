@@ -156,3 +156,9 @@ made around it; the app's own list is `app/DECISIONS.md`.
     first setup that is the normal state, and the app's recovery page shows it as a note with the master-key button.
 44. **Lease pills are not in the app**: leases are forwarded to Jarvis 1, which doesn't accept Jarvis 2 sessions yet
     (PLAN.md "Later"), so no Jarvis 2 session can hold one and the pill would never show.
+45. **Found, not fixed (needs a core change, so a recovery): two new sessions with the same stores, harness, mode and
+    image can't both start.** The core derives a challenge's nonce from the request alone (`core.go` Succession:
+    `mac("challenge", request)`), and a from-null request has nothing that differs between two such sessions, so the
+    second one's certify answers "this approval was already used" and the session fails. The e2e test hit it (its
+    one-shot session now uses other stores). A fix in the core: a fresh random value in every from-null request (or
+    the router's `requestId` in the signed request).

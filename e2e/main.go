@@ -306,7 +306,9 @@ func main() {
 	}
 
 	step("one-shot: once the supervisor marks the prompt done the router destroys it by itself, forcefully, and DMs the work lost")
-	s, b = call(router, "POST", "/api/sessions", map[string]any{"label": "e2e one-shot", "stores": []string{"e2e"}, "size": "small", "harness": "claude",
+	// no stores: a new line with the same stores, options and image as the first session would get the same
+	// challenge nonce (the core derives it from the request), which the core refuses to certify twice
+	s, b = call(router, "POST", "/api/sessions", map[string]any{"label": "e2e one-shot", "stores": []string{}, "size": "small", "harness": "claude",
 		"oneShot": true, "prompt": "e2e: nothing to do"}, nil)
 	must(s, b, "create one-shot")
 	a = waitApproval("new-session", "")
