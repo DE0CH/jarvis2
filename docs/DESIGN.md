@@ -46,10 +46,13 @@ changes nobody can see — no single compromised component is enough.
   the core's namespace reads, and the core signs its fresh public keys with it, so its identity can travel as
   plain text through anything untrusted. (Hetzner keeps serving user-data from the metadata address; every pod
   is blocked from it.)
-- **Master key pair:** never expected to change. Private half in Deyao's password manager (the one Jarvis 1
-  already uses), used only on the iPhone during recovery; public half in git and in the session image. It is
-  the root of trust for machines (a core is trusted when the master key has signed its keys) and the key the
-  backups are encrypted to.
+- **Master key pair:** made on Deyao's iPhone, which shows only the public half (he sends it to Claude; it goes
+  into git and the session image). The private half is never shown on its own: it stays in the shell's Keychain
+  (this device only, Face ID) until the recovery kit is made from it, and once Deyao has saved the kit (in his
+  password manager, the one Jarvis 1 already uses) the phone deletes it, so the kit is its only copy; it is used
+  only on the iPhone during recovery. It is the root of trust for machines (a core is trusted when the master key
+  has signed its keys) and the key the backups are encrypted to. A new master key means a new core, every backup
+  sealed again and a new kit.
 
 ## Records
 
@@ -142,10 +145,12 @@ Console can make, so the setup session makes it, seals it to the **master public
 sealing, associated data `jarvis2/recovery-keys`), signs it with the **setup key**, and sends it through the
 router (`/setup/recovery-keys`), which keeps the blob on its volume and can't open it. The app's **Recovery
 kit** page — a secure page of the shell, never the React Native extension — fetches it, checks the setup key's
-signature against `keys/setup.pub` from GitHub, takes the master private key (held in memory from "Make a master
-key pair", or pasted once for a master key made earlier), checks it against `keys/master.pub`, opens the keys,
-tries them on the bucket, and shows **one string** to save: `jarvis2-kit:1:<master private key>:<access
-key>:<secret key>`. Recovery takes only that string. The router can withhold the blob or serve an older one
+signature against `keys/setup.pub` from GitHub, takes the master private key this iPhone holds (Face ID; held in
+the Keychain since "Make a master key pair" showed Deyao only its public half), checks it against
+`keys/master.pub`, opens the keys, tries them on the bucket, and shows **one string** to save: `jarvis2-kit:1:<master
+private key>:<access key>:<secret key>` — the only secret Deyao ever sees. When he confirms it is saved, the phone
+deletes the held key. A phone that holds no private key for `keys/master.pub` says so and offers a new pair (whose
+public key Deyao sends to Claude). Recovery takes only the kit string. The router can withhold the blob or serve an older one
 (signed too), never a key of its own; an older one whose credential was revoked fails the bucket check. A new
 read credential means a new kit: the setup session seals it the same way and Deyao makes the kit again.
 

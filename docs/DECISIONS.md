@@ -174,7 +174,25 @@ made around it; the app's own list is `app/DECISIONS.md`.
     access key carry no colon; versioned). The router can only withhold or replay an earlier signed blob; a
     revoked credential then fails the bucket check, so a replay can't plant a key, only stall. A box rebuild
     loses the blob, which doesn't matter: the kit already holds the keys. Recovery takes only the kit (the
-    separate fields and `jarvis2-s3:` are gone); the kit page takes the bare `jarvis2-master:` key once.
+    separate fields and `jarvis2-s3:` are gone). The master key comes only from the phone that made it (item 48).
 47. **A new read credential `jarvis2-backup-read`** replaced the revoked one (same name, the old one was gone),
     narrowed as RUNBOOK says; 9 more Deny actions than before (version ACL/tagging, logging, notification,
     replication, website, public-access block). It was sealed for Deyao and every local copy deleted.
+48. **The master private key is never shown on its own** (Deyao, 2026-10-10: "I don't think I should be seeing a
+    private key because the string I need to copy is negotiated afterward"). "Make a master key pair" shows only
+    the public half; the private half goes into the shell's Keychain (`HeldMaster`: this device only, never
+    synced, Face ID on every read on a real iPhone; its public half kept beside it so pages can compare it with
+    `keys/master.pub` without Face ID). The Recovery kit page makes the kit from it and, when Deyao taps "I've
+    saved the kit — delete the key here", deletes it: the kit is then the only copy. Chosen: delete on that
+    confirmation, not on Copy (a copy that never reached the password manager would lose the key); one held key
+    at a time (a new pair replaces it, after a confirm). No page shows or takes a bare master
+    key (clean cut). The CI walkthrough holds the public TEST key as if made on the simulator (code compiled only
+    with `JARVIS_CI`).
+49. **A new master key (Deyao, 2026-10-10), the old core not recovered** (it held no stores): `keys/master.pub` and
+    MASTER_KEY replaced, the core restarted as a new core, every backup re-made sealed to the new key with fresh
+    tokens (GitHub push tokens re-minted, `jarvis2-store-claude` and `jarvis2-tunnel` rotated, a new narrowed Fly
+    token), a new read credential sealed to the new key and the previous one revoked. The old backup versions stay
+    in the versioned bucket, sealed to the old key: every Jarvis 2 token in them is dead; the Jarvis 1 values in
+    `default`/`openrouter` (LOBSTER_TOKEN, OPENROUTER_API, EXA_API) are the same as in the new backups. The previous narrowed Fly token
+    can't be revoked on its own (a macaroon attenuated from `JARVIS2_FLY_TOKEN`); it is sealed to the old key
+    only.

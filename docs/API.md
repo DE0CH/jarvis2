@@ -153,7 +153,8 @@ base64(combined)}` → `unlock/finish {pending, share}`.
 
 `GET /api/recovery-keys` → `{doc, sig}` exactly as the setup session sent it (above); 404 `{missing: true}`
 until it has. The shell's Recovery kit page checks `sig` against `keys/setup.pub` (from GitHub), opens `sealed`
-with the master key, tries the keys on the bucket, and shows the kit: `jarvis2-kit:1:<master private key,
+with the master private key the iPhone holds (made there, never shown alone), tries the keys on the bucket, and
+shows the kit: `jarvis2-kit:1:<master private key,
 base64 PKCS#8 DER>:<access key>:<secret key>`, the one string the Recovery page takes.
 
 ## Setup (`/setup/*`)

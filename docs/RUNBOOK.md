@@ -13,8 +13,11 @@ exists.
 
 ## The keys (`keys/`)
 
-- `master.pub` — made on Deyao's iPhone (the app's master key page); he keeps the private half in his password
-  manager. Commit it, and put the same value in `k8s/apps/core.yaml` (MASTER_KEY).
+- `master.pub` — made on Deyao's iPhone (the app's master key page shows only the public half; the private half
+  stays on the phone until it goes into his recovery kit). Commit it, and put the same value in
+  `k8s/apps/core.yaml` (MASTER_KEY) — a clean cut, the old value gone everywhere. That restarts the core (a new
+  core, new 8 words) and rebuilds the session image; then re-make every store backup sealed to the new key (below)
+  and seal the read keys to it ("The backup bucket's read keys").
 - `box.pub` — written by `infra/create.sh` with each new box; commit it.
 - `setup.pub` — the setup key (private half JARVIS2_SETUP_KEY); also `SETUP_KEY` in `k8s/apps/router.yaml`.
 
@@ -75,8 +78,25 @@ Making a new one (e.g. after a leak):
 2. Put the new access key as the principal in both bucket policies (admin key); test as above.
 3. `infra/setup.py recovery-keys FILE --credential=NAME` — sealed to `keys/master.pub`, signed by the setup key,
    kept by the router for the app; it reads the blob back to check. Then delete FILE.
-4. Deyao, in the app: Settings → Recovery kit (or Recovery → Make the recovery kit…), pastes his current kit's
-   master key part or the `jarvis2-master:…` key once, and saves the new kit string in place of the old entry.
+4. Deyao, in the app: Settings → Recovery kit (or Recovery → Make the recovery kit…) on the iPhone that holds the
+   private half of `keys/master.pub` → Make kit (Face ID) → saves the kit string → "I've saved the kit — delete
+   the key here". The phone deletes the held key once the kit is saved, so a later new read credential needs a
+   new master key pair as well (the page says so: "make a new master key pair and send Claude the public key").
+
+### A new master key
+
+Deyao makes the pair in the app (Settings → Master key, or Recovery → Make a master key pair…) and sends Claude
+the public key; the private half stays on that iPhone. Claude then:
+
+1. puts it in `keys/master.pub` and `k8s/apps/core.yaml` MASTER_KEY (nothing of the old key left) and pushes:
+   CI rebuilds the session image, Flux restarts the core (a new core; `infra/setup.py identity` gives its words);
+2. re-makes every store backup sealed to it (`setup.py backup …`, `backup-core` with a fresh
+   `infra/fly-token.sh`), minting or rotating every token whose value lived only in the old backups (the GitHub
+   push tokens with `github-web pat-create`, the Access service tokens `jarvis2-store-claude` and `jarvis2-tunnel`
+   with Cloudflare's `rotate`), and deletes the local copies;
+3. makes a new read credential and seals it to the new key (above).
+
+Deyao then makes the kit on that iPhone, saves it, checks the new 8 words and recovers.
 
 ## Rebuilding the box
 
