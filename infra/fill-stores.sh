@@ -8,7 +8,8 @@
 #   claude             JARVIS1_CREDENTIALS_ID/SECRET  Access service token jarvis2-store-claude, rotated
 #   tunnel             CF_ACCESS_CLIENT_ID/SECRET     Access service token jarvis2-tunnel, rotated
 #   core               FLY_API_TOKEN              a fresh infra/fly-token.sh
-#   default            LOBSTER_TOKEN OPENROUTER_API EXA_API   (from this session's env)
+#   default, identity, infra, money, devices, work, jarvis1   Deyao's own stores by kind: the keys are listed in
+#                      claude-env .claude/skills/jarvis2/stores.txt (values from this session's env)
 #   openrouter         OPENROUTER_API
 #
 # Needs: CLOUDFLARE_API, JARVIS2_FLY_TOKEN, JARVIS2_SETUP_*, HETZNER_S3_*, the env values above, and claude-env's
@@ -76,7 +77,14 @@ have="$($S stores | cut -d' ' -f1)"
 for n in default openrouter github-claude-env claude tunnel; do
   grep -qx "$n" <<<"$have" || $S create "$n"
 done
-$S write default LOBSTER_TOKEN OPENROUTER_API EXA_API
+# Deyao's own stores, by kind, from the layout file (key names only; private, in claude-env): each line is
+# "<store> KEY…", values from this session's env. Only `default` is created (not sensitive); the rest are sensitive.
+LAYOUT="${STORES_LAYOUT:-$HOME/workspace/claude-env/.claude/skills/jarvis2/stores.txt}"
+grep -v '^#' "$LAYOUT" | while read -r store keys; do
+  [ -n "$store" ] || continue
+  # shellcheck disable=SC2086
+  $S write "$store" $keys
+done
 $S write openrouter OPENROUTER_API
 $S write github-claude-env GITHUB_TOKEN_CLAUDE_ENV=file:$D/gh-claude-env.token
 $S write github-jarvis2 GITHUB_TOKEN_JARVIS2=file:$D/gh-jarvis2.token

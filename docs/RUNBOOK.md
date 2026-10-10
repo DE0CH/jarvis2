@@ -37,8 +37,10 @@ Reset or recover by itself, or Settings → Reset or recover…):
 `infra/fill-stores.sh` — once the core is set up: creates the non-sensitive stores, writes every store to the core
 and its backup (sealed to the new master key, read from the core's signed state), minting or rotating every token
 whose value lived only in the old stores and backups, sends the core its Fly token (`backup-core` with a fresh
-`infra/fly-token.sh`), and deletes the local copies. The stores and their keys: `default` (LOBSTER_TOKEN
-OPENROUTER_API EXA_API), `openrouter` (OPENROUTER_API), `github-claude-env` (GITHUB_TOKEN_CLAUDE_ENV: a new PAT
+`infra/fly-token.sh`), and deletes the local copies. The stores and their keys: Deyao's own stores by kind, `default` (not sensitive), `identity`, `infra`,
+`money`, `devices`, `work` and `jarvis1` (sensitive), whose key names are listed in the private claude-env repo
+(`.claude/skills/jarvis2/stores.txt`, read by the script; run it under `pull-secrets --exec` so it sees the setup
+session's live store values); the harness stores `openrouter` (OPENROUTER_API), `github-claude-env` (GITHUB_TOKEN_CLAUDE_ENV: a new PAT
 `jarvis2-sessions-claude-env-push`), `github-jarvis2` (sensitive; GITHUB_TOKEN_JARVIS2: a new PAT
 `jarvis2-sessions-jarvis2-push`; `github-web pat-create` deletes the same-name token first), `claude`
 (JARVIS1_CREDENTIALS_ID/SECRET: Access service token `jarvis2-store-claude`, rotated), `tunnel`
