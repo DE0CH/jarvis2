@@ -35,9 +35,11 @@ export function openMenu(ref: RNView | null, items: MenuItem[], opts: { width?: 
 }
 
 function MenuHost() {
-  const m = useMenu(), t = useTheme(), win = useWindowDimensions();
-  const [h, setH] = useState(0);
-  useEffect(() => { setH(0); }, [m]);
+  const m = useMenu(), t = useTheme(), win = useWindowDimensions(), ins = useSafeAreaInsets();
+  // the menu's measured height, for the menu it was measured for (0 = not measured yet: drawn invisible once)
+  const [size, setSize] = useState<{ m: MenuState; h: number }>({ m: null, h: 0 });
+  const h = size.m === m ? size.h : 0;
+  const setH = (v: number) => setSize({ m, h: v });
   useEffect(() => {
     if (!m || !isWeb) return;
     // with a keyboard: the first item has the focus, arrows move, Enter picks, Esc / Tab close
@@ -56,15 +58,22 @@ function MenuHost() {
   if (!m) return null;
   const touch = !mouse();
   const w = Math.min(m.width || (touch ? 260 : 240), win.width - 16);
-  const below = win.height - (m.anchor.y + m.anchor.h) - 12, above = m.anchor.y - 12;
-  const up = h > below && above > below && h <= above;
+  // the menu stays inside the window (and clear of the home indicator): under the anchor, or above it when
+  // that has more room, then nudged up so its bottom is on screen; a menu taller than the window scrolls
+  const bottomEdge = win.height - Math.max(8, ins.bottom), topEdge = Math.max(8, ins.top);
+  const below = bottomEdge - (m.anchor.y + m.anchor.h) - 4, above = m.anchor.y - 4 - topEdge;
+  const up = h > below && above > below;
+  const maxH = bottomEdge - topEdge;
+  const shown = Math.min(h, maxH);
   const left = Math.max(8, Math.min(m.anchor.x, win.width - w - 8));
-  const top = up ? m.anchor.y - 4 - h : m.anchor.y + m.anchor.h + 4;
+  const top = Math.max(topEdge, Math.min(up ? m.anchor.y - 4 - shown : m.anchor.y + m.anchor.h + 4, bottomEdge - shown));
   return (
     <View style={{ position: "absolute", left: 0, top: 0, right: 0, bottom: 0, zIndex: 1040 }}>
       <Pressable accessibilityLabel="Close menu" style={{ position: "absolute", left: 0, top: 0, right: 0, bottom: 0 }} onPress={closeMenu} />
-      <View {...ids("menu")} accessibilityRole="menu" onLayout={(e) => setH(e.nativeEvent.layout.height)}
-        style={{ position: "absolute", left, top, width: w, opacity: h ? 1 : 0, padding: 4, backgroundColor: t.panel, borderWidth: 1, borderColor: t.gray.a[6], borderRadius: radius[4] }}>
+      <ScrollView {...ids("menu")} accessibilityRole="menu" bounces={false} scrollEnabled={h > maxH}
+        onContentSizeChange={(_, ch) => setH(ch)}
+        style={{ position: "absolute", left, top, width: w, maxHeight: maxH, opacity: h ? 1 : 0, backgroundColor: t.panel, borderWidth: 1, borderColor: t.gray.a[6], borderRadius: radius[4] }}
+        contentContainerStyle={{ padding: 4 }}>
         {m.items.map((it, i) => (
           <Pressable key={i} {...ids("menu-" + it.label.toLowerCase().replace(/[^a-z0-9]+/g, "-"))} accessibilityRole="menuitem" disabled={it.disabled} onPress={() => { setMenu(null); it.onClick(); }}
             style={({ pressed, hovered }: any) => [{ paddingHorizontal: touch ? 12 : 10, paddingVertical: touch ? 12 : 8, borderRadius: radius[2], opacity: it.disabled ? 0.5 : 1, backgroundColor: pressed ? t.gray.a[3] : hovered ? t.accent.a[3] : "transparent", flexDirection: "row", gap: 8 }]}>
@@ -75,7 +84,7 @@ function MenuHost() {
             {it.checked ? <Text size={2} style={{ color: t.accent.a[11] }}>✓</Text> : null}
           </Pressable>
         ))}
-      </View>
+      </ScrollView>
     </View>
   );
 }
