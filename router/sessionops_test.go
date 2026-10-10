@@ -221,6 +221,12 @@ func TestRestartPatchesEnvAndRollsBack(t *testing.T) {
 		r.st.Do(func(d *persisted) { _, has := d.Sessions["s1"].Ops.Env["FEATURE_FLAG"]; ok = !has })
 		return ok
 	})
+	// that env change runs as a job of its own: let it end before the test does, or it writes into the state dir
+	// while the test's TempDir is being removed ("directory not empty", a flaky CI failure)
+	waitFor(t, "env job finished", func() bool { j := r.ops.jobView("s1"); return j != nil && j["finishedAt"] != nil })
+	// …and the resume it set off (its own goroutine under the session's lifecycle lock): take that lock and keep it,
+	// so nothing writes after the test
+	waitFor(t, "session idle", func() bool { _, err := r.lock("s1", "test-end"); return err == nil })
 }
 
 func TestEnvPatchRefusesSecrets(t *testing.T) {

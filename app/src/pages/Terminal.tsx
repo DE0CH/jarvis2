@@ -113,9 +113,11 @@ export function TerminalPage({ spec }: { spec: TermSpec }) {
           <Button variant="soft" color="gray" size={1} onPress={closePage} label="Close" id="term-close">✕</Button>
         </Flex>
         {!!session?.lockedStore && <View style={{ padding: 8 }}><LockedStore m={session} compact /></View>}
-        {(allowed === false || err) && (
+        {!!err && (
           <View nativeID="term-note" style={{ paddingHorizontal: 12, paddingVertical: 8, backgroundColor: "#2a2113", gap: 6 }}>
-            <P size={1} style={{ color: "#f1c27d" }}>{allowed === false ? "The terminal has no grant from the phone: the machine lets it in only if the session allowed it itself." : ""}{err ? (allowed === false ? "\n" : "") + err : ""}</P>
+            {/* turned away for want of a grant: one plain line (the machine's refusal says the same in HTTP words); any
+                other error as it came. With no phone grant but the session's own allow list, the screen just works. */}
+            <P size={1} style={{ color: "#f1c27d" }}>{allowed === false || /grant/i.test(err || "") ? "This session's terminal needs a grant." : err}</P>
             {hasShell && <Flex gap={2}><Button size={1} id="term-allow" onPress={() => requestGrant(id, spec.title, { holder: "terminal", kind: "grant", minutes: 10 }, () => checkGrant())}>Allow terminal for 10 minutes</Button></Flex>}
           </View>
         )}
