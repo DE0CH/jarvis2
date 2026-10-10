@@ -31,11 +31,13 @@ export function closePage() {
 // a page's primary action (Start) leaves differently from Back: in the app the page slides off to
 // the left, a "go ahead" motion, where Back slides it off to the right. The pop takes the animation
 // the screen has when it starts, so the option is set first and the pop follows once it is applied.
+// `instant`: the page closes while the shell's secure page still covers the app (the shell then slides its page
+// away over the list), so it closes without a motion of its own
 export function useDone() {
   const nav = useNavigation();
-  return () => {
+  return (instant = false) => {
     if (Platform.OS === "web" || !router.canGoBack()) { closePage(); return; }
-    nav.setOptions({ animation: "slide_from_left" } as any);
+    nav.setOptions({ animation: instant ? "none" : "slide_from_left" } as any);
     setTimeout(closePage, 50);
   };
 }

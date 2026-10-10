@@ -227,6 +227,19 @@ function NeedsGrant({ m }: { m: Session }) {
     </Callout>
   );
 }
+// the machine is waiting at boot on a store that is locked: the unlock review page (Allow / Deny) one tap away
+export function LockedStore({ m, compact }: { m: Session; compact?: boolean }) {
+  if (!m.lockedStore) return null;
+  const title = sessionTitle(m);
+  const open = () => requestSecure("unlock", { sessionId: m.id, label: title }, (r) => { if (r.result === "done") { refresh(false); settle(30000); } });
+  return (
+    <Callout color="amber" mt={compact ? 0 : 2} data={{ lockedStore: m.lockedStore }}>
+      <CalloutText color="amber">{`Waiting for store ${m.lockedStore} to be unlocked.`}</CalloutText>
+      {hasShell ? <Flex gap={2} mt={2} wrap><Button size={1} id={"unlock-" + m.id} onPress={open}>Unlock…</Button></Flex>
+        : <CalloutText color="amber">Unlock it in the Jarvis 2 app on the iPhone.</CalloutText>}
+    </Callout>
+  );
+}
 const DISCORD_GUILD = "1482150592414486748"; // the router's DISCORD_GUILD_ID default (router/discord.go)
 const openDiscord = (ch: string) => Linking.openURL(`https://discord.com/channels/${DISCORD_GUILD}/${ch}`).catch((e) => failed(e, "Could not open Discord: "));
 
@@ -276,6 +289,7 @@ export function Sessions() {
                 {m.authFailed && <P size={2} color="red" mt={1}>Claude's login failed in this session — the router writes fresh credentials from Jarvis 1 when it can.</P>}
                 {!!m.resumePrompt && <Muted mt={1}>{(paused ? "Prompt queued for the next resume" : "Prompt queued — delivered once it is up") + " — “" + clip(m.resumePrompt) + "”"}</Muted>}
                 <NeedsGrant m={m} />
+                <LockedStore m={m} />
                 <Schedules m={m} />
                 {!!m.error && <P size={2} color="red" mt={1}>{m.error}</P>}
                 {!!m.discordChannel && <Flex mt={1}><Button size={1} variant="ghost" color="gray" id={"discord-" + m.id} onPress={() => openDiscord(m.discordChannel!)}>Discord channel ↗</Button></Flex>}

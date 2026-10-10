@@ -79,6 +79,7 @@ final class HostLink: NSObject {
     case "session": proxy?.session { s in DispatchQueue.main.async { reply?(s as NSString) } }
     case "signIn": proxy?.signIn { s in DispatchQueue.main.async { reply?(s as NSString) } }
     case "copy": proxy?.copyText(arg)
+    case "settled": proxy?.secureSettled(arg)
     default: proxy?.report(arg)
     }
   }

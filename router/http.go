@@ -460,6 +460,7 @@ func (r *Router) buildHandlers() {
 			return
 		}
 		d, err := r.core.Call("/pull-secrets", map[string]any{"cert": cert})
+		r.noteSecretsPull(machine, err) // the app says which locked store the machine waits on, and offers to unlock it
 		if err != nil {
 			writeErr(w, err)
 			return
@@ -612,7 +613,7 @@ func sessionView(s *Session, d *persisted) map[string]any {
 		"environment": strings.Join(s.Stores, ","), "stores": s.Stores, "harness": s.Harness, "label": s.Label, "aiTitle": s.Title,
 		"model": s.Model, "permissionMode": s.PermissionMode, "guest": guest, "size": s.Size, "pausedAt": s.PausedAt,
 		"image": s.Image, "createRequestId": s.RequestID, "repos": s.Repos, "discordChannel": s.DiscordChannel,
-		"waiting": s.Waiting,
+		"waiting": s.Waiting, "lockedStore": s.LockedStore,
 	}
 	liveView(s, v)
 	scheduleView(d, s.ID, v)

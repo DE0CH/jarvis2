@@ -337,14 +337,16 @@ func readTrim(p string) (string, error) {
 func pullSecrets(c *client, coreKey, me string) (map[string]string, error) {
 	var doc SignedDoc
 	var lastErr error
-	for i := 0; i < 150; i++ { // a store may still be locked; Deyao unlocks it in the app
+	// a store may still be locked: the app shows which (the router notes the core's 423) and Deyao unlocks it on the
+	// phone; the pull is retried every 2 s for 10 minutes, so the machine carries on within seconds of the unlock
+	for i := 0; i < 300; i++ {
 		if lastErr = c.json("POST", "/m/pull-secrets", map[string]string{}, &doc); lastErr == nil {
 			break
 		}
-		if i%15 == 0 {
+		if i%30 == 0 {
 			log.Printf("pull secrets: %v (retrying)", lastErr)
 		}
-		time.Sleep(4 * time.Second)
+		time.Sleep(2 * time.Second)
 	}
 	if lastErr != nil {
 		return nil, fmt.Errorf("pull secrets: %w", lastErr)

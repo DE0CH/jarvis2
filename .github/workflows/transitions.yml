@@ -10,7 +10,7 @@ on:
     paths: [app/ios/Shell/**, app/ios/Extension/**, app/ios/UITests/TransitionsUITests.swift, .github/workflows/transitions.yml]
 concurrency:
   group: transitions-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 jobs:
   record:
     runs-on: macos-26

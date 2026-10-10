@@ -42,6 +42,7 @@ type Session struct {
 	Ops            *SessionOps `json:"ops,omitempty"`            // sessionops.go: API proxy, env patch, rollback, attachments
 	Booted         string      `json:"booted,omitempty"`         // the machine that has reported status: it got past boot (lastSnapshot)
 	Waiting        string      `json:"waiting,omitempty"`        // what a pause or destroy is waiting on, in plain words (the app shows it)
+	LockedStore    string      `json:"lockedStore,omitempty"`    // the store the machine waits on at boot (its secrets pull got 423 "store X is locked")
 }
 
 type Approval struct {

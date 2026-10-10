@@ -14,6 +14,8 @@ import { StatusBar } from "expo-status-bar";
 import { api } from "../lib/api";
 import { liveGrant, loadGrants, requestGrant } from "../lib/grants";
 import { hasShell } from "../lib/shell";
+import { useStore } from "../lib/store";
+import { LockedStore } from "../views/Sessions";
 import { ForceScheme } from "../theme";
 import { Button, Flex, Heading, P, TextField, mono } from "../ui/kit";
 import { closePage } from "../ui/page";
@@ -38,6 +40,7 @@ function Line({ runs }: { runs: Run[] }) {
 
 export function TerminalPage({ spec }: { spec: TermSpec }) {
   const id = spec.id;
+  const session = useStore((st) => st.state.sessions.find((x) => x.id === spec.id));
   const ins = useSafeAreaInsets(), frame = useTermFrame();
   const [lines, setLines] = useState<Run[][]>([]);
   const [status, setStatus] = useState("connecting…");
@@ -109,6 +112,7 @@ export function TerminalPage({ spec }: { spec: TermSpec }) {
           <P size={1} lines={1} id="term-status" style={{ fontSize: 11, color: "#9aa1ab", maxWidth: "45%" }}>{status}</P>
           <Button variant="soft" color="gray" size={1} onPress={closePage} label="Close" id="term-close">✕</Button>
         </Flex>
+        {!!session?.lockedStore && <View style={{ padding: 8 }}><LockedStore m={session} compact /></View>}
         {(allowed === false || err) && (
           <View nativeID="term-note" style={{ paddingHorizontal: 12, paddingVertical: 8, backgroundColor: "#2a2113", gap: 6 }}>
             <P size={1} style={{ color: "#f1c27d" }}>{allowed === false ? "The terminal has no grant from the phone: the machine lets it in only if the session allowed it itself." : ""}{err ? (allowed === false ? "\n" : "") + err : ""}</P>

@@ -225,7 +225,8 @@ export function ChoiceText({ title, sub }: { title: ReactNode; sub?: ReactNode }
   return <><P size={2} weight="medium">{title}</P>{sub ? <P size={1} color="gray">{sub}</P> : null}</>;
 }
 export function RadioCards({ value, onChange, options, id }: { value: string; onChange: (v: string) => void; options: Choice[]; id?: string }) {
-  return <View {...ids(id)} style={{ gap: 8 }}>{options.map((o) => <ChoiceCard key={o.value} data={{ value: o.value }} on={o.value === value} onPress={() => onChange(o.value)}><ChoiceText title={o.title} sub={o.sub} /></ChoiceCard>)}</View>;
+  // each option is `<id>-<value>` too (the UI tests tap them)
+  return <View {...ids(id)} style={{ gap: 8 }}>{options.map((o) => <ChoiceCard key={o.value} id={id ? id + "-" + o.value : undefined} data={{ value: o.value }} on={o.value === value} onPress={() => onChange(o.value)}><ChoiceText title={o.title} sub={o.sub} /></ChoiceCard>)}</View>;
 }
 export function CheckboxCards({ value, onChange, options, id }: { value: string[]; onChange: (v: string[]) => void; options: Choice[]; id?: string }) {
   const flip = (v: string) => onChange(value.includes(v) ? value.filter((x) => x !== v) : [...value, v]);
@@ -262,7 +263,7 @@ export function Segmented({ value, onChange, items, style, id }: { value: string
 export function Tabs({ value, onChange, items }: { value: string; onChange: (v: string) => void; items: [string, string][] }) {
   const t = useTheme();
   return (
-    <View nativeID="tablist" style={{ marginHorizontal: -16, marginBottom: 12 }}>
+    <View nativeID="tablist" testID="tablist" style={{ marginHorizontal: -16, marginBottom: 12 }}>
       <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ paddingHorizontal: 16 }}
         style={{ borderBottomWidth: 1, borderBottomColor: t.gray.a[5] }}>
         {items.map(([k, l]) => {

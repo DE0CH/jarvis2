@@ -3,8 +3,9 @@
 // may ask to ENTER secure mode (XPC requestSecureMode) on one of the shell's pages — new session, an
 // approval, stores, Reset or recover, a grant; only this shell's own code leaves it. In secure mode the extension's view is
 // removed — it cannot draw or receive taps — and the shell pushes its own page over a still snapshot of the
-// app with the native push motion (no sheets: forms are pages), so the switch looks seamless. Back pops it
-// to the right; a finished action leaves to the left. The shell also owns sign-in (RouterClient) and hands
+// app with the native push motion (no sheets: forms are pages), so the switch looks seamless. Leaving always
+// pops the page to the right: Back over the snapshot, a finished action over the live app once React Native
+// has drawn the result under the page (Shell.exitSecure). The shell also owns sign-in (RouterClient) and hands
 // the extension the router's address and the Access token.
 import ExtensionFoundation
 import ExtensionKit
@@ -26,7 +27,7 @@ struct Jarvis2App: App {
 
 enum Mode: Equatable { case normal, secure }
 /// the shell's secure pages
-enum Route: Equatable { case newSession, approval(String), stores, setup, grant(String), repoKey }
+enum Route: Equatable { case newSession, approval(String), stores, setup, grant(String), repoKey, unlock(String) }
 
 @Observable
 final class Shell {
@@ -34,16 +35,32 @@ final class Shell {
   var route: Route = .setup
   var secureOptions: [String: Any] = [:]
   var identity: AppExtensionIdentity?
-  var snapshot: UIImage?
-  var coverWithSnapshot = false
   var loadError: String?
-  /// how the secure page leaves: to the trailing edge (Back) or the leading edge (Create — "go ahead")
-  var exitForward = false
+  /// the push/pop motion: 0 = the app on screen, 1 = a secure page fully in (the app slid back under it)
+  var progress: CGFloat = 0
+  /// the extension's view is in the window. Never while a secure page is up; back in the moment the shell
+  /// decides to leave, under the page (and under the picture below) until it has drawn
+  var extensionMounted = true
+  /// a still picture of the app (shell-owned pixels), taken when a secure page is asked for
+  var snapshot: UIImage?
+  /// the picture is on screen: in the extension's place under a page, and over the re-added extension on a Back
+  /// until React Native has drawn again
+  var showSnapshot = false
+  /// the shell has left secure mode (only its own code does): the page takes no more taps
+  var leaving = false
+  /// leaving, with the page still fully in: the app is getting ready under it (after Create, or at launch)
+  var preparing = false
   var extensionProxy: ExtensionService?
   weak var hostVC: EXHostViewController?
   var lines: [String] = []
   private var monitor: AppExtensionPoint.Monitor?
   private let t0 = Date()
+  /// the result to tell React Native once the re-added extension's connection is up
+  private var pendingFinish: String?
+  private var onSettled: (() -> Void)?
+  private var popDone = false, settled = false
+  /// a secure page asked for while one is still leaving: it comes once that one is gone
+  private var queuedEnter: String?
 
   func log(_ s: String) {
     let line = String(format: "%.1f ", Date().timeIntervalSince(t0)) + s
@@ -54,6 +71,26 @@ final class Shell {
   /// the core's signed store list, fetched at launch so the secure page is filled at once (it is
   /// fetched again, with a fresh nonce, every time the page opens)
   var prefetched: [StoreView]?
+  /// what the New session page offers besides the stores (the router's lists; nothing here is signed as such: the
+  /// signed challenge is checked against what the page sends), fetched with the stores so the page opens filled
+  var lists = Lists()
+  struct Lists { var harnessStores: [String: [String]] = [:]; var models: [RouterClient.Choice] = []; var sizes: [RouterClient.Choice] = []; var repos: [RouterClient.RepoDTO] = [] }
+
+  /// fills `prefetched` and `lists` in the background (at launch, after a setup and whenever a secure page has gone)
+  func refreshLists() {
+    guard CoreTrust.pinned != nil else { return }
+    Task { @MainActor in
+      let r = RouterClient.shared
+      async let hs = r.harnessStores()
+      async let ms = r.models()
+      async let sz = r.sizes()
+      async let rp = r.repos()
+      lists = Lists(harnessStores: await hs, models: await ms, sizes: await sz, repos: await rp)
+      let t = Date()
+      do { prefetched = try await r.stores(); log(String(format: "core stores prefetched in %.2fs", Date().timeIntervalSince(t))) }
+      catch { log("core stores prefetch failed: \(error.localizedDescription)") }
+    }
+  }
 
   func load() async {
     // the master private key an earlier build held in the Keychain (it went into the version-1 kit): no core
@@ -61,7 +98,7 @@ final class Shell {
     Keychain.set("held-master", nil); Keychain.set("held-master-public", nil)
     if CoreTrust.pinned == nil {
       // not set up from this iPhone yet: Reset or recover comes first (Back leaves it for the app, which can still view)
-      route = .setup; mode = .secure
+      route = .setup; extensionMounted = false; progress = 1; mode = .secure
     } else {
       Task { @MainActor in
         // a restarted core is a new, empty core: until it is set up again nothing can be signed, so the page comes up
@@ -70,9 +107,7 @@ final class Shell {
           enterSecure(#"{"kind":"setup"}"#)
           return
         }
-        let t = Date()
-        do { prefetched = try await RouterClient.shared.stores(); log(String(format: "core stores prefetched in %.2fs", Date().timeIntervalSince(t))) }
-        catch { log("core stores prefetch failed: \(error.localizedDescription)") }
+        refreshLists()
       }
     }
     do {
@@ -93,6 +128,7 @@ final class Shell {
 
   /// anyone may ask (the extension, over XPC); the options only pre-fill the shell's page
   func enterSecure(_ optionsJSON: String) {
+    if leaving { queuedEnter = optionsJSON; return }
     guard mode == .normal else { return }
     let opts = (try? JSONSerialization.jsonObject(with: Data(optionsJSON.utf8))) as? [String: Any] ?? [:]
     switch opts["kind"] as? String {
@@ -105,6 +141,9 @@ final class Shell {
       guard let id = opts["sessionId"] as? String else { log("grant without a session refused"); return }
       route = .grant(id)
     case "setup": route = .setup
+    case "unlock":
+      guard let id = opts["sessionId"] as? String else { log("unlock without a session refused"); return }
+      route = .unlock(id)
     case "repo-key":
       guard let r = opts["repo"] as? String, !r.isEmpty, ["add", "remove"].contains(opts["action"] as? String ?? "") else { log("repo key without a repo or action refused"); return }
       route = .repoKey
@@ -113,33 +152,99 @@ final class Shell {
     log("enter secure \(opts["kind"] ?? "")")
     secureOptions = opts
     captureSnapshot()
-    exitForward = false
-    withAnimation(Shell.push) { mode = .secure }
+    // decoded now, so the picture is on screen in the very next frame (a 1206×2622 image decoded on its first draw
+    // left the screen blank for ~70 ms, and the push then jumped to its end)
+    snapshot = snapshot?.preparingForDisplay() ?? snapshot
+    // the picture goes over the extension's view at the same frame and the page waits off the trailing edge; the
+    // extension takes no taps from now on
+    Shell.instantly {
+      showSnapshot = snapshot != nil
+      progress = 0
+      mode = .secure
+    }
+    // a moment later (the picture drawn) the extension's view goes — it can't draw or take taps while a secure page
+    // is up — and the push runs: the page comes in, the app slides back a third and dims a little
+    DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+      Shell.instantly { self.extensionMounted = false }
+      withAnimation(Shell.push) { self.progress = 1 }
+    }
   }
 
   /// only the shell's own code calls this. `done` = the page's action went through (a cert the core
   /// issued, an unlock the core confirmed…); `id` = the session it concerned, if any.
+  ///
+  /// Back pops at once over the picture of the app as it was (that is what lies under the page); the extension
+  /// is re-added under the picture, and the picture goes once React Native has drawn again. A finished action
+  /// (or leaving the page shown at launch, with no picture) first lets the app show the result under the page,
+  /// e.g. the New session form closed, then pops over the live app: one motion, never the old screen first.
   func exitSecure(_ why: String, done: Bool = false, id: String? = nil) {
+    guard mode == .secure, !leaving else { return }
     log("exit secure: \(why)")
-    exitForward = done
-    coverWithSnapshot = snapshot != nil
-    withAnimation(Shell.push) { mode = .normal }
+    UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
     var r: [String: Any] = ["result": done ? "done" : "back"]
     if let rid = secureOptions["requestId"] as? String { r["requestId"] = rid }
     if let k = secureOptions["kind"] as? String { r["kind"] = k }
     if let id { r["id"] = id }
-    let json = (try? JSONSerialization.data(withJSONObject: r)).flatMap { String(data: $0, encoding: .utf8) } ?? "{}"
-    // the extension's view is back a moment later; tell React Native once it is listening again
-    DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { self.extensionProxy?.secureFinished(json) }
+    pendingFinish = (try? JSONSerialization.data(withJSONObject: r)).flatMap { String(data: $0, encoding: .utf8) } ?? "{}"
+    leaving = true; popDone = false; settled = false
+    let live = done || !showSnapshot
+    Shell.instantly { preparing = live; extensionMounted = true }
+    if live {
+      waitSettled(timeout: showSnapshot ? 2 : 15) { [self] in
+        settled = true
+        Shell.instantly { preparing = false; showSnapshot = false }
+        pop()
+      }
+    } else {
+      pop()
+      waitSettled(timeout: 2) { [self] in settled = true; finishLeaving() }
+    }
+  }
+
+  private func pop() {
+    withAnimation(Shell.push) { progress = 0 } completion: { [self] in popDone = true; finishLeaving() }
+  }
+
+  private func finishLeaving() {
+    guard popDone else { return }
+    if mode == .secure { Shell.instantly { mode = .normal } }
+    guard settled else { return }
+    if showSnapshot { withAnimation(.easeOut(duration: 0.12)) { showSnapshot = false } }
+    leaving = false; popDone = false; settled = false
+    refreshLists()
+    if let q = queuedEnter { queuedEnter = nil; DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { self.enterSecure(q) } }
+  }
+
+  /// runs `then` once React Native says it has drawn the result, or after `timeout` (a missing answer never
+  /// leaves a page or a picture on screen)
+  private func waitSettled(timeout: TimeInterval, _ then: @escaping () -> Void) {
+    var fired = false
+    let fire: () -> Void = { [weak self] in
+      guard !fired else { return }
+      fired = true; self?.onSettled = nil; then()
+    }
+    onSettled = fire
+    DispatchQueue.main.asyncAfter(deadline: .now() + timeout) { [weak self] in
+      guard !fired else { return }
+      self?.log("no answer from the app in \(Int(timeout)) s: showing it anyway")
+      fire()
+    }
   }
 
   /// the iOS navigation push/pop curve
   static let push = Animation.timingCurve(0.2, 0.9, 0.3, 1, duration: 0.45)
-
-  func extensionDidActivate() {
-    guard coverWithSnapshot else { return }
-    DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { withAnimation(.easeOut(duration: 0.15)) { self.coverWithSnapshot = false } }
+  static func instantly(_ change: () -> Void) {
+    var t = Transaction(); t.disablesAnimations = true
+    withTransaction(t, change)
   }
+
+  /// the re-added extension is connected again: tell React Native how the page ended
+  func extensionDidActivate() {
+    guard let f = pendingFinish else { return }
+    pendingFinish = nil
+    extensionProxy?.secureFinished(f)
+  }
+  func extensionSettled() { onSettled?() }
 }
 
 final class HostServiceImpl: NSObject, HostService {
@@ -147,6 +252,7 @@ final class HostServiceImpl: NSObject, HostService {
   init(shell: Shell) { self.shell = shell }
   func requestSecureMode(_ options: String) { DispatchQueue.main.async { [shell] in shell.enterSecure(options) } }
   func report(_ line: String) { DispatchQueue.main.async { [shell] in shell.log("ext: " + line) } }
+  func secureSettled(_ requestId: String) { DispatchQueue.main.async { [shell] in shell.extensionSettled() } }
   /// the router's address and the Access token, as JSON {base, token}
   func session(_ reply: @escaping (String) -> Void) {
     Task { @MainActor in
@@ -167,42 +273,37 @@ final class HostServiceImpl: NSObject, HostService {
 
 struct RootView: View {
   @State private var shell = Shell()
+  /// the window's full width (the push moves by it)
+  @State private var width: CGFloat = 0
 
   var body: some View {
     ZStack {
       Radix.background.ignoresSafeArea()
-      if shell.mode == .normal {
-        if let identity = shell.identity {
+      // the app — the extension's live view, and its picture over it while that stands in — slides back a third
+      // and dims a little under a secure page, like the page under a native push
+      ZStack {
+        if shell.extensionMounted, let identity = shell.identity {
           ExtensionHost(identity: identity, shell: shell)
             .ignoresSafeArea()
             .accessibilityIdentifier("extension-host")
-            .transition(.identity)
-            .overlay {
-              if shell.coverWithSnapshot, let img = shell.snapshot {
-                Image(uiImage: img).resizable().ignoresSafeArea().allowsHitTesting(false)
-              }
-            }
-        } else if let e = shell.loadError {
+            .allowsHitTesting(shell.mode == .normal)
+        } else if shell.mode == .normal, let e = shell.loadError {
           Text(e).font(.footnote).foregroundStyle(Radix.red.a[11]).padding()
         }
-      } else {
-        // a still image of the app (shell-owned pixels) slides back and dims a little, like the page
-        // under a native push; the shell's own page comes in over it
-        GeometryReader { g in
-          if let img = shell.snapshot {
-            Image(uiImage: img).resizable().ignoresSafeArea()
-              .overlay(Color.black.opacity(0.12).ignoresSafeArea())
-              .offset(x: -g.size.width * 0.3)
-              .transition(.asymmetric(insertion: .offset(x: g.size.width * 0.3).combined(with: .identity), removal: .offset(x: g.size.width * 0.3)))
-              .accessibilityHidden(true)
-          }
+        if shell.showSnapshot, let img = shell.snapshot {
+          Image(uiImage: img).resizable().ignoresSafeArea().allowsHitTesting(false).accessibilityHidden(true)
         }
-        .ignoresSafeArea()
+        Color.black.opacity(0.12 * shell.progress).ignoresSafeArea().allowsHitTesting(false)
+      }
+      .offset(x: -width * 0.3 * shell.progress)
+      if shell.mode == .secure {
         SecurePageFor(shell: shell)
           .shadow(color: .black.opacity(0.12), radius: 12, x: -2, y: 0)
-          .transition(.asymmetric(insertion: .move(edge: .trailing), removal: shell.exitForward ? .move(edge: .leading) : .move(edge: .trailing)))
+          .offset(x: (width + 24) * (1 - shell.progress))
+          .allowsHitTesting(!shell.leaving)
       }
     }
+    .background { Color.clear.ignoresSafeArea().onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 } }
     .task { await shell.load() }
   }
 }
@@ -218,6 +319,7 @@ struct SecurePageFor: View {
     case .setup: SetupPage(shell: shell)
     case .grant(let id): SecureGrant(shell: shell, sessionId: id, options: shell.secureOptions)
     case .repoKey: SecureRepoKey(shell: shell, options: shell.secureOptions)
+    case .unlock(let id): SecureUnlock(shell: shell, sessionId: id, options: shell.secureOptions)
     }
   }
 }
@@ -242,7 +344,6 @@ struct ExtensionHost: UIViewControllerRepresentable {
     init(shell: Shell) { self.shell = shell }
 
     func hostViewControllerDidActivate(_ viewController: EXHostViewController) {
-      shell.extensionDidActivate()
       do {
         let c = try viewController.makeXPCConnection()
         c.exportedInterface = NSXPCInterface(with: HostService.self)
@@ -254,6 +355,8 @@ struct ExtensionHost: UIViewControllerRepresentable {
         // an XPC connection only reaches the other side with its first message
         (c.remoteObjectProxyWithErrorHandler { [shell] e in DispatchQueue.main.async { shell.log("xpc error \(e)") } } as? ExtensionService)?
           .hello { [shell] a in DispatchQueue.main.async { shell.log("xpc: \(a)") } }
+        // after the hello on the same connection: how the secure page ended, if the shell has just left one
+        shell.extensionDidActivate()
       } catch {
         shell.log("xpc error \(error)")
       }

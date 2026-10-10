@@ -11,6 +11,10 @@ import Foundation
   func signIn(_ reply: @escaping (String) -> Void)
   /// put plain text on the clipboard (the extension carries no clipboard module; the shell is the foreground app)
   func copyText(_ text: String)
+  /// React Native has handled `secureFinished` and drawn the result (e.g. closed the form a Create came from):
+  /// the shell, which holds its page over the app until then, may reveal it. Timing only: the shell has already
+  /// left secure mode by its own decision, and reveals the app after a timeout anyway.
+  func secureSettled(_ requestId: String)
 }
 
 /// Exported by the extension. The shell calls `hello` right after connecting: an XPC connection only

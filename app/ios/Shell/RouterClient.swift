@@ -161,6 +161,22 @@ final class RouterClient: NSObject, ASWebAuthenticationPresentationContextProvid
     struct B: Decodable { let objects: [CoreSetup.BackupObject] }
     return try await json("GET", "api/backups", as: B.self).objects
   }
+  /// the router's machine sizes and models (api/sizes, api/models), as the New session page offers them
+  struct Choice: Decodable, Identifiable, Equatable { let id: String; let label: String?; let harness: String? }
+  func models() async -> [Choice] {
+    struct M: Decodable { let models: [Choice]? }
+    return (try? await json("GET", "api/models", as: M.self).models) ?? []
+  }
+  func sizes() async -> [Choice] {
+    struct S: Decodable { let sizes: [Choice]? }
+    return (try? await json("GET", "api/sizes", as: S.self).sizes) ?? []
+  }
+  /// the repos (Settings → Repos): each with its deploy key in its own store
+  struct RepoDTO: Decodable, Identifiable, Equatable { let name: String; let url: String; let repo: String; let store: String; let sensitive: Bool?; var id: String { name } }
+  func repos() async -> [RepoDTO] {
+    struct St: Decodable { let repos: [RepoDTO]? }
+    return (try? await json("GET", "api/repos", as: St.self).repos) ?? []
+  }
   /// the stores each harness brings (the router adds them to a session; the app doesn't offer them)
   struct PolicyDTO: Decodable { struct H: Decodable { let stores: [String]? }; let harnesses: [String: H] }
   func harnessStores() async -> [String: [String]] {

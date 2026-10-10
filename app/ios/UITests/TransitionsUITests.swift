@@ -58,27 +58,29 @@ final class TransitionsUITests: XCTestCase {
     wait(el("stores-manage"), 20, "stores tab again")
     settle()
 
-    // 3. new session: the form → Continue (secure page) → Back to the form → Continue → Create (leaves as done,
-    //    and React Native closes its form)
+    // 3. new session: + New session → the one secure page → Back; again, with the keyboard up on the page when Back
+    //    is tapped; again → Start (leaves as done over the list)
     el("tab-sessions").tap()
     wait(el("newBtn"), 10, "list")
-    el("newBtn").tap()
-    wait(el("ns-start"), 15, "new session form")
     settle()
-    tapMarked(el("ns-start"), "newsession-enter")
+    tapMarked(el("newBtn"), "newsession-enter")
     wait(el("secure-create"), 20, "secure new session page")
     settle()
     tapMarked(el("secure-back"), "newsession-back")
-    wait(el("ns-start"), 20, "the form again")
+    wait(el("newBtn"), 20, "the list again")
     settle()
-    // the form's text field focused: the keyboard is up when Continue is tapped
+    tapMarked(el("newBtn"), "newsession-enter-2")
+    wait(el("ns-title"), 20, "secure new session page (2)")
     el("ns-title").tap(); el("ns-title").typeText("transitions")
     settle()
-    tapMarked(el("ns-start"), "newsession-enter-keyboard")
-    wait(el("secure-create"), 20, "secure new session page (2)")
+    tapMarked(el("secure-back"), "newsession-back-keyboard")
+    wait(el("newBtn"), 20, "the list again (2)")
     settle()
-    tapMarked(el("secure-create"), "newsession-create")
-    wait(el("newBtn"), 120, "back to the list after Create")
+    tapMarked(el("newBtn"), "newsession-enter-3")
+    wait(el("secure-create"), 20, "secure new session page (3)")
+    settle()
+    tapMarked(el("secure-create"), "newsession-start")
+    wait(prefixed("more-"), 120, "the new session's card after Start")
     settle(); settle()
 
     // 4. a grant: More → Grants… → the secure grant page → Back, then again → Allow
@@ -86,19 +88,18 @@ final class TransitionsUITests: XCTestCase {
       el(prefixed("more-").identifier).tap()
       wait(el("menu-grants-"), 10, "menu grants")
       el("menu-grants-").tap()
-      if wait(el("grant-new-grant"), 20, "grants page") {
+      if wait(el("grant-review"), 20, "grants page") {
         settle()
-        tapMarked(el("grant-new-grant"), "grant-enter")
+        el("grant-holder-terminal").tap(); el("grant-len-10").tap()
+        tapMarked(el("grant-review"), "grant-enter")
         if wait(el("grant-meaning"), 30, "secure grant page") {
           settle()
-          tapMarked(el("secure-back"), "grant-back")
+          tapMarked(el("secure-back"), "grant-deny")
         }
-        wait(el("grant-new-grant"), 20, "grants page again")
+        wait(el("grant-review"), 20, "grants page again")
         settle()
-        tapMarked(el("grant-new-grant"), "grant-enter-2")
+        tapMarked(el("grant-review"), "grant-enter-2")
         if wait(el("grant-meaning"), 30, "secure grant page (2)") {
-          el("grant-holder-terminal").tap()
-          el("grant-min-10").tap()
           settle()
           tapMarked(el("secure-grant-allow"), "grant-allow")
           wait(el("grant-forget-terminal"), 60, "grant listed")

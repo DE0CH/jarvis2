@@ -70,6 +70,8 @@ export type Session = {
   // a lifecycle action holding the session (others are refused 409) and a permission-mode / restart job
   // what a pause or destroy is waiting on, in plain words (e.g. "waiting for the machine's last snapshot (up to 10 min)")
   waiting?: string;
+  // the store the machine is waiting on at boot (the core answered 423 "store X is locked" to its secrets pull)
+  lockedStore?: string;
   busy?: { kind: string; since?: string } | null; wake?: { kind: string; phase: string; error?: string } | null; apiProxy?: "on" | "off";
 };
 export type RepoEntry = { name: string; url: string; repo: string; store: string; sensitive?: boolean; fingerprint?: string; keyAt?: string };

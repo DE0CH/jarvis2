@@ -29,6 +29,42 @@ final class Jarvis2UITests: XCTestCase {
     if !ok { note("\(tag)-tree-\(what)", app.debugDescription); shot("missing-" + what.replacingOccurrences(of: " ", with: "-")) }
     return ok
   }
+  /// after a switch between the shell and the app: `target` must come up within `s` seconds, and at no moment on
+  /// the way may the screen be blank — neither a secure page (its banner) nor the app's own content (its tab list
+  /// or any of `alsoApp`) for longer than `blank` seconds
+  @discardableResult func arrives(_ target: XCUIElement, _ s: TimeInterval, _ what: String, blank: TimeInterval = 1.5) -> Bool {
+    let until = Date().addingTimeInterval(s)
+    var blankSince: Date?
+    while Date() < until {
+      if target.exists { return true }
+      let something = el("secure-banner").exists || el("tablist").exists || el("page-back").exists || el("newBtn").exists
+      if something { blankSince = nil } else if blankSince == nil { blankSince = Date() }
+      if let b = blankSince, Date().timeIntervalSince(b) > blank {
+        shot("blank-" + what.replacingOccurrences(of: " ", with: "-"))
+        XCTFail("[\(tag)] blank screen for over \(blank) s on the way to \(what)")
+        return target.waitForExistence(timeout: max(0, until.timeIntervalSinceNow))
+      }
+      usleep(150_000)
+    }
+    XCTFail("[\(tag)] \(what) didn't come up within \(Int(s)) s")
+    shot("missing-" + what.replacingOccurrences(of: " ", with: "-"))
+    return false
+  }
+  /// the core's store list as the router relays it (the test reads the payload; the app checks the signature)
+  func coreStores() -> [[String: Any]] {
+    var r = URLRequest(url: URL(string: "http://127.0.0.1:18080/api/core/stores")!)
+    r.httpMethod = "POST"; r.setValue("application/json", forHTTPHeaderField: "Content-Type")
+    r.httpBody = Data(#"{"nonce":"0123456789abcdef0123456789abcdef"}"#.utf8)
+    var out: [[String: Any]] = []
+    let done = DispatchSemaphore(value: 0)
+    URLSession.shared.dataTask(with: r) { data, _, _ in
+      if let data, let doc = try? JSONSerialization.jsonObject(with: data) as? [String: Any], let p = doc["payload"] as? String,
+         let pj = try? JSONSerialization.jsonObject(with: Data(p.utf8)) as? [String: Any], let st = pj["stores"] as? [[String: Any]] { out = st }
+      done.signal()
+    }.resume()
+    _ = done.wait(timeout: .now() + 20)
+    return out
+  }
   func gone(_ e: XCUIElement, _ s: TimeInterval) -> Bool {
     let until = Date().addingTimeInterval(s)
     while e.exists && Date() < until { usleep(300_000) }
@@ -63,10 +99,10 @@ final class Jarvis2UITests: XCTestCase {
     el("setup-recover-go").tap()
     guard wait(el("setup-done"), 120, "recovered") else { return }
     shot("setup-recovered")
-    el("secure-back").tap() // Done
+    el("secure-back").tap() // Done: the page stays until the app has drawn its list, then slides away over it
 
     // ---- the React Native list (in the extension)
-    guard wait(el("newBtn"), 120, "session list") else { return }
+    guard arrives(el("newBtn"), 120, "session list after Done at first launch") else { return }
     sleep(2)
     shot("sessions-empty")
 
@@ -92,37 +128,42 @@ final class Jarvis2UITests: XCTestCase {
     XCTAssertFalse(el("secure-error").exists, "[\(tag)] unlock error: \(el("secure-error").exists ? el("secure-error").label : "")")
     shot("secure-stores-unlocked")
     el("secure-back").tap()
-    wait(el("stores-manage"), 20, "back to the stores tab")
+    arrives(el("stores-manage"), 5, "back to the stores tab")
     sleep(2)
     shot("stores-tab-after")
     el("tab-sessions").tap()
 
-    // ---- new session: the form (normal mode) → the shell's secure page → Create (one signature)
+    // ---- new session: ONE page in the shell (every option, the stores, the harness) → Start (one Face ID, which
+    // also unlocks the session's locked stores — here the harness's own claude-login, locked until now)
+    XCTAssertEqual(coreStores().first { ($0["name"] as? String) == "claude-login" }?["unlocked"] as? Bool, false, "[\(tag)] the harness store starts locked")
     wait(el("newBtn"), 10, "list again")
     el("newBtn").tap()
-    wait(el("ns-start"), 15, "new session form")
-    sleep(2)
-    shot("new-session-form")
-    el("ns-start").tap()
-    wait(el("secure-create"), 20, "secure new session page")
+    guard arrives(el("secure-create"), 10, "the secure New session page") else { return }
     sleep(2)
     shot("secure-new-session")
+    XCTAssertTrue(el("ns-prompt").exists && el("ns-title").exists && el("ns-mode-oneshot").exists, "[\(tag)] prompt, title and one-shot are on the one page")
     XCTAssertTrue(el("secure-mode-bypass").exists, "[\(tag)] the secure page picks the permission mode")
     XCTAssertTrue(el("secure-store-default").exists, "[\(tag)] default offered")
     XCTAssertFalse(el("secure-store-core").exists, "[\(tag)] the core store is not offered to a session")
     XCTAssertFalse(el("secure-store-claude-login").exists, "[\(tag)] the harness's own store is not offered")
+    XCTAssertTrue(el("ns-unlocks").exists && el("ns-unlocks").label.contains("claude-login"), "[\(tag)] Start says it unlocks the locked harness store")
+    el("ns-title").tap(); el("ns-title").typeText("ci session")
     if el("secure-store-gmail").waitForExistence(timeout: 5) {
       el("secure-store-gmail").tap(); sleep(1)
       XCTAssertTrue(el("secure-sensitive-warning").exists, "[\(tag)] sensitive warning")
       shot("secure-sensitive-picked")
       el("secure-store-gmail").tap(); sleep(1)
     }
+    if el("ns-model-opus").exists || prefixed("ns-model-").exists { shot("secure-new-session-options") }
     el("secure-create").tap()
-    for _ in 0..<3 { shot("creating"); sleep(2) }
-    let created = el("newBtn").waitForExistence(timeout: 180)
-    XCTAssertTrue(created, "[\(tag)] back to the list after Create")
+    for _ in 0..<2 { shot("creating"); sleep(1) }
+    let created = arrives(prefixed("more-"), 180, "the new session's card after Start")
+    XCTAssertTrue(created, "[\(tag)] back to the list after Start")
     if el("secure-error").exists { note("\(tag)-create-error", el("secure-error").label); shot("create-error"); return }
-    sleep(3)
+    XCTAssertEqual(coreStores().first { ($0["name"] as? String) == "claude-login" }?["unlocked"] as? Bool, true,
+                   "[\(tag)] one Start opened the locked harness store, so the machine's secrets pull isn't refused")
+    XCTAssertFalse(prefixed("unlock-s").exists, "[\(tag)] no session waits on a locked store")
+    sleep(2)
     shot("session-created")
 
     // ---- grants: More → Grants… → the shell's grant page (a 10-minute terminal grant, then a standing rule
@@ -132,16 +173,19 @@ final class Jarvis2UITests: XCTestCase {
     wait(el("menu-grants-"), 10, "menu grants")
     shot("more-menu-running")
     el("menu-grants-").tap()
-    if wait(el("grant-new-grant"), 20, "grants page") {
+    if wait(el("grant-review"), 20, "grants page") {
       sleep(1)
       shot("grants-empty")
-      el("grant-new-grant").tap()
-      if wait(el("grant-meaning"), 30, "secure grant page") {
-        el("grant-holder-terminal").tap()
-        el("grant-min-10").tap()
+      // the choice is made here (React Native); the shell's page only reviews it: Allow or Deny
+      el("grant-holder-terminal").tap()
+      el("grant-len-10").tap()
+      el("grant-review").tap()
+      if arrives(el("grant-meaning"), 10, "the grant review page") {
         sleep(1)
         note("\(tag)-grant-meaning", el("grant-meaning").label)
-        XCTAssertTrue(el("grant-meaning").label.contains("Terminal"), "[\(tag)] the grant page says which feature: \(el("grant-meaning").label)")
+        XCTAssertTrue(el("grant-meaning").label.contains("Terminal") && el("grant-meaning").label.contains("10 minutes"), "[\(tag)] the review says what is asked: \(el("grant-meaning").label)")
+        XCTAssertFalse(prefixed("grant-holder-").exists || prefixed("grant-min-").exists, "[\(tag)] nothing to change on the review page")
+        XCTAssertTrue(el("secure-back").label.contains("Deny"), "[\(tag)] Allow or Deny")
         shot("secure-grant")
         el("secure-grant-allow").tap()
         wait(el("grant-forget-terminal"), 60, "terminal grant listed")
@@ -149,11 +193,22 @@ final class Jarvis2UITests: XCTestCase {
         sleep(1)
         shot("grants-one")
       }
-      el("grant-new-rule").tap()
-      if wait(el("grant-meaning"), 30, "secure grant page (rule)") {
-        el("grant-holder-scheduler").tap()
-        if el("grant-kind-rule").exists { el("grant-kind-rule").tap() }
+      // Deny leaves without signing
+      el("grant-holder-status").tap()
+      el("grant-len-2").tap()
+      el("grant-review").tap()
+      if arrives(el("grant-meaning"), 10, "the grant review page (deny)") {
+        el("secure-back").tap()
+        arrives(el("grant-review"), 5, "the grants page after Deny")
+        XCTAssertFalse(el("grant-forget-status").exists, "[\(tag)] Deny signed nothing")
+      }
+      el("grant-holder-scheduler").tap()
+      el("grant-len-rule").tap()
+      el("grant-days-30").tap()
+      el("grant-review").tap()
+      if arrives(el("grant-meaning"), 10, "the grant review page (rule)") {
         sleep(1)
+        XCTAssertTrue(el("grant-meaning").label.contains("Scheduler") && el("grant-meaning").label.contains("until"), "[\(tag)] the rule's review: \(el("grant-meaning").label)")
         shot("secure-grant-rule")
         el("secure-grant-allow").tap()
         wait(el("grant-forget-scheduler"), 60, "standing rule listed")

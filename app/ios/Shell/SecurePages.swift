@@ -21,9 +21,11 @@ struct SecureFrame<Content: View>: View {
     VStack(spacing: 0) {
       // page.tsx TopBar: ← Back (soft gray) · Heading size 4 · the primary action; 20 / 16 padding, a hairline below
       HStack(spacing: 12) {
-        KitButton(title: backTitle, variant: .soft, color: .gray, disabled: busy != nil, id: "secure-back") { if let onBack { onBack() } else { shell.exitSecure("back") } }
+        // while the shell leaves, the page takes no taps; while the app gets ready under it (after an action, or
+        // Done at launch) the button that left shows it is working
+        KitButton(title: backTitle, variant: .soft, color: .gray, disabled: busy != nil || shell.leaving, busy: shell.preparing && action == nil, id: "secure-back") { if let onBack { onBack() } else { shell.exitSecure("back") } }
         Text(title).kitHeading(4).foregroundStyle(Radix.gray.s[12]).lineLimit(1).frame(maxWidth: .infinity, alignment: .leading)
-        if let a = action { KitButton(title: busy ?? a.title, disabled: a.disabled, busy: busy != nil, id: a.id, action: run) }
+        if let a = action { KitButton(title: busy ?? a.title, disabled: a.disabled, busy: busy != nil || shell.preparing, id: a.id, action: run) }
       }
       .padding(.horizontal, 20).padding(.vertical, 16)
       .frame(maxWidth: K.pageMax).frame(maxWidth: .infinity)
@@ -87,30 +89,55 @@ struct StoreLines: View {
   }
 }
 
-// ---- New session: the stores, the harness, then Create (one Face ID) ----------------------------------
+// ---- New session: ONE page (Deyao, 2026-10-10: "new session page should just be one page") ------------------
+// Everything Jarvis 1's New session page has, chosen here in the shell: the prompt, title, stores, harness, repos,
+// permission mode, model, idle switch, API proxy and size. Start asks the router for the session, checks the core's
+// challenge carries exactly the stores (plus the harness's own), harness and permission mode picked here, and then,
+// under ONE Face ID, signs it AND opens every store the session gets that is locked (harness stores too) — so a
+// session never sits at boot waiting on a locked store. The free text and the other options travel unsigned, as
+// before.
 struct SecureNewSession: View {
   let shell: Shell
   let options: [String: Any]
   @State private var stores: [StoreView] = []
-  @State private var harnessStores: [String: [String]] = [:]
   @State private var picked: Set<String> = []
   @State private var harness = "claude"
-  @State private var mode = "auto"
+  @State private var perm = "bypass"
+  @State private var mode = "session"
+  @State private var prompt = ""
+  @State private var label = ""
+  @State private var model = ""
+  @State private var size = "medium"
+  @State private var repos: Set<String> = []
+  @State private var autoPause = true
+  @State private var apiProxy = false
   @State private var loaded = false
   @State private var loadError: String?
   @State private var busy: String?
   @State private var failure: String?
 
-  private var title: String { (options["label"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? "New session" }
+  private var lists: Shell.Lists { shell.lists }
+  private var oneShot: Bool { mode == "oneshot" }
   /// the stores any harness brings: the router adds them, the picker doesn't offer them
-  private var hidden: Set<String> { Set(harnessStores.values.flatMap { $0 }) }
+  private var hidden: Set<String> { Set(lists.harnessStores.values.flatMap { $0 }) }
   private var offered: [StoreView] { stores.filter { !$0.isCore && !hidden.contains($0.name) } }
   private var pickedSensitive: [String] { stores.filter { $0.sensitive && picked.contains($0.name) }.map(\.name) }
+  private var models: [RouterClient.Choice] { lists.models.filter { ($0.harness ?? "claude") == harness } }
+  /// every store the session will get: picked here plus the harness's own
+  private var allStores: [String] { Array(picked.union(lists.harnessStores[harness] ?? [])).sorted() }
+  /// those that are locked and hold values: Start opens them under the same Face ID
+  private var toUnlock: [String] { allStores.filter { n in stores.contains { $0.name == n && !$0.unlocked && !$0.empty } } }
+  private var canStart: Bool { loaded && busy == nil && !(oneShot && prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty) }
 
   var body: some View {
-    SecureFrame(shell: shell, title: "New session", action: ("Create", "secure-create", !loaded), busy: busy, run: { Task { await create() } }) {
-      Lbl(text: "Session")
-      Muted(text: title)
+    SecureFrame(shell: shell, title: "New session", action: ("Start", "secure-create", !canStart), busy: busy, run: { Task { await start() } }) {
+      Segmented(items: [("session", "Session"), ("oneshot", "One-shot")], value: $mode, id: "ns-mode").padding(.top, 16)
+      Lbl(text: oneShot ? "Prompt" : "First prompt (optional)")
+      KitTextArea(placeholder: oneShot ? "The one job for this session. Claude runs it, then the session is archived and destroyed." : "Typed into the session as its first message once it is up.",
+                  text: $prompt, rows: 4, capitalize: true, id: "ns-prompt")
+      if oneShot { Muted(text: "Needs a prompt. If Claude asks you something, the session waits (“needs you”) until you answer, then finishes.").padding(.top, 4) }
+      Lbl(text: "Session title (optional)")
+      KitTextField(placeholder: "e.g. refactor billing module", text: $label, capitalize: true, id: "ns-title")
       Lbl(text: "Secret stores")
       if let loadError { Callout(text: loadError, color: .red) }
       else if !loaded { ProgressView().frame(maxWidth: .infinity) }
@@ -137,42 +164,89 @@ struct SecureNewSession: View {
           ChoiceCard(on: harness == h.id, id: "secure-harness-\(h.id)", action: { harness = h.id }) { ChoiceText(title: h.title, sub: h.sub) }
         }
       }
-      if let hs = harnessStores[harness], !hs.isEmpty { Muted(text: "The harness brings its own: \(hs.joined(separator: ", ")).").padding(.top, 8) }
+      if let hs = lists.harnessStores[harness], !hs.isEmpty { Muted(text: "The harness brings its own: \(hs.joined(separator: ", ")).").padding(.top, 8) }
+      Lbl(text: "Repos")
+      if lists.repos.isEmpty { Muted(text: "No repos yet — add some in Settings → Repos.") }
+      VStack(spacing: 8) {
+        ForEach(lists.repos) { r in
+          ChoiceCard(on: repos.contains(r.name), check: true, id: "ns-repo-\(r.name)", action: { toggleRepo(r) }) { ChoiceText(title: r.repo, sub: r.store) }
+        }
+      }
+      if !lists.repos.isEmpty && repos.isEmpty { Muted(text: "No repo selected — the session starts with an empty workspace.").padding(.top, 4) }
       Lbl(text: "Permission mode")
       VStack(spacing: 8) {
-        ChoiceCard(on: mode == "auto", id: "secure-mode-auto", action: { mode = "auto" }) { ChoiceText(title: "Auto", sub: "Safe actions run; the permission classifier gates the rest") }
-        ChoiceCard(on: mode == "bypass", id: "secure-mode-bypass", action: { mode = "bypass" }) { ChoiceText(title: "Bypass", sub: "No permission prompts at all (--dangerously-skip-permissions)") }
+        ChoiceCard(on: perm == "auto", id: "secure-mode-auto", action: { perm = "auto" }) { ChoiceText(title: "Auto", sub: "Auto-approve safe actions; the permission classifier gates the rest.") }
+        ChoiceCard(on: perm == "bypass", id: "secure-mode-bypass", action: { perm = "bypass" }) { ChoiceText(title: "Dangerously skip permissions", sub: "No prompts at all (--dangerously-skip-permissions).") }
+      }
+      if !models.isEmpty {
+        Lbl(text: "Model")
+        VStack(spacing: 8) {
+          ForEach(models) { m in
+            ChoiceCard(on: model == m.id, id: "ns-model-\(m.id)", action: { model = m.id }) { ChoiceText(title: m.label ?? m.id, sub: m.id) }
+          }
+        }
+      }
+      if !oneShot {
+        Lbl(text: "Idle")
+        ChoiceCard(on: autoPause, check: true, id: "ns-autopause", action: { autoPause.toggle() }) {
+          ChoiceText(title: "Auto-pause when idle", sub: "Pauses the machine after 1 h with nothing running. Resume brings it back — the conversation and your files are kept.")
+        }
+      }
+      Lbl(text: "API proxy")
+      ChoiceCard(on: apiProxy, check: true, id: "ns-apiproxy", action: { apiProxy.toggle() }) {
+        ChoiceText(title: "API proxy", sub: "Logs every request to and response from the Anthropic API into ~/artifacts/api-log, archived with the session.")
+      }
+      if !lists.sizes.isEmpty {
+        Lbl(text: "Machine size")
+        VStack(spacing: 8) {
+          ForEach(lists.sizes) { s in
+            ChoiceCard(on: size == s.id, id: "ns-size-\(s.id)", action: { size = s.id }) { ChoiceText(title: s.id.prefix(1).uppercased() + s.id.dropFirst(), sub: s.label) }
+          }
+        }
+      }
+      if loaded && !toUnlock.isEmpty {
+        Muted(text: "Start also unlocks \(toUnlock.joined(separator: ", ")) (locked now), with the same Face ID.").padding(.top, 16).accessibilityIdentifier("ns-unlocks")
       }
       if let failure { Callout(text: failure, color: .red).padding(.top, 16).accessibilityIdentifier("secure-error") }
     }
     .task { await load() }
+    .onChange(of: harness) { pickModel() }
+    .onChange(of: lists.models) { pickModel() }
   }
 
   private func toggle(_ n: String) { if picked.contains(n) { picked.remove(n) } else { picked.insert(n) } }
+  /// picking a repo picks its deploy-key store too when that is offered (a sensitive one stays a tap of its own)
+  private func toggleRepo(_ r: RouterClient.RepoDTO) {
+    if repos.contains(r.name) { repos.remove(r.name); return }
+    repos.insert(r.name)
+    if let s = offered.first(where: { $0.name == r.store }), !s.sensitive { picked.insert(s.name) }
+  }
+  private func pickModel() { if !models.contains(where: { $0.id == model }) { model = models.first?.id ?? "" } }
   private func apply(_ list: [StoreView]) {
+    let first = stores.isEmpty
     stores = list
-    // pre-selection from normal mode: offered, NON-sensitive stores only
-    let pre = (options["stores"] as? [String]) ?? []
-    if picked.isEmpty { picked = Set(pre.filter { n in offered.contains { $0.name == n && !$0.sensitive } }) }
-    else { picked = picked.intersection(offered.map(\.name)) }
+    if first && picked.isEmpty, offered.contains(where: { $0.name == "default" && !$0.sensitive }) { picked = ["default"] }
+    picked = picked.intersection(offered.map(\.name))
   }
   private func load() async {
-    if let h = options["harness"] as? String, HARNESSES.contains(where: { $0.id == h }) { harness = h }
-    if (options["permissionMode"] as? String) == "bypass" { mode = "bypass" }
-    harnessStores = await RouterClient.shared.harnessStores()
+    pickModel()
     if let p = shell.prefetched { apply(p); loaded = true }
     do { let p = try await RouterClient.shared.stores(); shell.prefetched = p; apply(p); loaded = true }
     catch { if !loaded { loadError = errText(error) } }
+    if lists.models.isEmpty { shell.refreshLists() }
   }
 
-  private func create() async {
+  private func start() async {
     failure = nil
     let want = picked.sorted(), rid = (options["requestId"] as? String) ?? CoreCrypto.nonce()
+    let title = label.trimmingCharacters(in: .whitespacesAndNewlines)
     do {
       let key = try CoreTrust.key()
       busy = "Requesting…"
-      var body: [String: Any] = ["requestId": rid, "stores": want, "harness": harness, "permissionMode": mode]
-      for k in ["label", "prompt", "model", "size", "oneShot", "autoPause", "repos", "apiProxy"] { if let v = options[k] { body[k] = v } }
+      let chosen = lists.repos.filter { repos.contains($0.name) }
+      let body: [String: Any] = ["requestId": rid, "stores": want, "harness": harness, "permissionMode": perm, "label": title,
+                                 "prompt": prompt.trimmingCharacters(in: .whitespacesAndNewlines), "model": model, "size": size, "oneShot": oneShot,
+                                 "autoPause": !oneShot && autoPause, "repos": chosen.map(\.url).joined(separator: ","), "apiProxy": apiProxy]
       try await RouterClient.shared.createSession(body)
       // the core's challenge comes before any machine exists
       var found: RouterClient.ApprovalDTO?
@@ -187,20 +261,89 @@ struct SecureNewSession: View {
       }
       guard let a = found else { throw RouterError(message: "No approval yet — it will wait at the top of the session list.") }
       let r = try Checks.review(challenge: a.challenge, coreKey: key)
-      try Checks.matchesPicked(r, stores: want, harnessStores: harnessStores[harness] ?? [], harness: harness, permissionMode: mode)  // sign only what was chosen here
+      let hs = lists.harnessStores[harness] ?? []
+      try Checks.matchesPicked(r, stores: want, harnessStores: hs, harness: harness, permissionMode: perm)  // sign only what was chosen here
+      // the stores the challenge carries that are locked now (fresh from the core): opened under the same Face ID
+      let now = try await RouterClient.shared.stores()
+      shell.prefetched = now
+      let locked = r.stores.filter { n in now.contains { $0.name == n && !$0.unlocked && !$0.empty } }
       busy = "Signing…"
-      let payload = a.challenge.payload, reason = "Create \"\(title)\""
-      let sig = try await offMain { try PhoneKeys.shared.sign(payload, reason: reason) }
-      busy = "Creating…"
+      let reason = "Start \"\(title.isEmpty ? "New session" : title)\"" + (locked.isEmpty ? "" : " and unlock \(locked.joined(separator: ", "))")
+      guard let sig = try await StoreUnlock.signAndUnlock(payload: a.challenge.payload, stores: locked, reason: reason) else { throw TrustError.stale("signature") }
+      busy = "Starting…"
       let ans = try await RouterClient.shared.respond(a.id, signature: sig)
       try Checks.answerFor(r, answer: ans.answer, coreKey: key)
-      shell.log("created \(ans.session)")
-      busy = nil
-      shell.exitSecure("created \(ans.session)", done: true, id: ans.session)
+      shell.log("created \(ans.session)" + (locked.isEmpty ? "" : ", unlocked \(locked.joined(separator: ","))"))
+      shell.exitSecure("created \(ans.session)", done: true, id: ans.session)  // busy stays: the page leaves
     } catch {
       busy = nil
       failure = errText(error)
     }
+  }
+}
+
+/// Opening locked stores (each: the core's signed begin naming the store, this phone's share x(p·E) sealed to the
+/// core's one-off key) together with an optional signature, all under ONE Face ID.
+enum StoreUnlock {
+  @discardableResult
+  static func signAndUnlock(payload: String?, stores: [String], reason: String) async throws -> Data? {
+    var begins: [UnlockBegin] = []
+    for n in stores { begins.append(try await RouterClient.shared.unlockBegin(n)) }
+    let es = begins.map(\.e)
+    let out = try await offMain { try PhoneKeys.shared.signAndShares(payload, es: es, reason: reason) }
+    for (b, x) in zip(begins, out.shares) {
+      try await RouterClient.shared.unlockFinish(b, share: try CoreCrypto.sealShare(x, to: b.t))
+    }
+    return out.signature
+  }
+}
+
+// ---- unlock a session's locked stores: a review stop (Allow with Face ID, or Deny) ------------------------------
+// Opened from a session waiting at boot on a locked store. What it unlocks comes from the core's signed documents
+// only: the session's cert (its stores) and the store list (which are locked); the React Native UI only names the
+// session.
+struct SecureUnlock: View {
+  let shell: Shell
+  let sessionId: String
+  let options: [String: Any]
+  @State private var locked: [String]?
+  @State private var certStores: [String] = []
+  @State private var loadError: String?
+  @State private var busy: String?
+  @State private var failure: String?
+  private var label: String { (options["label"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? sessionId }
+
+  var body: some View {
+    SecureFrame(shell: shell, title: "Unlock stores", action: ("Allow", "secure-unlock-allow", (locked ?? []).isEmpty), busy: busy, run: { Task { await allow() } },
+                backTitle: "Deny") {
+      if let loadError { Callout(text: loadError, color: .red).padding(.top, 16).accessibilityIdentifier("secure-error") }
+      else if let locked {
+        Lbl(text: "What you allow")
+        Text(locked.isEmpty ? "Every store of “\(label)” is open already." : "Unlock \(locked.joined(separator: ", ")) so “\(label)” can finish starting. Unlocked stores stay open until you lock them on the Stores page.")
+          .kitText(3, weight: .medium).foregroundStyle(Radix.gray.s[12]).frame(maxWidth: .infinity, alignment: .leading).accessibilityIdentifier("unlock-meaning")
+        Lbl(text: "The session's stores (from the core's cert)")
+        StoreLines(stores: certStores, sensitive: [])
+        if let failure { Callout(text: failure, color: .red).padding(.top, 16).accessibilityIdentifier("secure-error") }
+      } else { ProgressView().frame(maxWidth: .infinity).padding(.top, 24) }
+    }
+    .task { await load() }
+  }
+  private func load() async {
+    do {
+      let c = try await RouterClient.shared.sessionCert(sessionId)
+      let all = try await RouterClient.shared.stores()
+      certStores = (c.stores ?? []).filter { $0 != StoreView.coreStore }
+      locked = certStores.filter { n in all.contains { $0.name == n && !$0.unlocked && !$0.empty } }
+    } catch { loadError = errText(error) }
+  }
+  private func allow() async {
+    guard let locked, !locked.isEmpty else { return }
+    failure = nil
+    do {
+      busy = "Unlocking…"
+      try await StoreUnlock.signAndUnlock(payload: nil, stores: locked, reason: "Unlock \(locked.joined(separator: ", "))")
+      shell.exitSecure("unlocked \(locked.joined(separator: ",")) for \(sessionId)", done: true, id: sessionId)
+    } catch { busy = nil; failure = errText(error) }
   }
 }
 
@@ -285,13 +428,12 @@ struct SecureApproval: View {
       busy = "Approving…"
       let ans = try await RouterClient.shared.respond(a.id, signature: sig)
       try Checks.answerFor(r, answer: ans.answer, coreKey: try CoreTrust.key())
-      busy = nil
-      shell.exitSecure("approved \(a.id)", done: true, id: ans.session)
+      shell.exitSecure("approved \(a.id)", done: true, id: ans.session)  // busy stays: the page leaves
     } catch { busy = nil; failure = errText(error) }
   }
   private func reject() async {
     guard let a else { return }
-    do { busy = "Rejecting…"; try await RouterClient.shared.reject(a.id); busy = nil; shell.exitSecure("rejected \(a.id)", done: true, id: a.session) }
+    do { busy = "Rejecting…"; try await RouterClient.shared.reject(a.id); shell.exitSecure("rejected \(a.id)", done: true, id: a.session) }
     catch { busy = nil; failure = errText(error) }
   }
 }

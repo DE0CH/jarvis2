@@ -112,6 +112,33 @@ final class PhoneKeys {
     let secret = try softAgreement().sharedSecretFromKeyAgreement(with: pub)
     return (sig, secret.withUnsafeBytes { Data($0) })
   }
+  /// an optional signature over `payload` and this phone's share x(p·E) for each store key in `es`, under ONE Face
+  /// ID (one LAContext for every Enclave use): New session's Start signs the approval and opens the session's locked
+  /// stores at once; the unlock review page opens several stores at once
+  func signAndShares(_ payload: String?, es: [String], reason: String) throws -> (signature: Data?, shares: [Data]) {
+    _ = try signingPublic(); _ = try agreementPublic()
+    let pubs = try es.map { e -> P256.KeyAgreement.PublicKey in
+      guard let eb = Data(base64Encoded: e) else { throw TrustError.badSignature("the store's key") }
+      return try P256.KeyAgreement.PublicKey(x963Representation: eb)
+    }
+    if usesEnclave {
+      let ctx = LAContext(); ctx.localizedReason = reason
+      var sig: Data?
+      if let payload {
+        let k = try SecureEnclave.P256.Signing.PrivateKey(dataRepresentation: Keychain.get("signing-se")!, authenticationContext: ctx)
+        sig = try k.signature(for: Data(payload.utf8)).derRepresentation
+      }
+      var shares: [Data] = []
+      if !pubs.isEmpty {
+        let a = try SecureEnclave.P256.KeyAgreement.PrivateKey(dataRepresentation: Keychain.get("agreement-se")!, authenticationContext: ctx)
+        for pub in pubs { shares.append(try a.sharedSecretFromKeyAgreement(with: pub).withUnsafeBytes { Data($0) }) }
+      }
+      return (sig, shares)
+    }
+    let sig = try payload.map { try softSigning().signature(for: Data($0.utf8)).derRepresentation }
+    let shares = try pubs.map { try softAgreement().sharedSecretFromKeyAgreement(with: $0).withUnsafeBytes { Data($0) } }
+    return (sig, shares)
+  }
   /// this phone's share of an unlock: x(p·E), 32 bytes
   func share(with e: String, reason: String) throws -> Data {
     _ = try agreementPublic()

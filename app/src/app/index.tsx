@@ -9,6 +9,7 @@ import { sessionTitle, usd } from "../lib/api";
 import { useTheme } from "../theme";
 import { Button, Callout, Heading, IconButton, Spinner, Tabs } from "../ui/kit";
 import { TopBar, openPage } from "../ui/page";
+import { openNewSession } from "../lib/sessions";
 import { useWide } from "../ui/overlays";
 import { Sessions } from "../views/Sessions";
 import { Records } from "../views/Records";
@@ -42,7 +43,7 @@ export default function Dashboard() {
       <TopBar max={wide ? 1320 : 820}>
         <Heading size={4} lines={1} style={{ flex: 1, minWidth: 0 }}>{wide ? TABS.find(([k]) => k === tab)![1] : "Jarvis 2"}</Heading>
         <IconButton id="refreshBtn" variant="soft" color="gray" label="Refresh" onPress={() => refresh(true)}>{refreshing ? <Spinner /> : "↻"}</IconButton>
-        {tab === "sessions" && <Button id="newBtn" onPress={() => openPage("new")}>+ New session</Button>}
+        {tab === "sessions" && <Button id="newBtn" onPress={openNewSession}>+ New session</Button>}
         {tab === "schedules" && <Button id="newScheduleBtn" onPress={() => openPage("task-schedule", {})}>+ New schedule</Button>}
       </TopBar>
       <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={{ paddingBottom: 24 + ins.bottom }}>

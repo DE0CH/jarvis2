@@ -12,6 +12,7 @@ import { GestureHandlerRootView } from "react-native-gesture-handler";
 import * as SystemUI from "expo-system-ui";
 import "../lib/webInit";
 import { useAuthState, loadAuth, signIn } from "../lib/auth";
+import { markAppReady } from "../lib/shell";
 import { useStore, setTab, start, TABS, type Tab } from "../lib/store";
 import { useTheme } from "../theme";
 import { Button, Flex, Heading, P, Spinner, Text } from "../ui/kit";
@@ -71,6 +72,9 @@ function Signed() {
 
 export default function Root() {
   const t = useTheme(), a = useAuthState();
+  // real content is on screen: the list with its first state (or the error saying why there is none), or sign-in
+  const drawn = useStore((s) => s.state.loaded || !!s.state.loadError);
+  useEffect(() => { if (a.phase !== "loading" && (a.phase !== "ready" || drawn)) requestAnimationFrame(() => markAppReady()); }, [a.phase, drawn]);
   useEffect(() => { loadAuth(); }, []);
   useEffect(() => { SystemUI.setBackgroundColorAsync(t.background).catch(() => {}); }, [t.background]);
   return (

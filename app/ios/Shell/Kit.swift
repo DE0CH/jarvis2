@@ -258,6 +258,8 @@ struct KitTextField: View {
   var size = 2
   var mono = false
   var secure = false
+  /// sentences (a title, a prompt) instead of the default: no capitals, no autocorrect (names, keys)
+  var capitalize = false
   var id: String
   @FocusState private var focused: Bool
   var body: some View {
@@ -266,7 +268,7 @@ struct KitTextField: View {
     }
     .font(mono ? .system(size: 16, design: .monospaced) : .system(size: 16))
     .foregroundStyle(Radix.gray.s[12]).tint(Radix.blue.s[9])
-    .textInputAutocapitalization(.never).autocorrectionDisabled()
+    .textInputAutocapitalization(capitalize ? .sentences : .never).autocorrectionDisabled(!capitalize)
     .focused($focused)
     .padding(.horizontal, size == 3 ? 12 : 8).frame(height: size == 3 ? 40 : 32)
     .background(RoundedRectangle(cornerRadius: K.radius[size == 3 ? 3 : 2], style: .continuous).fill(Radix.surface))
@@ -282,13 +284,14 @@ struct KitTextArea: View {
   @Binding var text: String
   var rows = 3
   var mono = false
+  var capitalize = false
   var id: String
   @FocusState private var focused: Bool
   var body: some View {
     TextField("", text: $text, prompt: Text(placeholder).foregroundStyle(Radix.gray.a[10]), axis: .vertical)
       .modifier(KitFont(size: 16, lineHeight: 22, weight: .regular, tracking: 0, mono: mono))
       .foregroundStyle(Radix.gray.s[12]).tint(Radix.blue.s[9])
-      .textInputAutocapitalization(.never).autocorrectionDisabled()
+      .textInputAutocapitalization(capitalize ? .sentences : .never).autocorrectionDisabled(!capitalize)
       .focused($focused)
       .padding(.horizontal, 8).padding(.vertical, 6)
       .frame(minHeight: CGFloat(rows) * 22 + 14, alignment: .topLeading)

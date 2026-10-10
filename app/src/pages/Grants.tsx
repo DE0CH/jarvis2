@@ -1,10 +1,11 @@
 // A session's grants (docs/DESIGN.md "Grants"): which of the router's features may run commands in it, for
-// how long. New ones are made on the shell's secure grant page (the phone signs them); here they are listed
-// and forgotten. Forgetting stops the router using one; the signed text itself stays valid on the machine
+// how long. A new one is chosen here (the feature, minutes or a standing rule's end) and the shell's secure grant
+// page only reviews that request: Allow (Face ID) or Deny. Here they are also listed and forgotten. Forgetting stops the router using one; the signed text itself stays valid on the machine
 // until it ends.
 import { useEffect, useState } from "react";
 import { HOLDERS, holderTitle, sessionTitle, when, type Grant } from "../lib/api";
 import { forgetGrant, loadGrants, requestGrant } from "../lib/grants";
+import { RadioCards, Segmented } from "../ui/kit";
 import { useStore, ask, exclusive, failed, pend } from "../lib/store";
 import { hasShell } from "../lib/shell";
 import { Button, Card, Flex, Heading, Lbl, Muted, P, Pill, Spinner } from "../ui/kit";
@@ -28,8 +29,13 @@ export function GrantsPage({ spec }: { spec: GrantsSpec }) {
     finally { pend("g:" + g.id, null); }
   });
   const make = (kind: "grant" | "rule", holder?: string) => requestGrant(spec.id, title, { kind, holder: holder || m?.needsGrant || "terminal", minutes: 10 }, () => load());
+  // the new request: which feature, then minutes or a standing rule until a date
+  const [holder, setHolder] = useState(m?.needsGrant || "terminal"), [len, setLen] = useState("10"), [days, setDays] = useState("30");
+  const review = () => len === "rule"
+    ? requestGrant(spec.id, title, { holder, kind: "rule", until: new Date(Date.now() + Number(days) * 86400000).toISOString() }, () => load())
+    : requestGrant(spec.id, title, { holder, kind: "grant", minutes: Number(len) }, () => load());
   return (
-    <Page title="Grants" id="grants-page" right={hasShell ? <Button id="grant-new" onPress={() => make("grant")}>+ Allow…</Button> : undefined}>
+    <Page title="Grants" id="grants-page">
       <Muted mt={2}>{title}</Muted>
       <Muted mt={2}>Features of the router (terminal, scheduler, status, login repair, archive check) run commands in a session only while the phone allows it: a grant for up to 10 minutes, or a standing rule until a date (not for a session with a sensitive store). The session may also allow a feature itself.</Muted>
       {!!m?.needsGrant && <Card mt={4} data={{ needsGrant: m.needsGrant }}>
@@ -55,10 +61,13 @@ export function GrantsPage({ spec }: { spec: GrantsSpec }) {
             <Flex mt={3}><PButton pkey={"g:" + g.id} id={"grant-forget-" + g.holder} variant="soft" color="red" onPress={() => forget(g)} label="Forget" /></Flex>
           </Card>))}</Cards>}
       {hasShell && <><Lbl>New</Lbl>
-        <Flex gap={2} wrap>
-          <Button variant="soft" id="grant-new-grant" onPress={() => make("grant")}>Allow for minutes…</Button>
-          <Button variant="soft" color="gray" id="grant-new-rule" onPress={() => make("rule")}>Make a standing rule…</Button>
-        </Flex></>}
+        <RadioCards id="grant-holder" value={holder} onChange={setHolder} options={Object.entries(HOLDERS).map(([k, v]) => ({ value: k, title: v.title, sub: v.sub }))} />
+        <Lbl>How long</Lbl>
+        <Segmented id="grant-len" value={len} onChange={setLen} items={[["1", "1 min"], ["2", "2 min"], ["5", "5 min"], ["10", "10 min"], ["rule", "Standing rule"]]} />
+        {len === "rule" && <><Muted mt={2}>For things that happen while you are away (wakeups, auto-pause). Not for a session with a sensitive store. Until:</Muted>
+          <Segmented id="grant-days" style={{ marginTop: 8 }} value={days} onChange={setDays} items={[["7", "7 days"], ["30", "30 days"], ["90", "90 days"], ["365", "1 year"]]} /></>}
+        <Flex mt={3}><Button id="grant-review" onPress={review}>Review and allow…</Button></Flex>
+        <Muted mt={2}>The next screen (drawn by the Jarvis 2 shell) shows exactly what will be signed: Allow with Face ID, or Deny.</Muted></>}
       {!hasShell && <Muted mt={4}>Grants are signed in the Jarvis 2 app on the iPhone.</Muted>}
     </Page>
   );

@@ -1,11 +1,10 @@
-// New session. In the app this form is normal mode: it carries the prompt, title, permission mode, model
-// and size, and may PRE-select non-sensitive stores; Continue pushes the shell's secure page, where the
-// stores and the harness are chosen for real and the iPhone signs. On the web the form only creates a
-// pending request (POST api/sessions); the approval happens in the app.
+// New session on the WEB page: the form only files a pending request (POST api/sessions) with non-sensitive
+// stores; the approval happens in the app. In the app New session is one page in the shell (lib/sessions.ts,
+// Shell/SecurePages.swift SecureNewSession), where everything is chosen and Start signs it.
 import { useEffect, useRef, useState } from "react";
 import { api, newId, CORE_STORE, harnessStoreSet } from "../lib/api";
 import { useStore, loadStores, refresh, settle, toast, failed } from "../lib/store";
-import { hasShell, requestSecure } from "../lib/shell";
+
 import { Button, CheckboxCards, Flex, Lbl, Muted, RadioCards, Segmented, Spinner, TextArea, TextField } from "../ui/kit";
 import { BtnLabel } from "../ui/bits";
 import { Page, useDone } from "../ui/page";
@@ -22,7 +21,7 @@ export function NewSession() {
   useEffect(() => { if (!touched.current) setPicked(plain.some((s) => s.name === "default") ? ["default"] : []); }, [plain.map((s) => s.name).join(",")]);
   const [perm, setPerm] = useState("bypass"), [model, setModel] = useState(""), [size, setSize] = useState("medium"), [harness, setHarness] = useState("claude");
   // the models of the chosen harness (the router swaps a model of another harness for that harness's default)
-  const models = MODELS.filter((m) => hasShell || (m.harness || "claude") === harness);
+  const models = MODELS.filter((m) => (m.harness || "claude") === harness);
   useEffect(() => { setModel((m) => (models.some((x) => x.id === m) ? m : models[0]?.id || "")); }, [harness, models.map((m) => m.id).join(",")]);
   const [label, setLabel] = useState(""), [prompt, setPrompt] = useState("");
   // one-shot: the session runs its prompt, then is archived and destroyed by itself (never auto-paused)
@@ -36,22 +35,13 @@ export function NewSession() {
   const done = useDone();
   // one create per form: the router answers a repeat of this id with the first create
   const requestId = useRef(newId());
-  const canStart = !busy && (hasShell || picked.length > 0) && !(oneShot && !prompt.trim());
+  const canStart = !busy && (picked.length > 0) && !(oneShot && !prompt.trim());
   function start() {
     if (!canStart) return;
     const chosen = repoList.filter((r) => repos.includes(r.name));
     const withRepos = [...new Set([...picked, ...chosen.map((r) => r.store).filter((n) => plain.some((s) => s.name === n))])];
     const body = { requestId: requestId.current, label: label.trim(), prompt: prompt.trim(), model, permissionMode: perm, size, harness, stores: withRepos, oneShot, autoPause: !oneShot && autoPause.includes("on"),
       repos: chosen.map((r) => r.url).join(","), apiProxy: apiProxy.includes("on") };
-    if (hasShell) {
-      // the form stays underneath the shell's page: Back there returns to it as it was
-      setBusy("Opening…");
-      requestSecure("new-session", body, (r) => {
-        setBusy(null);
-        if (r.result === "done") { refresh(false); settle(120000); done(); }
-      });
-      return;
-    }
     setBusy("Starting…");
     api("POST", "api/sessions", body)
       .then(() => { toast("Requested. Approve it in the Jarvis 2 app on the iPhone once the machine is up.", "ok"); refresh(false); settle(120000); done(); })
@@ -59,7 +49,7 @@ export function NewSession() {
   }
   return (
     <Page title="New session" onSubmit={canStart ? start : undefined}
-      right={<Button id="ns-start" disabled={!canStart} onPress={start}>{busy ? <><Spinner /><BtnLabel>{busy}</BtnLabel></> : hasShell ? "Continue" : "Start"}</Button>}>
+      right={<Button id="ns-start" disabled={!canStart} onPress={start}>{busy ? <><Spinner /><BtnLabel>{busy}</BtnLabel></> : "Start"}</Button>}>
       <Segmented id="ns-mode" value={mode} onChange={setMode} items={[["session", "Session"], ["oneshot", "One-shot"]]} />
       <Lbl>{oneShot ? "Prompt" : "First prompt (optional)"}</Lbl>
       <TextArea id="ns-prompt" rows={4} autoCapitalize="sentences" placeholder={oneShot ? "The one job for this session. Claude runs it, then the session is archived and destroyed." : "Typed into the session as its first message once it is up."} value={prompt} onChangeText={setPrompt} />
@@ -67,26 +57,25 @@ export function NewSession() {
       <Lbl>Session title (optional)</Lbl>
       <TextField id="ns-title" autoComplete="off" autoCorrect={false} autoCapitalize="sentences" placeholder="e.g. refactor billing module" value={label} onChangeText={setLabel} />
       <Lbl>Secret stores</Lbl>
-      {hasShell && <Muted style={{ marginBottom: 8 }}>Pre-selection only — you confirm the stores on the next, secure screen. Sensitive stores can only be picked there.</Muted>}
-      {!hasShell && <Muted style={{ marginBottom: 8 }}>Sensitive stores can only be picked in the app.</Muted>}
+      <Muted style={{ marginBottom: 8 }}>Sensitive stores can only be picked in the app.</Muted>
       {plain.length ? <CheckboxCards id="ns-stores" value={picked} onChange={(v) => { touched.current = true; setPicked(v); }} options={plain.map((s) => ({ value: s.name, title: s.name, sub: [s.empty ? "empty" : "", s.unlocked ? "" : "locked"].filter(Boolean).join(" · ") || "unlocked" }))} />
         : stores.loaded ? <Muted>No (non-sensitive) stores.</Muted>
         : stores.err ? <Muted>{"Could not list the stores: " + stores.err}</Muted>
         : <Flex gap={2} align="center"><Spinner /><Muted>Loading stores…</Muted></Flex>}
-      {!hasShell && <>
+      <>
         <Lbl>Harness</Lbl>
         <RadioCards id="ns-harness" value={harness} onChange={setHarness} options={[
           { value: "claude", title: "Claude Code", sub: "Claude subscription · Claude app" },
           { value: "opencode", title: "OpenCode · OpenRouter", sub: "Paseo app + web UI" },
           { value: "openclaw", title: "claw-code · OpenClaw", sub: "Claude subscription · OpenClaw app + Control UI" },
         ]} />
-      </>}
+      </>
       <Lbl>Repos</Lbl>
       {repoList.length ? <CheckboxCards id="ns-repo" value={repos} onChange={setRepos} options={repoList.map((r) => ({ value: r.name, title: r.repo, sub: r.store }))} />
         : <Muted>No repos yet — add some in Settings → Repos.</Muted>}
       {!!repoList.length && !repos.length && <Muted mt={1}>No repo selected — the session starts with an empty workspace.</Muted>}
       {repoList.some((r) => repos.includes(r.name) && !plain.some((s) => s.name === r.store)) && <Muted mt={1} id="ns-repo-sensitive">
-        {`Pick ${repoList.filter((r) => repos.includes(r.name) && !plain.some((s) => s.name === r.store)).map((r) => r.store).join(", ")} on the ${hasShell ? "next, secure screen" : "app's secure screen"} to push: a sensitive store (or one without a key) isn't pre-selected.`}</Muted>}
+        {`Pick ${repoList.filter((r) => repos.includes(r.name) && !plain.some((s) => s.name === r.store)).map((r) => r.store).join(", ")} on the app's secure screen to push: a sensitive store (or one without a key) isn't pre-selected.`}</Muted>}
       <Lbl>Permission mode</Lbl>
       <RadioCards id="ns-perm" value={perm} onChange={setPerm} options={[
         { value: "auto", title: "Auto", sub: "Auto-approve safe actions; the permission classifier gates the rest." },
