@@ -71,14 +71,23 @@ and everything on the other bucket. A Ceph quirk seen with an earlier credential
 of an existing object may add a delete marker; that hides a backup but loses nothing (the bucket is versioned),
 and the admin key removes the marker.
 
-Making a new one (e.g. after a leak):
+Making a new one (e.g. after a leak, or after a new master key): `infra/backup-read-key.py`, one step at a time,
+with a headed Chrome on CDP port 9333 (`Xvfb :99` + `google-chrome --remote-debugging-port=9333 --disable-quic`;
+the Console logs in with password only) and `HETZNER_USER`/`HETZNER_PASSWORD` (via `pull-secrets --exec` when not
+in the env):
 
-1. Console only (`hetzner-s3` skill in claude-env): Security → S3 credentials → generate, written straight to a
-   mode-600 file `ACCESS_KEY=…` / `SECRET_KEY=…` (never printed); delete the old credential.
-2. Put the new access key as the principal in both bucket policies (admin key); test as above.
-3. `infra/setup.py recovery-keys FILE --credential=NAME` — sealed to `keys/master.pub`, signed by the setup key,
-   kept by the router for the app; it reads the blob back to check. Then delete FILE.
-4. Deyao, in the app: Settings → Recovery kit (or Recovery → Make the recovery kit…) on the iPhone that holds the
+1. `login`, then `generate` — Console only (no API): Security → S3 credentials → a new `jarvis2-backup-read`
+   (the Console accepts the same description twice), written straight to `~/.jarvis2/backup-read.env`
+   (mode 600, never printed).
+2. `policies` — the new access key replaces the old one as the principal in both bucket policies (admin key).
+   Wait a minute, then `test` (the checks above, throwaway names only, cleaned up): seconds after a policy write a
+   multi-delete once went through, a gateway not yet holding the new policy.
+3. `delete-old` — the old credential's row ⋯ → Delete → OK (real mouse clicks; the menu ignores synthetic ones).
+4. `seal` — `infra/setup.py recovery-keys FILE --credential=jarvis2-backup-read`: sealed to `keys/master.pub`,
+   signed by the setup key, kept by the router on its volume for the app (`GET /api/recovery-keys`, behind
+   Deyao's login; `GET /setup/recovery-keys` serves the same blob to the setup session); it reads the blob back
+   to check, then FILE is shredded. Stop the Chrome and delete its profile.
+5. Deyao, in the app: Settings → Recovery kit (or Recovery → Make the recovery kit…) on the iPhone that holds the
    private half of `keys/master.pub` → Make kit (Face ID) → saves the kit string → "I've saved the kit — delete
    the key here". The phone deletes the held key once the kit is saved, so a later new read credential needs a
    new master key pair as well (the page says so: "make a new master key pair and send Claude the public key").
@@ -90,11 +99,17 @@ the public key; the private half stays on that iPhone. Claude then:
 
 1. puts it in `keys/master.pub` and `k8s/apps/core.yaml` MASTER_KEY (nothing of the old key left) and pushes:
    CI rebuilds the session image, Flux restarts the core (a new core; `infra/setup.py identity` gives its words);
-2. re-makes every store backup sealed to it (`setup.py backup …`, `backup-core` with a fresh
-   `infra/fly-token.sh`), minting or rotating every token whose value lived only in the old backups (the GitHub
-   push tokens with `github-web pat-create`, the Access service tokens `jarvis2-store-claude` and `jarvis2-tunnel`
-   with Cloudflare's `rotate`), and deletes the local copies;
-3. makes a new read credential and seals it to the new key (above).
+2. `infra/rebackup.sh` — re-makes every store backup sealed to it, minting or rotating every token whose value
+   lived only in the old backups, and deletes the local copies. The stores and their keys: `default`
+   (LOBSTER_TOKEN OPENROUTER_API EXA_API), `openrouter` (OPENROUTER_API), `github-claude-env`
+   (GITHUB_TOKEN_CLAUDE_ENV: a new PAT `jarvis2-sessions-claude-env-push`), `github-jarvis2` (sensitive;
+   GITHUB_TOKEN_JARVIS2: a new PAT `jarvis2-sessions-jarvis2-push`; `github-web pat-create` deletes the
+   same-name token first), `claude` (JARVIS1_CREDENTIALS_ID/SECRET: Access service token `jarvis2-store-claude`,
+   rotated), `tunnel` (CF_ACCESS_CLIENT_ID/SECRET: `jarvis2-tunnel`, rotated) and `core` (`backup-core` with a
+   fresh `infra/fly-token.sh`). The narrowed Fly token in the old `core` backup can't be revoked on its own (an
+   attenuation of JARVIS2_FLY_TOKEN); it stays sealed to the old key. Old backup versions stay in the versioned
+   bucket;
+3. makes a new read credential and seals it to the new key (above, all five steps).
 
 Deyao then makes the kit on that iPhone, saves it, checks the new 8 words and recovers.
 
