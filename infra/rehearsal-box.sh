@@ -174,6 +174,16 @@ PY
 }
 
 make_box() {
+  # a just-deleted server's primary IP counts against the project's limit for a while: wait and try again
+  for i in $(seq 1 10); do
+    make_box_once > "$W/make.out" 2>&1 && { cat "$W/make.out"; return 0; }
+    cat "$W/make.out"
+    grep -q "primary_ip_limit\|resource_limit_exceeded" "$W/make.out" || return 1
+    echo "the project's IP/server limit: trying again in 30 s"; sleep 30
+  done
+  return 1
+}
+make_box_once() {
   HCLOUD_PROJECT_TOKEN="$HCLOUD_TOKEN" WG_PEER="$NAME" CF_ENV="$W/cloudflare.env" KEYS_OUT="$W/keys" FIREWALL="$NAME" \
     LABELS="{\"role\":\"$NAME\",\"rehearsal\":\"$NAME\",\"session\":\"${SESSION_ID:-none}\"}" \
     SYNC_YAML_FILE="$W/sync.yaml" EXTRA_MANIFEST_FILE="$W/extra.yaml" SERVER_TYPE="${SERVER_TYPE:-cx23}" \
