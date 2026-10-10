@@ -215,7 +215,7 @@ session_check() { # a session with rh-plain + rh-secret (+ the harness's claude,
   for kv in "RH_PLAIN=$V_PLAIN" "RH_SECRET=$V_SECRET" "JARVIS1_CREDENTIALS_ID=$V_CLAUDE" "CF_ACCESS_CLIENT_ID=$V_TUNNEL"; do
     got=""
     for i in $(seq 1 12); do
-      got=$(on_machine "$m" "grep -c -F '${kv#*=}' /home/claude/.secrets || true" 2>/dev/null || true)
+      got=$(on_machine "$m" "grep -E '^(export )?${kv%%=*}=' /home/claude/.secrets | grep -c -F '${kv#*=}' || true" 2>/dev/null || true)  # that key's line holds that value
       [ "$got" = 1 ] && break; sleep 5
     done
     [ "$got" = 1 ] || { echo "FAIL ${kv%%=*} isn't on machine $m with the written value"; exit 1; }
@@ -287,6 +287,9 @@ OLD="$CORE"; sleep 20
 wait_empty "$OLD"
 "$RH" recover "$W/expect.json"
 session_check
+
+step "a session stuck at boot on a locked store is destroyed at once (no 10-minute snapshot wait)"
+"$RH" stuck rh-marked
 
 step "failure 2: the app's restart (the kit ends the core; Kubernetes starts a new one) → Recover"
 "$RH" wipe
