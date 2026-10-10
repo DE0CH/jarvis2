@@ -46,9 +46,11 @@ export function useBusy(): [string | null, (label: string, fn: () => Promise<voi
 // Copy: a value to the clipboard (lib/clipboard: the browser's, or the shell's in the app), with a toast. Not
 // shown where nothing can copy (an old browser): the value stays selectable text there.
 export function CopyButton({ value, what, id, size = 1, label = "Copy" }: { value: string; what: string; id?: string; size?: 1 | 2 | 3; label?: string }) {
+  const [done, setDone] = useState(false);
+  useEffect(() => { if (!done) return; const t = setTimeout(() => setDone(false), 2000); return () => clearTimeout(t); }, [done]);
   if (!canCopy) return null;
-  const run = () => copyText(value).then(() => toast(what + " copied", "ok"), (e: any) => toast("Could not copy: " + (e?.message || e), "error"));
-  return <Button size={size} variant="soft" color="gray" id={id} onPress={run}>{label}</Button>;
+  const run = () => copyText(value).then(() => { setDone(true); toast(what + " copied", "ok"); }, (e: any) => toast("Could not copy: " + (e?.message || e), "error"));
+  return <Button size={size} variant="soft" color={done ? "green" : "gray"} id={id} onPress={run}>{done ? "Copied" : label}</Button>;
 }
 
 // what a conversation ended on (a paused or previous session's card), clamped to three lines

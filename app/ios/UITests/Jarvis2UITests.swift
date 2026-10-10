@@ -287,10 +287,13 @@ final class Jarvis2UITests: XCTestCase {
     el("tab-settings").tap()
     sleep(2)
     shot("settings")
-    // copy (through the shell's clipboard): the toast says so
+    // copy (through the shell's clipboard): the button says Copied and a toast says what
     if el("copy-core-signing").waitForExistence(timeout: 5) {
       el("copy-core-signing").tap()
-      wait(app.staticTexts["Signing key copied"], 5, "copied toast")
+      let toastEl = app.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS %@", "Signing key copied")).firstMatch
+      wait(toastEl, 4, "copied toast")
+      XCTAssertEqual(el("copy-core-signing").label, "Copied", "[\(tag)] the copy button confirms")
+      shot("settings-copied")
     }
     app.swipeUp()
     sleep(1)
