@@ -265,7 +265,8 @@ final class ReplicaUITests: XCTestCase {
     let repo = env["REPLICA_REPO"] ?? ""
     let repoName = String(repo.split(separator: "/").last ?? "")
     if !repo.isEmpty, wait(el("repo-url"), 30, "the repos card") {
-      el("repo-url").tap(); el("repo-url").typeText(repo + "\n")
+      el("repo-url").tap()
+      for c in repo + "\n" { el("repo-url").typeText(String(c)) }   // one key at a time (a burst into the URL keyboard reorders letters)
       if wait(el("secure-repo-go"), 30, "the add-repo page") {
         shot("repo-add")
         faceIDMatches()
