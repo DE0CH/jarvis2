@@ -52,6 +52,19 @@ After a box rebuild, re-run it (the age key is new).
    bucket's read keys from his password manager, and the app restores every store from the backups.
 3. Stores are locked; he unlocks them in the app as needed.
 
+### The backup bucket's read keys
+
+Deyao keeps them as `jarvis2-s3:<access key>:<secret key>` in his password manager, next to the master key. They are
+the Hetzner S3 credential `jarvis2-backup-read` in project "Cloud Code" (2827255), which also holds
+`de0ch-claude-6fdff6`. S3 credentials are project-wide, so bucket policies narrow this one (principal
+`arn:aws:iam:::user/p2827255:<access key>`): on `jarvis2-backup-de0ch` a Deny of every write, delete-version and
+policy/versioning change; on `de0ch-claude-6fdff6` a Deny of everything. Tested: list, get and list versions work;
+put, delete a version, delete the policy and suspend versioning are refused. One gap, a Ceph quirk: a plain delete
+(no version id) is still allowed and adds a delete marker; that hides a backup but loses nothing (the bucket is
+versioned) — remove the marker with the admin key. `NotAction` in these policies is ignored by Hetzner (it let
+everything through), so list the denied actions explicitly. Making a new credential is Console-only
+(`hetzner-s3` skill in claude-env); after making it, update both policies with the new access key.
+
 ## Rebuilding the box
 
 1. Delete the server in the jarvis2 Hetzner project (API or console).
