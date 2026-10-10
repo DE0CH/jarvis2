@@ -223,3 +223,6 @@ stores, filled later by normal writes.
     `fill-stores.sh` re-mints or rotates every Jarvis 2 token in them. A new read credential `jarvis2-backup-read`
     is in the router's secrets (both bucket policies moved to it, the permission test passed, the previous one
     deleted in the Console, no local copy kept).
+57. **The setup session is fully trusted** (Deyao, 2026-10-10: "I don't really care what the setup person can do"). It
+    holds every key's plaintext, so it can put any key in any store, and its signed backups set each store's
+    sensitivity at the next Recover. Sensitivity protects against sessions and the router, not against it.
