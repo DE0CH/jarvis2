@@ -76,10 +76,13 @@ Carried over from the mock (DE0CH/jarvis2-mock DECISIONS.md) unless marked new.
 14. **CI walkthrough** runs twice (light, dark), each against a fresh, empty core + router and a reset simulator
     keychain: Reset or recover (an old kit refused, then Recover with the public TEST kit, the backups through the
     router from the S3 stand-in) → stores (create, unlock; the core's own and the harness's stores hidden, a
-    marker-sensitive store sensitive) → new session → grants (a 10-minute grant and a standing rule signed on the
-    grant page, one forgotten) → schedules (a wakeup, a cron) → terminal → pause → transcript → resume with a prompt
+    marker-sensitive store sensitive) → new session (the one secure page; Start also opens the locked harness store,
+    read back from the core) → grants (chosen on the Grants page; a 10-minute grant and a standing rule allowed on the
+    review page, one denied, one forgotten) → schedules (a wakeup, a cron) → terminal → pause → transcript → resume with a prompt
     → resume with the latest image → destroy → previous (remove) → search → settings → Reset (the TEST kit wipes the
     core, which CI runs in a restart loop as Kubernetes would; a new kit shown, saved, claimed; the stores empty).
+    After each switch to or from a secure page it fails when the screen stays blank for over 1.5 s. transitions.yml
+    records every switch on video (item 42).
 
 16. **The recovery kit format** (what Deyao keeps in the password manager, ONE entry): `jarvis2-kit:2:<master
     key>`, the base64 PKCS#8 DER of the P-256 private key (the body of a PEM "PRIVATE KEY" block, so `openssl pkey`
