@@ -107,7 +107,7 @@ gone (moved to records); `failed` (with `error`).
 
 `claude-records/<yyyy-mm-dd> <title>/` (Jarvis 1's layout; ` 2`, ` 3`… when taken): `transcript-<id>.jsonl`, `artifacts/**`,
 `session.json`, `restore-<session id>.json`, and `jarvis2/snapshot.tar.gz` + `snapshot.sig` (the machine's signature over the
-sha256 hex) + `cert.json` (the signer's core-signed cert) + `core-cert.json` (the master-signed core key). Index:
+sha256 hex) + `cert.json` (the signer's core-signed cert) + `core-cert.json` (the master-signed claim naming the core's key). Index:
 `claude-records/.index/jarvis2-destroyed-sessions.json` (newest first). `RECORDS_OFF=1` (the e2e test) destroys without archiving.
 While a session runs, its transcripts are also copied to `claude-records/.live/<session id>/<uuid>.jsonl` (`POST /m/live-transcript`
 above), deleted on destroy.
@@ -135,27 +135,45 @@ The phone may approve anything; it shows exactly what it signs (`request.stores`
 
 ## The core, relayed (`/api/core/*`)
 
-When the core can't be reached at all (before the first setup its pod doesn't run) every one of these answers 503
-`{error: "the core isn't running", coreDown: true}`; the app's recovery page shows that as a plain note.
-Pass-through to the core's own endpoints, answers unchanged (signed): `GET identity`, `GET core-cert`,
-`POST recover {statement, masterSig, bundle}`, `POST stores {nonce}`, `POST stores/create {name}`, `POST
-stores/mark-sensitive {name}`, `POST stores/write {store}`, `POST unlock/begin {store}`, `POST unlock/finish
-{pending, share}`, `POST lock {id}`, `POST unlocked {nonce}`, `POST log {nonce}`. Formats: `docs/DESIGN.md`,
-`core/core.go`, and the reference client `e2e/main.go`.
+When the core can't be reached at all (its pod restarting, e.g. after a wipe) every one of these answers 503
+`{error: "the core isn't running", coreDown: true}`; the app waits or shows it as a plain note.
+Pass-through to the core's own endpoints, answers unchanged (signed): `GET identity`, `POST stores {nonce}`,
+`POST stores/create {name}`, `POST stores/mark-sensitive {name}`, `POST stores/write {store}`, `POST unlock/begin
+{store}`, `POST unlock/finish {pending, share}`, `POST lock {id}`, `POST unlocked {nonce}`, `POST log {nonce}`, and
+— only from the app's device login (the `cf-access-token` header; 403 otherwise) — `POST claim {statement,
+masterSig, bundle}` and `POST wipe {statement, masterSig}`. Formats: `docs/DESIGN.md`, `core/core.go`, the app's
+`Shell/CoreSetup.swift`, and the reference client `e2e/main.go`.
+
+Setting the core up (Reset and Recover, the app's Reset or recover page):
+
+- `GET identity` → `{signingKey, agreementKey, boxSig, state}`: `boxSig` = the box key's signature over
+  `"jarvis2-core-identity <signingKey> <agreementKey>"` (checked against `keys/box.pub` from GitHub); `state` = a
+  core-signed doc `{"kind":"core-state","master": <the master public key it was set up with, "" while empty>,
+  "phone": {signingKey, agreementKey} | null}`.
+- `claim`: `statement` = the JSON text `{"kind":"claim","master","core":{signingKey,agreementKey},"phone":{…},
+  "bundleSha256"}`, `masterSig` = that master key's base64 DER ECDSA over it, `bundle` = `{stores:[{name, values}],
+  notSensitive:[names]}` sealed to the core's agreement key (ephemeral P-256, HKDF-SHA256 info `"jarvis2/claim"`,
+  AES-256-GCM combined) → the core's signed `{"kind":"claimed","stores": n}`; 409 when the core is set up already.
+  Reset sends no stores; Recover every store from the backups (the `core` store: `FLY_API_TOKEN`).
+- `wipe`: `statement` = `{"kind":"wipe","core": <the core's signing key>}`, signed by the master key the core was
+  set up with → the core's signed `{"kind":"wiping","core"}`, then it exits; a new, empty core follows.
+
+## Backups (`/api/backups`)
+
+`GET /api/backups` → `{bucket, objects: [{key, body}]}`: every object under `stores/` and `sensitive/` in the
+versioned bucket `jarvis2-backup-de0ch`, `body` its text unchanged — `stores/<name>.json` = `{doc, sig}` with `doc`
+= `{"kind":"store-backup","name","sensitive","sealed":{e,data},"at"}` (the values sealed to the master key, HKDF info
+`"jarvis2/backup"`, the store's name as associated data) and `sig` the setup key's ECDSA over `doc`;
+`sensitive/<name>.json` = a signed `{"kind":"store-sensitive","name","at"}` marker. The router reads them with its
+own read credential (router env `BACKUP_READ_ACCESS_KEY/SECRET_KEY`; `BACKUP_ENDPOINT`, `BACKUP_REGION`,
+`BACKUP_BUCKET` default to the production bucket) and answers 503 without it, 502 when the bucket refuses. The app
+checks each `sig` against `keys/setup.pub` (from GitHub) and opens each backup with the master key from the kit.
 
 Unlock, phone side: verify `unlock/begin`'s doc (kind `unlock-begin`, fields `pending, store, e, t`); Face
 ID → Enclave key agreement of the phone's agreement key with `e` → the 32-byte x-coordinate; seal it to `t`:
 ephemeral P-256 key `r`, `x' = x(r·t)`, key = HKDF-SHA256(ikm `x'`, salt empty, info `"jarvis2/unlock-share"`,
 32 bytes), AES-256-GCM combined (`nonce‖ciphertext‖tag`) → `share = {e: base64(r.pub x963), data:
 base64(combined)}` → `unlock/finish {pending, share}`.
-
-## Recovery kit (`/api/recovery-keys`)
-
-`GET /api/recovery-keys` → `{doc, sig}` exactly as the setup session sent it (above); 404 `{missing: true}`
-until it has. The shell's Recovery kit page checks `sig` against `keys/setup.pub` (from GitHub), opens `sealed`
-with the master private key the iPhone holds (made there, never shown alone), tries the keys on the bucket, and
-shows the kit: `jarvis2-kit:1:<master private key,
-base64 PKCS#8 DER>:<access key>:<secret key>`, the one string the Recovery page takes.
 
 ## Setup (`/setup/*`)
 
@@ -166,22 +184,14 @@ against `SETUP_KEY` (`k8s/apps/router.yaml`), within ±2 min, each signature onc
 | Call | Core path |
 |---|---|
 | `GET /setup/identity` | `/identity` |
-| `GET /setup/core-cert` | `/core-cert` |
 | `POST /setup/stores` | `/stores` |
 | `POST /setup/stores/create` | `/stores/create` |
 | `POST /setup/stores/write` | `/stores/write` |
 | `POST /setup/stores/mark-sensitive` | `/stores/mark-sensitive` |
+| `POST /setup/fly-token` | `/fly-token {sealed}`: `{"FLY_API_TOKEN"}` sealed to the core's agreement key (HKDF info `"jarvis2/fly-token"`) → the core's signed `{"kind":"fly-token-set"}`; 409 while the core is empty |
 
-The router's own setup calls (no core behind them):
-
-- `POST /setup/recovery-keys {doc, sig}` — the backup bucket's read keys for the app's recovery kit, as
-  `infra/setup.py recovery-keys` makes them: `doc` = the JSON text `{"kind":"recovery-keys", "bucket",
-  "credential", "sealed":{e, data}, "at"}`, `sig` = the setup key's base64 DER ECDSA over `doc`. `sealed` is the
-  store backups' sealing to the master public key (ephemeral P-256, HKDF-SHA256 info `"jarvis2/backup"`,
-  AES-256-GCM combined) with associated data `"jarvis2/recovery-keys"`, over `{"accessKey","secretKey"}`. The
-  router checks the kind and the setup key's signature, then keeps it on its volume (`<data>/recovery-keys.json`,
-  replacing any earlier one) → `{ok: true}`; 400 for anything else. It can't open it.
-- `GET /setup/recovery-keys` — what the router holds, unchanged (setup.py reads it back after sending).
+`GET /setup/status` — the router's health: the names of its secrets that are set (values never), the session
+image, whether the core answers.
 
 ## Machines (`/m/*`)
 
@@ -192,7 +202,7 @@ off.
 
 | Call | Does |
 |---|---|
-| `GET /m/cert` | `{cert, predecessorCert, coreCert}` — this machine's latest succession cert, the predecessor's cert when it continues a real machine, and the master-signed recovery statement naming the core's key (the machine checks it against the master key built into its image). 404 until certified. |
+| `GET /m/cert` | `{cert, predecessorCert}` — this machine's latest succession cert and the predecessor's cert when it continues a real machine (the machine checks both against the core key the core put in its Fly config, `JARVIS2_CORE_KEY`). 404 until certified. |
 | `GET /m/snapshot` | The predecessor's snapshot: body = tar.gz, header `X-Snapshot-Sig` = base64 signature by the predecessor's signing key over the sha256 of the body. 404 = none. |
 | `POST /m/snapshot` | Upload this machine's snapshot (same format). |
 | `GET /m/restore-snapshot` | A restoring session's first machine only: the archived snapshot, same format, signed by the OLD machine named in `JARVIS2_RESTORE_CERT`. 404 otherwise. |

@@ -11,9 +11,9 @@ made around it; the app's own list is `app/DECISIONS.md`.
    wakeups, terminal, transcript search, content stores, repo picker, Discord channels, the Fly budget cap,
    auto-pause on idle.
 3. **The session image is Jarvis 1's image (pinned by digest)** with `jarvis2-machine` in front: keys, wait for
-   `jarvis2-init`, check the core (master key) and the cert, restore the snapshot, pull the secrets, then Jarvis
-   1's unchanged entrypoint. A second image, `jarvis2-session-test`, is the same with the public TEST master key
-   (`e2e/testdata`), for the end-to-end test and CI only.
+   `jarvis2-init`, take the core's key from the Fly config, check the cert, restore the snapshot, pull the secrets,
+   then Jarvis 1's unchanged entrypoint. One image serves production and the end-to-end test (it names no master
+   key).
 
 ## Security-relevant
 
@@ -34,21 +34,21 @@ made around it; the app's own list is `app/DECISIONS.md`.
 9. **The core waits up to 10 min for a machine to start** (the image's first pull on a Fly host is slow) and
    destroys a machine whose init fails.
 10. **A CI-only fake Fly** (`go build -tags fakefly`) lets the app's CI run the real core and router.
-11. **The identity words** are 8 BIP39 English words over SHA-256 of
-    `"jarvis2-core-identity <signingKey> <agreementKey>"` (88 bits).
-12. **The recovery kit is one password-manager item** (Deyao, 2026-10-10): the master private key and the
-    backup bucket's read keys in one string, made by the app's Recovery kit page (item 46). The phone reads the
-    backups itself, so nothing on the box can reach the bucket.
+11. **The app checks a core's identity itself** (Deyao, 2026-10-10: no words to compare): the box key's signature
+    over `"jarvis2-core-identity <signingKey> <agreementKey>"` against `keys/box.pub` from GitHub, then the core's own
+    signature on its state.
+12. **The recovery kit is one password-manager item, the master private key only** (`jarvis2-kit:2:…`, items
+    46–55).
 13. **Backups:** `stores/<name>.json` (values sealed to the master key, the name as associated data; sensitive
     flag; signed by the setup key) and `sensitive/<name>.json` markers, in the versioned bucket
-    `jarvis2-backup-de0ch`. A store is not sensitive at recovery only if its backup says so and no marker exists.
+    `jarvis2-backup-de0ch`. A store is not sensitive after a Recover only if its backup says so and no marker exists.
 14. **The box changes only through git:** no SSH (sshd off, a throwaway key so Hetzner mails no root
     password), no k8s API from outside, a Hetzner firewall with no inbound rules. Flux applies as a limited
     identity (admin in the three Jarvis 2 namespaces only). Secrets (tunnel token, WireGuard peer, box key)
     arrive once in user-data; Hetzner keeps serving user-data from the metadata address, which every pod's
     network policy blocks.
 15. **The core restarts only when `core/` changes** (CI pins its image separately), because a restart means a
-    recovery.
+    new, empty core that Deyao sets up again.
 
 ## Infra
 
@@ -152,8 +152,8 @@ made around it; the app's own list is `app/DECISIONS.md`.
     snapshot with its core-signed cert, which such a folder doesn't have.
 42. **Search and the iCloud index stay Jarvis 1's** (as PLAN.md "Later" says for retirement): the app's Search tab is
     forwarded with the router's confined `jarvis2-services` token, not reimplemented.
-43. **When the core can't be reached the router answers 503 `{coreDown}`** (it said 502 "core unreachable"): before the
-    first setup that is the normal state, and the app's recovery page shows it as a note with the master-key button.
+43. **When the core can't be reached the router answers 503 `{coreDown}`** (it said 502 "core unreachable"): while
+    its pod restarts (after a wipe) that is the normal state, and the app waits or shows it as a plain note.
 44. **Lease pills are not in the app**: leases are forwarded to Jarvis 1, which doesn't accept Jarvis 2 sessions yet
     (PLAN.md "Later"), so no Jarvis 2 session can hold one and the pill would never show.
 45. **A new line's challenge carries a random salt** (`Request.salt`, core.go Succession): the nonce is the request's
@@ -161,38 +161,65 @@ made around it; the app's own list is `app/DECISIONS.md`.
     get the same nonce and the second failed with "this approval was already used". Fixed before the first recovery
     (a core change restarts the core). Successors don't need it: each predecessor is succeeded once.
 
-## Recovery kit, 2026-10-10
+## Reset and Recover, 2026-10-10
 
-46. **The read keys travel sealed, through the router; the kit is made on the phone.** Deyao: no secret over
-    Discord; one string to save. The setup session seals the credential to `keys/master.pub` with the store
-    backups' own sealing (associated data `jarvis2/recovery-keys`, so no store backup can pass for it), signs the
-    document with the setup key (`infra/setup.py recovery-keys`), and the router keeps it (`<data>/recovery-keys.json`,
-    the router's volume — not the bucket, which the keys are needed to read; not the core, which would mean a core
-    change and a restart). The shell checks the setup key against `keys/setup.pub` from GitHub (like `box.pub`) and
-    the master key against `keys/master.pub`, opens the keys, lists the bucket with them, and shows
-    `jarvis2-kit:1:<master PKCS#8 DER base64>:<access>:<secret>` (readable parts, colon-separated: base64 and the
-    access key carry no colon; versioned). The router can only withhold or replay an earlier signed blob; a
-    revoked credential then fails the bucket check, so a replay can't plant a key, only stall. A box rebuild
-    loses the blob, which doesn't matter: the kit already holds the keys. Recovery takes only the kit (the
-    separate fields and `jarvis2-s3:` are gone). The master key comes only from the phone that made it (item 48).
-47. **A new read credential `jarvis2-backup-read`** replaced the revoked one (same name, the old one was gone),
-    narrowed as RUNBOOK says; 9 more Deny actions than before (version ACL/tagging, logging, notification,
-    replication, website, public-access block). It was sealed for Deyao and every local copy deleted.
-48. **The master private key is never shown on its own** (Deyao, 2026-10-10: "I don't think I should be seeing a
-    private key because the string I need to copy is negotiated afterward"). "Make a master key pair" shows only
-    the public half; the private half goes into the shell's Keychain (`HeldMaster`: this device only, never
-    synced, Face ID on every read on a real iPhone; its public half kept beside it so pages can compare it with
-    `keys/master.pub` without Face ID). The Recovery kit page makes the kit from it and, when Deyao taps "I've
-    saved the kit — delete the key here", deletes it: the kit is then the only copy. Chosen: delete on that
-    confirmation, not on Copy (a copy that never reached the password manager would lose the key); one held key
-    at a time (a new pair replaces it, after a confirm). No page shows or takes a bare master
-    key (clean cut). The CI walkthrough holds the public TEST key as if made on the simulator (code compiled only
-    with `JARVIS_CI`).
-49. **A new master key (Deyao, 2026-10-10), the old core not recovered** (it held no stores): `keys/master.pub` and
-    MASTER_KEY replaced, the core restarted as a new core, every backup re-made sealed to the new key with fresh
-    tokens (GitHub push tokens re-minted, `jarvis2-store-claude` and `jarvis2-tunnel` rotated, a new narrowed Fly
-    token), a new read credential sealed to the new key and the previous one revoked. The old backup versions stay
-    in the versioned bucket, sealed to the old key: every Jarvis 2 token in them is dead; the Jarvis 1 values in
-    `default`/`openrouter` (LOBSTER_TOKEN, OPENROUTER_API, EXA_API) are the same as in the new backups. The previous narrowed Fly token
-    can't be revoked on its own (a macaroon attenuated from `JARVIS2_FLY_TOKEN`); it is sealed to the old key
-    only.
+Deyao: "There are two paths, one is reset/make new, and the other is recover, an ai shouldnt be involved in either
+path." His four answers: an empty core takes the master public key from the logged-in app; the router holds the
+backup bucket's read credential and the kit is just the master key; no words to compare; Reset starts with empty
+stores, filled later by normal writes.
+
+46. **A core starts empty and is claimed once** (`claim`): a statement naming a master public key, the core and
+    the phone, signed by that master key, with a bundle sealed to the core (none for Reset, the backups for
+    Recover). One primitive serves both paths. The core keeps that master key for its life and shows it in its
+    signed state. **Trade-off:** an empty core takes the first valid claim. The router admits claims only from the
+    app's device login (Deyao's Access login, carried as `cf-access-token`, which no browser tab sends), and the
+    app refuses a core set up with another master key; such a core can hold none of Deyao's stores (the backups
+    are sealed to his master key, and every approval needs his phone), and a restart from git empties it.
+47. **A set-up core ends only with its own master key** (`wipe`, the safe default asked for): the core answers,
+    then exits, and Kubernetes starts a new, empty core: the same as an infra restart, with no partial wipe to get
+    wrong (the used/killed sets, certs and unlocks all go with the process). Reset and Recover on a set-up core
+    both ask for its kit first. Not chosen: letting the phone pinned at the claim end the core without the kit
+    (that would make a Reset possible from the phone alone; change: accept the claim's phone key in `Wipe`).
+    Without the kit, the `jarvis2/restart` annotation in `k8s/apps/core.yaml` empties the core (a commit).
+48. **Machines trust the core that creates them**: the core puts its signing key in the machine's Fly config
+    (`JARVIS2_CORE_KEY`, overriding anything the router sends), and the machine checks every cert against it.
+    Only the core's narrowed token and the setup session's org token can create or change machines in the app;
+    the router's is read-only. This replaces the master key built into the image and the master-signed core cert
+    the machine used to check, so there is one session image (no test image) and no master key in git or
+    `core.yaml`.
+49. **The Fly token**: the Fly app is a constant in the core (`FlyApp`), so a token can only ever act on Deyao's
+    app; it comes in a Recover bundle (the `core` store's `FLY_API_TOKEN`) or sealed to the core by the setup
+    session (`/setup/fly-token`, `setup.py backup-core`, which also writes the backup). The core's
+    `set_fly_token` is open, like `write_store`: a wrong token (even the router's read-only one) can only make
+    starts fail, which the router can do anyway.
+50. **The router serves the backups** (`GET /api/backups`) with its own read credential (`jarvis2-backup-read`, a
+    second SOPS Secret `router-secrets-backup`, so it can be set without re-entering the other router secrets).
+    **Trade-off:** the router can withhold a backup or serve an older signed version (the bucket is versioned).
+    It can't read, change or forge one. The one effect beyond a stale or missing store: dropping a
+    `sensitive/<name>` marker (or serving a store's backup from before it was marked) brings that store back not
+    sensitive. Accepted as Deyao chose this split; the app's Stores page shows each store's sensitivity, and
+    marking one again is one tap.
+51. **The kit is `jarvis2-kit:2:<master private key, base64 PKCS#8 DER>`**; a version-1 kit is refused with "This
+    recovery kit is from an older Jarvis 2 and doesn't work any more." The master private key lives only in the
+    setup page's memory: Reset shows the kit first and claims only on "I've saved it" (a failed claim keeps the
+    same kit for a retry; leaving the page before claiming means nothing was claimed, and the next Reset shows a
+    new kit). A pasted kit is forgotten when the page goes or after 10 minutes; Copy puts the kit on this device's
+    clipboard only, for 2 minutes.
+52. **What the app pins**: at the claim, the core's keys and its own master public key (Keychain, this device only).
+    The page names the core's state from the signed state: empty, set up on this iPhone, set up with this kit for
+    another iPhone (e.g. after a reinstall), or set up with a different kit. A core set up here but never pinned
+    (the app ended between the claim and the pin) is pinned on the next visit.
+53. **The setup session needs a set-up core**: `infra/setup.py` learns the master public key and the phone's keys
+    from the core's signed state (box key first) and writes nothing to an empty core; `infra/fill-stores.sh` fills
+    every store after a Reset (core and backup, tokens minted or rotated). `setup.py recovery-keys`,
+    `/setup|/api/recovery-keys`, the sealed blob and `keys/master.pub` are gone; the blob an earlier router kept
+    on its volume (`recovery-keys.json`) is unread.
+54. **The earlier build's held master key is deleted** from the iPhone's Keychain at launch (it went into the
+    version-1 kit; no core trusts it).
+55. **Settings has one entry**: "Jarvis 2" (running or not) with "Reset or recover…"; the core's keys are no longer
+    shown. The app opens the page by itself when it isn't set up from this iPhone or the core has changed.
+56. **This change restarted the production core** (a `core/` change): it held no stores, and it is now empty, waiting
+    for Reset. The backups sealed to the previous master key stay in the versioned bucket; the next
+    `fill-stores.sh` re-mints or rotates every Jarvis 2 token in them. A new read credential `jarvis2-backup-read`
+    is in the router's secrets (both bucket policies moved to it, the permission test passed, the previous one
+    deleted in the Console, no local copy kept).

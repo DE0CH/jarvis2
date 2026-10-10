@@ -38,21 +38,23 @@ changes nobody can see — no single compromised component is enough.
 - **Router/manager (outside the core):** chains core primitives into useful actions and exposes them as an
   API; decides whether a challenge goes to the iPhone or to an automatic approval. Untrusted: a bug can only
   fail or crash.
-- **iPhone:** the highest privilege: approves any challenge after Deyao's click on a hardened path; runs recovery.
+- **iPhone:** the highest privilege: approves any challenge after Deyao's click on a hardened path; sets the core
+  up (Reset or Recover).
 - **Session machine (Fly):** its image generates at boot an **encryption key pair** and a **signing key pair**;
-  private halves never leave the machine. The image has the **master public key** built in.
+  private halves never leave the machine. It trusts the core that created it: the core puts its signing key in
+  the machine's Fly config.
 - **Box key:** made by the trusted setup session when it creates the box and delivered in Hetzner user-data
   (the only channel into the box we already trust); its public half is in git. On the box it is a secret only
   the core's namespace reads, and the core signs its fresh public keys with it, so its identity can travel as
   plain text through anything untrusted. (Hetzner keeps serving user-data from the metadata address; every pod
   is blocked from it.)
-- **Master key pair:** made on Deyao's iPhone, which shows only the public half (he sends it to Claude; it goes
-  into git and the session image). The private half is never shown on its own: it stays in the shell's Keychain
-  (this device only, Face ID) until the recovery kit is made from it, and once Deyao has saved the kit (in his
-  password manager, the one Jarvis 1 already uses) the phone deletes it, so the kit is its only copy; it is used
-  only on the iPhone during recovery. It is the root of trust for machines (a core is trusted when the master key
-  has signed its keys) and the key the backups are encrypted to. A new master key means a new core, every backup
-  sealed again and a new kit.
+- **Master key pair:** made by the app at **Reset**. Its private half exists only inside the **recovery kit**,
+  the one string Deyao saves in his password manager (the one Jarvis 1 already uses); the app holds it in memory
+  only while it sets the core up (Reset, Recover, or ending a set-up core). Its public half goes to the empty core
+  in a claim the master key signs, and the core keeps it until it ends. It is the key the backups are encrypted to,
+  and what the app checks a core against: a core set up with another master key is refused. A new master key
+  (Reset) means a new core, empty stores filled again, and a new kit. Nothing in git, the core's manifest or the
+  session image names it.
 
 ## Records
 
@@ -83,8 +85,10 @@ machines, and run exactly one command inside a machine, `/usr/local/bin/jarvis2-
 
 | Primitive | Does |
 |---|---|
-| `identity()` | Its public keys, signed with the box key. |
-| `recover(statement, masterSig, bundle)` | Once per core. The master key's signature over a statement naming this core and the phone's keys; the bundle (sealed to the core) carries every store — each wrapped to `P + K` at once, no plaintext kept — the store named `core`, whose Fly token the core keeps for its whole life (never a session's store), and the names of the stores that are not sensitive. |
+| `identity()` | Its public keys, signed with the box key, and its own signed state: the master public key it was set up with (none while empty) and the phone's keys. |
+| `claim(statement, masterSig, bundle)` | Once per core, on an empty core: Reset and Recover. The statement names a master public key, this core and the phone's keys, and that master key signs it; the core keeps both keys for its life. The bundle (sealed to the core) carries the stores — none for a Reset; for a Recover every store from the backups, each wrapped to `P + K` at once (no plaintext kept), the store named `core`, whose Fly token the core keeps for its whole life (never a session's store), and the names of the stores that are not sensitive. Who may claim is the router's business (Deyao's app only). |
+| `wipe(statement, masterSig)` | The current master key's signature over a statement naming this core: the core answers and exits; Kubernetes starts a new, empty core. Nothing else empties a set-up core except a restart from git. |
+| `set_fly_token(sealed)` | The Fly token, sealed to the core (the setup session, after a Reset). Open: the core calls Fly only for its own app, fixed in its code, so a wrong token can only fail. |
 | `create_store(name)` | Once per name: an empty, non-sensitive store. Open. |
 | `mark_sensitive(name)` | The one-way upgrade: the name leaves the non-sensitive set. Open. |
 | `write_store(contents)` | New contents for a store, already wrapped to `P + K` by the writer. Open (the router guards it). |
@@ -103,61 +107,63 @@ machines, and run exactly one command inside a machine, `/usr/local/bin/jarvis2-
 
 A succession from null is approved only by the phone: every new line starts with Deyao's click.
 
-**State, in memory only:** its own key pairs, the phone's public keys, the Fly token, the stores, the
-non-sensitive set, the unlocked stores' plaintext, the pending unlocks, and append-only sets — **killed**
+**State, in memory only:** its own key pairs, the master and phone public keys (from the claim), the Fly token,
+the stores, the non-sensitive set, the unlocked stores' plaintext, the pending unlocks, and append-only sets — **killed**
 (Fly-confirmed), **used** (predecessors continued or burnt), **spent** approvals, **certified** machines. What
 it **trusts** about others (the phone's and the master's public keys, the box key's signature) needs no
 secrecy; what it uses to **prove itself** (its private keys, the Fly token) never leaves it.
 
-**Restart = a new core,** brought back by recovery. Nothing is reloaded from the box's disk.
+**Restart = a new, empty core,** set up again from the iPhone (Reset or Recover). Nothing is reloaded from the
+box's disk.
 
 ## Writing stores and their backups
 
 A store is written **outside the core** by a trusted writer (the setup session today, later the app): the
 values under a fresh data key, the key wrapped to `P + K` (the phone's and the core's public agreement keys,
-from the master-signed core cert), handed to the core's open `write_store`. The router decides who may write.
-The writer also writes the backup: the values encrypted to the **master public key** and signed by the writer,
+from the core's signed state, its keys checked against the box key), handed to the core's open `write_store`.
+The router decides who may write. The writer also writes the backup: the values encrypted to the **master public
+key** the core was set up with (from the same signed state) and signed by the writer,
 in Deyao's Hetzner Object Storage, bucket `jarvis2-backup-de0ch`, **versioned** (an overwrite or a delete keeps
 every old version; no true wipe is designed — if one is ever needed, Deyao deletes versions in S3 by hand),
 plus a signed marker for every store made sensitive.
 
-## Recovery (a fresh core, on the iPhone)
+## Setting a core up: Reset and Recover (on the iPhone)
 
-1. The new core makes its keys and signs its public keys with the box key.
-2. The app's **recovery page** fetches that statement (through the router), checks the box-key signature
-   against `keys/box.pub` from GitHub, and shows the core's identity as **8 words** (BIP39 English list over
-   the SHA-256 of its public keys). Nothing goes on unless the signature checks.
-3. Deyao pastes his **recovery kit** from his password manager: one string holding the master private key and
-   the backup bucket's read keys (below). The app checks its master key against `keys/master.pub` from GitHub.
-4. The phone reads the backups, checks their writers' signatures, decrypts them with the master key, signs a
-   statement naming the core's keys, its own keys and the bundle's hash with the master key, and sends the
-   bundle (every store, the `core` store with the Fly token, the names that aren't sensitive) sealed to the
-   core. The core wraps every store to `P + K` at once; plaintext lives on the phone and in that one call, well
-   inside a 10-minute cap (the phone may drop offline).
-5. The phone forgets the master key. Stores are locked; Deyao unlocks them as usual. Machines and the app now
-   trust that core through the master key's signature.
+Two paths, nothing else, and neither needs Claude or waits on anything Claude does (Deyao, 2026-10-10). Both
+live on one secure page of the shell ("Reset or recover"), which first checks the core itself: the box key
+(`keys/box.pub`, fetched from GitHub, never from the router) signed its keys, and the core signed its state. The
+page says only what Deyao acts on; errors are one plain sentence with the details folded away.
 
-The first setup is a recovery from empty backups plus the `core` store.
+- **Reset (make new):** the app makes a master key pair in memory and shows the **recovery kit**
+  `jarvis2-kit:2:<master private key>` with Copy and "I've saved it". On that, it signs a claim naming the
+  master public key, the core's keys and its own, with an empty bundle, and the empty core takes it. The stores
+  start empty; the setup session fills them later by normal writes (`infra/setup.py write`, which learns the
+  master public key from the core's signed state) and sends the core its Fly token (`backup-core`).
+- **Recover:** Deyao pastes his kit. The app fetches the backups through the router (which holds the bucket's
+  read credential and passes the objects on as they are), checks each writer's signature (`keys/setup.pub`
+  from GitHub), decrypts them with the master key, and claims the empty core with the same statement and a
+  bundle of every store (the `core` store with the Fly token, the names that aren't sensitive), sealed to the
+  core. The core wraps every store to `P + K` at once; plaintext lives on the phone and in that one call, well
+  inside a 10-minute cap.
 
-**The recovery kit** (Deyao, 2026-10-10: no secret ever reaches him over Discord; the core and the iPhone
-negotiate, and he saves one string). The backup bucket's read keys are a Hetzner S3 credential that only the
-Console can make, so the setup session makes it, seals it to the **master public key** (the store backups'
-sealing, associated data `jarvis2/recovery-keys`), signs it with the **setup key**, and sends it through the
-router (`/setup/recovery-keys`), which keeps the blob on its volume and can't open it. The app's **Recovery
-kit** page — a secure page of the shell, never the React Native extension — fetches it, checks the setup key's
-signature against `keys/setup.pub` from GitHub, takes the master private key this iPhone holds (Face ID; held in
-the Keychain since "Make a master key pair" showed Deyao only its public half), checks it against
-`keys/master.pub`, opens the keys, tries them on the bucket, and shows **one string** to save: `jarvis2-kit:1:<master
-private key>:<access key>:<secret key>` — the only secret Deyao ever sees. When he confirms it is saved, the phone
-deletes the held key. A phone that holds no private key for `keys/master.pub` says so and offers a new pair (whose
-public key Deyao sends to Claude). Recovery takes only the kit string. The router can withhold the blob or serve an older one
-(signed too), never a key of its own; an older one whose credential was revoked fails the bucket check. A new
-read credential means a new kit: the setup session seals it the same way and Deyao makes the kit again.
+Either way the app pins the core's keys and its own master public key, then forgets the master private key. From
+then on it refuses a core set up with another master key, or for another phone. Stores are locked; Deyao unlocks
+them as usual.
+
+**A core that is already set up** takes neither path: Reset or Recover first asks for the kit it was set up with
+and sends `wipe` signed by that master key; the core exits and a new, empty one takes its place. Without that kit
+(a lost kit, or a core someone else claimed first) the core is emptied only by a restart from git (the
+`jarvis2/restart` annotation in `k8s/apps/core.yaml`).
+
+**The router's part** is to admit a claim or a wipe only from the app's device login and to serve the backups.
+It can withhold a backup or serve an older signed version (the bucket is versioned), never read, change or forge
+one: each is sealed to the master key and signed by the setup key. The bucket's read credential is the router's
+own (a Hetzner S3 credential narrowed to reads of the backup bucket by bucket policies), set once with the box.
 
 ## The box
 
 It takes changes only from git: no SSH, no reachable k8s API, no inbound port; everything arrives through
-Flux from the public repo. A box git can't fix is replaced, then recovered as above. Session machines reach
+Flux from the public repo. A box git can't fix is replaced, then set up again as above (Recover). Session machines reach
 the router over Fly's private network (the box is a WireGuard peer of the org), not through Cloudflare, so no
 credential on a machine opens anything on the edge.
 
@@ -168,9 +174,9 @@ comes from signatures at both ends. **Rule: everything that leaves the core is s
 challenge, cert and answer (including lists and errors), with the caller's nonce where freshness matters.
 
 - **Core → iPhone:** every challenge (and the store list, burn certs, `list_unlocked` answers) is signed by the
-  core. The phone verifies the core's signature against the core key it signed in recovery.
+  core. The phone verifies the core's signature against the core key it pinned when it set the core up.
 - **iPhone → core:** every response is signed by the phone's Secure Enclave key under Face ID. The core
-  verifies it against the phone's public key from recovery.
+  verifies it against the phone's public key from the claim.
 
 So the router can delay, drop or replay messages, but can't forge or alter one without the signature check
 failing.
@@ -178,7 +184,7 @@ failing.
 ## Sensitive stores
 
 Sensitivity lives in the core and only grows: `create_store` makes the only non-sensitive stores (besides
-recovery), `mark_sensitive` takes one out of the set for good, a store the core never created is sensitive.
+a Recover), `mark_sensitive` takes one out of the set for good, a store the core never created is sensitive.
 The core marks sensitive stores in every challenge it signs, so the phone learns them from the core, never
 from the router: a sensitive store is never pre-selected by the normal-mode UI or the web, is chosen by Deyao
 himself on the secure page, and any approval that includes one shows an obvious warning before Face ID.
@@ -223,9 +229,10 @@ one that decrypts.
 ## Machine side (in the image)
 
 Boot makes the machine's keys and waits. `jarvis2-init` (run by the core through Fly, no arguments) prints the
-public keys and lets boot go on: it fetches its core-signed succession cert and the master-signed core key
-through the router, checks the core key against the built-in master public key, the cert against the core key
-and that the cert names its own keys; if the predecessor is a real machine it fetches the snapshot and checks
+public keys and lets boot go on: it takes the core's key from its own Fly config (the core sets it when it creates
+the machine; only the core's token, and the setup session's org token, can create or change machines in the app,
+the router's is read-only), fetches its core-signed succession cert through the router, checks it against the
+core key and that it names its own keys; if the predecessor is a real machine it fetches the snapshot and checks
 it against the predecessor's signing key from the cert. Then it starts the harness from the cert's options and
 pulls its secrets. Any failed check → start nothing.
 
@@ -268,7 +275,7 @@ limit and start-up time.
 
 - A key store reaches a machine only through a succession: from null (Deyao's click), or from a killed,
   never-used predecessor (exact match automatically, or with Deyao's click when something changed).
-- Plaintext stores exist only in the core's memory: unlocked ones until locked, and during recovery for at most
+- Plaintext stores exist only in the core's memory: unlocked ones until locked, and during a Recover for at most
   10 minutes. The Fly token is the one secret the core keeps in memory for its whole life.
 - A session's line can't fork: each predecessor is used at most once (succession and burn both consume it).
 - A bug or compromise outside the core (router, Jarvis, the box) can block or fail actions, never move a store

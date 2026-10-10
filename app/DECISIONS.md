@@ -29,14 +29,19 @@ Carried over from the mock (DE0CH/jarvis2-mock DECISIONS.md) unless marked new.
    "Mark sensitive…" with an inline confirm (one way), and **New store** (a name → `stores/create`: empty,
    not sensitive; the setup session writes its values). Lock needs no Face ID. The React Native Stores tab and
    the web page list the stores unverified, view only.
-6. **Recovery page in the shell (replaces pairing).** It opens by itself at launch when no core is pinned,
-   or when the router reports a core other than the pinned one ("Later" leaves it; the app can still view,
-   nothing can be signed); also from Settings → Recovery. It shows the core's identity as 8 words only after
-   checking the box key's signature (keys/box.pub from GitHub), then takes the kit (item 16), reads, checks
-   and decrypts the backups, and sends the master-signed statement + the sealed bundle to
-   `api/core/recover`. On the core's signed `recovered` it pins the core's two keys in the shell's Keychain
-   and forgets the kit. The keys pinned are the ones the box vouched for and the core accepted the master's
-   statement about — never taken from the router alone.
+6. **Reset or recover: one page in the shell** (Deyao, 2026-10-10: two paths, no one else involved). It opens by
+   itself at launch when this iPhone hasn't set a core up, or when the router reports a core other than the pinned
+   one (Back leaves it; the app can still view, nothing can be signed); also from Settings → "Reset or recover…".
+   It first checks the core: the box key's signature on its keys (`keys/box.pub` from GitHub), then the core's
+   signature on its state. **Reset** shows a new kit with Copy and "I've saved it", then claims the empty core with
+   no stores; **Recover** takes the kit, reads the backups through the router (`api/backups`), checks and opens them,
+   and claims the empty core with every store. A core that is set up asks first for the kit it was set up with and
+   wipes it (the page waits for the new, empty core). On the core's signed `claimed` the page pins the core's keys
+   and its own master public key and forgets the master key. Errors are one plain sentence, the technical part
+   behind "Details". Copy (`CoreSetup.swift`, `SetupPage.swift`): "Jarvis 2 is empty. Choose one:" / "Jarvis 2 is
+   set up on this iPhone." / "…set up with your recovery kit, for another iPhone." / "…set up with a different
+   recovery kit."; Reset "Start fresh with a new recovery kit. Everything starts empty."; Recover "Bring everything
+   back with the recovery kit in your password manager."
 7. **Phone keys:** two Secure Enclave P-256 keys (signing + key agreement), `.biometryAny`, Face ID on every
    use; public keys made at first launch without Face ID. The **simulator** uses software keys (its Face ID
    can't be driven from CI); the secure banner says which.
@@ -63,47 +68,42 @@ Carried over from the mock (DE0CH/jarvis2-mock DECISIONS.md) unless marked new.
 15. **React Native's frameworks sit in the app's `Frameworks/`**, not inside the extension (App Store
     validation refuses an extension that carries its own); the extension loads them via its rpath. The shell
     binary links none of them.
-14. **CI walkthrough** runs twice (light, dark), each against a fresh core + router and a reset simulator
-    keychain, because a core is recovered once: recovery (words checked against the core's log) → stores
-    (create, unlock; the core's own and the harness's stores hidden, a marker-sensitive store sensitive) → new
-    session → grants (a 10-minute grant and a standing rule signed on the grant page, one forgotten) →
-    schedules (a wakeup, a cron) → terminal → pause → transcript → resume with a prompt → resume with the latest
-    image → destroy → previous (remove) → search → settings (a copy) → the master key page (a new pair: only its
-    public half shown, and the kit page offers no kit for it). The walkthrough starts from the public TEST key held
-    as if made on the simulator (`HeldMaster.ciSeed`, `JARVIS_CI` builds only), makes the kit and deletes the key.
+14. **CI walkthrough** runs twice (light, dark), each against a fresh, empty core + router and a reset simulator
+    keychain: Reset or recover (an old kit refused, then Recover with the public TEST kit, the backups through the
+    router from the S3 stand-in) → stores (create, unlock; the core's own and the harness's stores hidden, a
+    marker-sensitive store sensitive) → new session → grants (a 10-minute grant and a standing rule signed on the
+    grant page, one forgotten) → schedules (a wakeup, a cron) → terminal → pause → transcript → resume with a prompt
+    → resume with the latest image → destroy → previous (remove) → search → settings → Reset (the TEST kit wipes the
+    core, which CI runs in a restart loop as Kubernetes would; a new kit shown, saved, claimed; the stores empty).
 
-16. **New: the recovery kit format** (what Deyao keeps in the password manager, ONE entry):
-    `jarvis2-kit:1:<master key>:<access key>:<secret key>`, the master key being the base64 PKCS#8 DER of the
-    P-256 private key (the body of a PEM "PRIVATE KEY" block, so `openssl pkey` reads it), the other two the
-    read credentials for `jarvis2-backup-de0ch` at `https://fsn1.your-objectstorage.com`, region fsn1 (endpoint
-    and bucket are built in, not part of the kit). Whitespace and line breaks in a paste are ignored. The kit is
-    the only form the master private key is ever shown in. A pasted kit lives only in the page's memory: wiped
-    on success, on leaving the page, and 10 minutes after it was pasted.
-17. **New: master key page** (Settings → Master key, the recovery page, or the kit page when no matching key is
-    held): "Make a master key pair" makes a P-256 pair in software on the iPhone (it must go into the kit, so not
-    the Enclave) and shows ONLY the public key (base64 X9.63, for keys/master.pub) with Copy, and whether it is
-    keys/master.pub yet. The private half is kept in the shell's Keychain (`HeldMaster`, PhoneKeys.swift: this
-    device only, not synced, Face ID on every read on a real iPhone; the simulator has no Face ID) and is never
-    displayed. Coming back shows the held key's public half again; a different pair only after a confirm (it
-    deletes the held one).
+16. **The recovery kit format** (what Deyao keeps in the password manager, ONE entry): `jarvis2-kit:2:<master
+    key>`, the base64 PKCS#8 DER of the P-256 private key (the body of a PEM "PRIVATE KEY" block, so `openssl pkey`
+    reads it). Whitespace and line breaks in a paste are ignored; a `jarvis2-kit:1:` kit is refused with a plain
+    sentence. The master key is made in software (it must go into the kit, so not the Enclave) and exists only in the
+    setup page's memory and in the kit. A pasted kit is wiped on success, on leaving the page, and 10 minutes after
+    it was pasted.
+17. **The earlier master key page, held key and kit page are gone**; the app deletes the held key an earlier build
+    kept in the Keychain at launch.
 18. **New: what the shell trusts comes from GitHub, not the router**: `keys/box.pub` (the core's identity) and
     `keys/setup.pub` (the backups' signatures) are fetched from
-    `https://raw.githubusercontent.com/DE0CH/jarvis2/main/keys/` when needed (no cache). The backups are read
-    straight from the bucket (S3 SigV4 with CryptoKit's HMAC, no AWS SDK). Only a CI build can point both
-    elsewhere: the code that reads the overrides is compiled only with `JARVIS_CI` (`JARVIS_CI_FLAG`, set on
+    `https://raw.githubusercontent.com/DE0CH/jarvis2/main/keys/` when needed (no cache). The backups come through
+    the router, which can't read or change them (sealed to the master key, signed by the setup key). Only a CI build
+    can point the key source elsewhere: the code that reads the overrides is compiled only with `JARVIS_CI` (`JARVIS_CI_FLAG`, set on
     the simulator job's xcodebuild line), and the TestFlight job fails if the archive's Info.plist carries
     any override.
 19. **New: the S3 stand-in in CI is `rclone serve s3`** (MinIO's downloads are gone, HTTP 410; moto doesn't
     check signatures) — it checks SigV4, so a wrong secret fails as on Hetzner. `ios/ci/standin.py` seeds it
     by calling infra/setup.py's own `backup` / `mark_sensitive_backup` with a per-run setup key and the public
-    TEST master key; extra buckets hold a backup signed by another key and one without the core store (both
-    must be refused). The keys are served by a local `http.server`.
+    TEST master key, and the router on the runner reads it; extra buckets hold a backup signed by another key (must
+    be refused) and one without the core store (accepted: the token comes later). The keys are served by a local
+    `http.server`.
 20. **New: harness stores are hidden** (GET `api/policy`): not offered in any picker, left out of the
     session/record/approval summaries; the secure approval page still lists them (badged "Harness") since
     they are part of what is signed. The `core` store never shows (the core keeps it out of its list).
-21. **The `core` store must be in the backups** (`infra/setup.py backup-core`): recovery refuses without it.
+21. **The `core` store may be missing from the backups**: a Recover goes on, and the setup session sends the core
+    its Fly token (`infra/setup.py backup-core`).
 22. **Backups are refused whole** when any object under `stores/` or `sensitive/` isn't signed by the setup
-    key, names another store, or doesn't open with the master key: a tampered bucket stops the recovery rather
+    key, names another store, comes twice, or doesn't open with the master key: a tampered bucket stops the Recover rather
     than quietly dropping a store.
 
 23. **New: grants are signed on a shell page, never from text the React Native UI hands over.** There is no
@@ -187,28 +187,16 @@ Carried over from the mock (DE0CH/jarvis2-mock DECISIONS.md) unless marked new.
     Sessions and Previous tabs (filtering cards by transcript) isn't ported.
 37. **New: copy buttons through the shell.** The extension carries no clipboard module (a pod wouldn't embed into
     the ExtensionKit target, lessons/73), so React Native asks the shell over XPC (`ShellBridge.copyText` →
-    `HostService.copyText`), which writes `UIPasteboard` in the foreground app (plain text, ≤ 64 KB; the master kit
+    `HostService.copyText`), which writes `UIPasteboard` in the foreground app (plain text, ≤ 64 KB; the recovery kit
     keeps its own local-only, expiring copy). The web page uses the browser's clipboard. Copy appears on the Remote page
-    (web UI link, pairing link — now in the app too), Settings → Core (both keys), a session's More menu (its id) and an
-    iCloud file's path; a toast says what was copied.
+    (web UI link, pairing link — now in the app too), a session's More menu (its id) and an iCloud file's path; a toast
+    says what was copied.
 38. **New: the Claude app's title names the session** (`serverTitle`, read by the machine): cards, Discord channels and
     archive folders follow a rename in the Claude app, as in Jarvis 1. **Previous** hides Restore for an archive indexed
-    by hand (`POST api/records`: no signed snapshot) and says why. **Recovery** shows "The core isn't set up yet. First
-    time: make a master key pair below." as a plain note (no red) when the router answers 503 `coreDown`, with the
-    master-key button as the page's main button and "Check again".
+    by hand (`POST api/records`: no signed snapshot) and says why.
 
-39. **New: Recovery kit page** (shell, secure; Settings → Recovery kit, Recovery → "Make the recovery kit…", or
-    "Make the recovery kit…" on the master key page): the master private key this iPhone holds (`HeldMaster`, one
-    Face ID) must match `keys/master.pub` from GitHub — if none is held, or another one, the page says so ("make a
-    new master key pair and send Claude the public key") and offers the master key page, with no Make kit; the sealed
-    read keys from `GET api/recovery-keys` must carry the setup key's signature (`keys/setup.pub`), open with the
-    master key and list the bucket; then the page shows the kit with Copy (local-only, 2-minute clipboard) and
-    what it holds (credential name, when sealed, how many backups it reads). No keys at the router yet → "Check
-    again". Under the kit, "I've saved the kit — delete the key here" deletes the held key (the kit is then its only
-    copy; not on Copy, which may never reach the password manager). Opened from Recovery, its Back/Done returns
-    there so the kit can be pasted straight away. The Recovery page says whether this iPhone holds the key for
-    `keys/master.pub`, has one field, the kit, and checks its master key against `keys/master.pub` before reading
-    anything.
+39. **Settings has one entry for this**: "Jarvis 2" (running or not) with "Reset or recover…"; the core's keys
+    are no longer shown.
 
 40. **Jarvis 1's look, exactly (Deyao, 2026-10-10: "Keep them the same as jarvis 1, like font size etc").** Two
     causes. (a) In the extension React Native has no `UIApplication`, so its font-size multiplier came out 0 and

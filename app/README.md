@@ -10,21 +10,21 @@ router exactly as `docs/API.md` says. Design choices to review: [DECISIONS.md](D
 src/                 React Native UI (expo-router): sessions + approvals, stores, previous sessions, settings, new
                      session, and the pages: terminal, transcript, grants, schedules
 ios/Shell/           the shell (Swift, Apple frameworks only)
-  CoreCrypto.swift   the core's formats, the identity words, the kit, the checks around signing (no UI/network)
+  CoreCrypto.swift   the core's formats, the master key and the kit, the checks around signing (no UI/network)
                      — also compiled into ios/interop
-  Recovery.swift     the backups (S3 SigV4 reads, setup-key signatures, master-key decryption) and the recovery
-                     request (no UI) — also compiled into ios/interop
-  KeySource.swift    keys/box.pub + keys/setup.pub from GitHub, the bucket, the bundled word list
-  PhoneKeys.swift    Secure Enclave keys (simulator: software keys), the shell's Keychain, the pinned core keys
+  CoreSetup.swift    Reset and Recover without UI: the core's identity and state checked, the backups (setup-key
+                     signatures, master-key decryption), the claim and the wipe — also compiled into ios/interop
+  KeySource.swift    keys/box.pub + keys/setup.pub from GitHub
+  PhoneKeys.swift    Secure Enclave keys (simulator: software keys), the shell's Keychain, the pinned core + master
   RouterClient.swift sign-in (ASWebAuthenticationSession) + the router/core calls, every core answer verified
-  SecurePages.swift  New session, approvals (new-session / resume-upgrade / add-store), stores, recovery,
-                     the master key
+  SecurePages.swift  New session, approvals (new-session / resume-upgrade / add-store), stores
+  SetupPage.swift    Reset or recover: the only two paths; one plain sentence per error, details folded away
   Grants.swift       the grant page: a feature in a session for minutes, or a standing rule (signed here)
   Jarvis2App.swift   window, normal ⇄ secure mode, XPC with the extension
 ios/Extension/       the extension: React Native started like Expo's AppDelegate; ShellBridge (JS ⇄ shell)
 ios/Shared/          the XPC protocols
 ios/UITests/         the simulator walkthrough
-ios/interop/         CoreCrypto + Recovery against the real core binary (swift run)
+ios/interop/         CoreCrypto + CoreSetup against the real core binary and router (swift run)
 ios/ci/              CI stand-ins: throwaway box/setup keys, the backup bucket on rclone's S3 server
 ```
 
@@ -42,14 +42,15 @@ reject an approval and pause/resume/destroy; approvals happen only in the app (i
 
 - **web** — typecheck + the web export.
 - **interop** — `ios/ci/standins.sh` (throwaway box + setup keys, the backups on `rclone serve s3` seeded by
-  infra/setup.py's code, the core built with `-tags fakefly` and the public TEST master key), then
-  `swift run Interop` (env in its header). Locally on Linux a swift.org toolchain uses swift-crypto.
+  infra/setup.py's code and sealed to the public TEST master key, the core built with `-tags fakefly`, a router
+  reading the stand-in bucket), then `swift run Interop` (env in its header). Locally on Linux a swift.org toolchain uses swift-crypto.
 - **simulator** — the same stand-ins + router (`NO_ACCESS=1`, `SNAPSHOT_WAIT_SECONDS=2`, a test policy) on
-  the runner, the app built with `JARVIS_BASE=http://127.0.0.1:18080/` and `JARVIS_CI_FLAG=JARVIS_CI` (keys
-  and bucket from the stand-ins), then the UI walkthrough once light, once dark (fresh core, router and
-  simulator keychain each time): recovery → stores → new session (secure page, software key) → pause →
-  grants → schedules → terminal → resume (prompt) → resume with the latest image (approval) → destroy →
-  previous → search (conversations, iCloud) → settings (copy) → master key page. Screenshots: the
+  the runner (the core in a restart loop, as under Kubernetes), the app built with
+  `JARVIS_BASE=http://127.0.0.1:18080/` and `JARVIS_CI_FLAG=JARVIS_CI` (keys from the stand-in), then the UI
+  walkthrough once light, once dark (fresh core, router and simulator keychain each time): Recover with the TEST
+  kit → stores → new session (secure page, software key) → pause → grants → schedules → terminal → resume (prompt)
+  → resume with the latest image (approval) → destroy → previous → search (conversations, iCloud) → settings →
+  Reset. Screenshots: the
   run's `results` artifact (`light/`, `dark/`).
 - **testflight** (main only, after the others pass) — archive with cloud signing (App Store Connect API key:
   repo secrets `ASC_KEY_ID` / `ASC_ISSUER_ID` / `ASC_PRIVATE_KEY`), upload; build number = the run number.
