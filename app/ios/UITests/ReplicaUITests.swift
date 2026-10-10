@@ -167,7 +167,9 @@ final class ReplicaUITests: XCTestCase {
     el("unlock-rh-plain").tap()
     sleep(3)
     shot("faceid-failed")
-    for b in [springboard.buttons["Cancel"].firstMatch, app.buttons["Cancel"].firstMatch] where b.waitForExistence(timeout: 5) { b.tap(); break }
+    // the "Face Not Recognized" alert (Try Face ID Again / Cancel) comes from the system: whichever process shows it
+    let laui = XCUIApplication(bundleIdentifier: "com.apple.LocalAuthenticationUIService")
+    if let c = waitAny([app.buttons["Cancel"].firstMatch, springboard.buttons["Cancel"].firstMatch, laui.buttons["Cancel"].firstMatch], 20) { shot("faceid-not-recognized"); c.tap() } else { XCTFail("no Face Not Recognized alert") }
     XCTAssertTrue(wait(el("secure-error"), 20, "a failed Face ID leaves the store locked, with a message"), "Face ID failure shown")
     XCTAssertFalse(el("lock-rh-plain").exists, "no unlock without Face ID")
     faceIDMatches()
@@ -214,7 +216,8 @@ final class ReplicaUITests: XCTestCase {
         wait(el("secure-grant-allow"), 30, "the grant page again")
         faceIDMatches()
         el("secure-grant-allow").tap()
-        XCTAssertTrue(gone(el("term-allow"), 60), "allowed: the terminal opens")
+        XCTAssertTrue(gone(el("secure-grant-allow"), 90), "the grant page closes after Face ID")
+        XCTAssertTrue(wait(el("term-in"), 30, "back on the terminal") && gone(el("term-allow"), 60), "allowed: the terminal opens")
       }
     }
     let marker = "replica-\(Int.random(in: 1000...9999))"

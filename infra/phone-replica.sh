@@ -133,7 +133,7 @@ fill_stores() {
 WATCH=$!
 answer() { printf '%s' "$1" | curl -sS -m 900 -T - "$RELAY/resp" >/dev/null; }
 while :; do
-  msg=$(curl -sS -m 3600 "$RELAY/req" || true)
+  msg=$(curl -sS -m 120 "$RELAY/req" 2>/dev/null || true)   # short polls: the loop also notices the run ending
   [ -z "$msg" ] && { gh run view "$(cat "$W/run")" -R DE0CH/jarvis2 --json status -q .status | grep -q completed && break; continue; }
   echo "relay: $msg ($(date -u +%H:%M:%S))"
   case "$msg" in
