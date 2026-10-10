@@ -220,11 +220,13 @@ final class ReplicaUITests: XCTestCase {
         XCTAssertTrue(wait(el("term-in"), 30, "back on the terminal") && gone(el("term-allow"), 60), "allowed: the terminal opens")
       }
     }
-    let marker = "replica-\(Int.random(in: 1000...9999))"
-    el("term-in").tap(); el("term-in").typeText("echo \(marker)-$((1+1))\n")
-    if el("term-send").exists { el("term-send").tap() }
-    let out = app.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS %@", "\(marker)-2")).firstMatch
-    XCTAssertTrue(out.waitForExistence(timeout: 60), "the command's output on the terminal")
+    // the session's screen is Claude Code's input (no Claude login on a test box): what is typed and sent shows on it
+    let marker = "replica\(Int.random(in: 1000...9999))"
+    el("term-in").tap()
+    for c in marker { el("term-in").typeText(String(c)) }   // one key at a time, as a thumb types
+    el("term-send").tap()
+    let out = app.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS %@", marker)).firstMatch
+    XCTAssertTrue(out.waitForExistence(timeout: 60), "what was typed shows on the session's screen")
     shot("terminal-output")
     background(3)
     XCTAssertTrue(el("term-in").waitForExistence(timeout: 20), "the terminal survives backgrounding")
@@ -235,16 +237,21 @@ final class ReplicaUITests: XCTestCase {
       el("more-" + sid).tap()
       if wait(el("menu-grants-"), 10, "menu grants") {
         el("menu-grants-").tap()
-        if wait(el("grant-new-rule"), 30, "grants page") {
-          el("grant-new-rule").tap()
-          if wait(el("secure-grant-allow"), 30, "rule page") {
-            if el("grant-holder-scheduler").exists { el("grant-holder-scheduler").tap() }
+        if wait(el("grant-review"), 30, "grants page") {
+          shot("grants")
+          XCTAssertTrue(el("grant-forget-terminal").exists, "the terminal's grant is listed in force")
+          el("grant-holder-scheduler").tap()
+          el("grant-len-5").tap()
+          el("grant-review").tap()
+          if wait(el("secure-grant-allow"), 30, "the grant page (scheduler)") {
             faceIDMatches()
             el("secure-grant-allow").tap()
-            if wait(prefixed("grant-forget-"), 60, "the rule listed") {
-              shot("grants")
-              el(prefixed("grant-forget-").identifier).tap()
+            XCTAssertTrue(gone(el("secure-grant-allow"), 90), "the grant page closes after Face ID")
+            if wait(el("grant-forget-scheduler"), 60, "the scheduler's grant listed") {
+              shot("grants-two")
+              el("grant-forget-scheduler").tap()
               if wait(el("ask-ok"), 10, "forget question") { el("ask-ok").tap() }
+              XCTAssertTrue(gone(el("grant-forget-scheduler"), 30), "forgotten")
             }
           }
           if el("page-back").exists { el("page-back").tap() }
