@@ -90,15 +90,17 @@ final class ReplicaUITests: XCTestCase {
     guard let field = waitAny(email, 60) else { XCTFail("the Access login page didn't show"); shot("signin-blank"); return }
     shot("signin-page")
     field.tap(); field.typeText(env["REPLICA_EMAIL"] ?? "")
-    tapButton(["Send me a code", "Send code", "Continue"])
-    let codeField = [safari.textFields.firstMatch, app.webViews.textFields.firstMatch]
+    tapButton(["Send login code", "Send me a code", "Send code", "Continue"])
+    // the code page's field (the email field is gone by then; never type the code into it)
+    let notEmail = NSPredicate(format: "label != 'Email' AND placeholderValue != 'example@email.com'")
+    let codeField = [safari.textFields.matching(notEmail).firstMatch, app.webViews.textFields.matching(notEmail).firstMatch]
     sleep(3)
     let code = relay("otp").trimmingCharacters(in: .whitespacesAndNewlines)
     XCTAssertEqual(code.count, 6, "a 6-digit Access code from the mailbox (got \(code.count) chars)")
     guard let cf = waitAny(codeField, 30) else { XCTFail("no code field"); return }
     cf.tap(); cf.typeText(code)
     shot("signin-code")
-    tapButton(["Sign in", "Submit", "Continue"])
+    tapButton(["Sign in", "Log in", "Verify", "Submit", "Continue"])
   }
   func waitAny(_ es: [XCUIElement], _ s: TimeInterval) -> XCUIElement? {
     let until = Date().addingTimeInterval(s)

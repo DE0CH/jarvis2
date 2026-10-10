@@ -89,11 +89,13 @@ for _ in range(36):
     m = imaplib.IMAP4_SSL("imap.fastmail.com", 993)
     m.login(os.environ.get("BOT_EMAIL_ADDRESS", "bot@deyaochen.com"), os.environ["BOT_EMAIL_PASSWORD"])
     m.select("INBOX", readonly=True)
-    _, ids = m.search(None, "FROM", '"cloudflareaccess.com"')
+    _, ids = m.search(None, "ALL")
     best = None
-    for i in ids[0].split()[-5:]:
+    for i in ids[0].split()[-10:]:
         _, d = m.fetch(i, "(RFC822)")
         msg = email.message_from_bytes(d[0][1])
+        if "cloudflare" not in (msg.get("From", "") + msg.get("Subject", "")).lower():
+            continue
         at = email.utils.parsedate_to_datetime(msg["Date"]).timestamp()
         if at < since - 60:
             continue
