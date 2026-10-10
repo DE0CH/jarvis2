@@ -52,6 +52,14 @@ PY
 if [ "${1:-}" = teardown ]; then teardown; exit 0; fi
 [ "${KEEP:-}" = 1 ] || trap teardown EXIT
 
+# while a core change waits for Deyao's go (k8s/apps/core.yaml jarvis2/core-pin: hold), production runs an older
+# core than the app being shipped expects: the replica runs the core main builds (the tag the router is pinned at)
+# and says so; REPLICA_PINNED_CORE=1 keeps the pinned one (what production runs today)
+RAW=https://raw.githubusercontent.com/DE0CH/jarvis2/main/k8s/apps
+if [ "${REPLICA_PINNED_CORE:-}" != 1 ] && curl -sf "$RAW/core.yaml" | grep -q 'jarvis2/core-pin: hold'; then
+  export REHEARSAL_CORE_IMAGE="ghcr.io/de0ch/jarvis2-core:$(curl -sf "$RAW/router.yaml" | grep -o 'jarvis2-router:sha-[0-9a-f]*' | head -1 | cut -d: -f2)"
+  echo "the production core is held (jarvis2/core-pin: hold): the replica runs $REHEARSAL_CORE_IMAGE"
+fi
 prepare
 
 step "the throwaway repo DE0CH/$TREPO and its deploy-keys PAT (7 days, Administration on that repo only)"

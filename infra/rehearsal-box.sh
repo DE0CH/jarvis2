@@ -163,6 +163,24 @@ spec:
                     - { name: DISCORD_SESSION_CHANNELS, value: "off" }
 $access_env
 EOF
+  # REHEARSAL_CORE_IMAGE: the box runs that core instead of the pinned one (the phone replica runs the core main
+  # builds while a core change waits for Deyao: jarvis2/core-pin hold), as one more documented patch
+  if [ -n "${REHEARSAL_CORE_IMAGE:-}" ]; then
+    cat >> "$W/sync.yaml" <<EOF
+    - target: { kind: Deployment, name: core, namespace: jarvis2-core }
+      patch: |
+        apiVersion: apps/v1
+        kind: Deployment
+        metadata: { name: core, namespace: jarvis2-core }
+        spec:
+          template:
+            spec:
+              containers:
+                - name: core
+                  image: "$REHEARSAL_CORE_IMAGE"
+EOF
+    echo "the core: $REHEARSAL_CORE_IMAGE (not the pinned one)"
+  fi
   (umask 077; python3 - > "$W/extra.yaml" <<'PY'
 import json, os
 print(json.dumps({"apiVersion": "v1", "kind": "Secret", "type": "Opaque",
