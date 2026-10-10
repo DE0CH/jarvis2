@@ -71,6 +71,9 @@ type Request struct {
 	Options     Options         `json:"options"`
 	AddedStore  string          `json:"addedStore,omitempty"` // set when the machine succeeds itself with one more store
 	Downgrade   bool            `json:"downgrade,omitempty"`  // the machine succeeds itself with a subset of its stores and new keys
+	// Salt: random, on a new line only, so two identical new-session requests get different nonces (the nonce is
+	// the request's MAC, and an approval nonce is used once); a successor's nonce is already unique per predecessor
+	Salt string `json:"salt,omitempty"`
 }
 
 // Approval: a challenge one of the approve_by_* primitives approved; certify() binds it to exactly one machine
@@ -627,6 +630,13 @@ func (c *Core) Succession(in SuccessionInput) (SignedDoc, error) {
 			return SignedDoc{}, fail(400, "a new machine needs an image")
 		}
 		req.Image = in.Image
+		if req.PredID == "" {
+			salt := make([]byte, 16)
+			if _, err := rand.Read(salt); err != nil {
+				return SignedDoc{}, fail(500, "no randomness")
+			}
+			req.Salt = hex.EncodeToString(salt)
+		}
 	}
 	b, _ := json.Marshal(req)
 	return c.sign(map[string]any{"kind": "challenge", "nonce": c.mac("challenge", string(b)), "request": req})

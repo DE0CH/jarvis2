@@ -747,3 +747,10 @@ func TestRaisingToBypassOnResumeNeedsThePhone(t *testing.T) {
 		t.Fatalf("the phone's approval: %v", a)
 	}
 }
+
+// two identical new-session requests are two sessions: each challenge has its own nonce, so both start
+func TestTwoIdenticalNewSessionsBothStart(t *testing.T) {
+	c, _, p := setup(t)
+	newLine(t, c, p, "default")
+	newLine(t, c, p, "default")
+}
