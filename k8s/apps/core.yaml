@@ -18,9 +18,9 @@ spec:
           image: ghcr.io/de0ch/jarvis2-core:sha-0723a803ae1f
           ports: [{ containerPort: 8090 }]
           env:
-            # the master PUBLIC key (keys/master.pub; its private half is in Deyao's password manager): it signs
-            # recovery. Empty until Deyao makes the master key pair on his iPhone — the core refuses to start without it.
-            - { name: MASTER_KEY, value: "BJjNDXK7O6fd7mZeWlea5ZmhSc/jWX3ejaHhIL3rDlHRCOYuU9AH9RA+EhnggU+nzcM5QQfMjZg4kWmxBElBt4w=" }
+            # the master PUBLIC key (keys/master.pub; its private half is on the iPhone that made it until it goes
+            # into Deyao's recovery kit): it signs recovery. The core refuses to start without it.
+            - { name: MASTER_KEY, value: "BDwZhzmd6x4KNeBhca2aXm/WDXpglMjvIR4LOexGzOxGUD6Xe3fy+w5wLMq0hVP1xbwcm3acB6fKSGvIc057GBA=" }
             # the box key (made when the box was created, a Secret only this namespace has): it signs the core's identity
             - { name: BOX_KEY_FILE, value: /box/box-key.pem }
           volumeMounts: [{ name: box-key, mountPath: /box, readOnly: true }]
