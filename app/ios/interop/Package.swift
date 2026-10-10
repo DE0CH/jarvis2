@@ -11,4 +11,6 @@ let deps: [Package.Dependency] = []
 let tdeps: [Target.Dependency] = []
 #endif
 let package = Package(name: "Interop", platforms: [.macOS(.v14)], dependencies: deps,
-  targets: [.executableTarget(name: "Interop", dependencies: tdeps)])
+  targets: [.executableTarget(name: "Interop", dependencies: tdeps),
+            // the app's side of infra/rehearse-recover.sh (a real throwaway box): the same shell sources, symlinked in
+            .executableTarget(name: "Rehearse", dependencies: tdeps)])

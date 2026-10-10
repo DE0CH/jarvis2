@@ -165,6 +165,36 @@ infra/backup-read-key.py login` when they aren't in the env):
   and router, a throwaway WireGuard peer, the session image; set `E2E_SESSION_IMAGE` to a pinned tag). It sets its
   own core up and never touches the production core.
 
+### Rehearsing Recover on a real box
+
+`infra/rehearse-recover.sh` proves Reset → backups → failure → Recover → a session, on a REAL throwaway box built
+the way production is (`infra/cloudflare.py`, `infra/create.sh`, `infra/cloud-init.sh`, Flux applying `./k8s/apps`
+with the production images at a pinned commit), in the Hetzner project **runners** (`HCLOUD_TOKEN`). It never
+touches the production box, core, router, tunnel, Access apps, WireGuard peer or bucket. About 45 minutes; one
+cx23 for about an hour plus a second one for the rebuild (EUR 0.01056/h each + IPv4), a few minutes of small Fly
+machines. Run it from a setup session (needs `JARVIS2_FLY_TOKEN`, `JARVIS2_SETUP_KEY`, `CF_JARVIS2_INFRA_TOKEN`,
+`CLOUDFLARE_API`, `HETZNER_S3_*`) with a swift.org toolchain (`SWIFT_BIN`; the app's side is the `Rehearse` target
+in `app/ios/interop`, the shell's own CoreSetup/CoreCrypto):
+
+1. its own tunnel + `jarvis2-rehearsal.deyaochen.com` + Access app + service token, its own versioned bucket
+   `jarvis2-rehearsal-<unix time>`, a core Fly token narrowed as production's that also expires after 6 h, then the box;
+2. Reset with the TEST kit (`e2e/testdata`), stores written with `infra/setup.py` (dummy values: not sensitive,
+   sensitive, created-then-marked, the harness's `claude` and `tunnel`, the core's Fly token), backups checked;
+3. power failure (Hetzner hard reset) → Recover → every store and its sensitivity back (backups and the core's
+   signed list) → a session on Fly with them, values checked on the machine → destroyed;
+4. the app's restart (the kit wipes the core, Kubernetes starts an empty one) → Recover;
+5. the server deleted and made again (new box key, new peer) → Recover → a session again (`SKIP_REBUILD=1` skips);
+6. teardown, also on failure: servers, firewall, peer, the rehearsal cores' machines (`JARVIS2_CORE_KEY`),
+   Cloudflare tunnel/DNS/app/token, every object version and the bucket. After a crash: `infra/rehearse-recover.sh
+   teardown`.
+
+Test-only differences (all in the box's user-data, none in git): the router runs `NO_ACCESS=1` behind an Access
+app whose only policy is the rehearsal service token (the router's own check wants Deyao's email login); a Flux
+patch sets `MACHINE_URL` (the peer `jarvis2-rehearsal`), `BACKUP_BUCKET`, `RECORDS_OFF=1` and Discord off, and
+there is no `k8s/secrets` Kustomization (encrypted to production's age key); the router's backup read key is the
+admin S3 key (a narrowed one is Console-only); the kit is the public test key, so the bucket holds only dummy
+values and the expiring Fly token.
+
 ## Looking at things
 
 - The core's signed log, through the app or `POST /api/core/log` (behind Deyao's login).

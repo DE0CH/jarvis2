@@ -12,6 +12,13 @@ Access apps (created Access first, then DNS, so the hostname is never reachable 
   "Jarvis 2"        jarvis2.deyaochen.com         Deyao's email only (the app + web page)
   "Jarvis 2 setup"  jarvis2.deyaochen.com/setup   service token jarvis2-setup only (the setup session)
 Session machines don't come through Cloudflare at all (Fly's private network, docs/API.md).
+
+A rehearsal box (infra/rehearse-recover.sh) gets its own of each, never production's:
+  REHEARSAL=NAME infra/cloudflare.py OUT    tunnel NAME, hostname NAME.deyaochen.com, ONE Access app on the whole
+                                            hostname whose only policy is the service token NAME (the test client
+                                            and the setup calls both use it: SETUP_ACCESS_ID/SECRET in OUT)
+  REHEARSAL=NAME infra/cloudflare.py --delete   removes that app, token, DNS record and tunnel
+NAME must start with "jarvis2-rehearsal".
 """
 import json, os, sys, urllib.request, urllib.error
 
@@ -49,7 +56,64 @@ def access_app(name, domain, policy):
     return app["aud"]
 
 
+def tunnel_and_dns(host, name):
+    """the tunnel NAME (remotely managed, ingress host → the router), then the DNS record; returns its token"""
+    tunnels = call("GET", f"/accounts/{ACCOUNT}/cfd_tunnel?name={name}&is_deleted=false")
+    tun = tunnels[0] if tunnels else call("POST", f"/accounts/{ACCOUNT}/cfd_tunnel", {"name": name, "config_src": "cloudflare"})
+    call("PUT", f"/accounts/{ACCOUNT}/cfd_tunnel/{tun['id']}/configurations", {"config": {"ingress": [
+        {"hostname": host, "service": ORIGIN}, {"service": "http_status:404"}]}})
+    token = call("GET", f"/accounts/{ACCOUNT}/cfd_tunnel/{tun['id']}/token")
+    recs = call("GET", f"/zones/{ZONE}/dns_records?name={host}")
+    rec = {"type": "CNAME", "name": host, "content": f"{tun['id']}.cfargotunnel.com", "proxied": True, "comment": f"{name} tunnel"}
+    if recs:
+        call("PUT", f"/zones/{ZONE}/dns_records/{recs[0]['id']}", rec)
+    else:
+        call("POST", f"/zones/{ZONE}/dns_records", rec)
+    return tun["id"], token
+
+
+def write_out(out, vals):
+    fd = os.open(out, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as f:
+        for k, v in vals.items():
+            f.write(f"{k}={v}\n")
+
+
+def rehearsal(name, out):
+    """a rehearsal box's own tunnel, hostname, Access app and service token (never production's)"""
+    if not name.startswith("jarvis2-rehearsal"):
+        raise SystemExit("REHEARSAL must start with jarvis2-rehearsal")
+    host = f"{name}.deyaochen.com"
+    big = os.environ["CLOUDFLARE_API"]
+    if out == "--delete":
+        for a in call("GET", f"/accounts/{ACCOUNT}/access/apps"):
+            if a.get("domain") == host:
+                call("DELETE", f"/accounts/{ACCOUNT}/access/apps/{a['id']}")
+        for t in call("GET", f"/accounts/{ACCOUNT}/access/service_tokens", token=big):
+            if t["name"] == name:
+                call("DELETE", f"/accounts/{ACCOUNT}/access/service_tokens/{t['id']}", token=big)
+        for r in call("GET", f"/zones/{ZONE}/dns_records?name={host}"):
+            call("DELETE", f"/zones/{ZONE}/dns_records/{r['id']}")
+        for t in call("GET", f"/accounts/{ACCOUNT}/cfd_tunnel?name={name}&is_deleted=false"):
+            call("DELETE", f"/accounts/{ACCOUNT}/cfd_tunnel/{t['id']}/connections")
+            call("DELETE", f"/accounts/{ACCOUNT}/cfd_tunnel/{t['id']}")
+        print(f"ok: {name}'s Access app, service token, DNS record and tunnel are gone")
+        return
+    for t in call("GET", f"/accounts/{ACCOUNT}/access/service_tokens", token=big):
+        if t["name"] == name:
+            call("DELETE", f"/accounts/{ACCOUNT}/access/service_tokens/{t['id']}", token=big)
+    t = call("POST", f"/accounts/{ACCOUNT}/access/service_tokens", {"name": name, "duration": "24h"}, token=big)
+    vals = {"SETUP_ACCESS_ID": t["client_id"], "SETUP_ACCESS_SECRET": t["client_secret"]}
+    access_app(f"Jarvis 2 rehearsal ({name})", host, {
+        "name": "rehearsal client", "decision": "non_identity", "include": [{"service_token": {"token_id": t["id"]}}]})
+    tid, vals["TUNNEL_TOKEN"] = tunnel_and_dns(host, name)
+    write_out(out, vals)
+    print(f"ok: rehearsal tunnel {tid} at https://{host}/ behind its own Access app; values in {out}")
+
+
 def main():
+    if os.environ.get("REHEARSAL"):
+        return rehearsal(os.environ["REHEARSAL"], sys.argv[1])
     out = sys.argv[1]
     vals = {}
 
@@ -75,26 +139,11 @@ def main():
         "name": "setup session", "decision": "non_identity", "include": [{"service_token": {"token_id": tok_id}}]})
     print(f"audiences (k8s/apps/router.yaml): ACCESS_APP_AUD={aud} ACCESS_SETUP_AUD={setup_aud}")
 
-    # 3. the tunnel (remotely managed) and its ingress
-    tunnels = call("GET", f"/accounts/{ACCOUNT}/cfd_tunnel?name=jarvis2&is_deleted=false")
-    tun = tunnels[0] if tunnels else call("POST", f"/accounts/{ACCOUNT}/cfd_tunnel", {"name": "jarvis2", "config_src": "cloudflare"})
-    call("PUT", f"/accounts/{ACCOUNT}/cfd_tunnel/{tun['id']}/configurations", {"config": {"ingress": [
-        {"hostname": HOST, "service": ORIGIN}, {"service": "http_status:404"}]}})
-    vals["TUNNEL_TOKEN"] = call("GET", f"/accounts/{ACCOUNT}/cfd_tunnel/{tun['id']}/token")
+    # 3. the tunnel (remotely managed) and its ingress, then DNS last
+    tid, vals["TUNNEL_TOKEN"] = tunnel_and_dns(HOST, "jarvis2")
 
-    # 4. DNS last
-    recs = call("GET", f"/zones/{ZONE}/dns_records?name={HOST}")
-    rec = {"type": "CNAME", "name": HOST, "content": f"{tun['id']}.cfargotunnel.com", "proxied": True, "comment": "Jarvis 2 tunnel"}
-    if recs:
-        call("PUT", f"/zones/{ZONE}/dns_records/{recs[0]['id']}", rec)
-    else:
-        call("POST", f"/zones/{ZONE}/dns_records", rec)
-
-    fd = os.open(out, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w") as f:
-        for k, v in vals.items():
-            f.write(f"{k}={v}\n")
-    print(f"ok: tunnel {tun['id']}, Access apps + setup service token ready; values in {out}")
+    write_out(out, vals)
+    print(f"ok: tunnel {tid}, Access apps + setup service token ready; values in {out}")
 
 
 if __name__ == "__main__":

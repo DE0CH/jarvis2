@@ -5,6 +5,9 @@
 # in user-data and become k8s Secrets here; the user-data is shredded at the end.
 # Injected: TUNNEL_TOKEN WG_CONF (the wg-quick file of `fly wireguard create`) BOX_KEY (the box key, PEM)
 #           AGE_KEY (Flux decrypts k8s/secrets with it)
+#           SYNC_YAML, EXTRA_MANIFEST  empty in production; a rehearsal box (infra/rehearse-recover.sh) sets them:
+#           its own Flux sync (the same ./k8s/apps with documented patches) in place of k8s/flux/sync.yaml, and
+#           the Secrets that sync can't get from git
 set -uo pipefail
 export DEBIAN_FRONTEND=noninteractive
 exec > >(tee -a /var/log/jarvis2-bootstrap.log) 2>&1
@@ -35,7 +38,15 @@ shred -u /root/box-key.pem
 printf '%s\n' "$AGE_KEY" > /root/age.agekey
 kubectl -n flux-system create secret generic sops-age --from-file=age.agekey=/root/age.agekey
 shred -u /root/age.agekey
-kubectl apply -f /root/jarvis2/k8s/flux/sync.yaml || exit 1
+if [ -n "${EXTRA_MANIFEST:-}" ]; then
+  printf '%s\n' "$EXTRA_MANIFEST" > /root/extra.yaml
+  kubectl apply -f /root/extra.yaml; shred -u /root/extra.yaml
+fi
+if [ -n "${SYNC_YAML:-}" ]; then
+  printf '%s\n' "$SYNC_YAML" | kubectl apply -f - || exit 1
+else
+  kubectl apply -f /root/jarvis2/k8s/flux/sync.yaml || exit 1
+fi
 rm -rf /root/jarvis2
 echo "bootstrap COMPLETE $(date -u +%FT%TZ)" > /var/log/jarvis2-bootstrap.done
 shred -u /var/lib/cloud/instance/user-data.txt* 2>/dev/null || true
