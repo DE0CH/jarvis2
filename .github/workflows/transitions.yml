@@ -1,0 +1,95 @@
+name: transitions
+# Records the simulator's screen while UITests/TransitionsUITests.swift walks every switch between the React
+# Native extension and the shell's secure pages (enter, Back, a finished action, launch, after a background),
+# once in light and once in dark, against the real core + router on the runner (as app.yml's walkthrough).
+# The videos are the artifact: cut them into frames per transition with app/ios/ci/transition-frames.sh.
+# Run by hand (workflow_dispatch) or when the shell's or the test's code changes.
+on:
+  workflow_dispatch:
+  push:
+    paths: [app/ios/Shell/**, app/ios/Extension/**, app/ios/UITests/TransitionsUITests.swift, .github/workflows/transitions.yml]
+concurrency:
+  group: transitions-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  record:
+    runs-on: macos-26
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - uses: actions/setup-go@v5
+        with: { go-version: "1.25" }
+      - name: stand-ins
+        run: |
+          W="$RUNNER_TEMP/w"
+          NO_CORE=1 bash app/ios/ci/standins.sh "$W"
+          mkdir -p out
+          echo '{"harnesses":{"claude":{"stores":["claude-login"]},"opencode":{"stores":[]}}}' > "$W/policy.json"
+      - name: Install + JS bundle
+        working-directory: app
+        run: |
+          npm ci --no-audit --no-fund
+          mkdir -p ios/Extension/res
+          npx expo export:embed --platform ios --dev false --entry-file node_modules/expo-router/entry.js \
+            --bundle-output ios/Extension/main.jsbundle --assets-dest ios/Extension/res
+          mkdir -p ios/Extension/res/assets
+      - run: brew install xcodegen
+      - name: Generate project + pods
+        working-directory: app/ios
+        run: xcodegen generate && pod install
+      - name: Boot simulator + stream logs
+        run: |
+          xcrun simctl boot "iPhone 17" || true
+          xcrun simctl bootstatus "iPhone 17" -b
+          nohup xcrun simctl spawn "iPhone 17" log stream --style compact --level debug \
+            --predicate 'process == "JarvisUI" OR process == "Jarvis2"' > out/sim.log 2>&1 &
+      - name: Build for testing
+        working-directory: app/ios
+        run: |
+          set -o pipefail
+          xcodebuild build-for-testing -workspace Jarvis2.xcworkspace -scheme Jarvis2 \
+            -destination 'platform=iOS Simulator,name=iPhone 17' -derivedDataPath ../../dd \
+            JARVIS_BASE=http://127.0.0.1:18080/ JARVIS_CI_FLAG=JARVIS_CI JARVIS_CI_KEYS_BASE=http://127.0.0.1:18099/ \
+            2>&1 | tee ../../xcodebuild.log | grep -E "error:|\*\* " || true
+          grep -q "TEST BUILD SUCCEEDED" ../../xcodebuild.log
+      - name: Record, light then dark
+        run: |
+          W="$RUNNER_TEMP/w"
+          kit="jarvis2-kit:2:$(openssl pkcs8 -topk8 -nocrypt -in e2e/testdata/master-test.pem -outform DER | base64 | tr -d '\n')"
+          ok=0
+          for a in light dark; do
+            kill $(cat "$W/core.pid" "$W/router.pid" 2>/dev/null) 2>/dev/null || true; pkill -x core || true; sleep 1
+            rm -rf data-$a && mkdir -p data-$a
+            (nohup "$W/core-loop.sh" "$PWD/out/core-$a.log" > /dev/null 2>&1 & echo $! > "$W/core.pid")
+            for i in $(seq 30); do curl -sf http://127.0.0.1:8090/key > /dev/null && break; sleep 1; done
+            (set -a; . "$W/router-backup.env"; set +a
+             NO_ACCESS=1 SETUP_KEY="$(cat "$W/keys/setup.pub")" CORE_URL=http://127.0.0.1:8090 DATA_DIR=$PWD/data-$a WEB_DIR=$PWD/web TASKS_DIR=$PWD/tasks SNAPSHOT_WAIT_SECONDS=2 POLICY_FILE="$W/policy.json" \
+              SESSION_IMAGE=ghcr.io/de0ch/jarvis2-session:ci ADDR=127.0.0.1:18080 MACHINE_ADDR=127.0.0.1:18081 nohup "$W/router" > out/router-$a.log 2>&1 & echo $! > "$W/router.pid")
+            sleep 2
+            xcrun simctl keychain "iPhone 17" reset
+            xcrun simctl uninstall "iPhone 17" dev.de0ch.jarvis2 || true
+            xcrun simctl ui "iPhone 17" appearance $a
+            date +%s.%N > out/video-$a.start
+            xcrun simctl io "iPhone 17" recordVideo --codec=h264 --force out/transitions-$a.mov > out/record-$a.log 2>&1 &
+            rec=$!
+            sleep 2
+            (cd app/ios && TEST_RUNNER_JARVIS2_KIT="$kit" \
+              xcodebuild test-without-building -workspace Jarvis2.xcworkspace -scheme Jarvis2 \
+              -only-testing:Jarvis2UITests/TransitionsUITests/testTransitions \
+              -destination 'platform=iOS Simulator,name=iPhone 17' -derivedDataPath ../../dd \
+              -resultBundlePath ../../result-$a.xcresult 2>&1 | tee ../../test-$a.log | grep -E "error:|Test Case|\*\* " || true)
+            kill -INT $rec; wait $rec || true
+            grep -q "TEST EXECUTE SUCCEEDED\|\*\* TEST SUCCEEDED" test-$a.log || ok=1
+          done
+          exit $ok
+      - name: Export results
+        if: always()
+        run: |
+          for a in light dark; do mkdir -p out/$a; xcrun xcresulttool export attachments --path result-$a.xcresult --output-path out/$a || true; done
+          cat test-*.log > out/test.log 2>/dev/null || true
+          grep -n "error:" xcodebuild.log | head -100 > out/errors.txt || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with: { name: transitions, path: out }

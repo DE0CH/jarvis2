@@ -128,6 +128,7 @@ jobs:
             xcrun simctl ui "iPhone 17" appearance $a
             (cd app/ios && TEST_RUNNER_JARVIS2_APPEARANCE=$a TEST_RUNNER_JARVIS2_KIT="$kit" \
               xcodebuild test-without-building -workspace Jarvis2.xcworkspace -scheme Jarvis2 \
+              -only-testing:Jarvis2UITests/Jarvis2UITests/testWalkthrough \
               -destination 'platform=iOS Simulator,name=iPhone 17' -derivedDataPath ../../dd \
               -resultBundlePath ../../result-$a.xcresult 2>&1 | tee ../../test-$a.log | grep -E "error:|Test Case|\*\* " || true)
             grep -q "TEST EXECUTE SUCCEEDED\|\*\* TEST SUCCEEDED" test-$a.log || ok=1
