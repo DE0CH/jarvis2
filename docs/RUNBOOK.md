@@ -188,12 +188,34 @@ in `app/ios/interop`, the shell's own CoreSetup/CoreCrypto):
    Cloudflare tunnel/DNS/app/token, every object version and the bucket. After a crash: `infra/rehearse-recover.sh
    teardown`.
 
-Test-only differences (all in the box's user-data, none in git): the router runs `NO_ACCESS=1` behind an Access
-app whose only policy is the rehearsal service token (the router's own check wants Deyao's email login); a Flux
-patch sets `MACHINE_URL` (the peer `jarvis2-rehearsal`), `BACKUP_BUCKET`, `RECORDS_OFF=1` and Discord off, and
-there is no `k8s/secrets` Kustomization (encrypted to production's age key); the router's backup read key is the
-admin S3 key (a narrowed one is Console-only); the kit is the public test key, so the bucket holds only dummy
-values and the expiring Fly token.
+Test-only differences (all in the box's user-data, none in git; `infra/rehearsal-box.sh`, shared with the phone
+replica): the router runs `NO_ACCESS=1` behind an Access app whose only policy is the rehearsal service token (the
+router's own check wants Deyao's email login); a Flux patch sets `MACHINE_URL` (the peer `jarvis2-rehearsal`),
+`BACKUP_BUCKET`, `RECORDS_OFF=1` and Discord off, and there is no `k8s/secrets` Kustomization (encrypted to
+production's age key); the router's backup read key is the admin S3 key (a narrowed one is Console-only); the kit is
+the public test key, so the bucket holds only dummy values and the expiring Fly token. A hard reset waits 90 s after
+the stores are written: a power cut seconds after the images were pulled leaves them truncated on disk ("exec
+/router: exec format error" for ever after; only a rebuild cures it). Also checked: a session stuck at boot on a
+locked store is destroyed within 90 s.
+
+### The phone replica (the gate before a TestFlight build)
+
+`infra/phone-replica.sh` (one command, about 70 minutes): a throwaway box as above but with Access as in production
+(`MODE=replica`: the hostname admits one email, `bot@deyaochen.com`, by a real one-time-PIN login, and `/setup` the
+service token; the router checks both JWTs with `ALLOWED_EMAIL` = that email), then `.github/workflows/replica.yml` on
+a free GitHub macOS runner: the app's Release build (the TestFlight configuration, shell and extension; only
+`JARVIS_BASE` and `JARVIS_KEYS_REF` point at the box) on an iPhone 17 simulator (Deyao's iPhone18,3) with the newest
+iOS runtime the runner has, Face ID enrolled. `app/ios/UITests/ReplicaUITests.swift` taps every flow: the Access
+sign-in sheet (the PIN read from the bot's mailbox by this script and relayed to the runner through ppng.io), Reset
+(the kit read off the page, backgrounded mid-flow), stores (a Face ID failure, then unlock and lock), New session (one
+page, its stores and the harness's unlocked) running on Fly within 10 minutes, a kill and relaunch, the terminal
+(turned away → the grant page → Deny, then Allow with Face ID → a command's output), Grants (a standing rule,
+forgotten), Settings → Repos (a throwaway repo's deploy key added and removed by the core; the script checks GitHub),
+a session stuck at boot (its store locked right after Create) destroyed within 90 s, Destroy, then Recover with the
+kit (restart and recover) and every store back with its sensitivity, and a relaunch. A step fails on a missing
+element within its time, a near-blank screenshot, or a session not running in time. The run's video, screenshots and
+logs land in `~/artifacts/replica/<time>/`. Teardown also removes the keys branch `rehearsal-keys-<time>`, the repo
+`DE0CH/jarvis2-replica-<time>` and its 7-day PAT. `infra/phone-replica.sh teardown` after a crash.
 
 ## Looking at things
 
