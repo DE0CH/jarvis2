@@ -151,6 +151,8 @@ func (c *fakeCore) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	switch req.URL.Path {
 	case "/key":
 		writeJSON(w, 200, map[string]string{"signingKey": c.key.pub()})
+	case "/identity": // a set-up core (features.go coreSetUp)
+		writeJSON(w, 200, map[string]any{"signingKey": c.key.pub(), "state": c.key.doc(map[string]string{"kind": "core-state", "master": "m"})})
 	case "/core-cert":
 		writeJSON(w, 200, map[string]string{"statement": "{}", "masterSig": "x"})
 	default:

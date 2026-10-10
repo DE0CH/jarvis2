@@ -57,3 +57,39 @@ func TestLastSnapshotNeverWaitsOnABootingMachine(t *testing.T) {
 		t.Fatal(waitText(10 * time.Minute))
 	}
 }
+
+// a router restart cut off a destroy (the session sat at "destroying" for ever): the new router destroys it again
+// on start, and the core's kill force-destroys the machine (running, stopped or gone)
+func TestRestartResumesACutOffDestroy(t *testing.T) {
+	rg := newRig(t)
+	r := rg.r
+	r.st.Do(func(d *persisted) {
+		s := d.Sessions["s1"]
+		s.State, s.MachineID, s.Cert = "destroying", "m1", rg.cert
+	})
+	r.resumeInterrupted()
+	until := time.Now().Add(10 * time.Second)
+	for time.Now().Before(until) {
+		st := ""
+		r.st.Do(func(d *persisted) {
+			if s := d.Sessions["s1"]; s != nil {
+				st = s.State
+			}
+		})
+		if st != "destroying" {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	killed := false
+	rg.core.mu.Lock()
+	for _, c := range rg.core.calls {
+		killed = killed || c == "/kill"
+	}
+	rg.core.mu.Unlock()
+	var left *Session
+	r.st.Do(func(d *persisted) { left = d.Sessions["s1"] })
+	if !killed || (left != nil && left.State == "destroying") {
+		t.Fatalf("killed=%v, session %+v", killed, left)
+	}
+}
