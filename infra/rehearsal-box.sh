@@ -25,6 +25,10 @@ HOST="$NAME.deyaochen.com"; BUCKET="$NAME-$(date +%s)"
 : "${HCLOUD_TOKEN:?}" "${JARVIS2_FLY_TOKEN:?}" "${JARVIS2_SETUP_KEY:?}" "${CF_JARVIS2_INFRA_TOKEN:?}" "${CLOUDFLARE_API:?}"
 : "${HETZNER_S3_ENDPOINT:?}" "${HETZNER_S3_REGION:?}" "${HETZNER_S3_ACCESS_KEY:?}" "${HETZNER_S3_SECRET_KEY:?}"
 LOGS="${REHEARSAL_LOGS:-/tmp/jarvis2-rehearsal-logs}"; mkdir -p "$LOGS"
+mkdir -p "$HOME/.jarvis2"
+# one run per NAME at a time (a second run's teardown would take the first one's work dir and box)
+exec 9>"$HOME/.jarvis2/$NAME.lock"
+flock -n 9 || { echo "another $NAME run (or its teardown) is still going"; exit 1; }
 W="${REHEARSAL_WORK:-$HOME/.jarvis2/$NAME}"; mkdir -p "$W"; chmod 700 "$W"
 H="https://api.hetzner.cloud/v1"
 step() { echo; echo "######## $* ($(date -u +%H:%M:%S))"; }
