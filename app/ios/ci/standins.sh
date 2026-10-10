@@ -4,7 +4,8 @@
 #     (the CI build only — KeySource.swift);
 #   - the backup bucket on rclone's S3 server at :18098 (it checks SigV4), seeded with infra/setup.py's own
 #     code, encrypted to the public TEST master key; read keys in W/s3.env (ACCESS_KEY=/SECRET_KEY=), sealed as
-#     infra/setup.py recovery-keys seals them in W/recovery-keys.json, the test master key in W/master.kit;
+#     infra/setup.py recovery-keys seals them in W/recovery-keys.json; the public TEST master key's private half
+#     (base64 PKCS#8) in W/master-test.pkcs8, which the CI build holds as if the simulator had made the pair;
 #   - the core binary (fakefly, MASTER_KEY = the test master key, BOX_KEY_FILE = the throwaway box key) at
 #     W/core, and unless NO_CORE=1 started on :8090 (its identity words in W/words).
 # usage: standins.sh W
@@ -25,7 +26,7 @@ for i in $(seq 30); do curl -s -o /dev/null http://127.0.0.1:18098/ && curl -sf 
 HETZNER_S3_ENDPOINT=http://127.0.0.1:18098 HETZNER_S3_REGION=fsn1 HETZNER_S3_ACCESS_KEY=ciaccess HETZNER_S3_SECRET_KEY="$secret" \
   $PY "$ROOT/app/ios/ci/standin.py" seed "$W"
 $PY "$ROOT/app/ios/ci/standin.py" sealkeys "$W"
-echo "jarvis2-master:$(openssl pkcs8 -topk8 -nocrypt -in "$ROOT/e2e/testdata/master-test.pem" -outform DER | base64 | tr -d '\n')" > "$W/master.kit"
+openssl pkcs8 -topk8 -nocrypt -in "$ROOT/e2e/testdata/master-test.pem" -outform DER | base64 | tr -d '\n' > "$W/master-test.pkcs8"
 
 (cd "$ROOT/core" && go build -tags fakefly -o "$W/core" .)
 if [ "${NO_CORE:-}" != 1 ]; then

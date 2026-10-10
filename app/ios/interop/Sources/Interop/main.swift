@@ -64,13 +64,14 @@ check(w == need("INTEROP_WORDS_EXPECTED"), "the 8 words match the core's own (\(
 
 // ---- the master key ----
 let pem = try! String(contentsOfFile: need("INTEROP_MASTER_PEM"), encoding: .utf8)
-let master = try! MasterKey.parse(pem)
+let master = MasterKey(signing: try! P256.Signing.PrivateKey(pemRepresentation: pem))
 let masterPub = try! String(contentsOfFile: keysDir + "/master.pub", encoding: .utf8)
-check((try? MasterKey.parse(master.kit))?.publicKey == master.publicKey, "the master key's own string round-trips (\(master.kit.prefix(24))…)")
+check((try? MasterKey(pkcs8: master.pkcs8))?.publicKey == master.publicKey, "the master key's PKCS#8 part round-trips (\(master.pkcs8.prefix(8))…)")
 let fresh = MasterKey.generate()
-check((try? MasterKey.parse(fresh.kit))?.publicKey == fresh.publicKey, "a generated master key's string parses back")
-check(fresh.kit.hasPrefix("jarvis2-master:MIG"), "it is PKCS#8 DER (starts MIG…)")
-check(throwsErr { _ = try MasterKey.parse("jarvis2-master:AAAA") }, "a broken master key is refused")
+check((try? MasterKey(pkcs8: fresh.pkcs8))?.publicKey == fresh.publicKey, "a generated master key's PKCS#8 parses back")
+check(fresh.pkcs8.hasPrefix("MIG"), "it is PKCS#8 DER (starts MIG…)")
+check(throwsErr { _ = try MasterKey(pkcs8: "AAAA") }, "a broken master key is refused")
+check(MasterKey.same(master.publicKey, masterPub) && !MasterKey.same(fresh.publicKey, masterPub) && !MasterKey.same("", masterPub), "public keys compare by their bytes")
 check(master.matches(masterPub) && !fresh.matches(masterPub), "the master key matches keys/master.pub; another doesn't")
 
 // ---- the backup bucket's read keys, sealed by the setup session (infra/setup.py recovery-keys) ----
@@ -94,7 +95,8 @@ check(kit?.master.publicKey == master.publicKey && kit?.bucket == creds, "the ki
 let wrapped = String(kitString.enumerated().map { $0.offset > 0 && $0.offset % 64 == 0 ? "\n\($0.element)" : "\($0.element)" }.joined()) + "\n"
 check((try? RecoveryKit.parse("  " + wrapped))?.bucket == creds, "a kit pasted with line breaks and spaces still parses")
 check(throwsErr { _ = try RecoveryKit.parse("jarvis2-s3:\(creds.accessKey):\(creds.secretKey)") }, "the old jarvis2-s3: format is refused")
-check(throwsErr { _ = try RecoveryKit.parse(master.kit) }, "a bare master key is not a kit")
+check(throwsErr { _ = try RecoveryKit.parse(master.pkcs8) }, "a bare master key is not a kit")
+check(throwsErr { _ = try RecoveryKit.parse("jarvis2-master:" + master.pkcs8) }, "the old bare master key string is not a kit")
 check(throwsErr { _ = try RecoveryKit.parse("jarvis2-kit:1:AAAA:\(creds.accessKey):\(creds.secretKey)") }, "a kit with a broken master key is refused")
 check(throwsErr { _ = try RecoveryKit.parse(String(kitString.prefix(kitString.count - creds.secretKey.count - creds.accessKey.count - 2))) }, "a kit without its read keys is refused")
 check(throwsErr { _ = try RecoveryKit.parse(kitString.replacingOccurrences(of: "jarvis2-kit:1:", with: "jarvis2-kit:2:")) }, "another kit version is refused")

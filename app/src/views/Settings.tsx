@@ -113,12 +113,12 @@ export function Settings() {
       </Card>}
       {hasShell && <Card data={{ settings: "recovery-kit" }}>
         <Heading size={3} mb={1}>Recovery kit</Heading>
-        <Muted>The one string your password manager keeps: the master private key plus the backup bucket's read keys, which the setup session sealed to the master key.</Muted>
+        <Muted>The one string your password manager keeps: the master private key (held on the iPhone that made it, until the kit is saved) plus the backup bucket's read keys, which the setup session sealed to the master key.</Muted>
         <Flex mt={3}><Button id="open-recovery-kit" variant="soft" color="gray" onPress={() => requestSecure("recovery-kit", {})}>Make the recovery kit…</Button></Flex>
       </Card>}
       {hasShell && <Card data={{ settings: "master-key" }}>
         <Heading size={3} mb={1}>Master key</Heading>
-        <Muted>First setup only: make the master key pair on this iPhone. The private half goes to your password manager, the public half into the repo.</Muted>
+        <Muted>A new setup starts here: this iPhone makes the pair and shows only the public half, for you to send to Claude (it goes into the repo). The private half stays on this iPhone until it goes into your recovery kit.</Muted>
         <Flex mt={3}><Button id="open-master-key" variant="soft" color="gray" onPress={() => requestSecure("master-key", {})}>Make a master key pair…</Button></Flex>
       </Card>}
     </Cards>

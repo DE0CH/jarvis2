@@ -3,11 +3,13 @@ import XCTest
 /// Walks Jarvis 2 on a simulator against the REAL core (built with -tags fakefly, the public TEST master key)
 /// and router running on the CI runner, with the backups on a local S3 stand-in, keeping a screenshot of every
 /// step. CI runs it once per appearance (light, then dark), each time against a fresh core and router and a
-/// reset simulator keychain, so each pass recovers from scratch: the recovery kit (the test master key pasted
-/// once, the bucket's read keys sealed by infra/setup.py through the router) → recovery (8 words, the kit) → stores (create, unlock) → new session (secure page, software key) → grants (a
+/// reset simulator keychain, so each pass recovers from scratch: the recovery kit (the test master key held as if
+/// made on this simulator, the bucket's read keys sealed by infra/setup.py through the router; then the held key
+/// deleted) → recovery (8 words, the kit) → stores (create, unlock) → new session (secure page, software key) → grants (a
 /// 10-minute grant and a standing rule on the secure grant page, forget one) → schedules (a wakeup and a cron)
 /// → terminal → pause → transcript → resume (with a prompt) → resume with the latest image (approval) →
-/// destroy (the changes check) → previous sessions → search → settings (Fly, a copy) → the master key page.
+/// destroy (the changes check) → previous sessions → search → settings (Fly, a copy) → the master key page (a new
+/// pair: only its public half shown; the kit page refuses it as not keys/master.pub).
 final class Jarvis2UITests: XCTestCase {
   let app = XCUIApplication()
   var tag = "run"
@@ -37,24 +39,33 @@ final class Jarvis2UITests: XCTestCase {
   func testWalkthrough() {
     continueAfterFailure = true
     tag = env["JARVIS2_APPEARANCE"] ?? "run"
+    // CI build only (JARVIS_CI): the shell holds this key as if the simulator had made the pair (HeldMaster.ciSeed)
+    app.launchEnvironment["JARVIS2_CI_HELD_MASTER"] = env["JARVIS2_CI_HELD_MASTER"] ?? ""
     app.launch()
 
     // ---- recovery: the core's 8 words (checked against the box key), then the kit
     guard wait(el("recovery-words"), 60, "recovery page with the core's words") else { return }
     XCTAssertEqual(el("recovery-words").label, env["JARVIS2_WORDS"] ?? "", "[\(tag)] the 8 words are the core's own")
     shot("recovery")
-    // the recovery kit first: the master key pasted once + the read keys the setup session sealed to it
+    // the recovery kit first: the master key this simulator holds (CI: the public TEST pair, held as if made here)
+    // + the read keys the setup session sealed to it; no master key is ever pasted or shown on its own
+    XCTAssertTrue(el("recovery-holds-master").waitForExistence(timeout: 20), "[\(tag)] the recovery page says this iPhone holds the master key")
     el("recovery-make-kit").tap()
-    let master = el("kit-master")
-    guard wait(master, 15, "recovery kit page") else { return }
-    master.tap(); master.typeText(env["JARVIS2_MASTER_KEY"] ?? "")
-    shot("kit-master-pasted")
+    guard wait(el("kit-held-master"), 20, "recovery kit page with the held master key") else { return }
+    XCTAssertFalse(el("kit-master").exists, "[\(tag)] no field to paste a master key")
+    shot("kit-held-master")
     el("kit-make").tap()
     guard wait(el("kit-string"), 60, "the recovery kit") else { return }
     let kit = el("kit-string").label
     XCTAssertTrue(kit.hasPrefix("jarvis2-kit:1:MIG"), "[\(tag)] the kit string \(kit.prefix(16))…")
     shot("kit")
+    // saved → the held key is deleted; the kit is its only copy
+    el("kit-saved").tap()
+    wait(el("kit-key-deleted"), 10, "the held master key deleted once the kit is saved")
+    XCTAssertFalse(el("kit-string").exists, "[\(tag)] the kit is no longer on the page")
+    shot("kit-saved")
     el("secure-back").tap() // Done → back to the recovery page
+    wait(el("recovery-no-master"), 20, "the recovery page says no master key is held any more")
     let kitField = el("recovery-kit")
     guard wait(kitField, 15, "recovery kit field") else { return }
     kitField.tap(); kitField.typeText(kit)
@@ -364,18 +375,25 @@ final class Jarvis2UITests: XCTestCase {
       sleep(1)
     }
 
-    // ---- the master key page (smoke): a fresh pair, the private kit and the public key
+    // ---- the master key page: none held (deleted with the saved kit) → a new pair shows only its public half;
+    // the kit page then says the held key isn't keys/master.pub and offers no kit
     el("open-master-key").tap()
-    if wait(el("master-private"), 20, "master key page") {
-      XCTAssertTrue(el("master-private").label.hasPrefix("jarvis2-master:MIG"), "[\(tag)] private kit \(el("master-private").label.prefix(20))")
-      XCTAssertTrue(el("master-public").label.hasPrefix("B"), "[\(tag)] public key (x963 base64)")
-      shot("master-key")
-      // the recovery kit with the key made just now: held in memory, and refused because it isn't keys/master.pub
-      el("master-make-kit").tap()
-      if wait(el("kit-held-master"), 15, "kit page with the held master key") {
-        el("kit-make").tap()
-        wait(el("secure-error"), 30, "a master key that isn't keys/master.pub is refused")
-        shot("kit-wrong-master")
+    if wait(el("master-make"), 20, "master key page with no key held") {
+      shot("master-key-none")
+      el("master-make").tap()
+      if wait(el("master-public"), 10, "the new pair's public key") {
+        XCTAssertTrue(el("master-public").label.hasPrefix("B"), "[\(tag)] public key (x963 base64)")
+        XCTAssertTrue(el("master-not-in-repo").exists, "[\(tag)] the page says it isn't keys/master.pub yet")
+        XCTAssertFalse(el("master-private").exists, "[\(tag)] no private key element")
+        let privLike = app.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS 'MIG'")).firstMatch
+        XCTAssertFalse(privLike.exists, "[\(tag)] nothing on the page looks like a private key")
+        shot("master-key")
+        el("master-make-kit").tap()
+        if wait(el("kit-no-master"), 20, "kit page: the held key isn't keys/master.pub") {
+          XCTAssertFalse(el("kit-make").exists, "[\(tag)] no Make kit without the key for keys/master.pub")
+          XCTAssertTrue(el("kit-make-master").exists, "[\(tag)] it offers a new master key pair")
+          shot("kit-wrong-master")
+        }
       }
       el("secure-back").tap()
       wait(el("open-master-key"), 20, "back to settings")

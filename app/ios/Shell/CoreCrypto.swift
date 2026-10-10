@@ -110,33 +110,29 @@ enum CoreCrypto {
 }
 
 // ---- the recovery kit: what Deyao keeps in his password manager --------------------------------------
-/// `jarvis2-master:<base64 PKCS#8 DER>` — the master private key (a PEM "PRIVATE KEY" block is accepted too)
+/// The master private key. It exists in two places only: on the iPhone that made it (the shell's Keychain,
+/// HeldMaster, until the recovery kit is made from it) and inside the recovery kit. It is never shown on its own.
 struct MasterKey {
   let signing: P256.Signing.PrivateKey
   var agreement: P256.KeyAgreement.PrivateKey { try! P256.KeyAgreement.PrivateKey(rawRepresentation: signing.rawRepresentation) }
   var publicKey: String { signing.publicKey.x963Representation.base64EncodedString() }
-  static let prefix = "jarvis2-master:"
-  static func parse(_ raw: String) throws -> MasterKey {
-    let s = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-    var der: Data?
-    if s.hasPrefix(prefix) {
-      der = Data(base64Encoded: String(s.dropFirst(prefix.count)).filter { !$0.isWhitespace })
-    } else if s.hasPrefix("-----BEGIN PRIVATE KEY-----") {
-      der = Data(base64Encoded: s.split(separator: "\n").filter { !$0.hasPrefix("-----") }.joined().filter { !$0.isWhitespace })
-    }
-    guard let d = der, let k = try? P256.Signing.PrivateKey(derRepresentation: d) else {
-      throw TrustError.badKit("That isn't a master key (jarvis2-master:… with a base64 PKCS#8 P-256 private key).")
-    }
-    return MasterKey(signing: k)
-  }
-  /// a fresh pair, made in software so the private half can be written down (it is never stored)
+  /// a fresh pair, made in software so the private half can go into the recovery kit
   static func generate() -> MasterKey { MasterKey(signing: P256.Signing.PrivateKey()) }
-  /// the kit string: PKCS#8 DER, the body of the PEM "PRIVATE KEY" block
-  var kit: String { MasterKey.prefix + signing.pemRepresentation.split(separator: "\n").filter { !$0.hasPrefix("-----") }.joined() }
+  /// the kit's master part: base64 PKCS#8 DER (the body of a PEM "PRIVATE KEY" block)
+  var pkcs8: String { signing.pemRepresentation.split(separator: "\n").filter { !$0.hasPrefix("-----") }.joined() }
+  init(signing: P256.Signing.PrivateKey) { self.signing = signing }
+  init(pkcs8 b64: String) throws {
+    guard let d = Data(base64Encoded: b64.filter { !$0.isWhitespace }), let k = try? P256.Signing.PrivateKey(derRepresentation: d) else {
+      throw TrustError.badKit("That isn't a P-256 private key (base64 PKCS#8).")
+    }
+    signing = k
+  }
   func sign(_ text: String) throws -> String { try signing.signature(for: Data(text.utf8)).derRepresentation.base64EncodedString() }
   /// the public half is `pub` (keys/master.pub: base64 X9.63)
-  func matches(_ pub: String) -> Bool {
-    Data(base64Encoded: pub.trimmingCharacters(in: .whitespacesAndNewlines)) == signing.publicKey.x963Representation
+  func matches(_ pub: String) -> Bool { MasterKey.same(publicKey, pub) }
+  static func same(_ a: String, _ b: String) -> Bool {
+    guard let x = Data(base64Encoded: a.trimmingCharacters(in: .whitespacesAndNewlines)) else { return false }
+    return x == Data(base64Encoded: b.trimmingCharacters(in: .whitespacesAndNewlines))
   }
 }
 
@@ -147,13 +143,13 @@ struct S3Credentials: Codable, Equatable {
 
 /// The recovery kit: the ONE string Deyao keeps in his password manager —
 /// `jarvis2-kit:1:<master private key, base64 PKCS#8 DER>:<bucket access key>:<bucket secret key>`.
-/// The app's Recovery kit page makes it (the master key from this iPhone's memory or pasted once, the read keys
-/// from the setup session's sealed document); the Recovery page takes only this.
+/// The app's Recovery kit page makes it (the master key held in this iPhone's Keychain since it made the pair, the
+/// read keys from the setup session's sealed document); the Recovery page takes only this.
 struct RecoveryKit {
   let master: MasterKey, bucket: S3Credentials
   static let prefix = "jarvis2-kit:1:"
   var string: String {
-    RecoveryKit.prefix + String(master.kit.dropFirst(MasterKey.prefix.count)) + ":" + bucket.accessKey + ":" + bucket.secretKey
+    RecoveryKit.prefix + master.pkcs8 + ":" + bucket.accessKey + ":" + bucket.secretKey
   }
   static func parse(_ raw: String) throws -> RecoveryKit {
     let s = raw.filter { !$0.isWhitespace }
@@ -161,7 +157,7 @@ struct RecoveryKit {
     guard s.hasPrefix(prefix) else { throw bad }
     // base64 has no ":", nor does an S3 access key; the secret is the rest, whatever it holds
     let p = s.dropFirst(prefix.count).split(separator: ":", maxSplits: 2, omittingEmptySubsequences: false).map(String.init)
-    guard p.count == 3, !p[1].isEmpty, !p[2].isEmpty, let m = try? MasterKey.parse(MasterKey.prefix + p[0]) else { throw bad }
+    guard p.count == 3, !p[1].isEmpty, !p[2].isEmpty, let m = try? MasterKey(pkcs8: p[0]) else { throw bad }
     return RecoveryKit(master: m, bucket: S3Credentials(accessKey: p[1], secretKey: p[2]))
   }
 }

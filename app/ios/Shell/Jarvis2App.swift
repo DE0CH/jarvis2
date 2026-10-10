@@ -42,9 +42,6 @@ final class Shell {
   var extensionProxy: ExtensionService?
   weak var hostVC: EXHostViewController?
   var lines: [String] = []
-  /// a master key made on the master key page, handed to the recovery kit page; memory only, dropped when
-  /// secure mode ends
-  var heldMaster: MasterKey?
   /// the recovery kit page was opened from the recovery page: its Back/Done goes back there
   var kitReturnsToRecovery = false
   private var monitor: AppExtensionPoint.Monitor?
@@ -61,6 +58,9 @@ final class Shell {
   var prefetched: [StoreView]?
 
   func load() async {
+    #if JARVIS_CI
+    HeldMaster.ciSeed()
+    #endif
     if CoreTrust.pinned == nil {
       // no core recovered yet: the recovery page comes first (Later leaves it for the app, which can still view)
       route = .recovery; mode = .secure
@@ -122,7 +122,6 @@ final class Shell {
   /// issued, an unlock the core confirmed…); `id` = the session it concerned, if any.
   func exitSecure(_ why: String, done: Bool = false, id: String? = nil) {
     log("exit secure: \(why)")
-    heldMaster = nil
     kitReturnsToRecovery = false
     exitForward = done
     coverWithSnapshot = snapshot != nil

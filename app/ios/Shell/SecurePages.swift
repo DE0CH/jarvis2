@@ -1,6 +1,7 @@
 // The shell's secure pages: drawn only by the shell (the React Native UI's view is gone while one is up).
 // What they show comes from the core's signed answers (checked against the core keys pinned at recovery); what the
 // phone signs is checked first (CoreCrypto.swift, Checks).
+import CryptoKit
 import LocalAuthentication
 import SwiftUI
 import UIKit
@@ -414,6 +415,8 @@ struct RecoveryPage: View {
   @State private var busy: String?
   @State private var failure: String?
   @State private var note: String?
+  /// keys/master.pub, to say whether this iPhone holds its private half
+  @State private var repoPub: String?
   @State private var wipe: Task<Void, Never>?
 
   private var already: Bool { id != nil && id == CoreTrust.pinned }
@@ -448,9 +451,16 @@ struct RecoveryPage: View {
       if let failure { Callout(text: failure, color: .red).padding(.top, 16).accessibilityIdentifier("secure-error") }
       if !notRunning {
         Lbl(text: "No recovery kit yet")
-        Muted(text: "Make it from your master key and the backup bucket's read keys, which the setup session sealed to the master key.")
+        Muted(text: "It is made on the iPhone that made the master key pair (it holds the private half, never shown), with the backup bucket's read keys the setup session sealed to that key.")
+        if let repoPub {
+          if let h = HeldMaster.publicKey, MasterKey.same(h, repoPub) {
+            Callout(text: "This iPhone holds the master private key for keys/master.pub: make the recovery kit.", color: .blue).padding(.top, 8).accessibilityIdentifier("recovery-holds-master")
+          } else {
+            Callout(text: "This iPhone holds no master private key for keys/master.pub. Without a recovery kit for that key, make a new master key pair and send Claude the public key.", amber: true).padding(.top, 8).accessibilityIdentifier("recovery-no-master")
+          }
+        }
         HStack { KitButton(title: "Make the recovery kit…", variant: .soft, disabled: busy != nil, id: "recovery-make-kit") { clear(); shell.kitReturnsToRecovery = true; shell.route = .recoveryKit }; Spacer() }.padding(.top, 8)
-        Lbl(text: "First time")
+        Lbl(text: "A new master key")
         HStack { KitButton(title: "Make a master key pair…", variant: .soft, color: .gray, disabled: busy != nil, id: "recovery-make-master") { clear(); shell.route = .masterKey }; Spacer() }
       }
     }
@@ -470,6 +480,7 @@ struct RecoveryPage: View {
   }
   private func load() async {
     idError = nil
+    repoPub = try? await KeySource.key("master.pub")
     do {
       let x = try await RouterClient.shared.identity()
       notRunning = false
@@ -512,43 +523,58 @@ struct RecoveryPage: View {
   }
 }
 
-// ---- the recovery kit: master key + the backup bucket's read keys → the ONE string to keep ----------------
+// ---- the recovery kit: the master key held on this iPhone + the backup bucket's read keys → the ONE string ----
 /// The read keys come from the setup session through the router, sealed to the master public key and signed by
 /// the setup key: the page checks the signature against keys/setup.pub (from GitHub, like box.pub), opens them
-/// with the master key (held in memory from the master key page, or pasted once), checks they read the
-/// bucket, and shows the kit. Nothing is stored; leaving the page forgets it.
+/// with the master private key this iPhone has held since it made the pair (HeldMaster, Face ID), checks they
+/// read the bucket, and shows the kit. Once Deyao says the kit is saved, the held key is deleted and the kit is
+/// its only copy. The kit itself is never stored: leaving the page forgets it.
 struct RecoveryKitPage: View {
   let shell: Shell
-  @State private var pasted = ""
-  @State private var held: MasterKey?
+  @State private var heldPub: String? = HeldMaster.publicKey
+  @State private var repoPub: String?
   @State private var busy: String?
   @State private var failure: String?
   @State private var missing = false
   @State private var kit: String?
   @State private var about = ""
   @State private var copied = false
+  @State private var deleted = false
   @State private var wipe: Task<Void, Never>?
 
+  /// does this iPhone hold the private half of keys/master.pub? nil until keys/master.pub is fetched
+  private var holds: Bool? { repoPub.map { r in heldPub.map { MasterKey.same($0, r) } ?? false } }
+
   var body: some View {
-    SecureFrame(shell: shell, title: "Recovery kit", action: kit != nil ? nil : (missing ? "Check again" : "Make kit", "kit-make", held == nil && pasted.isEmpty),
+    SecureFrame(shell: shell, title: "Recovery kit", action: kit != nil || holds != true ? nil : (missing ? "Check again" : "Make kit", "kit-make", false),
                 busy: busy, run: { Task { await make() } }, backTitle: kit != nil ? "Done" : "← Back",
                 onBack: shell.kitReturnsToRecovery ? { forget(); shell.kitReturnsToRecovery = false; shell.route = .recovery } : nil) {
       if let kit {
-        Lbl(text: "Your recovery kit — the password manager")
-        Muted(text: "Save this one string in your password manager as the Jarvis 2 recovery kit. It holds the master private key and the backup bucket's read keys\(about); recovery needs only it. Once it is saved, a separate master key entry isn't needed. It is shown once and never stored: leaving this page forgets it. The copy expires from the clipboard after 2 minutes and doesn't go to your other devices.")
-        Text(kit).font(.system(size: K.fontSize[1], design: .monospaced)).foregroundStyle(Radix.gray.s[12]).textSelection(.enabled).privacySensitive()
-          .padding(12).frame(maxWidth: .infinity, alignment: .leading)
-          .background(RoundedRectangle(cornerRadius: K.radius[3], style: .continuous).fill(Radix.gray.a[3]))
-          .padding(.top, 8).accessibilityIdentifier("kit-string").accessibilityLabel(kit)
-        HStack { KitButton(title: copied ? "Copied" : "Copy recovery kit", id: "kit-copy") { copy(kit) }; Spacer() }.padding(.top, 8)
+        if deleted {
+          Callout(text: "The master private key is deleted from this iPhone. The recovery kit in your password manager is now its only copy.", color: .blue).padding(.top, 12).accessibilityIdentifier("kit-key-deleted")
+        } else {
+          Lbl(text: "Your recovery kit — the password manager")
+          Muted(text: "Save this one string in your password manager as the Jarvis 2 recovery kit. It holds the master private key and the backup bucket's read keys\(about); recovery needs only it. It is never stored: leaving this page forgets it. The copy expires from the clipboard after 2 minutes and doesn't go to your other devices.")
+          Text(kit).font(.system(size: K.fontSize[1], design: .monospaced)).foregroundStyle(Radix.gray.s[12]).textSelection(.enabled).privacySensitive()
+            .padding(12).frame(maxWidth: .infinity, alignment: .leading)
+            .background(RoundedRectangle(cornerRadius: K.radius[3], style: .continuous).fill(Radix.gray.a[3]))
+            .padding(.top, 8).accessibilityIdentifier("kit-string").accessibilityLabel(kit)
+          HStack { KitButton(title: copied ? "Copied" : "Copy recovery kit", id: "kit-copy") { copy(kit) }; Spacer() }.padding(.top, 8)
+          Lbl(text: "Saved it?")
+          Muted(text: "Then delete the master key from this iPhone: from then on the kit is its only copy. Until you do, it stays here behind Face ID, so the kit can be made again.")
+          HStack { KitButton(title: "I've saved the kit — delete the key here", color: .red, id: "kit-saved") { HeldMaster.delete(); heldPub = nil; deleted = true; shell.log("held master key deleted") }; Spacer() }.padding(.top, 8)
+        }
       } else {
         Lbl(text: "Master key")
-        if held != nil {
-          Callout(text: "Using the master key made on this iPhone just now (in memory only).", color: .blue).padding(.top, 8).accessibilityIdentifier("kit-held-master")
-        } else {
-          Muted(text: "From your password manager: jarvis2-master:…")
-          secretField("jarvis2-master:…", $pasted, "kit-master") { v in if !v.isEmpty { armWipe() } }
-        }
+        if let holds {
+          if holds {
+            Callout(text: "This iPhone holds the master private key for keys/master.pub (made here, never shown). Making the kit asks for Face ID.", color: .blue).padding(.top, 8).accessibilityIdentifier("kit-held-master")
+          } else {
+            Callout(text: heldPub == nil ? "This iPhone holds no master private key." : "The master key this iPhone holds isn't the one in keys/master.pub.", amber: true).padding(.top, 8).accessibilityIdentifier("kit-no-master")
+            Muted(text: "Make a new master key pair and send Claude the public key. Once Claude has put it in keys/master.pub and sealed the backup bucket's read keys to it, come back here.").padding(.top, 8)
+            HStack { KitButton(title: "Make a master key pair…", variant: .soft, disabled: busy != nil, id: "kit-make-master") { forget(); shell.route = .masterKey }; Spacer() }.padding(.top, 8)
+          }
+        } else if failure == nil { ProgressView().frame(maxWidth: .infinity).padding(.top, 8) }
         Muted(text: "The backup bucket's read keys come from the setup session through the router, sealed to the master key: the app checks they were signed by the setup key (keys/setup.pub, from GitHub\(KeySource.isCI ? " — CI stand-in" : "")), opens them with the master key and tries them on the bucket. The router can't read them.").padding(.top, 8)
         if missing {
           Callout(text: "The setup session hasn't sent the read keys yet (infra/setup.py recovery-keys). Check again once it has.").padding(.top, 12).accessibilityIdentifier("kit-missing")
@@ -556,29 +582,34 @@ struct RecoveryKitPage: View {
       }
       if let failure { Callout(text: failure, color: .red).padding(.top, 16).accessibilityIdentifier("secure-error") }
     }
-    .onAppear { if held == nil { held = shell.heldMaster } }
+    .task { await loadRepo() }
     .onDisappear { forget() }
   }
-  private func forget() { pasted = ""; held = nil; kit = nil; shell.heldMaster = nil; wipe?.cancel(); wipe = nil }
-  /// whatever was pasted or made is forgotten after 10 minutes
+  private func forget() { kit = nil; wipe?.cancel(); wipe = nil }
+  private func loadRepo() async {
+    do { repoPub = try await KeySource.key("master.pub") } catch { failure = errText(error) }
+  }
+  /// the kit is forgotten 10 minutes after it was made (the held key isn't)
   private func armWipe() {
     guard wipe == nil else { return }
     wipe = Task { @MainActor in
       try? await Task.sleep(nanoseconds: 600_000_000_000)
       guard !Task.isCancelled else { return }
-      forget()
-      failure = "The master key and the kit were wiped after 10 minutes."
+      kit = nil; wipe = nil
+      if !deleted { failure = "The kit was wiped from this page after 10 minutes. Make it again to copy it." }
     }
   }
   private func make() async {
     failure = nil
     do {
-      let m = try held ?? (MasterKey.parse(pasted))
       busy = "Checking the master key…"
       let masterPub = try await KeySource.key("master.pub")
-      guard m.matches(masterPub) else {
-        throw TrustError.badKit("This master key isn't the one in the repo (keys/master.pub): the read keys and the backups are sealed to that one.")
-      }
+      repoPub = masterPub
+      let raw = try await offMain { try HeldMaster.load(reason: "Make the Jarvis 2 recovery kit")?.signing.rawRepresentation }
+      heldPub = HeldMaster.publicKey
+      guard let raw, let k = try? P256.Signing.PrivateKey(rawRepresentation: raw) else { busy = nil; heldPub = nil; return }
+      let m = MasterKey(signing: k)
+      guard m.matches(masterPub) else { busy = nil; return }
       busy = "Fetching the read keys…"
       guard let sealed = try await RouterClient.shared.recoveryKeys() else { busy = nil; missing = true; return }
       missing = false
@@ -592,7 +623,6 @@ struct RecoveryKitPage: View {
       parts.append("\(n) store backup\(n == 1 ? "" : "s") readable")
       about = " (" + parts.joined(separator: ", ") + ")"
       kit = RecoveryKit(master: m, bucket: creds).string
-      pasted = ""
       armWipe()
       busy = nil
     } catch { busy = nil; failure = errText(error) }
@@ -603,41 +633,61 @@ struct RecoveryKitPage: View {
   }
 }
 
-// ---- the master key pair, made once (first time only) ----------------------------------------------
+// ---- the master key pair: made on this iPhone, only its public half shown ----------------------------------
+/// The private half goes straight into the shell's Keychain (HeldMaster) and is never shown: Deyao sends the
+/// public half to Claude, who puts it in keys/master.pub and seals the backup bucket's read keys to it; then the
+/// Recovery kit page makes the ONE string from the held key and deletes it.
 struct MasterKeyPage: View {
   let shell: Shell
-  @State private var key: MasterKey?
-  @State private var copied: String?
+  @State private var heldPub: String? = HeldMaster.publicKey
+  @State private var repoPub: String?
+  @State private var confirmNew = false
+  @State private var copied = false
+  @State private var failure: String?
+  private var inRepo: Bool { guard let h = heldPub, let r = repoPub else { return false }; return MasterKey.same(h, r) }
   var body: some View {
     SecureFrame(shell: shell, title: "Master key", backTitle: "Done") {
-      Callout(text: "Only for the very first setup. A new master key pair makes every existing backup unreadable to it and every machine image distrust it.", amber: true).padding(.top, 12)
-      if let k = key {
-        Lbl(text: "Private key — your password manager")
-        Muted(text: "Copy it into your password manager now. It is made here, shown once, and never stored: leaving this page forgets it. The copy expires from the clipboard after 2 minutes and doesn't go to your other devices.")
-        mono(k.kit, "master-private")
-        HStack { KitButton(title: copied == "private" ? "Copied" : "Copy private key", id: "master-copy-private") { copy(k.kit, "private", expires: true) }; Spacer() }.padding(.top, 8)
+      Callout(text: "A new master key pair is the root of a new setup: the core, the machines and the backups trust only the key in keys/master.pub, so a new one means a new core, backups sealed again and a new recovery kit.", amber: true).padding(.top, 12)
+      if let k = heldPub {
         Lbl(text: "Public key — send it to Claude")
-        Muted(text: "It becomes keys/master.pub in the repo (the core, the machines and the setup session trust it).")
-        mono(k.publicKey, "master-public")
-        HStack { KitButton(title: copied == "public" ? "Copied" : "Copy public key", variant: .soft, id: "master-copy-public") { copy(k.publicKey, "public", expires: false) }; Spacer() }.padding(.top, 8)
+        Muted(text: inRepo
+          ? "It is keys/master.pub in the repo. Once Claude has sealed the backup bucket's read keys to it, make the recovery kit."
+          : "Send it to Claude: it becomes keys/master.pub in the repo (the core, the machines and the setup session trust it). The private half stays in this iPhone's Keychain (this device only, Face ID) and is never shown; it goes into the recovery kit.")
+          .accessibilityIdentifier(inRepo ? "master-in-repo" : "master-not-in-repo")
+        Text(k).font(.system(size: K.fontSize[1], design: .monospaced)).foregroundStyle(Radix.gray.s[12]).textSelection(.enabled)
+          .padding(12).frame(maxWidth: .infinity, alignment: .leading)
+          .background(RoundedRectangle(cornerRadius: K.radius[3], style: .continuous).fill(Radix.gray.a[3]))
+          .padding(.top, 8).accessibilityIdentifier("master-public").accessibilityLabel(k)
+        HStack { KitButton(title: copied ? "Copied" : "Copy public key", variant: .soft, id: "master-copy-public") { copy(k) }; Spacer() }.padding(.top, 8)
         Lbl(text: "Then — the recovery kit")
-        Muted(text: "Once Claude has committed the public key and sealed the backup bucket's read keys to it, make the recovery kit with this key: the one string your password manager keeps from then on (it holds this private key too).")
-        HStack { KitButton(title: "Make the recovery kit with this key…", variant: .soft, id: "master-make-kit") { shell.heldMaster = k; shell.route = .recoveryKit }; Spacer() }.padding(.top, 8)
+        HStack { KitButton(title: "Make the recovery kit…", variant: .soft, id: "master-make-kit") { shell.route = .recoveryKit }; Spacer() }.padding(.top, 8)
+        Lbl(text: "A different pair")
+        if confirmNew {
+          Muted(text: "This deletes the private key held here. Only do it if this public key isn't in keys/master.pub, or you mean to replace that key too.")
+          HStack(spacing: 8) {
+            KitButton(title: "Cancel", variant: .soft, color: .gray, id: "master-new-cancel") { confirmNew = false }
+            KitButton(title: "Make a new pair", color: .red, id: "master-new-confirm") { make() }
+            Spacer()
+          }.padding(.top, 8)
+        } else {
+          HStack { KitButton(title: "Make a new pair instead…", variant: .soft, color: .gray, id: "master-new") { confirmNew = true }; Spacer() }
+        }
+      } else {
+        Lbl(text: "No master key on this iPhone")
+        Muted(text: "Make a pair here. Only the public half is shown, for you to send to Claude; the private half stays in this iPhone's Keychain (this device only, Face ID) until it goes into your recovery kit.")
+        HStack { KitButton(title: "Make a master key pair", id: "master-make") { make() }; Spacer() }.padding(.top, 8)
       }
+      if let failure { Callout(text: failure, color: .red).padding(.top, 16).accessibilityIdentifier("secure-error") }
     }
-    .onAppear { if key == nil { key = MasterKey.generate() } }
-    .onDisappear { key = nil }
+    .task { repoPub = try? await KeySource.key("master.pub") }
   }
-  private func mono(_ s: String, _ id: String) -> some View {
-    Text(s).font(.system(size: K.fontSize[1], design: .monospaced)).foregroundStyle(Radix.gray.s[12]).textSelection(.enabled)
-      .padding(12).frame(maxWidth: .infinity, alignment: .leading)
-      .background(RoundedRectangle(cornerRadius: K.radius[3], style: .continuous).fill(Radix.gray.a[3]))
-      .padding(.top, 8).accessibilityIdentifier(id).accessibilityLabel(s)
+  private func make() {
+    failure = nil; confirmNew = false; copied = false
+    do { let k = MasterKey.generate(); try HeldMaster.hold(k); heldPub = k.publicKey; shell.log("master key pair made; private half held") }
+    catch { failure = errText(error) }
   }
-  private func copy(_ s: String, _ which: String, expires: Bool) {
-    var opts: [UIPasteboard.OptionsKey: Any] = [.localOnly: true]
-    if expires { opts[.expirationDate] = Date().addingTimeInterval(120) }
-    UIPasteboard.general.setItems([["public.utf8-plain-text": s]], options: opts)
-    copied = which
+  private func copy(_ s: String) {
+    UIPasteboard.general.setItems([["public.utf8-plain-text": s]], options: [.localOnly: true])
+    copied = true
   }
 }

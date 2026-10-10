@@ -132,7 +132,7 @@ jobs:
             xcrun simctl uninstall "iPhone 17" dev.de0ch.jarvis2 || true
             xcrun simctl ui "iPhone 17" appearance $a
             (cd app/ios && TEST_RUNNER_JARVIS2_APPEARANCE=$a TEST_RUNNER_JARVIS2_WORDS="$words" \
-              TEST_RUNNER_JARVIS2_MASTER_KEY="$(cat "$W/master.kit")" \
+              TEST_RUNNER_JARVIS2_CI_HELD_MASTER="$(cat "$W/master-test.pkcs8")" \
               xcodebuild test-without-building -workspace Jarvis2.xcworkspace -scheme Jarvis2 \
               -destination 'platform=iOS Simulator,name=iPhone 17' -derivedDataPath ../../dd \
               -resultBundlePath ../../result-$a.xcresult 2>&1 | tee ../../test-$a.log | grep -E "error:|Test Case|\*\* " || true)
