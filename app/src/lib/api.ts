@@ -68,6 +68,8 @@ export type Session = {
   credsExpiresAt?: string | number; discordChannel?: string; statusUpdatedAt?: string; lastReport?: string; refusals?: Refusal[];
   wakeups?: Wakeup[]; crons?: Cron[]; resumePrompt?: string; createRequestId?: string; repos?: string;
   // a lifecycle action holding the session (others are refused 409) and a permission-mode / restart job
+  // what a pause or destroy is waiting on, in plain words (e.g. "waiting for the machine's last snapshot (up to 10 min)")
+  waiting?: string;
   busy?: { kind: string; since?: string } | null; wake?: { kind: string; phase: string; error?: string } | null; apiProxy?: "on" | "off";
 };
 export type RepoEntry = { name: string; url: string; repo: string; store: string; sensitive?: boolean; fingerprint?: string; keyAt?: string };

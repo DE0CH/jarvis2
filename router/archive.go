@@ -167,13 +167,7 @@ func (r *Router) latestSnapshot(sessionID string) (machine string, cert *Doc, at
 
 // snapshotAndKill: what Pause does to a running machine (flows.go); false (state failed) when the kill fails
 func (r *Router) snapshotAndKill(id, machine string) bool {
-	done := r.awaitSnapshot(machine)
-	r.send(machine, "snapshot")
-	select {
-	case <-done:
-	case <-time.After(r.cfg.SnapshotWait):
-		log.Printf("session %s: no snapshot from %s within %s; destroying from the last one", id, machine, r.cfg.SnapshotWait)
-	}
+	r.lastSnapshot(id, machine)
 	if _, err := r.core.Call("/kill", map[string]string{"machine": machine}); err != nil {
 		r.setState(id, "failed", "kill: "+err.Error())
 		return false

@@ -184,6 +184,7 @@ func (r *Router) registerAutopilot(app appRoute, m machineRoute) {
 				s.Live = &Liveness{}
 			}
 			s.Live.Reg, s.Live.LastReport = reg, time.Now().UTC()
+			s.Booted = machine // its agent reports only once the machine has booted (machine/main.go)
 			s.Status = ""
 			if reg != nil {
 				s.Status = reg.Status

@@ -430,6 +430,13 @@ func (r *Router) buildHandlers() {
 		http.ServeFile(w, req, p)
 	})
 	m("POST /m/snapshot", func(w http.ResponseWriter, req *http.Request, machine string, body []byte) {
+		if req.Header.Get("X-Snapshot-None") != "" {
+			// a machine still booting has nothing to snapshot: the waiting pause or destroy goes on at once
+			log.Printf("machine %s: nothing to snapshot (%s)", machine, req.Header.Get("X-Snapshot-None"))
+			r.snapshotArrived(machine)
+			writeJSON(w, 200, map[string]bool{"ok": true})
+			return
+		}
 		sig := req.Header.Get("X-Snapshot-Sig")
 		if sig == "" {
 			writeJSON(w, 400, map[string]string{"error": "X-Snapshot-Sig missing"})
@@ -605,6 +612,7 @@ func sessionView(s *Session, d *persisted) map[string]any {
 		"environment": strings.Join(s.Stores, ","), "stores": s.Stores, "harness": s.Harness, "label": s.Label, "aiTitle": s.Title,
 		"model": s.Model, "permissionMode": s.PermissionMode, "guest": guest, "size": s.Size, "pausedAt": s.PausedAt,
 		"image": s.Image, "createRequestId": s.RequestID, "repos": s.Repos, "discordChannel": s.DiscordChannel,
+		"waiting": s.Waiting,
 	}
 	liveView(s, v)
 	scheduleView(d, s.ID, v)

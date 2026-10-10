@@ -31,7 +31,7 @@ function SessionPill({ m }: { m: Session }) {
   if (m.state === "failed") return <Pill kind="bad">failed</Pill>;
   if (m.state === "paused") return hasSchedule(m) ? <Pill kind="info">scheduled</Pill> : <Pill kind="dim">paused</Pill>;
   if (m.state === "approval") return <Pill kind="info">needs approval</Pill>;
-  if (MOVING[m.state]) return <Pill kind={m.state === "destroying" ? "bad" : "wait"} spin>{MOVING[m.state]}</Pill>;
+  if (MOVING[m.state]) return <Pill kind={m.state === "destroying" ? "bad" : "wait"} spin>{m.waiting ? `${m.state}: ${m.waiting}` : MOVING[m.state]}</Pill>;
   if (m.state === "started") {
     if (m.oneShotDone) return <Pill kind="wait" spin>done · archiving…</Pill>;
     if (!m.status) return <Pill kind="wait" spin>booting…</Pill>;

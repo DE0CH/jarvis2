@@ -40,6 +40,8 @@ type Session struct {
 	RestoreFrom    string      `json:"restoreFrom,omitempty"`    // restore.go: the record this session restores
 	RestoreCert    *Doc        `json:"restoreCert,omitempty"`    // restore.go: that record's signer cert
 	Ops            *SessionOps `json:"ops,omitempty"`            // sessionops.go: API proxy, env patch, rollback, attachments
+	Booted         string      `json:"booted,omitempty"`         // the machine that has reported status: it got past boot (lastSnapshot)
+	Waiting        string      `json:"waiting,omitempty"`        // what a pause or destroy is waiting on, in plain words (the app shows it)
 }
 
 type Approval struct {

@@ -326,13 +326,7 @@ func (r *Router) Pause(id string) error {
 	r.setState(id, "pausing", "")
 	go func() {
 		defer unlock()
-		done := r.awaitSnapshot(s.MachineID)
-		r.send(s.MachineID, "snapshot")
-		select {
-		case <-done:
-		case <-time.After(r.cfg.SnapshotWait):
-			log.Printf("session %s: no snapshot from %s within %s; pausing without one", id, s.MachineID, r.cfg.SnapshotWait)
-		}
+		r.lastSnapshot(id, s.MachineID)
 		if _, err := r.core.Call("/kill", map[string]string{"machine": s.MachineID}); err != nil {
 			r.setState(id, "failed", "kill: "+err.Error())
 			return
@@ -595,6 +589,48 @@ func (r *Router) send(machine, cmd string) {
 	case r.queue(machine) <- cmd:
 	default:
 	}
+}
+
+// lastSnapshot: before a pause or destroy kills the machine, its last snapshot (or its "nothing to snapshot"
+// while booting), waiting up to SnapshotWait with the reason shown in the app. A machine that never got past boot
+// (no status report from it) isn't asked at all: it has nothing to snapshot, and an older image may never answer
+// (e.g. stuck pulling the secrets of a locked store).
+func (r *Router) lastSnapshot(id, machine string) {
+	booted := false
+	r.st.Do(func(d *persisted) {
+		if x := d.Sessions[id]; x != nil {
+			booted = x.Booted == machine
+		}
+	})
+	if !booted {
+		log.Printf("session %s: %s never got past boot; nothing to snapshot", id, machine)
+		return
+	}
+	done := r.awaitSnapshot(machine)
+	r.send(machine, "snapshot")
+	r.setWaiting(id, "waiting for the machine's last snapshot (up to "+waitText(r.cfg.SnapshotWait)+")")
+	defer r.setWaiting(id, "")
+	select {
+	case <-done:
+	case <-time.After(r.cfg.SnapshotWait):
+		log.Printf("session %s: no snapshot from %s within %s; going on from the last one", id, machine, r.cfg.SnapshotWait)
+	}
+}
+
+func (r *Router) setWaiting(id, what string) {
+	r.st.Do(func(d *persisted) {
+		if x := d.Sessions[id]; x != nil {
+			x.Waiting = what
+		}
+	})
+}
+
+// waitText: "10 min", "45 s"
+func waitText(d time.Duration) string {
+	if d >= time.Minute {
+		return fmt.Sprintf("%d min", int(d.Round(time.Minute)/time.Minute))
+	}
+	return fmt.Sprintf("%d s", int(d/time.Second))
 }
 
 func (r *Router) awaitSnapshot(machine string) chan struct{} {

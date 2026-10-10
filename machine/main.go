@@ -54,6 +54,7 @@ const (
 	coreKeyEnv  = "JARVIS2_CORE_KEY"        // the core that created this machine puts its signing key here
 	goPath      = dir + "/init-requested"
 	certPath    = dir + "/cert.json"
+	bootedPath  = dir + "/booted" // written once the boot is done (cert, snapshot, secrets, repos): the harness starts next
 	clientPath  = dir + "/client.json" // the router URL + this machine's id, for later commands
 	jarvis1     = "/usr/local/bin/entrypoint.sh"
 )
@@ -210,6 +211,16 @@ func prepare() error {
 	if err != nil {
 		return err
 	}
+	// 0. the agent, first: it answers the router's commands at every stage of this machine's life, so a pause or
+	// destroy never waits on a machine still booting (e.g. looping on a locked store): until bootedPath exists a
+	// snapshot command gets "nothing to snapshot" (agent())
+	os.Remove(bootedPath)
+	agentCmd := exec.Command("/proc/self/exe", "agent")
+	agentCmd.Stdout, agentCmd.Stderr = os.Stdout, os.Stderr
+	agentCmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	if err := agentCmd.Start(); err != nil {
+		return fmt.Errorf("agent: %w", err)
+	}
 
 	// 1. this machine's succession cert: core-signed, naming this machine and its own keys
 	var certs struct {
@@ -270,12 +281,9 @@ func prepare() error {
 	}
 	cloneRepos()
 
-	// 5. the agent (pause snapshots), then Jarvis 1's entrypoint runs the harness
-	agentCmd := exec.Command("/proc/self/exe", "agent")
-	agentCmd.Stdout, agentCmd.Stderr = os.Stdout, os.Stderr
-	agentCmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
-	if err := agentCmd.Start(); err != nil {
-		return fmt.Errorf("agent: %w", err)
+	// 5. booted: from now on a snapshot command gets a real snapshot; then Jarvis 1's entrypoint runs the harness
+	if err := os.WriteFile(bootedPath, []byte(time.Now().UTC().Format(time.RFC3339)), 0o644); err != nil {
+		return fmt.Errorf("booted marker: %w", err)
 	}
 	if t, ok := strings.CutPrefix(cert.Options.Harness, taskHarnessPrefix); ok {
 		runTask(c, t, secrets, certMode(cert)) // task.go: the template instead of a harness; never returns
@@ -517,14 +525,24 @@ func unpack(body []byte) (int, error) {
 
 // ---- agent: the router's commands (pause = snapshot) -----------------------------------------------
 
+// agent: started first thing at boot (prepare), it is the machine's one reader of the router's commands for its
+// whole life. While the machine boots it answers a snapshot with "nothing to snapshot" (no workspace of its own yet:
+// a resumed line's files are the predecessor's snapshot, which the router already holds); once booted it uploads
+// real snapshots and starts the status reports (the router's sign that the machine got past boot), the local
+// Jarvis API and the live transcript sync.
 func agent() error {
 	c, err := newClient()
 	if err != nil {
 		return err
 	}
-	go statusReporter(c)
-	go serveAPIProxy(c) // apiproxy.go: $JARVIS_URL for Jarvis 1's session scripts
-	go liveSync(c)      // livesync.go: the transcripts to the Storage Box (through the router) for search
+	go func() {
+		for !booted() {
+			time.Sleep(time.Second)
+		}
+		go statusReporter(c)
+		go serveAPIProxy(c) // apiproxy.go: $JARVIS_URL for Jarvis 1's session scripts
+		go liveSync(c)      // livesync.go: the transcripts to the Storage Box (through the router) for search
+	}()
 	for {
 		var out struct {
 			Commands []string `json:"commands"`
@@ -539,12 +557,31 @@ func agent() error {
 		}
 		for _, cmd := range out.Commands {
 			if cmd == "snapshot" {
-				if err := uploadSnapshot(c); err != nil {
+				if !booted() {
+					if err := noSnapshot(c); err != nil {
+						log.Printf("answering the snapshot while booting: %v", err)
+					}
+				} else if err := uploadSnapshot(c); err != nil {
 					log.Printf("snapshot failed: %v", err)
 				}
 			}
 		}
 	}
+}
+
+func booted() bool { _, err := os.Stat(bootedPath); return err == nil }
+
+// noSnapshot: the answer to a snapshot command while booting — nothing to snapshot, so the router kills at once
+func noSnapshot(c *client) error {
+	_, _, status, err := c.raw("POST", "/m/snapshot", nil, "X-Snapshot-None", "booting")
+	if err != nil {
+		return err
+	}
+	if status != 200 {
+		return fmt.Errorf("HTTP %d", status)
+	}
+	log.Printf("snapshot asked while booting: answered nothing to snapshot")
+	return nil
 }
 
 func uploadSnapshot(c *client) error {

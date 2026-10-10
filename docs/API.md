@@ -45,7 +45,7 @@ same thing:
   userTitle /* a name pinned in the CLI */, title /* what the card, channel and archive use: serverTitle → userTitle →
   label → aiTitle → id, Jarvis 1's pickTitle */, liveSync /* {at, files: {<name>: bytes}, stored, error} — the last live
   transcript copy (below) */,
-  discordChannel /* the session's Discord channel id */, wakeups: [wakeup view], crons: [cron view] /* below */,
+  discordChannel /* the session's Discord channel id */, waiting /* what a pause or destroy waits on, plain words, or "" */, wakeups: [wakeup view], crons: [cron view] /* below */,
   resumePrompt /* a prompt queued for delivery once started */ }
 ```
 
@@ -227,7 +227,7 @@ off.
 |---|---|
 | `GET /m/cert` | `{cert, predecessorCert}` — this machine's latest succession cert and the predecessor's cert when it continues a real machine (the machine checks both against the core key the core put in its Fly config, `JARVIS2_CORE_KEY`). 404 until certified. |
 | `GET /m/snapshot` | The predecessor's snapshot: body = tar.gz, header `X-Snapshot-Sig` = base64 signature by the predecessor's signing key over the sha256 of the body. 404 = none. |
-| `POST /m/snapshot` | Upload this machine's snapshot (same format). |
+| `POST /m/snapshot` | Upload this machine's snapshot (same format). With header `X-Snapshot-None` and no body: nothing to snapshot (the machine is still booting; its agent answers every snapshot command from the first second of its life), and the waiting pause or destroy goes on at once. A pause or destroy doesn't ask a machine that never got past boot (no `/m/status` from it) at all. |
 | `GET /m/restore-snapshot` | A restoring session's first machine only: the archived snapshot, same format, signed by the OLD machine named in `JARVIS2_RESTORE_CERT`. 404 otherwise. |
 | `POST /m/pull-secrets` | The router adds this machine's cert and relays to the core; answers the core's signed `secrets` doc (sealed to the machine's key). |
 | `GET /m/commands` | Long poll (≤ 50 s): `{commands: ["snapshot"]}` or `{commands: []}`. |
