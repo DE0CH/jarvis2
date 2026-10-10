@@ -23,18 +23,22 @@ final class ReplicaUITests: XCTestCase {
     a.name = String(format: "replica-%02d-%@", step, name); a.lifetime = .keepAlways; add(a)
     XCTAssertFalse(blank(s.image), "blank screen at \(name)")
   }
-  /// a near-uniform screenshot (a white or black page with nothing on it): fewer than 4 distinct colours on a coarse grid
+  /// a blank screen (a white or black page with nothing drawn on it): below the status bar, fewer than 0.2% of the
+  /// sampled pixels differ from the page's background colour (any text or control is far more)
   func blank(_ img: UIImage) -> Bool {
     guard let cg = img.cgImage, let data = cg.dataProvider?.data, let p = CFDataGetBytePtr(data) else { return false }
-    var colours = Set<UInt32>()
     let bpr = cg.bytesPerRow, bpp = cg.bitsPerPixel / 8
-    for y in stride(from: cg.height / 10, to: cg.height, by: max(1, cg.height / 24)) {
-      for x in stride(from: 0, to: cg.width, by: max(1, cg.width / 16)) {
+    let y0 = cg.height * 12 / 100
+    let bg = (Int(p[y0 * bpr + 4 * bpp]), Int(p[y0 * bpr + 4 * bpp + 1]), Int(p[y0 * bpr + 4 * bpp + 2]))
+    var n = 0, differ = 0
+    for y in stride(from: y0, to: cg.height, by: 4) {
+      for x in stride(from: 0, to: cg.width, by: 4) {
         let o = y * bpr + x * bpp
-        colours.insert(UInt32(p[o] & 0xF0) << 16 | UInt32(p[o + 1] & 0xF0) << 8 | UInt32(p[o + 2] & 0xF0))
+        n += 1
+        if abs(Int(p[o]) - bg.0) > 24 || abs(Int(p[o + 1]) - bg.1) > 24 || abs(Int(p[o + 2]) - bg.2) > 24 { differ += 1 }
       }
     }
-    return colours.count < 4
+    return n > 0 && differ * 500 < n
   }
   func note(_ name: String, _ text: String) { let a = XCTAttachment(string: text); a.name = name; a.lifetime = .keepAlways; add(a) }
   func el(_ id: String) -> XCUIElement { app.descendants(matching: .any)[id] }
@@ -103,7 +107,7 @@ final class ReplicaUITests: XCTestCase {
     shot("signin-code")
     cf.typeText("\n")
     sleep(2)
-    if cf.exists { tapButton(["Sign in", "Log in", "Verify", "Submit", "Continue"]) }
+    if cf.waitForExistence(timeout: 1), !gone(cf, 8) { tapButton(["Sign in", "Log in", "Verify", "Submit", "Continue"]) }
   }
   func waitAny(_ es: [XCUIElement], _ s: TimeInterval) -> XCUIElement? {
     let until = Date().addingTimeInterval(s)
@@ -163,7 +167,7 @@ final class ReplicaUITests: XCTestCase {
     el("unlock-rh-plain").tap()
     sleep(3)
     shot("faceid-failed")
-    for b in [springboard.buttons["Cancel"], app.buttons["Cancel"]] where b.waitForExistence(timeout: 5) { b.tap(); break }
+    for b in [springboard.buttons["Cancel"].firstMatch, app.buttons["Cancel"].firstMatch] where b.waitForExistence(timeout: 5) { b.tap(); break }
     XCTAssertTrue(wait(el("secure-error"), 20, "a failed Face ID leaves the store locked, with a message"), "Face ID failure shown")
     XCTAssertFalse(el("lock-rh-plain").exists, "no unlock without Face ID")
     faceIDMatches()
