@@ -12,7 +12,7 @@ const STATUS_HINT: Record<number, string> = {
   400: "bad request", 401: "not authorised", 403: "forbidden", 404: "not found", 409: "conflict",
   413: "request too large", 423: "locked", 429: "rate-limited — try again shortly", 500: "router error",
   502: "bad gateway — the router or the core dropped the request",
-  503: "unavailable — the router is restarting",
+  503: "unavailable",
   504: "timed out — no response from the router in time",
 };
 export function reasonOf(text: string): string {
