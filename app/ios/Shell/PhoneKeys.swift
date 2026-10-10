@@ -2,7 +2,9 @@
 // group, which the extension's process doesn't share) reads them.
 //   - signing key: Secure Enclave P-256, Face ID on every use (.biometryAny) — signs challenges;
 //   - agreement key: Secure Enclave P-256, Face ID on every use — computes this phone's share p·E of an unlock.
-// The simulator builds use software keys (its Face ID can't be driven from CI); the pages say so.
+// The simulator has no Secure Enclave, so its builds use software keys (the pages say so); when the simulator has
+// Face ID enrolled (the phone replica enrols it and drives matches and failures with simctl), every use asks for
+// Face ID first, as the iPhone does.
 import CryptoKit
 import Foundation
 import LocalAuthentication
@@ -82,6 +84,23 @@ final class PhoneKeys {
     let k = P256.KeyAgreement.PrivateKey(); Keychain.set("agreement-sw", k.rawRepresentation); return k
   }
 
+  /// the simulator's stand-in for the Secure Enclave's Face ID check: with Face ID enrolled, a use needs a match
+  private func simulatorFaceID(_ reason: String) throws {
+    #if targetEnvironment(simulator)
+    let ctx = LAContext()
+    var e: NSError?
+    guard ctx.canEvaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, error: &e) else { return } // not enrolled
+    let sem = DispatchSemaphore(value: 0)
+    nonisolated(unsafe) var err: Error?
+    ctx.evaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, localizedReason: reason) { ok, error in
+      if !ok { err = error ?? LAError(.authenticationFailed) }
+      sem.signal()
+    }
+    sem.wait()
+    if let err { throw err }
+    #endif
+  }
+
   // ---- uses (one Face ID each on a real iPhone) ----
   /// DER signature over exactly `payload`'s bytes
   func sign(_ payload: String, reason: String) throws -> Data {
@@ -91,6 +110,7 @@ final class PhoneKeys {
       let k = try SecureEnclave.P256.Signing.PrivateKey(dataRepresentation: Keychain.get("signing-se")!, authenticationContext: ctx)
       return try k.signature(for: Data(payload.utf8)).derRepresentation
     }
+    try simulatorFaceID(reason)
     return try softSigning().signature(for: Data(payload.utf8)).derRepresentation
   }
   /// a signature over `payload` and this phone's share x(p·E), under ONE Face ID: both Enclave keys use the same
@@ -150,6 +170,7 @@ final class PhoneKeys {
       let k = try SecureEnclave.P256.KeyAgreement.PrivateKey(dataRepresentation: Keychain.get("agreement-se")!, authenticationContext: ctx)
       secret = try k.sharedSecretFromKeyAgreement(with: pub)
     } else {
+      try simulatorFaceID(reason)
       secret = try softAgreement().sharedSecretFromKeyAgreement(with: pub)
     }
     return secret.withUnsafeBytes { Data($0) }

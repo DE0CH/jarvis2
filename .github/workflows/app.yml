@@ -194,7 +194,7 @@ jobs:
           grep -q "ARCHIVE SUCCEEDED" ../../archive.log
           # a release build never carries the CI stand-in's address (KeySource.swift reads it only when
           # compiled with JARVIS_CI, which this archive isn't)
-          for k in JarvisCIKeysBase; do
+          for k in JarvisCIKeysBase JarvisKeysRef; do
             v=$(/usr/libexec/PlistBuddy -c "Print :$k" ../../Jarvis2.xcarchive/Products/Applications/Jarvis2.app/Info.plist 2>/dev/null || true)
             [ -z "$v" ] || { echo "release Info.plist has $k=$v"; exit 1; }
           done

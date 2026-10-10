@@ -1,0 +1,104 @@
+name: replica
+# The phone replica (infra/phone-replica.sh starts it): the app's RELEASE build (the TestFlight configuration, shell and
+# React Native extension; only the router address and the keys' git ref point at the throwaway box) on the simulator
+# closest to Deyao's iPhone (iPhone 17 = iPhone18,3; the newest iOS runtime the runner has, iOS 27 when there is one),
+# with Face ID enrolled and every flow tapped by ReplicaUITests against the real box and real Fly sessions. The video,
+# screenshots and logs are the run's artifact `replica`.
+on:
+  workflow_dispatch:
+    inputs:
+      base: { description: "the box's router (https://<name>.deyaochen.com/)", required: true }
+      keys_ref: { description: "the git ref holding the box's keys/ (a rehearsal branch)", required: true }
+      relay: { description: "the relay to the setup session (https://ppng.io/<random>)", required: true }
+      email: { description: "the Access login email (the bot's mailbox)", required: true }
+      repo: { description: "the throwaway repo for the repos flow (DE0CH/<name>)", required: false, default: "" }
+concurrency:
+  group: replica
+  cancel-in-progress: false
+jobs:
+  replica:
+    runs-on: macos-26
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - name: Xcode and the simulator closest to the iPhone (iPhone 17, newest iOS)
+        run: |
+          set -x
+          ls -d /Applications/Xcode*.app
+          X=$(ls -d /Applications/Xcode_*.app | sort -V | tail -1); sudo xcode-select -s "$X"; xcodebuild -version
+          xcrun simctl list runtimes
+          RT=$(xcrun simctl list runtimes -j | python3 -c "
+          import json,sys
+          rs=[r for r in json.load(sys.stdin)['runtimes'] if r['platform']=='iOS' and r['isAvailable']]
+          rs.sort(key=lambda r:[int(x) for x in r['version'].split('.')])
+          print(rs[-1]['identifier'])")
+          case "$RT" in *iOS-27*) ;; *) echo "no iOS 27 runtime on this runner: trying to download it"; xcodebuild -downloadPlatform iOS || true
+            RT=$(xcrun simctl list runtimes -j | python3 -c "
+          import json,sys
+          rs=[r for r in json.load(sys.stdin)['runtimes'] if r['platform']=='iOS' and r['isAvailable']]
+          rs.sort(key=lambda r:[int(x) for x in r['version'].split('.')])
+          print(rs[-1]['identifier'])");; esac
+          UDID=$(xcrun simctl create replica "iPhone 17" "$RT")
+          echo "UDID=$UDID" >> "$GITHUB_ENV"; echo "RUNTIME=$RT" >> "$GITHUB_ENV"
+          mkdir -p out && echo "device: iPhone 17, runtime $RT, $(xcodebuild -version | head -1)" | tee out/device.txt
+      - name: Install + JS bundle (as for TestFlight)
+        working-directory: app
+        run: |
+          npm ci --no-audit --no-fund
+          mkdir -p ios/Extension/res
+          npx expo export:embed --platform ios --dev false --entry-file node_modules/expo-router/entry.js \
+            --bundle-output ios/Extension/main.jsbundle --assets-dest ios/Extension/res
+          mkdir -p ios/Extension/res/assets
+      - run: brew install xcodegen
+      - name: Generate project + pods
+        working-directory: app/ios
+        run: xcodegen generate && pod install
+      - name: Boot, enrol Face ID, stream logs
+        run: |
+          xcrun simctl boot "$UDID"; xcrun simctl bootstatus "$UDID" -b
+          xcrun simctl spawn "$UDID" notifyutil -s com.apple.BiometricKit.enrollmentChanged 1
+          xcrun simctl spawn "$UDID" notifyutil -p com.apple.BiometricKit.enrollmentChanged
+          nohup xcrun simctl spawn "$UDID" log stream --style compact --level debug \
+            --predicate 'process == "JarvisUI" OR process == "Jarvis2"' > out/sim.log 2>&1 &
+      - name: Build for testing (Release; the box's router and keys ref only)
+        working-directory: app/ios
+        env:
+          BASE: ${{ inputs.base }}
+          KEYS_REF: ${{ inputs.keys_ref }}
+        run: |
+          set -o pipefail
+          xcodebuild build-for-testing -workspace Jarvis2.xcworkspace -scheme Jarvis2 -configuration Release \
+            -destination "id=$UDID" -derivedDataPath ../../dd \
+            JARVIS_BASE="$BASE" JARVIS_KEYS_REF="$KEYS_REF" \
+            2>&1 | tee ../../xcodebuild.log | grep -E "error:|\*\* " || true
+          grep -q "TEST BUILD SUCCEEDED" ../../xcodebuild.log
+      - name: Every flow (video + screenshots)
+        env:
+          RELAY: ${{ inputs.relay }}
+          EMAIL: ${{ inputs.email }}
+          REPO: ${{ inputs.repo }}
+        run: |
+          nohup python3 app/ios/ci/replica-host.py "$UDID" "$RELAY" > out/host.log 2>&1 &
+          sleep 1
+          nohup xcrun simctl io "$UDID" recordVideo --codec=h264 --force out/replica.mp4 > out/video.log 2>&1 &
+          VP=$!
+          (cd app/ios && TEST_RUNNER_REPLICA_EMAIL="$EMAIL" TEST_RUNNER_REPLICA_REPO="$REPO" \
+            xcodebuild test-without-building -workspace Jarvis2.xcworkspace -scheme Jarvis2 -configuration Release \
+            -only-testing:Jarvis2UITests/ReplicaUITests/testReplica -destination "id=$UDID" -derivedDataPath ../../dd \
+            -resultBundlePath ../../replica.xcresult 2>&1 | tee ../../test.log | grep -E "error:|Test Case|\*\* " || true)
+          kill -INT $VP; sleep 5
+          grep -q "TEST EXECUTE SUCCEEDED\|\*\* TEST SUCCEEDED" test.log
+      - name: Export results
+        if: always()
+        run: |
+          mkdir -p out/shots
+          xcrun xcresulttool export attachments --path replica.xcresult --output-path out/shots || true
+          cp test.log out/ 2>/dev/null || true
+          grep -n "error:" xcodebuild.log | head -100 > out/build-errors.txt || true
+          mkdir -p out/crash
+          find ~/Library/Logs/DiagnosticReports -newer app/package.json -name "*.ips" -exec cp {} out/crash/ \; 2>/dev/null || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with: { name: replica, path: out }

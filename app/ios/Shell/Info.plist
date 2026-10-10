@@ -4,6 +4,8 @@
 <dict>
 	<key>JarvisBase</key>
 	<string>$(JARVIS_BASE)</string>
+	<key>JarvisKeysRef</key>
+	<string>$(JARVIS_KEYS_REF)</string>
 	<key>JarvisCIKeysBase</key>
 	<string>$(JARVIS_CI_KEYS_BASE)</string>
 	<key>NSAppTransportSecurity</key>

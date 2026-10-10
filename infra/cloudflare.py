@@ -17,7 +17,12 @@ A rehearsal box (infra/rehearse-recover.sh) gets its own of each, never producti
   REHEARSAL=NAME infra/cloudflare.py OUT    tunnel NAME, hostname NAME.deyaochen.com, ONE Access app on the whole
                                             hostname whose only policy is the service token NAME (the test client
                                             and the setup calls both use it: SETUP_ACCESS_ID/SECRET in OUT)
-  REHEARSAL=NAME infra/cloudflare.py --delete   removes that app, token, DNS record and tunnel
+  REHEARSAL=NAME REHEARSAL_EMAIL=E infra/cloudflare.py OUT
+                                            the phone replica's (infra/phone-replica.sh): as production, two apps —
+                                            the hostname for the email E only (a real Access login, one-time PIN),
+                                            NAME.deyaochen.com/setup for the service token NAME; OUT also gets
+                                            APP_AUD and SETUP_AUD (the router checks the JWTs as in production)
+  REHEARSAL=NAME infra/cloudflare.py --delete   removes that app (or both), token, DNS record and tunnel
 NAME must start with "jarvis2-rehearsal".
 """
 import json, os, sys, urllib.request, urllib.error
@@ -87,7 +92,7 @@ def rehearsal(name, out):
     big = os.environ["CLOUDFLARE_API"]
     if out == "--delete":
         for a in call("GET", f"/accounts/{ACCOUNT}/access/apps"):
-            if a.get("domain") == host:
+            if a.get("domain") in (host, host + "/setup"):
                 call("DELETE", f"/accounts/{ACCOUNT}/access/apps/{a['id']}")
         for t in call("GET", f"/accounts/{ACCOUNT}/access/service_tokens", token=big):
             if t["name"] == name:
@@ -104,8 +109,15 @@ def rehearsal(name, out):
             call("DELETE", f"/accounts/{ACCOUNT}/access/service_tokens/{t['id']}", token=big)
     t = call("POST", f"/accounts/{ACCOUNT}/access/service_tokens", {"name": name, "duration": "24h"}, token=big)
     vals = {"SETUP_ACCESS_ID": t["client_id"], "SETUP_ACCESS_SECRET": t["client_secret"]}
-    access_app(f"Jarvis 2 rehearsal ({name})", host, {
-        "name": "rehearsal client", "decision": "non_identity", "include": [{"service_token": {"token_id": t["id"]}}]})
+    email = os.environ.get("REHEARSAL_EMAIL", "")
+    if email:
+        vals["APP_AUD"] = access_app(f"Jarvis 2 replica ({name})", host, {
+            "name": "replica phone", "decision": "allow", "include": [{"email": {"email": email}}]})
+        vals["SETUP_AUD"] = access_app(f"Jarvis 2 replica setup ({name})", host + "/setup", {
+            "name": "setup session", "decision": "non_identity", "include": [{"service_token": {"token_id": t["id"]}}]})
+    else:
+        access_app(f"Jarvis 2 rehearsal ({name})", host, {
+            "name": "rehearsal client", "decision": "non_identity", "include": [{"service_token": {"token_id": t["id"]}}]})
     tid, vals["TUNNEL_TOKEN"] = tunnel_and_dns(host, name)
     write_out(out, vals)
     print(f"ok: rehearsal tunnel {tid} at https://{host}/ behind its own Access app; values in {out}")

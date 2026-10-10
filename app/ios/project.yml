@@ -20,6 +20,9 @@ settings:
     # code that reads the key stand-in's address (KeySource.swift); release builds leave both empty
     JARVIS_CI_FLAG: ""
     JARVIS_CI_KEYS_BASE: ""
+    # the phone replica only (infra/phone-replica.sh): the git ref of DE0CH/jarvis2 the keys come from (KeySource.swift);
+    # empty = main, and the TestFlight archive must leave it empty
+    JARVIS_KEYS_REF: ""
 targets:
   Jarvis2:
     type: application

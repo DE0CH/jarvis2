@@ -95,7 +95,9 @@ Carried over from the mock (DE0CH/jarvis2-mock DECISIONS.md) unless marked new.
     the router, which can't read or change them (sealed to the master key, signed by the setup key). Only a CI build
     can point the key source elsewhere: the code that reads the overrides is compiled only with `JARVIS_CI` (`JARVIS_CI_FLAG`, set on
     the simulator job's xcodebuild line), and the TestFlight job fails if the archive's Info.plist carries
-    any override.
+    any override. Any build may name another git ref of the same repo (`JarvisKeysRef`, a branch name, never a URL):
+    the phone replica's Release build reads its throwaway box's keys from a rehearsal branch; the TestFlight job
+    fails if the archive names one (Claude, 2026-10-10, for the replica to be the Release build).
 19. **New: the S3 stand-in in CI is `rclone serve s3`** (MinIO's downloads are gone, HTTP 410; moto doesn't
     check signatures) — it checks SigV4, so a wrong secret fails as on Hetzner. `ios/ci/standin.py` seeds it
     by calling infra/setup.py's own `backup` / `mark_sensitive_backup` with a per-run setup key and the public
