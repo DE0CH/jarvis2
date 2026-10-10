@@ -63,7 +63,7 @@ export type Session = {
   created?: string; region?: string; environment?: string; harness?: string; label?: string; model?: string;
   permissionMode?: string; guest?: string; stores?: string[] | null; size?: string; image?: string; pausedAt?: string | null; error?: string | null; title?: string; destroyedAt?: string;
   // live fields (docs/API.md "Sessions"): the machine's report, the autopilot's settings, the schedule
-  aiTitle?: string; liveName?: string; userTitle?: string; bgTasks?: number; needsGrant?: string; pauseInMs?: number;
+  aiTitle?: string; liveName?: string; userTitle?: string; serverTitle?: string; liveSync?: { at: string; files: Record<string, number>; stored: boolean; error?: string } | null; bgTasks?: number; needsGrant?: string; pauseInMs?: number;
   autoPause?: "on" | "off"; notifyIdle?: "on" | "off"; oneShot?: boolean; oneShotDone?: boolean; authFailed?: boolean;
   credsExpiresAt?: string | number; discordChannel?: string; statusUpdatedAt?: string; lastReport?: string; refusals?: Refusal[];
   wakeups?: Wakeup[]; crons?: Cron[]; resumePrompt?: string; createRequestId?: string; repos?: string;
@@ -140,7 +140,9 @@ export function ago(iso: string | Date) {
   const s = Math.max(0, (Date.now() - new Date(iso).getTime()) / 1000);
   if (s < 60) return "just now"; if (s < 3600) return Math.floor(s / 60) + " min ago"; if (s < 86400) return Math.floor(s / 3600) + " h ago"; return Math.floor(s / 86400) + " d ago";
 }
-export const sessionTitle = (m: Session) => m.userTitle || m.label || m.aiTitle || m.title || m.name || m.id;
+// what the Claude app calls it (Jarvis 1's order, router/discord.go sessionTitle): the app's own title — which
+// follows a rename in the app — then a name pinned in the CLI, the label from New session, the AI title
+export const sessionTitle = (m: Session) => m.serverTitle || m.userTitle || m.label || m.aiTitle || m.title || m.name || m.id;
 export const usd = (n: number) => "USD " + (Math.round(n * 100) / 100).toFixed(2);
 /** "at 07:52" / "Oct 12 07:52", with how far away it is */
 export function when(at: number | string) {
@@ -189,3 +191,19 @@ export type TaskSchedule = { id: string; instance: string; time: string; tz: str
 export type TasksOverview = { sessionImage?: string | null; templates: TaskTemplate[]; instances: TaskInstance[]; schedules: TaskSchedule[] };
 export const RUN_ACTIVE = (p: TaskRunPhase) => p === "queued" || p === "starting" || p === "running";
 export const isTaskLine = (m: Session) => (m.harness || "").startsWith("task:");
+
+// ---- search (api/search, api/icloud/*): forwarded by the router to Jarvis 1's services, Jarvis 1's shapes ----
+// every archived, paused and running conversation (Jarvis 1's and Jarvis 2's: a running Jarvis 2 session's live
+// copy is under .live/<its id>, so `machineId` is that session's id) plus the task records
+export type SearchHit = {
+  id: number; score: number; via: ("keyword" | "semantic")[]; kind: "msg" | "tool" | "doc"; date: string | null; ts: string | null;
+  title: string; sid: string | null; dir: string | null; state: "archive" | "paused" | "live"; machineId: string | null; file: string; snippet: string;
+};
+export type SearchGroup = { title: string; sid: string | null; dir: string | null; state: SearchHit["state"]; machineId: string | null; date: string | null; count: number; hits: SearchHit[] };
+export type SearchResult = { query: string; reranked: boolean; total: number; tookMs: number; notes: string[]; terms: string[]; hits?: SearchHit[]; sessions?: SearchGroup[] };
+export type ContextChunk = { id: number; kind: SearchHit["kind"]; ts: string | null; text: string; hit?: boolean };
+export type SearchContext = { session: { title: string; dir: string | null } | null; file: string; chunks: ContextChunk[] };
+// Deyao's iCloud Drive, by name and content (Jarvis 1's icloud-index)
+export type IcloudHit = { path: string; size: number; mtime: string; kind: string; state?: string; note?: string; score: number; via: string[]; part?: string; src?: string; snippet: string };
+export type IcloudResult = { query: string; total: number; tookMs: number; notes: string[]; hits: IcloudHit[] };
+export type IcloudFile = { path: string; size?: number; mtime?: string; kind?: string; state?: string; note?: string; error?: string; chunks: { part?: string; src?: string; text: string }[] };

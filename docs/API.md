@@ -41,13 +41,19 @@ same thing:
   sessionId /* claude's conversation id */, authFailed, credsExpiresAt, sessionsInside, oneShotDone,
   refusals: [{kind: "fallback" | "refusal", at, uuid, from, to, model, category}],
   pauseInMs /* while the auto-pause countdown runs */,
+  serverTitle /* the Claude app's own title of its Remote Control entry (the machine reads it; kept while paused) */,
+  userTitle /* a name pinned in the CLI */, title /* what the card, channel and archive use: serverTitle → userTitle →
+  label → aiTitle → id, Jarvis 1's pickTitle */, liveSync /* {at, files: {<name>: bytes}, stored, error} — the last live
+  transcript copy (below) */,
   discordChannel /* the session's Discord channel id */, wakeups: [wakeup view], crons: [cron view] /* below */,
   resumePrompt /* a prompt queued for delivery once started */ }
 ```
 
 What the router does by itself with a running session (`router/autopilot.go`, every 30 s), from that report:
 auto-pause after 1 h plain idle (unless `autoPause` is off, the session is one-shot, or another feature vetoes);
-destroy a one-shot session once `oneShotDone`; Escape a prompt left `waiting` for 1 h (holder `status`); DM
+destroy a one-shot session once `oneShotDone` — forcefully (a failed archive doesn't stop it) and with a DM when work
+was lost: dirty repos as its final snapshot recorded them, a repo check that couldn't run, or a failed archive
+(`router/oneshot.go`, Jarvis 1's finishOneShot); Escape a prompt left `waiting` for 1 h (holder `status`); DM
 "needs you" / idle / dead after 5 min in that state (the idle one muted by `notifyIdle` off); DM new safeguard
 refusals and the "switch model?" dialog (holder `status` reads the pane); a Jarvis watchdog peer message every
 15 min while idle with background jobs; and login repair: when the session's credentials expire before Jarvis
@@ -79,6 +85,7 @@ gone (moved to records); `failed` (with `error`).
 | `GET /api/sessions/:id/tail` | A paused session's conversation end, from its snapshot: `{title, sessionId, messages: [{role, text, at}]}` (409 while it runs, 404 without a snapshot). |
 | `GET /api/state` (extra fields) | `budget`: `{month, spentUsd, capUsd, warnUsd, warned, capped, cappedAt, ratePerHour, perMonth, running, volumes, sampledAt}` or null; `fly`: `{apps, app, machines, volumes, other: [{kind, app, id, name, state, region, created, detail}], error, checkedAt}` ("Also on Fly": machines in app jarvis2-sessions that are no running session of the router's, and volumes); `flyApp`. |
 | `GET /api/records` | Destroyed sessions `{records: [...]}`; each has `archive: {dir, title, transcripts, artifacts, signer, snapshotAt, last}` when it was archived, `archiveError`, `restored: [{sessionId, at}]`. |
+| `POST /api/records` | Index an archive ALREADY on the Storage Box, by hand (Jarvis 1's call): `{archiveDir: "claude-records/<folder>", transcripts: [file…], artifacts?, title?, environment? \| stores?, repos?, permissionMode?, model?, size?, harness?, created?, destroyedAt?}` → `{ok, record}` (id `archive-<the first transcript's uuid prefix>`). The transcripts must exist; nothing is scanned. Such a record has no machine-signed snapshot (`archive.signer` empty), so its tail, Remove and Delete work and Restore is refused (400). |
 | `GET /api/records/:id/tail` | The archived conversation's end (a Range read of its newest transcript), same shape as the session tail. |
 | `DELETE /api/records/:id` | Off the list and the Storage Box index; `?purge=1` deletes its archive too (the whole dir, or only its own files when another record shares the dir). |
 | `POST /api/records/:id/restore` | Body `{requestId?}` → `{id, requestId}`. A NEW session (new line) with the record's options; an approval of kind `new-session` with `options.restore` naming the record. Its first machine restores the archived snapshot (below). |
@@ -94,6 +101,7 @@ gone (moved to records); `failed` (with `error`).
 | `GET /api/repos`, `POST /api/repos {name?, url}`, `DELETE /api/repos/:name` | Deyao's repo list (https clone URLs), for New session's `repos`. |
 | `GET /api/github/repos` | `{repos: [{fullName, url, htmlUrl, private, fork, archived, description, language, pushedAt, owner}], cachedAt, configured}` (5 min cache, `?refresh=1`), listed with `GITHUB_READ_TOKEN` (router env; metadata read only — sessions clone with their own per-repo tokens). 503 without it. |
 | `GET /api/usage` | Forwarded to Jarvis 1's `/api/usage` (query kept) with the services token: Jarvis 1 holds the Claude login. |
+| `GET /api/search`, `/api/search/context`, `/api/search/status`; `GET /api/icloud/search`, `/api/icloud/file`, `/api/icloud/status`; `POST /api/icloud/relist` | The app's Search tab: forwarded to Jarvis 1's transcript search and iCloud index unchanged (path, query, body) with the services token `JARVIS1_SERVICES_ID/SECRET` and no `X-Jarvis2-Session`; Jarvis 1's shapes (its `selfhost/API.md`). 503 without the token. |
 
 ### Archives (Storage Box, router env `STORAGEBOX_HOST/USER/PASSWORD`)
 
@@ -101,6 +109,8 @@ gone (moved to records); `failed` (with `error`).
 `session.json`, `restore-<session id>.json`, and `jarvis2/snapshot.tar.gz` + `snapshot.sig` (the machine's signature over the
 sha256 hex) + `cert.json` (the signer's core-signed cert) + `core-cert.json` (the master-signed core key). Index:
 `claude-records/.index/jarvis2-destroyed-sessions.json` (newest first). `RECORDS_OFF=1` (the e2e test) destroys without archiving.
+While a session runs, its transcripts are also copied to `claude-records/.live/<session id>/<uuid>.jsonl` (`POST /m/live-transcript`
+above), deleted on destroy.
 
 Restore trust: the router passes the old cert to the new line's first machine in `JARVIS2_RESTORE_CERT`; the machine accepts
 it only with no predecessor, checks it against the core key, the snapshot (`GET /m/restore-snapshot`) against the cert's
@@ -125,6 +135,8 @@ The phone may approve anything; it shows exactly what it signs (`request.stores`
 
 ## The core, relayed (`/api/core/*`)
 
+When the core can't be reached at all (before the first setup its pod doesn't run) every one of these answers 503
+`{error: "the core isn't running", coreDown: true}`; the app's recovery page shows that as a plain note.
 Pass-through to the core's own endpoints, answers unchanged (signed): `GET identity`, `GET core-cert`,
 `POST recover {statement, masterSig, bundle}`, `POST stores {nonce}`, `POST stores/create {name}`, `POST
 stores/mark-sensitive {name}`, `POST stores/write {store}`, `POST unlock/begin {store}`, `POST unlock/finish
@@ -173,7 +185,8 @@ off.
 | `GET /m/tunnel-proof` | `{proof, id}`: hex HMAC-SHA256(`JARVIS2_TUNNEL_KEY`, `"jarvis2-tunnel:" + <this machine's session id>`), which the cf-tunnel Worker checks when the `jarvis2-tunnel` token registers that id. The machine puts it in `TUNNEL_AGENT_SECRET` at boot (never in the Fly config). 404 without the key; 403 for a machine with no running session. |
 | `GET /m/attachments` | `{files: [{name, size, isImage}]}`: the first-prompt attachments bound to this machine's session (404 none). `GET /m/attachments/:name` the bytes; `DELETE /m/attachments` drops the router's copy once fetched. |
 | `POST /m/task-result` | A task line's machine (harness `task:<template>`, below) after its run: `{run, exitCode, timedOut, error, startedAt, finishedAt, log /* tail ≤ 256 KB */, output /* ≤ 64 KB */}`, store values already redacted by the machine. `run: ""` = a boot with no run (the line's first machine). The router records the run and pauses the line. 403 for a machine that isn't a running task line. |
-| `POST /m/status` | Body `{raw}`: the output of Jarvis 1's registry command (`machine/status.go`), sent by the agent when it changes and at least every 60 s; parsed by the router (`router/registry.go`). |
+| `POST /m/status` | Body `{raw, appTitle}`: `raw` = the output of Jarvis 1's registry command (`machine/status.go`), sent by the agent when it changes and at least every 60 s; parsed by the router (`router/registry.go`). `appTitle` = the Claude app's title of the session's Remote Control entry, which the machine reads (at most once a minute) from `api.anthropic.com/v1/code/sessions/cse_<bridge>` with the session's own Claude login (`machine/apptitle.go`); "" keeps the last one. It becomes the session's `serverTitle`, and a resume without a label passes it on as `SESSION_RESUME_TITLE` (Jarvis 1's supervisor names a fresh Remote Control entry with it). |
+| `POST /m/live-transcript` | Header `X-Name: <uuid>.jsonl`, body = the whole transcript (≤ 256 MB). The machine sends each conversation under `~/.claude/projects` that changed, every `JARVIS2_LIVE_SYNC_SECONDS` (default 300; router env `LIVE_SYNC_SECONDS` sets it), skipping Jarvis's delivery relays (`machine/livesync.go`). The router PUTs it to `claude-records/.live/<session id>/<name>` with its own Storage Box credentials — Jarvis 1's layout, so its transcript search indexes running Jarvis 2 sessions — and records `liveSync` on the session; with no Storage Box (or `RECORDS_OFF=1`) it answers `{ok, stored: false}`. The folder goes when the session is destroyed. 403 for a machine with no running session. |
 
 ## Wakeups and crons (`router/schedule.go`)
 

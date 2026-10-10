@@ -12,6 +12,7 @@ import { TopBar, openPage } from "../ui/page";
 import { useWide } from "../ui/overlays";
 import { Sessions } from "../views/Sessions";
 import { Records } from "../views/Records";
+import { Search } from "../views/Search";
 import { Stores } from "../views/Stores";
 import { Settings } from "../views/Settings";
 import { Repos } from "../views/Repos";
@@ -51,6 +52,7 @@ export default function Dashboard() {
           {!wide && <Tabs value={tab} onChange={(v) => setTab(v as Tab)} items={TABS} />}
           <View nativeID={"view-" + tab}>
             {tab === "sessions" && <Sessions />}
+            {tab === "search" && <Search />}
             {tab === "stores" && <Stores />}
             {tab === "records" && <Records />}
             {tab === "tasks" && <Tasks />}

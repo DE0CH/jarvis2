@@ -4,6 +4,7 @@ import { api, ago, isTaskLine, challengeRequest, cronEvery, holderTitle, HOLDERS
 import { useStore, getStore, pend, refresh, refreshUntil, pendUntil, settle, ask, askText, toast, failed, exclusive, BUSY_LABEL } from "../lib/store";
 import { hasShell, requestSecure } from "../lib/shell";
 import { requestGrant } from "../lib/grants";
+import { canCopy, copyText } from "../lib/clipboard";
 import { Box, Button, Callout, CalloutText, Card, Flex, Heading, Lbl, Muted, P, Pill, Text } from "../ui/kit";
 import { BusyButton, PButton, useCoolAfterShift } from "../ui/bits";
 import { Cards } from "../ui/cards";
@@ -168,6 +169,7 @@ function menuItems(m: Session): MenuItem[] {
     ? { label: "Switch to auto mode", sub: "Permission prompts gated by the classifier", onClick: () => switchMode(m, "auto") }
     : { label: "Switch to bypass mode", sub: "No permission prompts; the iPhone allows it", onClick: () => switchMode(m, "bypass") });
   if (m.state === "paused") items.push({ label: "Resume with latest image", sub: "Newest session image; the iPhone approves", onClick: () => upgrade(m.id) });
+  if (canCopy) items.push({ label: "Copy session id", sub: m.id, onClick: () => copyText(m.id).then(() => toast("Session id copied", "ok"), (e) => failed(e, "Could not copy: ")) });
   items.push({ label: "Destroy", sub: "Archive transcripts + ~/artifacts, then burn the machine", danger: true, onClick: () => destroySession(m.id) });
   return items;
 }

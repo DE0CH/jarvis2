@@ -565,6 +565,7 @@ func agent() error {
 	}
 	go statusReporter(c)
 	go serveAPIProxy(c) // apiproxy.go: $JARVIS_URL for Jarvis 1's session scripts
+	go liveSync(c)      // livesync.go: the transcripts to the Storage Box (through the router) for search
 	for {
 		var out struct {
 			Commands []string `json:"commands"`

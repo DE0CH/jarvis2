@@ -32,6 +32,8 @@ type Session struct {
 	Title          string      `json:"aiTitle,omitempty"`
 	Status         string      `json:"status,omitempty"`
 	UserTitle      string      `json:"userTitle,omitempty"`      // Deyao's own rename (the transcript's custom title): beats Label
+	AppTitle       string      `json:"serverTitle,omitempty"`    // the Claude app's own title (machine report; Jarvis 1's serverTitle): beats all
+	LiveSync       *LiveSync   `json:"liveSync,omitempty"`       // livesync.go: the transcripts the machine last copied out
 	DiscordChannel string      `json:"discordChannel,omitempty"` // the session's channel (discord.go), LOBSTER_CHANNEL on the machine
 	Live           *Liveness   `json:"live,omitempty"`           // reported status, auto-pause/one-shot settings (autopilot.go)
 	ArchiveDir     string      `json:"archiveDir,omitempty"`     // archive.go: fixed by the destroy that archives it

@@ -117,6 +117,15 @@ func liveOptions(s *Session, o map[string]string) {
 	}
 }
 
+// cleanAppTitle: one line, at most 200 characters (it names a Discord channel and an archive folder)
+func cleanAppTitle(t string) string {
+	t = strings.Join(strings.Fields(t), " ")
+	if r := []rune(t); len(r) > 200 {
+		t = string(r[:200])
+	}
+	return t
+}
+
 func onOff(off bool) string {
 	if off {
 		return "off"
@@ -160,10 +169,12 @@ func orEmptyR(r []Refusal) []Refusal {
 func (r *Router) registerAutopilot(app appRoute, m machineRoute) {
 	m("POST /m/status", func(w http.ResponseWriter, req *http.Request, machine string, body []byte) {
 		var in struct {
-			Raw string `json:"raw"`
+			Raw      string `json:"raw"`
+			AppTitle string `json:"appTitle"` // the Claude app's title of the Remote Control entry (machine/apptitle.go)
 		}
 		json.Unmarshal(body, &in)
 		reg := parseRegistry(in.Raw)
+		appTitle := cleanAppTitle(in.AppTitle)
 		r.st.Do(func(d *persisted) {
 			s := d.Sessions[d.Machines[machine]]
 			if s == nil || s.MachineID != machine {
@@ -182,6 +193,9 @@ func (r *Router) registerAutopilot(app appRoute, m machineRoute) {
 				if reg.NameSource != "" && reg.NameSource != "derived" && reg.LiveName != "" {
 					s.UserTitle = reg.LiveName // Deyao named it himself (Jarvis 1's pickTitle userName)
 				}
+			}
+			if appTitle != "" {
+				s.AppTitle = appTitle // kept while paused, as Jarvis 1's paused record keeps the title the app showed
 			}
 		})
 		writeJSON(w, 200, map[string]bool{"ok": true})
@@ -512,7 +526,7 @@ func (r *Router) runAction(a pilotAction) {
 			}
 		})
 	case "destroy":
-		if err := r.Destroy(a.Session); err != nil {
+		if err := r.finishOneShot(a.Session); err != nil { // oneshot.go: forced, DMs about lost work
 			log.Printf("[oneshot] %s: %v", a.Session, err)
 			r.st.Do(func(d *persisted) {
 				if s := d.Sessions[a.Session]; s != nil && s.Live != nil {

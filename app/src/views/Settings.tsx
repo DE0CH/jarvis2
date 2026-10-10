@@ -4,7 +4,7 @@ import { Linking } from "react-native";
 import { useEffect, useRef, useState } from "react";
 import { api, fromNow, usd, type Usage, type UsageLimit } from "../lib/api";
 import { useStore, failed, pend } from "../lib/store";
-import { PButton } from "../ui/bits";
+import { CopyButton, PButton } from "../ui/bits";
 import { hasShell, requestSecure } from "../lib/shell";
 import { Box, Button, Card, Flex, Heading, Muted, P, Progress, Text } from "../ui/kit";
 import { Cards } from "../ui/cards";
@@ -100,9 +100,9 @@ export function Settings() {
       <Card data={{ settings: "core" }}>
         <Heading size={3} mb={1}>Core</Heading>
         <Muted>{core.up ? "Answering." : "Not answering."}</Muted>
-        <P size={2} mt={2}>Signing key</P>
+        <Flex mt={2} gap={2} align="center"><P size={2} style={{ flex: 1 }}>Signing key</P>{!!core.signingKey && <CopyButton id="copy-core-signing" value={core.signingKey} what="Signing key" />}</Flex>
         <P size={1} mono color="gray" selectable>{short(core.signingKey)}</P>
-        <P size={2} mt={1}>Agreement key</P>
+        <Flex mt={1} gap={2} align="center"><P size={2} style={{ flex: 1 }}>Agreement key</P>{!!core.agreementKey && <CopyButton id="copy-core-agreement" value={core.agreementKey} what="Agreement key" />}</Flex>
         <P size={1} mono color="gray" selectable>{short(core.agreementKey)}</P>
         <Muted mt={2}>As the router reports them. The app trusts only the core it recovered (its 8 words checked against the box key in git).</Muted>
       </Card>

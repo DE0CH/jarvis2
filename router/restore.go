@@ -52,6 +52,9 @@ func (r *Router) RestoreRecord(recordID, requestID string) (string, error) {
 	if rec.Archive == nil {
 		return "", errors.New("this session was destroyed without an archive: nothing to restore")
 	}
+	if rec.Archive.Signer == "" {
+		return "", errHandIndex // records.go
+	}
 	box := r.box()
 	if box == nil {
 		return "", errNoStorageBox

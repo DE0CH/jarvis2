@@ -11,9 +11,9 @@ import { SvgXml } from "react-native-svg";
 import { api } from "../lib/api";
 import { requestGrant } from "../lib/grants";
 import { hasShell } from "../lib/shell";
-import { failed, toast } from "../lib/store";
+import { failed } from "../lib/store";
+import { CopyButton } from "../ui/bits";
 import { Button, Flex, Lbl, Muted, P, Spinner } from "../ui/kit";
-import { isWeb } from "../ui/overlays";
 import { Page } from "../ui/page";
 
 export type RemoteSpec = { id: string; title: string };
@@ -39,10 +39,6 @@ export function Remote({ spec }: { spec: RemoteSpec }) {
     QRCode.toString(appUrl, { type: "svg", margin: 4, errorCorrectionLevel: "M", color: { dark: "#000000", light: "#ffffff" } }).then((svg) => { if (live) setQr(svg); }, () => {});
     return () => { live = false; };
   }, [appUrl]);
-  const copy = async (what: string, value: string) => {
-    try { await (navigator as any).clipboard.writeText(value); toast(what + " copied", "ok"); }
-    catch { toast("Could not copy — select the link instead", "error"); }
-  };
   return (
     <Page title={spec.title} id="remote-page">
       {err ? <>
@@ -52,7 +48,10 @@ export function Remote({ spec }: { spec: RemoteSpec }) {
         : !info ? <Flex justify="center" gap={2} align="center" mt={6}><Spinner /><P size={3} color="gray">Loading…</P></Flex>
         : <>
             <Lbl>Web UI</Lbl>
-            <Button id="rm-web" href={info.webUrl} onPress={() => open(info.webUrl)}>{info.harness === "openclaw" ? "Open the Control UI" : "Open the web UI"}</Button>
+            <Flex gap={2} wrap>
+              <Button id="rm-web" href={info.webUrl} onPress={() => open(info.webUrl)}>{info.harness === "openclaw" ? "Open the Control UI" : "Open the web UI"}</Button>
+              <CopyButton size={2} id="rm-copy-web" value={info.webUrl} what="Link" label="Copy link" />
+            </Flex>
             {info.harness === "openclaw"
               ? <Muted mt={1}>The session’s OpenClaw Control UI, behind the same Cloudflare login as this page. The link carries the gateway token — don’t share it. The OpenClaw app lists this session by itself once the app is paired.</Muted>
               : <Muted mt={1}>The session’s own Paseo page, behind the same Cloudflare login as this page. One session’s web UI per browser at a time — opening another session’s moves it over.</Muted>}
@@ -60,7 +59,7 @@ export function Remote({ spec }: { spec: RemoteSpec }) {
               <Lbl>Paseo app</Lbl>
               <Flex gap={2} wrap>
                 <Button id="rm-pair" href={appUrl || info.pairUrl} self onPress={() => open(appUrl || info.pairUrl!)}>Pair this device</Button>
-                {isWeb && <Button variant="soft" color="gray" onPress={() => copy("Pairing link", info.pairUrl!)}>Copy pairing link</Button>}
+                <CopyButton size={2} id="rm-copy-pair" value={info.pairUrl} what="Pairing link" label="Copy pairing link" />
               </Flex>
               <P size={1} mono color="gray" selectable mt={2}>{info.pairUrl}</P>
               <Muted mt={1}>Opens the Paseo app with this session’s pairing offer (or paste the link under “Paste pairing link” in the app). The link is the key to the session — don’t share it. From another device, scan with the camera:</Muted>

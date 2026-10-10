@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
-import { useStore } from "../lib/store";
+import { useStore, toast } from "../lib/store";
+import { canCopy, copyText } from "../lib/clipboard";
 import { useTheme } from "../theme";
 import { Button, P, Spinner, type BtnVariant } from "./kit";
 import type { ColorName } from "../theme";
@@ -40,6 +41,14 @@ export function useBusy(): [string | null, (label: string, fn: () => Promise<voi
   const on = useRef(false);
   const guard = async (fn: () => Promise<void>) => { if (on.current) return; on.current = true; try { await fn(); } finally { on.current = false; } };
   return [busy, async (label, fn) => { setBusy(label); try { await fn(); } finally { setBusy(null); } }, guard];
+}
+
+// Copy: a value to the clipboard (lib/clipboard: the browser's, or the shell's in the app), with a toast. Not
+// shown where nothing can copy (an old browser): the value stays selectable text there.
+export function CopyButton({ value, what, id, size = 1, label = "Copy" }: { value: string; what: string; id?: string; size?: 1 | 2 | 3; label?: string }) {
+  if (!canCopy) return null;
+  const run = () => copyText(value).then(() => toast(what + " copied", "ok"), (e: any) => toast("Could not copy: " + (e?.message || e), "error"));
+  return <Button size={size} variant="soft" color="gray" id={id} onPress={run}>{label}</Button>;
 }
 
 // what a conversation ended on (a paused or previous session's card), clamped to three lines

@@ -46,9 +46,9 @@ Carried over from the mock (DE0CH/jarvis2-mock DECISIONS.md) unless marked new.
    router's "Access login required") opens the sheet again and retries once. No sign-in screen on launch:
    the first refused request opens the sheet.
 9. **Not in the React Native app yet** (the router doesn't have them, or they need a native module the extension
-   doesn't carry): content stores, devices, the Search tab, first-prompt attachments (a file picker),
-   copying to the clipboard in the app (links are selectable text instead). Everything else Jarvis 1's
-   dashboard has is back (items 23–35).
+   doesn't carry): content stores, devices and lease pills (forwarded to Jarvis 1, which doesn't take Jarvis 2
+   sessions yet — PLAN.md "Later"), first-prompt attachments (a file picker; the router has `POST /api/uploads`).
+   Everything else Jarvis 1's dashboard has is back (items 23–38).
 10. **The image** shows as the ref the core read from Fly (on approval pages); the GitHub build attestation
     ("CI build from <date>") isn't checked yet.
 11. **iPhone only** (`TARGETED_DEVICE_FAMILY = 1`), portrait + landscape.
@@ -68,7 +68,7 @@ Carried over from the mock (DE0CH/jarvis2-mock DECISIONS.md) unless marked new.
     (create, unlock; the core's own and the harness's stores hidden, a marker-sensitive store sensitive) → new
     session → grants (a 10-minute grant and a standing rule signed on the grant page, one forgotten) →
     schedules (a wakeup, a cron) → terminal → pause → transcript → resume with a prompt → resume with the latest
-    image → destroy → previous (remove) → settings → the master key page.
+    image → destroy → previous (remove) → search → settings (a copy) → the master key page.
 
 16. **New: the recovery kit formats** (what Deyao keeps in the password manager, two entries):
     `jarvis2-master:<base64 PKCS#8 DER of the P-256 private key>` (the body of a PEM "PRIVATE KEY" block, so
@@ -171,6 +171,25 @@ Carried over from the mock (DE0CH/jarvis2-mock DECISIONS.md) unless marked new.
     A store field (`optionsFrom: "stores"`) is filled from the core's store list (sensitive ones marked); sizes and
     models from the router's lists; store fields can't change after creation (the router refuses, the form says
     so). Daily schedules (HH:MM + time zone, on/off on the card). Task lines are left out of the Sessions list.
+
+36. **New: Search tab** (Jarvis 1's, second in the tab list): **Conversations** — every conversation of both Jarvises
+    (Jarvis 1's search, forwarded by the router), the same filters (Chat / Actions / Records, time range, By session) and
+    a hit opens the conversation around it, with **Resume** when the hit is a paused Jarvis 2 session (its live copy is
+    filed under the session's id) or **Restore** when its archive is on the Previous list; **iCloud files** — Jarvis 1's
+    iCloud index: name, folder, kind, size, the matching passage; a file opens what the index read from it, with the
+    path's Copy button. Jarvis 1 had no iCloud screen (only its API); this one is new. Jarvis 1's search box on the
+    Sessions and Previous tabs (filtering cards by transcript) isn't ported.
+37. **New: copy buttons through the shell.** The extension carries no clipboard module (a pod wouldn't embed into
+    the ExtensionKit target, lessons/73), so React Native asks the shell over XPC (`ShellBridge.copyText` →
+    `HostService.copyText`), which writes `UIPasteboard` in the foreground app (plain text, ≤ 64 KB; the master kit
+    keeps its own local-only, expiring copy). The web page uses the browser's clipboard. Copy appears on the Remote page
+    (web UI link, pairing link — now in the app too), Settings → Core (both keys), a session's More menu (its id) and an
+    iCloud file's path; a toast says what was copied.
+38. **New: the Claude app's title names the session** (`serverTitle`, read by the machine): cards, Discord channels and
+    archive folders follow a rename in the Claude app, as in Jarvis 1. **Previous** hides Restore for an archive indexed
+    by hand (`POST api/records`: no signed snapshot) and says why. **Recovery** shows "The core isn't set up yet. First
+    time: make a master key pair below." as a plain note (no red) when the router answers 503 `coreDown`, with the
+    master-key button as the page's main button and "Check again".
 
 ## Unfinished / known gaps
 

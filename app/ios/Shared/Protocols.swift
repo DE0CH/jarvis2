@@ -9,6 +9,8 @@ import Foundation
   func session(_ reply: @escaping (String) -> Void)
   /// run the sign-in sheet; replies the new token, "" when it didn't complete
   func signIn(_ reply: @escaping (String) -> Void)
+  /// put plain text on the clipboard (the extension carries no clipboard module; the shell is the foreground app)
+  func copyText(_ text: String)
 }
 
 /// Exported by the extension. The shell calls `hello` right after connecting: an XPC connection only

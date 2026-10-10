@@ -7,7 +7,7 @@ import XCTest
 /// stand-in bucket's keys) → stores (create, unlock) → new session (secure page, software key) → grants (a
 /// 10-minute grant and a standing rule on the secure grant page, forget one) → schedules (a wakeup and a cron)
 /// → terminal → pause → transcript → resume (with a prompt) → resume with the latest image (approval) →
-/// destroy (the changes check) → previous sessions → settings (Fly) → the master key page.
+/// destroy (the changes check) → previous sessions → search → settings (Fly, a copy) → the master key page.
 final class Jarvis2UITests: XCTestCase {
   let app = XCUIApplication()
   var tag = "run"
@@ -272,9 +272,26 @@ final class Jarvis2UITests: XCTestCase {
       XCTAssertTrue(gone(prefixed("rremove-"), 30), "[\(tag)] removed from the list")
       shot("previous-removed")
     }
+    // ---- search: the router forwards to Jarvis 1, which the CI router has no token for, so the tab shows
+    // that answer in words; then the iCloud mode
+    el("tab-search").tap()
+    if wait(el("search-q"), 15, "search tab") {
+      el("search-q").tap(); el("search-q").typeText("hello")
+      el("search-go").tap()
+      wait(el("search-error"), 30, "search answer (no Jarvis 1 in CI)")
+      shot("search")
+      el("search-mode-files").tap()
+      sleep(1)
+      shot("search-icloud")
+    }
     el("tab-settings").tap()
     sleep(2)
     shot("settings")
+    // copy (through the shell's clipboard): the toast says so
+    if el("copy-core-signing").waitForExistence(timeout: 5) {
+      el("copy-core-signing").tap()
+      wait(app.staticTexts["Signing key copied"], 5, "copied toast")
+    }
     app.swipeUp()
     sleep(1)
     shot("settings-more")

@@ -49,6 +49,12 @@ RCT_EXPORT_METHOD(signIn:(RCTPromiseResolveBlock)resolve reject:(RCTPromiseRejec
   shellCall(@"signIn", @"", ^(NSString *token) { resolve(token); });
 }
 
+// plain text to the clipboard, written by the shell (lib/clipboard.native.ts)
+RCT_EXPORT_METHOD(copyText:(NSString *)text)
+{
+  shellCall(@"copy", text ?: @"", nil);
+}
+
 RCT_EXPORT_METHOD(requestSecureMode:(NSString *)options)
 {
   dispatch_async(dispatch_get_main_queue(), ^{

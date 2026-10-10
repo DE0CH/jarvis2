@@ -147,6 +147,10 @@ func TestSessionTitleOrder(t *testing.T) {
 	if sessionTitle(s) != "mine" {
 		t.Fatal("Deyao's rename should beat the label")
 	}
+	s.AppTitle = "the app's"
+	if sessionTitle(s) != "the app's" {
+		t.Fatal("the Claude app's title should beat everything (Jarvis 1's serverTitle)")
+	}
 	if sessionTitle(Session{ID: "s1", Title: "ai"}) != "ai" || sessionTitle(Session{ID: "s1"}) != "s1" {
 		t.Fatal("fallbacks")
 	}

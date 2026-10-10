@@ -9,6 +9,7 @@
 import ExtensionFoundation
 import ExtensionKit
 import SwiftUI
+import UIKit
 
 extension AppExtensionPoint {
   @Definition
@@ -151,6 +152,12 @@ final class HostServiceImpl: NSObject, HostService {
   }
   /// runs the sign-in sheet; replies the new token, "" when it didn't complete
   func signIn(_ reply: @escaping (String) -> Void) { Task { @MainActor in reply(await RouterClient.shared.signIn()) } }
+  /// plain text onto the clipboard for the React Native UI (links, ids, paths — never anything the shell
+  /// guards: the master kit has its own local-only, expiring copy). At most 64 KB.
+  func copyText(_ text: String) {
+    guard text.utf8.count <= 65536 else { return }
+    DispatchQueue.main.async { UIPasteboard.general.string = text }
+  }
 }
 
 struct RootView: View {

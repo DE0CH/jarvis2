@@ -39,6 +39,13 @@ var jarvis1Routes = []string{
 	"GET /api/credentials", "POST /api/credentials",
 }
 
+// appJarvis1Routes: the same services for the app's Search tab (Deyao, with his Access login) — forwarded with
+// the services token and no X-Jarvis2-Session (they aren't a session's calls)
+var appJarvis1Routes = []string{
+	"GET /api/search", "GET /api/search/context", "GET /api/search/status",
+	"GET /api/icloud/search", "GET /api/icloud/file", "GET /api/icloud/status", "POST /api/icloud/relist",
+}
+
 var jarvis1Client = &http.Client{Timeout: 5 * time.Minute}
 
 // auto-pause (autopilot.go) leaves a session running when a wakeup or cron fires within 10 minutes
@@ -71,6 +78,13 @@ func (r *Router) registerSessionAPI(app appRoute, m machineRoute) {
 	app("DELETE /api/sessions/{id}/crons/{name}", func(w http.ResponseWriter, req *http.Request) {
 		r.deleteCron(w, req.PathValue("id"), req.PathValue("name"))
 	})
+
+	for _, p := range appJarvis1Routes {
+		app(p, func(w http.ResponseWriter, req *http.Request) {
+			b, _ := io.ReadAll(io.LimitReader(req.Body, 1<<20))
+			r.forwardJarvis1(w, req, "", b)
+		})
+	}
 
 	// ---- the session itself (through its machine's local proxy) -------------------------------------------
 	own := func(pattern string, fn func(w http.ResponseWriter, req *http.Request, sid string, body []byte)) {

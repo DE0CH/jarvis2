@@ -234,10 +234,11 @@ func channelName(title, sid string) string {
 
 func channelTopic(sid string) string { return "Jarvis 2 session " + sid }
 
-// sessionTitle: the name a session's channel and archive folder carry. Deyao's own rename (UserTitle, from
-// the transcript's custom title) beats the label given at New session, which beats the AI title; else the id.
+// sessionTitle: the name a session's card, channel and archive folder carry — Jarvis 1's pickTitle: the Claude
+// app's own title (AppTitle, which follows Deyao's rename in the app) beats a name he pinned in the CLI
+// (UserTitle), which beats the label given at New session, which beats the AI title; else the id.
 func sessionTitle(s Session) string {
-	for _, t := range []string{s.UserTitle, s.Label, s.Title} {
+	for _, t := range []string{s.AppTitle, s.UserTitle, s.Label, s.Title} {
 		if t = strings.TrimSpace(t); t != "" {
 			return t
 		}

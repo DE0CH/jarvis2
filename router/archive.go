@@ -97,7 +97,7 @@ func recordsOff() bool { return os.Getenv("RECORDS_OFF") == "1" }
 // archiveDirFor: the dir for a title (archivedir.go's layout); a leading "." would hide it from the search
 func archiveDirFor(s *Session, title string) string {
 	c := *s
-	c.ArchiveDir, c.UserTitle, c.Label, c.Title = "", "", strings.TrimLeft(title, ". "), ""
+	c.ArchiveDir, c.AppTitle, c.UserTitle, c.Label, c.Title = "", "", "", strings.TrimLeft(title, ". "), ""
 	return (&Router{}).archiveDir(c)
 }
 
@@ -234,7 +234,7 @@ func (r *Router) archiveSnapshot(box *StorageBox, s *Session) (*ArchiveInfo, err
 		return nil, fmt.Errorf("reading the snapshot: %w", err)
 	}
 	title := sessionTitle(*s)
-	if s.Label == "" && s.UserTitle == "" && facts.Tail != nil && facts.Tail.Title != "" {
+	if s.AppTitle == "" && s.Label == "" && s.UserTitle == "" && facts.Tail != nil && facts.Tail.Title != "" {
 		title = facts.Tail.Title // the title the app showed, from the transcript
 	}
 	dir, err := r.pickArchiveDir(box, s, title)
@@ -540,20 +540,29 @@ func (r *Router) Changes(id string) map[string]any {
 		}
 		return map[string]any{"checked": true, "repos": parseRepoChanges(res.Stdout), "status": s.Status}
 	case s.MachineID == "" && s.State == "paused":
-		m, _, _ := r.latestSnapshot(id)
-		if m == "" {
-			return no("it has no pause snapshot")
-		}
-		facts, err := readSnapshotFacts(r.st.snapshotPath(m))
-		if err != nil {
-			return no(err.Error())
-		}
-		if facts.Changes == nil {
-			return no("its pause snapshot has no record of the repos' state — resume it and check again")
-		}
-		return map[string]any{"checked": true, "paused": true, "repos": parseRepoChanges(*facts.Changes), "status": ""}
+		return r.snapshotChanges(id)
 	}
 	return no("session is " + s.State)
+}
+
+// snapshotChanges: the repos' state as the session's newest snapshot recorded it (the machine writes it just
+// before tarring the workspace, and a snapshot is frozen)
+func (r *Router) snapshotChanges(id string) map[string]any {
+	no := func(reason string) map[string]any {
+		return map[string]any{"checked": false, "reason": reason, "repos": []RepoChange{}}
+	}
+	m, _, _ := r.latestSnapshot(id)
+	if m == "" {
+		return no("it has no pause snapshot")
+	}
+	facts, err := readSnapshotFacts(r.st.snapshotPath(m))
+	if err != nil {
+		return no(err.Error())
+	}
+	if facts.Changes == nil {
+		return no("its pause snapshot has no record of the repos' state — resume it and check again")
+	}
+	return map[string]any{"checked": true, "paused": true, "repos": parseRepoChanges(*facts.Changes), "status": ""}
 }
 
 // ---- tails ------------------------------------------------------------------------------------------
@@ -748,6 +757,8 @@ func (r *Router) registerArchive(app appRoute, m machineRoute) {
 		}
 		writeJSON(w, 200, map[string]any{"id": sid, "requestId": in.RequestID})
 	})
+	m("POST /m/live-transcript", r.liveTranscript) // livesync.go
+	app("POST /api/records", r.indexRecord)        // records.go: an archive already on the Storage Box, by hand
 	m("GET /m/restore-snapshot", func(w http.ResponseWriter, req *http.Request, machine string, _ []byte) {
 		dir := r.restoreFilesFor(machine)
 		if dir == "" {

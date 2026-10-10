@@ -398,6 +398,7 @@ struct RecoveryPage: View {
   @State private var id: PublicKeys?
   @State private var words = ""
   @State private var idError: String?
+  @State private var notRunning = false // no core yet (first setup): a plain note, not an error
   @State private var master = ""
   @State private var bucketKeys = ""
   @State private var busy: String?
@@ -410,7 +411,13 @@ struct RecoveryPage: View {
     SecureFrame(shell: shell, title: "Recovery", action: id == nil || already ? nil : ("Recover", "recovery-go", master.isEmpty || bucketKeys.isEmpty), busy: busy,
                 run: { Task { await recover() } }, backTitle: CoreTrust.pinned == nil ? "Later" : "← Back") {
       Lbl(text: "The core")
-      if let idError { Callout(text: idError, color: .red).accessibilityIdentifier("recovery-identity-error") }
+      if notRunning {
+        Muted(text: "The core isn't set up yet. First time: make a master key pair below.").accessibilityIdentifier("recovery-core-not-running")
+        HStack { KitButton(title: "Make a master key pair…", disabled: busy != nil, id: "recovery-make-master-first") { clear(); shell.route = .masterKey }; Spacer() }.padding(.top, 12)
+        Muted(text: "Once its public half is in the repo the core starts, and this page shows its 8 words.").padding(.top, 8)
+        HStack { KitButton(title: "Check again", variant: .soft, color: .gray, disabled: busy != nil, id: "recovery-retry") { Task { await load() } }; Spacer() }.padding(.top, 8)
+      }
+      else if let idError { Callout(text: idError, color: .red).accessibilityIdentifier("recovery-identity-error") }
       else if id == nil { ProgressView().frame(maxWidth: .infinity) }
       else {
         Muted(text: "Check these words against the ones the box logged for this core. Its keys are vouched for by the box key (keys/box.pub, from GitHub\(KeySource.isCI ? " — CI stand-in" : "")).")
@@ -432,8 +439,10 @@ struct RecoveryPage: View {
       }
       if let note { Callout(text: note).padding(.top, 12) }
       if let failure { Callout(text: failure, color: .red).padding(.top, 16).accessibilityIdentifier("secure-error") }
-      Lbl(text: "First time")
-      HStack { KitButton(title: "Make a master key pair…", variant: .soft, color: .gray, disabled: busy != nil, id: "recovery-make-master") { clear(); shell.route = .masterKey }; Spacer() }
+      if !notRunning {
+        Lbl(text: "First time")
+        HStack { KitButton(title: "Make a master key pair…", variant: .soft, color: .gray, disabled: busy != nil, id: "recovery-make-master") { clear(); shell.route = .masterKey }; Spacer() }
+      }
     }
     .task { await load() }
     .onDisappear { clear() }
@@ -457,8 +466,10 @@ struct RecoveryPage: View {
     }
   }
   private func load() async {
+    idError = nil
     do {
       let x = try await RouterClient.shared.identity()
+      notRunning = false
       let k = PublicKeys(signingKey: x.signingKey, agreementKey: x.agreementKey)
       let box = try await KeySource.key("box.pub")
       guard CoreCrypto.identityVouched(k, boxSig: x.boxSig, boxKey: box) else {
@@ -466,7 +477,8 @@ struct RecoveryPage: View {
       }
       words = CoreCrypto.identityWords(k, words: KeySource.words)
       id = k
-    } catch { idError = "Couldn't read the core's identity: " + errText(error) }
+    } catch is RouterClient.CoreNotRunning { notRunning = true }
+    catch { notRunning = false; idError = "Couldn't read the core's identity: " + errText(error) }
   }
   private func recover() async {
     guard let core = id else { return }

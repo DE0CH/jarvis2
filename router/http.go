@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"math/big"
 	"net/http"
 	"net/url"
@@ -541,7 +542,10 @@ func (r *Router) buildHandlers() {
 func (r *Router) relay(w http.ResponseWriter, method, path string, body []byte) {
 	status, b, err := r.core.Raw(method, path, body)
 	if err != nil {
-		writeJSON(w, 502, map[string]string{"error": "core unreachable: " + err.Error()})
+		// no core to talk to: before the first recovery (no master key yet) the core's pod isn't running at
+		// all, so this is a state, not a fault — the app shows it as a plain note (coreDown)
+		log.Printf("core %s %s: %v", method, path, err)
+		writeJSON(w, 503, map[string]any{"error": "the core isn't running", "coreDown": true})
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -588,6 +592,7 @@ func sessionView(s *Session, d *persisted) map[string]any {
 		name = s.Title
 	}
 	v := map[string]any{
+		"serverTitle": s.AppTitle, "userTitle": s.UserTitle, "title": sessionTitle(*s), "liveSync": s.LiveSync,
 		"id": s.ID, "machineId": nullIfEmpty(s.MachineID), "released": s.MachineID == "" && s.State == "paused",
 		"name": name, "state": s.State, "status": s.Status, "error": s.Error, "created": s.Created, "region": "",
 		"environment": strings.Join(s.Stores, ","), "stores": s.Stores, "harness": s.Harness, "label": s.Label, "aiTitle": s.Title,

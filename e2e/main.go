@@ -233,6 +233,12 @@ func main() {
 	}
 	must2(call(router, "DELETE", "/api/sessions/"+id+"/wakeups/e2e", nil, nil))
 
+	step("live transcript sync: the machine sends a changed conversation to the router (no Storage Box in the test: received, not stored)")
+	tname := "0e2e0000-1111-4222-8333-" + secret[:12] + ".jsonl"
+	expectOnMachine(m1, "mkdir -p /home/claude/.claude/projects/-e2e && echo '{\"type\":\"user\",\"message\":{\"content\":\"e2e live\"}}' > /home/claude/.claude/projects/-e2e/"+tname+
+		" && chown -R claude /home/claude/.claude/projects && echo ok", "ok")
+	waitLiveSync(id, tname, 3*time.Minute)
+
 	step("add a store from the machine (e2e-extra)")
 	go flyExec(m1, []string{"su", "-", "claude", "-c", "jarvis2 add-store e2e-extra"})
 	a = waitApproval("add-store", id)
@@ -297,6 +303,47 @@ func main() {
 			log.Fatal("destroy didn't finish")
 		}
 		time.Sleep(3 * time.Second)
+	}
+
+	step("one-shot: once the supervisor marks the prompt done the router destroys it by itself, forcefully, and DMs the work lost")
+	s, b = call(router, "POST", "/api/sessions", map[string]any{"label": "e2e one-shot", "stores": []string{"e2e"}, "size": "small", "harness": "claude",
+		"oneShot": true, "prompt": "e2e: nothing to do"}, nil)
+	must(s, b, "create one-shot")
+	a = waitApproval("new-session", "")
+	os1 := approve(p, a)
+	waitState(os1, "started", 6*time.Minute)
+	om := machineOf(os1)
+	// a repo with an uncommitted file and no upstream, then the supervisor's marker (no Claude login here, so
+	// claude never finishes a prompt by itself)
+	expectOnMachine(om, "su - claude -c 'mkdir -p ~/workspace/lost && cd ~/workspace/lost && git init -q && echo x > f && echo ok'", "ok")
+	expectOnMachine(om, "su - claude -c 'echo \"done e2e\" > ~/.claude/.one-shot-done && echo ok'", "ok")
+	deadline = time.Now().Add(12 * time.Minute)
+	for {
+		var recs struct {
+			Records []map[string]any `json:"records"`
+		}
+		call(router, "GET", "/api/records", nil, &recs)
+		if len(recs.Records) > 0 && recs.Records[0]["id"] == os1 {
+			break
+		}
+		if time.Now().After(deadline) {
+			dumpState()
+			log.Fatal("the one-shot session wasn't destroyed")
+		}
+		time.Sleep(3 * time.Second)
+	}
+	if lf := os.Getenv("E2E_ROUTER_LOG"); lf != "" {
+		var logb []byte
+		for i := 0; i < 10; i++ {
+			logb, _ = os.ReadFile(lf)
+			if bytes.Contains(logb, []byte("one-shot session “e2e one-shot” was destroyed with work lost")) {
+				break
+			}
+			time.Sleep(time.Second)
+		}
+		if !bytes.Contains(logb, []byte("one-shot session “e2e one-shot” was destroyed with work lost")) || !bytes.Contains(logb, []byte("lost: 1 uncommitted file(s), branch has no upstream")) {
+			log.Fatal("no lost-work DM for the one-shot session in the router's log")
+		}
 	}
 
 	step("a task: the iPhone approves its line once; a run resumes it with no phone, runs the script, pauses it")
@@ -586,6 +633,24 @@ func expectExec(id, cmd, want string) {
 	must(s, b, "exec "+cmd)
 	if strings.TrimSpace(res.Stdout) != want || res.Code != 0 {
 		log.Fatalf("exec %q: got %q (code %d), want %q", cmd, res.Stdout, res.Code, want)
+	}
+}
+
+// waitLiveSync: the router lists the file in the session's liveSync
+func waitLiveSync(id, name string, d time.Duration) {
+	deadline := time.Now().Add(d)
+	for {
+		if ls, ok := session(id)["liveSync"].(map[string]any); ok {
+			if files, ok := ls["files"].(map[string]any); ok && files[name] != nil {
+				log.Printf("   live sync: %s received (stored %v)", name, ls["stored"])
+				return
+			}
+		}
+		if time.Now().After(deadline) {
+			dumpState()
+			log.Fatalf("live sync: %s never reached the router", name)
+		}
+		time.Sleep(5 * time.Second)
 	}
 }
 

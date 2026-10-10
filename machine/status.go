@@ -45,17 +45,18 @@ func readStatus() string {
 
 // statusReporter: the agent's status loop (started by agent())
 func statusReporter(c *client) {
-	var last string
+	var last, lastTitle string
 	var sent time.Time
+	titles := &appTitler{} // apptitle.go: the Claude app's title of this session
 	for ; ; time.Sleep(statusEvery) {
-		raw := readStatus()
-		if raw == last && time.Since(sent) < statusHeartbeat {
+		raw, title := readStatus(), titles.current()
+		if raw == last && title == lastTitle && time.Since(sent) < statusHeartbeat {
 			continue
 		}
-		if err := c.json("POST", "/m/status", map[string]string{"raw": raw}, nil); err != nil {
+		if err := c.json("POST", "/m/status", map[string]string{"raw": raw, "appTitle": title}, nil); err != nil {
 			log.Printf("status report failed: %v", err)
 			continue
 		}
-		last, sent = raw, time.Now()
+		last, lastTitle, sent = raw, title, time.Now()
 	}
 }

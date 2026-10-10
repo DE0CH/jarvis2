@@ -63,6 +63,8 @@ export function Records() {
       <Cards>
         {list.map((m) => {
           const n = (m.restored || []).length, busy = pending.has("r:" + m.id), a = m.archive;
+          // an archive indexed by hand (POST api/records) has no machine-signed snapshot: nothing Jarvis 2 can restore
+          const signed = !!a?.signer;
           return (
             <Card key={m.id} data={{ record: m.id }}>
               <Flex justify="space-between" align="flex-start" gap={2} mb={1}>
@@ -72,10 +74,11 @@ export function Records() {
               <Muted>{[m.destroyedAt ? "destroyed " + ago(m.destroyedAt) : "", m.created ? "created " + new Date(m.created).toLocaleDateString() : ""].filter(Boolean).join(" · ")}</Muted>
               <Muted>{[storesOf(m, policy).length ? "stores: " + storesOf(m, policy).join(", ") : "no stores", HARNESS[m.harness || ""] || m.harness, models.find((x) => x.id === m.model)?.label || m.model, m.size, m.permissionMode === "bypass" ? "skip permissions" : "", m.live?.oneShot ? "was one-shot" : ""].filter(Boolean).join(" · ")}</Muted>
               <Muted>{a ? `${a.transcripts.length} transcript${a.transcripts.length === 1 ? "" : "s"} · ${a.artifacts} artifact file${a.artifacts === 1 ? "" : "s"}` : m.archiveError ? "not archived: " + m.archiveError : "no archive"}</Muted>
+              {a && !signed && <Muted>Indexed by hand: no signed snapshot, so it can't be restored here.</Muted>}
               {a?.last && <LastMessage last={a.last} />}
               <Flex gap={2} pt={3} wrap style={{ marginTop: "auto" }}>
-                {a && <PButton pkey={"r:" + m.id} id={"restore-" + m.id} onPress={() => restore(m)} label="Restore" />}
-                {a && <Button variant="soft" color="gray" id={"rtail-" + m.id} disabled={busy} onPress={() => openPage("transcript", { title: recTitle(m), note: "Destroyed " + ago(m.destroyedAt), path: `api/records/${m.id}/tail`, action: { label: "Restore", run: () => restore(m) } })}>Transcript</Button>}
+                {a && signed && <PButton pkey={"r:" + m.id} id={"restore-" + m.id} onPress={() => restore(m)} label="Restore" />}
+                {a && <Button variant="soft" color="gray" id={"rtail-" + m.id} disabled={busy} onPress={() => openPage("transcript", { title: recTitle(m), note: "Destroyed " + ago(m.destroyedAt), path: `api/records/${m.id}/tail`, action: signed ? { label: "Restore", run: () => restore(m) } : undefined })}>Transcript</Button>}
                 <Button variant="soft" color="gray" id={"rremove-" + m.id} disabled={busy} onPress={() => remove(m, false)}>Remove</Button>
                 {a && <Button variant="soft" color="red" id={"rpurge-" + m.id} disabled={busy} onPress={() => remove(m, true)}>Delete</Button>}
               </Flex>

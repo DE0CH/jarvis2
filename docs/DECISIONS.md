@@ -127,3 +127,32 @@ made around it; the app's own list is `app/DECISIONS.md`.
     also sits in `~/artifacts/task-runs`, archived with the line. Store values are redacted on the machine.
 37. **Task lines have no Discord channel and skip the autopilot** (no harness to watch: no "dead" DMs, no auto-pause);
     failure DMs follow Jarvis 1 (scheduled runs only).
+
+## Parity, 2026-10-10
+
+38. **Live transcript sync needs no grant: the machine pushes, the router writes.** Each machine sends its changed
+    transcripts to `POST /m/live-transcript` every 5 minutes and the router PUTs them to `claude-records/.live/<session
+    id>/` with its own Storage Box credentials (Jarvis 1's layout, so Jarvis 1's search indexes them). No holder runs a
+    command in the session, so the grant rules don't come into it, a sensitive session included: the router already
+    receives the same transcripts in every pause snapshot (and archives them on destroy), so this moves nothing new to
+    anyone; the Storage Box credentials stay on the router (writing is the router's, never a machine's). The copy stays
+    while a session is paused (Jarvis 1's search then shows it as "running" until the next resume or the destroy) and
+    goes on destroy. The router keeps no copy itself.
+39. **The Claude app's title is read by the machine, with its own Claude login**, not by the router: the router holds
+    no Claude token (Jarvis 1's box did), and the machine already holds the session's. It sends only the title with its
+    status report. As in Jarvis 1 it beats every other name (a rename in the Claude app wins over the label), it is
+    kept while paused, and a resume without a label passes it as `SESSION_RESUME_TITLE`. Jarvis 1's "rename the new
+    Remote Control entry back after a Start" (`keepAppTitle`, a PUT with the token) isn't ported: the title passed at
+    launch covers the common case.
+40. **One-shot sessions are destroyed with force** (Jarvis 1's finishOneShot): a failed archive no longer leaves them
+    paused; the repos' state comes from the final snapshot (the machine records it just before tarring), so no `archive`
+    grant is needed; Deyao gets a DM only when work was lost (dirty repos, an unchecked state, a failed archive).
+41. **Indexing an archive by hand** (`POST /api/records`, Jarvis 1's) puts a folder already on the Storage Box on the
+    Previous list (tail, Remove, Delete). It can't be restored in Jarvis 2: restore trusts only a machine-signed
+    snapshot with its core-signed cert, which such a folder doesn't have.
+42. **Search and the iCloud index stay Jarvis 1's** (as PLAN.md "Later" says for retirement): the app's Search tab is
+    forwarded with the router's confined `jarvis2-services` token, not reimplemented.
+43. **When the core can't be reached the router answers 503 `{coreDown}`** (it said 502 "core unreachable"): before the
+    first setup that is the normal state, and the app's recovery page shows it as a note with the master-key button.
+44. **Lease pills are not in the app**: leases are forwarded to Jarvis 1, which doesn't accept Jarvis 2 sessions yet
+    (PLAN.md "Later"), so no Jarvis 2 session can hold one and the pill would never show.

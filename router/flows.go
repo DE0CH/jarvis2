@@ -104,6 +104,11 @@ func (r *Router) machineEnv(s *Session) map[string]string {
 	if s.Prompt != "" {
 		e["SESSION_PROMPT"] = s.Prompt
 	}
+	if s.Label == "" && s.AppTitle != "" {
+		// the title the Claude app showed: a resumed claude names a fresh Remote Control entry with it (Jarvis 1's
+		// session-supervisor.sh), so the conversation keeps its title in the app
+		e["SESSION_RESUME_TITLE"] = s.AppTitle
+	}
 	for _, h := range envHooks {
 		h(r, s, e)
 	}
@@ -402,6 +407,18 @@ func (r *Router) Destroy(id string) error { return r.DestroyWith(id, false) }
 // DestroyWith: a running session is paused first (its final snapshot), then archived (archive.go); a failed
 // archive leaves it paused with the error, unless force. Then the destroy hooks, the burn, the records.
 func (r *Router) DestroyWith(id string, force bool) error {
+	return r.destroy(id, destroyOpts{force: force})
+}
+
+// destroyOpts: force = destroy even when the archive failed; report (oneshot.go) gets, once the line is
+// burnt and the session is a record, the repos' state as the final snapshot recorded it and what the archive did
+type destroyOpts struct {
+	force  bool
+	report func(s Session, changes map[string]any, archived *ArchiveInfo, aerr error)
+}
+
+func (r *Router) destroy(id string, o destroyOpts) error {
+	force := o.force
 	unlock, err := r.lock(id, "destroying")
 	if err != nil {
 		return err
@@ -421,6 +438,10 @@ func (r *Router) DestroyWith(id string, force bool) error {
 		defer unlock()
 		if s.MachineID != "" && !r.snapshotAndKill(id, s.MachineID) {
 			return
+		}
+		var changes map[string]any
+		if o.report != nil {
+			changes = r.snapshotChanges(id) // archive.go: before finish() drops the snapshot
 		}
 		archived, aerr := r.archive(id)
 		if aerr != nil && !force {
@@ -458,6 +479,9 @@ func (r *Router) DestroyWith(id string, force bool) error {
 				}
 			}
 		})
+		if o.report != nil {
+			o.report(s, changes, archived, aerr)
+		}
 	}()
 	return nil
 }

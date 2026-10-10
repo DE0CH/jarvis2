@@ -202,13 +202,7 @@ func (r *Router) remotes(w http.ResponseWriter, req *http.Request) {
 	out := make([]map[string]any, len(all))
 	var wg sync.WaitGroup
 	for i, s := range all {
-		title := s.UserTitle
-		for _, t := range []string{s.Label, s.Title, s.ID} {
-			if title == "" {
-				title = t
-			}
-		}
-		o := map[string]any{"id": s.ID, "title": title, "state": s.State, "model": s.Model}
+		o := map[string]any{"id": s.ID, "title": sessionTitle(s), "state": s.State, "model": s.Model}
 		out[i] = o
 		if s.State != "started" || s.MachineID == "" {
 			continue

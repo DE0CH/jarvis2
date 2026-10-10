@@ -49,7 +49,7 @@ reject an approval and pause/resume/destroy; approvals happen only in the app (i
   and bucket from the stand-ins), then the UI walkthrough once light, once dark (fresh core, router and
   simulator keychain each time): recovery → stores → new session (secure page, software key) → pause →
   grants → schedules → terminal → resume (prompt) → resume with the latest image (approval) → destroy →
-  previous → settings → master key page. Screenshots: the
+  previous → search (conversations, iCloud) → settings (copy) → master key page. Screenshots: the
   run's `results` artifact (`light/`, `dark/`).
 - **testflight** (main only, after the others pass) — archive with cloud signing (App Store Connect API key:
   repo secrets `ASC_KEY_ID` / `ASC_ISSUER_ID` / `ASC_PRIVATE_KEY`), upload; build number = the run number.

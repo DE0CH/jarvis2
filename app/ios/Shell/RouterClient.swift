@@ -124,7 +124,15 @@ final class RouterClient: NSObject, ASWebAuthenticationPresentationContextProvid
   // ---- identity + recovery ----
   struct IdentityDTO: Decodable { let signingKey: String; let agreementKey: String; let boxSig: String }
   /// the core's keys and the box key's signature over them (checked by the caller against keys/box.pub)
-  func identity() async throws -> IdentityDTO { try await json("GET", "api/core/identity") }
+  /// throws CoreNotRunning when there is no core to ask (before the first setup its pod doesn't run: the router
+  /// answers 503 {coreDown}; a 502/504 from the edge means the same to this page)
+  func identity() async throws -> IdentityDTO {
+    let (status, data) = try await raw("GET", "api/core/identity", nil)
+    if status == 503 || status == 502 || status == 504 { throw CoreNotRunning() }
+    guard status == 200 else { throw RouterError(message: Self.reason(data) ?? "HTTP \(status) from api/core/identity") }
+    return try JSONDecoder().decode(IdentityDTO.self, from: data)
+  }
+  struct CoreNotRunning: Error {}
   /// POST api/core/recover; the answer must be the recovered core's signed "recovered"
   func recover(_ body: [String: Any], core: PublicKeys) async throws -> Int {
     let d = try CoreCrypto.decode(try await json("POST", "api/core/recover", body, as: SignedDoc.self), by: core.signingKey, as: KindDoc.self, what: "the recovery answer")
