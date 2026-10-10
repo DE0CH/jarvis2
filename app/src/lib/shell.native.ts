@@ -8,7 +8,7 @@ type Bridge = { requestSecureMode(options: string): void; session(): Promise<str
 const bridge = NativeModules.ShellBridge as undefined | Bridge;
 const events = bridge ? new NativeEventEmitter(NativeModules.ShellBridge) : null;
 export const hasShell = !!bridge;
-export type SecureKind = "new-session" | "approval" | "stores" | "recovery" | "master-key" | "grant";
+export type SecureKind = "new-session" | "approval" | "stores" | "recovery" | "recovery-kit" | "master-key" | "grant";
 export type SecureResult = { requestId?: string; kind?: SecureKind; result: "done" | "back"; id?: string };
 
 const newId = () => String(Date.now()) + Math.random().toString(16).slice(2);

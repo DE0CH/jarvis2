@@ -9,6 +9,8 @@
 // (infra/setup.py writes both.) The bundle {stores:[{name, values}], notSensitive:[names]} goes sealed to the
 // core (info "jarvis2/recover"); the statement {"kind":"recovery","core":{…},"phone":{…},"bundleSha256"} is
 // signed by the master key.
+// The read keys themselves reach the phone sealed to the master key (openKeys) and go into the recovery kit
+// (CoreCrypto.swift RecoveryKit), the one string Deyao keeps.
 #if canImport(CryptoKit)
 import CryptoKit
 #else
@@ -179,6 +181,31 @@ enum Recovery {
     struct St: Encodable { let kind = "recovery"; let core: PublicKeys; let phone: PublicKeys; let bundleSha256: String }
     let e = JSONEncoder(); e.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
     return String(decoding: try e.encode(St(core: core, phone: phone, bundleSha256: CoreCrypto.sha256hex(bundle))), as: UTF8.self)
+  }
+
+  // ---- the backup bucket's read keys, from the setup session through the router (GET /api/recovery-keys) ----
+  /// {doc, sig}: doc = {"kind":"recovery-keys","bucket","credential","sealed":{e,data},"at"}, sig = the setup
+  /// key's ECDSA over the doc text; sealed to the master key (info "jarvis2/backup", associated data
+  /// "jarvis2/recovery-keys") → {"accessKey","secretKey"} (infra/setup.py recovery-keys writes it)
+  struct SealedKeys: Codable { let doc: String; let sig: String }
+  struct SealedKeysDoc: Decodable { let kind: String; let bucket: String?; let credential: String?; let sealed: [String: String]; let at: Int? }
+  static let recoveryKeysAAD = Data("jarvis2/recovery-keys".utf8)
+
+  /// checked against the setup key (keys/setup.pub), opened with the master key
+  static func openKeys(_ k: SealedKeys, setupKey: String, master: MasterKey) throws -> (creds: S3Credentials, doc: SealedKeysDoc) {
+    guard CoreCrypto.valid(Data(k.doc.utf8), sig: k.sig, by: setupKey) else {
+      throw TrustError.badSignature("the backup bucket's read keys (not the setup key's)")
+    }
+    guard let d = try? JSONDecoder().decode(SealedKeysDoc.self, from: Data(k.doc.utf8)), d.kind == "recovery-keys" else {
+      throw TrustError.backup("The sealed read keys aren't a recovery-keys document.")
+    }
+    let plain: Data
+    do { plain = try CoreCrypto.open(d.sealed, with: master.agreement, info: CoreCrypto.backupInfo, aad: recoveryKeysAAD) }
+    catch { throw TrustError.backup("The sealed read keys don't open with this master key — is it the right one?") }
+    guard let c = try? JSONDecoder().decode(S3Credentials.self, from: plain), !c.accessKey.isEmpty, !c.secretKey.isEmpty else {
+      throw TrustError.backup("The sealed read keys hold something that isn't a credential.")
+    }
+    return (c, d)
   }
 
   /// the body of POST /api/core/recover

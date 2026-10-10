@@ -48,22 +48,35 @@ After a box rebuild, re-run it (the age key is new).
 ## Recovery (after a box rebuild or any core restart)
 
 1. `infra/setup.py identity` prints the new core's 8 words (checked against `keys/box.pub`).
-2. Deyao opens the app's recovery page: it shows the same 8 words, he pastes the master key and the backup
-   bucket's read keys from his password manager, and the app restores every store from the backups.
+2. Deyao opens the app's recovery page: it shows the same 8 words, he pastes his recovery kit (`jarvis2-kit:1:…`,
+   one string: the master key and the backup bucket's read keys) from his password manager, and the app restores
+   every store from the backups.
 3. Stores are locked; he unlocks them in the app as needed.
 
-### The backup bucket's read keys
+### The backup bucket's read keys and the recovery kit
 
-Deyao keeps them as `jarvis2-s3:<access key>:<secret key>` in his password manager, next to the master key. They are
-the Hetzner S3 credential `jarvis2-backup-read` in project "Cloud Code" (2827255), which also holds
-`de0ch-claude-6fdff6`. S3 credentials are project-wide, so bucket policies narrow this one (principal
-`arn:aws:iam:::user/p2827255:<access key>`): on `jarvis2-backup-de0ch` a Deny of every write, delete-version and
-policy/versioning change; on `de0ch-claude-6fdff6` a Deny of everything. Tested: list, get and list versions work;
-put, delete a version, delete the policy and suspend versioning are refused. One gap, a Ceph quirk: a plain delete
-(no version id) is still allowed and adds a delete marker; that hides a backup but loses nothing (the bucket is
-versioned) — remove the marker with the admin key. `NotAction` in these policies is ignored by Hetzner (it let
-everything through), so list the denied actions explicitly. Making a new credential is Console-only
-(`hetzner-s3` skill in claude-env); after making it, update both policies with the new access key.
+The read keys reach Deyao only inside his recovery kit, never as text over Discord or a page (Deyao,
+2026-10-10). They are the Hetzner S3 credential `jarvis2-backup-read` in project "Cloud Code" (2827255), which
+also holds `de0ch-claude-6fdff6`. S3 credentials are project-wide, so bucket policies narrow this one (principal
+`arn:aws:iam:::user/p2827255:<access key>`): on `jarvis2-backup-de0ch` a Deny of every write, delete,
+delete-version, ACL, tagging, policy, versioning, lifecycle, CORS, website, logging, notification, replication,
+object-lock and public-access-block change (27 actions, listed one by one: Hetzner ignores `NotAction`, and
+refuses a policy naming `PutEncryptionConfiguration` or `PutBucketOwnershipControls` with ServiceUnavailable); on
+`de0ch-claude-6fdff6` a Deny of `s3:*`. Tested (throwaway names only): list, get, list versions and get policy
+work; put, copy, delete (plain, by version, multi), policy, versioning, lifecycle and ACL changes are refused,
+and everything on the other bucket. A Ceph quirk seen with an earlier credential: a plain delete (no version id)
+of an existing object may add a delete marker; that hides a backup but loses nothing (the bucket is versioned),
+and the admin key removes the marker.
+
+Making a new one (e.g. after a leak):
+
+1. Console only (`hetzner-s3` skill in claude-env): Security → S3 credentials → generate, written straight to a
+   mode-600 file `ACCESS_KEY=…` / `SECRET_KEY=…` (never printed); delete the old credential.
+2. Put the new access key as the principal in both bucket policies (admin key); test as above.
+3. `infra/setup.py recovery-keys FILE --credential=NAME` — sealed to `keys/master.pub`, signed by the setup key,
+   kept by the router for the app; it reads the blob back to check. Then delete FILE.
+4. Deyao, in the app: Settings → Recovery kit (or Recovery → Make the recovery kit…), pastes his current kit's
+   master key part or the `jarvis2-master:…` key once, and saves the new kit string in place of the old entry.
 
 ## Rebuilding the box
 

@@ -3,8 +3,8 @@ import XCTest
 /// Walks Jarvis 2 on a simulator against the REAL core (built with -tags fakefly, the public TEST master key)
 /// and router running on the CI runner, with the backups on a local S3 stand-in, keeping a screenshot of every
 /// step. CI runs it once per appearance (light, then dark), each time against a fresh core and router and a
-/// reset simulator keychain, so each pass recovers from scratch: recovery (8 words, the test master key, the
-/// stand-in bucket's keys) → stores (create, unlock) → new session (secure page, software key) → grants (a
+/// reset simulator keychain, so each pass recovers from scratch: the recovery kit (the test master key pasted
+/// once, the bucket's read keys sealed by infra/setup.py through the router) → recovery (8 words, the kit) → stores (create, unlock) → new session (secure page, software key) → grants (a
 /// 10-minute grant and a standing rule on the secure grant page, forget one) → schedules (a wakeup and a cron)
 /// → terminal → pause → transcript → resume (with a prompt) → resume with the latest image (approval) →
 /// destroy (the changes check) → previous sessions → search → settings (Fly, a copy) → the master key page.
@@ -43,11 +43,21 @@ final class Jarvis2UITests: XCTestCase {
     guard wait(el("recovery-words"), 60, "recovery page with the core's words") else { return }
     XCTAssertEqual(el("recovery-words").label, env["JARVIS2_WORDS"] ?? "", "[\(tag)] the 8 words are the core's own")
     shot("recovery")
-    let master = el("recovery-master")
-    wait(master, 10, "master key field")
-    master.tap(); master.typeText(env["JARVIS2_MASTER_KIT"] ?? "")
-    let s3 = el("recovery-s3")
-    s3.tap(); s3.typeText(env["JARVIS2_S3_KIT"] ?? "")
+    // the recovery kit first: the master key pasted once + the read keys the setup session sealed to it
+    el("recovery-make-kit").tap()
+    let master = el("kit-master")
+    guard wait(master, 15, "recovery kit page") else { return }
+    master.tap(); master.typeText(env["JARVIS2_MASTER_KEY"] ?? "")
+    shot("kit-master-pasted")
+    el("kit-make").tap()
+    guard wait(el("kit-string"), 60, "the recovery kit") else { return }
+    let kit = el("kit-string").label
+    XCTAssertTrue(kit.hasPrefix("jarvis2-kit:1:MIG"), "[\(tag)] the kit string \(kit.prefix(16))…")
+    shot("kit")
+    el("secure-back").tap() // Done → back to the recovery page
+    let kitField = el("recovery-kit")
+    guard wait(kitField, 15, "recovery kit field") else { return }
+    kitField.tap(); kitField.typeText(kit)
     shot("recovery-kit-pasted")
     el("recovery-go").tap()
     sleep(1)
@@ -360,6 +370,13 @@ final class Jarvis2UITests: XCTestCase {
       XCTAssertTrue(el("master-private").label.hasPrefix("jarvis2-master:MIG"), "[\(tag)] private kit \(el("master-private").label.prefix(20))")
       XCTAssertTrue(el("master-public").label.hasPrefix("B"), "[\(tag)] public key (x963 base64)")
       shot("master-key")
+      // the recovery kit with the key made just now: held in memory, and refused because it isn't keys/master.pub
+      el("master-make-kit").tap()
+      if wait(el("kit-held-master"), 15, "kit page with the held master key") {
+        el("kit-make").tap()
+        wait(el("secure-error"), 30, "a master key that isn't keys/master.pub is refused")
+        shot("kit-wrong-master")
+      }
       el("secure-back").tap()
       wait(el("open-master-key"), 20, "back to settings")
     }

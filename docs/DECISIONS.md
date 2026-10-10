@@ -36,9 +36,9 @@ made around it; the app's own list is `app/DECISIONS.md`.
 10. **A CI-only fake Fly** (`go build -tags fakefly`) lets the app's CI run the real core and router.
 11. **The identity words** are 8 BIP39 English words over SHA-256 of
     `"jarvis2-core-identity <signingKey> <agreementKey>"` (88 bits).
-12. **The recovery kit is two password-manager items:** the master private key (made on the iPhone) and the
-    backup bucket's read keys (Claude shows them to Deyao once, on a private page). The phone reads the backups
-    itself, so nothing on the box can reach the bucket.
+12. **The recovery kit is one password-manager item** (Deyao, 2026-10-10): the master private key and the
+    backup bucket's read keys in one string, made by the app's Recovery kit page (item 46). The phone reads the
+    backups itself, so nothing on the box can reach the bucket.
 13. **Backups:** `stores/<name>.json` (values sealed to the master key, the name as associated data; sensitive
     flag; signed by the setup key) and `sensitive/<name>.json` markers, in the versioned bucket
     `jarvis2-backup-de0ch`. A store is not sensitive at recovery only if its backup says so and no marker exists.
@@ -160,3 +160,21 @@ made around it; the app's own list is `app/DECISIONS.md`.
     MAC and an approval nonce is used once, so two new sessions with the same stores, harness, mode and image used to
     get the same nonce and the second failed with "this approval was already used". Fixed before the first recovery
     (a core change restarts the core). Successors don't need it: each predecessor is succeeded once.
+
+## Recovery kit, 2026-10-10
+
+46. **The read keys travel sealed, through the router; the kit is made on the phone.** Deyao: no secret over
+    Discord; one string to save. The setup session seals the credential to `keys/master.pub` with the store
+    backups' own sealing (associated data `jarvis2/recovery-keys`, so no store backup can pass for it), signs the
+    document with the setup key (`infra/setup.py recovery-keys`), and the router keeps it (`<data>/recovery-keys.json`,
+    the router's volume — not the bucket, which the keys are needed to read; not the core, which would mean a core
+    change and a restart). The shell checks the setup key against `keys/setup.pub` from GitHub (like `box.pub`) and
+    the master key against `keys/master.pub`, opens the keys, lists the bucket with them, and shows
+    `jarvis2-kit:1:<master PKCS#8 DER base64>:<access>:<secret>` (readable parts, colon-separated: base64 and the
+    access key carry no colon; versioned). The router can only withhold or replay an earlier signed blob; a
+    revoked credential then fails the bucket check, so a replay can't plant a key, only stall. A box rebuild
+    loses the blob, which doesn't matter: the kit already holds the keys. Recovery takes only the kit (the
+    separate fields and `jarvis2-s3:` are gone); the kit page takes the bare `jarvis2-master:` key once.
+47. **A new read credential `jarvis2-backup-read`** replaced the revoked one (same name, the old one was gone),
+    narrowed as RUNBOOK says; 9 more Deny actions than before (version ACL/tagging, logging, notification,
+    replication, website, public-access block). It was sealed for Deyao and every local copy deleted.

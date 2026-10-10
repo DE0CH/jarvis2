@@ -134,17 +134,35 @@ struct MasterKey {
   /// the kit string: PKCS#8 DER, the body of the PEM "PRIVATE KEY" block
   var kit: String { MasterKey.prefix + signing.pemRepresentation.split(separator: "\n").filter { !$0.hasPrefix("-----") }.joined() }
   func sign(_ text: String) throws -> String { try signing.signature(for: Data(text.utf8)).derRepresentation.base64EncodedString() }
+  /// the public half is `pub` (keys/master.pub: base64 X9.63)
+  func matches(_ pub: String) -> Bool {
+    Data(base64Encoded: pub.trimmingCharacters(in: .whitespacesAndNewlines)) == signing.publicKey.x963Representation
+  }
 }
 
-/// `jarvis2-s3:<access key>:<secret key>` — read credentials for the backup bucket
-struct S3Credentials {
+/// read credentials for the backup bucket (the Hetzner S3 credential narrowed to reads by bucket policies)
+struct S3Credentials: Codable, Equatable {
   let accessKey: String, secretKey: String
-  static func parse(_ raw: String) throws -> S3Credentials {
-    let p = raw.trimmingCharacters(in: .whitespacesAndNewlines).split(separator: ":", maxSplits: 2, omittingEmptySubsequences: false).map(String.init)
-    guard p.count == 3, p[0] == "jarvis2-s3", !p[1].isEmpty, !p[2].isEmpty else {
-      throw TrustError.badKit("That isn't the backup bucket's credentials (jarvis2-s3:<access key>:<secret key>).")
-    }
-    return S3Credentials(accessKey: p[1], secretKey: p[2])
+}
+
+/// The recovery kit: the ONE string Deyao keeps in his password manager —
+/// `jarvis2-kit:1:<master private key, base64 PKCS#8 DER>:<bucket access key>:<bucket secret key>`.
+/// The app's Recovery kit page makes it (the master key from this iPhone's memory or pasted once, the read keys
+/// from the setup session's sealed document); the Recovery page takes only this.
+struct RecoveryKit {
+  let master: MasterKey, bucket: S3Credentials
+  static let prefix = "jarvis2-kit:1:"
+  var string: String {
+    RecoveryKit.prefix + String(master.kit.dropFirst(MasterKey.prefix.count)) + ":" + bucket.accessKey + ":" + bucket.secretKey
+  }
+  static func parse(_ raw: String) throws -> RecoveryKit {
+    let s = raw.filter { !$0.isWhitespace }
+    let bad = TrustError.badKit("That isn't a recovery kit (jarvis2-kit:1:… from the app's Recovery kit page).")
+    guard s.hasPrefix(prefix) else { throw bad }
+    // base64 has no ":", nor does an S3 access key; the secret is the rest, whatever it holds
+    let p = s.dropFirst(prefix.count).split(separator: ":", maxSplits: 2, omittingEmptySubsequences: false).map(String.init)
+    guard p.count == 3, !p[1].isEmpty, !p[2].isEmpty, let m = try? MasterKey.parse(MasterKey.prefix + p[0]) else { throw bad }
+    return RecoveryKit(master: m, bucket: S3Credentials(accessKey: p[1], secretKey: p[2]))
   }
 }
 

@@ -149,6 +149,13 @@ ephemeral P-256 key `r`, `x' = x(r·t)`, key = HKDF-SHA256(ikm `x'`, salt empty,
 32 bytes), AES-256-GCM combined (`nonce‖ciphertext‖tag`) → `share = {e: base64(r.pub x963), data:
 base64(combined)}` → `unlock/finish {pending, share}`.
 
+## Recovery kit (`/api/recovery-keys`)
+
+`GET /api/recovery-keys` → `{doc, sig}` exactly as the setup session sent it (above); 404 `{missing: true}`
+until it has. The shell's Recovery kit page checks `sig` against `keys/setup.pub` (from GitHub), opens `sealed`
+with the master key, tries the keys on the bucket, and shows the kit: `jarvis2-kit:1:<master private key,
+base64 PKCS#8 DER>:<access key>:<secret key>`, the one string the Recovery page takes.
+
 ## Setup (`/setup/*`)
 
 Every call carries `X-Setup-Time` (unix seconds) and `X-Setup-Sig` = base64 DER ECDSA-P256-SHA256 signature
@@ -163,6 +170,17 @@ against `SETUP_KEY` (`k8s/apps/router.yaml`), within ±2 min, each signature onc
 | `POST /setup/stores/create` | `/stores/create` |
 | `POST /setup/stores/write` | `/stores/write` |
 | `POST /setup/stores/mark-sensitive` | `/stores/mark-sensitive` |
+
+The router's own setup calls (no core behind them):
+
+- `POST /setup/recovery-keys {doc, sig}` — the backup bucket's read keys for the app's recovery kit, as
+  `infra/setup.py recovery-keys` makes them: `doc` = the JSON text `{"kind":"recovery-keys", "bucket",
+  "credential", "sealed":{e, data}, "at"}`, `sig` = the setup key's base64 DER ECDSA over `doc`. `sealed` is the
+  store backups' sealing to the master public key (ephemeral P-256, HKDF-SHA256 info `"jarvis2/backup"`,
+  AES-256-GCM combined) with associated data `"jarvis2/recovery-keys"`, over `{"accessKey","secretKey"}`. The
+  router checks the kind and the setup key's signature, then keeps it on its volume (`<data>/recovery-keys.json`,
+  replacing any earlier one) → `{ok: true}`; 400 for anything else. It can't open it.
+- `GET /setup/recovery-keys` — what the router holds, unchanged (setup.py reads it back after sending).
 
 ## Machines (`/m/*`)
 

@@ -1,5 +1,5 @@
 // Settings: the Claude account (Jarvis 1 holds it), the Fly spend against the cap, the core as the router
-// reports it, and the shell's recovery and master-key pages (the app only).
+// reports it, and the shell's recovery, recovery-kit and master-key pages (the app only).
 import { Linking } from "react-native";
 import { useEffect, useRef, useState } from "react";
 import { api, fromNow, usd, type Usage, type UsageLimit } from "../lib/api";
@@ -108,8 +108,13 @@ export function Settings() {
       </Card>
       {hasShell && <Card data={{ settings: "recovery" }}>
         <Heading size={3} mb={1}>Recovery</Heading>
-        <Muted>A new or restarted core gets every store back from the backups: its 8 words, then the master key and the bucket's read keys from your password manager.</Muted>
+        <Muted>A new or restarted core gets every store back from the backups: its 8 words, then the recovery kit from your password manager.</Muted>
         <Flex mt={3}><Button id="open-recovery" variant="soft" onPress={() => requestSecure("recovery", {})}>Open recovery</Button></Flex>
+      </Card>}
+      {hasShell && <Card data={{ settings: "recovery-kit" }}>
+        <Heading size={3} mb={1}>Recovery kit</Heading>
+        <Muted>The one string your password manager keeps: the master private key plus the backup bucket's read keys, which the setup session sealed to the master key.</Muted>
+        <Flex mt={3}><Button id="open-recovery-kit" variant="soft" color="gray" onPress={() => requestSecure("recovery-kit", {})}>Make the recovery kit…</Button></Flex>
       </Card>}
       {hasShell && <Card data={{ settings: "master-key" }}>
         <Heading size={3} mb={1}>Master key</Heading>

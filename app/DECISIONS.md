@@ -70,12 +70,14 @@ Carried over from the mock (DE0CH/jarvis2-mock DECISIONS.md) unless marked new.
     schedules (a wakeup, a cron) → terminal → pause → transcript → resume with a prompt → resume with the latest
     image → destroy → previous (remove) → search → settings (a copy) → the master key page.
 
-16. **New: the recovery kit formats** (what Deyao keeps in the password manager, two entries):
-    `jarvis2-master:<base64 PKCS#8 DER of the P-256 private key>` (the body of a PEM "PRIVATE KEY" block, so
-    `openssl pkey` reads it; the page also accepts the PEM itself) and `jarvis2-s3:<access key>:<secret key>`
-    (read credentials for `jarvis2-backup-de0ch` at `https://fsn1.your-objectstorage.com`, region fsn1 — the
-    endpoint and bucket are built in, not part of the kit). Both live only in the page's memory: wiped on
-    success, on leaving the page, and 10 minutes after they were pasted.
+16. **New: the recovery kit format** (what Deyao keeps in the password manager, ONE entry):
+    `jarvis2-kit:1:<master key>:<access key>:<secret key>`, the master key being the base64 PKCS#8 DER of the
+    P-256 private key (the body of a PEM "PRIVATE KEY" block, so `openssl pkey` reads it), the other two the
+    read credentials for `jarvis2-backup-de0ch` at `https://fsn1.your-objectstorage.com`, region fsn1 (endpoint
+    and bucket are built in, not part of the kit). Whitespace and line breaks in a paste are ignored. The bare
+    master key `jarvis2-master:<same base64>` (what the master key page shows) is taken only by the Recovery kit
+    page. Everything pasted lives only in the page's memory: wiped on success, on leaving the page, and 10
+    minutes after it was pasted.
 17. **New: master key page** (Settings → Master key, or from the recovery page): a P-256 pair made in software
     on the iPhone (it must be exportable, so not the Enclave), the private kit shown once with Copy (clipboard
     local-only, expires after 2 minutes) and the public key (base64 X9.63, for keys/master.pub) with Copy.
@@ -191,6 +193,15 @@ Carried over from the mock (DE0CH/jarvis2-mock DECISIONS.md) unless marked new.
     time: make a master key pair below." as a plain note (no red) when the router answers 503 `coreDown`, with the
     master-key button as the page's main button and "Check again".
 
+39. **New: Recovery kit page** (shell, secure; Settings → Recovery kit, Recovery → "Make the recovery kit…", or
+    "Make the recovery kit with this key…" on the master key page, which hands the just-made key over in memory):
+    the master key (held, or `jarvis2-master:…` pasted once) must match `keys/master.pub` from GitHub; the sealed
+    read keys from `GET api/recovery-keys` must carry the setup key's signature (`keys/setup.pub`), open with the
+    master key and list the bucket; then the page shows the kit with Copy (local-only, 2-minute clipboard) and
+    what it holds (credential name, when sealed, how many backups it reads). No keys at the router yet → "Check
+    again". Opened from Recovery, its Back/Done returns there so the kit can be pasted straight away. The Recovery
+    page has one field, the kit, and checks its master key against `keys/master.pub` before reading anything.
+
 ## Unfinished / known gaps
 
 - **Keyboard avoidance for React Native forms** still comes only from React Native (lessons/73: the
@@ -200,7 +211,5 @@ Carried over from the mock (DE0CH/jarvis2-mock DECISIONS.md) unless marked new.
   resumes sessions in `initialising`; the Pause button is offered there too.
 - Approval pages show the router's session label (unsigned) next to the signed content.
 - No GitHub build-attestation check of the session image (item 10).
-- The app doesn't compare the master key's public half with keys/master.pub (it doesn't exist until Deyao
-  makes the pair); a wrong key fails at the backups (they don't open) and at the core (403).
 - After a reinstall the phone's keys are new, but an already-recovered core refuses a second recovery (409):
   the core has to be restarted (= a new core) and recovered again.

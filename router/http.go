@@ -114,6 +114,8 @@ func (r *Router) buildHandlers() {
 	setup("POST /setup/stores/create", "POST", "/stores/create")
 	setup("POST /setup/stores/write", "POST", "/stores/write")
 	setup("POST /setup/stores/mark-sensitive", "POST", "/stores/mark-sensitive")
+	// the backup bucket's read keys, sealed to the master key by the setup session (recoverykeys.go)
+	r.registerRecoveryKeys(app, mux.Handle)
 
 	// ---- recovery (the app, with the master key) and the core's identity --------------------------------
 	app("GET /api/core/identity", func(w http.ResponseWriter, req *http.Request) { r.relay(w, "GET", "/identity", nil) })

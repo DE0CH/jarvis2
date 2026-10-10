@@ -139,6 +139,14 @@ final class RouterClient: NSObject, ASWebAuthenticationPresentationContextProvid
     guard d.kind == "recovered" else { throw TrustError.stale("recovery") }
     return d.stores ?? 0
   }
+  /// the backup bucket's read keys as the setup session sealed them (nil: none sent yet); the caller checks
+  /// the setup key's signature and opens them with the master key (Recovery.openKeys)
+  func recoveryKeys() async throws -> Recovery.SealedKeys? {
+    let (status, data) = try await raw("GET", "api/recovery-keys", nil)
+    if status == 404 { return nil }
+    guard status == 200 else { throw RouterError(message: Self.reason(data) ?? "HTTP \(status) from api/recovery-keys") }
+    return try JSONDecoder().decode(Recovery.SealedKeys.self, from: data)
+  }
   /// the stores each harness brings (the router adds them to a session; the app doesn't offer them)
   struct PolicyDTO: Decodable { struct H: Decodable { let stores: [String]? }; let harnesses: [String: H] }
   func harnessStores() async -> [String: [String]] {

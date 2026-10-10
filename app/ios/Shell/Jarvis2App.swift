@@ -1,7 +1,7 @@
 // Jarvis 2: a small native shell that owns the window. The whole Jarvis React Native UI runs in the
 // bundled ExtensionKit extension (JarvisUI), in its own process, shown full-screen in normal mode. Anything
 // may ask to ENTER secure mode (XPC requestSecureMode) on one of the shell's pages — new session, an
-// approval, stores, recovery, the master key, a grant; only this shell's own code leaves it. In secure mode the extension's view is
+// approval, stores, recovery, the master key, the recovery kit, a grant; only this shell's own code leaves it. In secure mode the extension's view is
 // removed — it cannot draw or receive taps — and the shell pushes its own page over a still snapshot of the
 // app with the native push motion (no sheets: forms are pages), so the switch looks seamless. Back pops it
 // to the right; a finished action leaves to the left. The shell also owns sign-in (RouterClient) and hands
@@ -26,7 +26,7 @@ struct Jarvis2App: App {
 
 enum Mode: Equatable { case normal, secure }
 /// the shell's secure pages
-enum Route: Equatable { case newSession, approval(String), stores, recovery, masterKey, grant(String) }
+enum Route: Equatable { case newSession, approval(String), stores, recovery, masterKey, recoveryKit, grant(String) }
 
 @Observable
 final class Shell {
@@ -42,6 +42,11 @@ final class Shell {
   var extensionProxy: ExtensionService?
   weak var hostVC: EXHostViewController?
   var lines: [String] = []
+  /// a master key made on the master key page, handed to the recovery kit page; memory only, dropped when
+  /// secure mode ends
+  var heldMaster: MasterKey?
+  /// the recovery kit page was opened from the recovery page: its Back/Done goes back there
+  var kitReturnsToRecovery = false
   private var monitor: AppExtensionPoint.Monitor?
   private let t0 = Date()
 
@@ -103,6 +108,7 @@ final class Shell {
       route = .grant(id)
     case "recovery": route = .recovery
     case "master-key": route = .masterKey
+    case "recovery-kit": route = .recoveryKit
     default: log("secure request of unknown kind refused"); return
     }
     log("enter secure \(opts["kind"] ?? "")")
@@ -116,6 +122,8 @@ final class Shell {
   /// issued, an unlock the core confirmed…); `id` = the session it concerned, if any.
   func exitSecure(_ why: String, done: Bool = false, id: String? = nil) {
     log("exit secure: \(why)")
+    heldMaster = nil
+    kitReturnsToRecovery = false
     exitForward = done
     coverWithSnapshot = snapshot != nil
     withAnimation(Shell.push) { mode = .normal }
@@ -212,6 +220,7 @@ struct SecurePageFor: View {
     case .stores: SecureStores(shell: shell)
     case .recovery: RecoveryPage(shell: shell)
     case .masterKey: MasterKeyPage(shell: shell)
+    case .recoveryKit: RecoveryKitPage(shell: shell)
     case .grant(let id): SecureGrant(shell: shell, sessionId: id, options: shell.secureOptions)
     }
   }

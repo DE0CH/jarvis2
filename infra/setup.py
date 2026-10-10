@@ -20,6 +20,10 @@ both). Values never print.
                                        this is how stores reach a core); sensitive unless --not-sensitive
   infra/setup.py backup-core FILE      the `core` store's backup only (it reaches a core only by recovery):
                                        FLY_API_TOKEN from FILE (infra/fly-token.sh), FLY_APP jarvis2-sessions
+  infra/setup.py recovery-keys FILE --credential=NAME
+                                       the backup bucket's read keys (FILE: ACCESS_KEY=…, SECRET_KEY=… lines)
+                                       sealed to the master key, signed by the setup key, kept by the router
+                                       for the app's Recovery kit page (the router can't open them)
 
 A store the core never created (no `create` first) is sensitive.
 """
@@ -115,7 +119,8 @@ def call(method, path, body=None):
 
 
 def keyfile(name):
-    return open(os.path.join(ROOT, "keys", name)).read().strip()
+    """keys/<name> from this checkout (JARVIS2_KEYS_DIR: another directory, for CI's stand-in keys)"""
+    return open(os.path.join(os.environ.get("JARVIS2_KEYS_DIR") or os.path.join(ROOT, "keys"), name)).read().strip()
 
 
 def identity():
@@ -166,22 +171,50 @@ def s3():
                         aws_access_key_id=os.environ["HETZNER_S3_ACCESS_KEY"], aws_secret_access_key=os.environ["HETZNER_S3_SECRET_KEY"])
 
 
-def backup(name, values, sensitive):
-    """stores/<name>.json in the versioned bucket: the values sealed to the master key, signed by the setup key"""
+def seal_to_master(plain, aad):
+    """{e, data}: sealed to the master public key (keys/master.pub) — ECDH P-256, HKDF info "jarvis2/backup", AES-GCM"""
     master = ec.EllipticCurvePublicKey.from_encoded_point(ec.SECP256R1(), base64.b64decode(keyfile("master.pub")))
     e = ec.generate_private_key(ec.SECP256R1())
-    sealed = {"e": base64.b64encode(_x963(e.public_key())).decode(),
-              "data": base64.b64encode(_gcm(_kdf(e.exchange(ec.ECDH(), master), "jarvis2/backup"), json.dumps(values).encode(), name.encode())).decode()}
+    return {"e": base64.b64encode(_x963(e.public_key())).decode(),
+            "data": base64.b64encode(_gcm(_kdf(e.exchange(ec.ECDH(), master), "jarvis2/backup"), plain, aad)).decode()}
+
+
+def signed(doc):
+    """{doc, sig}: the document text and the setup key's signature over it"""
+    return {"doc": doc, "sig": base64.b64encode(setup_key().sign(doc.encode(), ec.ECDSA(hashes.SHA256()))).decode()}
+
+
+def backup(name, values, sensitive):
+    """stores/<name>.json in the versioned bucket: the values sealed to the master key, signed by the setup key"""
+    sealed = seal_to_master(json.dumps(values).encode(), name.encode())
     doc = json.dumps({"kind": "store-backup", "name": name, "sensitive": sensitive, "sealed": sealed, "at": int(time.time())})
-    sig = base64.b64encode(setup_key().sign(doc.encode(), ec.ECDSA(hashes.SHA256()))).decode()
-    s3().put_object(Bucket=BUCKET, Key=f"stores/{name}.json", Body=json.dumps({"doc": doc, "sig": sig}).encode())
+    s3().put_object(Bucket=BUCKET, Key=f"stores/{name}.json", Body=json.dumps(signed(doc)).encode())
+
+
+RECOVERY_KEYS_AAD = b"jarvis2/recovery-keys"
+
+
+def recovery_keys_doc(access_key, secret_key, credential):
+    """the backup bucket's read keys for the iPhone's recovery kit: sealed to the master key (associated data
+    "jarvis2/recovery-keys", so no store backup can pass for it), signed by the setup key"""
+    plain = json.dumps({"accessKey": access_key, "secretKey": secret_key}).encode()
+    doc = json.dumps({"kind": "recovery-keys", "bucket": BUCKET, "credential": credential,
+                      "sealed": seal_to_master(plain, RECOVERY_KEYS_AAD), "at": int(time.time())})
+    return signed(doc)
+
+
+def read_keys_file(path):
+    """ACCESS_KEY=… / SECRET_KEY=… lines (never printed)"""
+    v = dict(l.strip().split("=", 1) for l in open(os.path.expanduser(path)) if "=" in l)
+    if not v.get("ACCESS_KEY") or not v.get("SECRET_KEY"):
+        raise SystemExit(f"{path}: needs ACCESS_KEY= and SECRET_KEY= lines")
+    return v["ACCESS_KEY"], v["SECRET_KEY"]
 
 
 def mark_sensitive_backup(name):
     """sensitive/<name>.json: a signed marker; at recovery a store with one is sensitive whatever its backup says"""
     doc = json.dumps({"kind": "store-sensitive", "name": name, "at": int(time.time())})
-    sig = base64.b64encode(setup_key().sign(doc.encode(), ec.ECDSA(hashes.SHA256()))).decode()
-    s3().put_object(Bucket=BUCKET, Key=f"sensitive/{name}.json", Body=json.dumps({"doc": doc, "sig": sig}).encode())
+    s3().put_object(Bucket=BUCKET, Key=f"sensitive/{name}.json", Body=json.dumps(signed(doc)).encode())
 
 
 def store_list():
@@ -233,6 +266,18 @@ def main():
     elif cmd == "backup-core":
         backup("core", {"FLY_API_TOKEN": open(os.path.expanduser(args[0])).read().strip(), "FLY_APP": "jarvis2-sessions"}, True)
         print("ok: the core store's backup is written (it comes in at the next recovery)")
+    elif cmd == "recovery-keys":
+        cred = next((a.split("=", 1)[1] for a in args if a.startswith("--credential=")), "")
+        files = [a for a in args if not a.startswith("--")]
+        if len(files) != 1 or not cred:
+            raise SystemExit("usage: setup.py recovery-keys FILE --credential=NAME")
+        ak, sk = read_keys_file(files[0])
+        k = recovery_keys_doc(ak, sk, cred)
+        call("POST", "/setup/recovery-keys", k)
+        back = call("GET", "/setup/recovery-keys")
+        if back.get("doc") != k["doc"] or back.get("sig") != k["sig"]:
+            raise SystemExit("the router doesn't give the sealed keys back unchanged")
+        print(f"ok: the read keys of {cred} are sealed to the master key and waiting at the router for the app's recovery kit")
     else:
         raise SystemExit(__doc__)
 

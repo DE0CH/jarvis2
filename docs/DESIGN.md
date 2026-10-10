@@ -124,7 +124,8 @@ plus a signed marker for every store made sensitive.
 2. The app's **recovery page** fetches that statement (through the router), checks the box-key signature
    against `keys/box.pub` from GitHub, and shows the core's identity as **8 words** (BIP39 English list over
    the SHA-256 of its public keys). Nothing goes on unless the signature checks.
-3. Deyao pastes the **master private key** and the backup bucket's read keys from his password manager.
+3. Deyao pastes his **recovery kit** from his password manager: one string holding the master private key and
+   the backup bucket's read keys (below). The app checks its master key against `keys/master.pub` from GitHub.
 4. The phone reads the backups, checks their writers' signatures, decrypts them with the master key, signs a
    statement naming the core's keys, its own keys and the bundle's hash with the master key, and sends the
    bundle (every store, the `core` store with the Fly token, the names that aren't sensitive) sealed to the
@@ -134,6 +135,19 @@ plus a signed marker for every store made sensitive.
    trust that core through the master key's signature.
 
 The first setup is a recovery from empty backups plus the `core` store.
+
+**The recovery kit** (Deyao, 2026-10-10: no secret ever reaches him over Discord; the core and the iPhone
+negotiate, and he saves one string). The backup bucket's read keys are a Hetzner S3 credential that only the
+Console can make, so the setup session makes it, seals it to the **master public key** (the store backups'
+sealing, associated data `jarvis2/recovery-keys`), signs it with the **setup key**, and sends it through the
+router (`/setup/recovery-keys`), which keeps the blob on its volume and can't open it. The app's **Recovery
+kit** page — a secure page of the shell, never the React Native extension — fetches it, checks the setup key's
+signature against `keys/setup.pub` from GitHub, takes the master private key (held in memory from "Make a master
+key pair", or pasted once for a master key made earlier), checks it against `keys/master.pub`, opens the keys,
+tries them on the bucket, and shows **one string** to save: `jarvis2-kit:1:<master private key>:<access
+key>:<secret key>`. Recovery takes only that string. The router can withhold the blob or serve an older one
+(signed too), never a key of its own; an older one whose credential was revoked fails the bucket check. A new
+read credential means a new kit: the setup session seals it the same way and Deyao makes the kit again.
 
 ## The box
 

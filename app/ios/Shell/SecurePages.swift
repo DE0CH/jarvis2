@@ -13,11 +13,13 @@ struct SecureFrame<Content: View>: View {
   var busy: String? = nil
   var run: () -> Void = {}
   var backTitle = "← Back"
+  /// Back to another secure page instead of leaving secure mode
+  var onBack: (() -> Void)? = nil
   @ViewBuilder let content: () -> Content
   var body: some View {
     VStack(spacing: 0) {
       HStack(spacing: 12) {
-        KitButton(title: backTitle, variant: .soft, color: .gray, disabled: busy != nil, id: "secure-back") { shell.exitSecure("back") }
+        KitButton(title: backTitle, variant: .soft, color: .gray, disabled: busy != nil, id: "secure-back") { if let onBack { onBack() } else { shell.exitSecure("back") } }
         Text(title).font(.system(size: K.fontSize[4], weight: .bold)).foregroundStyle(Radix.gray.s[12]).lineLimit(1).frame(maxWidth: .infinity, alignment: .leading)
         if let a = action { KitButton(title: busy ?? a.title, disabled: a.disabled, busy: busy != nil, id: a.id, action: run) }
       }
@@ -392,15 +394,23 @@ struct SecureStores: View {
   }
 }
 
-// ---- recovery: the core's identity (8 words), then the kit → every store into the new core -----------
+// ---- recovery: the core's identity (8 words), then the recovery kit → every store into the new core --------
+/// a pasted secret's field: monospaced, no autocorrect, hidden from screenshots
+func secretField(_ ph: String, _ text: Binding<String>, _ id: String, onChange: @escaping (String) -> Void) -> some View {
+  TextField(ph, text: text, axis: .vertical)
+    .font(.system(size: K.fontSize[1], design: .monospaced)).textInputAutocapitalization(.never).autocorrectionDisabled().privacySensitive()
+    .padding(10).background(RoundedRectangle(cornerRadius: K.radius[2]).strokeBorder(Radix.gray.a[7], lineWidth: 1))
+    .padding(.top, 8).accessibilityIdentifier(id)
+    .onChange(of: text.wrappedValue) { _, v in onChange(v) }
+}
+
 struct RecoveryPage: View {
   let shell: Shell
   @State private var id: PublicKeys?
   @State private var words = ""
   @State private var idError: String?
   @State private var notRunning = false // no core yet (first setup): a plain note, not an error
-  @State private var master = ""
-  @State private var bucketKeys = ""
+  @State private var kit = ""
   @State private var busy: String?
   @State private var failure: String?
   @State private var note: String?
@@ -408,7 +418,7 @@ struct RecoveryPage: View {
 
   private var already: Bool { id != nil && id == CoreTrust.pinned }
   var body: some View {
-    SecureFrame(shell: shell, title: "Recovery", action: id == nil || already ? nil : ("Recover", "recovery-go", master.isEmpty || bucketKeys.isEmpty), busy: busy,
+    SecureFrame(shell: shell, title: "Recovery", action: id == nil || already ? nil : ("Recover", "recovery-go", kit.isEmpty), busy: busy,
                 run: { Task { await recover() } }, backTitle: CoreTrust.pinned == nil ? "Later" : "← Back") {
       Lbl(text: "The core")
       if notRunning {
@@ -428,18 +438,18 @@ struct RecoveryPage: View {
         if already {
           Callout(text: "This iPhone already trusts this core.", color: .blue).padding(.top, 12).accessibilityIdentifier("recovery-done")
         } else {
-          Lbl(text: "Master key")
-          Muted(text: "From your password manager: jarvis2-master:…")
-          kitField("jarvis2-master:…", $master, "recovery-master")
-          Lbl(text: "Backup bucket (read)")
-          Muted(text: "From your password manager: jarvis2-s3:<access key>:<secret key>")
-          kitField("jarvis2-s3:…", $bucketKeys, "recovery-s3")
-          Muted(text: "Both stay in this page's memory only, for at most 10 minutes. The app reads every store's backup, checks it was written by the setup key, decrypts it with the master key, and hands the stores to this core sealed to its key, with the master key's signature naming the core and this iPhone.").padding(.top, 8)
+          Lbl(text: "Recovery kit")
+          Muted(text: "From your password manager: jarvis2-kit:1:…")
+          secretField("jarvis2-kit:1:…", $kit, "recovery-kit") { v in if !v.isEmpty { armWipe() } }
+          Muted(text: "It stays in this page's memory only, for at most 10 minutes. The app checks its master key against keys/master.pub, reads every store's backup with its bucket keys, checks each was written by the setup key, decrypts them with the master key, and hands the stores to this core sealed to its key, with the master key's signature naming the core and this iPhone.").padding(.top, 8)
         }
       }
       if let note { Callout(text: note).padding(.top, 12) }
       if let failure { Callout(text: failure, color: .red).padding(.top, 16).accessibilityIdentifier("secure-error") }
       if !notRunning {
+        Lbl(text: "No recovery kit yet")
+        Muted(text: "Make it from your master key and the backup bucket's read keys, which the setup session sealed to the master key.")
+        HStack { KitButton(title: "Make the recovery kit…", variant: .soft, disabled: busy != nil, id: "recovery-make-kit") { clear(); shell.kitReturnsToRecovery = true; shell.route = .recoveryKit }; Spacer() }.padding(.top, 8)
         Lbl(text: "First time")
         HStack { KitButton(title: "Make a master key pair…", variant: .soft, color: .gray, disabled: busy != nil, id: "recovery-make-master") { clear(); shell.route = .masterKey }; Spacer() }
       }
@@ -447,22 +457,15 @@ struct RecoveryPage: View {
     .task { await load() }
     .onDisappear { clear() }
   }
-  private func kitField(_ ph: String, _ text: Binding<String>, _ id: String) -> some View {
-    TextField(ph, text: text, axis: .vertical)
-      .font(.system(size: K.fontSize[1], design: .monospaced)).textInputAutocapitalization(.never).autocorrectionDisabled().privacySensitive()
-      .padding(10).background(RoundedRectangle(cornerRadius: K.radius[2]).strokeBorder(Radix.gray.a[7], lineWidth: 1))
-      .padding(.top, 8).accessibilityIdentifier(id)
-      .onChange(of: text.wrappedValue) { _, v in if !v.isEmpty { armWipe() } }
-  }
-  private func clear() { master = ""; bucketKeys = ""; wipe?.cancel(); wipe = nil }
+  private func clear() { kit = ""; wipe?.cancel(); wipe = nil }
   /// the kit is forgotten 10 minutes after it was pasted
   private func armWipe() {
     guard wipe == nil else { return }
     wipe = Task { @MainActor in
       try? await Task.sleep(nanoseconds: 600_000_000_000)
       guard !Task.isCancelled else { return }
-      master = ""; bucketKeys = ""; wipe = nil
-      note = "The pasted keys were wiped after 10 minutes. Paste them again to recover."
+      kit = ""; wipe = nil
+      note = "The pasted kit was wiped after 10 minutes. Paste it again to recover."
     }
   }
   private func load() async {
@@ -484,14 +487,19 @@ struct RecoveryPage: View {
     guard let core = id else { return }
     failure = nil; note = nil
     do {
-      let m = try MasterKey.parse(master), c = try S3Credentials.parse(bucketKeys)
+      let k = try RecoveryKit.parse(kit)
+      busy = "Checking the kit…"
+      let masterPub = try await KeySource.key("master.pub")
+      guard k.master.matches(masterPub) else {
+        throw TrustError.badKit("This kit's master key isn't the one in the repo (keys/master.pub): the backups are sealed to that one.")
+      }
       busy = "Reading the backups…"
       let setupKey = try await KeySource.key("setup.pub")
-      let stores = try await Recovery.readBackups(S3Reader(bucket: KeySource.bucket, creds: c), master: m, setupKey: setupKey) { s in Task { @MainActor in busy = s } }
+      let stores = try await Recovery.readBackups(S3Reader(bucket: KeySource.bucket, creds: k.bucket), master: k.master, setupKey: setupKey) { s in Task { @MainActor in busy = s } }
       let bundle = try Recovery.bundle(stores)
       busy = "Signing…"
       let phone = try PhoneKeys.shared.publicKeys()
-      let body = try Recovery.request(core: core, phone: phone, master: m, bundle: bundle)
+      let body = try Recovery.request(core: core, phone: phone, master: k.master, bundle: bundle)
       busy = "Recovering the core…"
       let n = try await RouterClient.shared.recover(body, core: core)
       CoreTrust.pin(core)
@@ -501,6 +509,97 @@ struct RecoveryPage: View {
       busy = nil
       shell.exitSecure("recovered", done: true)
     } catch { busy = nil; failure = errText(error) }
+  }
+}
+
+// ---- the recovery kit: master key + the backup bucket's read keys → the ONE string to keep ----------------
+/// The read keys come from the setup session through the router, sealed to the master public key and signed by
+/// the setup key: the page checks the signature against keys/setup.pub (from GitHub, like box.pub), opens them
+/// with the master key (held in memory from the master key page, or pasted once), checks they read the
+/// bucket, and shows the kit. Nothing is stored; leaving the page forgets it.
+struct RecoveryKitPage: View {
+  let shell: Shell
+  @State private var pasted = ""
+  @State private var held: MasterKey?
+  @State private var busy: String?
+  @State private var failure: String?
+  @State private var missing = false
+  @State private var kit: String?
+  @State private var about = ""
+  @State private var copied = false
+  @State private var wipe: Task<Void, Never>?
+
+  var body: some View {
+    SecureFrame(shell: shell, title: "Recovery kit", action: kit != nil ? nil : (missing ? "Check again" : "Make kit", "kit-make", held == nil && pasted.isEmpty),
+                busy: busy, run: { Task { await make() } }, backTitle: kit != nil ? "Done" : "← Back",
+                onBack: shell.kitReturnsToRecovery ? { forget(); shell.kitReturnsToRecovery = false; shell.route = .recovery } : nil) {
+      if let kit {
+        Lbl(text: "Your recovery kit — the password manager")
+        Muted(text: "Save this one string in your password manager as the Jarvis 2 recovery kit. It holds the master private key and the backup bucket's read keys\(about); recovery needs only it. Once it is saved, a separate master key entry isn't needed. It is shown once and never stored: leaving this page forgets it. The copy expires from the clipboard after 2 minutes and doesn't go to your other devices.")
+        Text(kit).font(.system(size: K.fontSize[1], design: .monospaced)).foregroundStyle(Radix.gray.s[12]).textSelection(.enabled).privacySensitive()
+          .padding(12).frame(maxWidth: .infinity, alignment: .leading)
+          .background(RoundedRectangle(cornerRadius: K.radius[3], style: .continuous).fill(Radix.gray.a[3]))
+          .padding(.top, 8).accessibilityIdentifier("kit-string").accessibilityLabel(kit)
+        HStack { KitButton(title: copied ? "Copied" : "Copy recovery kit", id: "kit-copy") { copy(kit) }; Spacer() }.padding(.top, 8)
+      } else {
+        Lbl(text: "Master key")
+        if held != nil {
+          Callout(text: "Using the master key made on this iPhone just now (in memory only).", color: .blue).padding(.top, 8).accessibilityIdentifier("kit-held-master")
+        } else {
+          Muted(text: "From your password manager: jarvis2-master:…")
+          secretField("jarvis2-master:…", $pasted, "kit-master") { v in if !v.isEmpty { armWipe() } }
+        }
+        Muted(text: "The backup bucket's read keys come from the setup session through the router, sealed to the master key: the app checks they were signed by the setup key (keys/setup.pub, from GitHub\(KeySource.isCI ? " — CI stand-in" : "")), opens them with the master key and tries them on the bucket. The router can't read them.").padding(.top, 8)
+        if missing {
+          Callout(text: "The setup session hasn't sent the read keys yet (infra/setup.py recovery-keys). Check again once it has.").padding(.top, 12).accessibilityIdentifier("kit-missing")
+        }
+      }
+      if let failure { Callout(text: failure, color: .red).padding(.top, 16).accessibilityIdentifier("secure-error") }
+    }
+    .onAppear { if held == nil { held = shell.heldMaster } }
+    .onDisappear { forget() }
+  }
+  private func forget() { pasted = ""; held = nil; kit = nil; shell.heldMaster = nil; wipe?.cancel(); wipe = nil }
+  /// whatever was pasted or made is forgotten after 10 minutes
+  private func armWipe() {
+    guard wipe == nil else { return }
+    wipe = Task { @MainActor in
+      try? await Task.sleep(nanoseconds: 600_000_000_000)
+      guard !Task.isCancelled else { return }
+      forget()
+      failure = "The master key and the kit were wiped after 10 minutes."
+    }
+  }
+  private func make() async {
+    failure = nil
+    do {
+      let m = try held ?? (MasterKey.parse(pasted))
+      busy = "Checking the master key…"
+      let masterPub = try await KeySource.key("master.pub")
+      guard m.matches(masterPub) else {
+        throw TrustError.badKit("This master key isn't the one in the repo (keys/master.pub): the read keys and the backups are sealed to that one.")
+      }
+      busy = "Fetching the read keys…"
+      guard let sealed = try await RouterClient.shared.recoveryKeys() else { busy = nil; missing = true; return }
+      missing = false
+      let setupKey = try await KeySource.key("setup.pub")
+      let (creds, doc) = try Recovery.openKeys(sealed, setupKey: setupKey, master: m)
+      busy = "Trying them on the bucket…"
+      let n = try await S3Reader(bucket: KeySource.bucket, creds: creds).list(prefix: "stores/").count
+      var parts: [String] = []
+      if let c = doc.credential, !c.isEmpty { parts.append("credential \(c)") }
+      if let at = doc.at { parts.append("sealed " + Date(timeIntervalSince1970: TimeInterval(at)).formatted(date: .abbreviated, time: .shortened)) }
+      parts.append("\(n) store backup\(n == 1 ? "" : "s") readable")
+      about = " (" + parts.joined(separator: ", ") + ")"
+      kit = RecoveryKit(master: m, bucket: creds).string
+      pasted = ""
+      armWipe()
+      busy = nil
+    } catch { busy = nil; failure = errText(error) }
+  }
+  private func copy(_ s: String) {
+    UIPasteboard.general.setItems([["public.utf8-plain-text": s]], options: [.localOnly: true, .expirationDate: Date().addingTimeInterval(120)])
+    copied = true
   }
 }
 
@@ -521,6 +620,9 @@ struct MasterKeyPage: View {
         Muted(text: "It becomes keys/master.pub in the repo (the core, the machines and the setup session trust it).")
         mono(k.publicKey, "master-public")
         HStack { KitButton(title: copied == "public" ? "Copied" : "Copy public key", variant: .soft, id: "master-copy-public") { copy(k.publicKey, "public", expires: false) }; Spacer() }.padding(.top, 8)
+        Lbl(text: "Then — the recovery kit")
+        Muted(text: "Once Claude has committed the public key and sealed the backup bucket's read keys to it, make the recovery kit with this key: the one string your password manager keeps from then on (it holds this private key too).")
+        HStack { KitButton(title: "Make the recovery kit with this key…", variant: .soft, id: "master-make-kit") { shell.heldMaster = k; shell.route = .recoveryKit }; Spacer() }.padding(.top, 8)
       }
     }
     .onAppear { if key == nil { key = MasterKey.generate() } }
