@@ -65,6 +65,11 @@ final class Jarvis2UITests: XCTestCase {
     _ = done.wait(timeout: .now() + 20)
     return out
   }
+  /// one character at a time: a burst into the extension's URL-keyboard field reordered the characters around the
+  /// switch to the digit plane ("DE0CH" arrived as "DH…E0C")
+  func slowType(_ e: XCUIElement, _ text: String) {
+    for ch in text { e.typeText(String(ch)); usleep(150_000) }
+  }
   func gone(_ e: XCUIElement, _ s: TimeInterval) -> Bool {
     let until = Date().addingTimeInterval(s)
     while e.exists && Date() < until { usleep(300_000) }
@@ -363,7 +368,7 @@ final class Jarvis2UITests: XCTestCase {
     // private half), see Jarvis 2's own repo come up sensitive, then remove the first again
     let repoField = el("repo-url")
     if wait(repoField, 15, "the repos card in Settings") {
-      repoField.tap(); repoField.typeText("DE0CH/china-train\n")
+      repoField.tap(); slowType(repoField, "DE0CH/china-train\n")
       if wait(el("secure-repo-go"), 30, "the secure add-repo page") {
         wait(el("store-line-github-china-train"), 15, "…naming the repo's store")
         XCTAssertFalse(el("secure-repo-sensitive").isSelected, "[\(tag)] a repo's store isn't sensitive by default")
@@ -377,7 +382,7 @@ final class Jarvis2UITests: XCTestCase {
         }
         XCTAssertFalse(el("secure-error").exists, "[\(tag)] add-repo error: \(el("secure-error").exists ? el("secure-error").label : "")")
       }
-      repoField.tap(); repoField.typeText("DE0CH/jarvis2\n")
+      repoField.tap(); slowType(repoField, "DE0CH/jarvis2\n")
       if wait(el("secure-repo-go"), 30, "the secure add-repo page for jarvis2") {
         wait(el("store-line-github-jarvis2"), 15, "…naming github-jarvis2")
         sleep(1)
