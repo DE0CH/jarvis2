@@ -15,11 +15,14 @@ echo "=== jarvis2 bootstrap $(date -u +%FT%TZ) ==="
 apt-get update -y && apt-get install -y --no-install-recommends ca-certificates curl git
 systemctl disable --now ssh.socket ssh.service 2>/dev/null || true
 
-curl -sfL https://get.k3s.io | INSTALL_K3S_EXEC="server --disable traefik" sh - || exit 1
+# pinned versions: no lookup of a "latest" (update.k3s.io served a self-signed certificate on 2026-10-10 and every
+# unpinned bootstrap failed: "Finding release for channel stable … Download failed"); bump them here
+K3S_VERSION=v1.36.5+k3s1 FLUX_VERSION=2.9.6
+curl -sfL https://get.k3s.io | INSTALL_K3S_VERSION="$K3S_VERSION" INSTALL_K3S_EXEC="server --disable traefik" sh - || exit 1
 export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
 for i in $(seq 1 60); do kubectl get nodes 2>/dev/null | grep -q ' Ready' && break; sleep 5; done
 
-curl -s https://fluxcd.io/install.sh | bash || exit 1
+curl -s https://fluxcd.io/install.sh | FLUX_VERSION="$FLUX_VERSION" bash || exit 1
 flux install --timeout 5m || exit 1
 # a Kustomization that names no service account applies as the powerless `default`, never as the controller
 kubectl -n flux-system patch deployment kustomize-controller --type=json \
