@@ -19,33 +19,39 @@ struct SecureFrame<Content: View>: View {
   @ViewBuilder let content: () -> Content
   var body: some View {
     VStack(spacing: 0) {
+      // page.tsx TopBar: ← Back (soft gray) · Heading size 4 · the primary action; 20 / 16 padding, a hairline below
       HStack(spacing: 12) {
         KitButton(title: backTitle, variant: .soft, color: .gray, disabled: busy != nil, id: "secure-back") { if let onBack { onBack() } else { shell.exitSecure("back") } }
-        Text(title).font(.system(size: K.fontSize[4], weight: .bold)).foregroundStyle(Radix.gray.s[12]).lineLimit(1).frame(maxWidth: .infinity, alignment: .leading)
+        Text(title).kitHeading(4).foregroundStyle(Radix.gray.s[12]).lineLimit(1).frame(maxWidth: .infinity, alignment: .leading)
         if let a = action { KitButton(title: busy ?? a.title, disabled: a.disabled, busy: busy != nil, id: a.id, action: run) }
       }
       .padding(.horizontal, 20).padding(.vertical, 16)
+      .frame(maxWidth: K.pageMax).frame(maxWidth: .infinity)
+      .background(Radix.background)
       .overlay(alignment: .bottom) { Rectangle().fill(Radix.gray.a[5]).frame(height: 1) }
       ScrollView {
+        // page.tsx's body: 720 wide, 16 at the sides, 8 on top, 48 below
         VStack(alignment: .leading, spacing: 0) {
-          HStack(spacing: 6) {
-            Image(systemName: "lock.fill").font(.system(size: 11, weight: .semibold)).foregroundStyle(Radix.blue.a[11])
+          HStack(alignment: .firstTextBaseline, spacing: 6) {
+            Image(systemName: "lock.fill").font(.system(size: 10, weight: .semibold)).foregroundStyle(Radix.blue.a[11])
             Text("Secure — drawn by the Jarvis 2 shell, signed with \(PhoneKeys.shared.how)")
-              .font(.system(size: K.fontSize[1], weight: .medium)).foregroundStyle(Radix.blue.a[11])
+              .kitText(1, weight: .medium).foregroundStyle(Radix.blue.a[11])
           }
-          .padding(.horizontal, 8).padding(.vertical, 6)
-          .background(RoundedRectangle(cornerRadius: K.radius[2]).fill(Radix.blue.a[3]))
-          .padding(.top, 12)
+          .padding(.horizontal, 8).padding(.vertical, 4)
+          .background(RoundedRectangle(cornerRadius: K.radius[2], style: .continuous).fill(Radix.blue.a[3]))
+          .padding(.top, 8)
           .accessibilityIdentifier("secure-banner")
           content()
           Spacer(minLength: 48)
         }
         .padding(.horizontal, 16)
-        .frame(maxWidth: 720)
+        .frame(maxWidth: K.pageMax)
         .frame(maxWidth: .infinity)
       }
     }
     .background(Radix.background.ignoresSafeArea())
+    // one layer: a shadow the shell puts on the whole page (the push motion) must not land on every text run
+    .compositingGroup()
   }
 }
 
@@ -67,15 +73,14 @@ struct StoreLines: View {
     VStack(spacing: 8) {
       if stores.isEmpty { Muted(text: "No stores.") }
       ForEach(stores, id: \.self) { s in
-        HStack(spacing: 6) {
-          Text(s).font(.system(size: K.fontSize[2], weight: .medium)).foregroundStyle(Radix.gray.s[12])
-          if sensitive.contains(s) { Badge(text: "Sensitive", color: .red) }
-          if harness.contains(s) { Badge(text: "Harness") }
-          Spacer()
+        KitCard(size: 1) {
+          HStack(spacing: 6) {
+            Text(s).kitText(2, weight: .medium).foregroundStyle(Radix.gray.s[12])
+            if sensitive.contains(s) { Badge(text: "Sensitive", color: .red) }
+            if harness.contains(s) { Badge(text: "Harness") }
+            Spacer()
+          }
         }
-        .padding(12)
-        .background(RoundedRectangle(cornerRadius: K.radius[3], style: .continuous).fill(Radix.surface))
-        .overlay(RoundedRectangle(cornerRadius: K.radius[3], style: .continuous).strokeBorder(Radix.gray.a[6], lineWidth: 1))
         .accessibilityIdentifier("store-line-\(s)")
       }
     }
@@ -114,11 +119,11 @@ struct SecureNewSession: View {
         ForEach(offered) { s in
           ChoiceCard(on: picked.contains(s.name), check: true, id: "secure-store-\(s.name)", action: { toggle(s.name) }) {
             HStack(spacing: 6) {
-              Text(s.name).font(.system(size: K.fontSize[2], weight: .medium)).foregroundStyle(Radix.gray.s[12])
+              Text(s.name).kitText(2, weight: .medium).foregroundStyle(Radix.gray.s[12])
               if s.sensitive { Badge(text: "Sensitive", color: .red) }
               if !s.unlocked { Badge(text: "Locked") }
             }
-            if s.empty { Text("empty").font(.system(size: K.fontSize[1])).foregroundStyle(Radix.gray.s[11]) }
+            if s.empty { Text("empty").kitText(1).foregroundStyle(Radix.gray.a[11]) }
           }
         }
       }
@@ -240,7 +245,7 @@ struct SecureApproval: View {
         case .other:
           Muted(text: "A request this page has no special view for — what you sign is below.").padding(.top, 8)
           Lbl(text: "Secret stores"); StoreLines(stores: r.stores, sensitive: r.sensitive, harness: harnessStores)
-          Lbl(text: "The challenge"); Text(r.challenge.request.kind).font(.system(size: K.fontSize[1], design: .monospaced))
+          Lbl(text: "The challenge"); Text(r.challenge.request.kind).kitText(1, mono: true).foregroundStyle(Radix.gray.s[12])
         }
         let warn = r.kind == .addStore ? r.sensitive.filter { $0 == r.addedStore } : r.sensitive
         if !warn.isEmpty {
@@ -309,14 +314,14 @@ struct SecureStores: View {
       if !loaded && failure == nil { ProgressView().frame(maxWidth: .infinity) }
       VStack(spacing: 8) {
         ForEach(stores) { s in
-          VStack(alignment: .leading, spacing: 8) {
+          KitCard(size: 1) { VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 6) {
-              Text(s.name).font(.system(size: K.fontSize[2], weight: .medium)).foregroundStyle(Radix.gray.s[12])
+              Text(s.name).kitText(2, weight: .medium).foregroundStyle(Radix.gray.s[12])
               if s.sensitive { Badge(text: "Sensitive", color: .red) }
               Badge(text: s.unlocked ? "Unlocked" : "Locked", color: s.unlocked ? .blue : .gray)
               Spacer()
             }
-            if s.empty { Text("empty — written by the setup session").font(.system(size: K.fontSize[1])).foregroundStyle(Radix.gray.s[11]) }
+            if s.empty { Text("empty — written by the setup session").kitText(1).foregroundStyle(Radix.gray.a[11]) }
             if confirmMark == s.name {
               Callout(text: "Mark \(s.name) sensitive? The mark can never be removed.", amber: true)
               HStack(spacing: 8) {
@@ -329,37 +334,28 @@ struct SecureStores: View {
                 if !s.sensitive { KitButton(title: "Mark sensitive…", variant: .soft, color: .gray, disabled: busy != nil, id: "mark-\(s.name)") { confirmMark = s.name } }
               }
             }
-          }
-          .padding(12)
-          .background(RoundedRectangle(cornerRadius: K.radius[3], style: .continuous).fill(Radix.surface))
-          .overlay(RoundedRectangle(cornerRadius: K.radius[3], style: .continuous).strokeBorder(Radix.gray.a[6], lineWidth: 1))
+          } }
         }
       }
       Lbl(text: "New store")
       Muted(text: "An empty store that is NOT sensitive (you can mark it later; never back). The setup session writes its values.")
       HStack(spacing: 8) {
-        TextField("name (a–z, 0–9, -)", text: $newName)
-          .font(.system(size: K.fontSize[2])).textInputAutocapitalization(.never).autocorrectionDisabled()
-          .padding(.horizontal, 10).frame(height: 32).background(RoundedRectangle(cornerRadius: K.radius[2]).strokeBorder(Radix.gray.a[7], lineWidth: 1))
-          .accessibilityIdentifier("store-new-name")
+        KitTextField(placeholder: "name (a–z, 0–9, -)", text: $newName, id: "store-new-name")
         KitButton(title: "Create", variant: .soft, disabled: busy != nil || newName.isEmpty, id: "store-create") { Task { await create() } }
-      }
+      }.padding(.top, 8)
       Lbl(text: "Open unlocks")
       Muted(text: "Every unlock the core holds open, signed by the core with this page's nonce: genuine, complete and fresh. A store's secrets leave the core's memory when its last unlock is locked.")
       VStack(spacing: 8) {
         if loaded && open.isEmpty { Muted(text: "None — every store is locked.").accessibilityIdentifier("unlocks-none") }
         ForEach(open) { u in
-          HStack(spacing: 8) {
-            VStack(alignment: .leading, spacing: 2) {
-              Text(u.store).font(.system(size: K.fontSize[2], weight: .medium)).foregroundStyle(Radix.gray.s[12])
-              Text("since \(SecureStores.date(u.since)) · \(u.id.prefix(8))").font(.system(size: K.fontSize[1])).foregroundStyle(Radix.gray.s[11])
+          KitCard(size: 1) { HStack(spacing: 8) {
+            VStack(alignment: .leading, spacing: 0) {
+              Text(u.store).kitText(2, weight: .medium).foregroundStyle(Radix.gray.s[12])
+              Text("since \(SecureStores.date(u.since)) · \(u.id.prefix(8))").kitText(1).foregroundStyle(Radix.gray.a[11])
             }
             Spacer()
             KitButton(title: "Lock", variant: .soft, color: .red, disabled: busy != nil, id: "lock-\(u.store)") { Task { await lock(u.id) } }
-          }
-          .padding(12)
-          .background(RoundedRectangle(cornerRadius: K.radius[3], style: .continuous).fill(Radix.surface))
-          .overlay(RoundedRectangle(cornerRadius: K.radius[3], style: .continuous).strokeBorder(Radix.gray.a[6], lineWidth: 1))
+          } }
         }
       }.padding(.top, 8)
     }

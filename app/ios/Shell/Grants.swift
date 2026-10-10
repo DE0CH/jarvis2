@@ -49,11 +49,11 @@ struct SecureGrant: View {
       if let loadError { Callout(text: loadError, color: .red).padding(.top, 16).accessibilityIdentifier("secure-error") }
       else if let cert {
         Lbl(text: "What you allow")
-        Text(meaning).font(.system(size: K.fontSize[3], weight: .medium)).foregroundStyle(Radix.gray.s[12])
+        Text(meaning).kitText(3, weight: .medium).foregroundStyle(Radix.gray.s[12])
           .frame(maxWidth: .infinity, alignment: .leading).accessibilityIdentifier("grant-meaning")
         Lbl(text: "Session")
         Muted(text: label)
-        Text("line \(cert.line)").font(.system(size: K.fontSize[1], design: .monospaced)).foregroundStyle(Radix.gray.s[11])
+        Text("line \(cert.line)").kitText(1, mono: true).foregroundStyle(Radix.gray.a[11])
           .frame(maxWidth: .infinity, alignment: .leading).padding(.top, 2)
         Lbl(text: "Its stores (from the core's cert)")
         StoreLines(stores: (cert.stores ?? []).filter { $0 != StoreView.coreStore }, sensitive: [])
@@ -83,7 +83,7 @@ struct SecureGrant: View {
           }.padding(.top, 12)
         } else {
           DatePicker("Until", selection: $until, in: Date().addingTimeInterval(3600)...Date().addingTimeInterval(366 * 86400))
-            .font(.system(size: K.fontSize[2])).padding(.top, 12).accessibilityIdentifier("grant-until")
+            .kitText(2).foregroundStyle(Radix.gray.s[12]).tint(Radix.blue.s[9]).padding(.top, 12).accessibilityIdentifier("grant-until")
         }
         Muted(text: "Signed with this iPhone's key (\(PhoneKeys.shared.how)); the session's machine checks the signature against the phone named in its cert. Forgetting it later stops the router using it.")
           .padding(.top, 16)

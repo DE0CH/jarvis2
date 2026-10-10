@@ -7,7 +7,8 @@
 // A full-screen page, always dark: close with ✕, Back, or the swipe-back. A change of the screen area
 // (open, rotation, keyboard) resizes the remote tmux window to fit.
 import { useEffect, useRef, useState } from "react";
-import { ScrollView, Text as RNText, View, type LayoutChangeEvent } from "react-native";
+import { ScrollView, View, type LayoutChangeEvent } from "react-native";
+import { RNText } from "../ui/rntext";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { StatusBar } from "expo-status-bar";
 import { api } from "../lib/api";

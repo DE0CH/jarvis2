@@ -210,6 +210,20 @@ Carried over from the mock (DE0CH/jarvis2-mock DECISIONS.md) unless marked new.
     `keys/master.pub`, has one field, the kit, and checks its master key against `keys/master.pub` before reading
     anything.
 
+40. **Jarvis 1's look, exactly (Deyao, 2026-10-10: "Keep them the same as jarvis 1, like font size etc").** Two
+    causes. (a) In the extension React Native has no `UIApplication`, so its font-size multiplier came out 0 and
+    every text run fell back to iOS's 12 pt default: the whole app was one small size. `src/ui/rntext.native.tsx`
+    gives every kit text run `dynamicTypeRamp="body"` (its multiplier from `UIFontMetrics`, which works in an
+    extension: exactly 1.0 at the default text size, and it still follows the iPhone's text size like Jarvis 1)
+    and text fields `allowFontScaling={false}` (the kit's fields are a fixed 16 pt anyway); the web keeps React
+    Native's own components. (b) The shell's SwiftUI pages approximated the kit. `Shell/Kit.swift` now ports
+    `src/ui/kit.tsx` + `theme/tokens.ts` value for value: the type ramp (size, line height with the glyphs centred
+    in the line box, letter spacing, weight), Heading, P, Muted, Lbl (alpha gray, upper-case tracking), Button
+    sizes 1–3 in every variant with the pressed fill, Card, TextField/TextArea (surface, gray border → focus
+    colour), Callout, Badge, ChoiceCard/ChoiceText, Segmented and a CodeBox; `SecureFrame` follows `page.tsx`'s top
+    bar and column. Store rows on the shell's pages are kit Cards. The page is drawn as one layer
+    (`compositingGroup`), so the push motion's shadow no longer lands on every text run as a halo.
+
 ## Unfinished / known gaps
 
 - **Keyboard avoidance for React Native forms** still comes only from React Native (lessons/73: the

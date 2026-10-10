@@ -7,9 +7,10 @@
 // attributes on the web (react-native-web's dataSet).
 import { useState, type ReactNode } from "react";
 import {
-  ActivityIndicator, Platform, Pressable, ScrollView, Text as RNText, TextInput, View,
+  ActivityIndicator, Platform, Pressable, ScrollView, View,
   type StyleProp, type TextInputProps, type TextStyle, type ViewStyle,
 } from "react-native";
+import { RNText, TextInput } from "./rntext";
 import { useTheme, space, radius, fontSize, lineHeight, headingLineHeight, letterSpacing, fonts, type ColorName, type Size } from "../theme";
 
 type Sp = 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9;
