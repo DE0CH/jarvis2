@@ -150,10 +150,9 @@ Carried over from the mock (DE0CH/jarvis2-mock DECISIONS.md) unless marked new.
     New session has One-shot (needs a prompt) and the auto-pause switch, carried through the secure page; the
     approval page shows one-shot and a restore's source (the router's word, not signed).
 
-32. **New: Repos tab** (Jarvis 1's: the list, the GitHub picker over the router's read-only token, any git URL)
-    and **Repos** + **API proxy** in New session (carried through the secure page; repos go as the
-    comma-joined URLs the machine clones, each with its own token from the session's stores). Nothing is
-    pre-picked: a Jarvis 2 session can only clone a repo its stores hold a token for.
+32. **New: Repos** (in Settings since item 41; the list, the GitHub picker over the router's read-only token) and
+    **Repos** + **API proxy** in New session (carried through the secure page; repos go as the comma-joined URLs
+    the machine clones over SSH with each repo's deploy key from its store). Nothing is pre-picked.
 33. **New: Remote page** for OpenCode / OpenClaw sessions (their primary action instead of Terminal): the web UI
     link, the Paseo pairing link + QR. The router reads them in the machine as the `remote` feature, so a 403
     offers "Allow the remote page for 10 minutes". **Usage** (the Claude quota, read through Jarvis 1) is a
@@ -211,6 +210,22 @@ Carried over from the mock (DE0CH/jarvis2-mock DECISIONS.md) unless marked new.
     colour), Callout, Badge, ChoiceCard/ChoiceText, Segmented and a CodeBox; `SecureFrame` follows `page.tsx`'s top
     bar and column. Store rows on the shell's pages are kit Cards. The page is drawn as one layer
     (`compositingGroup`), so the push motion's shadow no longer lands on every text run as a halo.
+
+41. **New: Settings → Repos, each repo with its own deploy key** (Deyao, 2026-10-10; docs/DESIGN.md "Deploy keys").
+    The Repos tab is gone; its card sits in Settings after Usage. **Add repo** (the GitHub picker, or "owner/name" /
+    a GitHub URL typed; Return submits) opens the shell's secure page **Add repo** (kind `repo-key`): it asks the core
+    for the request at once and shows what the core signed — the repo, "what happens" in one paragraph, the store as a
+    store line (Sensitive badge), "replaces" in amber when the store exists, a **Sensitive store** check (on and
+    fixed when the core says so: Jarvis 2's own repo, or a store sensitive already; ticking it asks the core again),
+    and that Face ID opens `github-deploy-keys` for this one request. **Add** checks the request (this action, this
+    repo, its store and title, the one token store), then ONE Face ID signs the request and computes the share
+    (`PhoneKeys.signAndShare`, one LAContext), and the core's answer must be for this request (`Checks.deployKeyAnswer`).
+    Each listed repo shows its store and key fingerprint, **No key** (amber) when the core's store list lacks its store
+    (after a Recover) with **Make key**, and **Remove** (the same page, "Remove repo"). The web page lists the repos
+    only. New session pre-selects a picked repo's store when it isn't sensitive and says which to tick on the secure
+    page otherwise. The walkthrough adds `DE0CH/china-train` against the CI core's fake GitHub, sees `DE0CH/jarvis2`
+    come up sensitive, and removes the first; interop covers the checks and the refusals against the real core and
+    router.
 
 ## Unfinished / known gaps
 

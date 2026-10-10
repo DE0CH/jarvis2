@@ -3,7 +3,10 @@
 # (Fly's API) but nothing inside the cluster.
 apiVersion: apps/v1
 kind: Deployment
-metadata: { name: core, namespace: jarvis2-core }
+# While the annotation jarvis2/core-pin is "hold", CI builds the core image but doesn't pin it here, so
+# a core/ change doesn't restart the running core (a restart = a new, empty core that only Deyao can set up again:
+# Recover). Remove it (a commit) when Deyao says the new core may go live, then run the images workflow, which pins it.
+metadata: { name: core, namespace: jarvis2-core, annotations: { jarvis2/core-pin: hold } }
 spec:
   replicas: 1
   strategy: { type: Recreate }

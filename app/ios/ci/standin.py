@@ -81,7 +81,8 @@ def seed(d):
     default = ("default", {"GITHUB_TOKEN": "ci-dummy", "OTHER": "x"}, False)
     bucket("jarvis2-backup-ci", [core, default, ("gmail", {"GMAIL_TOKEN": "ci-dummy"}, True),
                                  ("claude-login", {"CLAUDE_CODE_OAUTH_TOKEN": "ci-dummy"}, False),
-                                 ("marked", {"M": "1"}, False)], markers=["marked"])
+                                 ("marked", {"M": "1"}, False),
+                                 ("github-deploy-keys", {"GITHUB_DEPLOY_KEYS_TOKEN": "ci-dummy"}, True)], markers=["marked"])
     bucket("jarvis2-backup-tampered", [core, default], bad=["default"])
     bucket("jarvis2-backup-nocore", [default])
     with open(os.path.join(d, "backups.json"), "w") as f:

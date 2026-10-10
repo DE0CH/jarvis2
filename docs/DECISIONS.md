@@ -59,16 +59,16 @@ made around it; the app's own list is `app/DECISIONS.md`.
     read-only Fly token (`infra/fly-read-token.sh`).
 18. **Images** on GHCR (public, like the repo), with GitHub build attestations (the phone doesn't check them
     yet).
-19. **Repos for a session** are cloned by the machine with the session's own `GITHUB_TOKEN`.
+19. **Repos for a session** are cloned by the machine over SSH with each repo's deploy key from its store (items
+    58–66); a repo without one is cloned anonymously over HTTPS.
 20. **Harness stores** (`policy/stores.json`, baked into the router image): `claude` brings the store `claude`,
     `opencode` brings `openrouter` + `tunnel`, `openclaw` brings `claude` + `tunnel` (`tunnel` = the confined Access
     service token `jarvis2-tunnel` for the web UI's cf-tunnel agent: a store, not the router's machine env, so the
     router never holds it and it never sits in a Fly machine config; the per-id proof comes over `/m`).
-21. **Stores that can reach a code push are sensitive** (Deyao, 2026-10-09): one GitHub token per repo, each
-    limited to its repo (fine-grained, no expiry; contents, workflows, actions) — store `github-claude-env`
-    (key `GITHUB_TOKEN_CLAUDE_ENV`, not sensitive) and `github-jarvis2` (key `GITHUB_TOKEN_JARVIS2`,
-    sensitive). The machine gives each repo its own token (`GITHUB_TOKEN_<REPO>`), so a session with both keeps
-    both. claude-env holds no Jarvis 2 code or design.
+21. **Stores that can reach a code push are sensitive** (Deyao, 2026-10-09). Each repo's push access is its own
+    deploy-key store `github-<repo>` (items 58–66): `github-jarvis2` is sensitive (Jarvis 2's own push path),
+    every other repo's store isn't unless Deyao picks it so (he asked for non-sensitive repo stores). claude-env
+    holds no Jarvis 2 code or design.
 22. **The Claude login is shared with Jarvis 1** (Deyao, 2026-10-09). The store `claude` holds an Access service
     token (`jarvis2-claude-credentials`, keys `JARVIS1_CREDENTIALS_ID/SECRET`) that Jarvis 1's Worker lets
     reach only `GET/POST jarvis.deyaochen.com/api/credentials`; tested: 403 on any other path and on session
@@ -226,3 +226,58 @@ stores, filled later by normal writes.
 57. **The setup session is fully trusted** (Deyao, 2026-10-10: "I don't really care what the setup person can do"). It
     holds every key's plaintext, so it can put any key in any store, and its signed backups set each store's
     sensitivity at the next Recover. Sensitivity protects against sessions and the router, not against it.
+
+## Deploy keys, 2026-10-10
+
+Deyao: "i want each github git (e.g. claude-env or china-train) to be associated with a non sensitive key store that
+contains a github key that can read and push to the repo. It should be minted automatically (without using ai) when
+i add the repo in setting page." His answers: phone-approved (Face ID; the box alone can never make a key) and a
+deploy key (SSH, one repo, read + push, no expiry, through GitHub's API). Then: "Should belong in its own [store],
+shouldnt unlock the whole infra [store] for that one task."
+
+58. **The minting token has a store of its own**: `github-deploy-keys`, sensitive, key `GITHUB_DEPLOY_KEYS_TOKEN` = the
+    fine-grained PAT `jarvis2-deploy-keys` on DE0CH: **all repositories** (so a new repo works), **Repository
+    permission "Administration: read and write" and nothing else** (Metadata read comes with every token), no
+    expiry. Deploy keys need Administration (GitHub has no narrower permission); it also lets the token change a repo's
+    settings, collaborators, branch protection, and delete repos, but it can't read or write contents or refs (tested:
+    contents write and ref create 403, keys list/add/delete 200/201/204, on a repo made after the token). A deploy
+    key on jarvis2 is a push path, hence sensitive. The add/remove flow opens only this store, never `infra`.
+    Minted by `infra/fill-stores.sh` (claude-env's `github-web pat-create-all jarvis2-deploy-keys … Administration=write`).
+59. **Core primitives `deploy_key_begin` / `deploy_key_finish`** (core/deploykeys.go, DESIGN "Deploy keys"): the
+    begin document (repo, store, sensitivity, add/remove, replaces, the key's title, the token store's E, a one-off T)
+    is signed; the phone signs that document and sends its share of the token store under ONE Face ID (one
+    LAContext for both Enclave keys). The core checks the signature, opens the token store for this call only (it
+    never joins the unlocked set; the plaintext leaves with the call), talks to GitHub at the fixed host
+    api.github.com, and writes or deletes the repo's store itself (wrapped to P + K). Both proofs, not just the
+    share: the share binds the request too (it is sealed to the pending's T), but the signature is what makes the
+    approval explicit and checkable.
+60. **The repo's store**: `github-<name>` for DE0CH's repos, `github-<owner>-<name>` otherwise (lower case,
+    `[a-z0-9-]`); contents `GITHUB_DEPLOY_REPO_<SLUG>` = `owner/name` and `GITHUB_DEPLOY_KEY_<SLUG>` = base64 of the
+    OpenSSH private key file (ed25519, written by the core; checked against `ssh-keygen` in the tests). Not sensitive
+    unless picked on the secure page; **`DE0CH/jarvis2` is always sensitive** (a core constant: the router can't lower
+    it), and a store that is sensitive stays so on a re-add.
+61. **Re-adding a repo rotates its key**: the core deletes every key titled `jarvis2 <store>` on that repo, adds the
+    new one and replaces the store (the begin document says "replaces"; any unlocked plaintext of the old key is
+    dropped). Keys with other titles are never touched. Remove deletes the titled keys and the store.
+62. **No backups of repo stores**: the core has no way to write a backup (the router reads the bucket only). After a
+    Recover the repo list says "No key" for each and **Make key** (one Face ID) makes a new one. Change: a core-signed
+    backup the app checks on Recover.
+63. **The repo list is the router's, but follows the core**: an entry appears only from the core's `deploy-key-added`
+    answer and goes with `deploy-key-removed`; GitHub repos only (Jarvis 1's "any git URL" is gone, and an older
+    non-GitHub entry is left off the list). Removing needs Face ID too, since it deletes the key on GitHub.
+64. **Sessions get the repo by SSH, set up by the machine** (machine/deploykeys.go): each key in
+    `~/.ssh/jarvis2-deploy/`, a host alias `github.com-jarvis2-<slug>` with that key only (`IdentitiesOnly`) and
+    GitHub's published host keys pinned (`StrictHostKeyChecking`, its own known_hosts), and git `insteadOf` rewrites of
+    the repo's `.git` URLs (https, `git@`, `ssh://`; as stored and lower case) to the alias. Only the `.git` forms:
+    a rewrite is a prefix match, so `…/claude-env` would also catch `…/claude-env-x`. Rewritten whole at boot and after
+    add-store / downgrade. No `GITHUB_TOKEN` is used for cloning any more (a plain `GITHUB_TOKEN` in a store is just an
+    env var).
+65. **New session pre-selects a picked repo's store** when it isn't sensitive; a sensitive one (github-jarvis2) is
+    ticked on the secure page, as every sensitive store.
+66. **The production core is held, not restarted** (`jarvis2/core-pin: hold` on the core Deployment; `images.yml` builds
+    the core image but doesn't pin it while the annotation is there). A restart would empty the core and only Deyao's
+    Recover brings the stores back, so the deploy-key core waits for his go: remove the annotation (a commit), run the
+    `images` workflow (it pins the core), Flux restarts it, Deyao recovers, then adds claude-env and jarvis2 in Settings → Repos.
+    Until then the router and app ship (the router answers 501 "the running core predates deploy keys") and sessions
+    have no push access to any repo: the old per-repo PATs (`jarvis2-sessions-*-push`) are deleted and their store
+    backups removed (delete markers; the versions stay in the versioned bucket).

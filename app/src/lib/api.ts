@@ -70,7 +70,7 @@ export type Session = {
   // a lifecycle action holding the session (others are refused 409) and a permission-mode / restart job
   busy?: { kind: string; since?: string } | null; wake?: { kind: string; phase: string; error?: string } | null; apiProxy?: "on" | "off";
 };
-export type RepoEntry = { name: string; url: string };
+export type RepoEntry = { name: string; url: string; repo: string; store: string; sensitive?: boolean; fingerprint?: string; keyAt?: string };
 export type GhRepo = { fullName: string; url: string; htmlUrl: string; description?: string; language?: string; private?: boolean; fork?: boolean; archived?: boolean; pushedAt?: string };
 export type UsageLimit = { kind: string; group: string; percent: number; severity?: string; resetsAt: string | null; model: string | null; surface: string | null; active: boolean };
 export type Usage = {

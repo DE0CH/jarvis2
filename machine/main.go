@@ -264,8 +264,11 @@ func prepare() error {
 	sj, _ := json.Marshal(secrets)
 	log.Printf("secrets ok: %d keys", len(secrets))
 
-	// 4. repos (cloned with the session's own per-repo GitHub tokens, when it has them)
-	cloneRepos(secrets)
+	// 4. repos: each repo's deploy key from its store (SSH, that repo only), then the clones
+	if err := setupDeployKeys(secrets); err != nil {
+		log.Printf("deploy keys: %v", err)
+	}
+	cloneRepos()
 
 	// 5. the agent (pause snapshots), then Jarvis 1's entrypoint runs the harness
 	agentCmd := exec.Command("/proc/self/exe", "agent")
@@ -361,38 +364,17 @@ func pullSecrets(c *client, coreKey, me string) (map[string]string, error) {
 	return m, json.Unmarshal(plain, &m)
 }
 
-// gitTokens: a GitHub token per repo of DE0CH. A store holds GITHUB_TOKEN_<REPO> (upper case, "-" as "_"),
-// so sessions with several repo stores keep every token; a plain GITHUB_TOKEN counts for any repo.
-func gitTokens(secrets map[string]string) map[string]string {
-	out := map[string]string{}
-	for k, v := range secrets {
-		if strings.HasPrefix(k, "GITHUB_TOKEN_") && v != "" {
-			out[strings.ReplaceAll(strings.ToLower(strings.TrimPrefix(k, "GITHUB_TOKEN_")), "_", "-")] = v
-		}
-	}
-	return out
-}
-
-// cloneRepos: JARVIS2_REPOS, each with its own repo's token; pushes go through git's credential store, which
-// holds one entry per repo path (credential.useHttpPath)
-func cloneRepos(secrets map[string]string) {
-	tokens := gitTokens(secrets)
+// cloneRepos: JARVIS2_REPOS into ~/workspace. A repo whose deploy key is in the session's stores goes over SSH
+// with that key (setupDeployKeys has already written git's rewrites for its https URL); any other is cloned
+// anonymously over HTTPS (public repos only).
+func cloneRepos() {
 	home, _ := os.UserHomeDir()
-	var creds strings.Builder
-	for repo, t := range tokens {
-		creds.WriteString("https://x-access-token:" + t + "@github.com/DE0CH/" + repo + ".git\n")
-	}
-	if creds.Len() > 0 {
-		shredWrite(filepath.Join(home, ".git-credentials"), []byte(creds.String()), 0o600)
-		exec.Command("git", "config", "--global", "credential.helper", "store").Run()
-		exec.Command("git", "config", "--global", "credential.https://github.com.useHttpPath", "true").Run()
-	}
 	repos := strings.TrimSpace(os.Getenv("JARVIS2_REPOS"))
 	if repos == "" {
 		return
 	}
 	for _, url := range strings.Split(repos, ",") {
-		url = strings.TrimSpace(url)
+		url = cloneURL(url)
 		if url == "" {
 			continue
 		}
@@ -401,20 +383,12 @@ func cloneRepos(secrets map[string]string) {
 		if _, err := os.Stat(filepath.Join(dst, ".git")); err == nil {
 			continue // restored from the snapshot
 		}
-		token := tokens[strings.ToLower(name)]
-		if token == "" {
-			token = secrets["GITHUB_TOKEN"]
-		}
-		src := url
-		if token != "" && strings.HasPrefix(url, "https://github.com/") {
-			src = "https://x-access-token:" + token + "@" + strings.TrimPrefix(url, "https://")
-		}
-		cmd := exec.Command("git", "clone", "-q", src, dst)
+		cmd := exec.Command("git", "clone", "-q", url, dst)
+		cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
 		if out, err := cmd.CombinedOutput(); err != nil {
-			log.Printf("clone %s failed: %s", name, strings.ReplaceAll(string(out), token, "***"))
+			log.Printf("clone %s failed: %s", name, strings.TrimSpace(string(out)))
 			continue
 		}
-		exec.Command("git", "-C", dst, "remote", "set-url", "origin", url).Run()
 		log.Printf("cloned %s", name)
 	}
 }
@@ -642,6 +616,9 @@ func addStore(name string) error {
 		if err := writeSecrets(secrets); err != nil {
 			return err
 		}
+		if err := setupDeployKeys(secrets); err != nil { // a repo's store: its key and rewrites now
+			return err
+		}
 		fmt.Fprintf(os.Stderr, "added %s: ~/.secrets rewritten (%d keys); run `set -a; . ~/.secrets; set +a` in a shell to load them\n", name, len(secrets))
 		return nil
 	}
@@ -724,6 +701,9 @@ func downgrade(keep []string) error {
 		secrets = map[string]string{} // locked or empty: nothing kept
 	}
 	if err := writeSecrets(secrets); err != nil {
+		return err
+	}
+	if err := setupDeployKeys(secrets); err != nil { // a dropped repo store's key and rewrites go
 		return err
 	}
 	fmt.Fprintf(os.Stderr, "downgraded to %v: old keys shredded, ~/.secrets rewritten (%d keys). Values already loaded in running processes stay there until they exit.\n", cert.Stores, len(secrets))

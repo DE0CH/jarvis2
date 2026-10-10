@@ -218,6 +218,56 @@ enum Checks {
   }
 }
 
+// ---- deploy keys (core/deploykeys.go): adding or removing a repo's key, approved by the phone ------------
+/// the core's signed begin document: exactly what will happen, with the token store's E and a one-off T
+struct DeployKeyBegin: Codable, Equatable {
+  let kind: String, pending: String, action: String, repo: String, store: String
+  let sensitive: Bool, replaces: Bool, title: String, tokenStore: String, e: String, t: String
+}
+/// the core's answer once it is done: "deploy-key-added" (with the key's fingerprint) or "deploy-key-removed"
+struct DeployKeyAnswer: Codable {
+  let kind: String, pending: String, repo: String, store: String
+  let sensitive: Bool?, fingerprint: String?, deleted: Int?
+}
+
+extension Checks {
+  /// the only store this flow opens: its GitHub token may manage deploy keys, nothing else
+  static let deployKeyTokenStore = "github-deploy-keys"
+
+  /// the store a repo's key lives in (the core's RepoStore): github-<name> for DE0CH's repos, else
+  /// github-<owner>-<name>; lower case, anything outside [a-z0-9-] as "-"
+  static func repoStore(_ repo: String) -> String {
+    let parts = repo.lowercased().split(separator: "/", maxSplits: 1).map(String.init)
+    guard parts.count == 2 else { return "" }
+    let slug = parts[0] == "de0ch" ? parts[1] : parts[0] + "-" + parts[1]
+    let mapped = String(slug.unicodeScalars.map { s -> Character in
+      (s >= "a" && s <= "z") || (s >= "0" && s <= "9") ? Character(s) : "-"
+    })
+    return "github-" + mapped.trimmingCharacters(in: CharacterSet(charactersIn: "-"))
+  }
+
+  /// the begin document is the core's, for exactly this action on this repo: its store, its title on GitHub,
+  /// the one token store it opens; asked-for sensitivity is kept (the core may only add it)
+  static func deployKeyBegin(_ doc: SignedDoc, coreKey: String, action: String, repo: String, sensitive: Bool) throws -> DeployKeyBegin {
+    let b = try CoreCrypto.decode(doc, by: coreKey, as: DeployKeyBegin.self, what: "the deploy-key request")
+    guard b.kind == "deploy-key-begin", b.action == action else { throw TrustError.mismatch("action") }
+    guard b.repo.lowercased() == repo.lowercased() else { throw TrustError.mismatch("repo") }
+    guard b.store == repoStore(repo), b.title == "jarvis2 " + b.store else { throw TrustError.mismatch("store") }
+    guard b.tokenStore == deployKeyTokenStore else { throw TrustError.mismatch("the store it opens") }
+    if action == "add", sensitive, !b.sensitive { throw TrustError.mismatch("sensitive") }
+    return b
+  }
+
+  /// the core's answer is for this request and says it was done
+  static func deployKeyAnswer(_ doc: SignedDoc, coreKey: String, begin b: DeployKeyBegin) throws -> DeployKeyAnswer {
+    let a = try CoreCrypto.decode(doc, by: coreKey, as: DeployKeyAnswer.self, what: "the core's answer")
+    guard a.pending == b.pending, a.repo == b.repo, a.store == b.store else { throw TrustError.stale("deploy key") }
+    guard a.kind == (b.action == "add" ? "deploy-key-added" : "deploy-key-removed") else { throw TrustError.stale("answer kind \(a.kind)") }
+    if b.action == "add", a.sensitive != b.sensitive { throw TrustError.mismatch("sensitive") }
+    return a
+  }
+}
+
 // ---- grants (docs/DESIGN.md "Grants"): what the phone signs to let a router feature into a session --------
 /// a line's succession cert (core/core.go Cert): the line grants name, the phone key the machine checks them
 /// against, and the stores the session holds

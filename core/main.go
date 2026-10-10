@@ -162,6 +162,18 @@ func Handler(c *Core) http.Handler {
 		return c.UnlockFinish(str(b, "pending"), s)
 	})
 	h("POST /lock", func(r *http.Request, b body) (any, error) { return c.Lock(str(b, "id")) })
+
+	// ---- deploy keys (deploykeys.go): the phone signs the begin document and shares the token store ----
+	h("POST /deploy-keys/begin", func(r *http.Request, b body) (any, error) {
+		var sensitive bool
+		json.Unmarshal(b["sensitive"], &sensitive)
+		return c.DeployKeyBegin(str(b, "action"), str(b, "repo"), sensitive)
+	})
+	h("POST /deploy-keys/finish", func(r *http.Request, b body) (any, error) {
+		var s Sealed
+		json.Unmarshal(b["share"], &s)
+		return c.DeployKeyFinish(str(b, "pending"), s, str(b, "signature"))
+	})
 	h("POST /unlocked", func(r *http.Request, b body) (any, error) { return c.ListUnlocked(str(b, "nonce")) })
 
 	// ---- machines pull ----

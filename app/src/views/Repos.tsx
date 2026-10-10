@@ -1,15 +1,24 @@
-// Deyao's repo list (the router's own, GET/POST/DELETE api/repos), picked from in New session: a session clones
-// each picked repo with its own per-repo token from its stores. The picker lists what the router's read-only
-// GitHub token can see (api/github/repos). Jarvis 1's Repos tab.
+// Deyao's repos, in Settings (the router's list, GET api/repos / api/state `repos`). Each is a GitHub repo with
+// its own deploy key: Add opens the shell's secure page (kind repo-key), where one Face ID lets the core make an
+// SSH key, put it on the repo as a read/write deploy key and keep the private half in the store github-<repo>;
+// Remove deletes both the same way. Sessions that include a repo's store clone, pull and push it over SSH. The
+// picker lists what the router's read-only GitHub token can see (api/github/repos). On the web: view only.
 import { useState } from "react";
 import { Pressable, ScrollView, View } from "react-native";
-import { api, ago, type GhRepo } from "../lib/api";
-import { useStore, pendUntil, ask, toast } from "../lib/store";
+import { api, ago, type GhRepo, type RepoEntry } from "../lib/api";
+import { useStore, pend, refresh, settle, loadStores, toast } from "../lib/store";
+import { hasShell, requestSecure } from "../lib/shell";
 import { useTheme, radius } from "../theme";
 import { Badge, Card, Flex, Heading, Lbl, Muted, P, Spinner, Text, TextField, ids } from "../ui/kit";
-import { PButton, useCoolAfterShift } from "../ui/bits";
-import { Cards } from "../ui/cards";
+import { PButton } from "../ui/bits";
 import { isWeb } from "../ui/overlays";
+
+// owner/name from what was typed or picked: "owner/name", a GitHub https URL or git@github.com:owner/name
+export function githubRepo(s: string): string {
+  const m = s.trim().match(/^(?:https:\/\/github\.com\/|git@github\.com:)?([A-Za-z0-9][A-Za-z0-9-]{0,38})\/([A-Za-z0-9._-]{1,100}?)(?:\.git)?\/?$/);
+  if (!m || m[2] === "." || m[2].includes("..")) return "";
+  return m[1] + "/" + m[2];
+}
 
 // ---- GitHub repo picker: search box + a list of the repos the router's GitHub token can see ----
 let cache: GhRepo[] | null = null;
@@ -73,42 +82,65 @@ function Picker({ onPick, disabled }: { onPick: (r: GhRepo) => void; disabled: b
   );
 }
 
-export function Repos() {
-  const repos = useStore((s) => s.state.repos) || [];
-  const pending = useStore((s) => s.pending);
-  const cool = useCoolAfterShift(repos.map((x) => x.name).sort().join("|"));
-  // controlled inputs: typed text and an open picker survive the poll-driven re-renders
-  const [url, setUrl] = useState(""), [alias, setAlias] = useState(""), [ph, setPh] = useState("auto from URL");
-  const busy = pending.has("repo:add");
-  async function del(n: string) {
-    if (!(await ask({ title: `Remove "${n}" from this list?`, detail: "This only forgets the entry here — nothing on GitHub is deleted or changed.", action: "Remove", danger: true }))) return;
-    await pendUntil("repo:" + n, "Removing…", () => api("DELETE", "api/repos/" + encodeURIComponent(n)), (s) => !(s.repos || []).some((r) => r.name === n));
-  }
-  async function add() {
-    if (busy) return;
-    if (!url.trim()) { toast("Repo URL required.", "error"); return; }
-    const u = url.trim(), same = (x: string) => x.toLowerCase().replace(/\.git$/, "") === u.toLowerCase().replace(/\.git$/, "");
-    await pendUntil("repo:add", "Adding…", async () => { await api("POST", "api/repos", { url: u, name: alias.trim() }); setUrl(""); setAlias(""); setPh("auto from URL"); },
-      (s) => (s.repos || []).some((r) => same(r.url)));
-  }
-  const wideMax = { maxWidth: 720 };
+// the shell's secure page for a repo's key; `done` once the core answered (the list follows the router's poll)
+function openKeyPage(action: "add" | "remove", repo: string, key: string, after?: () => void) {
+  pend(key, action === "add" ? "Adding…" : "Removing…");
+  requestSecure("repo-key", { action, repo, sensitive: false }, (r) => {
+    pend(key, null);
+    if (r.result !== "done") return;
+    toast(action === "add" ? `${repo}: deploy key added.` : `${repo}: deploy key and store removed.`, "ok");
+    refresh(false); loadStores(); settle(30000); after?.();
+  });
+}
+
+function RepoRow({ x }: { x: RepoEntry }) {
+  const stores = useStore((s) => s.stores);
+  const store = stores.items.find((s) => s.name === x.store);
+  // the core's store list says whether the key is there (a Recover brings no repo keys back: make it again)
+  const missing = stores.loaded && !store;
+  const sensitive = store ? store.sensitive : !!x.sensitive;
   return (
-    <>
-      {repos.length ? <Cards>{repos.map((x) => (
-        <Card key={x.name} dim={pending.has("repo:" + x.name)} data={{ repo: x.name }}>
-          <Flex justify="space-between" align="flex-start" gap={2}><Heading size={3} style={{ flex: 1 }}>{x.name}</Heading><PButton pkey={"repo:" + x.name} variant="soft" color="gray" onPress={() => del(x.name)} label="Remove" cool={cool} /></Flex>
-          <Muted>{x.url}</Muted>
-        </Card>))}</Cards> : <P size={3} color="gray" align="center" mt={6} mb={6}>No repos yet.</P>}
-      <Card mt={3} id="repo-add" style={wideMax}>
-        <Lbl mt={0}>Add repo — pick one of yours</Lbl>
-        <Picker disabled={busy} onPick={(r) => { setUrl(r.url); setPh(r.fullName.split("/")[1]); }} />
-        <Lbl>Git URL (any host)</Lbl>
-        <TextField id="repo-url" keyboardType="url" autoComplete="off" autoCapitalize="none" autoCorrect={false} placeholder="https://github.com/owner/repo.git" value={url} disabled={busy} onChangeText={setUrl} onSubmitEditing={add} />
-        <Lbl>Alias (optional)</Lbl>
-        <TextField id="repo-title" autoComplete="off" autoCapitalize="none" autoCorrect={false} placeholder={ph} value={alias} disabled={busy} onChangeText={setAlias} onSubmitEditing={add} />
-        <Flex mt={3}><PButton pkey="repo:add" onPress={add} label="Add repo" id="repo-add-go" /></Flex>
-        <Muted mt={2}>The picker lists every repo the router's GitHub token can see. A session clones a repo only with a token for it in one of its stores (the setup session writes those).</Muted>
-      </Card>
-    </>
+    <Card data={{ repo: x.name }} mt={2}>
+      <Flex justify="space-between" align="flex-start" gap={2}>
+        <View style={{ flex: 1 }}>
+          <Flex gap={1} align="center" wrap><Heading size={3}>{x.repo}</Heading>{sensitive && <Badge color="red">Sensitive</Badge>}{missing && <Badge color="amber">No key</Badge>}</Flex>
+          <Muted id={"repo-key-" + x.name}>{missing ? `The store ${x.store} isn't in the core: make the key again.` : `Deploy key in ${x.store}${x.fingerprint ? " · " + x.fingerprint : ""}`}</Muted>
+        </View>
+        {hasShell && <Flex gap={2}>
+          {missing && <PButton pkey={"repo:" + x.repo} size={1} onPress={() => openKeyPage("add", x.repo, "repo:" + x.repo)} label="Make key" id={"repo-makekey-" + x.name} />}
+          <PButton pkey={"repo-rm:" + x.repo} size={1} variant="soft" color="gray" onPress={() => openKeyPage("remove", x.repo, "repo-rm:" + x.repo)} label="Remove" id={"repo-remove-" + x.name} />
+        </Flex>}
+      </Flex>
+    </Card>
   );
 }
+
+/** Settings → Repos: the list, and Add (the app only: it needs Face ID) */
+export function ReposCard() {
+  const repos = useStore((s) => s.state.repos) || [];
+  const busy = useStore((s) => s.pending.has("repo:add"));
+  // a controlled input: typed text survives the poll-driven re-renders
+  const [text, setText] = useState("");
+  function add() {
+    if (busy) return;
+    const repo = githubRepo(text);
+    if (!repo) { toast("A GitHub repo: owner/name or its URL.", "error"); return; }
+    openKeyPage("add", repo, "repo:add", () => setText(""));
+  }
+  return (
+    <Card data={{ settings: "repos" }} id="repos">
+      <Heading size={3} mb={1}>Repos</Heading>
+      <Muted>Each repo has its own deploy key on GitHub (read and push, that repo only), kept in its store github-&lt;repo&gt;. A session that includes the store clones, pulls and pushes the repo over SSH.</Muted>
+      {repos.length ? repos.map((x) => <RepoRow key={x.repo} x={x} />) : <P size={2} color="gray" mt={3} id="repos-none">No repos yet.</P>}
+      {hasShell ? <>
+        <Lbl>Add repo — pick one of yours</Lbl>
+        <Picker disabled={busy} onPick={(r) => setText(r.fullName)} />
+        <Lbl>Or type it</Lbl>
+        <TextField id="repo-url" keyboardType="url" autoComplete="off" autoCapitalize="none" autoCorrect={false} placeholder="owner/name or https://github.com/owner/name" value={text} disabled={busy} onChangeText={setText} onSubmitEditing={add} />
+        <Flex mt={3}><PButton pkey="repo:add" onPress={add} label="Add repo" id="repo-add-go" /></Flex>
+        <Muted mt={2}>Adding asks for Face ID: the core uses the GitHub token in the store github-deploy-keys for that one request.</Muted>
+      </> : <Muted mt={3}>Adding or removing a repo needs Face ID: use the Jarvis 2 app on the iPhone.</Muted>}
+    </Card>
+  );
+}
+

@@ -401,21 +401,66 @@ func (zeros) Read(p []byte) (int, error) { return len(p), nil }
 
 func TestReposAndGitHub(t *testing.T) {
 	r := newTestRouter(t)
-	r.core = &CoreClient{base: "http://127.0.0.1:1", http: http.DefaultClient}
-	if code, _ := appDo(t, r, "POST", "/api/repos", `{"url":"https://github.com/DE0CH/jarvis2.git"}`); code != 200 {
-		t.Fatal(code)
+	// a stand-in core: the begin is relayed as asked; a finish answers what the core signs
+	var begun map[string]any
+	answer := `{"kind":"deploy-key-added","repo":"DE0CH/jarvis2","store":"github-jarvis2","sensitive":true,"fingerprint":"SHA256:abc"}`
+	core := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		b, _ := io.ReadAll(req.Body)
+		switch req.URL.Path {
+		case "/deploy-keys/begin":
+			json.Unmarshal(b, &begun)
+			w.Write([]byte(`{"payload":"{\"kind\":\"deploy-key-begin\"}","sig":"s"}`))
+		case "/deploy-keys/finish":
+			p, _ := json.Marshal(answer)
+			w.Write([]byte(`{"payload":` + string(p) + `,"sig":"s"}`))
+		default:
+			http.NotFound(w, req)
+		}
+	}))
+	defer core.Close()
+	r.core = &CoreClient{base: core.URL, http: http.DefaultClient}
+	if code, _ := appDo(t, r, "POST", "/api/repos/key/begin", `{"action":"add","repo":"https://github.com/DE0CH/jarvis2.git"}`); code != 200 || begun["repo"] != "DE0CH/jarvis2" || begun["action"] != "add" {
+		t.Fatal(code, begun)
 	}
-	if code, _ := appDo(t, r, "POST", "/api/repos", `{"url":"git@github.com:x/y"}`); code != 400 {
-		t.Fatal("an ssh URL was accepted")
+	for _, b := range []string{`{"action":"add","repo":"gitlab.com/x/y"}`, `{"action":"rotate","repo":"DE0CH/x"}`, `{"action":"add","repo":"DE0CH/.."}`} {
+		if code, _ := appDo(t, r, "POST", "/api/repos/key/begin", b); code != 400 {
+			t.Fatal("accepted", b)
+		}
+	}
+	// the list follows the core's answer only
+	if _, out := appDo(t, r, "GET", "/api/repos", ""); len(out["repos"].([]any)) != 0 {
+		t.Fatal("a begin added to the list")
+	}
+	if code, _ := appDo(t, r, "POST", "/api/repos/key/finish", `{"pending":"p"}`); code != 200 {
+		t.Fatal(code)
 	}
 	_, out := appDo(t, r, "GET", "/api/state", "")
 	rs := out["repos"].([]any)
-	if len(rs) != 1 || rs[0].(map[string]any)["name"] != "jarvis2" {
+	if len(rs) != 1 || rs[0].(map[string]any)["name"] != "jarvis2" || rs[0].(map[string]any)["store"] != "github-jarvis2" ||
+		rs[0].(map[string]any)["sensitive"] != true || rs[0].(map[string]any)["url"] != "https://github.com/DE0CH/jarvis2.git" {
 		t.Fatalf("%v", rs)
 	}
-	appDo(t, r, "DELETE", "/api/repos/jarvis2", "")
+	answer = `{"kind":"deploy-key-removed","repo":"DE0CH/jarvis2","store":"github-jarvis2"}`
+	appDo(t, r, "POST", "/api/repos/key/finish", `{"pending":"p"}`)
 	if _, out := appDo(t, r, "GET", "/api/repos", ""); len(out["repos"].([]any)) != 0 {
 		t.Fatalf("%v", out)
+	}
+	// a core from before deploy keys: a plain sentence
+	r.core = &CoreClient{base: httptest.NewServer(http.NotFoundHandler()).URL, http: http.DefaultClient}
+	if code, out := appDo(t, r, "POST", "/api/repos/key/begin", `{"action":"add","repo":"DE0CH/x"}`); code != 501 || !strings.Contains(out["error"].(string), "predates") {
+		t.Fatal(code, out)
+	}
+	// entries that aren't GitHub repos (an older list) are left off
+	os.WriteFile(r.reposPath(), []byte(`[{"name":"a","url":"https://gitlab.com/x/a.git"},{"name":"b","url":"https://github.com/DE0CH/b.git"}]`), 0o600)
+	if rs := r.Repos(); len(rs) != 1 || rs[0].Repo != "DE0CH/b" || rs[0].Store != "github-b" {
+		t.Fatalf("%+v", rs)
+	}
+	// the same store names as the core's RepoStore (core/deploykeys_test.go)
+	for in, want := range map[string]string{"DE0CH/claude-env": "github-claude-env", "DE0CH/china_train": "github-china-train",
+		"de0ch/Jarvis2": "github-jarvis2", "someone/Thing.js": "github-someone-thing-js"} {
+		if got := repoStore(in); got != want {
+			t.Errorf("repoStore(%s) = %s, want %s", in, got, want)
+		}
 	}
 
 	t.Setenv("GITHUB_READ_TOKEN", "")

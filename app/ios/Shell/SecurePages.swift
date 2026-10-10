@@ -391,3 +391,85 @@ struct SecureStores: View {
   }
 }
 
+// ---- a repo's deploy key: add (make the key, put it on GitHub, keep it in the repo's store) or remove ------
+/// What the page shows comes from the core's signed begin document (asked for when the page opens, again when
+/// "Sensitive" changes). One Face ID signs that document and opens github-deploy-keys for this one request.
+struct SecureRepoKey: View {
+  let shell: Shell
+  let options: [String: Any]
+  @State private var b: DeployKeyBegin?
+  @State private var doc: SignedDoc?
+  @State private var sensitive = false
+  @State private var forced = false
+  @State private var busy: String?
+  @State private var failure: String?
+
+  private var action: String { (options["action"] as? String) == "remove" ? "remove" : "add" }
+  private var repo: String { (options["repo"] as? String) ?? "" }
+  private var title: String { action == "add" ? "Add repo" : "Remove repo" }
+
+  var body: some View {
+    SecureFrame(shell: shell, title: title, action: (action == "add" ? "Add" : "Remove", "secure-repo-go", b == nil), busy: busy, run: { Task { await go() } }) {
+      Lbl(text: "Repo")
+      Text(repo).kitText(2, weight: .medium).foregroundStyle(Radix.gray.s[12]).accessibilityIdentifier("secure-repo-name")
+      if let b {
+        Lbl(text: "What happens")
+        if action == "add" {
+          Muted(text: "The core makes a new SSH key and adds it to \(b.repo) on GitHub as a deploy key that can read and push (titled “\(b.title)”). It keeps the private half in the store \(b.store). Sessions that include \(b.store) can clone, pull and push this repo, and no other.")
+          if b.replaces {
+            Callout(text: "\(b.store) exists: its contents are replaced by the new key, and the earlier key “\(b.title)” is deleted on GitHub.", amber: true).padding(.top, 8).accessibilityIdentifier("secure-repo-replaces")
+          }
+        } else {
+          Muted(text: "The core deletes the deploy key “\(b.title)” on GitHub and the store \(b.store). Sessions that hold the store lose access to the repo.")
+        }
+        Lbl(text: "Store")
+        StoreLines(stores: [b.store], sensitive: b.sensitive ? [b.store] : [])
+        if action == "add" {
+          ChoiceCard(on: b.sensitive, check: true, id: "secure-repo-sensitive", action: { if !forced && busy == nil { Task { await begin(sensitive: !sensitive) } } }) {
+            ChoiceText(title: "Sensitive store", sub: forced ? "Always: a push to this repo can change Jarvis 2 itself (or the store is sensitive already, which never goes back)." : "Never pre-selected; only picked on the secure New session page. One way: it can't be made not sensitive later.")
+          }.padding(.top, 8)
+        }
+        Muted(text: "Face ID lets the core use the GitHub token in \(b.tokenStore) for this one request; no other store is opened.").padding(.top, 12)
+      } else if failure == nil {
+        ProgressView().frame(maxWidth: .infinity).padding(.top, 24)
+      }
+      if let failure { Callout(text: failure, color: .red).padding(.top, 16).accessibilityIdentifier("secure-error") }
+    }
+    .task {
+      sensitive = (options["sensitive"] as? Bool) ?? false
+      await begin(sensitive: sensitive)
+    }
+  }
+
+  private func begin(sensitive want: Bool) async {
+    failure = nil; busy = b == nil ? nil : "Checking…"
+    do {
+      let r = try await RouterClient.shared.deployKeyBegin(action: action, repo: repo, sensitive: want)
+      doc = r.doc; b = r.begin; sensitive = want
+      forced = r.begin.sensitive && !want
+    } catch { failure = errText(error) }
+    busy = nil
+  }
+
+  private func go() async {
+    guard let b, let doc else { return }
+    failure = nil
+    do {
+      busy = action == "add" ? "Adding…" : "Removing…"
+      let payload = doc.payload, e = b.e, reason = "\(title): \(b.repo)"
+      let r = try await offMain { try PhoneKeys.shared.signAndShare(payload, e: e, reason: reason) }
+      let a = try await RouterClient.shared.deployKeyFinish(b, signature: r.signature, share: r.share)
+      shell.log("repo key \(a.kind) \(a.repo)")
+      busy = nil
+      shell.exitSecure("\(a.kind) \(a.repo)", done: true, id: a.repo)
+    } catch {
+      busy = nil
+      failure = errText(error)
+      // the pending is spent either way: ask the core again so the button works on the next tap
+      let keep = failure
+      await begin(sensitive: sensitive)
+      failure = keep
+    }
+  }
+}
+

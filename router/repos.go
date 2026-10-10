@@ -3,9 +3,13 @@ package main
 // Deyao's repo list and the GitHub picker (Jarvis 1's /api/repos, /api/github/repos), and the Claude usage
 // quota (Jarvis 1's /api/usage, forwarded).
 //
-// The router holds no GitHub token that can push: the picker lists repos with GITHUB_READ_TOKEN, a
-// fine-grained token with metadata read only. Sessions clone and push with their own per-repo tokens from
-// their stores (machine/main.go cloneRepos); the picker only fills New session's `repos`.
+// Every repo on the list is a GitHub repo with its own deploy key (Deyao, 2026-10-10): adding one in the app's
+// Settings asks the core for a deploy key (docs/DESIGN.md "Deploy keys"), which the phone approves with Face ID;
+// the core makes the key pair, adds the public half to the repo on GitHub and keeps the private half in the
+// store github-<repo>. Removing one deletes both, the same way. The router only relays: it holds no GitHub
+// token that can push or manage keys (the picker lists repos with GITHUB_READ_TOKEN, metadata read only), and
+// it records an entry only from the core's answer. Sessions clone, pull and push a repo over SSH with its
+// store's key (machine/deploykeys.go); the picker only fills New session's `repos`.
 // The repo list is the router's own (DATA_DIR/repos.json), shown in /api/state `repos`.
 // Usage needs the Claude login, which lives in Jarvis 1: forwarded with the services token.
 
@@ -13,6 +17,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -21,13 +26,50 @@ import (
 	"time"
 )
 
+// RepoEntry: a repo on the list. Repo, URL and Store follow from the GitHub name; Sensitive, Fingerprint and
+// KeyAt come from the core's answer when its deploy key was made.
 type RepoEntry struct {
-	Name string `json:"name"`
-	URL  string `json:"url"`
+	Name        string `json:"name"`  // the clone's directory in ~/workspace
+	URL         string `json:"url"`   // https://github.com/<owner>/<name>.git
+	Repo        string `json:"repo"`  // <owner>/<name>
+	Store       string `json:"store"` // the store holding its deploy key
+	Sensitive   bool   `json:"sensitive"`
+	Fingerprint string `json:"fingerprint,omitempty"`
+	KeyAt       string `json:"keyAt,omitempty"`
 }
 
-var repoURLRE = regexp.MustCompile(`^https://[A-Za-z0-9.-]+/[A-Za-z0-9._/-]+$`)
-var repoNameRE = regexp.MustCompile(`^[A-Za-z0-9._-]{1,100}$`)
+var githubRepoRE = regexp.MustCompile(`^(?:https://github\.com/|git@github\.com:)?([A-Za-z0-9][A-Za-z0-9-]{0,38})/([A-Za-z0-9._-]{1,100}?)(?:\.git)?/?$`)
+
+// parseGitHubRepo: "owner/name" from a GitHub URL or name ("" when it isn't one)
+func parseGitHubRepo(s string) string {
+	m := githubRepoRE.FindStringSubmatch(strings.TrimSpace(s))
+	if m == nil || m[2] == "." || m[2] == ".." || strings.Contains(m[2], "..") {
+		return ""
+	}
+	return m[1] + "/" + m[2]
+}
+
+// repoStore: the core's RepoStore (core/deploykeys.go) — github-<name> for DE0CH's repos, else
+// github-<owner>-<name>, lower case, anything outside [a-z0-9-] as "-"
+func repoStore(repo string) string {
+	owner, name, _ := strings.Cut(strings.ToLower(repo), "/")
+	slug := name
+	if owner != "de0ch" {
+		slug = owner + "-" + name
+	}
+	b := []byte(slug)
+	for i, ch := range b {
+		if !(ch >= 'a' && ch <= 'z' || ch >= '0' && ch <= '9') {
+			b[i] = '-'
+		}
+	}
+	return "github-" + strings.Trim(string(b), "-")
+}
+
+func repoEntry(repo string) RepoEntry {
+	_, name, _ := strings.Cut(repo, "/")
+	return RepoEntry{Name: name, URL: "https://github.com/" + repo + ".git", Repo: repo, Store: repoStore(repo)}
+}
 
 func (r *Router) reposPath() string { return filepath.Join(r.cfg.DataDir, "repos.json") }
 
@@ -37,10 +79,22 @@ func (r *Router) Repos() []RepoEntry {
 	return r.readRepos()
 }
 
+// readRepos: the list; every entry is a GitHub repo, its derived fields recomputed from its URL
 func (r *Router) readRepos() []RepoEntry {
-	out := []RepoEntry{}
+	var raw []RepoEntry
 	if b, err := os.ReadFile(r.reposPath()); err == nil {
-		json.Unmarshal(b, &out)
+		json.Unmarshal(b, &raw)
+	}
+	out := []RepoEntry{}
+	for _, e := range raw {
+		repo := parseGitHubRepo(e.URL)
+		if repo == "" {
+			log.Printf("repos: %q isn't a GitHub repo: left off the list", e.URL)
+			continue
+		}
+		n := repoEntry(repo)
+		n.Sensitive, n.Fingerprint, n.KeyAt = e.Sensitive, e.Fingerprint, e.KeyAt
+		out = append(out, n)
 	}
 	return out
 }
@@ -58,35 +112,31 @@ func (r *Router) updateRepos(fn func([]RepoEntry) []RepoEntry) error {
 	return os.Rename(tmp, r.reposPath())
 }
 
-func (r *Router) AddRepo(name, url string) error {
-	url = strings.TrimSpace(url)
-	if !repoURLRE.MatchString(url) || strings.Contains(url, "..") {
-		return bad("url: an https clone URL")
-	}
-	if name == "" {
-		name = strings.TrimSuffix(filepath.Base(url), ".git")
-	}
-	if !repoNameRE.MatchString(name) {
-		return bad("bad repo name")
-	}
-	return r.updateRepos(func(rs []RepoEntry) []RepoEntry {
-		out := []RepoEntry{}
-		for _, x := range rs {
-			if x.URL != url {
-				out = append(out, x)
-			}
-		}
-		return append(out, RepoEntry{name, url})
-	})
+// keyAnswer: the core's answer to a finished deploy-key request, applied to the list
+type keyAnswer struct {
+	Kind        string `json:"kind"` // deploy-key-added | deploy-key-removed
+	Repo        string `json:"repo"`
+	Sensitive   bool   `json:"sensitive"`
+	Fingerprint string `json:"fingerprint"`
 }
 
-func (r *Router) RemoveRepo(name string) error {
+func (r *Router) applyKeyAnswer(a keyAnswer) error {
+	repo := parseGitHubRepo(a.Repo)
+	if repo == "" {
+		return fmt.Errorf("the core's answer names no GitHub repo")
+	}
+	same := func(e RepoEntry) bool { return strings.EqualFold(e.Repo, repo) }
 	return r.updateRepos(func(rs []RepoEntry) []RepoEntry {
 		out := []RepoEntry{}
-		for _, x := range rs {
-			if x.Name != name {
-				out = append(out, x)
+		for _, e := range rs {
+			if !same(e) {
+				out = append(out, e)
 			}
+		}
+		if a.Kind == "deploy-key-added" {
+			e := repoEntry(repo)
+			e.Sensitive, e.Fingerprint, e.KeyAt = a.Sensitive, a.Fingerprint, time.Now().UTC().Format(time.RFC3339)
+			out = append(out, e)
 		}
 		return out
 	})
@@ -98,6 +148,57 @@ func init() {
 			out["repos"] = r.Repos()
 		}
 	})
+}
+
+// ---- deploy keys: the core's two calls, relayed; the list follows the core's signed answer ----------------
+
+func (r *Router) registerDeployKeys(app appRoute) {
+	app("POST /api/repos/key/begin", func(w http.ResponseWriter, req *http.Request) {
+		var in struct {
+			Action    string `json:"action"`
+			Repo      string `json:"repo"`
+			Sensitive bool   `json:"sensitive"`
+		}
+		json.NewDecoder(io.LimitReader(req.Body, 1<<16)).Decode(&in)
+		repo := parseGitHubRepo(in.Repo)
+		if repo == "" || (in.Action != "add" && in.Action != "remove") {
+			writeJSON(w, 400, map[string]string{"error": "a GitHub repo (owner/name or its URL) and action add or remove"})
+			return
+		}
+		b, _ := json.Marshal(map[string]any{"action": in.Action, "repo": repo, "sensitive": in.Sensitive})
+		r.relayDeployKey(w, "/deploy-keys/begin", b, false)
+	})
+	app("POST /api/repos/key/finish", func(w http.ResponseWriter, req *http.Request) {
+		b, _ := io.ReadAll(io.LimitReader(req.Body, 1<<16))
+		r.relayDeployKey(w, "/deploy-keys/finish", b, true)
+	})
+}
+
+// relayDeployKey: the core's answer unchanged; a finished add or remove also updates the list. A core from
+// before deploy keys answers its mux's plain-text 404: say so plainly.
+func (r *Router) relayDeployKey(w http.ResponseWriter, path string, body []byte, finish bool) {
+	status, b, err := r.core.Raw("POST", path, body)
+	if err != nil {
+		log.Printf("core %s: %v", path, err)
+		writeJSON(w, 503, map[string]any{"error": "the core isn't running", "coreDown": true})
+		return
+	}
+	var d Doc
+	if status == 404 && json.Unmarshal(b, &d) != nil {
+		writeJSON(w, 501, map[string]string{"error": "the running core predates deploy keys: it makes them once it has been restarted with the new core image (then Recover)"})
+		return
+	}
+	if finish && status == 200 && json.Unmarshal(b, &d) == nil {
+		var a keyAnswer
+		if d.Decode(&a) == nil && (a.Kind == "deploy-key-added" || a.Kind == "deploy-key-removed") {
+			if err := r.applyKeyAnswer(a); err != nil {
+				log.Printf("repos: %v", err)
+			}
+		}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	w.Write(b)
 }
 
 // ---- the GitHub picker -------------------------------------------------------------------------------------
@@ -195,22 +296,7 @@ func (r *Router) GitHubRepos(refresh bool) ([]ghRepo, time.Time, error) {
 
 func (r *Router) registerRepos(app appRoute) {
 	app("GET /api/repos", func(w http.ResponseWriter, req *http.Request) { writeJSON(w, 200, map[string]any{"repos": r.Repos()}) })
-	app("POST /api/repos", func(w http.ResponseWriter, req *http.Request) {
-		var in RepoEntry
-		json.NewDecoder(io.LimitReader(req.Body, 1<<16)).Decode(&in)
-		if err := r.AddRepo(strings.TrimSpace(in.Name), in.URL); err != nil {
-			scheduleErr(w, err)
-			return
-		}
-		writeJSON(w, 200, map[string]bool{"ok": true})
-	})
-	app("DELETE /api/repos/{name}", func(w http.ResponseWriter, req *http.Request) {
-		if err := r.RemoveRepo(req.PathValue("name")); err != nil {
-			writeErr(w, err)
-			return
-		}
-		writeJSON(w, 200, map[string]bool{"ok": true})
-	})
+	r.registerDeployKeys(app)
 	app("GET /api/github/repos", func(w http.ResponseWriter, req *http.Request) {
 		configured := os.Getenv("GITHUB_READ_TOKEN") != ""
 		repos, at, err := r.GitHubRepos(req.URL.Query().Get("refresh") == "1")

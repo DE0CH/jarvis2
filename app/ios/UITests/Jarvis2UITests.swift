@@ -7,7 +7,7 @@ import XCTest
 /// TEST kit) → stores (create, unlock) → new session (secure page, software key) → grants (a 10-minute grant and a
 /// standing rule on the secure grant page, forget one) → schedules (a wakeup and a cron) → terminal → pause →
 /// transcript → resume (with a prompt) → resume with the latest image (approval) → destroy (the changes check) →
-/// previous sessions → search → settings (Fly) → Reset (the current kit ends the core, a new empty one
+/// previous sessions → search → settings (repos: add with its deploy key, remove; Fly) → Reset (the current kit ends the core, a new empty one
 /// comes up, a new kit is shown and saved, the core is set up with it and its stores are empty).
 final class Jarvis2UITests: XCTestCase {
   let app = XCUIApplication()
@@ -302,6 +302,46 @@ final class Jarvis2UITests: XCTestCase {
     app.swipeUp()
     sleep(1)
     shot("settings-more")
+
+    // ---- Settings → Repos: add a repo on the shell's secure page (the core's signed request; one Face ID → the
+    // core makes the key, the CI core's fake GitHub takes its public half, the store github-china-train holds the
+    // private half), see Jarvis 2's own repo come up sensitive, then remove the first again
+    let repoField = el("repo-url")
+    if wait(repoField, 15, "the repos card in Settings") {
+      repoField.tap(); repoField.typeText("DE0CH/china-train\n")
+      if wait(el("secure-repo-go"), 30, "the secure add-repo page") {
+        wait(el("store-line-github-china-train"), 15, "…naming the repo's store")
+        XCTAssertFalse(el("secure-repo-sensitive").isSelected, "[\(tag)] a repo's store isn't sensitive by default")
+        sleep(1)
+        shot("secure-repo-add")
+        el("secure-repo-go").tap()
+        if wait(el("repo-key-china-train"), 60, "the repo listed with its deploy key") {
+          sleep(2)
+          XCTAssertTrue(el("repo-key-china-train").label.contains("github-china-train"), "[\(tag)] the key lives in github-china-train: \(el("repo-key-china-train").label)")
+          shot("settings-repo-added")
+        }
+        XCTAssertFalse(el("secure-error").exists, "[\(tag)] add-repo error: \(el("secure-error").exists ? el("secure-error").label : "")")
+      }
+      repoField.tap(); repoField.typeText("DE0CH/jarvis2\n")
+      if wait(el("secure-repo-go"), 30, "the secure add-repo page for jarvis2") {
+        wait(el("store-line-github-jarvis2"), 15, "…naming github-jarvis2")
+        sleep(1)
+        XCTAssertTrue(el("secure-repo-sensitive").isSelected, "[\(tag)] Jarvis 2's own repo comes up sensitive (the core's word)")
+        shot("secure-repo-sensitive")
+        el("secure-back").tap() // nothing happens without Face ID
+      }
+      if wait(el("repo-remove-china-train"), 30, "Remove on the repo") {
+        el("repo-remove-china-train").tap()
+        if wait(el("secure-repo-go"), 30, "the secure remove-repo page") {
+          sleep(1)
+          shot("secure-repo-remove")
+          el("secure-repo-go").tap()
+          XCTAssertTrue(gone(el("repo-key-china-train"), 60), "[\(tag)] the repo is off the list after remove")
+          sleep(1)
+          shot("settings-repo-removed")
+        }
+      }
+    }
 
     // ---- tasks: make one from the hello template (the iPhone approves its line, opened by itself), run it,
     // the run page (stop), a daily schedule, the Schedules tab

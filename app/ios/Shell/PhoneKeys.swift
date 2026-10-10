@@ -93,6 +93,25 @@ final class PhoneKeys {
     }
     return try softSigning().signature(for: Data(payload.utf8)).derRepresentation
   }
+  /// a signature over `payload` and this phone's share x(p·E), under ONE Face ID: both Enclave keys use the same
+  /// LAContext, which the first use authenticates (a deploy key: the phone approves the request and opens the
+  /// token store for it)
+  func signAndShare(_ payload: String, e: String, reason: String) throws -> (signature: Data, share: Data) {
+    _ = try signingPublic(); _ = try agreementPublic()
+    guard let eb = Data(base64Encoded: e) else { throw TrustError.badSignature("the store's key") }
+    let pub = try P256.KeyAgreement.PublicKey(x963Representation: eb)
+    if usesEnclave {
+      let ctx = LAContext(); ctx.localizedReason = reason
+      let s = try SecureEnclave.P256.Signing.PrivateKey(dataRepresentation: Keychain.get("signing-se")!, authenticationContext: ctx)
+      let sig = try s.signature(for: Data(payload.utf8)).derRepresentation
+      let a = try SecureEnclave.P256.KeyAgreement.PrivateKey(dataRepresentation: Keychain.get("agreement-se")!, authenticationContext: ctx)
+      let secret = try a.sharedSecretFromKeyAgreement(with: pub)
+      return (sig, secret.withUnsafeBytes { Data($0) })
+    }
+    let sig = try softSigning().signature(for: Data(payload.utf8)).derRepresentation
+    let secret = try softAgreement().sharedSecretFromKeyAgreement(with: pub)
+    return (sig, secret.withUnsafeBytes { Data($0) })
+  }
   /// this phone's share of an unlock: x(p·E), 32 bytes
   func share(with e: String, reason: String) throws -> Data {
     _ = try agreementPublic()

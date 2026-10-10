@@ -26,7 +26,7 @@ struct Jarvis2App: App {
 
 enum Mode: Equatable { case normal, secure }
 /// the shell's secure pages
-enum Route: Equatable { case newSession, approval(String), stores, setup, grant(String) }
+enum Route: Equatable { case newSession, approval(String), stores, setup, grant(String), repoKey }
 
 @Observable
 final class Shell {
@@ -105,6 +105,9 @@ final class Shell {
       guard let id = opts["sessionId"] as? String else { log("grant without a session refused"); return }
       route = .grant(id)
     case "setup": route = .setup
+    case "repo-key":
+      guard let r = opts["repo"] as? String, !r.isEmpty, ["add", "remove"].contains(opts["action"] as? String ?? "") else { log("repo key without a repo or action refused"); return }
+      route = .repoKey
     default: log("secure request of unknown kind refused"); return
     }
     log("enter secure \(opts["kind"] ?? "")")
@@ -214,6 +217,7 @@ struct SecurePageFor: View {
     case .stores: SecureStores(shell: shell)
     case .setup: SetupPage(shell: shell)
     case .grant(let id): SecureGrant(shell: shell, sessionId: id, options: shell.secureOptions)
+    case .repoKey: SecureRepoKey(shell: shell, options: shell.secureOptions)
     }
   }
 }

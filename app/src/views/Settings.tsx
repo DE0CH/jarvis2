@@ -1,4 +1,5 @@
-// Settings: the Claude account (Jarvis 1 holds it), the Fly spend against the cap, and whether Jarvis 2 runs, with
+// Settings: the Claude account (Jarvis 1 holds it), the repos and their deploy keys (Repos.tsx), the Fly spend
+// against the cap, and whether Jarvis 2 runs, with
 // the way into the shell's Reset or recover page (the app only).
 import { Linking } from "react-native";
 import { useEffect, useRef, useState } from "react";
@@ -8,6 +9,7 @@ import { PButton } from "../ui/bits";
 import { hasShell, requestSecure } from "../lib/shell";
 import { Box, Button, Card, Flex, Heading, Muted, P, Progress, Text } from "../ui/kit";
 import { Cards } from "../ui/cards";
+import { ReposCard } from "./Repos";
 
 const open = (u: string) => Linking.openURL(u).catch((e) => failed(e, "Could not open the link: "));
 
@@ -95,6 +97,7 @@ export function Settings() {
         <Flex mt={3}><Button variant="soft" id="open-jarvis1" onPress={() => open("https://jarvis.deyaochen.com/")}>Jarvis 1 ↗</Button></Flex>
       </Card>
       <UsageCard />
+      <ReposCard />
       <FlyCard />
       <Card data={{ settings: "setup" }}>
         <Heading size={3} mb={1}>Jarvis 2</Heading>

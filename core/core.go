@@ -141,10 +141,12 @@ type Core struct {
 	notSensitive map[string]bool       // the only sensitivity state: every store not in it is sensitive
 	pending      map[string]pendingUnlock
 	unlocked     map[string]*unlocked
+	pendingKeys  map[string]pendingDeployKey // deploy-key adds/removes waiting for the phone (deploykeys.go)
 
-	fly Fly
-	log []string
-	now func() time.Time
+	fly    Fly
+	github GitHub // deploy keys only, with the token the phone unlocks for that one call
+	log    []string
+	now    func() time.Time
 }
 
 type pendingUnlock struct {
@@ -166,7 +168,8 @@ func NewCore(fly Fly) (*Core, error) {
 	return &Core{signer: s, agreement: a, nonceKey: nk,
 		approvalsUsed: map[string]bool{}, certified: map[string]bool{},
 		started: map[string]*StartedMachine{}, killed: map[string]bool{}, used: map[string]bool{},
-		stores: map[string]*StoreBlob{}, notSensitive: map[string]bool{}, pending: map[string]pendingUnlock{}, unlocked: map[string]*unlocked{}, fly: fly, now: time.Now}, nil
+		stores: map[string]*StoreBlob{}, notSensitive: map[string]bool{}, pending: map[string]pendingUnlock{}, unlocked: map[string]*unlocked{}, pendingKeys: map[string]pendingDeployKey{},
+		fly: fly, github: newGitHub(), now: time.Now}, nil
 }
 
 func (c *Core) logf(f string, a ...any) {

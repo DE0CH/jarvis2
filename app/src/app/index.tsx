@@ -15,7 +15,6 @@ import { Records } from "../views/Records";
 import { Search } from "../views/Search";
 import { Stores } from "../views/Stores";
 import { Settings } from "../views/Settings";
-import { Repos } from "../views/Repos";
 import { Tasks } from "../views/Tasks";
 import { TaskSchedules } from "../views/TaskSchedules";
 
@@ -57,7 +56,6 @@ export default function Dashboard() {
             {tab === "records" && <Records />}
             {tab === "tasks" && <Tasks />}
             {tab === "schedules" && <TaskSchedules />}
-            {tab === "repos" && <Repos />}
             {tab === "settings" && <Settings />}
           </View>
         </View>

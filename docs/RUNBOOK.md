@@ -8,7 +8,10 @@ through git, and a box git can't fix is replaced.
 
 `git push` to main. The `images` workflow builds the core, router and session images, then pins their tags in
 `k8s/apps/`; Flux applies within a minute. The core's tag moves only when `core/` changed (a core restart is a
-new, empty core: see "Setting the core up").
+new, empty core: see "Setting the core up"), and never while the core Deployment in `k8s/apps/core.yaml` carries the
+annotation `jarvis2/core-pin: hold`: a core change that waits for Deyao's go (he then Recovers). To roll it out once
+he says so, delete the annotation, push, then `gh workflow run images -R DE0CH/jarvis2` (a k8s/ push alone doesn't
+run it): it pins the newest core and Flux restarts it.
 
 ## The keys (`keys/`)
 
@@ -40,14 +43,32 @@ whose value lived only in the old stores and backups, sends the core its Fly tok
 `infra/fly-token.sh`), and deletes the local copies. The stores and their keys: Deyao's own stores by kind, `default` (not sensitive), `identity`, `infra`,
 `money`, `devices`, `work` and `jarvis1` (sensitive), whose key names are listed in the private claude-env repo
 (`.claude/skills/jarvis2/stores.txt`, read by the script; run it under `pull-secrets --exec` so it sees the setup
-session's live store values); the harness stores `openrouter` (OPENROUTER_API), `github-claude-env` (GITHUB_TOKEN_CLAUDE_ENV: a new PAT
-`jarvis2-sessions-claude-env-push`), `github-jarvis2` (sensitive; GITHUB_TOKEN_JARVIS2: a new PAT
-`jarvis2-sessions-jarvis2-push`; `github-web pat-create` deletes the same-name token first), `claude`
-(JARVIS1_CREDENTIALS_ID/SECRET: Access service token `jarvis2-store-claude`, rotated), `tunnel`
-(CF_ACCESS_CLIENT_ID/SECRET: `jarvis2-tunnel`, rotated) and `core` (the Fly token). The narrowed Fly token in an
-old `core` backup can't be revoked on its own (an attenuation of JARVIS2_FLY_TOKEN); it stays sealed to the old
-master key. Old backup versions stay in the versioned bucket, sealed to their old key. Deyao then unlocks stores
-in the app as usual.
+session's live store values); `github-deploy-keys` (sensitive; GITHUB_DEPLOY_KEYS_TOKEN: a new fine-grained PAT
+`jarvis2-deploy-keys`, all repositories, Repository "Administration: read and write" only, minted by `github-web
+pat-create-all`, which deletes the same-name token first; its line is in the layout file too); the harness stores
+`openrouter` (OPENROUTER_API), `claude` (JARVIS1_CREDENTIALS_ID/SECRET: Access service token `jarvis2-store-claude`,
+rotated), `tunnel` (CF_ACCESS_CLIENT_ID/SECRET: `jarvis2-tunnel`, rotated) and `core` (the Fly token). The narrowed
+Fly token in an old `core` backup can't be revoked on its own (an attenuation of JARVIS2_FLY_TOKEN); it stays sealed
+to the old master key. Old backup versions stay in the versioned bucket, sealed to their old key. Deyao then unlocks
+stores in the app as usual, and adds his repos again in Settings → Repos (the repos' stores aren't backed up, below).
+
+## Repos and their deploy keys
+
+Each repo is added in the app (Settings → Repos → Add repo, or "Make key" on a listed repo whose store is missing):
+the shell's secure page shows the core's signed request, and one Face ID lets the core use `github-deploy-keys` for
+that call to make an ed25519 key, add it to the repo as a read/write deploy key titled `jarvis2 <store>`, and keep
+the private half in the store `github-<repo>` (`github-jarvis2` always sensitive). Nothing for Claude to do. Remove
+deletes both. A Recover brings no repo stores back (no backup): "Make key" again, which also deletes the old key on
+GitHub. Sessions that include a repo's store clone, pull and push it over SSH (`machine/deploykeys.go`).
+
+If the core says the token can't manage a repo's deploy keys, the token in `github-deploy-keys` lacks Repository
+"Administration: read and write" on it: mint `jarvis2-deploy-keys` again (`github-web pat-create-all
+jarvis2-deploy-keys ~/.jarvis2/gh-deploy-keys.token Administration=write`) and write the store (`setup.py write
+github-deploy-keys GITHUB_DEPLOY_KEYS_TOKEN=file:~/.jarvis2/gh-deploy-keys.token`, then shred the file).
+
+Against real GitHub: `JARVIS2_LIVE_GITHUB_TOKEN_FILE=… JARVIS2_LIVE_REPO=<a throwaway repo> JARVIS2_LIVE_OTHER_REPO=<a
+private repo> go test -run Live` in `core/` (the phone flow, then `git clone`/`push` over SSH with exactly that key,
+the other repo refused, remove).
 
 ### Emptying the core without its kit
 

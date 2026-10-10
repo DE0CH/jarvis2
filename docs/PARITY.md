@@ -54,7 +54,7 @@ watches.
 
 ## Stores, repos, content
 - Store editor in the app: partial — the shell's Stores page creates, unlocks, locks and marks stores sensitive; values are written only by the setup session (`infra/setup.py`). Copy keys between stores: missing (design question 12).
-- Multi-store merge conflict file: unverified. Repo picker: present (`router/repos.go`, the app's Repos tab). Repo delivery: replaced by per-repo tokens.
+- Multi-store merge conflict file: unverified. Repo picker: present (`router/repos.go`, the app's Settings → Repos). Repo delivery: replaced by per-repo deploy keys (SSH).
 - Content stores: deferred. Drop tokens: missing.
 
 ## Account and apps

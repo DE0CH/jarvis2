@@ -103,12 +103,13 @@ machines, and run exactly one command inside a machine, `/usr/local/bin/jarvis2-
 | `unlock_begin(name)` / `unlock_finish(pending, phone share)` | The split-key unlock; the plaintext stays in memory until locked. |
 | `lock(unlock id)` / `list_unlocked(nonce)` | Release; the signed list of open unlocks. |
 | `pull_secrets(cert)` | The cert's stores, while unlocked, sealed to that machine's encryption key — so no other proof is needed. |
+| `deploy_key_begin(action, repo, sensitive)` / `deploy_key_finish(pending, phone sig, phone share)` | A repo's deploy key, added or removed (below, "Deploy keys"): the signed request, then the phone's signature over it and its share of `github-deploy-keys`; the core uses that store's GitHub token for this one call and writes or deletes the store `github-<repo>`. |
 | `log(nonce)` | Its signed log. |
 
 A succession from null is approved only by the phone: every new line starts with Deyao's click.
 
 **State, in memory only:** its own key pairs, the master and phone public keys (from the claim), the Fly token,
-the stores, the non-sensitive set, the unlocked stores' plaintext, the pending unlocks, and append-only sets — **killed**
+the stores, the non-sensitive set, the unlocked stores' plaintext, the pending unlocks and deploy-key requests, and append-only sets — **killed**
 (Fly-confirmed), **used** (predecessors continued or burnt), **spent** approvals, **certified** machines. What
 it **trusts** about others (the phone's and the master's public keys, the box key's signature) needs no
 secrecy; what it uses to **prove itself** (its private keys, the Fly token) never leaves it.
@@ -206,6 +207,33 @@ discrete-log problem). A share opens only the store written with that `E`, and e
 The Enclave returns only the x-coordinate of `p·E`, so the core tries both points with that x and keeps the
 one that decrypts.
 
+## Deploy keys (a repo's push access)
+
+Each GitHub repo Deyao adds in the app's Settings gets its own store, `github-<repo>`, holding an SSH key that GitHub
+accepts for that one repo, read and push, with no expiry: a **deploy key** (Deyao, 2026-10-10). The key is made
+by the core, approved by the phone; the box alone can never make one, and no AI is in the path.
+
+- **The token** that may manage deploy keys lives only in its own sensitive store, `github-deploy-keys`: a
+  fine-grained GitHub token on all of Deyao's repositories with Repository "Administration: read and write" and
+  nothing else (it can't read or write code). No other store is opened by this flow.
+- **Add:** the app asks for the repo; `deploy_key_begin` answers, signed, exactly what will happen: the repo, the
+  store's name, whether it is sensitive (asked for, or always for `DE0CH/jarvis2`, whose push reaches the core; a
+  store that is sensitive stays so), whether it replaces an existing store, the key's title on GitHub (`jarvis2
+  <store>`), and the token store's `E` with a one-off `T`, as an unlock. The shell's secure page shows it; under one
+  Face ID the phone signs that document and computes its share of the token store, sealed to `T`.
+  `deploy_key_finish` checks the signature against the phone key from the claim, opens the token store with the
+  share for this call only (it never joins the unlocked set; the plaintext goes when the call returns), deletes
+  that repo's keys titled `jarvis2 <store>`, makes an ed25519 key pair, adds the public half to the repo through
+  GitHub's API (api.github.com, fixed in the core), and writes the store — the repo's name and the OpenSSH private
+  key — wrapped to `P + K` itself. Its signed answer carries the key's fingerprint.
+- **Remove:** the same request and approval; the core deletes the titled keys on GitHub and the store.
+- **Sessions:** a session that includes `github-<repo>` gets the key with its other secrets; the machine writes it
+  with an SSH host alias that uses only that key and pins GitHub's host keys, and git rewrites that repo's URLs to
+  the alias, so clone, pull and push work with no setup, and no other repo is reachable with it.
+- **The router** keeps the repo list, adding or removing an entry only from the core's answer; it holds no token
+  that can push or manage keys. The repos' stores have no backup (the core can't write one): after a Recover each
+  repo is made again with one Face ID, which also deletes the old key on GitHub.
+
 ## Flows (router, outside the core)
 
 - **New session:** the router adds the harness's stores (policy) → `succession(null, …)` ← iPhone approval →
@@ -275,8 +303,10 @@ limit and start-up time.
 
 - A key store reaches a machine only through a succession: from null (Deyao's click), or from a killed,
   never-used predecessor (exact match automatically, or with Deyao's click when something changed).
-- Plaintext stores exist only in the core's memory: unlocked ones until locked, and during a Recover for at most
-  10 minutes. The Fly token is the one secret the core keeps in memory for its whole life.
+- Plaintext stores exist only in the core's memory: unlocked ones until locked, during a Recover for at most
+  10 minutes, and `github-deploy-keys` for the length of one phone-approved deploy-key call. The Fly token is the one
+  secret the core keeps in memory for its whole life.
+- A deploy key is made or deleted only on a phone-approved request; the core uses the GitHub token for nothing else.
 - A session's line can't fork: each predecessor is used at most once (succession and burn both consume it).
 - A bug or compromise outside the core (router, Jarvis, the box) can block or fail actions, never move a store
   to a machine not approved for it.

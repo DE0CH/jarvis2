@@ -28,7 +28,8 @@ export function NewSession() {
   // one-shot: the session runs its prompt, then is archived and destroyed by itself (never auto-paused)
   const [mode, setMode] = useState("session"), [autoPause, setAutoPause] = useState<string[]>(["on"]);
   const oneShot = mode === "oneshot";
-  // repos from the Repos tab (cloned with the per-repo tokens in the session's stores) and the API proxy switch
+  // repos from Settings → Repos, each with its deploy key in its own store (github-<repo>): picking a repo also
+  // picks its store when that is not sensitive (a sensitive one, e.g. github-jarvis2, only on the secure page)
   const repoList = useStore((s) => s.state.repos) || [];
   const [repos, setRepos] = useState<string[]>([]), [apiProxy, setApiProxy] = useState<string[]>([]);
   const [busy, setBusy] = useState<string | null>(null);
@@ -38,8 +39,10 @@ export function NewSession() {
   const canStart = !busy && (hasShell || picked.length > 0) && !(oneShot && !prompt.trim());
   function start() {
     if (!canStart) return;
-    const body = { requestId: requestId.current, label: label.trim(), prompt: prompt.trim(), model, permissionMode: perm, size, harness, stores: picked, oneShot, autoPause: !oneShot && autoPause.includes("on"),
-      repos: repoList.filter((r) => repos.includes(r.name)).map((r) => r.url).join(","), apiProxy: apiProxy.includes("on") };
+    const chosen = repoList.filter((r) => repos.includes(r.name));
+    const withRepos = [...new Set([...picked, ...chosen.map((r) => r.store).filter((n) => plain.some((s) => s.name === n))])];
+    const body = { requestId: requestId.current, label: label.trim(), prompt: prompt.trim(), model, permissionMode: perm, size, harness, stores: withRepos, oneShot, autoPause: !oneShot && autoPause.includes("on"),
+      repos: chosen.map((r) => r.url).join(","), apiProxy: apiProxy.includes("on") };
     if (hasShell) {
       // the form stays underneath the shell's page: Back there returns to it as it was
       setBusy("Opening…");
@@ -79,9 +82,11 @@ export function NewSession() {
         ]} />
       </>}
       <Lbl>Repos</Lbl>
-      {repoList.length ? <CheckboxCards id="ns-repo" value={repos} onChange={setRepos} options={repoList.map((r) => ({ value: r.name, title: r.name, sub: r.url }))} />
-        : <Muted>No repos yet — add some in the Repos tab.</Muted>}
+      {repoList.length ? <CheckboxCards id="ns-repo" value={repos} onChange={setRepos} options={repoList.map((r) => ({ value: r.name, title: r.repo, sub: r.store }))} />
+        : <Muted>No repos yet — add some in Settings → Repos.</Muted>}
       {!!repoList.length && !repos.length && <Muted mt={1}>No repo selected — the session starts with an empty workspace.</Muted>}
+      {repoList.some((r) => repos.includes(r.name) && !plain.some((s) => s.name === r.store)) && <Muted mt={1} id="ns-repo-sensitive">
+        {`Pick ${repoList.filter((r) => repos.includes(r.name) && !plain.some((s) => s.name === r.store)).map((r) => r.store).join(", ")} on the ${hasShell ? "next, secure screen" : "app's secure screen"} to push: a sensitive store (or one without a key) isn't pre-selected.`}</Muted>}
       <Lbl>Permission mode</Lbl>
       <RadioCards id="ns-perm" value={perm} onChange={setPerm} options={[
         { value: "auto", title: "Auto", sub: "Auto-approve safe actions; the permission classifier gates the rest." },

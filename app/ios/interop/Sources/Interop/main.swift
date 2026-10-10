@@ -85,7 +85,7 @@ let served = (try? JSONDecoder().decode(Served.self, from: bd))?.objects ?? []
 check(bs == 200 && Set(served.map { $0.key + $0.body }) == Set((dumps["jarvis2-backup-ci"] ?? []).map { $0.key + $0.body }), "the router serves the bucket's objects unchanged (HTTP \(bs), \(served.count) objects)")
 let stores: [RecoveredStore]
 do { stores = try CoreSetup.readBackups(served, master: kitMaster, setupKey: setupKey) } catch { print("FAIL reading the backups: \(error)"); exit(1) }
-check(stores.map(\.name) == ["claude-login", "core", "default", "gmail", "marked"], "every store comes back (\(stores.map(\.name)))")
+check(stores.map(\.name) == ["claude-login", "core", "default", "github-deploy-keys", "gmail", "marked"], "every store comes back (\(stores.map(\.name)))")
 let sens = Dictionary(uniqueKeysWithValues: stores.map { ($0.name, $0.sensitive) })
 check(sens["default"] == false && sens["claude-login"] == false && sens["gmail"] == true && sens["core"] == true, "sensitivity from the backups")
 check(sens["marked"] == true, "a sensitive/ marker makes a store sensitive whatever its backup says")
@@ -114,7 +114,7 @@ check(call("/wipe", try! CoreSetup.wipe(core: coreKeys, master: kitMaster)).0 ==
 let (rs, rb) = claim(try! CoreSetup.claim(core: coreKeys, phone: phone, master: kitMaster, bundle: bundle))
 check(rs == 200, "the core is set up (HTTP \(rs) \(String(decoding: rb.prefix(200), as: UTF8.self)))")
 let rec = try? CoreCrypto.decode(doc(rb), by: coreKeys.signingKey, as: KindDoc.self, what: "claimed")
-check(rec?.kind == "claimed" && rec?.stores == 4, "the answer is the core's signed 'claimed' (4 stores, the core's own excluded)")
+check(rec?.kind == "claimed" && rec?.stores == 5, "the answer is the core's signed 'claimed' (5 stores, the core's own excluded)")
 check(claim(try! CoreSetup.claim(core: coreKeys, phone: phone, master: kitMaster, bundle: bundle)).0 == 409, "a second claim is refused")
 check(claim(try! CoreSetup.claim(core: coreKeys, phone: phone, master: fresh, bundle: try! CoreSetup.bundle([]))).0 == 409, "…and a Reset's claim with a new key too")
 let st1 = (try? CoreSetup.check(identity(), boxKey: boxKey))?.state
@@ -133,8 +133,8 @@ func list() -> [StoreView] {
   return d.stores
 }
 var l = list()
-check(l.map(\.name) == ["claude-login", "default", "gmail", "marked"], "the core lists every store but its own")
-check(l.filter(\.sensitive).map(\.name) == ["gmail", "marked"], "sensitivity in the core's list")
+check(l.map(\.name) == ["claude-login", "default", "github-deploy-keys", "gmail", "marked"], "the core lists every store but its own")
+check(l.filter(\.sensitive).map(\.name) == ["github-deploy-keys", "gmail", "marked"], "sensitivity in the core's list")
 check(throwsErr { _ = try CoreCrypto.verified(SignedDoc(payload: "{}", sig: doc(call("/stores", ["nonce": "x"]).1).sig), by: coreKey, what: "x") }, "an altered payload is refused")
 check(call("/stores/create", ["name": "notes"]).0 == 200, "create a store")
 check(call("/stores/create", ["name": "notes"]).0 == 409, "…once")
@@ -274,6 +274,42 @@ if a4s == 200, c4s == 200, let sc4 = try? Checks.cert(doc(c4d), coreKey: coreKey
   var r4 = rule; r4["session"] = sc4.line
   check(!review(r4, kind: "rule", until: end, cert: sc4), "…and the grant page refuses a standing rule for it")
 } else { check(false, "a sensitive session certifies") }
+
+// ---- deploy keys: a repo added and removed, each approved by the phone (the core's fake GitHub in CI) ----
+func deployKey(_ action: String, _ repo: String, sensitive: Bool = false, signer: P256.Signing.PrivateKey? = nil, base: String = core, prefix: String = "/deploy-keys") -> (Int, DeployKeyBegin?, Data) {
+  let (bs, bd) = call(prefix + "/begin", ["action": action, "repo": repo, "sensitive": sensitive], base: base)
+  guard bs == 200, let d = try? JSONDecoder().decode(SignedDoc.self, from: bd) else { return (bs, nil, bd) }
+  guard let b = try? Checks.deployKeyBegin(d, coreKey: coreKey, action: action, repo: repo, sensitive: sensitive) else { return (0, nil, bd) }
+  let sig = try! (signer ?? phoneSigning).signature(for: Data(d.payload.utf8)).derRepresentation.base64EncodedString()
+  let x = try! phoneAgreement.sharedSecretFromKeyAgreement(with: P256.KeyAgreement.PublicKey(x963Representation: Data(base64Encoded: b.e)!)).withUnsafeBytes { Data($0) }
+  let (fs, fd) = call(prefix + "/finish", ["pending": b.pending, "signature": sig, "share": try! CoreCrypto.sealShare(x, to: b.t)], base: base)
+  return (fs, b, fd)
+}
+check(Checks.repoStore("DE0CH/china_train") == "github-china-train" && Checks.repoStore("someone/Thing.js") == "github-someone-thing-js" && Checks.repoStore("de0ch/Jarvis2") == "github-jarvis2", "the app's store names are the core's")
+let (dk1s, dk1b, dk1d) = deployKey("add", "DE0CH/china-train")
+let dk1 = dk1b.flatMap { try? Checks.deployKeyAnswer(doc(dk1d), coreKey: coreKey, begin: $0) }
+check(dk1s == 200 && dk1?.kind == "deploy-key-added" && dk1?.store == "github-china-train" && dk1?.sensitive == false && (dk1?.fingerprint ?? "").hasPrefix("SHA256:"), "add a repo: the core makes its key, the store github-china-train (HTTP \(dk1s))")
+check(list().first { $0.name == "github-china-train" }.map { !$0.sensitive && !$0.empty && !$0.unlocked } == true, "…the repo's store: not sensitive, with contents, locked")
+check(list().first { $0.name == "github-deploy-keys" }?.unlocked == false, "…and the token store was opened for that call only")
+let (bjs, bjd) = call("/deploy-keys/begin", ["action": "add", "repo": "DE0CH/jarvis2", "sensitive": false])
+let bj = bjs == 200 ? try? Checks.deployKeyBegin(doc(bjd), coreKey: coreKey, action: "add", repo: "DE0CH/jarvis2", sensitive: false) : nil
+check(bj?.sensitive == true && bj?.store == "github-jarvis2", "Jarvis 2's own repo is always sensitive (the begin document says so before Face ID)")
+check(bjs == 200 && throwsErr { _ = try Checks.deployKeyBegin(doc(bjd), coreKey: coreKey, action: "remove", repo: "DE0CH/jarvis2", sensitive: false) }, "the page refuses a begin for another action")
+check(bjs == 200 && throwsErr { _ = try Checks.deployKeyBegin(doc(bjd), coreKey: coreKey, action: "add", repo: "DE0CH/claude-env", sensitive: false) }, "…or another repo")
+check(deployKey("add", "DE0CH/x", signer: P256.Signing.PrivateKey()).0 == 403, "a signature by another key is refused")
+let (nas, _, nad) = deployKey("add", "DE0CH/no-admin")
+check(nas == 502 && String(decoding: nad, as: UTF8.self).contains("Administration: read and write"), "a token GitHub refuses: the error names the permission it needs (HTTP \(nas))")
+let (rms, rmb, rmd) = deployKey("remove", "DE0CH/china-train")
+check(rms == 200 && rmb.flatMap { try? Checks.deployKeyAnswer(doc(rmd), coreKey: coreKey, begin: $0) }?.kind == "deploy-key-removed", "remove: the key and the store go")
+check(!list().contains { $0.name == "github-china-train" }, "…the store is gone from the core's list")
+// through the router (Settings → Repos): the list follows the core's answer
+let rbase = need("INTEROP_ROUTER")
+struct ReposDTO: Decodable { struct R: Decodable { let name: String; let repo: String; let store: String; let sensitive: Bool? }; let repos: [R] }
+let (ras, _, _) = deployKey("add", "DE0CH/claude-env", base: rbase, prefix: "/api/repos/key")
+let rl = try? JSONDecoder().decode(ReposDTO.self, from: call("/api/repos", base: rbase).1)
+check(ras == 200 && rl?.repos.map(\.repo) == ["DE0CH/claude-env"] && rl?.repos.first?.store == "github-claude-env", "through the router: the repo is on the list with its store")
+_ = deployKey("remove", "DE0CH/claude-env", base: rbase, prefix: "/api/repos/key")
+check((try? JSONDecoder().decode(ReposDTO.self, from: call("/api/repos", base: rbase).1))?.repos.isEmpty == true, "…and off it after remove")
 
 // ---- lock ----
 let lk = try? CoreCrypto.decode(doc(call("/lock", ["id": u?.id ?? ""]).1), by: coreKey, as: KindDoc.self, what: "locked")

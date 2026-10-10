@@ -5,8 +5,8 @@ import { useSyncExternalStore } from "react";
 import { AppState, Platform } from "react-native";
 import { api, coreStores, loadPolicy, RUN_ACTIVE, type Choice, type CoreStore, type Policy, type Rec, type State, type TasksOverview } from "./api";
 
-export type Tab = "sessions" | "search" | "stores" | "records" | "tasks" | "schedules" | "repos" | "settings";
-export const TABS: [Tab, string][] = [["sessions", "Sessions"], ["search", "Search"], ["stores", "Stores"], ["records", "Previous"], ["tasks", "Tasks"], ["schedules", "Schedules"], ["repos", "Repos"], ["settings", "Settings"]];
+export type Tab = "sessions" | "search" | "stores" | "records" | "tasks" | "schedules" | "settings";
+export const TABS: [Tab, string][] = [["sessions", "Sessions"], ["search", "Search"], ["stores", "Stores"], ["records", "Previous"], ["tasks", "Tasks"], ["schedules", "Schedules"], ["settings", "Settings"]];
 // tasks + their schedules (api/tasks): loaded while the Tasks or Schedules tab (or a task page) is open
 export type TasksState = { loading: boolean; loaded: boolean; data: TasksOverview; err: string | null };
 // what holds a session right now (api/state `busy`), as a button label
@@ -39,7 +39,7 @@ export function useStore<T>(sel: (s: Store) => T): T {
 }
 export const getStore = () => snap;
 
-export function setTab(t: Tab) { S.tab = t; emit(); if (t === "records" || t === "search") loadRecords(); if (t === "stores") loadStores(); if (t === "tasks" || t === "schedules") { loadTasks(); loadStores(); } }
+export function setTab(t: Tab) { S.tab = t; emit(); if (t === "records" || t === "search") loadRecords(); if (t === "stores" || t === "settings") loadStores(); if (t === "tasks" || t === "schedules") { loadTasks(); loadStores(); } }
 export function pend(key: string, label: string | null) { label ? S.pending.set(key, label) : S.pending.delete(key); S.pending = new Map(S.pending); emit(); }
 
 // ---- notices: no alert()/confirm() — toasts at the bottom of the screen, questions as dialogs ----
@@ -118,7 +118,7 @@ const pollState = coalesce(async () => {
   if (S.state.sessions.some((m) => ["starting", "approval", "initialising", "pausing", "resuming", "destroying"].includes(m.state))) fastUntil = Math.max(fastUntil, Date.now() + 4000);
 });
 export function refresh(manual = false): Promise<void> {
-  if (manual) { S.refreshing = true; emit(); if (S.tab === "records") loadRecords(); if (S.tab === "stores") loadStores(); if (S.tab === "tasks" || S.tab === "schedules") loadTasks(); }
+  if (manual) { S.refreshing = true; emit(); if (S.tab === "records") loadRecords(); if (S.tab === "stores" || S.tab === "settings") loadStores(); if (S.tab === "tasks" || S.tab === "schedules") loadTasks(); }
   return pollState();
 }
 export function settle(maxMs = 90000) { fastUntil = Math.max(fastUntil, Date.now() + maxMs); }

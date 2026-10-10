@@ -85,7 +85,10 @@ jobs:
           # the core moves ONLY when core/ changed (the CI-only fake and the tests don't count): a core restart is a new, empty
           # core (Deyao sets it up again: Reset or Recover), so a router or app push must never restart it
           corecur="$(grep -ho 'jarvis2-core:sha-[0-9a-f]*' k8s/apps/core.yaml | cut -d- -f3)"
-          if ! corefull="$(git rev-parse -q --verify "$corecur^{commit}")" || ! git diff --quiet "$corefull" "$GITHUB_SHA" -- core/ ':!core/fakefly.go' ':!core/*_test.go'; then
+          # and never while k8s/apps/core.yaml carries the annotation jarvis2/core-pin = hold (a core change waiting for Deyao's go)
+          if grep -q 'jarvis2/core-pin: hold' k8s/apps/core.yaml; then
+            echo "the core is held (jarvis2/core-pin: hold): its new image is built, not pinned"
+          elif ! corefull="$(git rev-parse -q --verify "$corecur^{commit}")" || ! git diff --quiet "$corefull" "$GITHUB_SHA" -- core/ ':!core/fakefly.go' ':!core/*_test.go'; then
             sed -i -E "s#(ghcr.io/de0ch/jarvis2-core):sha-[0-9a-f]{12}#\1:$T#g" k8s/apps/core.yaml
           fi
           git diff --quiet && exit 0

@@ -122,6 +122,18 @@ final class RouterClient: NSObject, ASWebAuthenticationPresentationContextProvid
     guard d.kind == "store-created", d.name == name else { throw TrustError.stale("create") }
   }
 
+  // ---- deploy keys: a repo added or removed in Settings (core/deploykeys.go) ----
+  /// the core's signed begin document, checked: this action, this repo, its store, the one token store it opens
+  func deployKeyBegin(action: String, repo: String, sensitive: Bool) async throws -> (doc: SignedDoc, begin: DeployKeyBegin) {
+    let d = try await json("POST", "api/repos/key/begin", ["action": action, "repo": repo, "sensitive": sensitive], as: SignedDoc.self)
+    return (d, try Checks.deployKeyBegin(d, coreKey: try CoreTrust.key(), action: action, repo: repo, sensitive: sensitive))
+  }
+  /// the phone's signature over the begin document and its share of the token store; the answer, checked
+  func deployKeyFinish(_ b: DeployKeyBegin, signature: Data, share: Data) async throws -> DeployKeyAnswer {
+    let body: [String: Any] = ["pending": b.pending, "signature": signature.base64EncodedString(), "share": try CoreCrypto.sealShare(share, to: b.t)]
+    return try Checks.deployKeyAnswer(try await json("POST", "api/repos/key/finish", body, as: SignedDoc.self), coreKey: try CoreTrust.key(), begin: b)
+  }
+
   // ---- setting the core up: Reset and Recover ----
   /// the core's keys, the box key's signature over them and its signed state (the caller checks both:
   /// CoreSetup.check). Throws CoreNotRunning when there is no core to ask (its pod restarting, e.g. after a wipe:
