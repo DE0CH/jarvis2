@@ -1,0 +1,17 @@
+# k8s.yml — every push touching k8s/ builds the manifests Flux applies and checks the three Deployments are
+# there: Flux prunes whatever a commit drops, so an emptied file would delete the router (and its volume).
+name: k8s
+on:
+  push:
+    branches: [main]
+    paths: [k8s/**, infra/router-secrets.py, .github/workflows/k8s.yml]
+jobs:
+  manifests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          kubectl kustomize k8s/apps > /tmp/apps.yaml
+          deps="$(awk '/^kind: Deployment/{f=1} f&&/^  name:/{print $2;f=0}' /tmp/apps.yaml | sort | tr '\n' ' ')"
+          [ "$deps" = "cloudflared core router " ] || { echo "Deployments: $deps"; exit 1; }
+          grep -q 'jarvis2-router:sha-' /tmp/apps.yaml || { echo "no router image"; exit 1; }

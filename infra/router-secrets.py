@@ -49,7 +49,10 @@ def main():
     import hashlib, re
     rev = hashlib.sha256(enc).hexdigest()[:12]
     rp = os.path.join(ROOT, "k8s/apps/router.yaml")
-    open(rp, "w").write(re.sub(r'jarvis2/secrets-rev: "[^"]*"', f'jarvis2/secrets-rev: "{rev}"', open(rp).read()))
+    y = open(rp).read()  # read before opening for write: open(rp, "w") first would empty it
+    if 'jarvis2/secrets-rev: "' not in y:
+        sys.exit(f"{rp}: no secrets-rev annotation")
+    open(rp, "w").write(re.sub(r'jarvis2/secrets-rev: "[^"]*"', f'jarvis2/secrets-rev: "{rev}"', y))
     print("wrote", os.path.relpath(OUT, ROOT), "with", ", ".join(sorted(data)), "; router secrets-rev", rev)
 
 main()
