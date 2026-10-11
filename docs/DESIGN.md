@@ -245,7 +245,9 @@ by the core, approved by the phone; the box alone can never make one, and no AI 
   → `start` → `certify` → succession cert.
 - **Resume with a change (e.g. newer image), approved:** `succession(old, …)` ← iPhone (shows the difference,
   Deyao clicks) → `start` → `certify`. Rejecting leaves the session paused as it was.
-- **Add a store to a running session:** the session asks through the router (signed with its machine key) for
+- **Add a store to a running session:** the session finds the store holding the key it needs (`jarvis2 stores`:
+  every store's key names, never values — the router's record, kept by the setup session's writes; repo stores'
+  names follow from the repo), then asks through the router (signed with its machine key) for
   one more store → `succession(machine → same machine, set + store)` → `approve_by_phone` → new cert → the
   machine pulls its secrets again.
 - **Downgrade in place:** the machine makes a new key pair → `succession(machine → same machine, a subset, new

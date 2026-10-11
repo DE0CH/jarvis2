@@ -293,3 +293,11 @@ shouldnt unlock the whole infra [store] for that one task."
     router is the one recording it, so it is shown as "Requested via (router)", below what is signed. The setup
     session gets `GET /setup/repos` (the router's repo list) so it checks before asking for a repo. Unlock requests
     name a session (the stores it waits on), as the shell's unlock page does; no "unlock store X" with no session.
+68. **Store key names come from the router's own record, not the core** (Deyao, 2026-10-11: "the names of the keys
+    should be visible through the api"; names from data we own, behind TLS and the push path, are trustworthy
+    enough, no core assertion needed). The core can't name a locked store's keys, so the router keeps
+    `store-keys.json` in its data volume, written only by the setup session's signed `POST /setup/store-keys` (every
+    `infra/setup.py write` sends it; `infra/store-keys.sh` fills it from the layout file after a new box). A repo store's
+    two names follow from the repo. The store list itself stays the core's signed list (passed on as `signed`, and
+    checked by `jarvis2 stores`), and a store whose names were never recorded shows `keys: null`, never a guess.
+    Every session sees every store's names (not only its own), since that is what it needs to pick one to add.

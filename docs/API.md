@@ -70,6 +70,7 @@ gone (moved to records); `failed` (with `error`).
 | `GET /api/state` | `{sessions, approvals, core: {up, signingKey, agreementKey}}` |
 | `GET /api/sizes` | `{sizes: [{id, label}]}` (small / medium / large) |
 | `GET /api/models` | `?harness=` optional → `{models: [{id, label, harness}], default, defaults: {<harness>: id}, harnesses: {<harness>: {label, detail}}}` — Jarvis 1's list (Claude, OpenRouter via OpenCode, Claude via OpenClaw), only harnesses the policy has. In `POST /api/sessions` an empty model or one of another harness becomes the harness's default; an unknown one is refused (400). |
+| `GET /api/stores` | Every store and the key NAMES it holds (never a value): `{stores: [{name, sensitive, empty, unlocked, keys /* sorted names, or null when not recorded */, keysFrom /* "setup" \| "deploy-key" \| "empty" \| "" */, keysAt?}], signed /* the core's signed list it was built from */}`. The list, sensitivity, empty and unlocked are the core's (`POST /stores`); the names come from the router's own record (`store-keys.json` in its data volume), written by the setup session (`POST /setup/store-keys`, sent by every `infra/setup.py write`), or, for a repo's store, follow from the repo (`GITHUB_DEPLOY_KEY_<SLUG>`, `GITHUB_DEPLOY_REPO_<SLUG>`). Only stores in the core are listed. Same answer at `GET /m/stores` and `GET /setup/stores/keys`. |
 | `GET /api/policy` | `{harnesses: {<harness>: {stores: […]}}}` — the stores each harness brings (the router adds them; the app hides them) |
 | `POST /api/sessions` | Body `{requestId, label, prompt, model, permissionMode, size, harness, stores: [], oneShot, autoPause, apiProxy, attachments: {uploadId, files: [{name}]}}` (`apiProxy`: `SESSION_API_PROXY=1`, claude through Jarvis 1's api-proxy.js; `attachments`: files staged by `POST /api/uploads`, bound to this session) (`oneShot`: the machine gets `SESSION_ONE_SHOT=1` and the session is destroyed when its prompt is done; `autoPause` defaults to true, false for one-shot; both show in the approval's `options`). The router adds the harness's stores and asks the core for a challenge (`succession(null, …)`, before any machine); the approval (kind `new-session`) appears at once. Answers `{id, requestId}`; a repeat with a `requestId` already on a session answers that session and makes nothing. |
 | `POST /api/sessions/:id/pause` | The machine snapshots itself (signed), then the core kills it. |
@@ -262,6 +263,8 @@ against `SETUP_KEY` (`k8s/apps/router.yaml`), within ±2 min, each signature onc
 | `POST /setup/stores/write` | `/stores/write` |
 | `POST /setup/stores/mark-sensitive` | `/stores/mark-sensitive` |
 | `POST /setup/fly-token` | `/fly-token {sealed}`: `{"FLY_API_TOKEN"}` sealed to the core's agreement key (HKDF info `"jarvis2/fly-token"`) → the core's signed `{"kind":"fly-token-set"}`; 409 while the core is empty |
+| `GET /setup/stores/keys` | (the router's own) the store list with key names, as `GET /api/stores` |
+| `POST /setup/store-keys` | (the router's own) `{name, keys: [names] \| null}` → `{ok}`: records a store's key names (env-var style, ≤ 128 chars, de-duplicated and sorted); `null` forgets them. No values. `infra/setup.py write` sends it after every write; `infra/setup.py keys NAME KEY…` and `infra/store-keys.sh` (every store, from the layout file) record names alone. |
 
 `GET /setup/status` — the router's health: the names of its secrets that are set (values never), the session
 image, whether the core answers, and `githubRepos` — `{total, private}` repos the picker's `GITHUB_READ_TOKEN`
@@ -282,6 +285,7 @@ off.
 | `GET /m/restore-snapshot` | A restoring session's first machine only: the archived snapshot, same format, signed by the OLD machine named in `JARVIS2_RESTORE_CERT`. 404 otherwise. |
 | `POST /m/pull-secrets` | The router adds this machine's cert and relays to the core; answers the core's signed `secrets` doc (sealed to the machine's key). |
 | `GET /m/commands` | Long poll (≤ 50 s): `{commands: ["snapshot"]}` or `{commands: []}`. |
+| `GET /m/stores` | Every store (all of them, not only this session's) with its key names, as `GET /api/stores`, so the session knows which one to ask for. `jarvis2 stores [--json]` prints it, checks the list against the core's signature and marks this session's own stores. |
 | `POST /m/add-store` | Body `{store}`: asks Deyao (an `add-store` approval) to add one store to this session. With a reason: `POST /m/api/requests/add-store` (Requests). |
 | `POST /m/downgrade` | Body `{stores, newEncryptionKey, newSigningKey}` → `{challenge}`, which the machine signs with its OLD key. |
 | `POST /m/downgrade/finish` | Body `{challenge, signature}` → core `approve/by-old-key` → `{cert}`; from now on the router knows the machine by its new key. |

@@ -10,7 +10,9 @@ both). Values never print.
   infra/setup.py status                the router's health: secret names present, session image, core up
   infra/setup.py identity              whether the core is empty or set up (and with which master public key),
                                        checked against keys/box.pub and the core's own signature
-  infra/setup.py stores                the core's signed store list
+  infra/setup.py stores                every store (the core's signed list) with the key NAMES it holds
+  infra/setup.py keys NAME KEY[=SRC]…  record a store's key names at the router only (no values needed or sent);
+                                       `write` records them itself. `keys NAME --forget` drops them
   infra/setup.py create NAME           a new, empty, NOT sensitive store (once per name)
   infra/setup.py write NAME KEY[=SRC]… new contents for a store; each value from this session's env var KEY,
                                        or SRC: another env var name, or file:PATH. Written to the core wrapped
@@ -227,8 +229,14 @@ def main():
         me = identity()
         print(f"set up with master key {me['master'][:16]}…" if me["master"] else "empty: waiting for Reset or Recover in the app")
     elif cmd == "stores":
-        for n, s in sorted(store_list().items()):
-            print(n, "sensitive" if s["sensitive"] else "not-sensitive", "empty" if s["empty"] else "", "unlocked" if s["unlocked"] else "")
+        for s in call("GET", "/setup/stores/keys")["stores"]:
+            flags = ["sensitive" if s["sensitive"] else "not-sensitive"] + (["empty"] if s["empty"] else []) + (["unlocked"] if s["unlocked"] else [])
+            keys = " ".join(s["keys"]) if s["keys"] is not None else "(key names not recorded)"
+            print(f"{s['name']} [{', '.join(flags)}]: {keys}")
+    elif cmd == "keys":
+        names = None if args[1:] == ["--forget"] else [a.partition("=")[0] for a in args[1:]]
+        call("POST", "/setup/store-keys", {"name": args[0], "keys": names})
+        print(f"ok: {args[0]}: key names forgotten" if names is None else f"ok: {args[0]}: {len(names)} key names recorded")
     elif cmd == "create":
         call("POST", "/setup/stores/create", {"name": args[0]})
         print(f"ok: store {args[0]} created (empty, not sensitive)")
@@ -239,7 +247,8 @@ def main():
         d = call("POST", "/setup/stores/write", {"store": b})
         sens = json.loads(d["payload"])["sensitive"]
         backup(name, vals, sens, me["master"])
-        print(f"ok: store {name} written with {len(vals)} keys (sensitive={sens}), backed up")
+        call("POST", "/setup/store-keys", {"name": name, "keys": sorted(vals)})
+        print(f"ok: store {name} written with {len(vals)} keys (sensitive={sens}), backed up, key names recorded")
     elif cmd == "mark-sensitive":
         set_up()
         call("POST", "/setup/stores/mark-sensitive", {"name": args[0]})

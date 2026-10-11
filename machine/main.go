@@ -6,6 +6,9 @@
 //	                           hand over to Jarvis 1's entrypoint (the harness). Any failed check → start
 //	                           nothing.
 //	jarvis2-machine init       what the core runs through Fly exec (no arguments): asks boot to go on.
+//	jarvis2-machine stores [--json]
+//	                           every store and the key NAMES it holds (never a value), to know which store to
+//	                           ask for (stores.go).
 //	jarvis2-machine add-store <name>
 //	                           asks Deyao to add one store to this session; on approval re-pulls the
 //	                           secrets into ~/.secrets.
@@ -96,7 +99,7 @@ func main() {
 	log.SetFlags(0)
 	log.SetPrefix("[jarvis2] ")
 	if len(os.Args) < 2 {
-		log.Fatal("usage: jarvis2-machine boot | init | add-store <name> | downgrade [<store>…] | allow [<holder> <duration> | --remove <holder>]")
+		log.Fatal("usage: jarvis2-machine boot | init | stores [--json] | add-store <name> | downgrade [<store>…] | allow [<holder> <duration> | --remove <holder>]")
 	}
 	var err error
 	switch os.Args[1] {
@@ -109,6 +112,8 @@ func main() {
 			log.Fatal("usage: jarvis2-machine add-store <name>")
 		}
 		err = addStore(os.Args[2])
+	case "stores":
+		err = storesCmd(os.Args[2:]) // stores.go
 	case "downgrade":
 		err = downgrade(os.Args[2:])
 	case "agent":

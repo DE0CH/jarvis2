@@ -35,6 +35,14 @@ Reset or recover by itself, or Settings → Reset or recover…):
 
 `infra/setup.py identity` says whether the core is empty or set up (and with which master public key).
 
+### Store key names
+
+The app, sessions (`jarvis2 stores`) and `infra/setup.py stores` list every store's key names (API.md `GET
+/api/stores`). The router keeps them in its data volume; `infra/setup.py write` records them with each write. When
+they are missing (a new box, or after a Recover onto a new box) run `infra/store-keys.sh` (names only, from the
+layout file; needs only `JARVIS2_SETUP_*`). A new key in a store: add it to the layout file, then write the store
+(or `infra/setup.py keys <store> <KEY>…` to record the names alone).
+
 ### After a Reset (the setup session)
 
 `infra/fill-stores.sh` — once the core is set up: creates the non-sensitive stores, writes every store to the core
