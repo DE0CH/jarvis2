@@ -245,17 +245,17 @@ shouldnt unlock the whole infra [store] for that one task."
     Minted by `infra/fill-stores.sh` (claude-env's `github-web pat-create-all jarvis2-deploy-keys … Administration=write`).
 59. **Core primitives `deploy_key_begin` / `deploy_key_finish`** (core/deploykeys.go, DESIGN "Deploy keys"): the
     begin document (repo, store, sensitivity, add/remove, replaces, the key's title, the token store's E, a one-off T)
-    is signed; the phone signs that document and sends its share of the token store under ONE Face ID (one
-    LAContext for both Enclave keys). The core checks the signature, opens the token store for this call only (it
-    never joins the unlocked set; the plaintext leaves with the call), talks to GitHub at the fixed host
-    api.github.com, and writes or deletes the repo's store itself (wrapped to P + K). Both proofs, not just the
+    is signed; the phone signs that document and sends its share of the token store under ONE Face ID (one LAContext
+    for both Enclave keys). The core checks the signature, opens the token store for this call only (it never joins
+    the unlocked set; the plaintext leaves with the call), talks to GitHub at the fixed host api.github.com, and
+    writes or deletes the repo's store itself (the app's blob, wrapped to P + K; item 93). Both proofs, not just the
     share: the share binds the request too (it is sealed to the pending's T), but the signature is what makes the
     approval explicit and checkable.
 60. **The repo's store**: `github-<name>` for DE0CH's repos, `github-<owner>-<name>` otherwise (lower case,
     `[a-z0-9-]`); contents `GITHUB_DEPLOY_REPO_<SLUG>` = `owner/name` and `GITHUB_DEPLOY_KEY_<SLUG>` = base64 of the
-    OpenSSH private key file (ed25519, written by the core; checked against `ssh-keygen` in the tests). Not sensitive
-    unless picked on the secure page; **`DE0CH/jarvis2` is always sensitive** (a core constant: the router can't lower
-    it), and a store that is sensitive stays so on a re-add.
+    OpenSSH private key file (ed25519, made by the app since R2, item 93; checked against `ssh-keygen` in the tests).
+    Not sensitive unless picked on the secure page; **`DE0CH/jarvis2` is always sensitive** (the app asks for it and
+    refuses a begin that isn't, since R2; the router can't lower it), and a store that is sensitive stays so on a re-add.
 61. **Re-adding a repo rotates its key**: the core deletes every key titled `jarvis2 <store>` on that repo, adds the
     new one and replaces the store (the begin document says "replaces"; any unlocked plaintext of the old key is
     dropped). Keys with other titles are never touched. Remove deletes the titled keys and the store.
@@ -465,11 +465,13 @@ entry points only ("if I decide to break it later then it's fine").
       The machine's pre-vouch path (legacy.go) is gone: every core in use vouches.
     - *Keys the app makes*: the app makes a deploy key's pair and wraps its store, and brings a Recover's stores already
       wrapped, so the core never sees those plaintexts. CryptoKit can't add points, so the core gives the store key P + K
-      signed (`store_key`). The core's older forms (it makes the pair; plaintext Recover bundle) stay until the app has
-      moved, then go. GitHub's refusal is the core's status and words; the router adds the hint.
+      signed (`store_key`). The core's older forms (it made the pair; the plaintext Recover bundle) are gone now that
+      the app has moved: a begin without the app's store, title and key pair is 400, and so is a bundle that isn't
+      "blobs". GitHub's refusal is the core's status and words; the router adds the hint.
     - *Kept*: the scoped-unlock TTL sweep (finding 8: moving the check into openFor alone would keep lapsed plaintext in
       memory longer, the opposite of stateless); the three-size table (refusing unknown sizes, no default) rather than a
-      guest spec from the router with a bound; the always-sensitive DE0CH/jarvis2 check until the app's own check ships.
+      guest spec from the router with a bound. (The always-sensitive DE0CH/jarvis2 check left the core once the app's
+      own check shipped: Checks.deployKeyBegin.)
     - *Router compatibility*: while the running (held) core is the one from before R2, the router still reads its
       `/input-log`, its `/core-cert`, its `/carry/forward`, and its waiting `/start` and `/kill`. These fallbacks go
       when that core is released.

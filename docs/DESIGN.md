@@ -87,7 +87,7 @@ machines, and run exactly one command inside a machine, `/usr/local/bin/jarvis2-
 | Primitive | Does |
 |---|---|
 | `identity()` | Its public keys, signed with the box key, and its own signed state: the master public key it was set up with (none while empty) and the phone's keys. |
-| `claim(statement, masterSig, bundle)` | Once per core, on an empty core: Reset and Recover. The statement names a master public key, this core and the phone's keys, and that master key signs it; the core keeps both keys for its life. The bundle (sealed to the core) carries the stores — none for a Reset; for a Recover every store from the backups, each wrapped to `P + K` at once (no plaintext kept), the store named `core`, whose Fly token the core keeps for its whole life (never a session's store), and the names of the stores that are not sensitive. Who may claim is the router's business (Deyao's app only). |
+| `claim(statement, masterSig, bundle)` | Once per core, on an empty core: Reset and Recover. The statement names a master public key, this core and the phone's keys, and that master key signs it; the core keeps both keys for its life. The bundle (sealed to the core) carries the stores — none for a Reset; for a Recover every store from the backups, each already wrapped by the app to `P + K` (the core's signed store key), so the core never sees their plaintext; the `core` store's Fly token, which the core keeps for its whole life (never a session's store); each deploy-key store's repo; and the names of the stores that are not sensitive. Who may claim is the router's business (Deyao's app only). |
 | `wipe(statement, masterSig)` | The current master key's signature over a statement naming this core: the core answers and exits; Kubernetes starts a new, empty core. Nothing else empties a set-up core except a restart from git. |
 | `set_fly_token(sealed)` | The Fly token, sealed to the core (the setup session, after a Reset). Open: the core calls Fly only for its own app, fixed in its code, so a wrong token can only fail. |
 | `create_store(name)` | Once per name, on a set-up core: an empty, non-sensitive store. Open; the writer checks the core's word against its own list and marks a store sensitive before writing it (an empty store goes into no session). Never `github-deploy-keys`. |
@@ -147,10 +147,10 @@ page says only what Deyao acts on; errors are one plain sentence with the detail
   master public key from the core's signed state) and sends the core its Fly token (`backup-core`).
 - **Recover:** Deyao pastes his kit. The app fetches the backups through the router (which holds the bucket's
   read credential and passes the objects on as they are), checks each writer's signature (`keys/setup.pub`
-  from GitHub), decrypts them with the master key, and claims the empty core with the same statement and a
-  bundle of every store (the `core` store with the Fly token, the names that aren't sensitive), sealed to the
-  core. The core wraps every store to `P + K` at once; plaintext lives on the phone and in that one call, well
-  inside a 10-minute cap.
+  from GitHub), decrypts them with the master key, wraps each store to `P + K` (the store key the core signs for
+  this phone: CryptoKit can't add points), and claims the empty core with the same statement and a bundle of those
+  blobs (the `core` store's Fly token on its own, the names that aren't sensitive, each deploy-key store's repo),
+  sealed to the core. The plaintext lives only on the phone, well inside a 10-minute cap; the core never sees it.
 
 Either way the app pins the core's keys and its own master public key, then forgets the master private key. From
 then on it refuses a core set up with another master key, or for another phone. Stores are locked; Deyao unlocks
@@ -220,7 +220,8 @@ key, `K = k·G` the core's. Writing a store picks a fresh one-off `e` and stores
 `e·(P + K)`. It's Diffie–Hellman with the recipient split in two: `p·E + k·E = (p + k)·E = e·(P + K)`.
 
 1. `unlock_begin(store)` → core returns (store, `E`, one-off `T`, the blob's **writer**: the setup key's signature over
-   name, `E` and the data's sha256, or "core" for a blob the core wrapped itself), signed.
+   name, `E` and the data's sha256, or "core" for a blob the core vouches for: a Recover's or a deploy key's, which the
+   phone or the master key signed for), signed.
 2. iPhone checks the signature and the writer (`keys/setup.pub` from GitHub; refused without one when the core's store
    list says `writers`), shows "Unlock <store>?", and on Face ID the Enclave computes its share `p·E`.
    The phone encrypts the share to `T`, so the router relaying it never sees it.
@@ -240,16 +241,19 @@ by the core, approved by the phone; the box alone can never make one, and no AI 
 - **The token** that may manage deploy keys lives only in its own sensitive store, `github-deploy-keys`: a
   fine-grained GitHub token on all of Deyao's repositories with Repository "Administration: read and write" and
   nothing else (it can't read or write code). No other store is opened by this flow.
-- **Add:** the app asks for the repo; `deploy_key_begin` answers, signed, exactly what will happen: the repo, the
-  store's name, whether it is sensitive (asked for, or always for `DE0CH/jarvis2`, whose push reaches the core; a
-  store that is sensitive stays so), whether it replaces an existing store, the key's title on GitHub (`jarvis2
-  <store>`), and the token store's `E` with a one-off `T`, as an unlock. The app's review page shows it; under one
+- **Add:** the app makes an ed25519 key pair and wraps the store holding the repo's name and the OpenSSH private
+  key to the core's store key (`P + K`, signed by the core), so the core never sees the private key; it asks for the
+  repo with that public key and blob. `deploy_key_begin` answers, signed, exactly what will happen: the repo, the
+  store's name, whether it is sensitive (asked for, and a store that is sensitive stays so; the app always asks for
+  `DE0CH/jarvis2`, whose push reaches the core, and refuses an answer that isn't), whether it replaces an existing
+  store, the key's title on GitHub (`jarvis2 <store>`), the public key and the blob it will store, and the token
+  store's `E` with a one-off `T`, as an unlock. The app's review page shows it; under one
   Face ID the phone signs that document and computes its share of the token store, sealed to `T`.
   `deploy_key_finish` checks the signature against the phone key from the claim, opens the token store with the
   share for this call only (it never joins the unlocked set; the plaintext goes when the call returns), deletes
-  that repo's keys titled `jarvis2 <store>`, makes an ed25519 key pair, adds the public half to the repo through
-  GitHub's API (api.github.com, fixed in the core), and writes the store — the repo's name and the OpenSSH private
-  key — wrapped to `P + K` itself. Its signed answer carries the key's fingerprint.
+  that repo's keys titled `jarvis2 <store>`, adds the app's public key to the repo through GitHub's API
+  (api.github.com, fixed in the core), and keeps the app's blob as the store. Its signed answer carries the public
+  key.
 - **Remove:** the same request and approval; the core deletes the titled keys on GitHub and the store.
 - **Sessions:** a session that includes `github-<repo>` gets the key with its other secrets; the machine writes it
   with an SSH host alias that uses only that key and pins GitHub's host keys, and git rewrites that repo's URLs to

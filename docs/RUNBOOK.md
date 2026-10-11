@@ -97,11 +97,12 @@ Previous, and Restore there starts it as a new line approved on the phone.
 ## Repos and their deploy keys
 
 Each repo is added in the app (Settings → Repos → Add repo, or "Make key" on a listed repo whose store is missing):
-the shell's secure page shows the core's signed request, and one Face ID lets the core use `github-deploy-keys` for
-that call to make an ed25519 key, add it to the repo as a read/write deploy key titled `jarvis2 <store>`, and keep
-the private half in the store `github-<repo>` (`github-jarvis2` always sensitive). Nothing for Claude to do. Remove
-deletes both. A Recover brings no repo stores back (no backup): "Make key" again, which also deletes the old key on
-GitHub. Sessions that include a repo's store clone, pull and push it over SSH (`machine/deploykeys.go`).
+the app makes an ed25519 key, the shell's secure page shows the core's signed request, and one Face ID lets the core
+use `github-deploy-keys` for that call to add the key to the repo as a read/write deploy key titled `jarvis2 <store>`
+and keep the app-wrapped private half in the store `github-<repo>` (the app keeps `github-jarvis2` sensitive). Nothing
+for Claude to do. Remove deletes both. A Recover brings no repo stores back (no backup): "Make key" again, which also
+deletes the old key on GitHub. Sessions that include a repo's store clone, pull and push it over SSH
+(`machine/deploykeys.go`).
 
 If the picker says "No match." for a repo that exists (a private one), the router's `GITHUB_READ_TOKEN` sees public
 repos only: `infra/setup.py status` shows `githubRepos.private: 0`. Mint `jarvis2-repo-list` again with Metadata read

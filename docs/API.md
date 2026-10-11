@@ -107,8 +107,8 @@ gone (moved to records); `failed` (with `error`).
 | `POST /api/uploads` | First-prompt attachments: one raw file per request, headers `x-upload-id` (`[A-Za-z0-9_-]{1,64}`, groups a form's files) and `x-upload-name` (URI-encoded; made a safe basename as in Jarvis 1) → `{name, size, isImage}`. ≤ 20 files, 25 MB each (413). Staged on the router's volume; unbound uploads go after 24 h, bound ones with their session. Each bound file's sha256 and size go into the new line's signed config (`attachments: [{name, sha256, size}]`). |
 | `GET /api/sessions/:id/attachments/:name` | The bytes of a file staged for that session (until its first machine has fetched them; 404 after): the app's approval page shows it and hashes it against the signed config. |
 | `GET /api/repos` | Deyao's repo list, for Settings → Repos and New session's `repos`: `{repos: [{name, url /* https://github.com/<repo>.git */, repo /* owner/name */, store /* github-<repo> */, sensitive, fingerprint?, keyAt?}]}`. GitHub repos only; an entry is added or removed only by the core's answer to `POST /api/repos/key/finish` (below). |
-| `POST /api/repos/key/begin {action: add \| remove, repo: owner/name \| GitHub URL, sensitive?}` | Relayed to the core's `deploy-keys/begin` (the repo normalised to `owner/name`): its signed begin document, which the shell's secure page checks and the phone answers. 400 for a non-GitHub repo or another action; 501 `{error}` from a core older than deploy keys. |
-| `POST /api/repos/key/finish {pending, signature, share}` | Relayed to `deploy-keys/finish`; on the core's signed `deploy-key-added` the repo goes on the list (with `sensitive`, `fingerprint`), on `deploy-key-removed` it comes off. The answer is the core's, unchanged. |
+| `POST /api/repos/key/begin {action: add \| remove, repo: owner/name \| GitHub URL, sensitive?, store, title, publicKey?, blob?}` | Relayed to the core's `deploy-keys/begin` (the repo normalised to `owner/name`; the app's store, title and key pair as sent): its signed begin document, which the shell's secure page checks and the phone answers. 400 for a non-GitHub repo or another action; 501 `{error}` from a core older than deploy keys. |
+| `POST /api/repos/key/finish {pending, signature, share}` | Relayed to `deploy-keys/finish`; on the core's signed `deploy-key-added` the repo goes on the list (with `sensitive`, and `fingerprint` = SHA256 of the answer's `publicKey`, or the answer's own `fingerprint` from a core before R2), on `deploy-key-removed` it comes off. The answer is the core's, unchanged. |
 | `GET /api/github/repos` | `{repos: [{fullName, url, htmlUrl, private, fork, archived, description, language, pushedAt, owner}], cachedAt, configured}` (5 min cache, `?refresh=1`), listed with `GITHUB_READ_TOKEN` (router env; Metadata read picked explicitly, else GitHub lists public repos only — sessions push with their repos' deploy keys). 503 without it. |
 | `GET /api/usage` | Forwarded to Jarvis 1's `/api/usage` (query kept) with the services token: Jarvis 1 holds the Claude login. |
 | `GET /api/search`, `/api/search/context`, `/api/search/status`; `GET /api/icloud/search`, `/api/icloud/file`, `/api/icloud/status`; `POST /api/icloud/relist` | The app's Search tab: forwarded to Jarvis 1's transcript search and iCloud index unchanged (path, query, body) with the services token `JARVIS1_SERVICES_ID/SECRET` and no `X-Jarvis2-Session`; Jarvis 1's shapes (its `selfhost/API.md`). 503 without the token. |
@@ -214,10 +214,14 @@ Setting the core up (Reset and Recover, the app's Reset or recover page):
   core-signed doc `{"kind":"core-state","master": <the master public key it was set up with, "" while empty>,
   "phone": {signingKey, agreementKey} | null}`.
 - `claim`: `statement` = the JSON text `{"kind":"claim","master","core":{signingKey,agreementKey},"phone":{…},
-  "bundleSha256"}`, `masterSig` = that master key's base64 DER ECDSA over it, `bundle` = `{stores:[{name, values}],
-  notSensitive:[names]}` sealed to the core's agreement key (ephemeral P-256, HKDF-SHA256 info `"jarvis2/claim"`,
-  AES-256-GCM combined) → the core's signed `{"kind":"claimed","stores": n}`; 409 when the core is set up already.
-  Reset sends no stores; Recover every store from the backups (the `core` store: `FLY_API_TOKEN`).
+  "bundleSha256"}`, `masterSig` = that master key's base64 DER ECDSA over it, `bundle` = `{"format":"blobs",
+  "stores":"blobs", blobs: [StoreBlob], notSensitive: [names], owners: {store: "owner/name"}, flyToken}` sealed to the
+  core's agreement key (ephemeral P-256, HKDF-SHA256 info `"jarvis2/claim"`, AES-256-GCM combined) → the core's
+  signed `{"kind":"claimed","stores": n}`; 409 when the core is set up already, 400 "bad bundle" for any other bundle
+  (the older plaintext form `{stores:[{name, values}]}` among them). Each blob is a store the app wrapped itself to the
+  store key (`store-key`, below), so the core never sees a store's plaintext; `owners` names each deploy-key store's
+  repo (the app reads it from the store's `GITHUB_DEPLOY_REPO_*`); `flyToken` is the `core` store's `FLY_API_TOKEN`,
+  which never becomes a store. Reset sends no blobs; Recover every store from the backups.
 - `wipe`: `statement` = `{"kind":"wipe","core": <the core's signing key>}`, signed by the master key the core was
   set up with → the core's signed `{"kind":"wiping","core"}`, then it exits; a new, empty core follows.
 
@@ -246,39 +250,36 @@ base64(combined)}` → `unlock/finish {pending, share}`.
 
 ## Deploy keys (the core: `deploy-keys/*`, `core/deploykeys.go`)
 
-- `POST deploy-keys/begin {action: add | remove, repo: owner/name, sensitive}` → the core's signed
-  `{"kind":"deploy-key-begin", pending, action, repo, store /* github-<name> for DE0CH, else github-<owner>-<name> */,
-  sensitive /* add: asked for, OR DE0CH/jarvis2, OR the store is sensitive already; remove: the store's */, replaces
-  /* add: the store exists */, title /* "jarvis2 <store>": the key's title on GitHub */, tokenStore:
-  "github-deploy-keys", e /* that store's E */, t /* a one-off key */}`. 404 while `github-deploy-keys` has no
-  contents; 409 on an empty core; 409 `store github-x belongs to <owner/name>` when another repo owns that store
-  name (names collide: `DE0CH/foo-bar` and `foo/bar`, `my.repo` and `My-Repo`; the owner is the repo whose add
-  wrote the store, or after a Recover the store's own `GITHUB_DEPLOY_REPO_*` value; finish checks it again); 400
-  for a bad repo (or one whose store name would be `github-deploy-keys`).
+- `POST deploy-keys/begin {action: add | remove, repo: owner/name, sensitive, store, title, publicKey, blob}`: the
+  app names the store (`github-<name>` for DE0CH, else `github-<owner>-<name>`) and the key's title on GitHub
+  (`jarvis2 <store>`), and for an add makes the key pair: `publicKey` ("ssh-ed25519 <base64 wire>") and `blob`, the
+  store `{GITHUB_DEPLOY_REPO_<SLUG>: "owner/name", GITHUB_DEPLOY_KEY_<SLUG>: base64(OpenSSH private key file)}`
+  (`<SLUG>` = `OWNER_NAME`, upper case, other characters `_`) wrapped to the store key from `POST store-key` → the
+  core's signed `{"kind":"deploy-key-begin", pending, action, repo, store, sensitive /* add: asked for, OR the store
+  is sensitive already; remove: the store's */, replaces /* add: the store exists */, title, publicKey, blobE,
+  blobSha256 /* add: the blob's E and the sha256 hex of its data */, tokenStore: "github-deploy-keys", tokenWriter,
+  tokenDataSha256, e /* that store's E */, t /* a one-off key */}`, so the phone's signature covers the key and the
+  blob. The app keeps `DE0CH/jarvis2`'s store sensitive itself (it asks for it, and refuses a begin that isn't).
+  400 for an add without the key pair or with a blob for another store, or a title that isn't one short line; 404
+  while `github-deploy-keys` has no contents; 409 on an empty core; 409 `store github-x belongs to <owner/name>` when
+  another repo owns that store name (names collide: `DE0CH/foo-bar` and `foo/bar`, `my.repo` and `My-Repo`; the owner
+  is the repo whose add wrote the store, or after a Recover the bundle's `owners`; finish checks it again); 400 for a
+  bad repo or store name (`github-deploy-keys` and `core` aren't allowed).
 - `POST deploy-keys/finish {pending, signature, share}`: `signature` = the phone's base64 DER ECDSA over the begin
   document's payload (its signing key from the claim), `share` = x(p·E) of the token store sealed to `t` exactly as
   an unlock's share (HKDF info `"jarvis2/unlock-share"`); the shell makes both under one Face ID. One try per
   pending. The core opens `github-deploy-keys` for this call only (it never joins the unlocked set) and reads
   `GITHUB_DEPLOY_KEYS_TOKEN`; it deletes the repo's keys titled `jarvis2 <store>` on GitHub (`GET/DELETE
-  /repos/{repo}/keys`), then — add — makes an ed25519 key pair, adds the public half (`POST /repos/{repo}/keys`,
-  `read_only: false`) and writes the store `{GITHUB_DEPLOY_REPO_<SLUG>: "owner/name", GITHUB_DEPLOY_KEY_<SLUG>:
-  base64(OpenSSH private key file)}` (`<SLUG>` = `OWNER_NAME`, upper case, other characters `_`) wrapped to P + K →
-  `{"kind":"deploy-key-added", pending, repo, store, sensitive, title, fingerprint /* SHA256:… */, keyId}`; or —
+  /repos/{repo}/keys`), then — add — adds the app's public key (`POST /repos/{repo}/keys`, `read_only: false`) and
+  stores exactly the app's blob (writer `core`) →
+  `{"kind":"deploy-key-added", pending, repo, store, sensitive, title, publicKey, keyId}`; or —
   remove — deletes the store → `{"kind":"deploy-key-removed", pending, repo, store, deleted}`. 403 for a wrong
   signature or share; 502 `github: HTTP <status>: <GitHub's words>` when GitHub refuses (the router's
   `/api/repos/key/finish` turns a 403/404 into what the token needs: Repository "Administration: read and write").
-- **The app's key pair (R2):** begin may also carry `store`, `title` and, for an add, `publicKey` ("ssh-ed25519
-  <base64 wire>") and `blob` (the store `{GITHUB_DEPLOY_REPO_<SLUG>, GITHUB_DEPLOY_KEY_<SLUG>}` as above, wrapped by the
-  app to the store key from `POST store-key`). The begin document then also names `publicKey`, `blobE` and
-  `blobSha256` (sha256 hex of the blob's `data`), so the phone's signature covers them; finish adds exactly that public
-  key and stores exactly that blob (writer `core`), and answers `publicKey` instead of `fingerprint`. Without `store`
-  the core still names the store and makes the pair itself (the app before R2; removed once the app has moved).
 - `POST store-key {phone}` → the core's signed `{"kind":"store-key", phone, storeKey}`: `storeKey` = P + K (X9.63
   base64) for that phone agreement key P. Open, also on an empty core: what the app wraps a data key to (one-off e,
   HKDF-SHA256 of x(e·storeKey) with info `"jarvis2/store-data-key"`, AES-256-GCM nonce‖ciphertext), since CryptoKit
-  can't add points. A Recover's bundle may be `{"format":"blobs", "stores":"blobs", blobs: [StoreBlob], notSensitive,
-  owners: {store: "owner/name"}, flyToken}`: the stores already wrapped by the app, so the core never sees their
-  plaintext (`"stores":"blobs"` makes a core before R2 refuse it with 400 "bad bundle").
+  can't add points: a deploy key's store, and every store of a Recover's bundle (`claim`, above).
 
 ## Setup (`/setup/*`)
 
