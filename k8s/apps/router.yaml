@@ -17,8 +17,8 @@ spec:
   strategy: { type: Recreate }
   selector: { matchLabels: { app: router } }
   template:
-    # secrets-rev(-backup|-github): bumped by infra/router-secrets.py so a changed Secret restarts the pod (envFrom is read at start)
-    metadata: { labels: { app: router }, annotations: { jarvis2/secrets-rev: "043246abae2f", jarvis2/secrets-rev-backup: "cc2fe4a5bfde", jarvis2/secrets-rev-github: "5d4b8b75a9b6" } }
+    # secrets-rev(-backup|-github|-flyorgs): bumped by infra/router-secrets.py so a changed Secret restarts the pod (envFrom is read at start)
+    metadata: { labels: { app: router }, annotations: { jarvis2/secrets-rev: "043246abae2f", jarvis2/secrets-rev-backup: "cc2fe4a5bfde", jarvis2/secrets-rev-github: "5d4b8b75a9b6", jarvis2/secrets-rev-flyorgs: "1a0800b2e3d3" } }
     spec:
       automountServiceAccountToken: false
       enableServiceLinks: false
@@ -45,7 +45,7 @@ spec:
           # k8s/secrets/router-backup.enc.yaml, and the repo picker's GITHUB_READ_TOKEN: k8s/secrets/router-github.enc.yaml
           # — all SOPS-encrypted to the box's age key (infra/router-secrets.py). router-secrets-github stays LAST: with a
           # key in several envFrom sources the last one wins, and the default part still holds an old GITHUB_READ_TOKEN
-          envFrom: [{ secretRef: { name: router-secrets, optional: true } }, { secretRef: { name: router-secrets-backup, optional: true } }, { secretRef: { name: router-secrets-github, optional: true } }]
+          envFrom: [{ secretRef: { name: router-secrets, optional: true } }, { secretRef: { name: router-secrets-backup, optional: true } }, { secretRef: { name: router-secrets-github, optional: true } }, { secretRef: { name: router-secrets-flyorgs, optional: true } }]
           volumeMounts: [{ name: data, mountPath: /data }, { name: wg, mountPath: /wg, readOnly: true }]
           resources: { requests: { cpu: 20m, memory: 64Mi }, limits: { memory: 1Gi } }
           securityContext: { runAsNonRoot: true, runAsUser: 65532, runAsGroup: 65532, allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: { drop: [ALL] }, seccompProfile: { type: RuntimeDefault } }

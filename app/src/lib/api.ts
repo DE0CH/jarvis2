@@ -93,7 +93,13 @@ export type FlyOther = { kind: string; app: string; id: string; name?: string; s
 export type FlyView = { apps: number; machines: number; volumes: number; other: FlyOther[]; error?: string | null; checkedAt?: string | null };
 // every Fly machine in jarvis2-sessions (api/machines, router/machines.go): its session or none ("" ), and
 // test = its JARVIS2_URL is a test router's; noDestroy = why Destroy isn't offered ("" = it is)
-export type Machine = { id: string; name: string; state: string; region: string; size: string; guest: string; image: string; created: string; updated: string; sessionId: string; current: boolean; routerUrl: string; test: boolean; noDestroy: string };
+// GET /api/machines: `machines` = jarvis2-sessions (sessions, Destroy); `orgs` = every Fly org → app, read-only outside
+// jarvis2-sessions (router/flyorgs.go). `attention`: why a machine stands out (a possible leak), "" = it doesn't.
+export type Machine = { id: string; name: string; state: string; region: string; size: string; guest: string; image: string; created: string; updated: string; sessionId: string; current: boolean; routerUrl: string; test: boolean; noDestroy: string; attention: string; otherSession?: string };
+export type FlyVolumeView = { id: string; name: string; state: string; region: string; sizeGb: number; attachedTo: string; created: string; attention: string };
+export type FlyAppView = { app: string; label: string; own: boolean; status: string; machines: Machine[]; volumes: FlyVolumeView[]; error: string };
+export type FlyOrgView = { org: string; via: string; error: string; checkedAt: string; apps: FlyAppView[] };
+export type MachinesOverview = { app: string; org: string; machines: Machine[]; orgs: FlyOrgView[]; attention: number; configError: string; checkedAt: string };
 export type SignedDoc = { payload: string; sig: string };
 export type ApprovalKind = "new-session" | "resume-upgrade" | "add-store";
 export type Approval = {

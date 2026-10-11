@@ -156,7 +156,7 @@ state, after checking its keys against `keys/box.pub`.
 ## The router's secrets
 
 Non-sensitive only (nothing that can reach a code push), SOPS-encrypted to `keys/box-age.pub`; Flux decrypts them
-on the box with the age key the box got in user-data. Three Secrets, each rewritten whole by
+on the box with the age key the box got in user-data. Four Secrets, each rewritten whole by
 `infra/router-secrets.py` (nobody can read the old values back), so name every key of the one you write:
 
 - `infra/router-secrets.py KEY[=SRC]…` → `k8s/secrets/router.enc.yaml`:
@@ -179,7 +179,13 @@ on the box with the age key the box got in user-data. Three Secrets, each rewrit
   `k8s/secrets/router-backup.enc.yaml`: the backup bucket's read credential, with which the router serves the
   locked backups to the app's Recover (`infra/backup-read-key.py install` writes it; below).
 
-After a box rebuild, re-run all three (the age key is new).
+- `infra/router-secrets.py --part flyorgs FLY_ORG_READ_TOKENS=file:…` → `k8s/secrets/router-flyorgs.enc.yaml`: the
+  Machines view's other orgs, JSON `{"jarvis2-370": "<token>", "kamyee": "<token>"}`, each `fly tokens create readonly -o <org>`
+  (named "Jarvis 2 Machines tab (read-only)"; revoke with `fly tokens list -o <org>` + `fly tokens revoke`). Never one for
+  org personal: a read token returns Jarvis 1's session machines' env, their secrets included (Jarvis 1 relays a
+  sanitized list instead).
+
+After a box rebuild, re-run all four (the age key is new).
 
 ### The backup bucket's read credential
 

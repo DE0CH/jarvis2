@@ -2,7 +2,7 @@
 """router-secrets.py — write the router's non-sensitive secrets into git, SOPS-encrypted to the box's age key
 (keys/box-age.pub); Flux decrypts them on the box (k8s/flux/sync.yaml, Kustomization jarvis2-secrets).
 
-    infra/router-secrets.py [--part backup|github] KEY[=SRC] …
+    infra/router-secrets.py [--part backup|github|flyorgs] KEY[=SRC] …
 
 SRC is `env:VAR` (default `env:KEY`) or `file:PATH`. A part is one Secret, rewritten whole each run, so name
 every key of that part (nobody can read the old values back: only the box holds the age key):
@@ -12,6 +12,8 @@ every key of that part (nobody can read the old values back: only the box holds 
   --part github  k8s/secrets/router-github.enc.yaml, Secret router-secrets-github — GITHUB_READ_TOKEN only (the
                  repo picker's list token), so it can be replaced without rewriting the default part. It is the
                  LAST envFrom in router.yaml, so it wins over the stale GITHUB_READ_TOKEN still in the default part
+  --part flyorgs k8s/secrets/router-flyorgs.enc.yaml, Secret router-secrets-flyorgs — FLY_ORG_READ_TOKENS only:
+                 {"<org slug>": "<read-only org token>"} for the Machines view's other orgs (router/flyorgs.go)
 Only for secrets that can't reach a code push (Deyao, 2026-10-09); the router's pod gets them as env
 (k8s/apps/router.yaml envFrom). Prints names only, never a value."""
 import hashlib, json, os, re, subprocess, sys, tempfile
@@ -21,6 +23,7 @@ PARTS = {  # part → (file, Secret name, router.yaml annotation)
     "": ("router.enc.yaml", "router-secrets", "jarvis2/secrets-rev"),
     "backup": ("router-backup.enc.yaml", "router-secrets-backup", "jarvis2/secrets-rev-backup"),
     "github": ("router-github.enc.yaml", "router-secrets-github", "jarvis2/secrets-rev-github"),
+    "flyorgs": ("router-flyorgs.enc.yaml", "router-secrets-flyorgs", "jarvis2/secrets-rev-flyorgs"),
 }
 
 

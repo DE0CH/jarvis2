@@ -1,6 +1,7 @@
 package main
 
-// The Machines view (Deyao, 2026-10-11: "I should be able to see all machines"): every machine in the Fly app
+// The Machines view (Deyao, 2026-10-11: "I should be able to see all machines"; flyorgs.go adds every other app
+// and org, read-only): every machine in the Fly app
 // jarvis2-sessions, live from Fly with the router's read-only token (FLY_READ_TOKEN, as budget.go), each with
 // the session it belongs to or none, and marked "test" when its JARVIS2_URL is not production's router.
 //
@@ -65,8 +66,16 @@ type machineView struct {
 	Current   bool   `json:"current"`
 	RouterURL string `json:"routerUrl"` // the machine's JARVIS2_URL
 	Test      bool   `json:"test"`      // JARVIS2_URL is not production's router
-	// why Destroy isn't offered ("" = it is): belongs to a session, too new, …
+	// why Destroy isn't offered ("" = it is): belongs to a session, too new, another app (read-only), …
 	NoDestroy string `json:"noDestroy"`
+	// why it stands out (a possible leak: stopped, failed, stuck, no session, an app no Jarvis uses), "" = it doesn't
+	Attention string `json:"attention"`
+	// org personal (via Jarvis 1): the Jarvis 1 session the machine belongs to; shown, never linked
+	OtherSession string `json:"otherSession,omitempty"`
+}
+
+func guestText(g *flyGuest) string {
+	return fmt.Sprintf("%d×%s · %d GB", g.CPUs, g.CPUKind, int(math.Round(float64(g.MemoryMB)/1024)))
 }
 
 // the sizes the router starts machines with (core/fly.go sizes)
@@ -107,7 +116,7 @@ func (r *Router) machinesView(ms []flyMachineDetail, now time.Time) []machineVie
 				v.Image = m.ImageRef.Registry + "/" + m.ImageRef.Repository + ":" + m.ImageRef.Tag
 			}
 			if g := m.Config.Guest; g != nil {
-				v.Guest = fmt.Sprintf("%d×%s · %d GB", g.CPUs, g.CPUKind, int(math.Round(float64(g.MemoryMB)/1024)))
+				v.Guest = guestText(g)
 			}
 			v.Test = isTestRouter(v.RouterURL)
 			if sid, ok := d.Machines[m.ID]; ok {
@@ -117,6 +126,7 @@ func (r *Router) machinesView(ms []flyMachineDetail, now time.Time) []machineVie
 				}
 			}
 			v.NoDestroy = orphanRefusal(d, m, now)
+			v.Attention = attentionOf(m.State, m.CreatedAt, true, v.SessionID, sessionsApp, now)
 			out = append(out, v)
 		}
 	})
@@ -209,7 +219,10 @@ func (r *Router) registerMachines(app appRoute) {
 			writeJSON(w, 502, map[string]string{"error": "Fly: " + err.Error()})
 			return
 		}
-		writeJSON(w, 200, map[string]any{"app": sessionsApp, "machines": r.machinesView(ms, time.Now()), "checkedAt": time.Now().UTC()})
+		now := time.Now()
+		orgs, configErr := r.flyOrgsOverview(ms, now)
+		writeJSON(w, 200, map[string]any{"app": sessionsApp, "org": ownFlyOrg, "machines": r.machinesView(ms, now), "orgs": orgs,
+			"attention": flyAttentionCount(orgs), "configError": configErr, "checkedAt": now.UTC()})
 	})
 	app("POST /api/machines/{id}/destroy", func(w http.ResponseWriter, req *http.Request) {
 		if err := r.DestroyOrphan(req.PathValue("id")); err != nil {

@@ -3,7 +3,7 @@
 // actions show as PENDING labels on their buttons.
 import { useSyncExternalStore } from "react";
 import { AppState, Platform } from "react-native";
-import { api, coreStores, loadPolicy, RUN_ACTIVE, type Choice, type CoreStore, type Policy, type Rec, type State, type TasksOverview, type Machine } from "./api";
+import { api, coreStores, loadPolicy, RUN_ACTIVE, type Choice, type CoreStore, type Policy, type Rec, type State, type TasksOverview, type Machine, type FlyOrgView, type MachinesOverview } from "./api";
 
 export type Tab = "sessions" | "inbox" | "search" | "stores" | "records" | "tasks" | "schedules" | "machines" | "settings";
 export const TABS: [Tab, string][] = [["sessions", "Sessions"], ["inbox", "Inbox"], ["search", "Search"], ["stores", "Stores"], ["records", "Previous"], ["tasks", "Tasks"], ["schedules", "Schedules"], ["machines", "Machines"], ["settings", "Settings"]];
@@ -20,14 +20,14 @@ export type Toast = { id: number; text: string; kind: "info" | "ok" | "error" };
 export type AskInput = { heading: string; label: string; placeholder?: string; note?: string; max?: number; match?: string };
 export type Confirm = { title: string; detail?: string; action: string; danger?: boolean; input?: AskInput; resolve: (ok: boolean, text: string) => void };
 type Store = {
-  state: State; tab: Tab; pending: Map<string, string>; records: Loaded<Rec>; stores: Loaded<CoreStore>; machines: Loaded<Machine>;
+  state: State; tab: Tab; pending: Map<string, string>; records: Loaded<Rec>; stores: Loaded<CoreStore>; machines: Loaded<Machine>; flyOrgs: { orgs: FlyOrgView[]; attention: number; configError: string };
   toasts: Toast[]; confirm: (Confirm & { id: number }) | null; sizes: Choice[]; models: Choice[]; refreshing: boolean; policy: Policy;
   tasks: TasksState;
 };
 const empty = <T,>(): Loaded<T> => ({ loading: false, loaded: false, items: [], err: null });
 const S: Store = {
   state: { sessions: [], approvals: [], core: { up: false } },
-  tab: "sessions", pending: new Map(), records: empty(), stores: empty(), machines: empty(),
+  tab: "sessions", pending: new Map(), records: empty(), stores: empty(), machines: empty(), flyOrgs: { orgs: [], attention: 0, configError: "" },
   sizes: [], models: [], refreshing: false, toasts: [], confirm: null, policy: {},
   tasks: { loading: false, loaded: false, data: { templates: [], instances: [], schedules: [] }, err: null },
 };
@@ -153,7 +153,11 @@ let machinesAt = 0;
 export const loadMachines = coalesce(async () => {
   machinesAt = Date.now();
   S.machines = { ...S.machines, loading: true }; emit();
-  try { const j = await api<{ machines: Machine[] }>("GET", "api/machines"); S.machines = { ...S.machines, items: j.machines || [], err: null, loaded: true }; }
+  try {
+    const j = await api<MachinesOverview>("GET", "api/machines");
+    S.flyOrgs = { orgs: j.orgs || [], attention: j.attention || 0, configError: j.configError || "" };
+    S.machines = { ...S.machines, items: j.machines || [], err: null, loaded: true };
+  }
   catch (e: any) { S.machines = { ...S.machines, err: e.message }; }
   S.machines = { ...S.machines, loading: false }; emit();
 });
