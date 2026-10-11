@@ -405,6 +405,9 @@ final class ReplicaUITests: XCTestCase {
         if mores.count > 0 {
           let stuck = mores.firstMatch.identifier
           el(stuck).tap()
+          // the card re-renders every 2 s while the machine loops on its locked store; a tap that lands mid-render was
+          // lost twice in a row (2026-10-11 replica): note it and tap again, as a thumb would
+          if !el("menu-destroy").waitForExistence(timeout: 5) { note("stuck-more-retap", "the first tap on More opened no menu"); el(stuck).tap() }
           if wait(el("menu-destroy"), 10, "destroy (stuck)") {
             el("menu-destroy").tap()
             if wait(el("ask-ok"), 30, "destroy question (stuck)") { el("ask-ok").tap() }
