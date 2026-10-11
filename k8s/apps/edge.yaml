@@ -18,3 +18,19 @@ spec:
           env: [{ name: TUNNEL_TOKEN, valueFrom: { secretKeyRef: { name: tunnel-token, key: token } } }]
           resources: { requests: { cpu: 10m, memory: 32Mi }, limits: { memory: 256Mi } }
           securityContext: { runAsNonRoot: true, runAsUser: 65532, runAsGroup: 65532, allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: { drop: [ALL] }, seccompProfile: { type: RuntimeDefault } }
+---
+# cloudflared reaches only DNS, the router and Cloudflare's edge (7844, 443) — never the metadata address
+# 169.254.169.254, which serves the box's user-data (the box key) to anything on the host network path (R1 audit)
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: { name: cloudflared, namespace: jarvis2-edge }
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+  egress:
+    - to: [{ namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: kube-system } }, podSelector: { matchLabels: { k8s-app: kube-dns } } }]
+      ports: [{ port: 53, protocol: UDP }, { port: 53, protocol: TCP }]
+    - to: [{ namespaceSelector: { matchLabels: { jarvis2/ns: router } }, podSelector: { matchLabels: { app: router } } }]
+      ports: [{ port: 8080 }]
+    - to: [{ ipBlock: { cidr: 0.0.0.0/0, except: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16] } }]
+      ports: [{ port: 7844, protocol: UDP }, { port: 7844, protocol: TCP }, { port: 443, protocol: TCP }]

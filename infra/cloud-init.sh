@@ -15,6 +15,21 @@ echo "=== jarvis2 bootstrap $(date -u +%FT%TZ) ==="
 apt-get update -y && apt-get install -y --no-install-recommends ca-certificates curl git
 systemctl disable --now ssh.socket ssh.service 2>/dev/null || true
 
+# no pod reaches the metadata address (it keeps serving this user-data: the box key, the age key): dropped in the raw
+# table before any of k3s's own rules see it, at every boot, whatever a namespace's NetworkPolicy says (R1 audit)
+cat > /etc/systemd/system/jarvis2-no-metadata.service <<'UNIT'
+[Unit]
+Description=Jarvis 2: pods never reach 169.254.169.254
+Before=k3s.service
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/sh -c 'iptables -t raw -C PREROUTING -d 169.254.169.254 -j DROP 2>/dev/null || iptables -t raw -I PREROUTING -d 169.254.169.254 -j DROP'
+[Install]
+WantedBy=multi-user.target
+UNIT
+systemctl daemon-reload && systemctl enable --now jarvis2-no-metadata.service
+
 # pinned versions: no lookup of a "latest" (update.k3s.io served a self-signed certificate on 2026-10-10 and every
 # unpinned bootstrap failed: "Finding release for channel stable … Download failed"); bump them here
 K3S_VERSION=v1.36.5+k3s1 FLUX_VERSION=2.9.6
