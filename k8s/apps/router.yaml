@@ -25,10 +25,10 @@ spec:
       securityContext: { fsGroup: 65532 }
       containers:
         - name: router
-          image: ghcr.io/de0ch/jarvis2-router:sha-5135bb0fd1d0
+          image: ghcr.io/de0ch/jarvis2-router:sha-7316074da1b1
           ports: [{ containerPort: 8080 }]
           env:
-            - { name: SESSION_IMAGE, value: "ghcr.io/de0ch/jarvis2-session:sha-5135bb0fd1d0@sha256:29358584f06198f0d602141089a73e583537a18a83c41d6115b56ec256b46f84" }
+            - { name: SESSION_IMAGE, value: "ghcr.io/de0ch/jarvis2-session:sha-7316074da1b1@sha256:43f7b177565bcd3066baf08bbc6489b6bd506401e453f5b5b811cd568abc5e0b" }
             - { name: FLY_REGION, value: lhr }
             # the box's WireGuard peer in Fly org jarvis2-370 (fly wireguard create jarvis2-370 lhr jarvis2-box)
             - { name: MACHINE_URL, value: "http://jarvis2-box._peer.internal:8081" }
