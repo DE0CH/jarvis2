@@ -171,6 +171,50 @@ func writeStore(t *testing.T, c *Core, p *phone, name string, vals map[string]st
 	return StoreBlob{Name: name, Wrapped: w, Data: b64.EncodeToString(gcmSeal(dk, plain, []byte(name)))}
 }
 
+// ---- the writer's side (the app's CoreCrypto.wrapStore, the router's store API): the core itself never wraps ----
+
+// WrapToCombined: a fresh e; secret = e·(P+K)
+func WrapToCombined(phoneAgreementRaw string, coreAgreementPub []byte, dataKey []byte) (WrappedKey, error) {
+	pb, err := b64.DecodeString(phoneAgreementRaw)
+	if err != nil {
+		return WrappedKey{}, err
+	}
+	combined, err := AddPoints(pb, coreAgreementPub)
+	if err != nil {
+		return WrappedKey{}, err
+	}
+	return WrapToPoint(combined, dataKey)
+}
+
+// WrapToPoint: the data key wrapped to a store key C = P + K (what a writer without point addition gets from the
+// core's signed store_key): a one-off e, HKDF(x(e·C), "jarvis2/store-data-key"), AES-GCM
+func WrapToPoint(combined, dataKey []byte) (WrappedKey, error) {
+	e, err := ecdh.P256().GenerateKey(rand.Reader)
+	if err != nil {
+		return WrappedKey{}, err
+	}
+	shared, err := ScalarMult(e.Bytes(), combined)
+	if err != nil {
+		return WrappedKey{}, err
+	}
+	return WrappedKey{E: b64.EncodeToString(e.PublicKey().Bytes()), Wrapped: b64.EncodeToString(gcmSeal(kdf(xOf(shared), infoStore), dataKey, nil))}, nil
+}
+
+// appWrap: a store as the app wraps it, to the store key the core signed for this phone (store_key)
+func appWrap(t *testing.T, c *Core, p *phone, name string, vals map[string]string) StoreBlob {
+	t.Helper()
+	sk := pl(t)(c.StoreKey(p.agreementKey()))
+	C, _ := b64.DecodeString(sk["storeKey"].(string))
+	dk := make([]byte, 32)
+	rand.Read(dk)
+	w, err := WrapToPoint(C, dk)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plain, _ := json.Marshal(vals)
+	return StoreBlob{Name: name, Wrapped: w, Data: b64.EncodeToString(gcmSeal(dk, plain, []byte(name)))}
+}
+
 const testMachineURL = "http://jarvis2-test._peer.internal:8081"
 
 func newCore(t *testing.T) (*Core, *fakeFly, *phone) {
@@ -201,21 +245,24 @@ func claimFor(c *Core, master, p *phone, rb any) (string, string, Sealed) {
 	return string(sb), master.sign(string(sb)), bundle
 }
 
-// recoverBundle: every test store and the Fly store
-func recoverBundle(flyToken string) claimBundle {
-	rb := claimBundle{NotSensitive: []string{"default", "claude", "openrouter"}}
-	rb.Stores = append(rb.Stores, storeData{Name: FlyStore, Values: map[string]string{"FLY_API_TOKEN": flyToken}})
+// recoverBundle: the app's Recover bundle — every test store wrapped to the store key, and the Fly token
+func recoverBundle(t *testing.T, c *Core, p *phone, flyToken string) claimBlobs {
+	t.Helper()
+	rb := claimBlobs{Format: "blobs", NotSensitive: []string{"default", "claude", "openrouter"}, FlyToken: flyToken}
 	for _, n := range []string{"claude", "default", "gmail", "openrouter"} {
-		rb.Stores = append(rb.Stores, storeData{Name: n, Values: testValues[n]})
+		rb.Blobs = append(rb.Blobs, appWrap(t, c, p, n, testValues[n]))
 	}
 	return rb
 }
+
+// resetBundle: a Reset's bundle, no stores
+var resetBundle = claimBlobs{Format: "blobs"}
 
 func setup(t *testing.T) (*Core, *fakeFly, *phone) {
 	t.Helper()
 	c, f, master := newCore(t)
 	p := newPhone()
-	s, sig, b := claimFor(c, master, p, recoverBundle("fly-secret"))
+	s, sig, b := claimFor(c, master, p, recoverBundle(t, c, p, "fly-secret"))
 	pl(t)(c.Claim(s, sig, b))
 	return c, f, p
 }
@@ -320,18 +367,24 @@ func TestEverythingLeavingIsSignedByTheCore(t *testing.T) {
 func TestRecoverOnceOnlyOnAnEmptyCore(t *testing.T) {
 	c, f, master := newCore(t)
 	p := newPhone()
-	s, sig, b := claimFor(c, master, p, recoverBundle("fly-secret"))
+	s, sig, b := claimFor(c, master, p, recoverBundle(t, c, p, "fly-secret"))
 	if _, err := c.Claim(s, newPhone().sign(s), b); err == nil {
 		t.Fatal("claimed with a signature by another key than the master key it names")
 	}
 	other, _, _ := newCore(t)
-	s2, sig2, b2 := claimFor(other, master, p, recoverBundle("fly-secret"))
+	s2, sig2, b2 := claimFor(other, master, p, recoverBundle(t, other, p, "fly-secret"))
 	if _, err := c.Claim(s2, sig2, b2); err == nil {
 		t.Fatal("claimed with a statement naming another core")
 	}
-	_, _, b3 := claimFor(c, master, p, recoverBundle("another"))
+	_, _, b3 := claimFor(c, master, p, recoverBundle(t, c, p, "another"))
 	if _, err := c.Claim(s, sig, b3); err == nil {
 		t.Fatal("claimed with a bundle the master didn't sign")
+	}
+	// the older plaintext form (stores with their values) is refused, signed or not
+	plain := map[string]any{"stores": []map[string]any{{"name": "default", "values": testValues["default"]}}, "notSensitive": []string{}}
+	s5, sig5, b5 := claimFor(c, master, p, plain)
+	if _, err := c.Claim(s5, sig5, b5); err == nil || err.(*Err).Status != 400 || !strings.Contains(err.Error(), "bad bundle") {
+		t.Fatal("took a plaintext bundle:", err)
 	}
 	if _, err := c.SetFlyToken(Sealed{}); err == nil {
 		t.Fatal("an empty core took a Fly token")
@@ -348,7 +401,7 @@ func TestRecoverOnceOnlyOnAnEmptyCore(t *testing.T) {
 		t.Fatal("claimed twice")
 	}
 	m2 := newPhone()
-	s4, sig4, b4 := claimFor(c, m2, p, claimBundle{})
+	s4, sig4, b4 := claimFor(c, m2, p, resetBundle)
 	if _, err := c.Claim(s4, sig4, b4); err == nil {
 		t.Fatal("a set-up core took a new master key")
 	}
@@ -383,7 +436,7 @@ func TestResetStartsEmptyAndTakesTheFlyTokenSealed(t *testing.T) {
 	if m, _ := id(); m != "" {
 		t.Fatal("a new core isn't empty")
 	}
-	s, sig, b := claimFor(c, master, p, claimBundle{})
+	s, sig, b := claimFor(c, master, p, resetBundle)
 	pl(t)(c.Claim(s, sig, b))
 	if m, st := id(); m != master.signingKey() || st["phone"].(map[string]any)["signingKey"] != p.signingKey() {
 		t.Fatalf("the state doesn't name the master key and the phone: %v", st)
@@ -420,7 +473,7 @@ func TestWipeOnlyByTheCurrentMasterKey(t *testing.T) {
 		t.Fatal("wiped an empty core")
 	}
 	p := newPhone()
-	s, sig, b := claimFor(c, master, p, claimBundle{})
+	s, sig, b := claimFor(c, master, p, resetBundle)
 	pl(t)(c.Claim(s, sig, b))
 	if _, err := c.Wipe(w, newPhone().sign(w)); err == nil {
 		t.Fatal("wiped with another key")

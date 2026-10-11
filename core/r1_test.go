@@ -103,7 +103,7 @@ func TestCreateBeforeTheClaimLeavesNoTrace(t *testing.T) {
 	// even if one got in somehow, the claim sets the non-sensitive set to exactly the bundle's
 	c.notSensitive["gmail"] = true
 	p := newPhone()
-	s, sig, bundle := claimFor(c, master, p, recoverBundle("t"))
+	s, sig, bundle := claimFor(c, master, p, recoverBundle(t, c, p, "t"))
 	pl(t)(c.Claim(s, sig, bundle))
 	if c.notSensitive["gmail"] {
 		t.Fatal("a name from before the claim stayed not sensitive")

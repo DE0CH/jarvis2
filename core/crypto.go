@@ -235,33 +235,6 @@ type WrappedKey struct {
 
 const infoStore = "jarvis2/store-data-key"
 
-// WrapToCombined: a fresh e; secret = e·(P+K)
-func WrapToCombined(phoneAgreementRaw string, coreAgreementPub []byte, dataKey []byte) (WrappedKey, error) {
-	pb, err := b64.DecodeString(phoneAgreementRaw)
-	if err != nil {
-		return WrappedKey{}, err
-	}
-	combined, err := AddPoints(pb, coreAgreementPub)
-	if err != nil {
-		return WrappedKey{}, err
-	}
-	return WrapToPoint(combined, dataKey)
-}
-
-// WrapToPoint: the data key wrapped to a store key C = P + K (what a writer without point addition gets from the
-// core's signed store_key): a one-off e, HKDF(x(e·C), "jarvis2/store-data-key"), AES-GCM
-func WrapToPoint(combined, dataKey []byte) (WrappedKey, error) {
-	e, err := ecdh.P256().GenerateKey(rand.Reader)
-	if err != nil {
-		return WrappedKey{}, err
-	}
-	shared, err := ScalarMult(e.Bytes(), combined)
-	if err != nil {
-		return WrappedKey{}, err
-	}
-	return WrappedKey{E: b64.EncodeToString(e.PublicKey().Bytes()), Wrapped: b64.EncodeToString(gcmSeal(kdf(xOf(shared), infoStore), dataKey, nil))}, nil
-}
-
 // UnwrapWithShares: the phone's x(p·E) + the core's k → the data key (tries both points with that x)
 func UnwrapWithShares(w WrappedKey, phoneShareX []byte, coreAgreement *ecdh.PrivateKey) ([]byte, error) {
 	eb, err := b64.DecodeString(w.E)

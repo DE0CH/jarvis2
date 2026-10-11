@@ -2,9 +2,9 @@ package main
 
 import (
 	"bytes"
-	"crypto/ecdh"
 	"crypto/ed25519"
 	"crypto/rand"
+	"encoding/binary"
 	"encoding/json"
 	"log"
 	"os"
@@ -80,9 +80,21 @@ func (p *phone) answerDeployKey(t *testing.T, begin SignedDoc) (string, Sealed, 
 	return id, s, p.sign(begin.Payload)
 }
 
+// keyRequest: what the app sends to deploy_key_begin — the store and title it names, and for an add the key pair it
+// made (appKey)
+func keyRequest(t *testing.T, c *Core, p *phone, action, repo string, sensitive bool) DeployKeyRequest {
+	t.Helper()
+	store := RepoStore(repo)
+	r := DeployKeyRequest{Action: action, Repo: repo, Sensitive: sensitive, Store: store, Title: "jarvis2 " + store}
+	if action == "add" && c.phoneSigning != "" {
+		r.PublicKey, r.Blob, _ = appKey(t, c, p, repo, store)
+	}
+	return r
+}
+
 func deployKey(t *testing.T, c *Core, p *phone, action, repo string, sensitive bool) (map[string]any, error) {
 	t.Helper()
-	b, err := c.DeployKeyBegin(DeployKeyRequest{Action: action, Repo: repo, Sensitive: sensitive})
+	b, err := c.DeployKeyBegin(keyRequest(t, c, p, action, repo, sensitive))
 	if err != nil {
 		return nil, err
 	}
@@ -194,13 +206,10 @@ func TestDeployKeyReAddRotatesAndRemoveDeletesBoth(t *testing.T) {
 	}
 }
 
+// sensitivity is what the app asks for (the app insists on it for DE0CH/jarvis2: Checks.deployKeyBegin); the core
+// only keeps an existing sensitive store sensitive
 func TestDeployKeySensitivity(t *testing.T) {
 	c, _, p := deployKeyCore(t)
-	// Jarvis 2's own repo is sensitive whatever the request says
-	m, err := deployKey(t, c, p, "add", "DE0CH/jarvis2", false)
-	if err != nil || m["sensitive"] != true || c.notSensitive["github-jarvis2"] {
-		t.Fatal("github-jarvis2 came out not sensitive", m, err)
-	}
 	// asked for: sensitive
 	if m, _ := deployKey(t, c, p, "add", "DE0CH/private-thing", true); m["sensitive"] != true {
 		t.Fatal(m)
@@ -210,10 +219,10 @@ func TestDeployKeySensitivity(t *testing.T) {
 		t.Fatal("a re-add downgraded a sensitive store")
 	}
 	// the begin document says so before the phone signs
-	b, _ := c.DeployKeyBegin(DeployKeyRequest{Action: "add", Repo: "DE0CH/jarvis2", Sensitive: false})
+	b, _ := c.DeployKeyBegin(keyRequest(t, c, p, "add", "DE0CH/private-thing", false))
 	var bd deployKeyBegin
 	json.Unmarshal([]byte(b.Payload), &bd)
-	if !bd.Sensitive || !bd.Replaces || bd.Store != "github-jarvis2" || bd.TokenStore != DeployKeyTokenStore {
+	if !bd.Sensitive || !bd.Replaces || bd.Store != "github-private-thing" || bd.TokenStore != DeployKeyTokenStore {
 		t.Fatalf("begin: %+v", bd)
 	}
 }
@@ -222,7 +231,7 @@ func TestDeployKeyNeedsThePhone(t *testing.T) {
 	c, g, p := deployKeyCore(t)
 	other := newPhone()
 	// another key's signature
-	b, _ := c.DeployKeyBegin(DeployKeyRequest{Action: "add", Repo: "DE0CH/x", Sensitive: false})
+	b, _ := c.DeployKeyBegin(keyRequest(t, c, p, "add", "DE0CH/x", false))
 	id, s, _ := p.answerDeployKey(t, b)
 	if _, err := c.DeployKeyFinish(id, s, other.sign(b.Payload)); err == nil {
 		t.Fatal("another key's signature was accepted")
@@ -231,14 +240,14 @@ func TestDeployKeyNeedsThePhone(t *testing.T) {
 		t.Fatal("a pending was usable twice")
 	}
 	// the phone's signature over ANOTHER begin document (the router swapping requests)
-	b1, _ := c.DeployKeyBegin(DeployKeyRequest{Action: "add", Repo: "DE0CH/x", Sensitive: false})
-	b2, _ := c.DeployKeyBegin(DeployKeyRequest{Action: "add", Repo: "DE0CH/y", Sensitive: false})
+	b1, _ := c.DeployKeyBegin(keyRequest(t, c, p, "add", "DE0CH/x", false))
+	b2, _ := c.DeployKeyBegin(keyRequest(t, c, p, "add", "DE0CH/y", false))
 	id2, s2 := p.share(b2)
 	if _, err := c.DeployKeyFinish(id2, s2, p.sign(b1.Payload)); err == nil {
 		t.Fatal("a signature over another request was accepted")
 	}
 	// another phone's share
-	b3, _ := c.DeployKeyBegin(DeployKeyRequest{Action: "add", Repo: "DE0CH/x", Sensitive: false})
+	b3, _ := c.DeployKeyBegin(keyRequest(t, c, p, "add", "DE0CH/x", false))
 	id3, s3 := other.share(b3)
 	if _, err := c.DeployKeyFinish(id3, s3, p.sign(b3.Payload)); err == nil {
 		t.Fatal("another phone's share opened the token store")
@@ -251,7 +260,7 @@ func TestDeployKeyNeedsThePhone(t *testing.T) {
 func TestDeployKeyRefusals(t *testing.T) {
 	c, _, p := setup(t)
 	c.github = newTestGitHub()
-	if _, err := c.DeployKeyBegin(DeployKeyRequest{Action: "add", Repo: "DE0CH/x", Sensitive: false}); err == nil || !strings.Contains(err.Error(), DeployKeyTokenStore) {
+	if _, err := c.DeployKeyBegin(keyRequest(t, c, p, "add", "DE0CH/x", false)); err == nil || !strings.Contains(err.Error(), DeployKeyTokenStore) {
 		t.Fatal("began without the token store:", err)
 	}
 	pl(t)(c.WriteStore(writeStore(t, c, p, DeployKeyTokenStore, map[string]string{"OTHER": "x"})))
@@ -259,15 +268,15 @@ func TestDeployKeyRefusals(t *testing.T) {
 		t.Fatal("a token store without the token:", err)
 	}
 	for _, bad := range []string{"", "x", "DE0CH/", "/x", "DE0CH/a/b", "DE0CH/..", "DE0CH/deploy-keys", "-x/y", "DE0CH/a b", "DE0CH/."} {
-		if _, err := c.DeployKeyBegin(DeployKeyRequest{Action: "add", Repo: bad, Sensitive: false}); err == nil {
+		if _, err := c.DeployKeyBegin(keyRequest(t, c, p, "add", bad, false)); err == nil {
 			t.Fatalf("repo %q accepted", bad)
 		}
 	}
-	if _, err := c.DeployKeyBegin(DeployKeyRequest{Action: "rotate", Repo: "DE0CH/x", Sensitive: false}); err == nil {
+	if _, err := c.DeployKeyBegin(keyRequest(t, c, p, "rotate", "DE0CH/x", false)); err == nil {
 		t.Fatal("an unknown action")
 	}
 	empty, _, _ := newCore(t)
-	if _, err := empty.DeployKeyBegin(DeployKeyRequest{Action: "add", Repo: "DE0CH/x", Sensitive: false}); err == nil {
+	if _, err := empty.DeployKeyBegin(keyRequest(t, empty, p, "add", "DE0CH/x", false)); err == nil {
 		t.Fatal("an empty core began")
 	}
 }
@@ -307,7 +316,6 @@ func TestOpenSSHKeyFormat(t *testing.T) {
 	if !strings.Contains(string(raw), string(pub)) {
 		t.Fatal("the public key isn't in the file")
 	}
-	_ = ecdh.P256
 }
 
 // colliding repos share a store name: the second repo's add (or remove) is refused with 409 naming the owner, and
@@ -322,14 +330,14 @@ func TestDeployKeyStoreClashRefused(t *testing.T) {
 	}
 	calls := len(g.seen)
 	for _, action := range []string{"add", "remove"} {
-		_, err := c.DeployKeyBegin(DeployKeyRequest{Action: action, Repo: "foo/bar", Sensitive: false})
+		_, err := c.DeployKeyBegin(keyRequest(t, c, p, action, "foo/bar", false))
 		if e, ok := err.(*Err); !ok || e.Status != 409 || !strings.Contains(err.Error(), "store github-foo-bar belongs to DE0CH/foo-bar") {
 			t.Fatalf("%s for a colliding repo: %v", action, err)
 		}
 	}
 	// a begin taken before the store was owned is refused at finish, before GitHub
 	c2, g2, p2 := deployKeyCore(t)
-	early, _ := c2.DeployKeyBegin(DeployKeyRequest{Action: "add", Repo: "DE0CH/My-Repo", Sensitive: false})
+	early, _ := c2.DeployKeyBegin(keyRequest(t, c2, p2, "add", "DE0CH/My-Repo", false))
 	if _, err := deployKey(t, c2, p2, "add", "DE0CH/my.repo", false); err != nil {
 		t.Fatal(err)
 	}
@@ -370,29 +378,29 @@ func TestDeployKeySameRepoReAdd(t *testing.T) {
 	if len(g.keys["DE0CH/china-train"]) != 1 || c.repoOwner["github-china-train"] != "DE0CH/china-train" {
 		t.Fatal(g.keys, c.repoOwner)
 	}
-	if b, err := c.DeployKeyBegin(DeployKeyRequest{Action: "add", Repo: "DE0CH/china-train", Sensitive: false}); err != nil || !strings.Contains(b.Payload, `"replaces":true`) {
+	if b, err := c.DeployKeyBegin(keyRequest(t, c, p, "add", "DE0CH/china-train", false)); err != nil || !strings.Contains(b.Payload, `"replaces":true`) {
 		t.Fatal(err)
 	}
 }
 
-// a Recover keeps each deploy-key store's owner: derived from the store's own GITHUB_DEPLOY_REPO_* value
+// a Recover keeps each deploy-key store's owner: the bundle's owners (the app reads them from the stores), for
+// stores the bundle holds and repos that are repos
 func TestDeployKeyRecoverKeepsTheOwner(t *testing.T) {
 	c, _, master := newCore(t)
 	p := newPhone()
-	rb := recoverBundle("fly-secret")
-	rb.Stores = append(rb.Stores,
-		storeData{Name: "github-foo-bar", Values: map[string]string{"GITHUB_DEPLOY_REPO_DE0CH_FOO_BAR": "DE0CH/foo-bar", "GITHUB_DEPLOY_KEY_DE0CH_FOO_BAR": "x"}},
-		// a value that doesn't name this store's repo, or two repos, make no owner
-		storeData{Name: "github-odd", Values: map[string]string{"GITHUB_DEPLOY_REPO_DE0CH_OTHER": "DE0CH/other"}},
-		storeData{Name: "github-two", Values: map[string]string{"GITHUB_DEPLOY_REPO_DE0CH_TWO": "DE0CH/two", "GITHUB_DEPLOY_REPO_TWO_X": "two/x"}},
-		storeData{Name: DeployKeyTokenStore, Values: map[string]string{DeployKeyTokenKey: "gh-admin-token"}})
+	rb := recoverBundle(t, c, p, "fly-secret")
+	rb.Blobs = append(rb.Blobs,
+		appWrap(t, c, p, "github-foo-bar", map[string]string{"GITHUB_DEPLOY_REPO_DE0CH_FOO_BAR": "DE0CH/foo-bar", "GITHUB_DEPLOY_KEY_DE0CH_FOO_BAR": "x"}),
+		appWrap(t, c, p, "github-odd", map[string]string{"GITHUB_DEPLOY_REPO_DE0CH_OTHER": "DE0CH/other"}),
+		appWrap(t, c, p, DeployKeyTokenStore, map[string]string{DeployKeyTokenKey: "gh-admin-token"}))
+	rb.Owners = map[string]string{"github-foo-bar": "DE0CH/foo-bar", "github-odd": "not a repo", "github-gone": "DE0CH/gone"}
 	s, sig, b := claimFor(c, master, p, rb)
 	pl(t)(c.Claim(s, sig, b))
 	c.github = newTestGitHub()
 	if len(c.repoOwner) != 1 || c.repoOwner["github-foo-bar"] != "DE0CH/foo-bar" {
 		t.Fatalf("owners after Recover: %v", c.repoOwner)
 	}
-	if _, err := c.DeployKeyBegin(DeployKeyRequest{Action: "add", Repo: "foo/bar", Sensitive: false}); err == nil || !strings.Contains(err.Error(), "belongs to DE0CH/foo-bar") {
+	if _, err := c.DeployKeyBegin(keyRequest(t, c, p, "add", "foo/bar", false)); err == nil || !strings.Contains(err.Error(), "belongs to DE0CH/foo-bar") {
 		t.Fatal("a Recover lost the owner:", err)
 	}
 	if _, err := deployKey(t, c, p, "add", "DE0CH/foo-bar", false); err != nil {
@@ -471,7 +479,8 @@ func TestDeployKeyFromTheAppsKeyPair(t *testing.T) {
 			x.Name = DeployKeyTokenStore
 			r.Blob = &x
 		},
-		"a title with a line": func(r *DeployKeyRequest) { r.Title = "x\ny" },
+		"a title with a line":                               func(r *DeployKeyRequest) { r.Title = "x\ny" },
+		"no store or title (the core named them before R2)": func(r *DeployKeyRequest) { r.Store, r.Title = "", "" },
 	} {
 		in := req
 		bad(&in)
@@ -504,4 +513,51 @@ func TestDeployKeyFromTheAppsKeyPair(t *testing.T) {
 	if _, err := c.StoreKey("not a key"); err == nil {
 		t.Fatal("a store key for nothing")
 	}
+}
+
+// ---- the app's OpenSSH key (ios OpenSSH.ed25519), as a Go stand-in for the tests ----------------------------------
+
+func sshString(b []byte) []byte {
+	out := make([]byte, 4, 4+len(b))
+	binary.BigEndian.PutUint32(out, uint32(len(b)))
+	return append(out, b...)
+}
+
+// sshPublicWire: the public key blob (RFC 8709): string "ssh-ed25519", string key
+func sshPublicWire(pub ed25519.PublicKey) []byte {
+	return append(sshString([]byte("ssh-ed25519")), sshString(pub)...)
+}
+
+// OpenSSHPrivateKey: the key as an unencrypted OpenSSH private key file (PROTOCOL.key), what `ssh -i` reads
+func OpenSSHPrivateKey(priv ed25519.PrivateKey, comment string) []byte {
+	pub := priv.Public().(ed25519.PublicKey)
+	check := make([]byte, 4)
+	rand.Read(check)
+	var sec []byte
+	sec = append(sec, check...)
+	sec = append(sec, check...)
+	sec = append(sec, sshString([]byte("ssh-ed25519"))...)
+	sec = append(sec, sshString(pub)...)
+	sec = append(sec, sshString(priv)...) // seed || public, 64 bytes
+	sec = append(sec, sshString([]byte(comment))...)
+	for i := byte(1); len(sec)%8 != 0; i++ {
+		sec = append(sec, i)
+	}
+	var b []byte
+	b = append(b, "openssh-key-v1\x00"...)
+	b = append(b, sshString([]byte("none"))...)
+	b = append(b, sshString([]byte("none"))...)
+	b = append(b, sshString(nil)...)
+	b = binary.BigEndian.AppendUint32(b, 1)
+	b = append(b, sshString(sshPublicWire(pub))...)
+	b = append(b, sshString(sec)...)
+	enc := b64.EncodeToString(b)
+	var out strings.Builder
+	out.WriteString("-----BEGIN OPENSSH PRIVATE KEY-----\n")
+	for len(enc) > 70 {
+		out.WriteString(enc[:70] + "\n")
+		enc = enc[70:]
+	}
+	out.WriteString(enc + "\n-----END OPENSSH PRIVATE KEY-----\n")
+	return []byte(out.String())
 }

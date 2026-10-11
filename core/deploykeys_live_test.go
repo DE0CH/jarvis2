@@ -1,7 +1,7 @@
 package main
 
 // Against real GitHub, only when asked: JARVIS2_LIVE_GITHUB_TOKEN_FILE (a token with Administration on the
-// repo) and JARVIS2_LIVE_REPO (a throwaway repo it may write). The core makes the key through the phone flow,
+// repo) and JARVIS2_LIVE_REPO (a throwaway repo it may write). The core adds the app's key through the phone flow,
 // git clones and pushes over SSH with exactly that key, another repo refuses it, and remove takes it away.
 //
 //	JARVIS2_LIVE_GITHUB_TOKEN_FILE=~/.jarvis2/gh-deploy-keys.token JARVIS2_LIVE_REPO=DE0CH/jarvis2-deploykey-test \
@@ -35,7 +35,7 @@ func TestLiveDeployKeyOnGitHub(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Logf("added: %v", m["fingerprint"])
+	t.Logf("added: %v", m["publicKey"])
 	store := RepoStore(repo)
 	v := storeValues(t, c, p, store)
 	pem, _ := b64.DecodeString(v[DeployKeyPrefix+EnvSlug(repo)])
@@ -55,7 +55,7 @@ func TestLiveDeployKeyOnGitHub(t *testing.T) {
 	if out, err := git("clone", "-q", "git@github.com:"+repo+".git", wt); err != nil {
 		t.Fatal("clone with the deploy key:", out)
 	}
-	os.WriteFile(filepath.Join(wt, "probe.txt"), []byte(m["fingerprint"].(string)+"\n"), 0o644)
+	os.WriteFile(filepath.Join(wt, "probe.txt"), []byte(m["publicKey"].(string)+"\n"), 0o644)
 	git("-C", wt, "add", "probe.txt")
 	git("-C", wt, "-c", "user.name=jarvis2-test", "-c", "user.email=test@jarvis2.invalid", "commit", "-qm", "deploy key probe")
 	if out, err := git("-C", wt, "push", "-q", "origin", "HEAD"); err != nil {
