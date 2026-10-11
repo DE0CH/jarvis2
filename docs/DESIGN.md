@@ -100,16 +100,17 @@ machines, and run exactly one command inside a machine, `/usr/local/bin/jarvis2-
 | `start(image)` | Open (normally the router, which guards it; it can't lead to a secret): Fly create → `jarvis2-init` (its output: the machine's keys) → a started machine. If init fails, the core destroys the machine. |
 | `certify(approval, machine)` | The approval and a started machine running the approved image → the succession cert. One machine per approval, one line per machine, one successor per predecessor (killed and not used). The null image: no machine, a burn cert. For a machine succeeding itself the approval is the new cert at once. |
 | `kill(machine)` | Fly destroy, confirmed by Fly → killed. |
-| `unlock_begin(name)` / `unlock_finish(pending, phone share)` | The split-key unlock; the plaintext stays in memory until locked. |
-| `lock(unlock id)` / `list_unlocked(nonce)` | Release; the signed list of open unlocks. |
-| `pull_secrets(cert)` | The cert's stores, while unlocked, sealed to that machine's encryption key — so no other proof is needed. |
+| `unlock_begin(name, for)` / `unlock_finish(pending, phone share)` | The split-key unlock. `for` = the nonce of the one challenge or cert it is for (a Start, an add-store, a waiting session): only that cert reads it and its pull locks it again (below, "Carried secrets"); no `for` = a standing unlock, open until locked. |
+| `lock(unlock id)` / `list_unlocked(nonce)` | Release; the signed list of open unlocks (each with what it is for). |
+| `pull_secrets(cert, carry)` | The cert's stores sealed to that machine's encryption key — so no other proof is needed — each from an unlock open to that cert, else from the line's carried secrets; answers the next carry blob for that machine. |
+| `forward_carry(carry, cert)` | The line's carried secrets rebound to the machine a cert names (its certified successor, or itself with a new cert), keeping only that cert's stores. Open: only this core opens a blob. |
 | `deploy_key_begin(action, repo, sensitive)` / `deploy_key_finish(pending, phone sig, phone share)` | A repo's deploy key, added or removed (below, "Deploy keys"): the signed request, then the phone's signature over it and its share of `github-deploy-keys`; the core uses that store's GitHub token for this one call and writes or deletes the store `github-<repo>`. |
 | `log(nonce)` | Its signed log. |
 
 A succession from null is approved only by the phone: every new line starts with Deyao's click.
 
-**State, in memory only:** its own key pairs, the master and phone public keys (from the claim), the Fly token,
-the stores, the non-sensitive set, the unlocked stores' plaintext, the pending unlocks and deploy-key requests, and append-only sets — **killed**
+**State, in memory only:** its own key pairs, the carry key, the master and phone public keys (from the claim), the Fly token,
+the stores, the non-sensitive set, the unlocked stores' plaintext (each unlock standing or for one cert), the pending unlocks and deploy-key requests, and append-only sets — **killed**
 (Fly-confirmed), **used** (predecessors continued or burnt), **spent** approvals, **certified** machines. What
 it **trusts** about others (the phone's and the master's public keys, the box key's signature) needs no
 secrecy; what it uses to **prove itself** (its private keys, the Fly token) never leaves it.
@@ -240,21 +241,65 @@ by the core, approved by the phone; the box alone can never make one, and no AI 
   `start(image)` → `certify(approval, machine)` → succession cert. (The router may start the machine while
   Deyao is still deciding, and destroy it on a reject.)
 - **Pause:** the machine signs its snapshot (artefacts + transcript) with its signing key and uploads it →
-  `kill`. Skipped/failed snapshot = nothing to resume; no secret moves.
+  `kill`. Its carried secrets (sealed by the core at its last pull) are already next to the snapshot. Skipped/failed
+  snapshot = nothing to resume; no secret moves.
 - **Resume, nothing changed (also unattended, e.g. scheduled):** `succession(old, …)` ← approve_by_dead_machine
-  → `start` → `certify` → succession cert.
+  → `start` → `certify` → succession cert → `forward_carry` → the machine pulls its secrets from the carried blob,
+  no store unlocked, no Face ID.
 - **Resume with a change (e.g. newer image), approved:** `succession(old, …)` ← iPhone (shows the difference,
   Deyao clicks) → `start` → `certify`. Rejecting leaves the session paused as it was.
 - **Add a store to a running session:** the session finds the store holding the key it needs (`jarvis2 stores`:
   every store's key names, never values — the router's record, kept by the setup session's writes; repo stores'
   names follow from the repo), then asks through the router (signed with its machine key) for
-  one more store → `succession(machine → same machine, set + store)` → `approve_by_phone` → new cert → the
-  machine pulls its secrets again.
+  one more store → `succession(machine → same machine, set + store)` → `approve_by_phone` (the same Face ID unlocks
+  the added store for that challenge only, if it is locked) → new cert → `forward_carry` → the machine pulls its
+  secrets again (its stores from the carried blob, the added one from its unlock, locked again by that pull).
 - **Downgrade in place:** the machine makes a new key pair → `succession(machine → same machine, a subset, new
-  keys)` → the machine signs the challenge with its old key → `approve_by_old_key` → new cert → only then the
-  machine shreds its old keys and the dropped stores' secrets, and re-pulls with the new keys.
+  keys)` → the machine signs the challenge with its old key → `approve_by_old_key` → new cert → `forward_carry` (the
+  dropped stores leave the carried blob) → only then the machine shreds its old keys and the dropped stores'
+  secrets, and re-pulls with the new keys.
 - **End a session:** `kill`, then burn: `succession(old, no stores, no options, null image)` ← respond by
-  dead machine → `certify(approval, none)` → burn cert.
+  dead machine → `certify(approval, none)` → burn cert. The router deletes the carried blob with the snapshots;
+  burnt, it could open for nothing anyway (no successor can be certified, the killed machine's certs read none).
+
+## Carried secrets (Deyao, 2026-10-11)
+
+"After a session is started, there's no reason to keep the store unlocked in the core. So just lock it then." For
+unattended resumes (a wakeup, a cron, a task run with nobody there) he chose: **the session carries its secrets**.
+
+- **Unlocks are for one session.** The phone's unlock names what it is for: `unlock_begin(store, for)` with the nonce
+  of the Start's challenge (New session, an approval of a new line), of an add-store's challenge, or of a waiting
+  session's cert (Unlock…, an Inbox unlock request). The core signs `for` into the begin document, only the cert with
+  that nonce reads the plaintext, and that cert's first pull that goes through locks it again; one its cert never
+  pulls with lapses after 30 minutes. Start stays one Face ID that unlocks what the session needs (Deyao,
+  2026-10-10). A **standing** unlock (no `for`: the Stores page's Unlock) stays what it was, open to every session
+  until locked; it is the only kind the store list calls unlocked.
+- **The carry blob.** Every pull that goes through also answers the values it sealed, per store, under the core's
+  **carry key** (AES-256-GCM), bound to that machine. The router keeps it next to the machine's snapshot
+  (`snapshots/<machine>.carry` on its volume) and sends it with the machine's next pull. The core reads a store from
+  it only when no unlock is open to the cert, only for a cert of that same machine or of its certified successor,
+  only while that machine isn't killed, and only the stores that cert names. `forward_carry` rebinds it right after a
+  successor is certified (so one that dies before pulling doesn't break the line), and after an add-store or a
+  downgrade (the dropped stores leave it at once).
+- **The carry key** is 32 random bytes the core makes when it starts, in memory only: sealed to the running core
+  and nothing else — no backup, no setup step, no new trust path. Nothing else (the router, the Storage Box, a
+  machine, another session, another core) can open or forge a blob.
+- **A new core destroys the earlier core's sessions** (Deyao, 2026-10-11: "They are just automatically destroyed.
+  Core restart is infrequent enough. No need to engineer around it."). A new core (restart, `core/` deploy, box
+  rebuild; empty, Reset or Recovered) can open none of the earlier blobs, and the earlier lines can't continue on it
+  (their certs are the earlier core's; its killed/used sets are gone). The router watches the core's identity
+  (`router/corechange.go`, every 30 s; the key must sign its own state document): when it changes, every session
+  with a line is marked `oldCore`, and each is destroyed the normal way once it is paused — archived as a record in
+  Previous, its snapshots and blob deleted, its machine and Discord channel cleaned up (a running one goes when it next
+  pauses). Restoring one from Previous is an ordinary new line approved on the phone.
+- **What still needs the phone:** a new line (Start, a restore, a task's first line), a store added, a changed image
+  or permission mode on resume — as before. A paused session whose blob is gone (lost by the router, a session
+  paused under a core that predates carried secrets) waits on its locked store as before ("Waiting for store X",
+  Unlock… or an Inbox unlock request), now unlocked for that session's cert only.
+- **Values are the session's own.** A resume gets the values its line last pulled. A store rewritten since reaches
+  the line at its next pull with an unlock open to it (Unlock… for that session, or a standing unlock).
+- Grants are unchanged: they open a shell on a machine, not a store; a standing rule still serves the unattended
+  features, which now also find their stores without anything left unlocked.
 
 ## Requests: the Inbox (Deyao, 2026-10-11)
 
@@ -325,8 +370,9 @@ can rewrite anything in its own process.
 - **Where choices are made (Deyao, 2026-10-10):** a secure page where Deyao *chooses* keeps its choices, so the
   flow is one page: **New session is one page in the shell** (prompt, title, stores, harness, repos, permission
   mode, model and the other options), and its **Start** signs the session and, under the same Face ID, unlocks
-  every store the session gets that is locked (harness stores included), so no session waits at boot on a locked
-  store. When the request comes from the non-secure side with no choosing step (a button in the terminal page's
+  every store the session gets that is locked (harness stores included), for that session only (the core locks
+  them again once its machine has pulled), so no session waits at boot on a locked store. An approval of a new line
+  made elsewhere (the web page, a restore, a task) and an add-store do the same under their one Face ID. When the request comes from the non-secure side with no choosing step (a button in the terminal page's
   banner, the Grants page's own chooser, a card's "Unlock…"), the secure page is a **review stop**: it shows in
   plain words exactly what will be signed (checked field for field against the router's draft or the core's signed
   documents), with **Allow** (Face ID) and **Deny**, and nothing on it can be changed.
@@ -338,7 +384,8 @@ can rewrite anything in its own process.
 - **Web:** the web page only creates a pending request; approval happens in the app's secure mode.
 - **A session waiting on a locked store says so:** the router notes the core's 423 on the machine's secrets pull
   (`lockedStore`); the card and the terminal page show "Waiting for store X to be unlocked" with Unlock…, a review
-  stop that unlocks exactly the locked stores of the session's core-signed cert. The machine retries every 2 s.
+  stop that unlocks exactly the locked stores of the session's core-signed cert, for that cert only. The machine
+  retries every 2 s.
 
 Test build (2026-10-05, simulator; DE0CH/ios-shell-spike, lessons/73): React Native runs inside the extension
 in its own process (taps, typing, a WebView, XPC both ways, background/resume); secure mode removes the
@@ -352,8 +399,10 @@ limit and start-up time.
 
 - A key store reaches a machine only through a succession: from null (Deyao's click), or from a killed,
   never-used predecessor (exact match automatically, or with Deyao's click when something changed).
-- Plaintext stores exist only in the core's memory: unlocked ones until locked, during a Recover for at most
-  10 minutes, and `github-deploy-keys` for the length of one phone-approved deploy-key call. The Fly token is the one
+- Plaintext stores exist only in the core's memory: an unlock for one session until that session's machine has
+  pulled (at most 30 minutes), a standing unlock until locked, during a Recover for at most 10 minutes, and
+  `github-deploy-keys` for the length of one phone-approved deploy-key call. Elsewhere a store's values exist only
+  sealed: to a machine's key (its pull), or under the core's carry key, bound to that machine (its carried secrets). The Fly token is the one
   secret the core keeps in memory for its whole life.
 - A deploy key is made or deleted only on a phone-approved request; the core uses the GitHub token for nothing else.
 - A session's line can't fork: each predecessor is used at most once (succession and burn both consume it).

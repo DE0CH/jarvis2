@@ -43,6 +43,7 @@ type Session struct {
 	Booted         string      `json:"booted,omitempty"`         // the machine that has reported status: it got past boot (lastSnapshot)
 	Waiting        string      `json:"waiting,omitempty"`        // what a pause or destroy is waiting on, in plain words (the app shows it)
 	LockedStore    string      `json:"lockedStore,omitempty"`    // the store the machine waits on at boot (its secrets pull got 423 "store X is locked")
+	OldCore        bool        `json:"oldCore,omitempty"`        // corechange.go: its line is an earlier core's; destroyed once paused
 }
 
 type Approval struct {
@@ -91,6 +92,7 @@ type persisted struct {
 	Uploads   map[string]*Upload       `json:"uploads,omitempty"`   // uploads.go: first-prompt attachments staged on the volume
 	Tasks     *TaskState               `json:"tasks,omitempty"`     // tasks.go: task instances (session lines), runs, daily schedules
 	Inbox     map[string]*InboxRequest `json:"inbox,omitempty"`     // inbox.go: requests waiting for the phone
+	CoreKey   string                   `json:"coreKey,omitempty"`   // corechange.go: the signing key of the core the sessions' lines belong to
 }
 
 type State struct {

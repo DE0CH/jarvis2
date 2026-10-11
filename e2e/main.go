@@ -31,6 +31,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -195,19 +196,30 @@ func main() {
 		log.Fatal("re-created a sensitive store")
 	}
 
-	step("unlock e2e and e2e-extra (split key, through the router)")
-	unlock(p, "e2e")
-	unlock(p, "e2e-extra")
+	step("a standing unlock (the Stores page): open to every session, until locked")
+	unlock(p, "e2e-extra", "")
+	if !storeOpen("e2e-extra") {
+		log.Fatal("a standing unlock doesn't show as unlocked")
+	}
+	lockAll()
+	if storeOpen("e2e-extra") {
+		log.Fatal("still unlocked after lock")
+	}
 
-	step("new session (stores [e2e])")
+	step("new session (stores [e2e]): Start unlocks e2e for this session only; locked again once the machine pulled")
 	s, b := call(router, "POST", "/api/sessions", map[string]any{"label": "e2e test", "stores": []string{"e2e"}, "size": "small", "harness": "claude"}, nil)
 	must(s, b, "create")
 	a := waitApproval("new-session", "")
 	checkChallenge(a, []string{"e2e"}, "")
+	unlock(p, "e2e", nonceOf(*a.Challenge))
+	if storeOpen("e2e") {
+		log.Fatal("an unlock for one session shows as open to every session")
+	}
 	id := approve(p, a)
 	waitState(id, "started", 6*time.Minute)
 	m1 := machineOf(id)
 	expectOnMachine(m1, "grep -c E2E_SECRET /home/claude/.secrets", "1")
+	expectNoUnlocks("after the Start's pull")
 	expectOnMachine(m1, "echo marker-"+secret+" > /home/claude/artifacts/e2e-marker && chown claude /home/claude/artifacts/e2e-marker && echo ok", "ok")
 
 	step("grants: no shell without one; a phone grant opens it; the session's own allow list too")
@@ -255,15 +267,17 @@ func main() {
 
 	step("store key names: recorded by setup, listed to the session for every store (not only its own)")
 	must2(call(router, "POST", "/setup/store-keys", map[string]any{"name": "e2e-extra", "keys": []string{"E2E_EXTRA"}}, nil))
-	expectOnMachine(m1, "su - claude -c 'jarvis2 stores' | grep -c '^e2e-extra \\[sensitive\\]: E2E_EXTRA$'", "1")
+	expectOnMachine(m1, "su - claude -c 'jarvis2 stores' | grep -c '^e2e-extra \\[sensitive, locked\\]: E2E_EXTRA$'", "1")
 	expectOnMachine(m1, "su - claude -c 'jarvis2 stores' | grep -c '^e2e \\[in this session\\]: (key names not recorded)$'", "1")
 
-	step("add a store from the machine (e2e-extra)")
+	step("add a store from the machine (e2e-extra, unlocked for that add-store only; e2e comes from the carried secrets)")
 	go flyExec(m1, []string{"su", "-", "claude", "-c", "jarvis2 add-store e2e-extra"})
 	a = waitApproval("add-store", id)
 	checkChallenge(a, []string{"e2e", "e2e-extra"}, "e2e-extra")
+	unlock(p, "e2e-extra", nonceOf(*a.Challenge))
 	approve(p, a)
-	expectOnMachine(m1, "for i in $(seq 1 30); do grep -q E2E_EXTRA /home/claude/.secrets && break; sleep 2; done; grep -c E2E_EXTRA /home/claude/.secrets", "1")
+	expectOnMachine(m1, "for i in $(seq 1 30); do grep -q E2E_EXTRA /home/claude/.secrets && break; sleep 2; done; grep -c E2E_EXTRA /home/claude/.secrets; grep -c E2E_SECRET /home/claude/.secrets", "1\n1")
+	expectNoUnlocks("after the add-store's pull")
 
 	step("downgrade in place: back to [e2e], new keys, the extra secret shredded")
 	expectOnMachine(m1, "su - claude -c 'jarvis2 downgrade e2e' >/dev/null 2>&1 && grep -c E2E_SECRET /home/claude/.secrets && grep -c E2E_EXTRA /home/claude/.secrets || true", "1\n0")
@@ -273,7 +287,7 @@ func main() {
 	must(s, b, "pause")
 	waitState(id, "paused", 12*time.Minute)
 
-	step("resume, same image → no approval (dead-machine responder), snapshot restored")
+	step("resume, same image → no approval (dead-machine responder), snapshot restored, secrets carried with no store unlocked")
 	s, b = call(router, "POST", "/api/sessions/"+id+"/resume", map[string]bool{"upgrade": false}, nil)
 	must(s, b, "resume")
 	waitState(id, "started", 8*time.Minute)
@@ -283,6 +297,34 @@ func main() {
 	}
 	expectOnMachine(m2, "cat /home/claude/artifacts/e2e-marker", "marker-"+secret)
 	expectOnMachine(m2, "grep -c E2E_EXTRA /home/claude/.secrets || true", "0")
+	expectOnMachine(m2, "grep -c E2E_SECRET /home/claude/.secrets", "1")
+	expectNoUnlocks("after the resume")
+
+	step("a lost carry blob: the resume waits on the locked store; an unlock for the session's cert lets it go on, then locks again")
+	must2(call(router, "POST", "/api/sessions/"+id+"/pause", nil, nil))
+	waitState(id, "paused", 12*time.Minute)
+	if dd := os.Getenv("E2E_DATA_DIR"); dd != "" {
+		blobs, _ := filepath.Glob(filepath.Join(dd, "snapshots", "*.carry"))
+		if len(blobs) != 1 {
+			log.Fatalf("carry blobs on the router after the pause: %v", blobs)
+		}
+		os.Remove(blobs[0])
+		must2(call(router, "POST", "/api/sessions/"+id+"/resume", map[string]bool{"upgrade": false}, nil))
+		deadline := time.Now().Add(8 * time.Minute)
+		for session(id)["lockedStore"] != "e2e" {
+			if time.Now().After(deadline) {
+				dumpState()
+				log.Fatal("the session doesn't say it waits on store e2e")
+			}
+			time.Sleep(3 * time.Second)
+		}
+		var cd Doc
+		must2(call(router, "GET", "/api/sessions/"+id+"/cert", nil, &cd))
+		unlock(p, "e2e", nonceOf(cd))
+		waitState(id, "started", 4*time.Minute)
+		expectOnMachine(machineOf(id), "grep -c E2E_SECRET /home/claude/.secrets", "1")
+		expectNoUnlocks("after the waiting session's pull")
+	}
 	expectExec(id, "echo the rule still holds", "the rule still holds") // grants name the line, not the machine
 
 	step("the permission mode is signed: resuming in bypass is a change the iPhone approves")
@@ -397,22 +439,8 @@ func main() {
 	waitTask(iid, "ready", 5*time.Minute) // paused again for the next run
 	must2(call(router, "DELETE", "/api/tasks/instances/"+iid, nil, nil))
 
-	step("lock both stores; the unlocked list is signed and empty")
-	var ul struct {
-		Kind     string           `json:"kind"`
-		Nonce    string           `json:"nonce"`
-		Unlocked []map[string]any `json:"unlocked"`
-	}
-	for _, uid := range unlockIDs {
-		var d Doc
-		must2(call(router, "POST", "/api/core/lock", map[string]string{"id": uid}, &d))
-	}
-	var d Doc
-	must2(call(router, "POST", "/api/core/unlocked", map[string]string{"nonce": "n-123"}, &d))
-	verify(d, &ul)
-	if ul.Nonce != "n-123" || len(ul.Unlocked) != 0 {
-		log.Fatalf("unlocked list: %+v", ul)
-	}
+	step("no store was left unlocked; the unlocked list is signed and empty")
+	expectNoUnlocks("at the end")
 	log.Printf("E2E PASSED (machines %s → %s → %s)", m1, m2, m3)
 }
 
@@ -473,12 +501,14 @@ func randBytes(n int) []byte {
 
 var unlockIDs []string
 
-func unlock(p *phone, store string) {
+// unlock: forNonce = the challenge or cert nonce the unlock is for (what the app's Start, add-store and Unlock…
+// send); "" = a standing unlock (the Stores page)
+func unlock(p *phone, store, forNonce string) {
 	var d Doc
-	must2(call(router, "POST", "/api/core/unlock/begin", map[string]string{"store": store}, &d))
-	var ub struct{ Kind, Pending, Store, E, T string }
+	must2(call(router, "POST", "/api/core/unlock/begin", map[string]string{"store": store, "for": forNonce}, &d))
+	var ub struct{ Kind, Pending, Store, E, T, For string }
 	verify(d, &ub)
-	if ub.Kind != "unlock-begin" || ub.Store != store {
+	if ub.Kind != "unlock-begin" || ub.Store != store || ub.For != forNonce {
 		log.Fatalf("unlock-begin: %+v", ub)
 	}
 	eb, _ := b64.DecodeString(ub.E)
@@ -500,6 +530,59 @@ func unlock(p *phone, store string) {
 		log.Fatalf("unlock-finish: %+v", uf)
 	}
 	unlockIDs = append(unlockIDs, uf.ID)
+}
+
+// nonceOf: a core-signed challenge's or cert's nonce
+func nonceOf(d Doc) string {
+	var x struct{ Nonce string }
+	verify(d, &x)
+	return x.Nonce
+}
+
+// storeOpen: the core's signed store list says the store is open to every session (a standing unlock)
+func storeOpen(name string) bool {
+	var d Doc
+	must2(call(router, "POST", "/api/core/stores", map[string]string{"nonce": "n-open"}, &d))
+	var l struct {
+		ScopedUnlocks bool `json:"scopedUnlocks"`
+		Stores        []struct {
+			Name     string
+			Unlocked bool
+		}
+	}
+	verify(d, &l)
+	if !l.ScopedUnlocks {
+		log.Fatal("the core doesn't take unlocks for one session")
+	}
+	for _, x := range l.Stores {
+		if x.Name == name {
+			return x.Unlocked
+		}
+	}
+	return false
+}
+
+// lockAll: lock every unlock this test opened that is still open
+func lockAll() {
+	for _, uid := range unlockIDs {
+		call(router, "POST", "/api/core/lock", map[string]string{"id": uid}, nil)
+	}
+	unlockIDs = nil
+}
+
+// expectNoUnlocks: the core's signed unlocked list is empty — every unlock for a session went with its pull
+func expectNoUnlocks(when string) {
+	var ul struct {
+		Kind     string           `json:"kind"`
+		Nonce    string           `json:"nonce"`
+		Unlocked []map[string]any `json:"unlocked"`
+	}
+	var d Doc
+	must2(call(router, "POST", "/api/core/unlocked", map[string]string{"nonce": "n-123"}, &d))
+	verify(d, &ul)
+	if ul.Nonce != "n-123" || len(ul.Unlocked) != 0 {
+		log.Fatalf("a store is still unlocked %s: %+v", when, ul)
+	}
 }
 
 type approval struct {

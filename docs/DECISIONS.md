@@ -301,3 +301,33 @@ shouldnt unlock the whole infra [store] for that one task."
     two names follow from the repo. The store list itself stays the core's signed list (passed on as `signed`, and
     checked by `jarvis2 stores`), and a store whose names were never recorded shows `keys: null`, never a guess.
     Every session sees every store's names (not only its own), since that is what it needs to pick one to add.
+
+## Carried secrets, 2026-10-11
+
+Deyao: "after a session is started, there's no reason to keep the store unlocked in the core. So just lock it then";
+for unattended resumes he chose "the session carries its secrets" (DESIGN "Carried secrets").
+
+69. **The carry key is the running core's own, made at start, never backed up; a new core destroys the earlier
+    core's sessions** (Deyao, 2026-10-11: "They are just automatically destroyed. Core restart is infrequent enough.
+    No need to engineer around it."). The router notices a new core identity (its key signing its own state) and
+    destroys each session that had a line once it is paused (archive kept in Previous; blob, snapshots, machine and
+    channel gone); the first identity a router sees is taken as the sessions' own core. A destroy whose archive
+    fails is tried again 10 minutes later.
+70. **Unlocks name what they are for** (`for` = a challenge or cert nonce), signed into the begin document; the core
+    locks them at that cert's first pull that goes through, and an unused one lapses after **30 min** (the machine
+    retries a locked pull for 10). **Standing unlocks stay** for the Stores page (open until locked); the store
+    list's `unlocked` means standing only, so the app never skips a store that is open only for another session.
+    Change: drop standing unlocks altogether (the Stores page would only lock).
+71. **The core seals the blob at every pull, not at pause.** The machine doesn't take part (no machine or image
+    change), the blob is authentic by construction (AES-GCM under the core's key), and a pause, a crash or a lost
+    snapshot leaves the last pull's blob. The router keeps it with the snapshot on its volume and forwards it right
+    after certify, an add-store and a downgrade.
+72. **Sensitive stores are carried too.** An unattended resume is what approve_by_dead_machine already certifies (same
+    stores, image, options); before, it only needed the store left unlocked. Change: leave sensitive stores out of
+    the blob, so a sensitive session's resume waits for an Unlock… each time.
+73. **A resume gets the values its line last pulled**; an unlock open to the cert wins (fresh values). A store
+    rewritten while a session is paused reaches it at its next pull with an unlock for it.
+74. **Approvals made outside the app also unlock under their one Face ID** (the web page's new session, a restore, a
+    task's first line, an add-store), for that session only, as New session does; a resume on a new image or mode
+    unlocks nothing (it carries its secrets). With a core that predates scoped unlocks (the held core) these pages
+    unlock nothing, as before, and New session's Start unlocks as before (standing).

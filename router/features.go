@@ -42,6 +42,7 @@ func (r *Router) startFeatures() {
 	go r.uploadsLoop()  // uploads.go: stale attachments
 	go r.tasksLoop()    // tasks.go: daily schedules, runs, pausing finished task lines
 	go r.resumeInterrupted()
+	go r.coreChangeLoop() // corechange.go: a new core → the earlier core's paused sessions are destroyed
 }
 
 // resumeInterrupted: a pause or destroy runs in a goroutine of the router that started it; a router restart (any

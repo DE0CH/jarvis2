@@ -57,8 +57,19 @@ pat-create-all`, which deletes the same-name token first; its line is in the lay
 `openrouter` (OPENROUTER_API), `claude` (JARVIS1_CREDENTIALS_ID/SECRET: Access service token `jarvis2-store-claude`,
 rotated), `tunnel` (CF_ACCESS_CLIENT_ID/SECRET: `jarvis2-tunnel`, rotated) and `core` (the Fly token). The narrowed
 Fly token in an old `core` backup can't be revoked on its own (an attenuation of JARVIS2_FLY_TOKEN); it stays sealed
-to the old master key. Old backup versions stay in the versioned bucket, sealed to their old key. Deyao then unlocks
-stores in the app as usual, and adds his repos again in Settings → Repos (the repos' stores aren't backed up, below).
+to the old master key. Old backup versions stay in the versioned bucket, sealed to their old key. Nothing needs
+unlocking ahead (each Start unlocks what its session needs, for that session only); Deyao adds his repos again in
+Settings → Repos (the repos' stores aren't backed up, below).
+
+### Carried secrets (DESIGN "Carried secrets")
+
+Stores stay locked: a Start's Face ID unlocks them for that session only, the core locks them again once its machine has
+pulled, and a paused session carries its secrets to its next machine (`snapshots/<machine>.carry` in the router's data
+volume, sealed under a key only the running core holds). Nothing to operate. A session that says "Waiting for store X"
+on a resume has no usable blob (lost, or paused under a core that predates carried secrets): Unlock… on its card, or
+`infra/setup.py request unlock SESSION --why "…"` for the Inbox. After a core restart (and Reset or Recover) the
+router destroys every earlier session by itself once it is paused (DESIGN "Carried secrets"): each is archived in
+Previous, and Restore there starts it as a new line approved on the phone.
 
 ## Repos and their deploy keys
 

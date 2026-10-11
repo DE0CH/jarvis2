@@ -45,5 +45,5 @@ env -u LOBSTER_TOKEN -u STORAGEBOX_HOST -u STORAGEBOX_USER -u STORAGEBOX_PASSWOR
   SESSION_IMAGE="${E2E_SESSION_IMAGE:-ghcr.io/de0ch/jarvis2-session:latest}" \
   "$W/router" > "$W/router.log" 2>&1 & PIDS+=($!)
 sleep 3
-(cd "$ROOT/e2e" && E2E_ROUTER_LOG="$W/router.log" E2E_ROUTER=http://127.0.0.1:28080 E2E_CORE=http://127.0.0.1:28090 E2E_MASTER_KEY_FILE="$ROOT/e2e/testdata/master-test.pem" E2E_BOX_PUB="$(cat "$W/box.pub")" \
+(cd "$ROOT/e2e" && E2E_ROUTER_LOG="$W/router.log" E2E_DATA_DIR="$W/data" E2E_ROUTER=http://127.0.0.1:28080 E2E_CORE=http://127.0.0.1:28090 E2E_MASTER_KEY_FILE="$ROOT/e2e/testdata/master-test.pem" E2E_BOX_PUB="$(cat "$W/box.pub")" \
   E2E_FLY_TOKEN="$JARVIS2_FLY_TOKEN" go run .) || { echo "--- router log"; tail -40 "$W/router.log"; exit 1; }

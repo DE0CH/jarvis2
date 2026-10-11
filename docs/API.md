@@ -45,7 +45,7 @@ same thing:
   userTitle /* a name pinned in the CLI */, title /* what the card, channel and archive use: serverTitle → userTitle →
   label → aiTitle → id, Jarvis 1's pickTitle */, liveSync /* {at, files: {<name>: bytes}, stored, error} — the last live
   transcript copy (below) */,
-  discordChannel /* the session's Discord channel id */, waiting /* what a pause or destroy waits on, plain words, or "" */, lockedStore /* the store the machine waits on at boot: its secrets pull got the core's 423 "store X is locked"; cleared by the next pull that goes through */, wakeups: [wakeup view], crons: [cron view] /* below */,
+  discordChannel /* the session's Discord channel id */, waiting /* what a pause or destroy waits on, plain words, or "" */, lockedStore /* the store the machine waits on at boot: its secrets pull got the core's 423 "store X is locked"; cleared by the next pull that goes through */, oldCore /* its line is an earlier core's: destroyed (archived in Previous) once paused (DESIGN "Carried secrets") */, wakeups: [wakeup view], crons: [cron view] /* below */,
   resumePrompt /* a prompt queued for delivery once started */ }
 ```
 
@@ -192,7 +192,7 @@ When the core can't be reached at all (its pod restarting, e.g. after a wipe) ev
 `{error: "the core isn't running", coreDown: true}`; the app waits or shows it as a plain note.
 Pass-through to the core's own endpoints, answers unchanged (signed): `GET identity`, `POST stores {nonce}`,
 `POST stores/create {name}`, `POST stores/mark-sensitive {name}`, `POST stores/write {store}`, `POST unlock/begin
-{store}`, `POST unlock/finish {pending, share}`, `POST lock {id}`, `POST unlocked {nonce}`, `POST log {nonce}`, and
+{store, for?}`, `POST unlock/finish {pending, share}`, `POST lock {id}`, `POST unlocked {nonce}`, `POST log {nonce}`, and
 — only from the app's device login (the `cf-access-token` header; 403 otherwise) — `POST claim {statement,
 masterSig, bundle}` and `POST wipe {statement, masterSig}`. Formats: `docs/DESIGN.md`, `core/core.go`, the app's
 `Shell/CoreSetup.swift`, and the reference client `e2e/main.go`.
@@ -222,7 +222,14 @@ own read credential (router env `BACKUP_READ_ACCESS_KEY/SECRET_KEY`; `BACKUP_END
 `BACKUP_BUCKET` default to the production bucket) and answers 503 without it, 502 when the bucket refuses. The app
 checks each `sig` against `keys/setup.pub` (from GitHub) and opens each backup with the master key from the kit.
 
-Unlock, phone side: verify `unlock/begin`'s doc (kind `unlock-begin`, fields `pending, store, e, t`); Face
+Unlocks for one session (DESIGN "Carried secrets"): `unlock/begin {store, for}` with `for` = the nonce of the challenge
+(New session's Start, an approval of a new line, an add-store) or of the session's cert (Unlock…) → the begin doc
+carries `for`; only the cert with that nonce reads the store, its first pull that goes through locks it again, and an
+unused one lapses after 30 min. No `for` = a standing unlock (the Stores page), open to every session until locked. The
+signed `stores` list says `scopedUnlocks: true` (a core that predates it: absent, every unlock standing) and its
+`unlocked` means standing only; `unlocked` rows carry `for` ("" = standing). `for` that isn't a 64-hex nonce: 400.
+
+Unlock, phone side: verify `unlock/begin`'s doc (kind `unlock-begin`, fields `pending, store, e, t, for`); Face
 ID → Enclave key agreement of the phone's agreement key with `e` → the 32-byte x-coordinate; seal it to `t`:
 ephemeral P-256 key `r`, `x' = x(r·t)`, key = HKDF-SHA256(ikm `x'`, salt empty, info `"jarvis2/unlock-share"`,
 32 bytes), AES-256-GCM combined (`nonce‖ciphertext‖tag`) → `share = {e: base64(r.pub x963), data:
@@ -283,7 +290,7 @@ off.
 | `GET /m/snapshot` | The predecessor's snapshot: body = tar.gz, header `X-Snapshot-Sig` = base64 signature by the predecessor's signing key over the sha256 of the body. 404 = none. |
 | `POST /m/snapshot` | Upload this machine's snapshot (same format). With header `X-Snapshot-None` and no body: nothing to snapshot (the machine is still booting; its agent answers every snapshot command from the first second of its life), and the waiting pause or destroy goes on at once. A pause or destroy doesn't ask a machine that never got past boot (no `/m/status` from it) at all. |
 | `GET /m/restore-snapshot` | A restoring session's first machine only: the archived snapshot, same format, signed by the OLD machine named in `JARVIS2_RESTORE_CERT`. 404 otherwise. |
-| `POST /m/pull-secrets` | The router adds this machine's cert and relays to the core; answers the core's signed `secrets` doc (sealed to the machine's key). |
+| `POST /m/pull-secrets` | The router adds this machine's cert and the line's carried secrets (`snapshots/<machine>.carry`, else its predecessor's) and relays to the core; answers the core's signed `secrets` doc (sealed to the machine's key; its `carry` field, the next blob, is kept by the router). 423 `store X is locked` when no unlock is open to the cert and the blob doesn't hold the store. |
 | `GET /m/commands` | Long poll (≤ 50 s): `{commands: ["snapshot"]}` or `{commands: []}`. |
 | `GET /m/stores` | Every store (all of them, not only this session's) with its key names, as `GET /api/stores`, so the session knows which one to ask for. `jarvis2 stores [--json]` prints it, checks the list against the core's signature and marks this session's own stores. |
 | `POST /m/add-store` | Body `{store}`: asks Deyao (an `add-store` approval) to add one store to this session. With a reason: `POST /m/api/requests/add-store` (Requests). |
@@ -380,8 +387,10 @@ schedule = { id, instance, time "HH:MM", tz, enabled, since /* ms */, createdAt,
 DMs (lobster, as Jarvis 1): a scheduled run that failed, timed out or was lost (with the log's tail), and a scheduled
 slot that could not start (line gone, waiting for approval, queue full). A run is `lost` when its line stopped (a manual
 pause, the budget cap) before the machine reported, and `timedout` by the router when no result came 15 min past the
-template's timeout. A run needs its line's stores **unlocked** in the core, as any start does: a run whose machine
-isn't up 30 min after the resume (a locked store keeps it `initialising`; `waiting` says so) fails and the line is paused.
+template's timeout. A run resumes its line with the secrets the line carries (DESIGN "Carried secrets"), no store
+unlocked; a line without them (its blob lost, or first started under a core that predates them) waits on its locked
+store like any start: a run whose machine isn't up 30 min after the resume (`waiting` says so) fails and the line is
+paused.
 
 ## Session-facing API (`/m/api/*`)
 
