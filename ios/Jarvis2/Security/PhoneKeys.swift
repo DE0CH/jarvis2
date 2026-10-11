@@ -105,14 +105,22 @@ final class PhoneKeys: @unchecked Sendable {
     let ctx = LAContext()
     var e: NSError?
     guard ctx.canEvaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, error: &e) else { return } // not enrolled
-    let sem = DispatchSemaphore(value: 0)
-    nonisolated(unsafe) var err: Error?
-    ctx.evaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, localizedReason: reason) { ok, error in
-      if !ok { err = error ?? LAError(.authenticationFailed) }
-      sem.signal()
+    // a busy simulator can fail to bring the Face ID sheet up ("UI activation timed out after 5 seconds", code -1000,
+    // seen on the iOS 27 replica): that is no answer from the person, so the sheet is asked for again (3 tries)
+    for attempt in 1...3 {
+      let c = attempt == 1 ? ctx : LAContext()
+      let sem = DispatchSemaphore(value: 0)
+      nonisolated(unsafe) var err: Error?
+      c.evaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, localizedReason: reason) { ok, error in
+        if !ok { err = error ?? LAError(.authenticationFailed) }
+        sem.signal()
+      }
+      sem.wait()
+      guard let err else { return }
+      let ns = err as NSError
+      if ns.domain == LAErrorDomain, ns.code == -1000, attempt < 3 { Thread.sleep(forTimeInterval: 2); continue }
+      throw err
     }
-    sem.wait()
-    if let err { throw err }
     #endif
   }
 

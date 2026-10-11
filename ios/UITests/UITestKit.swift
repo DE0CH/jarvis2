@@ -43,8 +43,18 @@ class JarvisUITestCase: XCTestCase {
   @discardableResult func wait(_ e: XCUIElement, _ s: TimeInterval, _ what: String) -> Bool {
     let ok = e.waitForExistence(timeout: s)
     XCTAssertTrue(ok, "[\(tag)] \(what)")
-    if !ok { note("tree-\(what)", app.debugDescription); shot("missing-" + what.replacingOccurrences(of: " ", with: "-"), checkBlank: false) }
+    if !ok {
+      note("tree-\(what)", app.debugDescription); shot("missing-" + what.replacingOccurrences(of: " ", with: "-"), checkBlank: false)
+      errorDetail(what)
+    }
     return ok
+  }
+  /// a page that shows an error with Details: open them and keep the text, so a failed run says why
+  func errorDetail(_ what: String) {
+    let d = el("secure-error-details")
+    guard d.exists else { return }
+    if !el("secure-error-detail").exists { d.tap() }
+    if el("secure-error-detail").waitForExistence(timeout: 3) { note("error-detail-\(what)", el("secure-error-detail").label) }
   }
   func gone(_ e: XCUIElement, _ s: TimeInterval) -> Bool {
     let until = Date().addingTimeInterval(s)
