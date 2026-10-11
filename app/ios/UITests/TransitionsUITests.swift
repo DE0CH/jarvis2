@@ -137,4 +137,62 @@ final class TransitionsUITests: XCTestCase {
     settle()
     app.terminate()
   }
+
+  /// Back from every secure page under stress (BackStress): loops, Back during the entry, double tap, the edge swipe,
+  /// background, memory warning, the extension killed or slow. Fails on a blank screen over 1.5 s or an app that
+  /// doesn't come back. transitions.yml runs it once (light) with the runner's helper on 127.0.0.1:18300.
+  func testBackStress() {
+    continueAfterFailure = true
+    let kit = env["JARVIS2_KIT"] ?? ""
+    app.launch()
+    guard wait(el("setup-state-empty"), 60, "setup page at launch") else { return }
+    el("setup-choose-recover").tap()
+    guard wait(el("setup-kit-field"), 15, "kit field") else { return }
+    el("setup-kit-field").tap(); el("setup-kit-field").typeText(kit)
+    el("setup-recover-go").tap()
+    guard wait(el("setup-done"), 120, "recovered") else { return }
+    sleep(1)
+    el("secure-back").tap()
+    guard wait(el("newBtn"), 120, "session list") else { return }
+    sleep(2)
+    let s = BackStress(test: self, app: app, tag: "stress")
+
+    // the app itself on screen when the extension ends (in front, in the background) and on a memory warning
+    s.killWhileShown(el("newBtn"))
+
+    let sessions = { self.el("tab-sessions").tap(); _ = self.el("newBtn").waitForExistence(timeout: 30) }
+    sessions()
+    s.run(.init(name: "newsession", open: { self.el("newBtn").tap() }, arrived: el("secure-create"), target: el("newBtn"), reset: sessions))
+
+    let stores = { _ = self.el("tab-stores").waitForExistence(timeout: 30); self.el("tab-stores").tap(); _ = self.el("stores-manage").waitForExistence(timeout: 30) }
+    stores()
+    s.run(.init(name: "stores", open: { self.el("stores-manage").tap() }, arrived: el("unlock-default"), target: el("stores-manage"), reset: stores))
+
+    let settings = { _ = self.el("tab-settings").waitForExistence(timeout: 30); self.el("tab-settings").tap(); _ = self.el("open-setup").waitForExistence(timeout: 30) }
+    settings()
+    s.run(.init(name: "setup", open: { self.el("open-setup").tap() }, arrived: el("setup-state-mine"), target: el("open-setup"), reset: settings))
+
+    // a grant page needs a session: Start one, then its Grants page
+    sessions()
+    el("newBtn").tap()
+    if wait(el("secure-create"), 30, "new session page") {
+      el("secure-create").tap()
+      if wait(prefixed("more-"), 120, "the session's card") {
+        let grants = {
+          self.sessions_()
+          let more = self.prefixed("more-")
+          guard more.waitForExistence(timeout: 30) else { return }
+          self.el(more.identifier).tap()
+          guard self.el("menu-grants-").waitForExistence(timeout: 10) else { return }
+          self.el("menu-grants-").tap()
+          guard self.el("grant-review").waitForExistence(timeout: 30) else { return }
+          self.el("grant-holder-terminal").tap(); self.el("grant-len-10").tap()
+        }
+        grants()
+        s.run(.init(name: "grant", open: { self.el("grant-review").tap() }, arrived: el("grant-meaning"), target: el("grant-review"), reset: grants))
+      }
+    }
+    app.terminate()
+  }
+  func sessions_() { el("tab-sessions").tap(); _ = el("newBtn").waitForExistence(timeout: 30) }
 }

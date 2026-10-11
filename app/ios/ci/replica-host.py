@@ -6,6 +6,12 @@ the UI test (ReplicaUITests) on 127.0.0.1:18300.
   GET /faceid/nomatch       the next prompt fails (a face that isn't enrolled)
   GET /relay?msg=M          M to the setup session (infra/phone-replica.sh) through the piping relay; its answer back
   GET /log?msg=M            a line in this helper's log
+  GET /ext/kill             SIGKILL the React Native extension's process (JarvisUI), as iOS ends it under memory
+                            pressure or in the background
+  GET /ext/stop?for=N       SIGSTOP it for N seconds, then SIGCONT (an extension that is slow to come back)
+  GET /memwarn              the simulator's memory warning (Debug → Simulate Memory Warning)
+
+  (transitions.yml runs it too, with RELAY_URL "-": no relay there)
 
   replica-host.py UDID RELAY_URL     (RELAY_URL: https://ppng.io/<random>; /req and /resp under it)
 """
@@ -35,6 +41,18 @@ def matcher():
             notify("pearl.match")
 
 
+def ext_pids():
+    r = subprocess.run(["pgrep", "-x", "JarvisUI"], capture_output=True, text=True)
+    return [int(x) for x in r.stdout.split()]
+
+
+def signal_ext(sig):
+    pids = ext_pids()
+    for p in pids:
+        subprocess.run(["kill", f"-{sig}", str(p)], check=False)
+    return pids
+
+
 def relay(msg):
     req = urllib.request.Request(RELAY + "/req", data=msg.encode(), method="POST")
     urllib.request.urlopen(req, timeout=600).read()
@@ -59,6 +77,16 @@ class H(http.server.BaseHTTPRequestHandler):
             except Exception as e:
                 out = f"relay failed: {e}"
             print(f"relay ← {len(out)} chars", flush=True)
+        elif u.path == "/ext/kill":
+            out = f"killed {signal_ext('KILL')}"
+            print(out, flush=True)
+        elif u.path == "/ext/stop":
+            secs = float(q.get("for", "4"))
+            out = f"stopped {signal_ext('STOP')} for {secs}s"
+            print(out, flush=True)
+            threading.Timer(secs, lambda: print(f"continued {signal_ext('CONT')}", flush=True)).start()
+        elif u.path == "/memwarn":
+            subprocess.run(["xcrun", "simctl", "spawn", UDID, "notifyutil", "-p", "com.apple.UIKit.SimulatorMemoryWarning"], check=False)
         elif u.path == "/log":
             print(q.get("msg", ""), flush=True)
         else:
