@@ -32,7 +32,8 @@ struct NewSessionView: View {
   static let defaultRepo = "DE0CH/claude-env"
   private var hidden: Set<String> { model.harnessHidden }
   private var offered: [StoreView] { stores.filter { !$0.isCore && !hidden.contains($0.name) } }
-  private var pickedSensitive: [String] { stores.filter { $0.sensitive && picked.contains($0.name) }.map(\.name) }
+  /// every sensitive store the session would get: picked here, or brought by the harness
+  private var pickedSensitive: [String] { stores.filter { $0.sensitive && allStores.contains($0.name) }.map(\.name) }
   private var models: [Choice] { model.models.filter { ($0.harness ?? "claude") == harness } }
   private var allStores: [String] { Array(picked.union(PinnedPolicy.stores(harness, router: model.policy))).sorted() }
   private var toUnlock: [String] { allStores.filter { n in stores.contains { $0.name == n && !$0.unlocked && !$0.empty } } }
@@ -112,14 +113,14 @@ struct NewSessionView: View {
           HStack(spacing: 6) {
             Label(n, systemImage: "shippingbox")
             Spacer()
-            if st?.sensitive == true { StatusPill(text: "Sensitive: refused", color: .red) }
+            if st?.sensitive == true { StatusPill(text: "Sensitive", color: .red) }
             if st?.unlocked == false { StatusPill(text: "Locked") }
           }
           .accessibilityElement(children: .combine)
           .accessibilityIdentifier("ns-harness-store-\(n)")
         }
       } header: { Text("The harness brings") } footer: {
-        Text("Added by the router for this harness. Start refuses a sensitive one, or any store you didn't pick that isn't on this list.")
+        Text("Added by the router for this harness. Start refuses any store you didn't pick that isn't on this list.")
       }
     }
   }

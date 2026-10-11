@@ -20,12 +20,13 @@ final class Jarvis2UITests: JarvisUITestCase {
     sleep(2)
     let repo = el("ns-repo-claude-env"), store = el("secure-store-github-claude-env")
     if expect {
-      XCTAssertTrue(repo.waitForExistence(timeout: 10) && repo.isSelected, "[\(tag)] claude-env pre-selected on New session")
-      XCTAssertTrue(store.exists && store.isSelected, "[\(tag)] github-claude-env pre-selected with it")
+      XCTAssertTrue(store.waitForExistence(timeout: 10) && store.isSelected, "[\(tag)] github-claude-env pre-selected with it")
+      XCTAssertTrue(scrolledTo(repo) && repo.isSelected, "[\(tag)] claude-env pre-selected on New session")
       shot("new-session-claude-env-default")
       repo.tap(); sleep(1)
       XCTAssertFalse(repo.isSelected, "[\(tag)] claude-env can be de-selected")
     } else {
+      scrolledTo(prefixed("ns-repo-"))
       let anyRepo = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH 'ns-repo-' AND selected == true")).count
       XCTAssertEqual(anyRepo, 0, "[\(tag)] no repo pre-selected without claude-env")
     }

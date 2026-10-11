@@ -68,9 +68,11 @@ final class ReplicaUITests: JarvisUITestCase {
     let ok = arrives(el("secure-create"), 60, "the New session page")
     if ok {
       sleep(1); shot("new-session")
+      scrolledTo(prefixed("ns-repo-"), max: 4)
       let picked = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH 'ns-repo-' AND selected == true")).count
       if !el("ns-repo-claude-env").exists { XCTAssertEqual(picked, 0, "no repo pre-selected without claude-env on the list") }
       else { XCTAssertTrue(el("ns-repo-claude-env").isSelected, "claude-env pre-selected") }
+      for _ in 0..<6 { app.swipeDown() }
     }
     return ok
   }

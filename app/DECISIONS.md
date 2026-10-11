@@ -88,9 +88,10 @@ fixes, 34–40 carried over from the old app and still true, 41–43 the web pag
     "Listed by the router as … (unverified)".
 24. **New session signed any extra store the router called a harness store (finding 2)**: the stores each harness brings
     are pinned in the app from git (`policy/stores.json` bundled; `PinnedPolicy`), and Start refuses a challenge with a
-    store that wasn't picked and isn't the harness's by that list, or a harness store that is sensitive
-    (`Checks.onlyHarnessExtras`). The harness's stores are listed on the page with their sensitivity. A CI build also takes
-    the router's test policy.
+    store that wasn't picked and isn't the harness's by that list (`Checks.onlyHarnessExtras`). The harness's stores are
+    listed on the page with their sensitivity, and a sensitive one joins the red "will hold sensitive secrets" warning: a
+    harness store Deyao marked sensitive is still started (refusing it would stop every session of that harness), but
+    never unseen. A CI build also takes the router's test policy.
 25. **Grant and unlock pages took the session→cert mapping from the router (findings 3, 4)**: they show the session from
     its core-signed cert (title, first prompt, line, machine, sensitive warning in red), the signed text names it, and the
     page refuses when the cert's signed title differs from the session's title in the app's list.

@@ -469,16 +469,15 @@ extension Checks {
   }
 
   /// New session: every store the challenge carries beyond those picked on the page must be one the harness brings
-  /// by the app's own (pinned) policy, and none of them may be sensitive: a sensitive store is only ever a tap on
-  /// the page. Returns those extra stores.
+  /// by the app's own (pinned) policy. Returns those extra stores; the page warns about any that is sensitive (a
+  /// harness store Deyao marked sensitive himself), so nothing sensitive is signed unseen.
   /// `sensitive`: the stores the core's signed store list marks sensitive (preferred; a newer core drops the
   /// challenge's own `sensitive`), joined with the challenge's
   static func onlyHarnessExtras(_ r: Reviewed, picked: [String], pinnedHarness: [String], sensitive: [String] = []) throws -> [String] {
     let extra = r.stores.filter { !picked.contains($0) }
     let marked = Set(sensitive + r.sensitive)
-    for n in extra {
-      if !pinnedHarness.contains(n) { throw TrustError.mismatch("store \(n) wasn't picked and isn't the harness's") }
-      if marked.contains(n) { throw TrustError.mismatch("the harness's store \(n) is sensitive: pick it on the page yourself") }
+    for n in extra where !pinnedHarness.contains(n) {
+      throw TrustError.mismatch("store \(n) wasn't picked and isn't the harness's\(marked.contains(n) ? " (and it is sensitive)" : "")")
     }
     return extra
   }
