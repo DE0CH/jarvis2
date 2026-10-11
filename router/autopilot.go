@@ -32,15 +32,15 @@ import (
 // Liveness: a session's reported status, its settings, and the loop's clocks (unexported: in memory only, as
 // in Jarvis 1, so a router restart just restarts them)
 type Liveness struct {
-	AutoPauseOff    bool      `json:"autoPauseOff,omitempty"`
-	NotifyIdleOff   bool      `json:"notifyIdleOff,omitempty"`
-	OneShot         bool      `json:"oneShot,omitempty"`
-	NeedsGrant      string    `json:"needsGrant,omitempty"` // a holder the machine refused; the app offers a grant
-	DowngradeSeenAt int64     `json:"downgradeSeenAt,omitempty"`
+	AutoPauseOff    bool   `json:"autoPauseOff,omitempty"`
+	NotifyIdleOff   bool   `json:"notifyIdleOff,omitempty"`
+	OneShot         bool   `json:"oneShot,omitempty"`
+	NeedsGrant      string `json:"needsGrant,omitempty"` // a holder the machine refused; the app offers a grant
+	DowngradeSeenAt int64  `json:"downgradeSeenAt,omitempty"`
 	// the settled episode already DMed ("idle:<statusUpdatedAt>"), so a router restart doesn't ping it again
-	AttentionSent string `json:"attentionSent,omitempty"`
-	Reg             *Registry `json:"registry,omitempty"`
-	LastReport      time.Time `json:"lastReport,omitempty"`
+	AttentionSent string    `json:"attentionSent,omitempty"`
+	Reg           *Registry `json:"registry,omitempty"`
+	LastReport    time.Time `json:"lastReport,omitempty"`
 
 	idleSince       time.Time
 	waiting         *waitEpisode
