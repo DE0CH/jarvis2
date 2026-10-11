@@ -239,7 +239,13 @@ func main() {
 	must2(call(router, "POST", "/api/sessions/"+id+"/grants/draft", map[string]any{"holder": "terminal", "kind": "rule", "until": time.Now().Add(24 * time.Hour)}, &draft))
 	must2(call(router, "POST", "/api/sessions/"+id+"/grants", map[string]string{"payload": draft.Text, "sig": p.sign(draft.Text)}, &grant))
 
-	step("status: the machine reports itself; the session's local Jarvis API arms a wakeup (scheduler on its allow list)")
+	step("inputs: the machine's Fly config carries only what the core set; the harness's env has nothing the router chose on its own")
+	if env := flyMachineEnv(m1); len(env) != 2 || env["JARVIS2_CORE_KEY"] == "" || env["JARVIS2_URL"] == "" {
+		log.Fatalf("the machine's Fly config env is %v, want only JARVIS2_CORE_KEY and JARVIS2_URL", env)
+	}
+	expectOnMachine(m1, "tr '\\0' '\\n' < /proc/$(pgrep -f session-supervisor | head -1)/environ | grep -cE '^(JARVIS2_REPOS|SESSION_RESUME_TITLE|JARVIS2_ROLLBACK|JARVIS2_RESTORE_CERT|SESSION_REPOS)=' || true", "0")
+
+	step("status: the machine reports itself; the session's local Jarvis API arms a wakeup (delivered later as its own signed request: no scheduler shell)")
 	for i := 0; ; i++ {
 		if lr, _ := session(id)["lastReport"].(string); lr != "" && !strings.HasPrefix(lr, "0001") {
 			break
@@ -250,7 +256,7 @@ func main() {
 		time.Sleep(2 * time.Second)
 	}
 	expectOnMachine(m1, "su - claude -c \"curl -s -X POST -H 'Content-Type: application/json' -d '{\\\"prompt\\\":\\\"e2e wake\\\",\\\"delaySeconds\\\":3600,\\\"name\\\":\\\"e2e\\\"}' http://127.0.0.1:7171/api/sessions/"+id+"/wakeups\" | grep -c '\"ok\":true'", "1")
-	expectOnMachine(m1, "su - claude -c 'jarvis2 allow' | grep -c '\"scheduler\"'", "1")
+	expectOnMachine(m1, "su - claude -c 'jarvis2 allow' | grep -c '\"scheduler\"' || true", "0")
 	expectOnMachine(m1, "su - claude -c 'curl -s -o /dev/null -w %{http_code} http://127.0.0.1:7171/api/sessions/s0000000000000000/wakeups'", "403")
 	var wk struct{ Wakeups []map[string]any }
 	must2(call(router, "GET", "/api/sessions/"+id+"/wakeups", nil, &wk))
@@ -686,6 +692,24 @@ func machineOf(id string) string { return fmt.Sprint(session(id)["machineId"]) }
 func dumpState() {
 	_, b := call(router, "GET", "/api/state", nil, nil)
 	log.Printf("state: %.2000s", string(b))
+}
+
+// flyMachineEnv: the env in a machine's Fly config
+func flyMachineEnv(m string) map[string]string {
+	req, _ := http.NewRequest("GET", "https://api.machines.dev/v1/apps/jarvis2-sessions/machines/"+m, nil)
+	req.Header.Set("Authorization", "Bearer "+os.Getenv("E2E_FLY_TOKEN"))
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		log.Fatalf("fly get %s: %v", m, err)
+	}
+	defer resp.Body.Close()
+	var out struct {
+		Config struct {
+			Env map[string]string `json:"env"`
+		} `json:"config"`
+	}
+	json.NewDecoder(resp.Body).Decode(&out)
+	return out.Config.Env
 }
 
 // flyExec: a command on a machine through the Machines API → its stdout and exit code
