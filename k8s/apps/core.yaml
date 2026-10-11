@@ -6,7 +6,7 @@ kind: Deployment
 # While the annotation jarvis2/core-pin is "hold", CI builds the core image but doesn't pin it here, so
 # a core/ change doesn't restart the running core (a restart = a new, empty core that only Deyao can set up again:
 # Recover). Remove it (a commit) when Deyao says the new core may go live, then run the images workflow, which pins it.
-metadata: { name: core, namespace: jarvis2-core }
+metadata: { name: core, namespace: jarvis2-core, annotations: { jarvis2/core-pin: hold } }
 spec:
   replicas: 1
   strategy: { type: Recreate }
@@ -34,14 +34,14 @@ spec:
 ---
 apiVersion: v1
 kind: Service
-metadata: { name: core, namespace: jarvis2-core }
+metadata: { name: core, namespace: jarvis2-core, annotations: { jarvis2/core-pin: hold } }
 spec:
   selector: { app: core }
   ports: [{ port: 8090, targetPort: 8090 }]
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
-metadata: { name: core, namespace: jarvis2-core }
+metadata: { name: core, namespace: jarvis2-core, annotations: { jarvis2/core-pin: hold } }
 spec:
   podSelector: {}
   policyTypes: [Ingress, Egress]
