@@ -35,10 +35,6 @@ struct MachinesView: View {
           let orphans = own.count { $0.sessionId == nil }
           Text("\(Fmt.plural(own.count, "machine")) in \(doc["app"].string ?? "jarvis2-sessions"), \(orphans > 0 ? "\(orphans) with no session" : "all belong to sessions"). A paused session has no machine.")
         }
-        if orgs.isEmpty {
-          // a router that lists only its own app
-          Section(doc["app"].string ?? "jarvis2-sessions") { ForEach(model.machines.items) { m in MachineRow(m: m, own: true) } }
-        }
         ForEach(Array(orgs.enumerated()), id: \.offset) { _, org in OrgSections(org: org) }
       }
     }
