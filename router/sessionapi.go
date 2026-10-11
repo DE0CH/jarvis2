@@ -61,7 +61,7 @@ func (r *Router) registerSessionAPI(app appRoute, m machineRoute) {
 	for _, p := range []string{"POST /api/sessions/{id}/wakeup", "POST /api/sessions/{id}/wakeups"} {
 		app(p, func(w http.ResponseWriter, req *http.Request) {
 			b, _ := io.ReadAll(io.LimitReader(req.Body, 1<<20))
-			r.postWakeup(w, req.PathValue("id"), b)
+			r.postWakeup(w, req.PathValue("id"), b, nil)
 		})
 	}
 	app("DELETE /api/sessions/{id}/wakeup", func(w http.ResponseWriter, req *http.Request) {
@@ -73,7 +73,7 @@ func (r *Router) registerSessionAPI(app appRoute, m machineRoute) {
 	app("GET /api/sessions/{id}/crons", func(w http.ResponseWriter, req *http.Request) { r.getCrons(w, req.PathValue("id")) })
 	app("POST /api/sessions/{id}/crons", func(w http.ResponseWriter, req *http.Request) {
 		b, _ := io.ReadAll(io.LimitReader(req.Body, 1<<20))
-		r.postCron(w, req.PathValue("id"), b)
+		r.postCron(w, req.PathValue("id"), b, nil)
 	})
 	app("DELETE /api/sessions/{id}/crons/{name}", func(w http.ResponseWriter, req *http.Request) {
 		r.deleteCron(w, req.PathValue("id"), req.PathValue("name"))
@@ -103,8 +103,13 @@ func (r *Router) registerSessionAPI(app appRoute, m machineRoute) {
 	}
 	own("GET /m/api/sessions/{id}/wakeup", func(w http.ResponseWriter, req *http.Request, sid string, _ []byte) { r.getWakeups(w, sid, true) })
 	own("GET /m/api/sessions/{id}/wakeups", func(w http.ResponseWriter, req *http.Request, sid string, _ []byte) { r.getWakeups(w, sid, false) })
-	own("POST /m/api/sessions/{id}/wakeup", func(w http.ResponseWriter, req *http.Request, sid string, b []byte) { r.postWakeup(w, sid, b) })
-	own("POST /m/api/sessions/{id}/wakeups", func(w http.ResponseWriter, req *http.Request, sid string, b []byte) { r.postWakeup(w, sid, b) })
+	// the session's own request, kept exactly as its machine signed it: what vouches for the delivery (vouch.go)
+	own("POST /m/api/sessions/{id}/wakeup", func(w http.ResponseWriter, req *http.Request, sid string, b []byte) {
+		r.postWakeup(w, sid, b, signedRequestOf(req, req.Header.Get("X-Machine"), b))
+	})
+	own("POST /m/api/sessions/{id}/wakeups", func(w http.ResponseWriter, req *http.Request, sid string, b []byte) {
+		r.postWakeup(w, sid, b, signedRequestOf(req, req.Header.Get("X-Machine"), b))
+	})
 	own("DELETE /m/api/sessions/{id}/wakeup", func(w http.ResponseWriter, req *http.Request, sid string, _ []byte) {
 		r.deleteWakeups(w, sid, req.URL.Query().Get("name"), req.URL.Query().Get("all") == "1")
 	})
@@ -112,7 +117,9 @@ func (r *Router) registerSessionAPI(app appRoute, m machineRoute) {
 		r.deleteWakeups(w, sid, req.PathValue("name"), false)
 	})
 	own("GET /m/api/sessions/{id}/crons", func(w http.ResponseWriter, req *http.Request, sid string, _ []byte) { r.getCrons(w, sid) })
-	own("POST /m/api/sessions/{id}/crons", func(w http.ResponseWriter, req *http.Request, sid string, b []byte) { r.postCron(w, sid, b) })
+	own("POST /m/api/sessions/{id}/crons", func(w http.ResponseWriter, req *http.Request, sid string, b []byte) {
+		r.postCron(w, sid, b, signedRequestOf(req, req.Header.Get("X-Machine"), b))
+	})
 	own("DELETE /m/api/sessions/{id}/crons/{name}", func(w http.ResponseWriter, req *http.Request, sid string, _ []byte) {
 		r.deleteCron(w, sid, req.PathValue("name"))
 	})
@@ -240,7 +247,7 @@ func (r *Router) getWakeups(w http.ResponseWriter, sid string, single bool) {
 	writeJSON(w, 200, map[string]any{"wakeup": first, "wakeups": views})
 }
 
-func (r *Router) postWakeup(w http.ResponseWriter, sid string, body []byte) {
+func (r *Router) postWakeup(w http.ResponseWriter, sid string, body []byte, signed *SignedRequest) {
 	b, err := decodeBody(body)
 	if err != nil {
 		scheduleErr(w, err)
@@ -248,6 +255,7 @@ func (r *Router) postWakeup(w http.ResponseWriter, sid string, body []byte) {
 	}
 	wu, err := normalizeWakeup(b, time.Now())
 	if err == nil {
+		wu.Signed = signed
 		err = r.ArmWakeup(sid, wu)
 	}
 	if err != nil {
@@ -288,7 +296,7 @@ func (r *Router) getCrons(w http.ResponseWriter, sid string) {
 	writeJSON(w, 200, map[string]any{"crons": views})
 }
 
-func (r *Router) postCron(w http.ResponseWriter, sid string, body []byte) {
+func (r *Router) postCron(w http.ResponseWriter, sid string, body []byte, signed *SignedRequest) {
 	b, err := decodeBody(body)
 	if err != nil {
 		scheduleErr(w, err)
@@ -296,6 +304,7 @@ func (r *Router) postCron(w http.ResponseWriter, sid string, body []byte) {
 	}
 	c, err := normalizeCron(b, time.Now())
 	if err == nil {
+		c.Signed = signed
 		err = r.ArmCron(sid, c)
 	}
 	if err != nil {

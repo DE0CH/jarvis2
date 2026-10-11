@@ -249,6 +249,8 @@ type pilotAction struct {
 	Text    string // dm, nudge
 	Repair  string // login: the uuid of the "Please run /login" reply being repaired
 	Name    string
+	Jobs    int // nudge: the numbers its text is built from (the image builds the same text: vouch.go)
+	Minutes int
 }
 
 func (r *Router) startAutopilot() {
@@ -400,7 +402,7 @@ func planTick(d *persisted, now time.Time, storedExp int64, c pilotConfig, busy,
 			l.stall = &stallClock{at: now, statusAt: g.StatusUpdatedAt}
 		} else if stalled := now.Sub(l.stall.at); stalled >= c.StallNudge {
 			l.stall.at = now
-			add(pilotAction{Kind: "nudge", Session: id, Text: nudgeText(g.BgTasks, stalled)})
+			add(pilotAction{Kind: "nudge", Session: id, Text: nudgeText(g.BgTasks, stalled), Jobs: g.BgTasks, Minutes: int(stalled.Round(time.Minute) / time.Minute)})
 		}
 
 		// Claude login: Jarvis 1's pair expires later than the session's, or the session stopped on "Please run /login"
@@ -566,7 +568,7 @@ func (r *Router) runAction(a pilotAction) {
 		}()
 	case "nudge":
 		go func() {
-			if err := r.Deliver(a.Session, "jarvis", a.Text); err != nil {
+			if err := r.DeliverCanned(a.Session, Delivery{Kind: "nudge", Jobs: a.Jobs, Minutes: a.Minutes}, a.Text); err != nil {
 				r.noteRefusal(a.Session, "scheduler", err)
 				log.Printf("[stall] nudge for %s failed (retried next interval): %v", a.Session, err)
 				return

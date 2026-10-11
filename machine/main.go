@@ -51,13 +51,13 @@ import (
 
 const (
 	dir         = "/run/jarvis2"
-	keysPath    = dir + "/keys.json"        // public halves, printed by init for the core (through Fly exec)
-	privPath    = dir + "/private.json"     // private halves, never leave the machine
-	coreKeyPath = dir + "/core-key"         // the core's key, from the machine's Fly config (the core set it)
-	coreKeyEnv  = "JARVIS2_CORE_KEY"        // the core that created this machine puts its signing key here
+	keysPath    = dir + "/keys.json"    // public halves, printed by init for the core (through Fly exec)
+	privPath    = dir + "/private.json" // private halves, never leave the machine
+	coreKeyPath = dir + "/core-key"     // the core's key, from the machine's Fly config (the core set it)
+	coreKeyEnv  = "JARVIS2_CORE_KEY"    // the core that created this machine puts its signing key here
 	goPath      = dir + "/init-requested"
 	certPath    = dir + "/cert.json"
-	bootedPath  = dir + "/booted" // written once the boot is done (cert, snapshot, secrets, repos): the harness starts next
+	bootedPath  = dir + "/booted"      // written once the boot is done (cert, snapshot, secrets, repos): the harness starts next
 	clientPath  = dir + "/client.json" // the router URL + this machine's id, for later commands
 	jarvis1     = "/usr/local/bin/entrypoint.sh"
 )
@@ -84,10 +84,14 @@ type Cert struct {
 	Options struct {
 		Harness        string `json:"harness"`
 		PermissionMode string `json:"permissionMode"`
+		Config         string `json:"config"` // the session's settings (vouch.go)
+		Once           string `json:"once"`   // this machine's one-time inputs
 	} `json:"options"`
 	Phone     string `json:"phone"`
 	Sensitive bool   `json:"sensitive"`
 	Line      string `json:"line"`
+	Snapshot  string `json:"snapshot"` // sha256 of the predecessor's snapshot, from the core's kill record
+	Vouch     int    `json:"vouch"`    // 2: a core that vouches for inputs (Config, Once, Snapshot are meaningful)
 }
 
 type private struct {
@@ -133,6 +137,12 @@ func main() {
 // ---- boot -----------------------------------------------------------------------------------------
 
 func boot() error {
+	// first: the env this machine was started with is thrown away, except what the image, Fly and the core set
+	// (vouch.go). Re-execs once.
+	if err := ensureCleanEnv(); err != nil {
+		log.Printf("REFUSING TO START: %v", err)
+		select {}
+	}
 	if err := keygen(); err != nil {
 		return fmt.Errorf("keygen: %w", err)
 	}
@@ -256,21 +266,37 @@ func prepare() error {
 	os.WriteFile(certPath, raw, 0o644)
 	log.Printf("cert ok: stores %v, harness %s, predecessor %q", cert.Stores, cert.Options.Harness, cert.PredID)
 
-	// 2. the predecessor's snapshot, checked against the predecessor's own signing key
-	if cert.PredID != "" && cert.PredID != me {
+	v, err := vouch(cert) // vouch.go: what the cert vouches for (nothing, from a core before Vouch 2)
+	if err != nil {
+		return err
+	}
+	v.Ex = fetchExceptions(c) // the few router values whose format can't carry an instruction
+	writeVouched(v)
+	firstMachine := cert.PredID == ""
+
+	// 2. the predecessor's snapshot: the one whose hash the cert names (a Vouch 2 cert), signed by the predecessor
+	if !firstMachine && cert.PredID != me {
 		var pc Cert
 		if err := verifyDoc(coreKey, certs.PredecessorCert, &pc); err != nil || pc.Kind != "succession-cert" || pc.Machine == nil || pc.Machine.ID != cert.PredID {
 			return fmt.Errorf("the predecessor's cert isn't core-signed for %s (%v)", cert.PredID, err)
 		}
-		if err := restore(c, pc.Machine.SigningKey); err != nil {
-			return fmt.Errorf("snapshot: %w", err)
+		if !v.V2 || cert.Snapshot != "" {
+			predecessorKey = pc.Machine.SigningKey
+			if err := restore(c, pc.Machine.SigningKey, v); err != nil {
+				return fmt.Errorf("snapshot: %w", err)
+			}
+		} else {
+			log.Printf("the cert names no snapshot of %s: starting with no predecessor state", cert.PredID)
 		}
-		applyRollback(cert.PredID) // rollback.go: a restart's transcript rollback, on the verified snapshot
+		if v.Once.Rollback != "" { // rollback.go: only a rollback the phone approved, on the verified snapshot
+			applyRollback(v.Once.Rollback)
+		}
 	}
-	// 2b. a new line restoring a destroyed session's archived snapshot (restore.go)
-	if err := restoreArchived(c, coreKey, me, &cert); err != nil {
+	// 2b. a new line restoring a destroyed session's archived snapshot (restore.go): only the one the cert names
+	if err := restoreArchived(c, coreKey, me, &cert, v); err != nil {
 		return fmt.Errorf("restore: %w", err)
 	}
+	trustLineKeys(cert) // deliver.go: this line's signing keys, for what it asked to be delivered later
 
 	// 3. the secrets, sealed to this machine's encryption key
 	secrets, err := pullSecrets(c, coreKey, me)
@@ -280,41 +306,34 @@ func prepare() error {
 	sj, _ := json.Marshal(secrets)
 	log.Printf("secrets ok: %d keys", len(secrets))
 
-	// 4. repos: each repo's deploy key from its store (SSH, that repo only), then the clones
+	// 4. repos: each repo's deploy key from its store (SSH, that repo only), then the clones the cert names
 	if err := setupDeployKeys(secrets); err != nil {
 		log.Printf("deploy keys: %v", err)
 	}
-	cloneRepos()
+	cloneRepos(reposToClone(v, secrets))
 
 	// 5. booted: from now on a snapshot command gets a real snapshot; then Jarvis 1's entrypoint runs the harness
 	if err := os.WriteFile(bootedPath, []byte(time.Now().UTC().Format(time.RFC3339)), 0o644); err != nil {
 		return fmt.Errorf("booted marker: %w", err)
 	}
+	clean := os.Environ() // already the clean env (ensureCleanEnv)
 	if t, ok := strings.CutPrefix(cert.Options.Harness, taskHarnessPrefix); ok {
+		for _, kv := range taskVouchedEnv(v) { // task.go reads these from the process env
+			k, val, _ := strings.Cut(kv, "=")
+			os.Setenv(k, val)
+		}
 		runTask(c, t, secrets, certMode(cert)) // task.go: the template instead of a harness; never returns
 	}
-	env := os.Environ()
-	env = withoutEnv(env, "SESSION_HARNESS", "SESSION_PERMISSION_MODE") // the signed values below replace the router's
-	env = append(env, "SESSION_SECRETS_JSON="+string(sj), "SESSION_HARNESS="+cert.Options.Harness, "SESSION_PERMISSION_MODE="+certMode(cert), "SESSION_ID="+sessionID(me))
-	if p := tunnelProof(c); p != "" { // tunnelproof.go
-		env = append(env, "TUNNEL_AGENT_SECRET="+p)
+	env := harnessEnv(clean, v, me, firstMachine, string(sj), secrets)
+	if !firstMachine && v.Once.Prompt != "" {
+		home, _ := os.UserHomeDir()
+		os.Remove(filepath.Join(home, ".claude", ".first-prompt-sent")) // the supervisor types the approved resume prompt
 	}
-	if v := secrets["CLAUDE_CREDENTIALS"]; v != "" {
-		env = append(env, "CLAUDE_CREDENTIALS="+v)
+	if firstMachine && v.V2 && len(v.Config.Attachments) > 0 {
+		env = append(env, fetchAttachments(c, v.Config.Attachments)...) // attachments.go: hash-checked against the cert
 	}
-	if v := secrets["CLAUDE_ACCOUNT"]; v != "" {
-		env = append(env, "CLAUDE_ACCOUNT="+v)
-	}
-	env = append(env, fetchAttachments(c)...) // attachments.go: first-prompt attachments, before the harness
 	log.Printf("starting the harness")
 	return syscall.Exec(jarvis1, []string{jarvis1}, env)
-}
-
-func sessionID(me string) string {
-	if s := os.Getenv("JARVIS2_SESSION_ID"); s != "" {
-		return s
-	}
-	return me
 }
 
 func ownKeys() (map[string]string, error) {
@@ -379,16 +398,12 @@ func pullSecrets(c *client, coreKey, me string) (map[string]string, error) {
 	return m, json.Unmarshal(plain, &m)
 }
 
-// cloneRepos: JARVIS2_REPOS into ~/workspace. A repo whose deploy key is in the session's stores goes over SSH
-// with that key (setupDeployKeys has already written git's rewrites for its https URL); any other is cloned
-// anonymously over HTTPS (public repos only).
-func cloneRepos() {
+// cloneRepos: the repos the cert names (reposToClone) into ~/workspace. A repo whose deploy key is in the session's
+// stores goes over SSH with that key (setupDeployKeys has already written git's rewrites for its https URL); any
+// other is cloned anonymously over HTTPS from GitHub (public repos only).
+func cloneRepos(repos []string) {
 	home, _ := os.UserHomeDir()
-	repos := strings.TrimSpace(os.Getenv("JARVIS2_REPOS"))
-	if repos == "" {
-		return
-	}
-	for _, url := range strings.Split(repos, ",") {
+	for _, url := range repos {
 		url = cloneURL(url)
 		if url == "" {
 			continue
@@ -398,7 +413,7 @@ func cloneRepos() {
 		if _, err := os.Stat(filepath.Join(dst, ".git")); err == nil {
 			continue // restored from the snapshot
 		}
-		cmd := exec.Command("git", "clone", "-q", url, dst)
+		cmd := exec.Command("git", "clone", "-q", "--", url, dst)
 		cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
 		if out, err := cmd.CombinedOutput(); err != nil {
 			log.Printf("clone %s failed: %s", name, strings.TrimSpace(string(out)))
@@ -411,7 +426,7 @@ func cloneRepos() {
 // ---- snapshots ------------------------------------------------------------------------------------
 
 // what a snapshot holds (relative to $HOME): the conversation, the work, the artefacts
-var snapshotPaths = []string{".claude/projects", ".claude.json", ".claude/.first-prompt-sent", "workspace", "artifacts", allowFile, changesFile}
+var snapshotPaths = []string{".claude/projects", ".claude.json", ".claude/.first-prompt-sent", "workspace", "artifacts", allowFile, changesFile, lineKeysFile}
 
 func makeSnapshot() ([]byte, error) {
 	home, _ := os.UserHomeDir()
@@ -460,12 +475,14 @@ func makeSnapshot() ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-func restore(c *client, predSigningKey string) error {
+// restore: the predecessor's snapshot. A Vouch 2 cert names its hash (the core took it from the predecessor's
+// signed kill): exactly that one, or nothing starts. An older cert: any snapshot the predecessor signed.
+func restore(c *client, predSigningKey string, v Vouched) error {
 	body, hdr, status, err := c.raw("GET", "/m/snapshot", nil)
 	if err != nil {
 		return err
 	}
-	if status == 404 {
+	if status == 404 && !v.V2 {
 		log.Printf("the predecessor left no snapshot: starting fresh")
 		return nil
 	}
@@ -473,6 +490,9 @@ func restore(c *client, predSigningKey string) error {
 		return fmt.Errorf("HTTP %d", status)
 	}
 	sum := sha256.Sum256(body)
+	if v.V2 && hex.EncodeToString(sum[:]) != v.Cert.Snapshot {
+		return errors.New("the snapshot isn't the one the cert names")
+	}
 	if !verify(predSigningKey, []byte(hex.EncodeToString(sum[:])), hdr.Get("X-Snapshot-Sig")) {
 		return errors.New("the snapshot isn't signed by the predecessor")
 	}
@@ -552,8 +572,9 @@ func agent() error {
 	}()
 	for {
 		var out struct {
-			Commands []string `json:"commands"`
-			Execs    []Exec   `json:"execs"`
+			Commands   []string   `json:"commands"`
+			Execs      []Exec     `json:"execs"`
+			Deliveries []Delivery `json:"deliveries"` // deliver.go: vouched, core-attested inputs
 		}
 		if err := c.json("GET", "/m/commands", nil, &out); err != nil {
 			time.Sleep(5 * time.Second)
@@ -561,6 +582,9 @@ func agent() error {
 		}
 		for _, e := range out.Execs {
 			go runExec(c, e)
+		}
+		for _, d := range out.Deliveries {
+			go runDelivery(c, d)
 		}
 		for _, cmd := range out.Commands {
 			if cmd == "snapshot" {
@@ -732,6 +756,7 @@ func downgrade(keep []string) error {
 	if err := shredWrite(privPath, p, 0o600); err != nil {
 		return err
 	}
+	addLineKey(sigPub) // deliver.go: what this machine asks for from now on is signed with the new key
 	pub, _ := json.Marshal(map[string]string{"encryptionKey": encPub, "signingKey": sigPub})
 	os.WriteFile(keysPath, pub, 0o644)
 	raw, _ := json.Marshal(fin.Cert)

@@ -2,14 +2,10 @@ package main
 
 // Transcript rollback (Jarvis 1's restart {rollback: {dropFromMarker}}, archive.js editSnapshotTranscript).
 // The router can't edit a snapshot: it is signed by the machine that took it, and this machine checks that
-// signature. So the router only asks, in the env (JARVIS2_ROLLBACK = the marker, JARVIS2_ROLLBACK_PRED = the
-// machine whose snapshot it means), and this machine applies it AFTER it has verified and unpacked that
-// snapshot: in every conversation transcript (~/.claude/projects/<dir>/<id>.jsonl), the first line containing
-// the marker and everything after it are dropped. A rollback naming another predecessor is ignored, so a
-// stale request never reaches a later start.
-//
-// Trust: the marker is the router's word, like the rest of the env. The worst a lying router does with it is
-// drop the end of a conversation, which it could already do by withholding the whole snapshot.
+// signature. A rollback is a one-time input of the successor's cert (Options.Once "rollback", approved on the
+// phone; vouch.go), and this machine applies it AFTER it has verified and unpacked the snapshot: in every
+// conversation transcript (~/.claude/projects/<dir>/<id>.jsonl), the first line containing the marker and
+// everything after it are dropped. Nothing in the env or from the router alone asks for one.
 
 import (
 	"bytes"
@@ -27,14 +23,10 @@ type rollbackResult struct {
 	Dropped int    `json:"dropped"`
 }
 
-// applyRollback: called by prepare once the predecessor's snapshot is restored
-func applyRollback(predID string) {
-	marker, pred := os.Getenv("JARVIS2_ROLLBACK"), os.Getenv("JARVIS2_ROLLBACK_PRED")
+// applyRollback: called by prepare once the predecessor's snapshot is restored, with the marker from the cert's
+// one-time inputs (only the phone approves one: vouch.go)
+func applyRollback(marker string) {
 	if marker == "" {
-		return
-	}
-	if pred == "" || pred != predID {
-		log.Printf("rollback asked for %q's snapshot, this machine succeeds %q: ignored", pred, predID)
 		return
 	}
 	home, _ := os.UserHomeDir()

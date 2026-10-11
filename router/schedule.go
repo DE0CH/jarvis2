@@ -50,18 +50,22 @@ type Wakeup struct {
 	At      int64  `json:"at"` // ms epoch
 	Prompt  string `json:"prompt"`
 	ArmedAt int64  `json:"armedAt"` // ms epoch: the arming's identity (compare-and-clear)
+	// Signed: the session's own request that armed it, as its machine signed it (nil = armed from the app): what
+	// vouches for the delivery to a machine whose cert vouches (vouch.go)
+	Signed *SignedRequest `json:"signed,omitempty"`
 }
 
 type Cron struct {
-	Name        string `json:"name"`
-	Prompt      string `json:"prompt"`
-	Every       int64  `json:"every"` // seconds
-	TZ          string `json:"tz"`
-	NextAt      int64  `json:"nextAt"`          // ms epoch
-	Until       *int64 `json:"until,omitempty"` // ms epoch
-	ArmedAt     int64  `json:"armedAt"`
-	Runs        int    `json:"runs"`
-	LastFiredAt *int64 `json:"lastFiredAt,omitempty"`
+	Name        string         `json:"name"`
+	Prompt      string         `json:"prompt"`
+	Every       int64          `json:"every"` // seconds
+	TZ          string         `json:"tz"`
+	NextAt      int64          `json:"nextAt"`          // ms epoch
+	Until       *int64         `json:"until,omitempty"` // ms epoch
+	ArmedAt     int64          `json:"armedAt"`
+	Runs        int            `json:"runs"`
+	LastFiredAt *int64         `json:"lastFiredAt,omitempty"`
+	Signed      *SignedRequest `json:"signed,omitempty"` // as Wakeup.Signed
 }
 
 // Schedule: one session's wakeups, crons and pending resume prompt
@@ -764,7 +768,17 @@ func (r *Router) fireWakeup(sid, name string, armedAt int64) error {
 	if w.Name != wakeupDefault {
 		text = fmt.Sprintf("[scheduled wakeup %q] %s", w.Name, w.Prompt)
 	}
-	if err := r.deliverToSession(sid, "jarvis", text, ""); err != nil {
+	var err error
+	if r.vouchedDeliveries(sid) { // vouch.go: the session's own signed request, attested by the core
+		if w.Signed == nil {
+			err = errNotVouched
+		} else {
+			err = r.deliverVouched(sid, Delivery{Kind: "wakeup", Request: w.Signed})
+		}
+	} else {
+		err = r.deliverToSession(sid, "jarvis", text, "")
+	}
+	if err != nil {
 		return err
 	}
 	log.Printf("[wakeup] %s %q delivered", sid, name)
@@ -806,7 +820,17 @@ func (r *Router) fireCron(sid, name string, armedAt int64) error {
 	text := fmt.Sprintf("[recurring wakeup %q, %s — run %d] %s", c.Name, everyText(c.Every), c.Runs+1, c.Prompt)
 	// each firing renews the session's own approval of the scheduler (never shortens it)
 	renew := fmt.Sprintf("jarvis2-machine allow-at-least scheduler %ds", int64(cronAllowFor(c.Every)/time.Second))
-	if err := r.deliverToSession(sid, "jarvis", text, renew); err != nil {
+	var err error
+	if r.vouchedDeliveries(sid) { // vouch.go: no allow-list renewal either: the machine needs no shell for it
+		if c.Signed == nil {
+			err = errNotVouched
+		} else {
+			err = r.deliverVouched(sid, Delivery{Kind: "cron", Request: c.Signed, Run: c.Runs + 1})
+		}
+	} else {
+		err = r.deliverToSession(sid, "jarvis", text, renew)
+	}
+	if err != nil {
 		return err
 	}
 	log.Printf("[cron] %s %q delivered", sid, name)

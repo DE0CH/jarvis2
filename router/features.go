@@ -30,6 +30,7 @@ func (r *Router) registerFeatures(app appRoute, m machineRoute, public publicRou
 	r.registerSessionOps(app, m)     // sessionops.go, uploads.go, repos.go
 	r.registerTasks(app, m)          // tasks.go: task instances (one-shot session lines), runs, schedules
 	r.registerInbox(app, m, public)  // inbox.go: requests waiting for the phone (the app's Inbox)
+	r.registerVouch(app, m)          // vouch.go: /m/config, /m/restore-cert, deliveries, the input log
 }
 
 // startFeatures: called once from main after the router is built
@@ -41,6 +42,7 @@ func (r *Router) startFeatures() {
 	go r.budgetLoop()   // budget.go: the Fly budget cap
 	go r.uploadsLoop()  // uploads.go: stale attachments
 	go r.tasksLoop()    // tasks.go: daily schedules, runs, pausing finished task lines
+	go r.inputLogLoop() // vouch.go: the core's input log onto the volume
 	go r.resumeInterrupted()
 	go r.coreChangeLoop() // corechange.go: a new core → the earlier core's paused sessions are destroyed
 }
@@ -109,7 +111,21 @@ func (r *Router) Deliver(session, from, text string) error {
 	if deliverHook == nil {
 		return errNoDeliver
 	}
+	if r.vouchedDeliveries(session) {
+		// a machine whose cert vouches takes only texts built into its image (vouch.go canned): the router picks
+		// when, never what
+		return errNotVouched
+	}
 	return deliverHook(r, session, from, text)
+}
+
+// DeliverCanned: a text built into the session image ("continue", the watchdog's nudge), as a delivery the core
+// attests; the old path (a command under the scheduler's grant) for a machine whose cert doesn't vouch
+func (r *Router) DeliverCanned(session string, d Delivery, text string) error {
+	if r.vouchedDeliveries(session) {
+		return r.deliverVouched(session, d)
+	}
+	return r.Deliver(session, "jarvis", text)
 }
 
 var errNoDeliver = errors.New("message delivery isn't built yet")

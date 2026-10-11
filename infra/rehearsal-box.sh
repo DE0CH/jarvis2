@@ -162,6 +162,18 @@ spec:
                     - { name: RECORDS_OFF, value: "1" }
                     - { name: DISCORD_SESSION_CHANNELS, value: "off" }
 $access_env
+    - target: { kind: Deployment, name: core, namespace: jarvis2-core }
+      patch: |
+        apiVersion: apps/v1
+        kind: Deployment
+        metadata: { name: core, namespace: jarvis2-core }
+        spec:
+          template:
+            spec:
+              containers:
+                - name: core
+                  env:
+                    - { name: MACHINE_URL, value: "http://$NAME._peer.internal:8081" }
 EOF
   # REHEARSAL_CORE_IMAGE: the box runs that core instead of the pinned one (the phone replica runs the core main
   # builds while a core change waits for Deyao: jarvis2/core-pin hold), as one more documented patch

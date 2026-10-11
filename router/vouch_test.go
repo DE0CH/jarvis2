@@ -1,0 +1,233 @@
+package main
+
+// The router's side of vouched inputs (vouch.go). The router isn't trusted, so these tests only check that it asks
+// the core and the machine for the right things; the refusals that count are in core/vouch_test.go and
+// machine/vouch_test.go.
+
+import (
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+)
+
+// v2Core: a core with the input log; records each call's body
+type v2Core struct {
+	fakeCore
+	mu     sync.Mutex
+	bodies map[string][]map[string]any
+}
+
+func (c *v2Core) last(path string) map[string]any {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	b := c.bodies[path]
+	if len(b) == 0 {
+		return nil
+	}
+	return b[len(b)-1]
+}
+
+func (c *v2Core) ServeHTTP(w http.ResponseWriter, req *http.Request) {
+	raw, _ := io.ReadAll(req.Body)
+	var b map[string]any
+	json.Unmarshal(raw, &b)
+	c.mu.Lock()
+	if c.bodies == nil {
+		c.bodies = map[string][]map[string]any{}
+	}
+	c.bodies[req.URL.Path] = append(c.bodies[req.URL.Path], b)
+	c.mu.Unlock()
+	switch req.URL.Path {
+	case "/input-log":
+		writeJSON(w, 200, map[string]any{"entries": []any{}, "head": c.key.doc(map[string]any{"kind": "input-log-head", "seq": 0})})
+	case "/succession":
+		writeJSON(w, 200, c.key.doc(map[string]any{"kind": "challenge", "nonce": strings.Repeat("a", 64), "request": b}))
+	case "/attest":
+		writeJSON(w, 200, c.key.doc(map[string]any{"kind": "input", "machine": b["machine"], "input": b["input"], "sha256": b["sha256"]}))
+	default:
+		c.fakeCore.ServeHTTP(w, req)
+	}
+}
+
+func v2Rig(t *testing.T) (*rig, *v2Core) {
+	rg := newRig(t)
+	vc := &v2Core{fakeCore: fakeCore{key: rg.core.key}}
+	cs := httptest.NewServer(vc)
+	t.Cleanup(cs.Close)
+	rg.r.core = &CoreClient{base: cs.URL, http: http.DefaultClient}
+	vouchProbe.Lock()
+	vouchProbe.at = time.Time{}
+	vouchProbe.Unlock()
+	t.Cleanup(func() { vouchProbe.Lock(); vouchProbe.at = time.Time{}; vouchProbe.Unlock() })
+	return rg, vc
+}
+
+func v2Cert(rg *rig, machine, config string) *Doc {
+	return rg.core.key.doc(map[string]any{"kind": "succession-cert", "line": "m1", "vouch": 2,
+		"machine": map[string]string{"id": machine, "signingKey": rg.mkey.pub(), "image": "ghcr.io/de0ch/jarvis2-session@sha256:" + strings.Repeat("1", 64)},
+		"stores":  []string{"claude", "default"}, "options": map[string]string{"harness": "claude", "permissionMode": "auto", "config": config}})
+}
+
+func TestTheSettingsGoIntoTheChallenge(t *testing.T) {
+	rg, vc := v2Rig(t)
+	sid, err := rg.r.CreateSession(NewSession{Label: "Refactor", Prompt: "please refactor", Harness: "claude", Repos: "https://github.com/DE0CH/claude-env.git", OneShot: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	opts, _ := vc.last("/succession")["options"].(map[string]any)
+	var c SessionConfig
+	if opts == nil || json.Unmarshal([]byte(opts["config"].(string)), &c) != nil {
+		t.Fatalf("no config in %v", vc.last("/succession"))
+	}
+	if c.Prompt != "please refactor" || c.Label != "Refactor" || !c.OneShot || len(c.Repos) != 1 || c.Repos[0] != "https://github.com/DE0CH/claude-env.git" {
+		t.Fatalf("config %+v", c)
+	}
+	waitFor(t, "approval", func() bool {
+		ok := false
+		rg.r.st.Do(func(d *persisted) {
+			for _, a := range d.Approvals {
+				ok = ok || a.Session == sid
+			}
+		})
+		return ok
+	})
+}
+
+func TestAnUnattendedResumeCarriesTheCertsConfigAndOnlyThat(t *testing.T) {
+	rg, vc := v2Rig(t)
+	conf := `{"v":1,"label":"x"}`
+	rg.r.st.Do(func(d *persisted) {
+		s := d.Sessions["s1"]
+		s.Cert, s.Image, s.Prompt, s.Label = v2Cert(rg, "m1", conf), "ghcr.io/de0ch/jarvis2-session@sha256:"+strings.Repeat("1", 64), "a new prompt", "a new label"
+	})
+	if err := rg.r.Resume("s1", false); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "dead-machine asked", func() bool { return vc.last("/approve/by-dead-machine") != nil })
+	opts := vc.last("/succession")["options"].(map[string]any)
+	if opts["config"] != conf || opts["once"] != nil {
+		t.Fatalf("resume options %v", opts)
+	}
+	waitFor(t, "idle", func() bool { _, err := rg.r.lock("s1", "test-end"); return err == nil })
+}
+
+func TestAResumePromptOrRollbackNeedsThePhone(t *testing.T) {
+	rg, vc := v2Rig(t)
+	rg.r.st.Do(func(d *persisted) {
+		s := d.Sessions["s1"]
+		s.Cert = v2Cert(rg, "m1", `{"v":1}`)
+		s.Ops = &SessionOps{Rollback: &RollbackMark{Marker: "uuid-1234", Pred: "m1"}}
+	})
+	rg.r.SetResumePrompt("s1", "carry on with the report")
+	if err := rg.r.Resume("s1", false); err != nil {
+		t.Fatal(err)
+	}
+	var a *Approval
+	waitFor(t, "approval", func() bool {
+		rg.r.st.Do(func(d *persisted) {
+			for _, x := range d.Approvals {
+				if x.Session == "s1" {
+					a = x
+				}
+			}
+		})
+		return a != nil
+	})
+	if a.Kind != "resume-upgrade" || vc.last("/approve/by-dead-machine") != nil {
+		t.Fatalf("a one-time input went unattended: %+v", a)
+	}
+	var once OnceInputs
+	json.Unmarshal([]byte(vc.last("/succession")["options"].(map[string]any)["once"].(string)), &once)
+	if once.Prompt != "carry on with the report" || once.Rollback != "uuid-1234" {
+		t.Fatalf("once %+v", once)
+	}
+	rg.r.st.Do(func(d *persisted) {
+		if d.Schedules["s1"].ResumePrompt != "" || d.Sessions["s1"].Ops.Rollback != nil {
+			t.Fatal("the prompt or rollback would be delivered again another way")
+		}
+	})
+}
+
+func TestAKillNamesTheMachinesSnapshot(t *testing.T) {
+	rg, vc := v2Rig(t)
+	if _, err := rg.r.killMachine("m1"); err != nil {
+		t.Fatal(err)
+	}
+	snap, _ := vc.last("/kill")["snapshot"].(map[string]any)
+	body, _ := os.ReadFile(rg.r.st.snapshotPath("m1"))
+	sig, _ := os.ReadFile(rg.r.st.snapshotPath("m1") + ".sig")
+	sum := sha256.Sum256(body)
+	if snap == nil || snap["sha256"] != hex.EncodeToString(sum[:]) || snap["sig"] != string(sig) {
+		t.Fatalf("kill %v", vc.last("/kill"))
+	}
+}
+
+func TestDeliveriesToAVouchingMachine(t *testing.T) {
+	rg, vc := v2Rig(t)
+	r := rg.r
+	r.st.Do(func(d *persisted) {
+		s := d.Sessions["s1"]
+		s.State, s.MachineID, s.Cert = "started", "m1", v2Cert(rg, "m1", `{"v":1}`)
+	})
+	// the router's own free text, or a wakeup made outside the session: nothing vouches for them
+	if err := r.Deliver("s1", "jarvis", "do something else"); !errors.Is(err, errNotVouched) {
+		t.Fatalf("free text: %v", err)
+	}
+	r.st.Do(func(d *persisted) {
+		sched(d, "s1").Wakeups["w"] = &Wakeup{Name: "w", At: 1, Prompt: "x", ArmedAt: 7}
+	})
+	if err := r.fireWakeup("s1", "w", 7); !errors.Is(err, errNotVouched) {
+		t.Fatalf("an app-made wakeup: %v", err)
+	}
+	// the session's own: handed over with the core's attestation of exactly its body
+	body := []byte(`{"name":"w","prompt":"check CI","delaySeconds":60}`)
+	signed := &SignedRequest{Machine: "m1", Method: "POST", Path: "/m/api/sessions/s1/wakeup", At: "1", Body: base64.StdEncoding.EncodeToString(body), Sig: "s"}
+	r.st.Do(func(d *persisted) { sched(d, "s1").Wakeups["w"].Signed = signed })
+	got := make(chan Delivery, 1)
+	go func() {
+		d := <-deliveryQueue("m1")
+		got <- d
+		deliveries.Lock()
+		ch := deliveries.results[d.ID]
+		deliveries.Unlock()
+		ch <- DeliveryResult{ID: d.ID, OK: true}
+	}()
+	if err := r.fireWakeup("s1", "w", 7); err != nil {
+		t.Fatal(err)
+	}
+	d := <-got
+	sum := sha256.Sum256(body)
+	at := vc.last("/attest")
+	if d.Kind != "wakeup" || d.Request == nil || d.Request.Body != signed.Body || d.Attest == nil ||
+		at["machine"] != "m1" || at["input"] != "wakeup" || at["sha256"] != hex.EncodeToString(sum[:]) {
+		t.Fatalf("delivery %+v attest %v", d, at)
+	}
+}
+
+func TestMachineConfigIsOnlyFormatExceptions(t *testing.T) {
+	rg, _ := v2Rig(t)
+	rg.r.st.Do(func(d *persisted) {
+		s := d.Sessions["s1"]
+		s.State, s.MachineID, s.Prompt, s.Label = "started", "m1", "secret instructions", "title"
+	})
+	out, err := rg.r.machineConfig("m1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	allowed := map[string]bool{"sessionId": true, "discordChannel": true, "liveSyncSeconds": true, "taskRun": true, "taskTrigger": true, "tunnelProof": true}
+	for k := range out {
+		if !allowed[k] {
+			t.Fatalf("/m/config carries %s", k)
+		}
+	}
+}

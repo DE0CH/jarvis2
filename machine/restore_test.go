@@ -78,13 +78,19 @@ func TestSnapshotSigAndUnpack(t *testing.T) {
 	}
 }
 
-func TestRestoreArchivedOnlyWhenAsked(t *testing.T) {
-	t.Setenv("JARVIS2_RESTORE_CERT", "")
-	if err := restoreArchived(nil, "", "me", &Cert{}); err != nil {
+func TestRestoreArchivedOnlyWhenTheCertNamesIt(t *testing.T) {
+	t.Setenv("JARVIS2_RESTORE_CERT", "{}") // the env asking: ignored
+	if err := restoreArchived(nil, "", "me", &Cert{}, Vouched{}); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("JARVIS2_RESTORE_CERT", "{}")
-	if err := restoreArchived(nil, "", "me", &Cert{PredID: "pred"}); err != nil {
-		t.Fatal("a successor acted on a restore cert")
+	if err := restoreArchived(nil, "", "me", &Cert{}, Vouched{V2: true}); err != nil {
+		t.Fatal("restored with no restore in the cert")
+	}
+	ref := &RestoreRef{Machine: "old", Sha256: strings.Repeat("a", 64)}
+	if err := restoreArchived(nil, "", "me", &Cert{PredID: "pred"}, Vouched{V2: true, Config: SessionConfig{Restore: ref}}); err != nil {
+		t.Fatal("a successor acted on a restore")
+	}
+	if err := restoreArchived(nil, "", "me", &Cert{}, Vouched{Config: SessionConfig{Restore: ref}}); err != nil {
+		t.Fatal("a cert from a core that doesn't vouch restored")
 	}
 }

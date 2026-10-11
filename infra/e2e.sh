@@ -37,12 +37,15 @@ FLY_API_TOKEN="$JARVIS2_FLY_TOKEN" flyctl wireguard remove jarvis2-370 jarvis2-e
 
 # the test router must never reach Deyao's Discord, the Storage Box or Jarvis 1: none of their keys go in
 mkdir -p "$W/data" "$W/web"
-BOX_KEY_FILE="$W/box-key.pem" ADDR=127.0.0.1:28090 "$W/core" > "$W/core.log" 2>&1 & PIDS+=($!)
+# the core sets the router's address in every machine it makes (core/vouch.go), from its own deployment
+BOX_KEY_FILE="$W/box-key.pem" ADDR=127.0.0.1:28090 MACHINE_URL=http://jarvis2-e2e._peer.internal:8081 "$W/core" > "$W/core.log" 2>&1 & PIDS+=($!)
+# the core starts only the session image pinned by its linux/amd64 digest
+E2E_SESSION_IMAGE="$("$ROOT/infra/image-digest.sh" "${E2E_SESSION_IMAGE:-ghcr.io/de0ch/jarvis2-session:latest}")"
 env -u LOBSTER_TOKEN -u STORAGEBOX_HOST -u STORAGEBOX_USER -u STORAGEBOX_PASSWORD -u FLY_READ_TOKEN -u GITHUB_READ_TOKEN \
   -u JARVIS1_CREDENTIALS_ID -u JARVIS1_CREDENTIALS_SECRET -u JARVIS1_SERVICES_ID -u JARVIS1_SERVICES_SECRET \
   CORE_URL=http://127.0.0.1:28090 NO_ACCESS=1 RECORDS_OFF=1 LIVE_SYNC_SECONDS=20 ADDR=127.0.0.1:28080 DATA_DIR="$W/data" WEB_DIR="$W/web" \
   WG_CONFIG="$W/wg.conf" MACHINE_URL=http://jarvis2-e2e._peer.internal:8081 POLICY_FILE="$W/policy.json" TASKS_DIR="$ROOT/tasks" \
-  SESSION_IMAGE="${E2E_SESSION_IMAGE:-ghcr.io/de0ch/jarvis2-session:latest}" \
+  SESSION_IMAGE="$E2E_SESSION_IMAGE" \
   "$W/router" > "$W/router.log" 2>&1 & PIDS+=($!)
 sleep 3
 (cd "$ROOT/e2e" && E2E_ROUTER_LOG="$W/router.log" E2E_DATA_DIR="$W/data" E2E_ROUTER=http://127.0.0.1:28080 E2E_CORE=http://127.0.0.1:28090 E2E_MASTER_KEY_FILE="$ROOT/e2e/testdata/master-test.pem" E2E_BOX_PUB="$(cat "$W/box.pub")" \

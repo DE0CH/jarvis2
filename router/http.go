@@ -507,11 +507,14 @@ func (r *Router) buildHandlers() {
 		r.cmdMu.Lock()
 		eq := r.execQueue(machine)
 		r.cmdMu.Unlock()
+		dq := deliveryQueue(machine) // vouch.go
 		select {
 		case c := <-q:
 			writeJSON(w, 200, map[string]any{"commands": []string{c}, "execs": []execItem{}})
 		case e := <-eq:
 			writeJSON(w, 200, map[string]any{"commands": []string{}, "execs": []execItem{e}})
+		case d := <-dq:
+			writeJSON(w, 200, map[string]any{"commands": []string{}, "execs": []execItem{}, "deliveries": []Delivery{d}})
 		case <-time.After(50 * time.Second):
 			writeJSON(w, 200, map[string]any{"commands": []string{}, "execs": []execItem{}})
 		case <-req.Context().Done():

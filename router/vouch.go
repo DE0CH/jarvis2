@@ -1,0 +1,607 @@
+package main
+
+// The router's part of "only vouched inputs shape a machine that gets secrets" (docs/DESIGN.md "Inputs to a
+// machine"; machine/vouch.go and machine/deliver.go do the checking, core/vouch.go and core/audit.go the signing).
+// The router is untrusted: nothing here is a check anyone relies on. It
+//
+//   - puts the session's settings into the succession challenge (Options.Config: title, first prompt, model,
+//     repos, one-shot, API proxy, attachments by hash, the task's parameters, what a restore restores), so the
+//     phone signs them and the cert carries them; an unattended resume passes the cert's own config unchanged;
+//   - puts a resume's one-time inputs (a prompt, a rollback) into Options.Once, which only the phone approves;
+//   - kills a machine with the hash and signature of its last snapshot, so its successor's cert names it;
+//   - serves the few values whose format can't carry an instruction (/m/config), and
+//   - delivers wakeups, crons and its own canned texts as deliveries the machine checks (the session's own signed
+//     request, or a text built into the image) and the core attests (the input log), instead of running a
+//     command under a grant.
+//
+// The held core (before Vouch 2) ignores Config and Once and has no input log: then everything stays as before
+// (the machine, for its part, takes none of those settings from such a cert).
+
+import (
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"log"
+	"net/http"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
+)
+
+// SessionConfig: Options.Config (machine/vouch.go reads it strictly; the app's shell shows and checks it)
+type SessionConfig struct {
+	V           int             `json:"v"`
+	Label       string          `json:"label,omitempty"`
+	Prompt      string          `json:"prompt,omitempty"`
+	Model       string          `json:"model,omitempty"`
+	Repos       []string        `json:"repos,omitempty"`
+	OneShot     bool            `json:"oneShot,omitempty"`
+	APIProxy    bool            `json:"apiProxy,omitempty"`
+	Attachments []AttachmentRef `json:"attachments,omitempty"`
+	Restore     *RestoreRef     `json:"restore,omitempty"`
+	Task        *TaskConfig     `json:"task,omitempty"`
+}
+
+type AttachmentRef struct {
+	Name   string `json:"name"`
+	Sha256 string `json:"sha256"`
+	Size   int64  `json:"size"`
+}
+
+type RestoreRef struct {
+	Machine string `json:"machine"`
+	Sha256  string `json:"sha256"`
+}
+
+type TaskConfig struct {
+	Instance string         `json:"instance"`
+	Name     string         `json:"name"`
+	Params   map[string]any `json:"params"`
+}
+
+// OnceInputs: Options.Once
+type OnceInputs struct {
+	Prompt   string `json:"prompt,omitempty"`
+	Rollback string `json:"rollback,omitempty"`
+}
+
+// ---- does the core vouch? -----------------------------------------------------------------------------------
+
+var vouchProbe struct {
+	sync.Mutex
+	at  time.Time
+	yes bool
+}
+
+// coreVouches: the running core has the input log (a Vouch 2 core). Re-checked every minute: a core restart is a
+// new core, possibly another version.
+func (r *Router) coreVouches() bool {
+	vouchProbe.Lock()
+	defer vouchProbe.Unlock()
+	if time.Since(vouchProbe.at) < time.Minute {
+		return vouchProbe.yes
+	}
+	st, b, err := r.core.Raw("POST", "/input-log", []byte(`{"from":1099511627776}`))
+	if err != nil {
+		return vouchProbe.yes // unreachable: keep the last answer
+	}
+	var out struct {
+		Entries []Doc `json:"entries"`
+		Head    *Doc  `json:"head"`
+	}
+	vouchProbe.yes = st == 200 && json.Unmarshal(b, &out) == nil && out.Head != nil && out.Head.Payload != "" && out.Entries != nil
+	vouchProbe.at = time.Now()
+	return vouchProbe.yes
+}
+
+// certVouch: the cert's Vouch (0 = from a core that doesn't vouch)
+func certVouch(c *Doc) int {
+	if c == nil {
+		return 0
+	}
+	var x struct {
+		Vouch int `json:"vouch"`
+	}
+	c.Decode(&x)
+	return x.Vouch
+}
+
+// certOptions: the cert's Config and Once
+func certOptions(c *Doc) (config, once string) {
+	if c == nil {
+		return "", ""
+	}
+	var x struct {
+		Options struct {
+			Config string `json:"config"`
+			Once   string `json:"once"`
+		} `json:"options"`
+	}
+	c.Decode(&x)
+	return x.Options.Config, x.Options.Once
+}
+
+// ---- the session's config ---------------------------------------------------------------------------------
+
+func splitRepos(s string) []string {
+	out := []string{}
+	for _, u := range strings.Split(s, ",") {
+		if u = strings.TrimSpace(u); u != "" {
+			out = append(out, u)
+		}
+	}
+	return out
+}
+
+// sessionConfig: the settings a new line's cert carries (the first machine is the only one that uses the prompt,
+// the attachments and the restore; the rest hold for the whole line)
+func (r *Router) sessionConfig(s *Session) (string, error) {
+	c := SessionConfig{V: 1, Label: s.Label, Prompt: s.Prompt, Model: s.Model, Repos: splitRepos(s.Repos)}
+	if len(c.Repos) == 0 {
+		c.Repos = nil
+	}
+	if s.Live != nil {
+		c.OneShot = s.Live.OneShot
+	}
+	if s.Ops != nil {
+		c.APIProxy = s.Ops.APIProxy
+		for _, f := range s.Ops.Attach {
+			sum, size, err := fileSha256(filepath.Join(r.uploadDir(s.Ops.Upload), f.Name))
+			if err != nil {
+				return "", fmt.Errorf("attachment %s: %v", f.Name, err)
+			}
+			c.Attachments = append(c.Attachments, AttachmentRef{Name: f.Name, Sha256: sum, Size: size})
+		}
+	}
+	if s.RestoreCert != nil {
+		var oc struct {
+			Machine *struct {
+				ID string `json:"id"`
+			} `json:"machine"`
+		}
+		sum, _, err := fileSha256(filepath.Join(r.restoresDir(s.ID), "snapshot.tar.gz"))
+		if err != nil || s.RestoreCert.Decode(&oc) != nil || oc.Machine == nil {
+			return "", fmt.Errorf("the restore's snapshot or cert: %v", err)
+		}
+		c.Restore = &RestoreRef{Machine: oc.Machine.ID, Sha256: sum}
+	}
+	if isTaskHarness(s.Harness) {
+		r.st.Do(func(d *persisted) {
+			if i := instanceBySession(tasksOf(d), s.ID); i != nil {
+				c.Task = &TaskConfig{Instance: i.ID, Name: i.Name, Params: map[string]any{}}
+				for k, v := range i.Params {
+					c.Task.Params[k] = v
+				}
+			}
+		})
+	}
+	b, err := json.Marshal(c)
+	return string(b), err
+}
+
+func fileSha256(p string) (string, int64, error) {
+	f, err := os.Open(p)
+	if err != nil {
+		return "", 0, err
+	}
+	defer f.Close()
+	h := sha256.New()
+	n, err := io.Copy(h, f)
+	if err != nil {
+		return "", 0, err
+	}
+	return hex.EncodeToString(h.Sum(nil)), n, nil
+}
+
+// lineConfig: what a successor's challenge carries: the cert's own config (an unattended resume keeps it exactly),
+// or, for a line from a core that doesn't vouch, nothing
+func lineConfig(s *Session) string {
+	c, _ := certOptions(s.Cert)
+	return c
+}
+
+// resumeOnce: a resume's one-time inputs — the pending resume prompt and the rollback asked for this predecessor —
+// when the core vouches (they then need the phone; the old paths deliver neither); "" = none
+func (r *Router) resumeOnce(s *Session) string {
+	if !r.coreVouches() {
+		return ""
+	}
+	var o OnceInputs
+	r.st.Do(func(d *persisted) {
+		if sc := d.Schedules[s.ID]; sc != nil {
+			o.Prompt = sc.ResumePrompt
+		}
+	})
+	if s.Ops != nil && s.Ops.Rollback != nil && s.Ops.Rollback.Marker != "" && certMachine(s.Cert) == s.Ops.Rollback.Pred {
+		o.Rollback = s.Ops.Rollback.Marker
+	}
+	if o == (OnceInputs{}) {
+		return ""
+	}
+	b, _ := json.Marshal(o)
+	return string(b)
+}
+
+// onceTaken: the approved resume carried them in its cert: nothing delivers them again
+func (r *Router) onceTaken(sid string) {
+	r.st.Do(func(d *persisted) {
+		if sc := d.Schedules[sid]; sc != nil {
+			sc.ResumePrompt = ""
+		}
+		if s := d.Sessions[sid]; s != nil && s.Ops != nil {
+			s.Ops.Rollback = nil
+		}
+	})
+}
+
+// ---- kill with the snapshot -----------------------------------------------------------------------------------
+
+// killMachine: kill, naming the machine's last snapshot (its sha256 and the machine's signature over it) so the
+// successor's cert names exactly that one. A core that doesn't vouch ignores the snapshot field.
+func (r *Router) killMachine(machine string) (*Doc, error) {
+	in := map[string]any{"machine": machine}
+	p := r.st.snapshotPath(machine)
+	if sig, err := os.ReadFile(p + ".sig"); err == nil {
+		if sum, _, err := fileSha256(p); err == nil {
+			in["snapshot"] = map[string]string{"sha256": sum, "sig": strings.TrimSpace(string(sig))}
+		}
+	}
+	return r.core.Call("/kill", in)
+}
+
+// ---- the values the machine takes from the router alone (each a strict format) --------------------------------
+
+func (r *Router) machineConfig(machine string) (map[string]any, error) {
+	sid, err := r.machineSession(machine)
+	if err != nil {
+		return nil, err
+	}
+	var s Session
+	r.st.Do(func(d *persisted) {
+		if x := d.Sessions[sid]; x != nil {
+			s = *x
+		}
+	})
+	e := r.machineEnv(&s) // the same hooks as the env (Discord channel, task run, live sync)
+	out := map[string]any{"sessionId": s.ID, "discordChannel": e["LOBSTER_CHANNEL"], "taskRun": e["JARVIS2_TASK_RUN"], "taskTrigger": e["TASK_TRIGGER"]}
+	if n, err := strconv.Atoi(e["JARVIS2_LIVE_SYNC_SECONDS"]); err == nil {
+		out["liveSyncSeconds"] = n
+	}
+	if p := tunnelProof(os.Getenv("JARVIS2_TUNNEL_KEY"), sid); p != "" {
+		out["tunnelProof"] = p
+	}
+	return out, nil
+}
+
+// ---- deliveries ----------------------------------------------------------------------------------------------
+
+// SignedRequest: a machine's request exactly as it signed it (machine/deliver.go checks it against its line's keys)
+type SignedRequest struct {
+	Machine string `json:"machine"`
+	Method  string `json:"method"`
+	Path    string `json:"path"`
+	At      string `json:"at"`
+	Body    string `json:"body"` // base64
+	Sig     string `json:"sig"`
+}
+
+func signedRequestOf(req *http.Request, machine string, body []byte) *SignedRequest {
+	return &SignedRequest{Machine: machine, Method: req.Method, Path: req.URL.Path, At: req.Header.Get("X-Time"),
+		Body: base64.StdEncoding.EncodeToString(body), Sig: req.Header.Get("X-Sig")}
+}
+
+type Delivery struct {
+	ID      string         `json:"id"`
+	Kind    string         `json:"kind"` // wakeup | cron | nudge | continue
+	Request *SignedRequest `json:"request,omitempty"`
+	Run     int            `json:"run,omitempty"`
+	Minutes int            `json:"minutes,omitempty"`
+	Jobs    int            `json:"jobs,omitempty"`
+	Attest  *Doc           `json:"attest"`
+}
+
+type DeliveryResult struct {
+	ID    string `json:"id"`
+	OK    bool   `json:"ok"`
+	Error string `json:"error,omitempty"`
+}
+
+var deliveries = struct {
+	sync.Mutex
+	queues  map[string]chan Delivery
+	results map[string]chan DeliveryResult
+}{queues: map[string]chan Delivery{}, results: map[string]chan DeliveryResult{}}
+
+func deliveryQueue(machine string) chan Delivery {
+	deliveries.Lock()
+	defer deliveries.Unlock()
+	q := deliveries.queues[machine]
+	if q == nil {
+		q = make(chan Delivery, 16)
+		deliveries.queues[machine] = q
+	}
+	return q
+}
+
+// attested: what the core attests for a delivery (the machine recomputes it the same way)
+func attested(d Delivery) ([]byte, string, error) {
+	switch d.Kind {
+	case "wakeup", "cron":
+		if d.Request == nil {
+			return nil, "", errors.New("no signed request")
+		}
+		b, err := base64.StdEncoding.DecodeString(d.Request.Body)
+		return b, "session-signed:" + d.Request.Machine, err
+	case "continue":
+		return []byte("continue"), "image-text", nil
+	case "nudge":
+		return []byte(nudgeText(d.Jobs, time.Duration(d.Minutes)*time.Minute)), "image-text", nil
+	}
+	return nil, "", fmt.Errorf("unknown delivery %s", d.Kind)
+}
+
+// vouchedDeliveries: deliveries go this way (the session's machine and the core both vouch)
+func (r *Router) vouchedDeliveries(sid string) bool {
+	var c *Doc
+	r.st.Do(func(d *persisted) {
+		if s := d.Sessions[sid]; s != nil {
+			c = s.Cert
+		}
+	})
+	return certVouch(c) >= 2 && r.coreVouches()
+}
+
+var errNotVouched = errors.New("this wasn't asked for by the session itself (no session-signed request), and nothing else vouches for it: not delivered")
+
+// deliverVouched: resume the session when it is paused, wait for it, then hand the machine the delivery with the
+// core's attestation and wait for its answer
+func (r *Router) deliverVouched(sid string, d Delivery) error {
+	state, _ := r.sessionState(sid)
+	switch state {
+	case "":
+		return errNoSession
+	case "paused":
+		if err := r.Resume(sid, false); err != nil {
+			if errors.Is(err, errBusy) {
+				return errSkip
+			}
+			return err
+		}
+	case "pausing", "destroying", "approval":
+		return fmt.Errorf("%w: the session is %s", errSkip, state)
+	case "failed":
+		return errors.New("the session has failed")
+	}
+	if err := r.waitStarted(sid); err != nil {
+		return err
+	}
+	input, origin, err := attested(d)
+	if err != nil {
+		return err
+	}
+	sum := sha256.Sum256(input)
+	deadline := time.Now().Add(harnessUpMax)
+	for {
+		var machine string
+		r.st.Do(func(p *persisted) {
+			if s := p.Sessions[sid]; s != nil {
+				machine = s.MachineID
+			}
+		})
+		if machine == "" {
+			return errors.New("the session has no running machine")
+		}
+		a, err := r.core.Call("/attest", map[string]string{"machine": machine, "input": d.Kind, "origin": origin, "sha256": hex.EncodeToString(sum[:])})
+		if err != nil {
+			return err
+		}
+		r.persistInputLog()
+		d.ID, d.Attest = randID(), a
+		res := make(chan DeliveryResult, 1)
+		deliveries.Lock()
+		deliveries.results[d.ID] = res
+		deliveries.Unlock()
+		deliveryQueue(machine) <- d
+		var out DeliveryResult
+		select {
+		case out = <-res:
+		case <-time.After(60 * time.Second):
+			out = DeliveryResult{ID: d.ID, Error: "the machine didn't answer within 60 s"}
+		}
+		deliveries.Lock()
+		delete(deliveries.results, d.ID)
+		deliveries.Unlock()
+		if out.OK {
+			return nil
+		}
+		// the harness may still be booting: retry while nobody listens yet
+		if strings.Contains(out.Error, "target session not found") && time.Now().Before(deadline) {
+			time.Sleep(scheduleWaitStep * 2)
+			continue
+		}
+		return errors.New("the machine refused or failed: " + out.Error)
+	}
+}
+
+// ---- the input log, persisted --------------------------------------------------------------------------------
+
+var inputLog struct {
+	sync.Mutex
+	next    int  // the next seq to fetch from the core
+	chained bool // this core's log was started from the persisted head (or there was none)
+}
+
+func (r *Router) inputLogPath() string { return filepath.Join(r.cfg.DataDir, "input-log.jsonl") }
+
+// persistInputLog: the core's new entries, appended to DATA_DIR/input-log.jsonl (each a core-signed document; each
+// names the hash of the one before). A new core first continues from the last persisted entry (chain_from).
+func (r *Router) persistInputLog() {
+	if !r.coreVouches() {
+		return
+	}
+	inputLog.Lock()
+	defer inputLog.Unlock()
+	var out struct {
+		Entries []Doc `json:"entries"`
+		Head    Doc   `json:"head"`
+	}
+	st, b, err := r.core.Raw("POST", "/input-log", []byte(fmt.Sprintf(`{"from":%d}`, inputLog.next)))
+	if err != nil || st != 200 || json.Unmarshal(b, &out) != nil {
+		return
+	}
+	var head struct {
+		Seq int `json:"seq"`
+	}
+	out.Head.Decode(&head)
+	if head.Seq < inputLog.next { // a new core: its log starts again at 0
+		inputLog.next, inputLog.chained = 0, false
+		r.persistInputLogLocked(0)
+		return
+	}
+	r.appendInputLog(out.Entries)
+}
+
+func (r *Router) persistInputLogLocked(from int) {
+	if !inputLog.chained {
+		inputLog.chained = true
+		if last := lastLine(r.inputLogPath()); last != "" {
+			var d Doc
+			if json.Unmarshal([]byte(last), &d) == nil && d.Payload != "" {
+				sum := sha256.Sum256([]byte(d.Payload))
+				if _, err := r.core.Call("/input-log/chain-from", map[string]string{"head": hex.EncodeToString(sum[:])}); err != nil {
+					log.Printf("[input-log] chain_from: %v", err)
+				}
+			}
+		}
+	}
+	var out struct {
+		Entries []Doc `json:"entries"`
+	}
+	st, b, err := r.core.Raw("POST", "/input-log", []byte(fmt.Sprintf(`{"from":%d}`, from)))
+	if err == nil && st == 200 && json.Unmarshal(b, &out) == nil {
+		r.appendInputLog(out.Entries)
+	}
+}
+
+func (r *Router) appendInputLog(entries []Doc) {
+	if len(entries) == 0 {
+		return
+	}
+	f, err := os.OpenFile(r.inputLogPath(), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		log.Printf("[input-log] %v", err)
+		return
+	}
+	defer f.Close()
+	for _, e := range entries {
+		var x struct {
+			Seq int `json:"seq"`
+		}
+		e.Decode(&x)
+		if x.Seq < inputLog.next {
+			continue
+		}
+		b, _ := json.Marshal(e)
+		f.Write(append(b, '\n'))
+		inputLog.next = x.Seq + 1
+	}
+}
+
+func lastLine(p string) string {
+	b, err := os.ReadFile(p)
+	if err != nil {
+		return ""
+	}
+	lines := strings.Split(strings.TrimSpace(string(b)), "\n")
+	return lines[len(lines)-1]
+}
+
+// inputLogTick: every minute (certs are logged by the core itself, without a router call)
+func (r *Router) inputLogTick() {
+	inputLog.Lock()
+	first := !inputLog.chained
+	inputLog.Unlock()
+	if first && r.coreVouches() {
+		inputLog.Lock()
+		r.persistInputLogLocked(0)
+		inputLog.Unlock()
+		return
+	}
+	r.persistInputLog()
+}
+
+// ---- routes ---------------------------------------------------------------------------------------------------
+
+func (r *Router) registerVouch(app appRoute, m machineRoute) {
+	m("GET /m/config", func(w http.ResponseWriter, req *http.Request, machine string, _ []byte) {
+		out, err := r.machineConfig(machine)
+		if err != nil {
+			writeJSON(w, 403, map[string]string{"error": err.Error()})
+			return
+		}
+		writeJSON(w, 200, out)
+	})
+	m("GET /m/restore-cert", func(w http.ResponseWriter, req *http.Request, machine string, _ []byte) {
+		var cert *Doc
+		r.st.Do(func(d *persisted) {
+			if s := d.Sessions[d.Machines[machine]]; s != nil && s.MachineID == machine {
+				cert = s.RestoreCert
+			}
+		})
+		if cert == nil {
+			writeJSON(w, 404, map[string]string{"error": "no restore for this session"})
+			return
+		}
+		writeJSON(w, 200, map[string]any{"cert": cert})
+	})
+	m("POST /m/delivery-result", func(w http.ResponseWriter, req *http.Request, machine string, body []byte) {
+		var res DeliveryResult
+		json.Unmarshal(body, &res)
+		deliveries.Lock()
+		ch := deliveries.results[res.ID]
+		deliveries.Unlock()
+		if ch != nil {
+			select {
+			case ch <- res:
+			default:
+			}
+		}
+		writeJSON(w, 200, map[string]bool{"ok": true})
+	})
+	app("GET /api/input-log", func(w http.ResponseWriter, req *http.Request) {
+		b, err := os.ReadFile(r.inputLogPath())
+		if err != nil && !os.IsNotExist(err) {
+			writeErr(w, err)
+			return
+		}
+		lines := strings.Split(strings.TrimSpace(string(b)), "\n")
+		n, _ := strconv.Atoi(req.URL.Query().Get("last"))
+		if n <= 0 || n > 2000 {
+			n = 200
+		}
+		if len(lines) > n {
+			lines = lines[len(lines)-n:]
+		}
+		out := []json.RawMessage{}
+		for _, l := range lines {
+			if l != "" {
+				out = append(out, json.RawMessage(l))
+			}
+		}
+		writeJSON(w, 200, map[string]any{"entries": out})
+	})
+}
+
+func (r *Router) inputLogLoop() {
+	for {
+		r.inputLogTick()
+		time.Sleep(time.Minute)
+	}
+}

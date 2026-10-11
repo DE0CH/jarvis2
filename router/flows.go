@@ -116,8 +116,9 @@ func (r *Router) machineEnv(s *Session) map[string]string {
 	return e
 }
 
-// succession: a challenge, before any machine exists. machine is set only for adding a store.
-func (r *Router) succession(pred *Doc, machine string, stores []string, harness, mode, image string) (*Doc, error) {
+// succession: a challenge, before any machine exists. machine is set only for adding a store. config and once:
+// Options.Config and Options.Once (vouch.go); a core that doesn't vouch ignores them.
+func (r *Router) succession(pred *Doc, machine string, stores []string, harness, mode, image, config, once string) (*Doc, error) {
 	var predecessor any // JSON null = from null
 	if pred != nil {
 		predecessor = pred
@@ -126,6 +127,12 @@ func (r *Router) succession(pred *Doc, machine string, stores []string, harness,
 		mode = "auto"
 	}
 	opts := map[string]string{"harness": harness, "permissionMode": mode} // both signed (core Options)
+	if config != "" {
+		opts["config"] = config
+	}
+	if once != "" {
+		opts["once"] = once
+	}
 	if image == nullImage {
 		opts = map[string]string{}
 	}
@@ -230,7 +237,12 @@ func (r *Router) CreateSession(in NewSession) (string, error) {
 	if err != nil || dup != "" {
 		return dup, err
 	}
-	ch, err := r.succession(nil, "", s.Stores, s.Harness, s.PermissionMode, r.cfg.SessionImage)
+	config, err := r.sessionConfig(s) // vouch.go: the settings the phone signs with the line
+	if err != nil {
+		r.st.Do(func(d *persisted) { delete(d.Sessions, s.ID) })
+		return "", err
+	}
+	ch, err := r.succession(nil, "", s.Stores, s.Harness, s.PermissionMode, r.cfg.SessionImage, config, "")
 	if err != nil {
 		r.st.Do(func(d *persisted) { delete(d.Sessions, s.ID) })
 		return "", err
@@ -335,7 +347,7 @@ func (r *Router) Pause(id string) error {
 	go func() {
 		defer unlock()
 		r.lastSnapshot(id, s.MachineID)
-		if _, err := r.core.Call("/kill", map[string]string{"machine": s.MachineID}); err != nil {
+		if _, err := r.killMachine(s.MachineID); err != nil { // vouch.go: with the snapshot's hash
 			r.setState(id, "failed", "kill: "+err.Error())
 			return
 		}
@@ -373,9 +385,17 @@ func (r *Router) Resume(id string, upgrade bool) error {
 		if upgrade {
 			image = r.cfg.SessionImage
 		}
-		ch, err := r.succession(s.Cert, "", s.Stores, s.Harness, s.PermissionMode, image)
+		once := r.resumeOnce(&s) // vouch.go: a resume prompt or a rollback: only the phone approves one
+		ch, err := r.succession(s.Cert, "", s.Stores, s.Harness, s.PermissionMode, image, lineConfig(&s), once)
 		if err != nil {
 			r.setState(id, "paused", "resume: "+err.Error())
+			return
+		}
+		if once != "" {
+			r.onceTaken(id) // the cert will carry them; nothing else delivers them
+			r.setState(id, "approval", "")
+			r.addApproval(&Approval{Kind: "resume-upgrade", Session: id, Label: s.Label, Challenge: ch,
+				Options: map[string]string{"permissionMode": normMode(s.PermissionMode), "once": once}})
 			return
 		}
 		// the permission mode is signed: a resume in another mode than the line's cert (raising to bypass) is a
@@ -452,7 +472,7 @@ func (r *Router) destroy(id string, o destroyOpts) error {
 		}
 		if s.Cert != nil {
 			// end the line: a succession to the null image, answered by the dead-machine responder → burn cert
-			ch, err := r.succession(s.Cert, "", nil, "", "", nullImage)
+			ch, err := r.succession(s.Cert, "", nil, "", "", nullImage, "", "")
 			var a *Doc
 			if err == nil {
 				a, err = r.core.Call("/approve/by-dead-machine", map[string]any{"challenge": ch})
@@ -536,7 +556,7 @@ func (r *Router) AddStoreFrom(machine, store string, o Origin, explanation strin
 	if err != nil {
 		return err
 	}
-	ch, err := r.succession(s.Cert, machine, stores, s.Harness, certMode(s.Cert), "")
+	ch, err := r.succession(s.Cert, machine, stores, s.Harness, certMode(s.Cert), "", lineConfig(&s), "")
 	if err != nil {
 		return err
 	}
@@ -559,8 +579,12 @@ func (r *Router) DowngradeBegin(machine string, stores []string, encKey, sigKey 
 	if s.ID == "" || s.MachineID != machine || s.Cert == nil {
 		return nil, fmt.Errorf("this machine isn't a running session")
 	}
+	opts := map[string]string{"harness": s.Harness, "permissionMode": certMode(s.Cert)}
+	if c := lineConfig(&s); c != "" {
+		opts["config"] = c
+	}
 	return r.core.Call("/succession", map[string]any{"predecessor": s.Cert, "machine": machine, "stores": stores,
-		"options": map[string]string{"harness": s.Harness, "permissionMode": certMode(s.Cert)}, "newEncryptionKey": encKey, "newSigningKey": sigKey})
+		"options": opts, "newEncryptionKey": encKey, "newSigningKey": sigKey})
 }
 
 // DowngradeFinish: the challenge signed with the machine's old key → its new cert; from now on the router

@@ -1,6 +1,8 @@
 package main
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -38,15 +40,15 @@ func TestApplyRollback(t *testing.T) {
 	}
 	write()
 
-	// another predecessor's rollback: ignored
+	// the env asks for one: nothing happens (only the cert's one-time inputs do: vouch.go)
 	t.Setenv("JARVIS2_ROLLBACK", "XYZZY")
 	t.Setenv("JARVIS2_ROLLBACK_PRED", "m-old")
-	applyRollback("m-new")
+	applyRollback("")
 	if b, _ := os.ReadFile(conv); !strings.Contains(string(b), "XYZZY") {
-		t.Fatal("a rollback for another predecessor was applied")
+		t.Fatal("a rollback from the env was applied")
 	}
 
-	applyRollback("m-old")
+	applyRollback("XYZZY")
 	if b, _ := os.ReadFile(conv); string(b) != `{"n":1}`+"\n" {
 		t.Fatalf("conversation: %q", b)
 	}
@@ -62,8 +64,7 @@ func TestApplyRollback(t *testing.T) {
 
 	// no marker: nothing happens
 	write()
-	t.Setenv("JARVIS2_ROLLBACK", "")
-	applyRollback("m-old")
+	applyRollback("")
 	if b, _ := os.ReadFile(conv); !strings.Contains(string(b), "XYZZY") {
 		t.Fatal("rolled back without a marker")
 	}
@@ -99,12 +100,20 @@ func TestFetchAttachments(t *testing.T) {
 	defer srv.Close()
 	c := &client{base: srv.URL, me: "m1", sig: key.k, http: srv.Client()}
 
-	t.Setenv("SESSION_ATTACHMENTS_JSON", "")
-	if env := fetchAttachments(c); env != nil {
-		t.Fatalf("no attachments, env %v", env)
+	refs := []AttachmentRef{}
+	for n, b := range files {
+		refs = append(refs, AttachmentRef{Name: n, Sha256: hexSum(b), Size: int64(len(b))})
 	}
-	t.Setenv("SESSION_ATTACHMENTS_JSON", `[{"name":"photo 1.png","isImage":true}]`)
-	env := fetchAttachments(c)
+	// a file other than the cert names: refused, nothing kept
+	bad := append([]AttachmentRef{}, refs...)
+	bad[0].Sha256 = hexSum("other bytes")
+	if env := fetchAttachments(c, bad); env != nil {
+		t.Fatalf("an attachment the cert doesn't name was taken: %v", env)
+	}
+	if _, err := os.Stat(filepath.Join(home, attachStaging)); err == nil {
+		t.Fatal("a refused attachment was left on disk")
+	}
+	env := fetchAttachments(c, refs)
 	for n, want := range files {
 		if b, err := os.ReadFile(filepath.Join(home, attachStaging, n)); err != nil || string(b) != want {
 			t.Fatalf("%s: %q %v", n, b, err)
@@ -122,4 +131,9 @@ func TestFetchAttachments(t *testing.T) {
 			t.Fatalf("%q passed", bad)
 		}
 	}
+}
+
+func hexSum(s string) string {
+	h := sha256.Sum256([]byte(s))
+	return hex.EncodeToString(h[:])
 }

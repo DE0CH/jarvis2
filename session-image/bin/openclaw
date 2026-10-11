@@ -1,0 +1,29 @@
+#!/bin/sh
+# `openclaw` for an OpenClaw session (Jarvis 2's copy of Jarvis 1's wrapper). OpenClaw and its Node are a runtime
+# bundle fetched on first use (Fly's 8 GB image limit), from the GitHub release pinned in
+# /opt/jarvis2/openclaw-runtime.json — by URL AND sha256, so the code that runs is fixed by this image's digest,
+# not by whatever the release serves later (docs/DESIGN.md "Inputs to a machine"). A bundle that doesn't match is
+# deleted and nothing runs.
+set -e
+PIN=/opt/jarvis2/openclaw-runtime.json
+url="$(python3 -I -c "import json;print(json.load(open('$PIN'))['url'])")"
+want="$(python3 -I -c "import json;print(json.load(open('$PIN'))['sha256'])")"
+dir="$HOME/.cache/openclaw-runtime/$(printf %.12s "$want")"
+if [ ! -x "$dir/openclaw/bin/openclaw" ] || [ "$(cat "$dir/.sha256" 2>/dev/null)" != "$want" ]; then
+  mkdir -p "$HOME/.cache/openclaw-runtime"
+  (
+    flock 9
+    if [ ! -x "$dir/openclaw/bin/openclaw" ] || [ "$(cat "$dir/.sha256" 2>/dev/null)" != "$want" ]; then
+      echo "openclaw: fetching the runtime bundle $(printf %.12s "$want")" >&2
+      tmp="$dir.tmp.$$"; rm -rf "$tmp" "$dir"; mkdir -p "$tmp"
+      curl -fsSL --retry 3 -o "$tmp.tgz" "$url"
+      got="$(sha256sum "$tmp.tgz" | cut -d' ' -f1)"
+      if [ "$got" != "$want" ]; then rm -rf "$tmp" "$tmp.tgz"; echo "openclaw: the bundle's sha256 is $got, the image pins $want: refused" >&2; exit 1; fi
+      tar -xzf "$tmp.tgz" -C "$tmp"; rm -f "$tmp.tgz"
+      printf '%s' "$want" > "$tmp/.sha256"
+      mv "$tmp" "$dir"
+      for old in "$HOME/.cache/openclaw-runtime"/*; do [ "$old" = "$dir" ] || case "$old" in *.lock) ;; *) rm -rf "$old";; esac; done
+    fi
+  ) 9>"$HOME/.cache/openclaw-runtime/.lock"
+fi
+PATH="$dir/node/bin:$PATH" exec "$dir/openclaw/bin/openclaw" "$@"

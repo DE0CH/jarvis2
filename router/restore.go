@@ -96,7 +96,12 @@ func (r *Router) RestoreRecord(recordID, requestID string) (string, error) {
 	s := &Session{ID: sid, State: "approval", Created: time.Now().UTC(), Label: label, Model: rec.Model, PermissionMode: rec.PermissionMode,
 		Size: rec.Size, Harness: rec.Harness, Stores: stores, Repos: rec.Repos, RequestID: requestID, RestoreFrom: recordID, RestoreCert: cert}
 	r.st.Do(func(d *persisted) { d.Sessions[sid] = s })
-	ch, err := r.succession(nil, "", s.Stores, s.Harness, s.PermissionMode, r.cfg.SessionImage)
+	config, err := r.sessionConfig(s) // vouch.go: names the snapshot this line restores (machine + sha256)
+	if err != nil {
+		r.st.Do(func(d *persisted) { delete(d.Sessions, sid) })
+		return fail(err)
+	}
+	ch, err := r.succession(nil, "", s.Stores, s.Harness, s.PermissionMode, r.cfg.SessionImage, config, "")
 	if err != nil {
 		r.st.Do(func(d *persisted) { delete(d.Sessions, sid) })
 		return fail(err)

@@ -168,7 +168,7 @@ func (r *Router) latestSnapshot(sessionID string) (machine string, cert *Doc, at
 // snapshotAndKill: what Pause does to a running machine (flows.go); false (state failed) when the kill fails
 func (r *Router) snapshotAndKill(id, machine string) bool {
 	r.lastSnapshot(id, machine)
-	if _, err := r.core.Call("/kill", map[string]string{"machine": machine}); err != nil {
+	if _, err := r.killMachine(machine); err != nil { // vouch.go: with the snapshot's hash
 		r.setState(id, "failed", "kill: "+err.Error())
 		return false
 	}

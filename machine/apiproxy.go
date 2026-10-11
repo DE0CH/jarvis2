@@ -253,6 +253,12 @@ func armAndAllow(w http.ResponseWriter, req *http.Request, c *client) {
 		return
 	}
 	until, ok := allowUntil(ans, time.Now())
+	if cert, err := currentCert(); err == nil && cert.Vouch >= 2 {
+		// a cert that vouches: the wakeup comes back as a delivery of this very request (deliver.go), checked
+		// against this line's keys and attested by the core; nobody needs a shell for it
+		ok = false
+		ans["scheduler"] = "delivered as this session's own signed request; no shell access granted"
+	}
 	if ok {
 		if err := extendAllow(c, "scheduler", until); err != nil {
 			ans["schedulerError"] = "armed, but the scheduler couldn't be put on this session's allow list: " + err.Error()

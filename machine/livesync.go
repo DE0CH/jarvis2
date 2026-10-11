@@ -13,7 +13,6 @@ import (
 	"log"
 	"os"
 	"path/filepath"
-	"strconv"
 	"time"
 )
 
@@ -25,7 +24,7 @@ type liveSyncer struct {
 }
 
 func liveSyncInterval() time.Duration {
-	if n, err := strconv.Atoi(os.Getenv("JARVIS2_LIVE_SYNC_SECONDS")); err == nil && n >= 5 {
+	if n := readVouchedInt("liveSyncSeconds"); n >= 5 { // vouch.go: a format exception from /m/config
 		return time.Duration(n) * time.Second
 	}
 	return 300 * time.Second

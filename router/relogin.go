@@ -126,7 +126,7 @@ func (r *Router) repairLogin(a pilotAction) {
 	if a.Repair == "" {
 		return
 	}
-	if err := r.Deliver(a.Session, "jarvis", "continue"); err != nil {
+	if err := r.DeliverCanned(a.Session, Delivery{Kind: "continue"}, "continue"); err != nil {
 		r.noteRefusal(a.Session, "scheduler", err)
 		log.Printf("[login] %s: credentials written, delivering \"continue\" failed: %v", a.Session, err)
 		return
