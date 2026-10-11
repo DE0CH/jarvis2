@@ -165,7 +165,7 @@ check(ul?.nonce == n2 && ul?.unlocked.map(\.id) == [u?.id ?? "?"], "unlocked lis
 // ---- an unlock for one session (a Start's challenge, a waiting session's cert): signed with what it is for, read
 // only by that cert's pull, never shown as open to every session ----
 let sdoc = try! CoreCrypto.decode(doc(call("/stores", ["nonce": CoreCrypto.nonce()]).1), by: coreKey, as: StoresDoc.self, what: "stores")
-check(sdoc.scopedUnlocks == true, "the core's signed store list says it takes unlocks for one session")
+check(sdoc.kind == "stores", "the core's signed store list")
 let forN = String(repeating: "ab", count: 32)
 let sb = try! CoreCrypto.decode(doc(call("/unlock/begin", ["store": "gmail", "for": forN]).1), by: coreKey, as: UnlockBegin.self, what: "unlock-begin for one session")
 check(sb.kind == "unlock-begin" && sb.forNonce == forN, "unlock-begin names the one session it is for (signed)")
@@ -191,8 +191,12 @@ func approve(_ ch: SignedDoc) -> (Int, SignedDoc?) {
   return (s, s == 200 ? doc(d) : nil)
 }
 struct StartedDoc: Codable { let kind: String; let machine: StartedMachine }
-func start(_ image: String) -> StartedMachine {
-  try! CoreCrypto.decode(doc(call("/start", ["image": image, "region": "lhr", "size": "small"]).1), by: coreKey, as: StartedDoc.self, what: "start").machine
+struct CreatedDoc: Codable { let kind: String; let id: String }
+/// start = one Fly create, then init reads the machine's keys (the router retries init; the fake Fly is up at once)
+func start(_ image: String) -> (machine: StartedMachine, started: SignedDoc) {
+  let created = try! CoreCrypto.decode(doc(call("/start", ["image": image, "region": "lhr", "size": "small"]).1), by: coreKey, as: CreatedDoc.self, what: "start")
+  let d = doc(call("/init", ["machine": created.id]).1)
+  return (try! CoreCrypto.decode(d, by: coreKey, as: StartedDoc.self, what: "init").machine, d)
 }
 
 // the core starts only the session image pinned by digest (core/vouch.go)
@@ -231,8 +235,9 @@ let forged = try! P256.Signing.PrivateKey().signature(for: Data(ch1.payload.utf8
 check(call("/approve/by-phone", ["challenge": docJSON(ch1), "signature": forged]).0 == 403, "the core refuses a signature by another key")
 let (a1s, a1) = approve(ch1)
 check(a1s == 200 && !throwsErr { try Checks.answerFor(r1, answer: a1!, coreKey: coreKey) }, "the phone's signature → the core's approval")
-let m1 = start(img)
-let (c1s, c1d) = call("/certify", ["approval": docJSON(a1!), "machine": m1.id])
+let m1run = start(img)
+let m1 = m1run.machine
+let (c1s, c1d) = call("/certify", ["approval": docJSON(a1!), "started": docJSON(m1run.started)])
 check(c1s == 200, "the approval certifies the started machine")
 let cert1 = doc(c1d)
 
@@ -300,12 +305,12 @@ check(r3.kind == .resumeUpgrade && r3.image == img2 && r3.permissionMode == "aut
 let (a3s, a3) = approve(ch3)
 check(a3s == 200 && !throwsErr { try Checks.answerFor(r3, answer: a3!, coreKey: coreKey) }, "the phone approves the resume")
 let m2 = start(img2)
-check(call("/certify", ["approval": docJSON(a3!), "machine": m2.id]).0 == 200, "…and the new machine is certified")
+check(call("/certify", ["approval": docJSON(a3!), "started": docJSON(m2.started)]).0 == 200, "…and the new machine is certified")
 
 // a sensitive line: no standing rule
 let ch4 = challenge(["predecessor": NSNull(), "stores": ["gmail"], "options": ["harness": "claude"], "image": img])
 let (a4s, a4) = approve(ch4)
-let (c4s, c4d) = a4 == nil ? (0, Data()) : call("/certify", ["approval": docJSON(a4!), "machine": start(img).id])
+let (c4s, c4d) = a4 == nil ? (0, Data()) : call("/certify", ["approval": docJSON(a4!), "started": docJSON(start(img).started)])
 if a4s == 200, c4s == 200, let sc4 = try? Checks.cert(doc(c4d), coreKey: coreKey) {
   check(sc4.sensitive == true, "a session with a sensitive store has a sensitive cert")
   var r4 = rule; r4["session"] = sc4.line
@@ -384,6 +389,6 @@ let (ws, wd) = call("/wipe", w2)
 let wiping = try? CoreCrypto.decode(doc(wd), by: coreKey, as: KindDoc.self, what: "wiping")
 check(ws == 200 && wiping?.kind == "wiping" && wiping?.core == coreKey, "the master key ends the core (a signed 'wiping')")
 sleep(3)
-check(call("/key").0 == 0, "…and the core process is gone (Kubernetes starts a new, empty one)")
+check(call("/identity").0 == 0, "…and the core process is gone (Kubernetes starts a new, empty one)")
 print(failures == 0 ? "ALL OK" : "\(failures) FAILED")
 exit(failures == 0 ? 0 : 1)

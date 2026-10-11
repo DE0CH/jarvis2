@@ -186,7 +186,6 @@ type Core struct {
 	exit      func() // Wipe ends the process (main: os.Exit; tests: a stub)
 
 	phoneSigning, phoneAgreement string
-	coreCert                     *MasterCert // the master's signature on this core (from the claim)
 
 	approvalsUsed map[string]bool // approval nonces already certified
 	// latest: a certified machine → the nonce of its newest cert (certify, then each add-store or downgrade). A
@@ -323,13 +322,6 @@ const (
 	infoFlyToken = "jarvis2/fly-token" // the Fly token, sealed to the core by the setup session
 )
 
-// MasterCert: the master key's signature over the claim statement (the archive keeps it next to a session's
-// snapshot: master key → core key → cert)
-type MasterCert struct {
-	Statement string `json:"statement"`
-	MasterSig string `json:"masterSig"`
-}
-
 type claimStatement struct {
 	Kind   string `json:"kind"`   // "claim"
 	Master string `json:"master"` // the master public key: it signs this statement; the core keeps it for its life
@@ -441,7 +433,6 @@ func (c *Core) Claim(statement, masterSig string, bundle Sealed) (SignedDoc, err
 	if token != "" {
 		c.fly.Configure(token)
 	}
-	c.coreCert = &MasterCert{Statement: statement, MasterSig: masterSig}
 	c.logf("claimed: master key, phone keys, %d stores, Fly token %v", len(c.stores), token != "")
 	return c.sign(map[string]any{"kind": "claimed", "stores": len(c.stores)})
 }
@@ -495,16 +486,6 @@ func (c *Core) SetFlyToken(sealed Sealed) (SignedDoc, error) {
 	c.fly.Configure(v.Token)
 	c.logf("Fly token set")
 	return c.sign(map[string]any{"kind": "fly-token-set"})
-}
-
-// CoreCert: the master's signature on this core (404 while empty)
-func (c *Core) CoreCert() (*MasterCert, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.coreCert == nil {
-		return nil, fail(404, "this core isn't set up yet")
-	}
-	return c.coreCert, nil
 }
 
 // ---- stores ----------------------------------------------------------------------------------------

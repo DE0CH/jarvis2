@@ -324,9 +324,6 @@ func TestRecoverOnceOnlyOnAnEmptyCore(t *testing.T) {
 	if _, err := c.Claim(s, sig, b3); err == nil {
 		t.Fatal("claimed with a bundle the master didn't sign")
 	}
-	if _, err := c.CoreCert(); err == nil {
-		t.Fatal("a core cert while empty")
-	}
 	if _, err := c.SetFlyToken(Sealed{}); err == nil {
 		t.Fatal("an empty core took a Fly token")
 	}
@@ -345,10 +342,6 @@ func TestRecoverOnceOnlyOnAnEmptyCore(t *testing.T) {
 	s4, sig4, b4 := claimFor(c, m2, p, claimBundle{})
 	if _, err := c.Claim(s4, sig4, b4); err == nil {
 		t.Fatal("a set-up core took a new master key")
-	}
-	cc, err := c.CoreCert()
-	if err != nil || !VerifyWith(c.MasterKey, []byte(cc.Statement), cc.MasterSig) {
-		t.Fatal("no master-signed core cert after the claim")
 	}
 	if len(c.unlocked) != 0 {
 		t.Fatal("the claim left plaintext in memory")
@@ -1007,4 +1000,20 @@ func TestKillIsOneDestroyConfirmedByFly(t *testing.T) {
 		t.Fatal("a killed machine's key is still kept")
 	}
 	pl(t)(c.KillWithSnapshot(id, nil)) // again: the same answer
+}
+
+// R2: one route per fact — the keys only from /identity (with the box signature), the master's claim kept by the
+// router, no free-text log, no input-log readback
+func TestTheCoreHasNoDuplicateOrReadbackRoutes(t *testing.T) {
+	c, _, _ := setup(t)
+	srv := httptest.NewServer(Handler(c))
+	defer srv.Close()
+	for _, p := range []string{"GET /key", "GET /core-cert", "POST /log"} {
+		m, path, _ := strings.Cut(p, " ")
+		req, _ := http.NewRequest(m, srv.URL+path, nil)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil || resp.StatusCode != 404 {
+			t.Fatalf("%s: %v %v", p, err, resp)
+		}
+	}
 }

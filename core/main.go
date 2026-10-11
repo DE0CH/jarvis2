@@ -86,8 +86,6 @@ func Handler(c *Core) http.Handler {
 		return &d
 	}
 
-	h("GET /key", func(r *http.Request, b body) (any, error) { return c.Key(), nil })
-
 	sealed := func(b body, k string) (Sealed, error) {
 		var s Sealed
 		if json.Unmarshal(b[k], &s) != nil || s.E == "" {
@@ -98,7 +96,6 @@ func Handler(c *Core) http.Handler {
 
 	// ---- identity, and setting the core up (the iPhone, with the master key) ----
 	h("GET /identity", func(r *http.Request, b body) (any, error) { return c.Identity() })
-	h("GET /core-cert", func(r *http.Request, b body) (any, error) { return c.CoreCert() })
 	h("POST /claim", func(r *http.Request, b body) (any, error) {
 		s, err := sealed(b, "bundle")
 		if err != nil {

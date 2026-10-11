@@ -1,6 +1,11 @@
 package main
 
-import "testing"
+import (
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+)
 
 func TestTheClaimsDeviceSignatureIsKeptForTheSetupSession(t *testing.T) {
 	r := &Router{cfg: Config{DataDir: t.TempDir()}}
@@ -26,5 +31,49 @@ func TestOnlyTheCIBuildCarriesItsSignature(t *testing.T) {
 	r.addApproval(b)
 	if a.ImageSig != "c2ln" || b.ImageSig != "" {
 		t.Fatalf("got %q and %q", a.ImageSig, b.ImageSig)
+	}
+}
+
+// R2: the master's signature on the core is kept by the router from the claim the core accepted, and served for the
+// running core only; a core claimed before (no kept claim) is asked for its own
+func TestTheRouterKeepsTheClaimForTheRunningCore(t *testing.T) {
+	var claimStatus = 200
+	ck := newTestKey()
+	core := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		switch req.URL.Path {
+		case "/identity":
+			writeJSON(w, 200, map[string]string{"signingKey": ck.pub(), "agreementKey": "a"})
+		case "/claim":
+			writeJSON(w, claimStatus, map[string]string{"payload": "{}", "sig": "x"})
+		default:
+			writeJSON(w, 404, map[string]string{"error": "no such route"})
+		}
+	}))
+	defer core.Close()
+	r := newTestRouter(t)
+	r.cfg.NoAccess = true
+	r.core = &CoreClient{base: core.URL, http: http.DefaultClient}
+	if r.coreCert() != nil {
+		t.Fatal("a cert before any claim")
+	}
+	stmt := func(key string) string {
+		b, _ := json.Marshal(map[string]any{"kind": "claim", "core": map[string]string{"signingKey": key}})
+		return string(b)
+	}
+	body := func(key string) string {
+		b, _ := json.Marshal(map[string]string{"statement": stmt(key), "masterSig": "ms"})
+		return string(b)
+	}
+	claimStatus = 403
+	appDo(t, r, "POST", "/api/core/claim", body(ck.pub()))
+	if r.coreCert() != nil {
+		t.Fatal("kept a claim the core refused")
+	}
+	claimStatus = 200
+	appDo(t, r, "POST", "/api/core/claim", body("another-core"))
+	appDo(t, r, "POST", "/api/core/claim", body(ck.pub()))
+	var mc MasterCert
+	if json.Unmarshal(r.coreCert(), &mc) != nil || mc.Statement != stmt(ck.pub()) || mc.MasterSig != "ms" {
+		t.Fatalf("got %+v", mc)
 	}
 }

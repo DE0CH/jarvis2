@@ -155,9 +155,32 @@ func (r *Router) buildHandlers() {
 		}
 		b, _ := io.ReadAll(io.LimitReader(req.Body, 16<<20))
 		r.keepClaimDevice(b)
-		r.relay(w, "POST", "/claim", b)
+		status, out, err := r.core.Raw("POST", "/claim", b)
+		if err != nil {
+			log.Printf("core POST /claim: %v", err)
+			writeJSON(w, 503, map[string]any{"error": "the core isn't running", "coreDown": true})
+			return
+		}
+		if status == 200 {
+			r.keepCoreCert(b) // claimdevice.go: the master's signature on this core, kept by the router
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(status)
+		w.Write(out)
 	})
-	setup("GET /setup/core-cert", "GET", "/core-cert")
+	mux.Handle("GET /setup/core-cert", r.requireSetup(func(w http.ResponseWriter, req *http.Request) {
+		if err := r.checkSetupSig(req.Method, req.URL.Path, req.Header.Get("X-Setup-Time"), req.Header.Get("X-Setup-Sig"), nil); err != nil {
+			writeJSON(w, 401, map[string]string{"error": err.Error()})
+			return
+		}
+		b := r.coreCert()
+		if b == nil {
+			writeJSON(w, 404, map[string]string{"error": "no claim kept for the running core (empty, or claimed elsewhere)"})
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Write(b)
+	}))
 	mux.Handle("GET /setup/claim-device", r.requireSetup(func(w http.ResponseWriter, req *http.Request) {
 		writeJSON(w, 200, r.claimDevices())
 	}))
@@ -414,7 +437,6 @@ func (r *Router) buildHandlers() {
 	})
 
 	// ---- the core, relayed unchanged ------------------------------------------------------------------
-	app("GET /api/core/key", func(w http.ResponseWriter, req *http.Request) { r.relay(w, "GET", "/key", nil) })
 	for _, p := range []string{"stores", "stores/create", "stores/mark-sensitive", "stores/write", "unlock/begin", "unlock/finish", "lock", "unlocked"} {
 		path := "/" + p
 		app("POST /api/core"+path, func(w http.ResponseWriter, req *http.Request) {

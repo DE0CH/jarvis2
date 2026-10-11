@@ -261,7 +261,7 @@ func (r *Router) archiveSnapshot(box *StorageBox, s *Session) (*ArchiveInfo, err
 	if err := box.PutBytes(dir+"/jarvis2/cert.json", certJSON); err != nil {
 		return nil, err
 	}
-	if st, b, err := r.core.Raw("GET", "/core-cert", nil); err == nil && st == 200 {
+	if b := r.coreCert(); b != nil {
 		if err := box.PutBytes(dir+"/jarvis2/core-cert.json", b); err != nil {
 			return nil, err
 		}

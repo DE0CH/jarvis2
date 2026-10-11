@@ -38,7 +38,7 @@ chmod +x "$W/core-loop.sh"
 printf 'BACKUP_READ_ACCESS_KEY=ciaccess\nBACKUP_READ_SECRET_KEY=%s\nBACKUP_ENDPOINT=http://127.0.0.1:18098\nBACKUP_BUCKET=jarvis2-backup-ci\n' "$secret" > "$W/router-backup.env"
 if [ "${NO_CORE:-}" != 1 ]; then
   BOX_KEY_FILE="$W/box-key.pem" MACHINE_URL=http://ci-router._peer.internal:8081 ADDR=127.0.0.1:8090 nohup "$W/core" > "$W/core.log" 2>&1 &
-  for i in $(seq 30); do curl -sf -o /dev/null http://127.0.0.1:8090/key && break; sleep 1; done
+  for i in $(seq 30); do curl -sf -o /dev/null http://127.0.0.1:8090/identity && break; sleep 1; done
   mkdir -p "$W/router-data" "$W/web"
   echo '{"harnesses":{"claude":{"stores":["claude-login"]}}}' > "$W/policy.json"
   (set -a; . "$W/router-backup.env"; set +a

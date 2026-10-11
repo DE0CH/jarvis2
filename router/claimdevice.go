@@ -51,3 +51,66 @@ func (r *Router) keepClaimDevice(body []byte) {
 	b, _ := json.Marshal(list)
 	os.WriteFile(r.claimDevicePath(), b, 0o600)
 }
+
+// ---- the master's signature on the core (R2: kept here, not in the core) ----------------------------------------
+//
+// A claim the core accepted is the master key's signature over a statement naming the core's keys: it verifies on
+// its own, so who stores it doesn't matter. The router keeps the newest few (by the core's signing key) and serves
+// the current core's to the setup session (GET /setup/core-cert) and into each archive (archive.go).
+
+type MasterCert struct {
+	Statement string `json:"statement"`
+	MasterSig string `json:"masterSig"`
+}
+
+func (r *Router) coreCertsPath() string { return filepath.Join(r.cfg.DataDir, "core-certs.json") }
+
+// keepCoreCert: a claim body the core answered 200
+func (r *Router) keepCoreCert(body []byte) {
+	var in MasterCert
+	if json.Unmarshal(body, &in) != nil || in.Statement == "" || in.MasterSig == "" || len(in.Statement) > 8<<10 {
+		return
+	}
+	claimDeviceMu.Lock()
+	defer claimDeviceMu.Unlock()
+	list := []MasterCert{}
+	if b, err := os.ReadFile(r.coreCertsPath()); err == nil {
+		json.Unmarshal(b, &list)
+	}
+	list = append([]MasterCert{in}, list...)
+	if len(list) > 10 {
+		list = list[:10]
+	}
+	b, _ := json.Marshal(list)
+	os.WriteFile(r.coreCertsPath(), b, 0o600)
+}
+
+// coreCert: the kept claim naming the running core (by its signing key from /identity); nil when none.
+// A core claimed before the router kept them (the running core until the next claim) still answers GET /core-cert.
+func (r *Router) coreCert() []byte {
+	key, err := r.core.Key()
+	if err != nil {
+		return nil
+	}
+	claimDeviceMu.Lock()
+	list := []MasterCert{}
+	if b, err := os.ReadFile(r.coreCertsPath()); err == nil {
+		json.Unmarshal(b, &list)
+	}
+	claimDeviceMu.Unlock()
+	for _, mc := range list {
+		var st struct {
+			Core struct {
+				SigningKey string `json:"signingKey"`
+			} `json:"core"`
+		}
+		if json.Unmarshal([]byte(mc.Statement), &st) == nil && st.Core.SigningKey == key["signingKey"] {
+			b, _ := json.Marshal(mc)
+			return b
+		}
+	}
+	if st, b, err := r.core.Raw("GET", "/core-cert", nil); err == nil && st == 200 {
+		return b
+	}
+	return nil
+}

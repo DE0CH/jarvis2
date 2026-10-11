@@ -69,14 +69,21 @@ func (c *CoreClient) Call(path string, in any) (*Doc, error) {
 	return &d, nil
 }
 
+// Key: the core's public keys (from /identity; the box signature and signed state are the app's and setup's to check)
 func (c *CoreClient) Key() (map[string]string, error) {
-	status, b, err := c.Raw("GET", "/key", nil)
+	status, b, err := c.Raw("GET", "/identity", nil)
 	if err != nil {
 		return nil, err
 	}
 	if status != 200 {
-		return nil, fmt.Errorf("core /key: HTTP %d", status)
+		return nil, fmt.Errorf("core /identity: HTTP %d", status)
 	}
-	m := map[string]string{}
-	return m, json.Unmarshal(b, &m)
+	var id struct {
+		SigningKey   string `json:"signingKey"`
+		AgreementKey string `json:"agreementKey"`
+	}
+	if err := json.Unmarshal(b, &id); err != nil {
+		return nil, err
+	}
+	return map[string]string{"signingKey": id.SigningKey, "agreementKey": id.AgreementKey}, nil
 }

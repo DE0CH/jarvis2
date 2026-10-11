@@ -199,10 +199,12 @@ When the core can't be reached at all (its pod restarting, e.g. after a wipe) ev
 `{error: "the core isn't running", coreDown: true}`; the app waits or shows it as a plain note.
 Pass-through to the core's own endpoints, answers unchanged (signed): `GET identity`, `POST stores {nonce}`,
 `POST stores/create {name}`, `POST stores/mark-sensitive {name}`, `POST stores/write {store}`, `POST unlock/begin
-{store, for?}`, `POST unlock/finish {pending, share}`, `POST lock {id}`, `POST unlocked {nonce}`, `POST log {nonce}`, and
+{store, for?}`, `POST unlock/finish {pending, share}`, `POST lock {id}`, `POST unlocked {nonce}`, and
 — only from the app's device login (the `cf-access-token` header; 403 otherwise) — `POST claim {statement,
 masterSig, bundle}` and `POST wipe {statement, masterSig}`. Formats: `docs/DESIGN.md`, `core/core.go`, the app's
-`Shell/CoreSetup.swift`, and the reference client `e2e/main.go`.
+`Shell/CoreSetup.swift`, and the reference client `e2e/main.go`. A claim the core accepts is kept by the router
+(`DATA_DIR/core-certs.json`, the newest 10): the master-signed statement naming the core verifies on its own, so the
+core keeps no copy; the router serves the running core's at `GET /setup/core-cert` and into each archive.
 
 Setting the core up (Reset and Recover, the app's Reset or recover page):
 
@@ -280,6 +282,7 @@ against `SETUP_KEY` (`k8s/apps/router.yaml`), within ±2 min, each signature onc
 | `POST /setup/stores/write` | `/stores/write` |
 | `POST /setup/stores/mark-sensitive` | `/stores/mark-sensitive` |
 | `POST /setup/fly-token` | `/fly-token {sealed}`: `{"FLY_API_TOKEN"}` sealed to the core's agreement key (HKDF info `"jarvis2/fly-token"`) → the core's signed `{"kind":"fly-token-set"}`; 409 while the core is empty |
+| `GET /setup/core-cert` | (the router's own) `{statement, masterSig}` of the claim it kept for the running core (matched by the core's signing key from `/identity`); 404 when none. A core claimed before the router kept claims (the running core until its release) is asked for its own `/core-cert`. |
 | `GET /setup/stores/keys` | (the router's own) the store list with key names, as `GET /api/stores` |
 | `POST /setup/store-keys` | (the router's own) `{name, keys: [names] \| null}` → `{ok}`: records a store's key names (env-var style, ≤ 128 chars, de-duplicated and sorted); `null` forgets them. No values. `infra/setup.py write` sends it after every write; `infra/setup.py keys NAME KEY…` and `infra/store-keys.sh` (every store, from the layout file) record names alone. |
 
