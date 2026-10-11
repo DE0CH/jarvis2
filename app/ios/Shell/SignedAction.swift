@@ -36,10 +36,19 @@ enum SignedAction {
     }
   }
 
-  /// unlocks: the stores the session's core-signed cert names that the core's signed list shows locked
-  static func unlock(stores: [String], session: String) -> String {
-    stores.isEmpty ? "Nothing: every store of “\(session)” is open already."
-      : "Core: unlock store\(stores.count == 1 ? "" : "s") \(list(stores)) for session “\(session)”. Unlocked stores stay open (any session holding them can read them) until you lock them on the Stores page."
+  /// unlocks: the stores the session's core-signed cert names that the core's signed list shows locked. scoped =
+  /// the core's signed store list says it takes unlocks for one session (then only this session's cert reads them
+  /// and its pull locks them again); a core that predates that keeps them open until locked.
+  static func unlock(stores: [String], session: String, scoped: Bool) -> String {
+    if stores.isEmpty { return "Nothing: every store of “\(session)” is open already." }
+    let what = "Core: unlock store\(stores.count == 1 ? "" : "s") \(list(stores)) for session “\(session)”"
+    return scoped ? what + " only. The core locks \(stores.count == 1 ? "it" : "them") again as soon as the session's machine has its secrets."
+      : what + ". Unlocked stores stay open (any session holding them can read them) until you lock them on the Stores page."
+  }
+
+  /// the stores an approval also unlocks under its Face ID (for that one session; scoped as above)
+  static func alsoUnlocks(_ stores: [String], scoped: Bool) -> String {
+    stores.isEmpty ? "" : " With the same Face ID: unlock \(list(stores)) " + (scoped ? "for this session only (locked again once its machine has its secrets)." : "(open until you lock them on the Stores page).")
   }
 
   /// a grant: signed by this iPhone (not the core) for the line in the session's core-signed cert; the router's draft

@@ -128,6 +128,8 @@ struct SecureNewSession: View {
   @State private var repoDefaulted = false
   @State private var autoPause = true
   @State private var apiProxy = false
+  /// the core takes unlocks for one session (its signed store list says so)
+  @State private var scoped = false
   @State private var loaded = false
   @State private var loadError: String?
   @State private var busy: String?
@@ -222,7 +224,8 @@ struct SecureNewSession: View {
         }
       }
       if loaded && !toUnlock.isEmpty {
-        Muted(text: "Start also unlocks \(toUnlock.joined(separator: ", ")) (locked now), with the same Face ID.").padding(.top, 16).accessibilityIdentifier("ns-unlocks")
+        Muted(text: scoped ? "Start also unlocks \(toUnlock.joined(separator: ", ")) (locked now) for this session only, with the same Face ID. The core locks \(toUnlock.count == 1 ? "it" : "them") again once the machine has its secrets; a paused session carries its secrets to its next machine."
+              : "Start also unlocks \(toUnlock.joined(separator: ", ")) (locked now), with the same Face ID.").padding(.top, 16).accessibilityIdentifier("ns-unlocks")
       }
       if let failure { Callout(text: failure, color: .red).padding(.top, 16).accessibilityIdentifier("secure-error") }
     }
@@ -257,7 +260,7 @@ struct SecureNewSession: View {
   private func load() async {
     pickModel()
     if let p = shell.prefetched { apply(p); loaded = true }
-    do { let p = try await RouterClient.shared.stores(); shell.prefetched = p; apply(p); loaded = true }
+    do { let d = try await RouterClient.shared.storesDoc(); let p = d.stores; scoped = d.scopedUnlocks == true; shell.prefetched = p; apply(p); loaded = true }
     catch { if !loaded { loadError = errText(error) } }
     if lists.models.isEmpty { shell.refreshLists() }
   }
@@ -295,7 +298,7 @@ struct SecureNewSession: View {
       let locked = r.stores.filter { n in now.contains { $0.name == n && !$0.unlocked && !$0.empty } }
       busy = "Signing…"
       let reason = "Start \"\(title.isEmpty ? "New session" : title)\"" + (locked.isEmpty ? "" : " and unlock \(locked.joined(separator: ", "))")
-      guard let sig = try await StoreUnlock.signAndUnlock(payload: a.challenge.payload, stores: locked, reason: reason) else { throw TrustError.stale("signature") }
+      guard let sig = try await StoreUnlock.signAndUnlock(payload: a.challenge.payload, stores: locked, reason: reason, for: scoped ? r.challenge.nonce : nil) else { throw TrustError.stale("signature") }
       busy = "Starting…"
       let ans = try await RouterClient.shared.respond(a.id, signature: sig)
       try Checks.answerFor(r, answer: ans.answer, coreKey: key)
@@ -313,9 +316,9 @@ struct SecureNewSession: View {
 @MainActor
 enum StoreUnlock {
   @discardableResult
-  static func signAndUnlock(payload: String?, stores: [String], reason: String) async throws -> Data? {
+  static func signAndUnlock(payload: String?, stores: [String], reason: String, for forNonce: String?) async throws -> Data? {
     var begins: [UnlockBegin] = []
-    for n in stores { begins.append(try await RouterClient.shared.unlockBegin(n)) }
+    for n in stores { begins.append(try await RouterClient.shared.unlockBegin(n, for: forNonce)) }
     let es = begins.map(\.e)
     let out = try await offMain { try PhoneKeys.shared.signAndShares(payload, es: es, reason: reason) }
     for (b, x) in zip(begins, out.shares) {
@@ -335,6 +338,8 @@ struct SecureUnlock: View {
   let options: [String: Any]
   @State private var locked: [String]?
   @State private var certStores: [String] = []
+  @State private var certNonce: String?
+  @State private var scoped = false
   @State private var loadError: String?
   @State private var busy: String?
   @State private var failure: String?
@@ -346,7 +351,7 @@ struct SecureUnlock: View {
       if let loadError { Callout(text: loadError, color: .red).padding(.top, 16).accessibilityIdentifier("secure-error") }
       else if let locked {
         Lbl(text: "What you allow")
-        Text(locked.isEmpty ? "Every store of “\(label)” is open already." : "Unlock \(locked.joined(separator: ", ")) so “\(label)” can finish starting. Unlocked stores stay open until you lock them on the Stores page.")
+        Text(locked.isEmpty ? "Every store of “\(label)” is open already." : "Unlock \(locked.joined(separator: ", ")) so “\(label)” can finish starting. " + (scoped ? "Only this session reads \(locked.count == 1 ? "it" : "them"), and the core locks \(locked.count == 1 ? "it" : "them") again once its machine has its secrets." : "Unlocked stores stay open until you lock them on the Stores page."))
           .kitText(3, weight: .medium).foregroundStyle(Radix.gray.s[12]).frame(maxWidth: .infinity, alignment: .leading).accessibilityIdentifier("unlock-meaning")
         Lbl(text: "The session's stores (from the core's cert)")
         StoreLines(stores: certStores, sensitive: [])
@@ -358,10 +363,13 @@ struct SecureUnlock: View {
   private func load() async {
     do {
       let c = try await RouterClient.shared.sessionCert(sessionId)
-      let all = try await RouterClient.shared.stores()
+      let doc = try await RouterClient.shared.storesDoc()
+      let all = doc.stores
+      scoped = doc.scopedUnlocks == true && (c.nonce ?? "").isEmpty == false
+      certNonce = scoped ? c.nonce : nil
       certStores = (c.stores ?? []).filter { $0 != StoreView.coreStore }
       locked = certStores.filter { n in all.contains { $0.name == n && !$0.unlocked && !$0.empty } }
-      shell.signedAction = SignedAction.unlock(stores: locked ?? [], session: label)
+      shell.signedAction = SignedAction.unlock(stores: locked ?? [], session: label, scoped: scoped)
     } catch { loadError = errText(error) }
   }
   private func allow() async {
@@ -369,7 +377,7 @@ struct SecureUnlock: View {
     failure = nil
     do {
       busy = "Unlocking…"
-      try await StoreUnlock.signAndUnlock(payload: nil, stores: locked, reason: "Unlock \(locked.joined(separator: ", "))")
+      try await StoreUnlock.signAndUnlock(payload: nil, stores: locked, reason: "Unlock \(locked.joined(separator: ", "))", for: certNonce)
       shell.exitSecure("unlocked \(locked.joined(separator: ",")) for \(sessionId)", done: true, id: sessionId)
     } catch { busy = nil; failure = errText(error) }
   }
@@ -382,6 +390,10 @@ struct SecureApproval: View {
   @State private var a: RouterClient.ApprovalDTO?
   @State private var r: Checks.Reviewed?
   @State private var harnessStores: [String] = []
+  /// the stores this approval also unlocks under its Face ID (a new line's or an added store that is locked now),
+  /// for this session only when the core takes such unlocks; a resume carries its secrets and unlocks nothing
+  @State private var toUnlock: [String] = []
+  @State private var scoped = false
   @State private var loadError: String?
   @State private var busy: String?
   @State private var failure: String?
@@ -432,6 +444,9 @@ struct SecureApproval: View {
           }
         }
         Lbl(text: "Session image"); Muted(text: r.image).textSelection(.enabled)
+        if !toUnlock.isEmpty {
+          Muted(text: "Approve also unlocks \(toUnlock.joined(separator: ", ")) (locked now) for this session only, with the same Face ID; the core locks \(toUnlock.count == 1 ? "it" : "them") again once the machine has its secrets.").padding(.top, 12).accessibilityIdentifier("secure-unlocks")
+        }
         HStack { KitButton(title: "Reject", variant: .soft, color: .red, disabled: busy != nil, id: "secure-reject") { Task { await reject() } }; Spacer() }.padding(.top, 20)
         if let failure { Callout(text: failure, color: .red).padding(.top, 16).accessibilityIdentifier("secure-error") }
       } else { ProgressView().frame(maxWidth: .infinity).padding(.top, 24) }
@@ -443,8 +458,13 @@ struct SecureApproval: View {
       guard let x = try await RouterClient.shared.approval(approvalId) else { loadError = "This approval is gone (answered or rejected elsewhere)."; return }
       let rv = try Checks.review(challenge: x.challenge, coreKey: try CoreTrust.key())
       harnessStores = (await RouterClient.shared.harnessStores())[rv.harness] ?? []
+      let doc = try await RouterClient.shared.storesDoc()
+      let want: [String] = rv.kind == .addStore ? [rv.addedStore ?? ""] : rv.kind == .newSession ? rv.stores : []
+      scoped = doc.scopedUnlocks == true
+      // only with a core that unlocks for one session (an older core's unlocks would stay open to every session)
+      toUnlock = scoped ? want.filter { n in doc.stores.contains { $0.name == n && !$0.unlocked && !$0.empty } } : []
       r = rv; a = x
-      shell.signedAction = SignedAction.approval(rv)
+      shell.signedAction = SignedAction.approval(rv) + SignedAction.alsoUnlocks(toUnlock, scoped: scoped)
     } catch { loadError = errText(error) }
   }
   private func approve() async {
@@ -452,8 +472,14 @@ struct SecureApproval: View {
     failure = nil
     do {
       busy = "Signing…"
-      let payload = a.challenge.payload, reason = title
-      let sig = try await offMain { try PhoneKeys.shared.sign(payload, reason: reason) }
+      let payload = a.challenge.payload, reason = title + (toUnlock.isEmpty ? "" : " and unlock \(toUnlock.joined(separator: ", "))")
+      let sig: Data
+      if toUnlock.isEmpty {
+        sig = try await offMain { try PhoneKeys.shared.sign(payload, reason: reason) }
+      } else {
+        guard let s = try await StoreUnlock.signAndUnlock(payload: payload, stores: toUnlock, reason: reason, for: r.challenge.nonce) else { throw TrustError.stale("signature") }
+        sig = s
+      }
       busy = "Approving…"
       let ans = try await RouterClient.shared.respond(a.id, signature: sig)
       try Checks.answerFor(r, answer: ans.answer, coreKey: try CoreTrust.key())
@@ -482,6 +508,7 @@ struct SecureStores: View {
     SecureFrame(shell: shell, title: "Stores", busy: busy) {
       if let failure { Callout(text: failure, color: .red).padding(.top, 16).accessibilityIdentifier("secure-error") }
       Lbl(text: "Stores")
+      Muted(text: "Unlocked = open to every session until you lock it. A session's Start unlocks what it needs for that session only, and the core locks it again once the machine has its secrets; a paused session carries its secrets to its next machine.")
       if !loaded && failure == nil { ProgressView().frame(maxWidth: .infinity) }
       VStack(spacing: 8) {
         ForEach(stores) { s in
@@ -522,7 +549,7 @@ struct SecureStores: View {
           KitCard(size: 1) { HStack(spacing: 8) {
             VStack(alignment: .leading, spacing: 0) {
               Text(u.store).kitText(2, weight: .medium).foregroundStyle(Radix.gray.s[12])
-              Text("since \(SecureStores.date(u.since)) · \(u.id.prefix(8))").kitText(1).foregroundStyle(Radix.gray.a[11])
+              Text("since \(SecureStores.date(u.since)) · \((u.forNonce ?? "").isEmpty ? "every session" : "one session") · \(u.id.prefix(8))").kitText(1).foregroundStyle(Radix.gray.a[11])
             }
             Spacer()
             KitButton(title: "Lock", variant: .soft, color: .red, disabled: busy != nil, id: "lock-\(u.store)") { Task { await lock(u.id) } }

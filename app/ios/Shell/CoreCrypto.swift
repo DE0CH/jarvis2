@@ -167,10 +167,19 @@ struct StoreView: Codable, Identifiable, Equatable {
   static let coreStore = "core"
   var isCore: Bool { name == StoreView.coreStore }
 }
-struct StoresDoc: Codable { let kind: String; let nonce: String; let stores: [StoreView] }
-struct UnlockRow: Codable, Identifiable, Equatable { let id: String; let store: String; let since: String }
+/// scopedUnlocks: the core takes unlocks for one session (unlock_begin's "for"; then `unlocked` = open to every
+/// session); nil from a core that predates them
+struct StoresDoc: Codable { let kind: String; let nonce: String; let stores: [StoreView]; let scopedUnlocks: Bool? }
+/// forNonce: the one challenge or cert the unlock is for ("" or nil = standing, open to every session)
+struct UnlockRow: Codable, Identifiable, Equatable {
+  let id: String; let store: String; let since: String; let forNonce: String?
+  enum CodingKeys: String, CodingKey { case id, store, since, forNonce = "for" }
+}
 struct UnlockedDoc: Codable { let kind: String; let nonce: String; let unlocked: [UnlockRow] }
-struct UnlockBegin: Codable { let kind: String; let pending: String; let store: String; let e: String; let t: String }
+struct UnlockBegin: Codable {
+  let kind: String; let pending: String; let store: String; let e: String; let t: String; let forNonce: String?
+  enum CodingKeys: String, CodingKey { case kind, pending, store, e, t, forNonce = "for" }
+}
 struct KindDoc: Codable { let kind: String; let id: String?; let store: String?; let name: String?; let stores: Int?; let core: String? }
 
 /// What a secure page shows for a challenge — read from the core-signed challenge itself, never from the
@@ -279,6 +288,8 @@ struct SessionCert: Codable {
   let sensitive: Bool?
   let line: String
   let issuedAt: String?
+  /// what an unlock for this session names (unlock_begin's "for")
+  let nonce: String?
 }
 /// the grant text (router/grants.go grantText) — exactly the router's draft, field for field
 struct GrantText: Codable, Equatable {

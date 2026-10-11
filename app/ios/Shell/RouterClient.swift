@@ -88,11 +88,13 @@ final class RouterClient: NSObject, ASWebAuthenticationPresentationContextProvid
   }
 
   // ---- the core, relayed: every answer checked against the pinned core key ----
-  func stores() async throws -> [StoreView] {
+  func stores() async throws -> [StoreView] { try await storesDoc().stores }
+  /// the signed list itself (also says whether the core takes unlocks for one session)
+  func storesDoc() async throws -> StoresDoc {
     let n = CoreCrypto.nonce()
     let d = try CoreCrypto.decode(try await json("POST", "api/core/stores", ["nonce": n], as: SignedDoc.self), by: try CoreTrust.key(), as: StoresDoc.self, what: "the store list")
     guard d.kind == "stores", d.nonce == n else { throw TrustError.stale("store list") }
-    return d.stores
+    return d
   }
   func unlocked() async throws -> [UnlockRow] {
     let n = CoreCrypto.nonce()
@@ -100,9 +102,15 @@ final class RouterClient: NSObject, ASWebAuthenticationPresentationContextProvid
     guard d.kind == "unlocked-list", d.nonce == n else { throw TrustError.stale("unlocked list") }
     return d.unlocked
   }
-  func unlockBegin(_ store: String) async throws -> UnlockBegin {
-    let b = try CoreCrypto.decode(try await json("POST", "api/core/unlock/begin", ["store": store], as: SignedDoc.self), by: try CoreTrust.key(), as: UnlockBegin.self, what: "the unlock")
+  /// forNonce: the challenge or cert nonce the unlock is for (the core locks it again once that cert has pulled);
+  /// nil = a standing unlock. A core that predates unlocks for one session answers no "for" (then it is standing).
+  func unlockBegin(_ store: String, for forNonce: String? = nil) async throws -> UnlockBegin {
+    var body: [String: Any] = ["store": store]
+    if let forNonce { body["for"] = forNonce }
+    let b = try CoreCrypto.decode(try await json("POST", "api/core/unlock/begin", body, as: SignedDoc.self), by: try CoreTrust.key(), as: UnlockBegin.self, what: "the unlock")
     guard b.kind == "unlock-begin", b.store == store else { throw TrustError.stale("unlock of \(b.store)") }
+    if let got = b.forNonce, !got.isEmpty, got != (forNonce ?? "") { throw TrustError.stale("unlock of \(b.store) for another session") }
+    if forNonce == nil, let got = b.forNonce, !got.isEmpty { throw TrustError.stale("unlock of \(b.store) for one session") }
     return b
   }
   func unlockFinish(_ b: UnlockBegin, share: [String: String]) async throws {

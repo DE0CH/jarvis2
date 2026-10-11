@@ -162,6 +162,23 @@ let n2 = CoreCrypto.nonce()
 let ul = try? CoreCrypto.decode(doc(call("/unlocked", ["nonce": n2]).1), by: coreKey, as: UnlockedDoc.self, what: "unlocked list")
 check(ul?.nonce == n2 && ul?.unlocked.map(\.id) == [u?.id ?? "?"], "unlocked list is signed, fresh and complete")
 
+// ---- an unlock for one session (a Start's challenge, a waiting session's cert): signed with what it is for, read
+// only by that cert's pull, never shown as open to every session ----
+let sdoc = try! CoreCrypto.decode(doc(call("/stores", ["nonce": CoreCrypto.nonce()]).1), by: coreKey, as: StoresDoc.self, what: "stores")
+check(sdoc.scopedUnlocks == true, "the core's signed store list says it takes unlocks for one session")
+let forN = String(repeating: "ab", count: 32)
+let sb = try! CoreCrypto.decode(doc(call("/unlock/begin", ["store": "gmail", "for": forN]).1), by: coreKey, as: UnlockBegin.self, what: "unlock-begin for one session")
+check(sb.kind == "unlock-begin" && sb.forNonce == forN, "unlock-begin names the one session it is for (signed)")
+let (ss, sd) = call("/unlock/finish", ["pending": sb.pending, "share": try! CoreCrypto.sealShare(try! realShare(sb), to: sb.t)])
+let su = try? CoreCrypto.decode(doc(sd), by: coreKey, as: KindDoc.self, what: "unlocked")
+check(ss == 200 && su?.kind == "unlocked", "the core opens it for that session")
+check(list().first { $0.name == "gmail" }?.unlocked == false, "…and the store list doesn't show it as open to every session")
+let ul2 = try? CoreCrypto.decode(doc(call("/unlocked", ["nonce": CoreCrypto.nonce()]).1), by: coreKey, as: UnlockedDoc.self, what: "unlocked list")
+check(ul2?.unlocked.first { $0.id == su?.id }?.forNonce == forN && ul2?.unlocked.first { $0.id == u?.id }.map { ($0.forNonce ?? "").isEmpty } == true, "the unlocked list says which unlock is for one session and which is standing")
+let slk = try? CoreCrypto.decode(doc(call("/lock", ["id": su?.id ?? ""]).1), by: coreKey, as: KindDoc.self, what: "locked")
+check(slk?.kind == "locked", "an unlock for one session can be locked by hand too")
+check(SignedAction.unlock(stores: ["gmail"], session: "s", scoped: true).contains("locks it again"), "the review page says the core locks it again")
+
 // ---- approvals: the challenge before any machine ----
 func challenge(_ body: [String: Any]) -> SignedDoc {
   let (s, d) = call("/succession", body)
