@@ -38,11 +38,14 @@ type Liveness struct {
 	NeedsGrant      string `json:"needsGrant,omitempty"` // a holder the machine refused; the app offers a grant
 	DowngradeSeenAt int64  `json:"downgradeSeenAt,omitempty"`
 	// the settled episode already DMed ("idle:<statusUpdatedAt>"), so a router restart doesn't ping it again
+	// the auto-pause clock: idle since when, on which turn (statusUpdatedAt) — kept across a router restart, so
+	// frequent deploys don't keep restarting the hour
+	IdleSince     time.Time `json:"idleSince,omitempty"`
+	IdleStatusAt  int64     `json:"idleStatusAt,omitempty"`
 	AttentionSent string    `json:"attentionSent,omitempty"`
 	Reg           *Registry `json:"registry,omitempty"`
 	LastReport    time.Time `json:"lastReport,omitempty"`
 
-	idleSince       time.Time
 	waiting         *waitEpisode
 	settled         *settledEpisode
 	stall           *stallClock
@@ -157,8 +160,8 @@ func liveView(s *Session, v map[string]any) {
 	v["bgTasks"], v["statusUpdatedAt"], v["bridgeSessionId"], v["sessionId"] = g.BgTasks, g.StatusUpdatedAt, g.BridgeSessionID, g.SessionID
 	v["authFailed"], v["credsExpiresAt"], v["sessionsInside"] = g.AuthFailed, g.CredsExpiresAt, g.SessionsInside
 	v["oneShotDone"], v["refusals"] = g.OneShotDone, orEmptyR(g.Refusals)
-	if !l.AutoPauseOff && !l.idleSince.IsZero() && idleEligible(g) {
-		v["pauseInMs"] = max(int64(0), time.Until(l.idleSince.Add(defaultPilot.IdlePause)).Milliseconds())
+	if !l.AutoPauseOff && !l.IdleSince.IsZero() && idleEligible(g) {
+		v["pauseInMs"] = max(int64(0), time.Until(l.IdleSince.Add(defaultPilot.IdlePause)).Milliseconds())
 	}
 }
 
@@ -230,7 +233,7 @@ func (r *Router) registerAutopilot(app appRoute, m machineRoute) {
 					s.Live = &Liveness{}
 				}
 				if field == "autoPause" {
-					s.Live.AutoPauseOff, s.Live.idleSince = !on, time.Time{}
+					s.Live.AutoPauseOff, s.Live.IdleSince = !on, time.Time{}
 				} else {
 					s.Live.NotifyIdleOff = !on
 				}
@@ -365,7 +368,7 @@ func planTick(d *persisted, now time.Time, storedExp int64, c pilotConfig, busy,
 		}
 		l := s.Live
 		if s.State != "started" || s.MachineID == "" {
-			l.idleSince, l.waiting, l.settled, l.stall, l.dialogCheckedAt, l.dialogReported = time.Time{}, nil, nil, nil, 0, false
+			l.IdleSince, l.waiting, l.settled, l.stall, l.dialogCheckedAt, l.dialogReported = time.Time{}, nil, nil, nil, 0, false
 			if s.MachineID == "" {
 				l.Reg = nil // paused: the next machine reports afresh
 			}
@@ -469,13 +472,13 @@ func planTick(d *persisted, now time.Time, storedExp int64, c pilotConfig, busy,
 
 		// auto-pause after IdlePause of plain idle
 		if l.AutoPauseOff || l.OneShot || veto(id) || !idleEligible(g) {
-			l.idleSince = time.Time{}
+			l.IdleSince = time.Time{}
 			continue
 		}
-		if l.idleSince.IsZero() {
-			l.idleSince = now
+		if l.IdleSince.IsZero() || l.IdleStatusAt != g.StatusUpdatedAt {
+			l.IdleSince, l.IdleStatusAt = now, g.StatusUpdatedAt // a turn the router didn't see starts the hour again
 		}
-		if now.Sub(l.idleSince) >= c.IdlePause && !operating {
+		if now.Sub(l.IdleSince) >= c.IdlePause && !operating {
 			add(pilotAction{Kind: "pause", Session: id, Name: name})
 		}
 	}
@@ -563,7 +566,7 @@ func (r *Router) runAction(a pilotAction) {
 		log.Printf("[autopause] paused idle session %s (%s)", a.Session, a.Name)
 		r.st.Do(func(d *persisted) {
 			if s := d.Sessions[a.Session]; s != nil && s.Live != nil {
-				s.Live.idleSince = time.Time{}
+				s.Live.IdleSince = time.Time{}
 			}
 		})
 	case "destroy":

@@ -108,13 +108,13 @@ func TestAutoPause(t *testing.T) {
 	// busy resets the clock
 	report(l, now2, &Registry{Status: "busy"})
 	planTick(d, now2, 0, c, none.busy, veto)
-	if !l.idleSince.IsZero() {
+	if !l.IdleSince.IsZero() {
 		t.Fatal("busy should reset the idle clock")
 	}
 	// background jobs are work
 	report(l, now2, &Registry{Status: "idle", BgTasks: 1})
 	planTick(d, now2, 0, c, none.busy, veto)
-	if !l.idleSince.IsZero() {
+	if !l.IdleSince.IsZero() {
 		t.Fatal("background jobs should reset the idle clock")
 	}
 	// switched off
@@ -127,15 +127,15 @@ func TestAutoPause(t *testing.T) {
 	}
 	// vetoed (a wakeup due soon)
 	l.AutoPauseOff = false
-	l.idleSince = now
+	l.IdleSince = now
 	if a := planTick(d, now2, 0, c, none.busy, func(string) bool { return true }); strings.Contains(kinds(a), "pause") {
 		t.Fatal("vetoed but paused")
 	}
 	// paused sessions forget their clocks and their report
-	l.idleSince = now
+	l.IdleSince = now
 	d.Sessions["s1"].State, d.Sessions["s1"].MachineID = "paused", ""
 	planTick(d, now2, 0, c, none.busy, veto)
-	if !l.idleSince.IsZero() || l.Reg != nil {
+	if !l.IdleSince.IsZero() || l.Reg != nil {
 		t.Fatal("paused session kept its clock or report")
 	}
 }
@@ -430,7 +430,7 @@ func TestToggleRoutesAndView(t *testing.T) {
 	r.registerAutopilot(func(p string, fn http.HandlerFunc) { mux.HandleFunc(p, fn) },
 		func(p string, fn func(http.ResponseWriter, *http.Request, string, []byte)) {})
 	st.Do(func(d *persisted) {
-		d.Sessions["s1"] = &Session{ID: "s1", State: "started", MachineID: "m1", Live: &Liveness{idleSince: time.Now()}}
+		d.Sessions["s1"] = &Session{ID: "s1", State: "started", MachineID: "m1", Live: &Liveness{IdleSince: time.Now()}}
 	})
 	call := func(path, body string) int {
 		w := httptest.NewRecorder()
@@ -448,11 +448,11 @@ func TestToggleRoutesAndView(t *testing.T) {
 	}
 	st.Do(func(d *persisted) {
 		s := d.Sessions["s1"]
-		if !s.Live.AutoPauseOff || !s.Live.NotifyIdleOff || !s.Live.idleSince.IsZero() {
+		if !s.Live.AutoPauseOff || !s.Live.NotifyIdleOff || !s.Live.IdleSince.IsZero() {
 			t.Fatalf("%+v", s.Live)
 		}
 		s.Live.AutoPauseOff = false
-		s.Live.idleSince = time.Now().Add(-10 * time.Minute)
+		s.Live.IdleSince = time.Now().Add(-10 * time.Minute)
 		s.Live.Reg, s.Live.LastReport = &Registry{Status: "idle", AiTitle: "T"}, time.Now()
 		v := sessionView(s, d)
 		ms, ok := v["pauseInMs"].(int64)
@@ -527,5 +527,35 @@ func TestAttentionDMNotRepeatedAfterRestart(t *testing.T) {
 	report(l2, now.Add(7*c.Attention), idle2)
 	if a := planTick(d2, now.Add(7*c.Attention), 0, c, no, no); !strings.Contains(kinds(a), "dm") {
 		t.Fatalf("a new idle episode wasn't pinged: %+v", a)
+	}
+}
+
+func TestAutoPauseClockSurvivesRestart(t *testing.T) {
+	c, now := defaultPilot, time.Now()
+	no := func(string) bool { return false }
+	l := &Liveness{}
+	d := running("s1", l)
+	idle := &Registry{Status: "idle", StatusUpdatedAt: 3}
+	report(l, now, idle)
+	planTick(d, now, 0, c, no, no)
+	// restarts every few minutes: only the persisted fields survive each one
+	for at := now; at.Before(now.Add(c.IdlePause)); at = at.Add(10 * time.Minute) {
+		l = &Liveness{IdleSince: l.IdleSince, IdleStatusAt: l.IdleStatusAt, AttentionSent: l.AttentionSent}
+		d = running("s1", l)
+		report(l, at, idle)
+		if strings.Contains(kinds(planTick(d, at, 0, c, no, no)), "pause") {
+			t.Fatal("paused early")
+		}
+	}
+	report(l, now.Add(c.IdlePause), idle)
+	if !strings.Contains(kinds(planTick(d, now.Add(c.IdlePause), 0, c, no, no)), "pause") {
+		t.Fatal("an hour idle across restarts didn't pause")
+	}
+	// a turn the router never saw (busy and idle again between reports) restarts the hour
+	l2 := &Liveness{IdleSince: now.Add(-2 * c.IdlePause), IdleStatusAt: 3}
+	d2 := running("s1", l2)
+	report(l2, now, &Registry{Status: "idle", StatusUpdatedAt: 4})
+	if strings.Contains(kinds(planTick(d2, now, 0, c, no, no)), "pause") {
+		t.Fatal("paused right after an unseen turn")
 	}
 }
