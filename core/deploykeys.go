@@ -116,8 +116,11 @@ type deployKeyBegin struct {
 	Replaces   bool   `json:"replaces"` // add: the store exists and its contents are replaced
 	Title      string `json:"title"`    // the deploy key's title on GitHub
 	TokenStore string `json:"tokenStore"`
-	E          string `json:"e"`
-	T          string `json:"t"`
+	// TokenWriter / TokenDataSha256: who wrote the token store's blob, as in unlock_begin (the phone checks it)
+	TokenWriter     map[string]string `json:"tokenWriter"`
+	TokenDataSha256 string            `json:"tokenDataSha256"`
+	E               string            `json:"e"`
+	T               string            `json:"t"`
 }
 
 // DeployKeyBegin: a pending add or remove for one repo, signed, with the token store's E and a one-off T
@@ -158,7 +161,7 @@ func (c *Core) DeployKeyBegin(action, repo string, sensitive bool) (SignedDoc, e
 	id := randID()
 	b := deployKeyBegin{Kind: "deploy-key-begin", Pending: id, Action: action, Repo: repo, Store: store, Sensitive: sensitive,
 		Replaces: action == "add" && exists && old != nil, Title: "jarvis2 " + store, TokenStore: DeployKeyTokenStore,
-		E: blob.Wrapped.E, T: b64.EncodeToString(t.PublicKey().Bytes())}
+		E: blob.Wrapped.E, T: b64.EncodeToString(t.PublicKey().Bytes()), TokenWriter: writerOf(blob), TokenDataSha256: sha256Hex(blob.Data)}
 	d, err := c.sign(b)
 	if err != nil {
 		return SignedDoc{}, err

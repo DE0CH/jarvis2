@@ -678,11 +678,15 @@ func TestAddAStoreToARunningSession(t *testing.T) {
 	if _, err := c.ApproveByDeadMachine(&chd); err == nil {
 		t.Fatal("approve_by_dead_machine added a store")
 	}
-	cert2 := pl(t)(c.ApproveByPhone(&chd, p.sign(chd.Payload)))
+	c2, err := c.ApproveByPhone(&chd, p.sign(chd.Payload))
+	cert2 := pl(t)(c2, err)
 	if cert2["kind"] != "succession-cert" || cert2["machine"].(map[string]any)["id"] != id {
 		t.Fatalf("got %v", cert2)
 	}
-	c2, _ := c.ApproveByPhone(&chd, p.sign(chd.Payload))
+	// once: the same challenge and signature answered again gets nothing (the cert it continues is superseded)
+	if _, err := c.ApproveByPhone(&chd, p.sign(chd.Payload)); err == nil {
+		t.Fatal("an add-store approval was answered twice")
+	}
 	unlock(t, c, p, "default")
 	unlock(t, c, p, "gmail")
 	if _, err := c.PullSecrets(&c2, ""); err != nil {

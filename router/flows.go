@@ -259,12 +259,18 @@ func (r *Router) CreateSession(in NewSession) (string, error) {
 	return s.ID, nil
 }
 
+// deployKeyTokenStore: the core opens it only inside a deploy-key call (core/deploykeys.go)
+const deployKeyTokenStore = "github-deploy-keys"
+
 // withHarnessStores: the chosen stores plus the harness's, sorted (the core refuses unknown ones)
 func (r *Router) withHarnessStores(chosen, harness []string) ([]string, error) {
 	set := map[string]bool{}
 	for _, n := range append(append([]string{}, chosen...), harness...) {
 		if n == flyStore {
 			return nil, fmt.Errorf("store %s holds the core's Fly token and never goes to a session", n)
+		}
+		if n == deployKeyTokenStore {
+			return nil, fmt.Errorf("store %s holds the deploy-key token: only a phone-approved deploy-key call opens it", n)
 		}
 		set[n] = true
 	}

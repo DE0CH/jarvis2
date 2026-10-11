@@ -40,6 +40,29 @@ type StoreBlob struct {
 	Name    string     `json:"name"`
 	Wrapped WrappedKey `json:"wrapped"` // the data key, to phone + core
 	Data    string     `json:"data"`    // AES-GCM(json values) under the data key, the name as associated data
+	// WriterSig: the writer's signature (the setup key, keys/setup.pub) over WriterText — the core can't check it
+	// (it holds no writer key) and only passes it on in unlock_begin, where the phone checks it before its share.
+	// Writer: "core" for a blob the core wrapped itself (a Recover, a deploy key); never taken from a writer.
+	WriterSig string `json:"writerSig,omitempty"`
+	Writer    string `json:"writer,omitempty"`
+}
+
+// WriterText: what a store's writer signs — the store's name, its E (which only that writer could wrap a data key
+// to) and the sha256 of its data
+func WriterText(name, e, data string) string {
+	return "jarvis2-store-blob\n" + name + "\n" + e + "\n" + sha256Hex(data)
+}
+
+// writerOf: who wrote a blob, for the phone (unlock_begin, deploy_key_begin): {"by":"core"}, {"by":"setup",
+// "sig"}, or nil (a blob with no writer signature: the phone refuses it)
+func writerOf(b *StoreBlob) map[string]string {
+	switch {
+	case b.Writer == "core":
+		return map[string]string{"by": "core"}
+	case b.WriterSig != "":
+		return map[string]string{"by": "setup", "sig": b.WriterSig}
+	}
+	return nil
 }
 
 type StartedMachine struct {
@@ -108,6 +131,10 @@ type Cert struct {
 	// cert doesn't name; a cert without it comes from an earlier core).
 	Snapshot string `json:"snapshot,omitempty"`
 	Vouch    int    `json:"vouch,omitempty"`
+	// PredCert: the nonce of the cert this one continues (the predecessor's newest, or this machine's previous one
+	// for an add-store or a downgrade); "" on a new line. Carried secrets sealed under it open for this cert, older
+	// ones don't (carry.go).
+	PredCert string `json:"predecessorCert,omitempty"`
 }
 
 // succession: the cert for a machine on a line (callers hold c.mu)
@@ -124,8 +151,14 @@ func (c *Core) succession(r Request, m *StartedMachine, nonce, now string) Cert 
 	if r.PredID != "" && r.PredID != m.ID {
 		snap = c.snapshots[r.PredID]
 	}
+	predCert := ""
+	if r.Predecessor != nil {
+		var pc Cert
+		json.Unmarshal([]byte(r.Predecessor.Payload), &pc) // already checked: this core signed it, and it is the newest
+		predCert = pc.Nonce
+	}
 	return Cert{Kind: "succession-cert", PredID: r.PredID, Machine: m, Stores: r.Stores, Options: r.Options,
-		Nonce: nonce, IssuedAt: now, Phone: c.phoneSigning, Sensitive: sensitive, Line: line, Snapshot: snap, Vouch: 2}
+		Nonce: nonce, IssuedAt: now, Phone: c.phoneSigning, Sensitive: sensitive, Line: line, Snapshot: snap, Vouch: 2, PredCert: predCert}
 }
 
 type unlocked struct {
@@ -155,7 +188,10 @@ type Core struct {
 	coreCert                     *MasterCert // the master's signature on this core (from the claim)
 
 	approvalsUsed map[string]bool // approval nonces already certified
-	certified     map[string]bool // started machines that already have a line
+	// latest: a certified machine → the nonce of its newest cert (certify, then each add-store or downgrade). A
+	// machine's older certs are superseded: they pull nothing, continue nothing and succeed to nothing, so a
+	// downgrade (or an add-store answered again) can't be undone with a cert from before it.
+	latest map[string]string
 
 	started map[string]*StartedMachine
 	killed  map[string]bool // approve_by_dead_machine's two sets
@@ -206,7 +242,7 @@ func NewCore(fly Fly) (*Core, error) {
 		return nil, err
 	}
 	return &Core{signer: s, agreement: a, nonceKey: nk, carryKey: ck,
-		approvalsUsed: map[string]bool{}, certified: map[string]bool{},
+		approvalsUsed: map[string]bool{}, latest: map[string]string{},
 		started: map[string]*StartedMachine{}, killed: map[string]bool{}, used: map[string]bool{}, snapshots: map[string]string{},
 		stores: map[string]*StoreBlob{}, notSensitive: map[string]bool{}, pending: map[string]pendingUnlock{}, unlocked: map[string]*unlocked{}, pendingKeys: map[string]pendingDeployKey{}, repoOwner: map[string]string{},
 		fly: fly, github: newGitHub(), now: time.Now}, nil
@@ -392,6 +428,7 @@ func (c *Core) Claim(statement, masterSig string, bundle Sealed) (SignedDoc, err
 	c.repoOwner = owners
 	c.phoneSigning, c.phoneAgreement = st.Phone.SigningKey, st.Phone.AgreementKey
 	c.stores = stores
+	c.notSensitive = map[string]bool{} // exactly the bundle's: nothing from before the claim survives
 	for _, n := range b.NotSensitive {
 		if _, ok := c.stores[n]; ok {
 			c.notSensitive[n] = true
@@ -489,7 +526,7 @@ func (c *Core) wrap(name string, values map[string]string, phoneAgreement string
 		return nil, err
 	}
 	plain, _ := json.Marshal(values)
-	return &StoreBlob{Name: name, Wrapped: w, Data: b64.EncodeToString(gcmSeal(dk, plain, []byte(name)))}, nil
+	return &StoreBlob{Name: name, Wrapped: w, Data: b64.EncodeToString(gcmSeal(dk, plain, []byte(name))), Writer: "core"}, nil
 }
 
 // CreateStore: once per name — an empty, non-sensitive store (the only way a store is ever not sensitive,
@@ -497,8 +534,11 @@ func (c *Core) wrap(name string, values map[string]string, phoneAgreement string
 func (c *Core) CreateStore(name string) (SignedDoc, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if !storeName(name) || name == FlyStore {
-		return SignedDoc{}, fail(400, "bad store name")
+	if c.MasterKey == "" {
+		return SignedDoc{}, fail(409, "this core isn't set up yet")
+	}
+	if !storeName(name) || name == FlyStore || name == DeployKeyTokenStore {
+		return SignedDoc{}, fail(400, "bad store name (%s is always sensitive)", DeployKeyTokenStore)
 	}
 	if _, ok := c.stores[name]; ok {
 		return SignedDoc{}, fail(409, "store %s exists", name)
@@ -526,9 +566,13 @@ func (c *Core) MarkSensitive(name string) (SignedDoc, error) {
 func (c *Core) WriteStore(b StoreBlob) (SignedDoc, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if c.MasterKey == "" {
+		return SignedDoc{}, fail(409, "this core isn't set up yet")
+	}
 	if !storeName(b.Name) || b.Name == FlyStore || b.Wrapped.E == "" || b.Data == "" {
 		return SignedDoc{}, fail(400, "not a store blob")
 	}
+	b.Writer = "" // only the core's own blobs say "core"
 	c.stores[b.Name] = &b
 	c.logf("store %s written (sensitive=%v)", b.Name, !c.notSensitive[b.Name])
 	return c.sign(map[string]any{"kind": "store-written", "name": b.Name, "sensitive": !c.notSensitive[b.Name]})
@@ -552,7 +596,8 @@ func (c *Core) Stores(nonce string) (SignedDoc, error) {
 		out = append(out, row{n, !c.notSensitive[n], b == nil, c.standing(n)})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
-	return c.sign(map[string]any{"kind": "stores", "nonce": nonce, "stores": out, "scopedUnlocks": true})
+	// writers: every unlock_begin names who wrote the blob (the phone refuses one without a valid writer)
+	return c.sign(map[string]any{"kind": "stores", "nonce": nonce, "stores": out, "scopedUnlocks": true, "writers": true})
 }
 
 // ---- machines (the Fly API is used only here: start, kill) -----------------------------------------
@@ -610,6 +655,9 @@ func (c *Core) Certify(approval *SignedDoc, machine string) (SignedDoc, error) {
 	if r.PredID != "" && (!c.killed[r.PredID] || c.used[r.PredID]) {
 		return SignedDoc{}, fail(409, "predecessor %s is not a killed, unused machine", r.PredID)
 	}
+	if err := c.isLatest(r.Predecessor); err != nil {
+		return SignedDoc{}, err
+	}
 	now := c.now().UTC().Format(time.RFC3339)
 	if r.Image == NullImage {
 		if machine != "" {
@@ -620,7 +668,7 @@ func (c *Core) Certify(approval *SignedDoc, machine string) (SignedDoc, error) {
 		return c.sign(Cert{Kind: "burn-cert", PredID: r.PredID, Stores: []string{}, Nonce: a.Nonce, IssuedAt: now})
 	}
 	m, ok := c.started[machine]
-	if !ok || c.killed[machine] || c.certified[machine] {
+	if !ok || c.killed[machine] || c.latest[machine] != "" {
 		return SignedDoc{}, fail(409, "machine %s is not a started machine without a line", machine)
 	}
 	if m.Requested != r.Image {
@@ -629,7 +677,7 @@ func (c *Core) Certify(approval *SignedDoc, machine string) (SignedDoc, error) {
 	if d := imageDigest(r.Image); d == "" || reportedDigest(m.Image) != d {
 		return SignedDoc{}, fail(409, "machine %s runs %s, not the approved digest of %s", machine, m.Image, r.Image)
 	}
-	c.approvalsUsed[a.Nonce], c.certified[machine] = true, true
+	c.approvalsUsed[a.Nonce], c.latest[machine] = true, a.Nonce
 	if r.PredID != "" {
 		c.used[r.PredID] = true
 	}
@@ -708,6 +756,9 @@ func (c *Core) Succession(in SuccessionInput) (SignedDoc, error) {
 		if err := c.verifyOwn(in.Predecessor, &pc); err != nil || pc.Kind != "succession-cert" || pc.Machine == nil {
 			return SignedDoc{}, fail(400, "predecessor is not a succession cert this core signed")
 		}
+		if c.latest[pc.Machine.ID] != pc.Nonce {
+			return SignedDoc{}, fail(409, "the predecessor cert isn't %s's newest: an older cert continues nothing", pc.Machine.ID)
+		}
 		req.PredID, req.Line = pc.Machine.ID, pc.Line
 	}
 	if in.Image == NullImage {
@@ -720,8 +771,15 @@ func (c *Core) Succession(in SuccessionInput) (SignedDoc, error) {
 	}
 	set := map[string]bool{}
 	for _, n := range in.Stores {
-		if _, ok := c.stores[n]; !ok {
+		if b, ok := c.stores[n]; !ok {
 			return SignedDoc{}, fail(400, "unknown store %s", n)
+		} else if b == nil {
+			// an empty store gets its sensitivity settled by its writer first (setup.py marks it before writing)
+			return SignedDoc{}, fail(400, "store %s is empty", n)
+		}
+		if n == DeployKeyTokenStore {
+			// its token is opened only by deploy_key_finish, for one phone-approved call (DESIGN "Deploy keys")
+			return SignedDoc{}, fail(403, "%s never goes to a session", DeployKeyTokenStore)
 		}
 		if !set[n] {
 			set[n] = true
@@ -845,6 +903,15 @@ func (c *Core) answer(ch challenge, by string) (SignedDoc, error) {
 	r := ch.Request
 	now := c.now().UTC().Format(time.RFC3339)
 	if r.AddedStore != "" || r.Downgrade {
+		// once per cert: the machine is alive and the challenge continues its newest cert, which this answer
+		// supersedes — so a saved challenge and signature answered again (or after a downgrade) gets nothing
+		if r.Machine == nil || c.killed[r.Machine.ID] {
+			return SignedDoc{}, fail(409, "the machine is gone")
+		}
+		if err := c.isLatest(r.Predecessor); err != nil {
+			return SignedDoc{}, err
+		}
+		c.latest[r.Machine.ID] = ch.Nonce
 		if r.Downgrade {
 			if m := c.started[r.Machine.ID]; m != nil { // its kill's snapshot is signed with the new key from now on
 				nm := *m
@@ -898,6 +965,9 @@ func (c *Core) ApproveByDeadMachine(d *SignedDoc) (SignedDoc, error) {
 	if err := c.verifyOwn(r.Predecessor, &pc); err != nil {
 		return SignedDoc{}, err
 	}
+	if err := c.isLatest(r.Predecessor); err != nil {
+		return SignedDoc{}, err
+	}
 	if !equalStrings(pc.Stores, r.Stores) || persistentOptions(pc.Options) != r.Options || pc.Machine.Image != r.Image {
 		return SignedDoc{}, fail(403, "store set, image or options differ from the predecessor's (or a one-time input is asked for)")
 	}
@@ -907,8 +977,8 @@ func (c *Core) ApproveByDeadMachine(d *SignedDoc) (SignedDoc, error) {
 
 // ApproveByOldKey: automatic — a succession of a machine to itself with a subset of its stores and a new key
 // pair, answered when it is signed with the signing key named in the predecessor cert (without that, anyone
-// could name their own keys and pull the remaining stores). Older certs keep pulling, sealed to keys that
-// whoever downgraded has deleted.
+// could name their own keys and pull the remaining stores). The predecessor cert must be the machine's newest, and
+// the new cert supersedes it: the older certs pull and continue nothing (Core.latest).
 func (c *Core) ApproveByOldKey(d *SignedDoc, sig string) (SignedDoc, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -937,6 +1007,9 @@ func (c *Core) ApproveByOldKey(d *SignedDoc, sig string) (SignedDoc, error) {
 func (c *Core) UnlockBegin(name, forNonce string) (SignedDoc, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if name == DeployKeyTokenStore {
+		return SignedDoc{}, fail(403, "%s is opened only by a deploy-key call, never unlocked", DeployKeyTokenStore)
+	}
 	blob := c.stores[name]
 	if blob == nil {
 		return SignedDoc{}, fail(404, "no store %s with contents", name)
@@ -951,7 +1024,8 @@ func (c *Core) UnlockBegin(name, forNonce string) (SignedDoc, error) {
 	}
 	id := randID()
 	c.pending[id] = pendingUnlock{store: s, t: t, For: forNonce}
-	return c.sign(map[string]any{"kind": "unlock-begin", "pending": id, "store": name, "e": s.Wrapped.E, "t": b64.EncodeToString(t.PublicKey().Bytes()), "for": forNonce})
+	return c.sign(map[string]any{"kind": "unlock-begin", "pending": id, "store": name, "e": s.Wrapped.E, "t": b64.EncodeToString(t.PublicKey().Bytes()), "for": forNonce,
+		"writer": writerOf(&s), "dataSha256": sha256Hex(s.Data)})
 }
 
 const infoShare = "jarvis2/unlock-share"
@@ -1048,6 +1122,9 @@ func (c *Core) PullSecrets(certDoc *SignedDoc, carry string) (SignedDoc, error) 
 	if err := c.verifyOwn(certDoc, &cert); err != nil || cert.Kind != "succession-cert" || cert.Machine == nil {
 		return SignedDoc{}, fail(400, "not a succession cert this core signed")
 	}
+	if c.latest[cert.Machine.ID] != cert.Nonce {
+		return SignedDoc{}, fail(409, "a superseded cert of %s: only its newest cert pulls", cert.Machine.ID)
+	}
 	carried := c.openCarryFor(carry, &cert) // nil when absent, not this line's, or not this core's
 	perStore := map[string]map[string]string{}
 	merged := map[string]string{}
@@ -1088,6 +1165,21 @@ func (c *Core) Log(nonce string) (SignedDoc, error) {
 }
 
 // ---- helpers ------------------------------------------------------------------------------------
+
+// isLatest: the predecessor cert a request continues is its machine's newest (nil = a new line). Callers hold c.mu.
+func (c *Core) isLatest(pred *SignedDoc) error {
+	if pred == nil {
+		return nil
+	}
+	var pc Cert
+	if err := c.verifyOwn(pred, &pc); err != nil || pc.Machine == nil {
+		return fail(400, "predecessor is not a succession cert this core signed")
+	}
+	if c.latest[pc.Machine.ID] != pc.Nonce {
+		return fail(409, "the predecessor cert isn't %s's newest: an older cert continues nothing", pc.Machine.ID)
+	}
+	return nil
+}
 
 func randID() string {
 	b := make([]byte, 12)

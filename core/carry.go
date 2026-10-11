@@ -106,12 +106,13 @@ type carryPayload struct {
 	Kind     string                       `json:"kind"`    // "carry"
 	Machine  string                       `json:"machine"` // the machine it is bound to
 	Line     string                       `json:"line"`
+	Cert     string                       `json:"cert"`   // the nonce of the cert it was sealed for
 	Stores   map[string]map[string]string `json:"stores"` // per store: its values as that machine got them
 	IssuedAt string                       `json:"issuedAt"`
 }
 
 func (c *Core) sealCarry(cert *Cert, perStore map[string]map[string]string) (string, error) {
-	p := carryPayload{Kind: "carry", Machine: cert.Machine.ID, Line: cert.Line, Stores: perStore, IssuedAt: c.now().UTC().Format(time.RFC3339)}
+	p := carryPayload{Kind: "carry", Machine: cert.Machine.ID, Line: cert.Line, Cert: cert.Nonce, Stores: perStore, IssuedAt: c.now().UTC().Format(time.RFC3339)}
 	plain, err := json.Marshal(p)
 	if err != nil {
 		return "", err
@@ -135,15 +136,22 @@ func (c *Core) openCarry(blob string) (*carryPayload, error) {
 	return &p, nil
 }
 
-// openCarryFor: a carry blob's stores that this cert may read — the blob is this core's, bound to the cert's own
-// machine (a pull again, an add-store, a downgrade) or to its predecessor (the successor the core certified), the
-// cert's machine isn't killed, and only the stores the cert names. nil otherwise (callers hold c.mu).
+// openCarryFor: a carry blob's stores that this cert may read — the blob is this core's, sealed for this cert or
+// for the cert it directly continues (the same machine's previous cert: an add-store, a downgrade; or the
+// predecessor's newest: the successor the core certified), the cert is its machine's newest and that machine isn't
+// killed, and only the stores the cert names. A blob from before a downgrade opens for nothing after it. nil
+// otherwise (callers hold c.mu).
 func (c *Core) openCarryFor(blob string, cert *Cert) map[string]map[string]string {
-	if blob == "" || cert.Machine == nil || c.killed[cert.Machine.ID] {
+	if blob == "" || cert.Machine == nil || c.killed[cert.Machine.ID] || c.latest[cert.Machine.ID] != cert.Nonce {
 		return nil
 	}
 	p, err := c.openCarry(blob)
-	if err != nil || p.Machine == "" || (p.Machine != cert.Machine.ID && p.Machine != cert.PredID) {
+	if err != nil || p.Machine == "" || p.Cert == "" {
+		return nil
+	}
+	own := p.Machine == cert.Machine.ID && (p.Cert == cert.Nonce || p.Cert == cert.PredCert)
+	pred := p.Machine == cert.PredID && p.Machine != cert.Machine.ID && p.Cert == cert.PredCert
+	if !own && !pred {
 		return nil
 	}
 	out := map[string]map[string]string{}
