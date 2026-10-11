@@ -57,6 +57,34 @@ func RepoStore(repo string) string {
 	return "github-" + strings.Trim(string(b), "-")
 }
 
+// Store names can collide (DE0CH/foo-bar and foo/bar both make github-foo-bar; my.repo, my_repo and My-Repo all
+// make github-my-repo). The core knows which repo owns a deploy-key store (Core.repoOwner) and refuses an add or a
+// remove for another repo with 409, so a second repo never silently replaces the first one's key and leaves that
+// key orphaned on the first repo's GitHub. Re-adding the owning repo (a rotation) still works.
+
+// deployRepoOf: the repo a store's own values name (its one GITHUB_DEPLOY_REPO_* value, whose store is this one),
+// else "" — how a Recover learns a deploy-key store's owner without the core keeping anything new
+func deployRepoOf(store string, values map[string]string) string {
+	repo := ""
+	for k, v := range values {
+		if strings.HasPrefix(k, DeployRepoPrefix) {
+			if repo != "" || k != DeployRepoPrefix+EnvSlug(v) || RepoStore(v) != store {
+				return ""
+			}
+			repo = v
+		}
+	}
+	return repo
+}
+
+// ownerClash: another repo owns the store (callers hold c.mu)
+func (c *Core) ownerClash(store, repo string) error {
+	if o := c.repoOwner[store]; o != "" && !strings.EqualFold(o, repo) {
+		return fail(409, "store %s belongs to %s", store, o)
+	}
+	return nil
+}
+
 // EnvSlug: the suffix of a repo's two env keys — OWNER_NAME, upper case, anything outside [A-Z0-9] as "_"
 func EnvSlug(repo string) string {
 	b := []byte(strings.ToUpper(repo))
@@ -113,6 +141,9 @@ func (c *Core) DeployKeyBegin(action, repo string, sensitive bool) (SignedDoc, e
 	if blob == nil {
 		return SignedDoc{}, fail(404, "no store %s with contents: the setup session writes its GitHub token (%s)", DeployKeyTokenStore, DeployKeyTokenKey)
 	}
+	if err := c.ownerClash(store, repo); err != nil {
+		return SignedDoc{}, err
+	}
 	old, exists := c.stores[store]
 	if action == "remove" {
 		sensitive = exists && !c.notSensitive[store]
@@ -168,6 +199,7 @@ func (c *Core) DeployKeyFinish(pending string, share Sealed, sig string) (Signed
 		delete(c.stores, p.store)
 		delete(c.notSensitive, p.store)
 		delete(c.unlocked, p.store)
+		delete(c.repoOwner, p.store)
 		c.logf("deploy key: %s removed (%d key(s) deleted on GitHub), store %s deleted", p.repo, removed, p.store)
 		return c.sign(map[string]any{"kind": "deploy-key-removed", "pending": pending, "repo": p.repo, "store": p.store, "deleted": removed})
 	}
@@ -177,7 +209,6 @@ func (c *Core) DeployKeyFinish(pending string, share Sealed, sig string) (Signed
 	}
 	wire := sshPublicWire(pub)
 	k, err := c.github.AddDeployKey(token, p.repo, title, "ssh-ed25519 "+b64.EncodeToString(wire))
-	token = ""
 	if err != nil {
 		return SignedDoc{}, c.githubFailure(p, err)
 	}
@@ -187,12 +218,22 @@ func (c *Core) DeployKeyFinish(pending string, share Sealed, sig string) (Signed
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if err := c.ownerClash(p.store, p.repo); err != nil {
+		// another repo's add finished first while GitHub was called: take back the key just added
+		c.mu.Unlock()
+		derr := c.github.DeleteDeployKey(token, p.repo, k.ID)
+		c.mu.Lock()
+		c.logf("deploy key: %s lost %s to %s (key %d taken back: %v)", p.repo, p.store, c.repoOwner[p.store], k.ID, derr)
+		return SignedDoc{}, err
+	}
+	token = ""
 	blob, err := c.wrap(p.store, values, c.phoneAgreement)
 	if err != nil {
 		return SignedDoc{}, err
 	}
 	_, existed := c.stores[p.store]
 	c.stores[p.store] = blob
+	c.repoOwner[p.store] = p.repo
 	delete(c.unlocked, p.store) // an earlier key's plaintext: that key is gone on GitHub
 	if p.sensitive {
 		delete(c.notSensitive, p.store)
@@ -216,6 +257,9 @@ func (c *Core) openDeployKeyToken(pending string, share Sealed, sig string) (pen
 		return p, "", fail(404, "no such pending deploy-key request")
 	}
 	delete(c.pendingKeys, pending)
+	if err := c.ownerClash(p.store, p.repo); err != nil {
+		return p, "", err
+	}
 	if c.phoneSigning == "" || !VerifyWith(c.phoneSigning, []byte(p.payload), sig) {
 		return p, "", fail(403, "the iPhone's signature doesn't cover this request")
 	}

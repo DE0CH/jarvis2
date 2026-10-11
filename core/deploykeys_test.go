@@ -302,3 +302,126 @@ func TestOpenSSHKeyFormat(t *testing.T) {
 	}
 	_ = ecdh.P256
 }
+
+// colliding repos share a store name: the second repo's add (or remove) is refused with 409 naming the owner, and
+// GitHub is never called for it; the owning repo still re-adds and removes, after which the name is free
+func TestDeployKeyStoreClashRefused(t *testing.T) {
+	c, g, p := deployKeyCore(t)
+	if RepoStore("DE0CH/foo-bar") != RepoStore("foo/bar") || RepoStore("DE0CH/my.repo") != RepoStore("DE0CH/My-Repo") {
+		t.Fatal("the test's repos don't collide")
+	}
+	if _, err := deployKey(t, c, p, "add", "DE0CH/foo-bar", false); err != nil {
+		t.Fatal(err)
+	}
+	calls := len(g.seen)
+	for _, action := range []string{"add", "remove"} {
+		_, err := c.DeployKeyBegin(action, "foo/bar", false)
+		if e, ok := err.(*Err); !ok || e.Status != 409 || !strings.Contains(err.Error(), "store github-foo-bar belongs to DE0CH/foo-bar") {
+			t.Fatalf("%s for a colliding repo: %v", action, err)
+		}
+	}
+	// a begin taken before the store was owned is refused at finish, before GitHub
+	c2, g2, p2 := deployKeyCore(t)
+	early, _ := c2.DeployKeyBegin("add", "DE0CH/My-Repo", false)
+	if _, err := deployKey(t, c2, p2, "add", "DE0CH/my.repo", false); err != nil {
+		t.Fatal(err)
+	}
+	n2 := len(g2.seen)
+	id, s, sig := p2.answerDeployKey(t, early)
+	if _, err := c2.DeployKeyFinish(id, s, sig); err == nil || !strings.Contains(err.Error(), "belongs to DE0CH/my.repo") {
+		t.Fatal("a pending add for a colliding repo finished:", err)
+	}
+	if len(g.seen) != calls || len(g2.seen) != n2 || len(g2.keys["DE0CH/My-Repo"]) != 0 {
+		t.Fatal("GitHub was called for a refused repo")
+	}
+	if v := storeValues(t, c2, p2, "github-my-repo"); v["GITHUB_DEPLOY_REPO_DE0CH_MY_REPO"] != "DE0CH/my.repo" {
+		t.Fatal("the owner's store was replaced:", keysOf(v))
+	}
+	// the owner re-adds (any case) and removes; then the name is free for the other repo
+	if _, err := deployKey(t, c, p, "add", "de0ch/FOO-BAR", false); err != nil {
+		t.Fatal("the owner's re-add:", err)
+	}
+	if m, err := deployKey(t, c, p, "remove", "DE0CH/foo-bar", false); err != nil || m["kind"] != "deploy-key-removed" {
+		t.Fatal("the owner's remove:", m, err)
+	}
+	if _, err := deployKey(t, c, p, "add", "foo/bar", false); err != nil {
+		t.Fatal("the freed name:", err)
+	}
+	if c.repoOwner["github-foo-bar"] != "foo/bar" {
+		t.Fatal(c.repoOwner)
+	}
+}
+
+// the same repo re-added keeps working, and keeps its owner
+func TestDeployKeySameRepoReAdd(t *testing.T) {
+	c, g, p := deployKeyCore(t)
+	for i := 0; i < 3; i++ {
+		if _, err := deployKey(t, c, p, "add", "DE0CH/china-train", false); err != nil {
+			t.Fatal(i, err)
+		}
+	}
+	if len(g.keys["DE0CH/china-train"]) != 1 || c.repoOwner["github-china-train"] != "DE0CH/china-train" {
+		t.Fatal(g.keys, c.repoOwner)
+	}
+	if b, err := c.DeployKeyBegin("add", "DE0CH/china-train", false); err != nil || !strings.Contains(b.Payload, `"replaces":true`) {
+		t.Fatal(err)
+	}
+}
+
+// a Recover keeps each deploy-key store's owner: derived from the store's own GITHUB_DEPLOY_REPO_* value
+func TestDeployKeyRecoverKeepsTheOwner(t *testing.T) {
+	c, _, master := newCore(t)
+	p := newPhone()
+	rb := recoverBundle("fly-secret")
+	rb.Stores = append(rb.Stores,
+		storeData{Name: "github-foo-bar", Values: map[string]string{"GITHUB_DEPLOY_REPO_DE0CH_FOO_BAR": "DE0CH/foo-bar", "GITHUB_DEPLOY_KEY_DE0CH_FOO_BAR": "x"}},
+		// a value that doesn't name this store's repo, or two repos, make no owner
+		storeData{Name: "github-odd", Values: map[string]string{"GITHUB_DEPLOY_REPO_DE0CH_OTHER": "DE0CH/other"}},
+		storeData{Name: "github-two", Values: map[string]string{"GITHUB_DEPLOY_REPO_DE0CH_TWO": "DE0CH/two", "GITHUB_DEPLOY_REPO_TWO_X": "two/x"}},
+		storeData{Name: DeployKeyTokenStore, Values: map[string]string{DeployKeyTokenKey: "gh-admin-token"}})
+	s, sig, b := claimFor(c, master, p, rb)
+	pl(t)(c.Claim(s, sig, b))
+	c.github = newTestGitHub()
+	if len(c.repoOwner) != 1 || c.repoOwner["github-foo-bar"] != "DE0CH/foo-bar" {
+		t.Fatalf("owners after Recover: %v", c.repoOwner)
+	}
+	if _, err := c.DeployKeyBegin("add", "foo/bar", false); err == nil || !strings.Contains(err.Error(), "belongs to DE0CH/foo-bar") {
+		t.Fatal("a Recover lost the owner:", err)
+	}
+	if _, err := deployKey(t, c, p, "add", "DE0CH/foo-bar", false); err != nil {
+		t.Fatal("the owner's re-add after Recover:", err)
+	}
+}
+
+// a GitHub that runs a hook inside AddDeployKey (another add finishing while this one talks to GitHub)
+type racingGitHub struct {
+	*testGitHub
+	onAdd func()
+}
+
+func (g racingGitHub) AddDeployKey(token, repo, title, pub string) (DeployKey, error) {
+	k, err := g.testGitHub.AddDeployKey(token, repo, title, pub)
+	if g.onAdd != nil {
+		g.onAdd()
+	}
+	return k, err
+}
+
+// two colliding adds in flight: the one that loses takes its new key back off GitHub and is refused
+func TestDeployKeyClashRaceTakesTheKeyBack(t *testing.T) {
+	c, g, p := deployKeyCore(t)
+	c.github = racingGitHub{g, func() {
+		c.mu.Lock()
+		c.repoOwner["github-foo-bar"] = "foo/bar"
+		c.mu.Unlock()
+	}}
+	if _, err := deployKey(t, c, p, "add", "DE0CH/foo-bar", false); err == nil || !strings.Contains(err.Error(), "belongs to foo/bar") {
+		t.Fatal("the losing add went through:", err)
+	}
+	if len(g.keys["DE0CH/foo-bar"]) != 0 {
+		t.Fatal("the losing add left its key on GitHub")
+	}
+	if _, ok := c.stores["github-foo-bar"]; ok {
+		t.Fatal("the losing add wrote the store")
+	}
+}

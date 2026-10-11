@@ -172,6 +172,9 @@ type Core struct {
 	pending      map[string]pendingUnlock
 	unlocked     map[string]*unlocked
 	pendingKeys  map[string]pendingDeployKey // deploy-key adds/removes waiting for the phone (deploykeys.go)
+	// repoOwner: a deploy-key store → the repo whose key it holds (deploykeys.go). Derived, not kept: set by the
+	// add that wrote the store, or by a Recover from the store's own GITHUB_DEPLOY_REPO_* value
+	repoOwner map[string]string
 
 	carryKey []byte // carry.go: the AES key of the sessions' carried secrets; made at start, never leaves the core
 
@@ -205,7 +208,7 @@ func NewCore(fly Fly) (*Core, error) {
 	return &Core{signer: s, agreement: a, nonceKey: nk, carryKey: ck,
 		approvalsUsed: map[string]bool{}, certified: map[string]bool{},
 		started: map[string]*StartedMachine{}, killed: map[string]bool{}, used: map[string]bool{}, snapshots: map[string]string{},
-		stores: map[string]*StoreBlob{}, notSensitive: map[string]bool{}, pending: map[string]pendingUnlock{}, unlocked: map[string]*unlocked{}, pendingKeys: map[string]pendingDeployKey{},
+		stores: map[string]*StoreBlob{}, notSensitive: map[string]bool{}, pending: map[string]pendingUnlock{}, unlocked: map[string]*unlocked{}, pendingKeys: map[string]pendingDeployKey{}, repoOwner: map[string]string{},
 		fly: fly, github: newGitHub(), now: time.Now}, nil
 }
 
@@ -366,6 +369,7 @@ func (c *Core) Claim(statement, masterSig string, bundle Sealed) (SignedDoc, err
 		return SignedDoc{}, fail(400, "bad bundle")
 	}
 	stores := map[string]*StoreBlob{}
+	owners := map[string]string{}
 	token := ""
 	for _, sd := range b.Stores {
 		if sd.Name == FlyStore {
@@ -380,8 +384,12 @@ func (c *Core) Claim(statement, masterSig string, bundle Sealed) (SignedDoc, err
 			return SignedDoc{}, err
 		}
 		stores[sd.Name] = blob
+		if repo := deployRepoOf(sd.Name, sd.Values); repo != "" {
+			owners[sd.Name] = repo
+		}
 	}
 	c.MasterKey = st.Master
+	c.repoOwner = owners
 	c.phoneSigning, c.phoneAgreement = st.Phone.SigningKey, st.Phone.AgreementKey
 	c.stores = stores
 	for _, n := range b.NotSensitive {

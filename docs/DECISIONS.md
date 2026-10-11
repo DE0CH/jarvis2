@@ -406,3 +406,10 @@ entry points only ("if I decide to break it later then it's fine").
 90. **A phone grant clears the refusal back-off** (2026-10-11): the loop backed off 10 minutes after a refusal and
     a saved grant didn't reset it, so a 10-minute grant usually ran out before the next try and the "Allow" button
     looked dead. `AddGrant` now clears `needsGrant` and the back-off for that holder; the next tick (30 s) uses it.
+91. **A repo's store belongs to one repo** (2026-10-11, decided while Deyao was away): store names collide
+    (`DE0CH/foo-bar` and `foo/bar` both make `github-foo-bar`; `my.repo`, `my_repo`, `My-Repo` all make
+    `github-my-repo`), and a second repo's add used to replace the first's store silently, orphaning its key on
+    GitHub. The core knows each deploy-key store's owner without new kept state: the add that wrote it, or, on a
+    Recover, the store's own `GITHUB_DEPLOY_REPO_*` value. begin and finish refuse another repo with 409 "store
+    github-x belongs to owner/name"; the owner (any case) re-adds and removes as before. An add that loses a race to
+    a colliding add while GitHub is called takes its new key back off GitHub.

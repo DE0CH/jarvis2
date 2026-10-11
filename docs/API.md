@@ -249,7 +249,10 @@ base64(combined)}` → `unlock/finish {pending, share}`.
   sensitive /* add: asked for, OR DE0CH/jarvis2, OR the store is sensitive already; remove: the store's */, replaces
   /* add: the store exists */, title /* "jarvis2 <store>": the key's title on GitHub */, tokenStore:
   "github-deploy-keys", e /* that store's E */, t /* a one-off key */}`. 404 while `github-deploy-keys` has no
-  contents; 409 on an empty core; 400 for a bad repo (or one whose store name would be `github-deploy-keys`).
+  contents; 409 on an empty core; 409 `store github-x belongs to <owner/name>` when another repo owns that store
+  name (names collide: `DE0CH/foo-bar` and `foo/bar`, `my.repo` and `My-Repo`; the owner is the repo whose add
+  wrote the store, or after a Recover the store's own `GITHUB_DEPLOY_REPO_*` value; finish checks it again); 400
+  for a bad repo (or one whose store name would be `github-deploy-keys`).
 - `POST deploy-keys/finish {pending, signature, share}`: `signature` = the phone's base64 DER ECDSA over the begin
   document's payload (its signing key from the claim), `share` = x(p·E) of the token store sealed to `t` exactly as
   an unlock's share (HKDF info `"jarvis2/unlock-share"`); the shell makes both under one Face ID. One try per
