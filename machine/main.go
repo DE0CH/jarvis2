@@ -93,7 +93,6 @@ type Cert struct {
 	Sensitive bool   `json:"sensitive"`
 	Line      string `json:"line"`
 	Snapshot  string `json:"snapshot"` // sha256 of the predecessor's snapshot, from the core's kill record
-	Vouch     int    `json:"vouch"`    // 2: a core that vouches for inputs (Config, Once, Snapshot are meaningful)
 }
 
 type private struct {
@@ -270,26 +269,21 @@ func prepare() error {
 	os.WriteFile(certPath, raw, 0o644)
 	log.Printf("cert ok: stores %v, harness %s, predecessor %q", cert.Stores, cert.Options.Harness, cert.PredID)
 
-	v, err := vouch(cert) // vouch.go: what the cert vouches for (nothing, from a core before Vouch 2)
+	v, err := vouch(cert) // vouch.go: what the cert vouches for
 	if err != nil {
 		return err
 	}
-	useLegacyEnv(v) // legacy.go: a cert from the held core keeps the behaviour from before the guard
-	if v.V2 {
-		v.Ex = fetchExceptions(c) // the few router values whose format can't carry an instruction
-	} else {
-		v.Ex = legacyExceptions()
-	}
+	v.Ex = fetchExceptions(c) // the few router values whose format can't carry an instruction
 	writeVouched(v)
 	firstMachine := cert.PredID == ""
 
-	// 2. the predecessor's snapshot: the one whose hash the cert names (a Vouch 2 cert), signed by the predecessor
+	// 2. the predecessor's snapshot: the one whose hash the cert names, signed by the predecessor
 	if !firstMachine && cert.PredID != me {
 		var pc Cert
 		if err := verifyDoc(coreKey, certs.PredecessorCert, &pc); err != nil || pc.Kind != "succession-cert" || pc.Machine == nil || pc.Machine.ID != cert.PredID {
 			return fmt.Errorf("the predecessor's cert isn't core-signed for %s (%v)", cert.PredID, err)
 		}
-		if !v.V2 || cert.Snapshot != "" {
+		if cert.Snapshot != "" {
 			predecessorKey = pc.Machine.SigningKey
 			if err := restore(c, pc.Machine.SigningKey, v); err != nil {
 				return fmt.Errorf("snapshot: %w", err)
@@ -299,16 +293,10 @@ func prepare() error {
 		}
 		if v.Once.Rollback != "" { // rollback.go: only a rollback the phone approved, on the verified snapshot
 			applyRollback(v.Once.Rollback)
-		} else if !v.V2 {
-			legacyRollback(cert.PredID)
 		}
 	}
 	// 2b. a new line restoring a destroyed session's archived snapshot (restore.go): only the one the cert names
-	restoreFn := func() error { return restoreArchived(c, coreKey, me, &cert, v) }
-	if !v.V2 {
-		restoreFn = func() error { return legacyRestoreArchived(c, coreKey, me, &cert) }
-	}
-	if err := restoreFn(); err != nil {
+	if err := restoreArchived(c, coreKey, me, &cert, v); err != nil {
 		return fmt.Errorf("restore: %w", err)
 	}
 	trustLineKeys(cert) // deliver.go: this line's signing keys, for what it asked to be delivered later
@@ -325,11 +313,7 @@ func prepare() error {
 	if err := setupDeployKeys(secrets); err != nil {
 		log.Printf("deploy keys: %v", err)
 	}
-	if v.V2 {
-		cloneRepos(reposToClone(v, secrets))
-	} else {
-		cloneRepos(legacyRepos())
-	}
+	cloneRepos(reposToClone(v, secrets))
 
 	// 5. booted: from now on a snapshot command gets a real snapshot; then Jarvis 1's entrypoint runs the harness
 	if err := os.WriteFile(bootedPath, []byte(time.Now().UTC().Format(time.RFC3339)), 0o644); err != nil {
@@ -337,10 +321,7 @@ func prepare() error {
 	}
 	clean := os.Environ() // already the clean env (ensureCleanEnv)
 	if t, ok := strings.CutPrefix(cert.Options.Harness, taskHarnessPrefix); ok {
-		for _, kv := range taskVouchedEnv(v) { // task.go reads these from the process env (the held core: already there)
-			if !v.V2 {
-				break
-			}
+		for _, kv := range taskVouchedEnv(v) { // task.go reads these from the process env
 			k, val, _ := strings.Cut(kv, "=")
 			os.Setenv(k, val)
 		}
@@ -351,16 +332,12 @@ func prepare() error {
 		secrets = maps.Clone(secrets)
 		secrets["CLAUDE_ACCOUNT"] = account // Jarvis 1's entrypoint merges it into ~/.claude.json
 	}
-	if !v.V2 {
-		log.Printf("starting the harness")
-		return syscall.Exec(jarvis1, []string{jarvis1}, legacyHarnessEnv(c, cert, me, string(sj), secrets))
-	}
 	env := harnessEnv(clean, v, me, firstMachine, string(sj), secrets)
 	if !firstMachine && v.Once.Prompt != "" {
 		home, _ := os.UserHomeDir()
 		os.Remove(filepath.Join(home, ".claude", ".first-prompt-sent")) // the supervisor types the approved resume prompt
 	}
-	if firstMachine && v.V2 && len(v.Config.Attachments) > 0 {
+	if firstMachine && len(v.Config.Attachments) > 0 {
 		env = append(env, fetchAttachments(c, v.Config.Attachments)...) // attachments.go: hash-checked against the cert
 	}
 	log.Printf("starting the harness")
@@ -506,22 +483,18 @@ func makeSnapshot() ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-// restore: the predecessor's snapshot. A Vouch 2 cert names its hash (the core took it from the predecessor's
-// signed kill): exactly that one, or nothing starts. An older cert: any snapshot the predecessor signed.
+// restore: the predecessor's snapshot. The cert names its hash (the core took it from the predecessor's signed
+// kill): exactly that one, or nothing starts.
 func restore(c *client, predSigningKey string, v Vouched) error {
 	body, hdr, status, err := c.raw("GET", "/m/snapshot", nil)
 	if err != nil {
 		return err
 	}
-	if status == 404 && !v.V2 {
-		log.Printf("the predecessor left no snapshot: starting fresh")
-		return nil
-	}
 	if status != 200 {
 		return fmt.Errorf("HTTP %d", status)
 	}
 	sum := sha256.Sum256(body)
-	if v.V2 && hex.EncodeToString(sum[:]) != v.Cert.Snapshot {
+	if hex.EncodeToString(sum[:]) != v.Cert.Snapshot {
 		return errors.New("the snapshot isn't the one the cert names")
 	}
 	if !verify(predSigningKey, []byte(hex.EncodeToString(sum[:])), hdr.Get("X-Snapshot-Sig")) {

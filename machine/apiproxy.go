@@ -36,8 +36,6 @@ import (
 const (
 	apiProxyAddr = "127.0.0.1:7171"
 	apiMaxBody   = 64 << 20
-	wakeupAllow  = time.Hour // beyond the due time
-	cronAllowMin = 31 * 24 * time.Hour
 )
 
 // serveAPIProxy: runs for the agent's life
@@ -252,51 +250,13 @@ func armAndAllow(w http.ResponseWriter, req *http.Request, c *client) {
 		copyResp(w, status, hdr, body)
 		return
 	}
-	until, ok := allowUntil(ans, time.Now())
-	if cert, err := currentCert(); err == nil && cert.Vouch >= 2 {
-		// a cert that vouches: the wakeup comes back as a delivery of this very request (deliver.go), checked
-		// against this line's keys and attested by the core; nobody needs a shell for it
-		ok = false
-		ans["scheduler"] = "delivered as this session's own signed request; no shell access granted"
-	}
-	if ok {
-		if err := extendAllow(c, "scheduler", until); err != nil {
-			ans["schedulerError"] = "armed, but the scheduler couldn't be put on this session's allow list: " + err.Error()
-		} else {
-			ans["scheduler"] = "allowed until " + until.UTC().Format(time.RFC3339)
-		}
-	}
+	// the wakeup comes back as a delivery of this very request (deliver.go), checked against this line's keys and
+	// attested by the core; nobody needs a shell for it
+	ans["scheduler"] = "delivered as this session's own signed request; no shell access granted"
 	if cert, err := currentCert(); err == nil && cert.Sensitive {
 		ans["note"] = "this session holds a sensitive store: the scheduler gets in only under a phone grant; when it is due and can't, Deyao gets a DM"
 	}
 	writeJSONResp(w, 200, ans)
-}
-
-// allowUntil: from the router's answer — a wakeup: due + 1 h; a cron: the longer of its first firing + 1 h and
-// now + max(a month, two periods + 1 h)
-func allowUntil(ans map[string]any, now time.Time) (time.Time, bool) {
-	ms := func(v any) (time.Time, bool) {
-		f, ok := v.(float64)
-		return time.UnixMilli(int64(f)), ok
-	}
-	if wu, ok := ans["wakeup"].(map[string]any); ok {
-		at, ok := ms(wu["at"])
-		return at.Add(wakeupAllow), ok
-	}
-	if cr, ok := ans["cron"].(map[string]any); ok {
-		next, ok := ms(cr["nextAt"])
-		every, _ := cr["everySeconds"].(float64)
-		u := now.Add(cronAllowFor(int64(every)))
-		if n := next.Add(time.Hour); n.After(u) {
-			u = n
-		}
-		return u, ok
-	}
-	return time.Time{}, false
-}
-
-func cronAllowFor(every int64) time.Duration {
-	return max(cronAllowMin, 2*time.Duration(every)*time.Second+time.Hour)
 }
 
 // extendAllow: the holder stays on the allow list at least until `until`; a later end already there is kept

@@ -66,18 +66,16 @@ func TestCleanEnvKeepsOnlyTheImageFlyAndTheCore(t *testing.T) {
 }
 
 func v2(config, once string) Cert {
-	c := Cert{Kind: "succession-cert", Machine: &Machine{ID: "m1"}, Vouch: 2}
+	c := Cert{Kind: "succession-cert", Machine: &Machine{ID: "m1"}}
 	c.Options.Harness, c.Options.Config, c.Options.Once = "claude", config, once
 	return c
 }
 
 func TestVouchReadsOnlyTheCert(t *testing.T) {
-	// a cert from a core that doesn't vouch (the held core): nothing at all, whatever it carries
-	held := v2(`{"v":1,"prompt":"x"}`, `{"rollback":"abcd"}`)
-	held.Vouch = 0
-	v, err := vouch(held)
-	if err != nil || v.V2 || v.Config.Prompt != "" || v.Once.Rollback != "" {
-		t.Fatalf("held: %+v %v", v, err)
+	// a cert with no config and no once vouches for nothing
+	v, err := vouch(v2("", ""))
+	if err != nil || v.Config.Prompt != "" || v.Once.Rollback != "" || v.Config.Repos != nil {
+		t.Fatalf("empty: %+v %v", v, err)
 	}
 	for _, bad := range []Cert{
 		v2(`{"v":1,"evilField":"x"}`, ""),                        // a field this machine doesn't know: refused
@@ -105,10 +103,10 @@ func TestReposAreTheCertsNeverTheRouters(t *testing.T) {
 		deployRepoPrefix + "A": "DE0CH/claude-env",
 		deployKeyPrefix + "A":  base64.StdEncoding.EncodeToString([]byte("-----BEGIN OPENSSH PRIVATE KEY-----\nx\n")),
 	}
-	t.Setenv("JARVIS2_REPOS", "https://github.com/evil/x.git") // the router asking: ignored
-	held, _ := vouch(Cert{Kind: "succession-cert", Machine: &Machine{ID: "m1"}})
-	if got := reposToClone(held, secrets); len(got) != 1 || got[0] != "https://github.com/DE0CH/claude-env.git" {
-		t.Fatalf("held core: %v", got)
+	t.Setenv("JARVIS2_REPOS", "https://github.com/evil/x.git")                   // the router asking: ignored
+	none, _ := vouch(Cert{Kind: "succession-cert", Machine: &Machine{ID: "m1"}}) // a cert naming no repos: its deploy-key stores'
+	if got := reposToClone(none, secrets); len(got) != 1 || got[0] != "https://github.com/DE0CH/claude-env.git" {
+		t.Fatalf("no repos named: %v", got)
 	}
 	v, _ := vouch(v2(`{"v":1,"repos":["https://github.com/DE0CH/jarvis2.git"]}`, ""))
 	if got := reposToClone(v, secrets); len(got) != 1 || got[0] != "https://github.com/DE0CH/jarvis2.git" {
@@ -280,28 +278,5 @@ func TestAResumeRestoresOnlyTheSnapshotTheCertNames(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(home, "workspace", "a.txt")); err == nil {
 		t.Fatal("a refused snapshot was unpacked")
-	}
-}
-
-func TestTheHeldCoresCertKeepsTheStartedEnv(t *testing.T) {
-	old := startedEnvPath
-	startedEnvPath = filepath.Join(t.TempDir(), "started")
-	t.Cleanup(func() { startedEnvPath = old })
-	t.Setenv(coreKeyEnv, "corekey")
-	saveStartedEnv([]string{"SESSION_PROMPT=line one\nline two", "SESSION_LABEL=t", "JARVIS2_REPOS=https://github.com/DE0CH/jarvis2.git", coreKeyEnv + "=other"})
-	saveStartedEnv([]string{"SESSION_LABEL=a re-exec doesn't overwrite it"})
-	held, _ := vouch(Cert{Kind: "succession-cert", Machine: &Machine{ID: "m1"}})
-	useLegacyEnv(held)
-	if os.Getenv("SESSION_PROMPT") != "line one\nline two" || os.Getenv("SESSION_LABEL") != "t" || os.Getenv(coreKeyEnv) != "corekey" {
-		t.Fatalf("prompt %q label %q key %q", os.Getenv("SESSION_PROMPT"), os.Getenv("SESSION_LABEL"), os.Getenv(coreKeyEnv))
-	}
-	if r := legacyRepos(); len(r) != 1 || r[0] != "https://github.com/DE0CH/jarvis2.git" {
-		t.Fatalf("repos %v", r)
-	}
-	// a cert that vouches: the saved env is dropped unread
-	os.Setenv("SESSION_PROMPT", "")
-	useLegacyEnv(Vouched{V2: true})
-	if _, err := os.Stat(startedEnvPath); err == nil || os.Getenv("SESSION_PROMPT") != "" {
-		t.Fatal("a vouching cert used the started env")
 	}
 }

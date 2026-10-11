@@ -68,7 +68,7 @@ func addLineKey(k string) {
 // line's first machine starts the file (an archived restore brings the old line's keys: the phone approved that
 // snapshot). Also the predecessor's own key, from its core-signed cert.
 func trustLineKeys(cert Cert) {
-	if cert.PredID == "" && cert.Vouch >= 2 && !restoredArchive {
+	if cert.PredID == "" && !restoredArchive {
 		home, _ := os.UserHomeDir()
 		os.Remove(filepath.Join(home, lineKeysFile))
 	}

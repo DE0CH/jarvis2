@@ -14,9 +14,9 @@ package main
 //
 //   - the env: the machine throws away whatever env it was started with and keeps only the image's own, Fly's
 //     FLY_* values, the core's key and the router's address (cleanEnv), before anything else runs;
-//   - the settings come from the cert (Options.Config / Options.Once). A cert from a core that doesn't carry them
-//     (Vouch < 2: the held core) vouches for none: no prompt, title, model, rollback, restore, one-shot, API proxy
-//     or task parameters; the repos are only those whose deploy-key store the cert names.
+//   - the settings come from the cert (Options.Config / Options.Once); a cert without a config vouches for none: no
+//     prompt, title, model, rollback, restore, one-shot, API proxy or task parameters; the repos are only those whose
+//     deploy-key store the cert names.
 
 import (
 	"bufio"
@@ -130,7 +130,6 @@ func ensureCleanEnv() error {
 	if len(dropped) > 0 {
 		log.Printf("env: dropping what the core didn't set: %s", strings.Join(dropped, " "))
 	}
-	saveStartedEnv(cur) // legacy.go: a cert from the held core still uses it (read only once the cert says so)
 	return syscall.Exec("/proc/self/exe", os.Args, clean)
 }
 
@@ -177,7 +176,6 @@ type OnceInputs struct {
 // Vouched: what this machine may use, each piece with its voucher
 type Vouched struct {
 	Cert   Cert
-	V2     bool // the cert comes from a core that vouches for inputs (Cert.Vouch >= 2)
 	Config SessionConfig
 	Once   OnceInputs
 	Ex     FormatExceptions
@@ -192,10 +190,7 @@ var (
 // vouch: the cert's settings, strictly read. A field the machine doesn't know refuses the whole config (the phone
 // showed it; this machine must not silently skip what Deyao approved).
 func vouch(cert Cert) (Vouched, error) {
-	v := Vouched{Cert: cert, V2: cert.Vouch >= 2}
-	if !v.V2 {
-		return v, nil
-	}
+	v := Vouched{Cert: cert}
 	if s := cert.Options.Config; s != "" {
 		d := json.NewDecoder(strings.NewReader(s))
 		d.DisallowUnknownFields()
@@ -247,7 +242,7 @@ func repoOfURL(u string) string {
 	return ""
 }
 
-// reposToClone: the cert's repos (a V2 cert), or, from a cert that names none, each repo whose deploy-key store
+// reposToClone: the cert's repos, or, from a cert that names none, each repo whose deploy-key store
 // the cert gives this machine (the store names the repo; the core wrote it). Never the router's list.
 func reposToClone(v Vouched, secrets map[string]string) []string {
 	seen := map[string]bool{}
@@ -258,7 +253,7 @@ func reposToClone(v Vouched, secrets map[string]string) []string {
 			out = append(out, "https://github.com/"+repo+".git")
 		}
 	}
-	if v.V2 && v.Config.Repos != nil {
+	if v.Config.Repos != nil {
 		for _, r := range v.Config.Repos {
 			add(repoOfURL(r))
 		}
@@ -390,7 +385,7 @@ func harnessEnv(clean []string, v Vouched, me string, firstMachine bool, secrets
 var vouchedPath = dir + "/vouched.json" // a var so tests can move it
 
 func writeVouched(v Vouched) {
-	b, _ := json.Marshal(map[string]any{"liveSyncSeconds": v.Ex.LiveSyncSeconds, "vouch": v.Cert.Vouch, "sessionId": v.Ex.SessionID})
+	b, _ := json.Marshal(map[string]any{"liveSyncSeconds": v.Ex.LiveSyncSeconds, "sessionId": v.Ex.SessionID})
 	os.WriteFile(vouchedPath, b, 0o644)
 }
 

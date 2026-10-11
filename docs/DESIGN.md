@@ -399,7 +399,7 @@ Deyao handing a feature a shell, and the session's own allow list is the session
 | A resume's prompt, a rollback | (a) `Options.Once`: only the phone approves one; never carried over |
 | The predecessor's state (transcripts, workspace, artifacts, `~/artifacts/on-start`, `.claude` settings and hooks, the allow list, the line keys) | (b) the one snapshot the cert names, signed by the predecessor |
 | An archived snapshot (restore) | (a) its sha256 in the config, plus the old cert (core-signed) and its machine's signature |
-| Repo contents (CLAUDE.md, hooks, skills) | (d) GitHub, for exactly the repos the cert names (with the held core: the repos of the deploy-key stores in the cert) |
+| Repo contents (CLAUDE.md, hooks, skills) | (d) GitHub, for exactly the repos the cert names (a cert whose config names none: the repos of the deploy-key stores in the cert) |
 | Secrets | the cert's stores, sealed to the machine by the core; written to `~/.secrets` only under env-name keys |
 | The Claude login | (d) Jarvis 1's `/api/credentials` over the `claude` store's Access-confined token: taken by the machine at boot, kept in step every 30 s (`machine/claudelogin.go`); no router write, no grant |
 | Wakeups, crons | (c) the session's own signed request + the core's attestation; the line records what it delivered (in the snapshot): a wakeup once, a cron once per run and at most every half period |
@@ -417,11 +417,6 @@ attestation over (machine, input hash, kind, origin) and the machine refuses one
 and every cert it issues, to a hash chain of core-signed entries; the router persists them to its volume
 (`input-log.jsonl`, `GET /api/input-log`) and starts a new core's chain from the last persisted head. The core only
 hashes, signs and appends.
-
-**With the held core** (a cert without `vouch: 2`) the machine keeps its behaviour from before the guard exactly: the
-settings come from the env it was started with (saved when boot drops it, used only for such a cert), repos from
-`JARVIS2_REPOS`, a restore from `JARVIS2_RESTORE_CERT`, a rollback from `JARVIS2_ROLLBACK`; any snapshot its predecessor
-signed; deliveries the old way (a command under a grant). The guard starts with the core release.
 
 ## iPhone approval screen
 

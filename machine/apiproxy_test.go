@@ -63,7 +63,7 @@ func TestProxyForwardsSigned(t *testing.T) {
 	}
 }
 
-func TestProxyArmingAllowsTheScheduler(t *testing.T) {
+func TestProxyArmingGivesTheSchedulerNoShell(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("JARVIS2_SESSION_ID", "s1")
@@ -91,49 +91,23 @@ func TestProxyArmingAllowsTheScheduler(t *testing.T) {
 		t.Fatal(err)
 	}
 	b, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode != 200 || !strings.Contains(string(b), `"ok":true`) || !strings.Contains(string(b), "allowed until") {
+	if resp.StatusCode != 200 || !strings.Contains(string(b), `"ok":true`) || !strings.Contains(string(b), "no shell access granted") {
 		t.Fatalf("%d %s", resp.StatusCode, b)
 	}
-	list := readAllow()
-	if len(list) != 1 || list[0].Name != "scheduler" || list[0].Holder != sched.pub() {
-		t.Fatalf("%+v", list)
+	if l := readAllow(); len(l) != 0 {
+		t.Fatalf("the scheduler was put on the allow list: %+v", l)
 	}
-	u, _ := time.Parse(time.RFC3339, list[0].Until)
-	if d := u.Sub(time.UnixMilli(at)); d < 59*time.Minute || d > 61*time.Minute {
-		t.Fatalf("until %v", u)
-	}
-	// the machine then runs the scheduler's commands without a grant
-	e := sched.req(ExecRequest{ID: "x1", Session: "m1", Holder: sched.pub(), Cmd: "true", Timeout: 5, At: time.Now().Unix()})
-	if _, err := authorise(e, time.Now()); err != nil {
+	_ = at
+	// an allow list entry (the CLI's allow command) is never shortened
+	if err := extendAllow(c, "scheduler", time.Now().Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	}
-	// never shortened
+	list := readAllow()
 	if err := extendAllow(c, "scheduler", time.Now().Add(time.Minute)); err != nil {
 		t.Fatal(err)
 	}
 	if l := readAllow(); len(l) != 1 || l[0].Until != list[0].Until {
 		t.Fatalf("shortened: %+v", l)
-	}
-	if err := extendAllow(c, "scheduler", u.Add(24*time.Hour)); err != nil {
-		t.Fatal(err)
-	}
-	if l := readAllow(); len(l) != 1 || l[0].Until == list[0].Until {
-		t.Fatalf("not extended: %+v", l)
-	}
-}
-
-func TestAllowUntil(t *testing.T) {
-	now := time.Now()
-	u, ok := allowUntil(map[string]any{"cron": map[string]any{"nextAt": float64(now.Add(time.Hour).UnixMilli()), "everySeconds": float64(86400)}}, now)
-	if !ok || u.Sub(now) < 30*24*time.Hour {
-		t.Fatalf("cron %v", u.Sub(now))
-	}
-	u, ok = allowUntil(map[string]any{"cron": map[string]any{"nextAt": float64(now.Add(time.Hour).UnixMilli()), "everySeconds": float64(60 * 86400)}}, now)
-	if !ok || u.Sub(now) < 120*24*time.Hour {
-		t.Fatalf("long cron %v", u.Sub(now))
-	}
-	if _, ok := allowUntil(map[string]any{"ok": true}, now); ok {
-		t.Fatal("nothing to allow")
 	}
 }
 

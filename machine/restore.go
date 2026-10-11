@@ -45,7 +45,7 @@ func writeChanges() {
 // (Config.restore: the old line's machine and the snapshot's sha256, approved on the phone with the new line)
 func restoreArchived(c *client, coreKey, me string, cert *Cert, v Vouched) error {
 	ref := v.Config.Restore
-	if cert.PredID != "" || !v.V2 || ref == nil {
+	if cert.PredID != "" || ref == nil {
 		return nil
 	}
 	var rc struct {
