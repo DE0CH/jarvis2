@@ -2,7 +2,7 @@ name: ios
 # The Jarvis 2 iPhone/iPad app (ios/, native SwiftUI): compile (Release and CI flavours), the app's crypto against the
 # real core, the simulator walkthrough against the REAL core (fakefly build) and router on the runner, and on main a
 # TestFlight build (archived unsigned, cloud-signed at export with the App Store Connect API key; lessons/75), gated on
-# a passing phone replica of the same ios/.
+# a passing phone replica of the same app (ios/Jarvis2, ios/project.yml, policy/: what ships; tests may differ).
 on:
   push:
     paths: [ios/**, core/**, router/**, tasks/**, infra/setup.py, e2e/testdata/**, policy/**, .github/workflows/ios.yml]
@@ -172,8 +172,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           for sha in $(gh run list -R "$GITHUB_REPOSITORY" -w replica.yml -s success -L 30 --json headSha -q '.[].headSha'); do
-            if git cat-file -e "$sha^{commit}" 2>/dev/null && git diff --quiet "$sha" "$GITHUB_SHA" -- ios/ policy/; then
-              echo "the replica passed on $sha (same ios/)"; exit 0
+            if git cat-file -e "$sha^{commit}" 2>/dev/null && git diff --quiet "$sha" "$GITHUB_SHA" -- ios/Jarvis2 ios/project.yml policy/; then
+              echo "the replica passed on $sha (the same app: ios/Jarvis2, ios/project.yml, policy/)"; exit 0
             fi
           done
           echo "::error::no passing phone replica for this ios/: run infra/phone-replica.sh, then this workflow with only=testflight"
