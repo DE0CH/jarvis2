@@ -132,7 +132,7 @@ func (b *backupBucket) list(prefix string) ([]string, error) {
 			return nil, err
 		}
 		var l struct {
-			Contents []struct{ Key string }
+			Contents              []struct{ Key string }
 			IsTruncated           bool
 			NextContinuationToken string
 		}

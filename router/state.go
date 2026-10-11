@@ -60,6 +60,9 @@ type Approval struct {
 	// inbox.go: who asked for it (from the caller's credential) and the call it made, and the caller's own words
 	Origin      *Origin `json:"origin,omitempty"`
 	Explanation string  `json:"explanation,omitempty"`
+	// ImageSig: CI's signature over "jarvis2-session-image <image>" for the image the challenge names, when that is the
+	// current CI build (SESSION_IMAGE_SIG, made by images.yml with the key of keys/ci.pub): the phone checks it
+	ImageSig string `json:"imageSig,omitempty"`
 }
 
 type Record struct {

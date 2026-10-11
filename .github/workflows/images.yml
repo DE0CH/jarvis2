@@ -69,23 +69,38 @@ jobs:
           push-to-registry: true
   pin:
     needs: build
+    # only main pins (R1 audit): a dispatch on another ref builds images but never moves main. The environment
+    # `release` admits refs/heads/main only, and holds the pin job's deploy key (the one CI identity the main ruleset
+    # lets push) and the key that signs the session image for the phone (keys/ci.pub)
+    if: github.ref == 'refs/heads/main'
+    environment: release
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with: { fetch-depth: 0 }  # the pin checks compare against older commits
-      - name: pin the new tags in k8s/ (Flux rolls them out); never over a newer pin
+        with: { fetch-depth: 0, ssh-key: "${{ secrets.PIN_DEPLOY_KEY }}" }  # the pin checks compare against older commits
+      - name: pin the new images in k8s/ by digest (Flux rolls them out); never over a newer pin
+        env: { CI_IMAGE_KEY: "${{ secrets.CI_IMAGE_KEY }}" }
         run: |
           T="sha-${GITHUB_SHA::12}"
-          git fetch -q origin main && git reset -q --hard origin/main
+          git fetch -q origin main
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main || { echo "$GITHUB_SHA isn't on main: nothing pinned"; exit 1; }
+          git reset -q --hard origin/main
           [ -d k8s ] || exit 0
           cur="$(grep -ho 'jarvis2-router:sha-[0-9a-f]*' k8s/apps/router.yaml | head -1 | cut -d- -f3)"
           [ -n "$cur" ] || { echo "k8s/apps/router.yaml pins no router image"; exit 1; }
           if [ -n "$cur" ] && full="$(git rev-parse -q --verify "$cur^{commit}")" && [ "$full" != "$GITHUB_SHA" ] \
              && git merge-base --is-ancestor "$GITHUB_SHA" "$full"; then echo "main already pins a newer build ($cur)"; exit 0; fi
-          sed -i -E "s#(ghcr.io/de0ch/jarvis2-router):sha-[0-9a-f]{12}#\1:$T#g" k8s/apps/*.yaml
-          # the session image pinned by its linux/amd64 digest: the core starts only that, and checks Fly reports it
+          # every image by digest (its linux/amd64 manifest): a tag pushed again from elsewhere changes nothing that runs
+          R="$(infra/image-digest.sh "ghcr.io/de0ch/jarvis2-router:$T")"
+          sed -i -E "s#ghcr.io/de0ch/jarvis2-router:sha-[0-9a-f]{12}(@sha256:[0-9a-f]{64})?#$R#g" k8s/apps/*.yaml
+          # the session image: the core starts only that digest, and the phone shows it as a CI build only with this
+          # signature (the CI key, environment release; keys/ci.pub)
           S="$(infra/image-digest.sh "ghcr.io/de0ch/jarvis2-session:$T")"
           sed -i -E "s#ghcr.io/de0ch/jarvis2-session:sha-[0-9a-f]{12}(@sha256:[0-9a-f]{64})?#$S#g" k8s/apps/*.yaml
+          k="$(mktemp)"; printf '%s\n' "$CI_IMAGE_KEY" > "$k"
+          SIG="$(printf '%s' "jarvis2-session-image $S" | openssl dgst -sha256 -sign "$k" | base64 -w0)"; rm -f "$k"
+          sed -i -E "s#(name: SESSION_IMAGE_SIG, value: \")[^\"]*#\1$SIG#" k8s/apps/router.yaml
+          grep -q "SESSION_IMAGE_SIG, value: \"$SIG\"" k8s/apps/router.yaml || { echo "router.yaml has no SESSION_IMAGE_SIG line"; exit 1; }
           # the core moves ONLY when core/ changed (the CI-only fake and the tests don't count): a core restart is a new, empty
           # core (Deyao sets it up again: Reset or Recover), so a router or app push must never restart it
           corecur="$(grep -ho 'jarvis2-core:sha-[0-9a-f]*' k8s/apps/core.yaml | cut -d- -f3)"
@@ -93,7 +108,8 @@ jobs:
           if grep -q 'jarvis2/core-pin: hold' k8s/apps/core.yaml; then
             echo "the core is held (jarvis2/core-pin: hold): its new image is built, not pinned"
           elif ! corefull="$(git rev-parse -q --verify "$corecur^{commit}")" || ! git diff --quiet "$corefull" "$GITHUB_SHA" -- core/ ':!core/fakefly.go' ':!core/*_test.go'; then
-            sed -i -E "s#(ghcr.io/de0ch/jarvis2-core):sha-[0-9a-f]{12}#\1:$T#g" k8s/apps/core.yaml
+            C="$(infra/image-digest.sh "ghcr.io/de0ch/jarvis2-core:$T")"
+            sed -i -E "s#ghcr.io/de0ch/jarvis2-core:sha-[0-9a-f]{12}(@sha256:[0-9a-f]{64})?#$C#g" k8s/apps/core.yaml
           fi
           git diff --quiet && exit 0
           git config user.name "jarvis2-ci"; git config user.email "ci@jarvis2.invalid"

@@ -13,19 +13,20 @@ import (
 )
 
 type Config struct {
-	CoreURL      string        // the core, inside the cluster
-	DataDir      string        // state.json + snapshots (a volume on the box)
-	WebDir       string        // the web page (expo export), served at /
-	SessionImage string        // the image new sessions get (a tag; resume pins what Fly reported)
-	Region       string        // Fly region for session machines
-	MachineURL   string        // how machines reach the router (JARVIS2_URL on the machine): its Fly private-network address
-	AccessTeam   string        // e.g. de0ch.cloudflareaccess.com
-	AppAUD       string        // the Access app audience for /api and /
-	SetupAUD     string        // the Access app audience for /setup (service token jarvis2-setup)
-	SetupKey     string        // the setup session's public key: it signs every /setup call
-	AllowedEmail string        // the only person
-	NoAccess     bool          // CI only: no Cloudflare in front, skip the JWT checks
-	SnapshotWait time.Duration // how long a pause waits for the machine's snapshot
+	CoreURL         string        // the core, inside the cluster
+	DataDir         string        // state.json + snapshots (a volume on the box)
+	WebDir          string        // the web page (expo export), served at /
+	SessionImage    string        // the image new sessions get (a tag; resume pins what Fly reported)
+	SessionImageSig string        // CI's signature over it (images.yml; keys/ci.pub)
+	Region          string        // Fly region for session machines
+	MachineURL      string        // how machines reach the router (JARVIS2_URL on the machine): its Fly private-network address
+	AccessTeam      string        // e.g. de0ch.cloudflareaccess.com
+	AppAUD          string        // the Access app audience for /api and /
+	SetupAUD        string        // the Access app audience for /setup (service token jarvis2-setup)
+	SetupKey        string        // the setup session's public key: it signs every /setup call
+	AllowedEmail    string        // the only person
+	NoAccess        bool          // CI only: no Cloudflare in front, skip the JWT checks
+	SnapshotWait    time.Duration // how long a pause waits for the machine's snapshot
 }
 
 func env(k, def string) string {
@@ -38,19 +39,20 @@ func env(k, def string) string {
 func main() {
 	wait, _ := strconv.Atoi(env("SNAPSHOT_WAIT_SECONDS", "600"))
 	cfg := Config{
-		CoreURL:      env("CORE_URL", "http://core.jarvis2-core.svc.cluster.local:8090"),
-		DataDir:      env("DATA_DIR", "/data"),
-		WebDir:       env("WEB_DIR", "/web"),
-		SessionImage: env("SESSION_IMAGE", "ghcr.io/de0ch/jarvis2-session:latest"),
-		Region:       env("FLY_REGION", "lhr"),
-		MachineURL:   os.Getenv("MACHINE_URL"),
-		AccessTeam:   env("ACCESS_TEAM", "de0ch.cloudflareaccess.com"),
-		AppAUD:       os.Getenv("ACCESS_APP_AUD"),
-		SetupAUD:     os.Getenv("ACCESS_SETUP_AUD"),
-		SetupKey:     os.Getenv("SETUP_KEY"),
-		AllowedEmail: env("ALLOWED_EMAIL", "chendeyao000@gmail.com"),
-		NoAccess:     os.Getenv("NO_ACCESS") == "1",
-		SnapshotWait: time.Duration(wait) * time.Second,
+		CoreURL:         env("CORE_URL", "http://core.jarvis2-core.svc.cluster.local:8090"),
+		DataDir:         env("DATA_DIR", "/data"),
+		WebDir:          env("WEB_DIR", "/web"),
+		SessionImage:    env("SESSION_IMAGE", "ghcr.io/de0ch/jarvis2-session:latest"),
+		SessionImageSig: os.Getenv("SESSION_IMAGE_SIG"),
+		Region:          env("FLY_REGION", "lhr"),
+		MachineURL:      os.Getenv("MACHINE_URL"),
+		AccessTeam:      env("ACCESS_TEAM", "de0ch.cloudflareaccess.com"),
+		AppAUD:          os.Getenv("ACCESS_APP_AUD"),
+		SetupAUD:        os.Getenv("ACCESS_SETUP_AUD"),
+		SetupKey:        os.Getenv("SETUP_KEY"),
+		AllowedEmail:    env("ALLOWED_EMAIL", "chendeyao000@gmail.com"),
+		NoAccess:        os.Getenv("NO_ACCESS") == "1",
+		SnapshotWait:    time.Duration(wait) * time.Second,
 	}
 	if cfg.NoAccess {
 		log.Printf("NO_ACCESS=1: Cloudflare Access checks are OFF (CI only)")

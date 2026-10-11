@@ -195,6 +195,14 @@ func (r *Router) addApproval(a *Approval) {
 	if a.Origin == nil {
 		a.Origin = takeOrigin(a.Session) // inbox.go: the caller the handler noted
 	}
+	var ch struct {
+		Request struct {
+			Image string `json:"image"`
+		} `json:"request"`
+	}
+	if a.Challenge != nil && a.Challenge.Decode(&ch) == nil && ch.Request.Image != "" && ch.Request.Image == r.cfg.SessionImage {
+		a.ImageSig = r.cfg.SessionImageSig
+	}
 	r.st.Do(func(d *persisted) { d.Approvals[a.ID] = a })
 }
 
