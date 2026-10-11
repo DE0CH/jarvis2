@@ -51,6 +51,21 @@ final class Jarvis2UITests: XCTestCase {
     return false
   }
   /// the core's store list as the router relays it (the test reads the payload; the app checks the signature)
+  /// the core's signed list of open unlocks (each standing or for one challenge/cert: "for")
+  func coreUnlocked() -> [[String: Any]] {
+    var r = URLRequest(url: URL(string: "http://127.0.0.1:18080/api/core/unlocked")!)
+    r.httpMethod = "POST"; r.setValue("application/json", forHTTPHeaderField: "Content-Type")
+    r.httpBody = Data(#"{"nonce":"0123456789abcdef0123456789abcdef"}"#.utf8)
+    var out: [[String: Any]] = []
+    let done = DispatchSemaphore(value: 0)
+    URLSession.shared.dataTask(with: r) { data, _, _ in
+      if let data, let doc = try? JSONSerialization.jsonObject(with: data) as? [String: Any], let p = doc["payload"] as? String,
+         let pj = try? JSONSerialization.jsonObject(with: Data(p.utf8)) as? [String: Any], let st = pj["unlocked"] as? [[String: Any]] { out = st }
+      done.signal()
+    }.resume()
+    _ = done.wait(timeout: .now() + 20)
+    return out
+  }
   func coreStores() -> [[String: Any]] {
     var r = URLRequest(url: URL(string: "http://127.0.0.1:18080/api/core/stores")!)
     r.httpMethod = "POST"; r.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -189,8 +204,10 @@ final class Jarvis2UITests: XCTestCase {
     let created = arrives(prefixed("more-"), 180, "the new session's card after Start")
     XCTAssertTrue(created, "[\(tag)] back to the list after Start")
     if el("secure-error").exists { note("\(tag)-create-error", el("secure-error").label); shot("create-error"); return }
-    XCTAssertEqual(coreStores().first { ($0["name"] as? String) == "claude-login" }?["unlocked"] as? Bool, true,
-                   "[\(tag)] one Start opened the locked harness store, so the machine's secrets pull isn't refused")
+    // an unlock for this session (carried secrets: "for" = the challenge's nonce), or a standing one from an older core
+    XCTAssertTrue(coreUnlocked().contains { ($0["store"] as? String) == "claude-login" }
+                  || coreStores().first { ($0["name"] as? String) == "claude-login" }?["unlocked"] as? Bool == true,
+                  "[\(tag)] one Start opened the locked harness store, so the machine's secrets pull isn't refused")
     XCTAssertFalse(prefixed("unlock-s").exists, "[\(tag)] no session waits on a locked store")
     sleep(2)
     shot("session-created")
@@ -305,6 +322,15 @@ final class Jarvis2UITests: XCTestCase {
       el("ask-text").tap(); el("ask-text").typeText("carry on")
       shot("resume-question")
       el("ask-ok").tap()
+    }
+    // a resume prompt is a one-time input the phone signs (core Options.Once; DESIGN "Inputs to a machine"): the
+    // approval opens on the secure page and shows the prompt from the signed challenge (an older core: no approval)
+    if wait(el("secure-approve"), 60, "resume-prompt approval page") {
+      sleep(1)
+      shot("secure-approval-resume-prompt")
+      XCTAssertTrue(el("signed-once-prompt").exists && el("signed-once-prompt").label.contains("carry on"), "[\(tag)] the approval shows the signed resume prompt")
+      el("secure-approve").tap()
+      XCTAssertTrue(el("newBtn").waitForExistence(timeout: 60), "[\(tag)] back after approving the resume prompt")
     }
     sleep(1)
     shot("resuming")

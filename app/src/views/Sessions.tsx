@@ -50,7 +50,7 @@ const groupOf = (m: Session): typeof GROUPS[number] => m.state === "paused" ? (h
 // ---- actions (never optimistic: the pending label stays until the router confirms) ----
 const pause = (id: string) => pendUntil("s:" + id, "Pausing…", () => api("POST", `api/sessions/${id}/pause`), (s) => find(s, id)?.state === "paused" || find(s, id)?.state === "failed", 120000);
 // the optional prompt of a Resume: delivered as a message once the session is up again
-export const RESUME_PROMPT = { label: "Prompt (optional)", placeholder: "What Claude should do once it is back — delivered as a message. Leave blank to just bring it back.", max: 4000 };
+export const RESUME_PROMPT = { label: "Prompt (optional)", placeholder: "What Claude should do once it is back — typed in when it starts; the iPhone approves it. Leave blank to just bring it back.", max: 4000 };
 export const resumeSession = (id: string) => exclusive("s:" + id, async () => {
   const m = find(getStore().state, id);
   const prompt = await askText({ title: `Resume “${m ? sessionTitle(m) : id}”?`, detail: "Continues the same conversation on a new machine with the same image, with the files as they were when it was paused.", action: "Resume", input: { heading: "Resume", ...RESUME_PROMPT } });
