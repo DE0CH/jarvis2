@@ -199,7 +199,7 @@ When the core can't be reached at all (its pod restarting, e.g. after a wipe) ev
 `{error: "the core isn't running", coreDown: true}`; the app waits or shows it as a plain note.
 Pass-through to the core's own endpoints, answers unchanged (signed): `GET identity`, `POST stores {nonce}`,
 `POST stores/create {name}`, `POST stores/mark-sensitive {name}`, `POST stores/write {store}`, `POST unlock/begin
-{store, for?}`, `POST unlock/finish {pending, share}`, `POST lock {id}`, `POST unlocked {nonce}`, and
+{store, for?}`, `POST unlock/finish {pending, share}`, `POST lock {id}`, `POST unlocked {nonce}`, `POST store-key {phone}`, and
 — only from the app's device login (the `cf-access-token` header; 403 otherwise) — `POST claim {statement,
 masterSig, bundle}` and `POST wipe {statement, masterSig}`. Formats: `docs/DESIGN.md`, `core/core.go`, the app's
 `Shell/CoreSetup.swift`, and the reference client `e2e/main.go`. A claim the core accepts is kept by the router

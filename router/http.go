@@ -450,7 +450,7 @@ func (r *Router) buildHandlers() {
 	})
 
 	// ---- the core, relayed unchanged ------------------------------------------------------------------
-	for _, p := range []string{"stores", "stores/create", "stores/mark-sensitive", "stores/write", "unlock/begin", "unlock/finish", "lock", "unlocked"} {
+	for _, p := range []string{"stores", "stores/create", "stores/mark-sensitive", "stores/write", "unlock/begin", "unlock/finish", "lock", "unlocked", "store-key"} {
 		path := "/" + p
 		app("POST /api/core"+path, func(w http.ResponseWriter, req *http.Request) {
 			b, _ := io.ReadAll(io.LimitReader(req.Body, 1<<20))
