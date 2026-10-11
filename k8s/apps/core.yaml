@@ -34,14 +34,14 @@ spec:
 ---
 apiVersion: v1
 kind: Service
-metadata: { name: core, namespace: jarvis2-core, annotations: { jarvis2/core-pin: hold } }
+metadata: { name: core, namespace: jarvis2-core }
 spec:
   selector: { app: core }
   ports: [{ port: 8090, targetPort: 8090 }]
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
-metadata: { name: core, namespace: jarvis2-core, annotations: { jarvis2/core-pin: hold } }
+metadata: { name: core, namespace: jarvis2-core }
 spec:
   podSelector: {}
   policyTypes: [Ingress, Egress]
