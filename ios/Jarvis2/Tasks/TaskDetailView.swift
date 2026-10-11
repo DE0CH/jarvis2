@@ -80,9 +80,9 @@ struct TaskDetailView: View {
   @ViewBuilder private func primary(_ inst: TaskInstance) -> some View {
     if inst.state == "approval" { Label("Waiting for the phone", systemImage: "hourglass").foregroundStyle(.secondary) }
     else if inst.state == "gone" || inst.state == "failed" {
-      PendingButton(key: "task:" + id, title: "New line…", systemImage: "arrow.triangle.branch") { await model.reapprove(inst) }.accessibilityIdentifier("td-run-approve")
+      PendingButton(key: "task:" + id, title: "New line…", systemImage: "arrow.triangle.branch") { await model.reapprove(inst) }.accessibilityElement(children: .combine).accessibilityIdentifier("td-run-approve")
     } else if inst.activeRun != nil { Label("Running…", systemImage: "play.circle").foregroundStyle(.secondary) }
-    else { PendingButton(key: "task:" + id, title: "Run", systemImage: "play.fill") { await model.runTask(id) }.accessibilityIdentifier("td-run") }
+    else { PendingButton(key: "task:" + id, title: "Run", systemImage: "play.fill") { await model.runTask(id) }.accessibilityElement(children: .combine).accessibilityIdentifier("td-run") }
   }
 
   private func loadRuns() async {

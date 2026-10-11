@@ -19,6 +19,8 @@ struct ApprovalView: View {
   @State private var harnessStores: [String] = []
   @State private var toUnlock: [String] = []
   @State private var scoped = false
+  /// sensitive stores: the core's signed store list's marks joined with the challenge's (a newer core drops the latter)
+  @State private var sens: [String] = []
   @State private var signed: String?
   @State private var loadError: String?
   @State private var busy: String?
@@ -56,22 +58,22 @@ struct ApprovalView: View {
           }
         } header: { Text("Session (as signed)") }
         if r.kind == .addStore {
-          Section("Add this store") { StoreLines(stores: [r.addedStore ?? ""], sensitive: r.sensitive) }
-          Section("It already has") { StoreLines(stores: r.stores.filter { $0 != r.addedStore }, sensitive: r.sensitive, harness: harnessStores) }
+          Section("Add this store") { StoreLines(stores: [r.addedStore ?? ""], sensitive: sens) }
+          Section("It already has") { StoreLines(stores: r.stores.filter { $0 != r.addedStore }, sensitive: sens, harness: harnessStores) }
         } else {
-          Section("Secret stores") { StoreLines(stores: r.stores, sensitive: r.sensitive, harness: harnessStores) }
+          Section("Secret stores") { StoreLines(stores: r.stores, sensitive: sens, harness: harnessStores) }
         }
         SignedSettingsSection(r: r)
-        let warn = r.kind == .addStore ? r.sensitive.filter { $0 == r.addedStore } : r.sensitive
+        let warn = r.kind == .addStore ? sens.filter { $0 == r.addedStore } : r.stores.filter { sens.contains($0) }
         Section {
           if !warn.isEmpty {
             Label("This session will hold sensitive secrets: \(warn.joined(separator: ", ")).", systemImage: "exclamationmark.triangle.fill")
-              .foregroundStyle(.orange).accessibilityIdentifier("secure-sensitive-warning")
+              .foregroundStyle(.orange).accessibilityElement(children: .combine).accessibilityIdentifier("secure-sensitive-warning")
           }
           LabeledContent("Harness", value: Harness.name(r.harness))
           if r.kind != .addStore {
             if r.permissionMode == "bypass" {
-              Label("Permission mode: bypass (no permission prompts at all)", systemImage: "exclamationmark.shield").foregroundStyle(.orange).accessibilityIdentifier("secure-mode")
+              Label("Permission mode: bypass (no permission prompts at all)", systemImage: "exclamationmark.shield").foregroundStyle(.orange).accessibilityElement(children: .combine).accessibilityIdentifier("secure-mode")
             } else {
               Text("Permission mode: auto").accessibilityIdentifier("secure-mode")
             }
@@ -79,7 +81,7 @@ struct ApprovalView: View {
           LabeledContent("Session image") { Text(r.image).font(.footnote.monospaced()).textSelection(.enabled) }
           if let attest {
             Label(attest.words, systemImage: attest == .attested ? "checkmark.seal" : "questionmark.diamond")
-              .font(.footnote).foregroundStyle(attest == .attested ? .green : .orange).accessibilityIdentifier("secure-image-attest")
+              .font(.footnote).foregroundStyle(attest == .attested ? .green : .orange).accessibilityElement(children: .combine).accessibilityIdentifier("secure-image-attest")
           }
           if r.kind == .other { LabeledContent("The challenge", value: r.challenge.request.kind) }
         }
@@ -126,7 +128,8 @@ struct ApprovalView: View {
       harnessStores = PinnedPolicy.stores(rv.harness, router: model.policy)
       let doc = try await RouterClient.shared.storesDoc()
       let want: [String] = rv.kind == .addStore ? [rv.addedStore ?? ""] : rv.kind == .newSession ? rv.stores : []
-      scoped = doc.scopedUnlocks == true
+      sens = Array(Set(rv.sensitive + doc.stores.filter(\.sensitive).map(\.name)))
+      scoped = true  // every core takes unlocks for one session (the flag is going away)
       // only with a core that unlocks for one session (an older core's unlocks would stay open to every session)
       toUnlock = scoped ? want.filter { n in doc.stores.contains { $0.name == n && !$0.unlocked && !$0.empty } } : []
       r = rv; a = x
@@ -194,7 +197,7 @@ struct SignedSettingsSection: View {
         }
         if let m = o["rollback"] as? String, !m.isEmpty {
           Label("Rolls the conversation back: every transcript line from the first containing “\(m)” is dropped.", systemImage: "arrow.uturn.backward")
-            .foregroundStyle(.orange).accessibilityIdentifier("signed-once-rollback")
+            .foregroundStyle(.orange).accessibilityElement(children: .combine).accessibilityIdentifier("signed-once-rollback")
         }
       }
     }
@@ -212,7 +215,7 @@ struct IdentityRows: View {
     if let m = ident.machine, m != ident.line { LabeledContent("Machine") { Text(m).font(.footnote.monospaced()) } }
     if let at = ident.issuedAt?.isoDate { LabeledContent("Its cert", value: "issued \(Fmt.ago(at))") }
     if ident.sensitive {
-      Label("This session holds a sensitive store.", systemImage: "exclamationmark.octagon.fill").foregroundStyle(.red).accessibilityIdentifier("secure-session-sensitive")
+      Label("This session holds a sensitive store.", systemImage: "exclamationmark.octagon.fill").foregroundStyle(.red).accessibilityElement(children: .combine).accessibilityIdentifier("secure-session-sensitive")
     }
     if ident.label == nil {
       Label("This core doesn't sign the session's title: check the line and the stores before you approve.", systemImage: "questionmark.circle").font(.footnote).foregroundStyle(.orange)

@@ -64,7 +64,7 @@ struct UnlockReviewView: View {
       try Checks.sameSession(id, expectedLabel: model.session(sessionId)?.j["label"].text)
       ident = id
       let doc = try await RouterClient.shared.storesDoc()
-      scoped = doc.scopedUnlocks == true && !(c.nonce ?? "").isEmpty
+      scoped = !(c.nonce ?? "").isEmpty  // every core takes unlocks for one session; a cert without a nonce can't be named
       certNonce = scoped ? c.nonce : nil
       certStores = (c.stores ?? []).filter { $0 != StoreView.coreStore }
       let l = certStores.filter { n in doc.stores.contains { $0.name == n && !$0.unlocked && !$0.empty } }

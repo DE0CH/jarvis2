@@ -98,7 +98,7 @@ struct NewSessionView: View {
       if !pickedSensitive.isEmpty {
         Label("This session will hold sensitive secrets: \(pickedSensitive.joined(separator: ", ")). Only pick them for a session you'll treat with care.", systemImage: "exclamationmark.triangle.fill")
           .foregroundStyle(.orange)
-          .accessibilityIdentifier("secure-sensitive-warning")
+          .accessibilityElement(children: .combine).accessibilityIdentifier("secure-sensitive-warning")
       }
     } header: { Text("Secret stores") }
   }
@@ -218,7 +218,7 @@ struct NewSessionView: View {
     if model.repos.isEmpty { await model.refresh() }
     do {
       let d = try await RouterClient.shared.storesDoc()
-      scoped = d.scopedUnlocks == true
+      scoped = true  // every core takes unlocks for one session
       apply(d.stores)
       loaded = true
     } catch { if !loaded { loadError = errText(error) } }
@@ -257,7 +257,9 @@ struct NewSessionView: View {
       // what the router added beyond the picks must be the harness's own by this app's pinned policy, and never
       // sensitive (audit finding 2: a lying api/policy could otherwise slip a sensitive store into the signature)
       _ = try await ImageAttestation.check(image: r.image, sig: a.imageSig)
-      _ = try Checks.onlyHarnessExtras(r, picked: want, pinnedHarness: PinnedPolicy.stores(harness, router: model.policy))
+      let signedList = try await RouterClient.shared.storesDoc()
+      _ = try Checks.onlyHarnessExtras(r, picked: want, pinnedHarness: PinnedPolicy.stores(harness, router: model.policy),
+                                       sensitive: signedList.stores.filter(\.sensitive).map(\.name))
       // …and, with a core that vouches, exactly these settings: the cert carries them to the machine (DESIGN "Inputs")
       try Checks.matchesSettings(r, .init(label: title, prompt: trimmedPrompt, model: modelId, repos: chosen.map(\.url), oneShot: oneShot, apiProxy: apiProxy))
       // the stores the challenge carries that are locked now (fresh from the core): opened under the same Face ID
@@ -265,7 +267,7 @@ struct NewSessionView: View {
       let locked = r.stores.filter { n in now.contains { $0.name == n && !$0.unlocked && !$0.empty } }
       busy = "Signing…"
       let reason = "Start \"\(title.isEmpty ? "New session" : title)\"" + (locked.isEmpty ? "" : " and unlock \(locked.joined(separator: ", "))")
-      guard let sig = try await StoreUnlock.signAndUnlock(payload: a.challenge.payload, stores: locked, reason: reason, for: scoped ? r.challenge.nonce : nil) else {
+      guard let sig = try await StoreUnlock.signAndUnlock(payload: a.challenge.payload, stores: locked, reason: reason, for: r.challenge.nonce) else {
         throw TrustError.stale("signature")
       }
       busy = "Starting…"

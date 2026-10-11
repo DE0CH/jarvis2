@@ -15,11 +15,11 @@ struct SettingsView: View {
           NavigationLink(value: SettingsRoute.stores) {
             LabeledContent { Text(model.stores.loaded ? "\(model.stores.items.count)" : "") } label: { Label("Stores", systemImage: "shippingbox") }
           }
-          .accessibilityIdentifier("open-stores")
+          .accessibilityElement(children: .combine).accessibilityIdentifier("open-stores")
           NavigationLink(value: SettingsRoute.repos) {
             LabeledContent { Text("\(model.repos.count)") } label: { Label("Repos", systemImage: "chevron.left.forwardslash.chevron.right") }
           }
-          .accessibilityIdentifier("open-repos")
+          .accessibilityElement(children: .combine).accessibilityIdentifier("open-repos")
           NavigationLink(value: SettingsRoute.machines) { Label("Machines", systemImage: "server.rack") }
             .accessibilityIdentifier("open-machines")
         }

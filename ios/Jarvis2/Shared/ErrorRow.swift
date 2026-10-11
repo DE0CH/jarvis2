@@ -8,6 +8,7 @@ struct ErrorRow: View {
     Label { Text(text) } icon: { Image(systemName: "exclamationmark.triangle.fill") }
       .foregroundStyle(.red)
       .font(.subheadline)
+      .accessibilityElement(children: .combine)
       .accessibilityIdentifier(id)
   }
 }

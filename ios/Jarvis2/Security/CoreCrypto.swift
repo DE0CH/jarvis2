@@ -327,6 +327,9 @@ extension Checks {
     guard b.store == repoStore(repo), b.title == "jarvis2 " + b.store else { throw TrustError.mismatch("store") }
     guard b.tokenStore == deployKeyTokenStore else { throw TrustError.mismatch("the store it opens") }
     if action == "add", sensitive, !b.sensitive { throw TrustError.mismatch("sensitive") }
+    // Jarvis 2's own repo can push code that changes Jarvis 2: its store is always sensitive (checked here, not only
+    // by the core)
+    if action == "add", repo.lowercased() == "de0ch/jarvis2", !b.sensitive { throw TrustError.mismatch("DE0CH/jarvis2's store must be sensitive") }
     return b
   }
 
@@ -457,11 +460,14 @@ extension Checks {
   /// New session: every store the challenge carries beyond those picked on the page must be one the harness brings
   /// by the app's own (pinned) policy, and none of them may be sensitive: a sensitive store is only ever a tap on
   /// the page. Returns those extra stores.
-  static func onlyHarnessExtras(_ r: Reviewed, picked: [String], pinnedHarness: [String]) throws -> [String] {
+  /// `sensitive`: the stores the core's signed store list marks sensitive (preferred; a newer core drops the
+  /// challenge's own `sensitive`), joined with the challenge's
+  static func onlyHarnessExtras(_ r: Reviewed, picked: [String], pinnedHarness: [String], sensitive: [String] = []) throws -> [String] {
     let extra = r.stores.filter { !picked.contains($0) }
+    let marked = Set(sensitive + r.sensitive)
     for n in extra {
       if !pinnedHarness.contains(n) { throw TrustError.mismatch("store \(n) wasn't picked and isn't the harness's") }
-      if r.sensitive.contains(n) { throw TrustError.mismatch("the harness's store \(n) is sensitive: pick it on the page yourself") }
+      if marked.contains(n) { throw TrustError.mismatch("the harness's store \(n) is sensitive: pick it on the page yourself") }
     }
     return extra
   }

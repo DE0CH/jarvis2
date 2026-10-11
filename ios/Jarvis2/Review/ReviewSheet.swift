@@ -27,6 +27,7 @@ struct SigningFooter: View {
           systemImage: PhoneKeys.shared.usesEnclave ? "lock.shield" : "lock.trianglebadge.exclamationmark")
       .font(.footnote)
       .foregroundStyle(.secondary)
+      .accessibilityElement(children: .combine)
       .accessibilityIdentifier("secure-banner")
   }
 }

@@ -96,7 +96,7 @@ struct SetupView: View {
       Section {
         Label("Jarvis 2 is running with this kit. Recovering restarts it, and the sessions running on it end.", systemImage: "exclamationmark.triangle.fill").foregroundStyle(.orange)
         Button(busy ?? "Restart and recover", role: .destructive) { Task { await recover(restart: true) } }
-          .disabled(busy != nil).accessibilityIdentifier("setup-restart-confirm")
+          .disabled(busy != nil).accessibilityElement(children: .combine).accessibilityIdentifier("setup-restart-confirm")
         Button("Cancel") { forget(); step = .choose }.disabled(busy != nil).accessibilityIdentifier("setup-restart-cancel")
       }
     case .resetAuth:
@@ -119,7 +119,7 @@ struct SetupView: View {
         }
       }
     case .done:
-      Section { Label(doneText, systemImage: "checkmark.seal.fill").foregroundStyle(.green).accessibilityIdentifier("setup-done") }
+      Section { Label(doneText, systemImage: "checkmark.seal.fill").foregroundStyle(.green).accessibilityElement(children: .combine).accessibilityIdentifier("setup-done") }
     }
   }
 

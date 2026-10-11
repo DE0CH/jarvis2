@@ -55,7 +55,7 @@ private struct SessionList: View {
           Button { model.tab = .inbox } label: {
             Label(model.inbox.count == 1 ? "1 request waiting in the Inbox" : "\(model.inbox.count) requests waiting in the Inbox", systemImage: "tray.full")
           }
-          .accessibilityIdentifier("inbox-note")
+          .accessibilityElement(children: .combine).accessibilityIdentifier("inbox-note")
         }
       }
       ForEach(["Running", "Scheduled", "Paused", "Failed"], id: \.self) { g in
@@ -104,7 +104,7 @@ private struct Banners: View {
           ErrorRow(text: "Fly spend reached the \(Fmt.usd(b["capUsd"].double ?? 0)) cap for \(b["month"].string ?? "this month") (\(Fmt.usd(b["spentUsd"].double ?? 0))): the router paused every running session.", id: "banner-budget")
         } else if b["warned"].bool == true {
           Label("Fly spend this month: \(Fmt.usd(b["spentUsd"].double ?? 0)) of the \(Fmt.usd(b["capUsd"].double ?? 0)) cap. At the cap every running session is paused.", systemImage: "dollarsign.circle").foregroundStyle(.orange)
-            .accessibilityIdentifier("banner-budget")
+            .accessibilityElement(children: .combine).accessibilityIdentifier("banner-budget")
         }
         if let e = model.fly["error"].text, e != "FLY_READ_TOKEN not set" { ErrorRow(text: "Fly: \(e)") }
       }

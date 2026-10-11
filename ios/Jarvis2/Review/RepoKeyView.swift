@@ -33,7 +33,7 @@ struct RepoKeyView: View {
             Text("The core makes a new SSH key and adds it to \(b.repo) on GitHub as a deploy key that can read and push (titled “\(b.title)”). It keeps the private half in the store \(b.store). Sessions that include \(b.store) can clone, pull and push this repo, and no other.")
             if b.replaces {
               Label("\(b.store) exists: its contents are replaced by the new key, and the earlier key “\(b.title)” is deleted on GitHub.", systemImage: "exclamationmark.triangle.fill")
-                .foregroundStyle(.orange).accessibilityIdentifier("secure-repo-replaces")
+                .foregroundStyle(.orange).accessibilityElement(children: .combine).accessibilityIdentifier("secure-repo-replaces")
             }
           } else {
             Text("The core deletes the deploy key “\(b.title)” on GitHub and the store \(b.store). Sessions that hold the store lose access to the repo.")
@@ -71,7 +71,12 @@ struct RepoKeyView: View {
       }
     }
     .interactiveDismissDisabled(busy != nil)
-    .task { sensitive = sensitiveAsked; await begin(sensitive: sensitiveAsked) }
+    .task {
+      // Jarvis 2's own repo is always asked for as sensitive (Checks.deployKeyBegin refuses it otherwise)
+      let want = sensitiveAsked || repo.lowercased() == "de0ch/jarvis2"
+      sensitive = want
+      await begin(sensitive: want)
+    }
   }
 
   private func begin(sensitive want: Bool) async {

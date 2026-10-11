@@ -35,7 +35,7 @@ struct RequestReviewSection: View {
     .task { await load() }
     if let error { Section { ErrorRow(text: error) } }
     else if gone {
-      Section { Label("This request is no longer in the Inbox (answered, denied or expired elsewhere).", systemImage: "tray").foregroundStyle(.orange).accessibilityIdentifier("request-gone") }
+      Section { Label("This request is no longer in the Inbox (answered, denied or expired elsewhere).", systemImage: "tray").foregroundStyle(.orange).accessibilityElement(children: .combine).accessibilityIdentifier("request-gone") }
     } else if let item {
       Section {
         VStack(alignment: .leading, spacing: 4) {

@@ -50,7 +50,7 @@ struct GrantReviewView: View {
       else if let cert {
         Section("What you allow") {
           Text(meaning).font(.body.weight(.medium)).accessibilityIdentifier("grant-meaning")
-          if let refusal { Label(refusal, systemImage: "hand.raised").foregroundStyle(.orange).accessibilityIdentifier("grant-refused") }
+          if let refusal { Label(refusal, systemImage: "hand.raised").foregroundStyle(.orange).accessibilityElement(children: .combine).accessibilityIdentifier("grant-refused") }
         }
         Section("Session (as signed)") {
           if let ident { IdentityRows(ident: ident) }
