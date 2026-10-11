@@ -1,59 +1,15 @@
 import XCTest
 
-/// The phone replica (infra/phone-replica.sh, .github/workflows/replica.yml): the RELEASE build on the simulator
-/// closest to Deyao's iPhone, against a real throwaway box (its own Cloudflare tunnel + Access login, core, router,
-/// backups) and real Fly sessions, every flow tapped as a person would. Face ID is enrolled on the simulator and
-/// each match or failure is sent by the runner (the host helper, ios/ci/replica-host.py, on 127.0.0.1:18300),
-/// which also relays to the setup session (the Access login code from the bot's mailbox; "reset done" → the stores
-/// are written). A step fails on a blank screen (no expected element within its time, or a near-uniform
-/// screenshot), a stuck state (a session not running within its time) or a broken transition.
-final class ReplicaUITests: XCTestCase {
-  let app = XCUIApplication()
-  let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+/// The phone replica (infra/phone-replica.sh, .github/workflows/replica.yml): the RELEASE build of the native app on the
+/// simulator matching Deyao's iPhone, against a real throwaway box (its own Cloudflare tunnel + Access login, core,
+/// router, backups) and real Fly sessions, every flow tapped as a person would. Face ID is enrolled on the simulator and
+/// each match or failure is sent by the runner (ios/ci/replica-host.py on 127.0.0.1:18300), which also relays to the
+/// setup session (the Access login code from the bot's mailbox; "reset done" → the stores are written). A step fails on
+/// a blank screen, a stuck state (a session not running within its time) or a broken transition.
+final class ReplicaUITests: JarvisUITestCase {
   let safari = XCUIApplication(bundleIdentifier: "com.apple.SafariViewService")
-  let env = ProcessInfo.processInfo.environment
-  var step = 0
   var kit = ""
 
-  // ---- evidence ----
-  func shot(_ name: String) {
-    step += 1
-    let s = XCUIScreen.main.screenshot()
-    let a = XCTAttachment(screenshot: s)
-    a.name = String(format: "replica-%02d-%@", step, name); a.lifetime = .keepAlways; add(a)
-    XCTAssertFalse(blank(s.image), "blank screen at \(name)")
-  }
-  /// a blank screen (a white or black page with nothing drawn on it): below the status bar, fewer than 0.2% of the
-  /// sampled pixels differ from the page's background colour (any text or control is far more)
-  func blank(_ img: UIImage) -> Bool {
-    guard let cg = img.cgImage, let data = cg.dataProvider?.data, let p = CFDataGetBytePtr(data) else { return false }
-    let bpr = cg.bytesPerRow, bpp = cg.bitsPerPixel / 8
-    let y0 = cg.height * 12 / 100
-    let bg = (Int(p[y0 * bpr + 4 * bpp]), Int(p[y0 * bpr + 4 * bpp + 1]), Int(p[y0 * bpr + 4 * bpp + 2]))
-    var n = 0, differ = 0
-    for y in stride(from: y0, to: cg.height, by: 4) {
-      for x in stride(from: 0, to: cg.width, by: 4) {
-        let o = y * bpr + x * bpp
-        n += 1
-        if abs(Int(p[o]) - bg.0) > 24 || abs(Int(p[o + 1]) - bg.1) > 24 || abs(Int(p[o + 2]) - bg.2) > 24 { differ += 1 }
-      }
-    }
-    return n > 0 && differ * 500 < n
-  }
-  func note(_ name: String, _ text: String) { let a = XCTAttachment(string: text); a.name = name; a.lifetime = .keepAlways; add(a) }
-  func el(_ id: String) -> XCUIElement { app.descendants(matching: .any)[id] }
-  func prefixed(_ p: String) -> XCUIElement { app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH %@", p)).firstMatch }
-  @discardableResult func wait(_ e: XCUIElement, _ s: TimeInterval, _ what: String) -> Bool {
-    let ok = e.waitForExistence(timeout: s)
-    XCTAssertTrue(ok, what)
-    if !ok { note("tree-\(what)", app.debugDescription); shot("missing-" + what.replacingOccurrences(of: " ", with: "-")) }
-    return ok
-  }
-  func gone(_ e: XCUIElement, _ s: TimeInterval) -> Bool {
-    let until = Date().addingTimeInterval(s)
-    while e.exists && Date() < until { usleep(300_000) }
-    return !e.exists
-  }
   func must(_ ok: Bool) throws { if !ok { throw XCTSkip("stopping: an earlier step failed") } }
 
   // ---- the runner: Face ID and the relay to the setup session ----
@@ -66,89 +22,75 @@ final class ReplicaUITests: XCTestCase {
     _ = sem.wait(timeout: .now() + timeout + 5)
     return out
   }
-  /// Face ID matches for the next `seconds` (one or more prompts), as a person looking at the phone
   func faceIDMatches(_ seconds: Int = 40) { host("faceid/match?for=\(seconds)") }
   func faceIDFails() { host("faceid/nomatch") }
   func relay(_ msg: String) -> String { host("relay?msg=\(msg)", timeout: 600) }
 
-  // ---- the system around the app: backgrounding, a kill and relaunch ----
-  func background(_ seconds: UInt32 = 5) {
-    XCUIDevice.shared.press(.home)
-    sleep(seconds)
-    app.activate()
-    sleep(2)
-  }
-  func relaunch() {
-    app.terminate()
-    sleep(2)
-    app.launch()
-  }
+  func background(_ seconds: UInt32 = 5) { XCUIDevice.shared.press(.home); sleep(seconds); app.activate(); sleep(2) }
+  func relaunch() { app.terminate(); sleep(2); app.launch() }
 
   // ---- the Access login, as on the phone: the system sheet, the email, the code from the mailbox ----
-  func signInIfAsked(_ s: TimeInterval) {
-    let cont = springboard.buttons["Continue"]
-    guard cont.waitForExistence(timeout: s) else { return }
-    shot("signin-ask")
-    cont.tap()
-    let email = [safari.textFields.firstMatch, app.webViews.textFields.firstMatch]
-    guard let field = waitAny(email, 60) else { XCTFail("the Access login page didn't show"); shot("signin-blank"); return }
-    shot("signin-page")
-    field.tap(); field.typeText((env["REPLICA_EMAIL"] ?? "") + "\n")   // Return sends the form (the button sits under the keyboard)
-    sleep(2)
-    if field.exists && (field.value as? String ?? "").contains("@") { tapButton(["Send login code", "Send me a code", "Send code", "Continue"]) }
-    // the code page's field (the email field is gone by then; never type the code into it)
-    let notEmail = NSPredicate(format: "label != 'Email' AND placeholderValue != 'example@email.com'")
-    let codeField = [safari.textFields.matching(notEmail).firstMatch, app.webViews.textFields.matching(notEmail).firstMatch]
-    sleep(3)
-    let code = relay("otp").trimmingCharacters(in: .whitespacesAndNewlines)
-    XCTAssertEqual(code.count, 6, "a 6-digit Access code from the mailbox (got \(code.count) chars)")
-    guard let cf = waitAny(codeField, 30) else { XCTFail("no code field"); return }
-    cf.tap(); cf.typeText(code)
-    shot("signin-code")
-    cf.typeText("\n")
-    sleep(2)
-    if cf.waitForExistence(timeout: 1), !gone(cf, 8) { tapButton(["Sign in", "Log in", "Verify", "Submit", "Continue"]) }
-  }
   func waitAny(_ es: [XCUIElement], _ s: TimeInterval) -> XCUIElement? {
     let until = Date().addingTimeInterval(s)
     while Date() < until { if let e = es.first(where: { $0.exists }) { return e }; usleep(500_000) }
     return nil
   }
   func tapButton(_ labels: [String]) {
-    for l in labels {
-      for b in [safari.buttons[l], app.webViews.buttons[l]] where b.exists { b.tap(); return }
-    }
+    for l in labels { for b in [safari.buttons[l], app.webViews.buttons[l]] where b.exists { b.tap(); return } }
     XCTFail("no button \(labels) on the login page"); note("login-tree", safari.debugDescription)
   }
+  func signInIfAsked(_ s: TimeInterval) {
+    let cont = springboard.buttons["Continue"]
+    guard cont.waitForExistence(timeout: s) else { return }
+    shot("signin-ask")
+    cont.tap()
+    guard let field = waitAny([safari.textFields.firstMatch, app.webViews.textFields.firstMatch], 60) else { XCTFail("the Access login page didn't show"); return }
+    shot("signin-page")
+    field.tap(); field.typeText((env["REPLICA_EMAIL"] ?? "") + "\n")
+    sleep(2)
+    if field.exists && (field.value as? String ?? "").contains("@") { tapButton(["Send login code", "Send me a code", "Send code", "Continue"]) }
+    let notEmail = NSPredicate(format: "label != 'Email' AND placeholderValue != 'example@email.com'")
+    sleep(3)
+    let code = relay("otp").trimmingCharacters(in: .whitespacesAndNewlines)
+    XCTAssertEqual(code.count, 6, "a 6-digit Access code from the mailbox (got \(code.count) chars)")
+    guard let cf = waitAny([safari.textFields.matching(notEmail).firstMatch, app.webViews.textFields.matching(notEmail).firstMatch], 30) else { XCTFail("no code field"); return }
+    cf.tap(); cf.typeText(code)
+    shot("signin-code")
+    cf.typeText("\n")
+    sleep(2)
+    if cf.waitForExistence(timeout: 1), !gone(cf, 8) { tapButton(["Sign in", "Log in", "Verify", "Submit", "Continue"]) }
+  }
 
-  /// + New session opens the shell's one-page New session (an older app: the React Native form first, then Start)
   func openNewSession() -> Bool {
+    tab("Sessions")
+    guard wait(el("newBtn"), 30, "sessions") else { return false }
     el("newBtn").tap()
-    if el("ns-start").waitForExistence(timeout: 5) && !el("secure-create").exists { shot("new-session-form"); el("ns-start").tap() }
-    let ok = wait(el("secure-create"), 60, "the New session page")
+    let ok = arrives(el("secure-create"), 60, "the New session page")
     if ok {
       sleep(1); shot("new-session")
-      // DE0CH/claude-env is pre-selected only when it is on the repo list; the replica's box has no claude-env
       let picked = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH 'ns-repo-' AND selected == true")).count
       if !el("ns-repo-claude-env").exists { XCTAssertEqual(picked, 0, "no repo pre-selected without claude-env on the list") }
       else { XCTAssertTrue(el("ns-repo-claude-env").isSelected, "claude-env pre-selected") }
     }
     return ok
   }
+  func openStores() { tab("Settings"); if wait(el("open-stores"), 30, "Settings → Stores") { el("open-stores").tap() } }
 
-  // ---- the Inbox: a request filed elsewhere (the setup session, a session's jarvis2-request) shows on the Inbox tab's
-  // badge; Review opens the shell's page with the three fields (what is signed, the call, the caller's reason) ----
+  // ---- the Inbox: a request filed elsewhere shows on the tab's badge; Review opens its page with the three fields ----
   func inboxReview(_ what: String) -> Bool {
-    _ = wait(el("tab-inbox"), 30, "the Inbox tab")
-    XCTAssertTrue(wait(el("tab-badge-inbox"), 90, "the Inbox badge (\(what))"), "[\(what)] the badge counts the request")
-    el("tab-inbox").tap()
+    let inboxTab = app.tabBars.buttons["Inbox"]
+    _ = wait(inboxTab, 30, "the Inbox tab")
+    let until = Date().addingTimeInterval(90)
+    while Date() < until && ((inboxTab.value as? String) ?? "").isEmpty { sleep(2) }
+    XCTAssertFalse(((inboxTab.value as? String) ?? "").isEmpty, "[\(what)] the badge counts the request")
+    inboxTab.tap()
     guard wait(prefixed("request-review-"), 60, "the request in the Inbox (\(what))") else { return false }
     sleep(1); shot("inbox-" + what)
     prefixed("request-review-").tap()
-    let ok = wait(el("request-call"), 30, "the review page (\(what))")
+    let ok = arrives(el("request-call"), 30, "the review page (\(what))")
     let signed = el("request-signed")
-    let until = Date().addingTimeInterval(30)
-    while Date() < until && signed.label.hasPrefix("Reading") { usleep(500_000) }
+    let t = Date().addingTimeInterval(30)
+    while Date() < t && signed.label.hasPrefix("Reading") { usleep(500_000) }
     sleep(1); shot("inbox-review-" + what)
     for id in ["request-signed", "request-call", "request-explanation"] where el(id).exists { note("\(what)-\(id)", el(id).label) }
     XCTAssertFalse(el("request-mismatch").exists, "[\(what)] the request matches the page")
@@ -158,19 +100,20 @@ final class ReplicaUITests: XCTestCase {
   func inboxDeny(_ what: String) {
     el("request-deny").tap()
     XCTAssertTrue(gone(el("request-call"), 30), "[\(what)] Deny leaves the page")
-    XCTAssertTrue(gone(prefixed("request-review-"), 60) && gone(el("tab-badge-inbox"), 60), "[\(what)] denied: off the Inbox, no badge")
+    XCTAssertTrue(gone(prefixed("request-review-"), 60), "[\(what)] denied: off the Inbox")
     shot("inbox-denied-" + what)
   }
   func inboxAllowed(_ what: String, button: String) {
     faceIDMatches()
     el(button).tap()
     XCTAssertTrue(gone(el("request-call"), 90), "[\(what)] the page closes after Face ID")
-    XCTAssertTrue(gone(prefixed("request-review-"), 60) && gone(el("tab-badge-inbox"), 60), "[\(what)] allowed: off the Inbox, no badge")
+    XCTAssertTrue(gone(prefixed("request-review-"), 60), "[\(what)] allowed: off the Inbox")
     shot("inbox-allowed-" + what)
   }
 
   func testReplica() throws {
     continueAfterFailure = true
+    tag = "replica"
     app.launch()
     signInIfAsked(30)
 
@@ -181,35 +124,32 @@ final class ReplicaUITests: XCTestCase {
     try must(wait(el("setup-kit"), 30, "the new recovery kit"))
     kit = el("setup-kit").label
     XCTAssertTrue(kit.hasPrefix("jarvis2-kit:2:"), "the kit is one string (\(kit.prefix(16))…)")
-    shot("setup-kit")
-    background()   // mid-flow: the kit page survives backgrounding
-    XCTAssertTrue(el("setup-kit").exists, "the kit page is still there after backgrounding")
+    shot("setup-kit", checkBlank: false)
+    background()
+    XCTAssertTrue(el("setup-kit").exists, "the kit page survives backgrounding")
     el("setup-kit-copy").tap()
+    faceIDMatches(60)   // the device key countersigns the claim
     el("setup-kit-saved").tap()
     try must(wait(el("setup-done"), 120, "reset done"))
     shot("setup-reset-done")
     el("secure-back").tap()
-    // the setup session fills the stores now (as after a real Reset)
     XCTAssertEqual(relay("reset-done"), "filled", "the setup session wrote the stores")
 
     // ---- stores: Face ID refused, then unlock and lock ----
-    try must(wait(el("tab-stores"), 120, "the app's tabs"))
-    el("tab-stores").tap()
-    try must(wait(el("stores-manage"), 30, "stores tab"))
-    sleep(2); shot("stores")
-    el("stores-manage").tap()
-    try must(wait(el("unlock-rh-plain"), 60, "secure stores page with rh-plain"))
-    XCTAssertTrue(el("mark-rh-plain").exists, "rh-plain is not sensitive")
-    XCTAssertFalse(el("mark-rh-secret").exists, "rh-secret is sensitive")
-    shot("secure-stores")
+    try must(arrives(el("newBtn"), 120, "the app's list"))
+    openStores()
+    try must(wait(el("unlock-rh-plain"), 60, "stores page with rh-plain"))
+    XCTAssertFalse(el("sensitive-rh-plain").exists, "rh-plain is not sensitive")
+    XCTAssertTrue(el("sensitive-rh-secret").exists, "rh-secret is sensitive")
+    shot("stores")
     faceIDFails()
     el("unlock-rh-plain").tap()
     sleep(3)
-    shot("faceid-failed")
-    // the "Face Not Recognized" alert (Try Face ID Again / Cancel) comes from the system: whichever process shows it
+    shot("faceid-failed", checkBlank: false)
     let laui = XCUIApplication(bundleIdentifier: "com.apple.LocalAuthenticationUIService")
-    if let c = waitAny([app.buttons["Cancel"].firstMatch, springboard.buttons["Cancel"].firstMatch, laui.buttons["Cancel"].firstMatch], 20) { shot("faceid-not-recognized"); c.tap() } else { XCTFail("no Face Not Recognized alert") }
-    XCTAssertTrue(wait(el("secure-error"), 20, "a failed Face ID leaves the store locked, with a message"), "Face ID failure shown")
+    if let c = waitAny([app.buttons["Cancel"].firstMatch, springboard.buttons["Cancel"].firstMatch, laui.buttons["Cancel"].firstMatch], 20) { c.tap() }
+    XCTAssertTrue(wait(app.alerts.firstMatch, 20, "a failed Face ID leaves the store locked, with a message"))
+    if app.alerts.firstMatch.exists { note("faceid-failure", app.alerts.firstMatch.label); app.alerts.firstMatch.buttons["OK"].tap() }
     XCTAssertFalse(el("lock-rh-plain").exists, "no unlock without Face ID")
     faceIDMatches()
     el("unlock-rh-plain").tap()
@@ -217,89 +157,76 @@ final class ReplicaUITests: XCTestCase {
     shot("stores-unlocked")
     el("lock-rh-plain").tap()
     XCTAssertTrue(gone(el("lock-rh-plain"), 30), "rh-plain locked again")
-    shot("stores-locked")
-    el("secure-back").tap()
-
-    // ---- Back under stress (BackStress): every secure page reachable here, Back and the edge swipe in loops, during
-    // the entry, double, after the background, a memory warning, the extension killed (jetsam) or slow; the app
-    // itself with its extension killed. A blank screen over 1.5 s or an app that doesn't come back fails ----
-    do {
-      let s = BackStress(test: self, app: app, tag: "replica-stress")
-      let sessions = { self.el("tab-sessions").tap(); _ = self.el("newBtn").waitForExistence(timeout: 60) }
-      sessions()
-      s.run(.init(name: "newsession", open: { self.el("newBtn").tap() }, arrived: el("secure-create"), target: el("newBtn"), reset: sessions), loops: 2)
-      let stores = { _ = self.el("tab-stores").waitForExistence(timeout: 60); self.el("tab-stores").tap(); _ = self.el("stores-manage").waitForExistence(timeout: 60) }
-      stores()
-      s.run(.init(name: "stores", open: { self.el("stores-manage").tap() }, arrived: el("unlock-rh-plain"), target: el("stores-manage"), reset: stores), loops: 2)
-      let settings = { _ = self.el("tab-settings").waitForExistence(timeout: 60); self.el("tab-settings").tap(); _ = self.el("open-setup").waitForExistence(timeout: 60) }
-      settings()
-      s.run(.init(name: "setup", open: { self.el("open-setup").tap() }, arrived: el("setup-choose-recover"), target: el("open-setup"), reset: settings), loops: 2)
-      sessions()
-      s.killWhileShown(el("newBtn"))
-      sessions()
-      shot("after-back-stress")
-    }
+    back()
 
     // ---- new session: one page, its stores (and the harness's) unlocked with Face ID, running on Fly ----
-    el("tab-sessions").tap()
-    try must(wait(el("newBtn"), 30, "sessions tab"))
     try must(openNewSession())
     if wait(el("secure-store-rh-plain"), 30, "rh-plain offered") { el("secure-store-rh-plain").tap() }
-    XCTAssertFalse(el("secure-store-claude").exists, "the harness's own store isn't offered")
-    shot("secure-new-session")
+    XCTAssertFalse(el("secure-store-claude").exists, "the harness's own store isn't offered as a pick")
+    shot("new-session-picked")
     faceIDMatches(90)
     el("secure-create").tap()
-    try must(wait(prefixed("term-"), 600, "the session is running on Fly (Terminal offered) within 10 minutes"))
-    sleep(2); shot("session-running")
-    let sid = String(prefixed("term-").identifier.dropFirst(5))
+    let row = prefixed("srow-")
+    try must(arrives(row, 120, "the session's row"))
+    let sid = String(row.identifier.dropFirst("srow-".count))
     note("session", sid)
+    row.tap()
+    try must(wait(el("term-\(sid)"), 600, "the session is running on Fly (Terminal offered) within 10 minutes"))
+    sleep(2); shot("session-running")
 
-    // ---- machines: the Machines tab lists the session's machine as its session's (Fly, live) ----
-    el("tab-machines").tap()
-    wait(prefixed("machine-session-"), 60, "the Machines tab lists the session's machine")
-    sleep(1); shot("machines")
-    el("tab-sessions").tap()
-    _ = wait(el("term-" + sid), 30, "back on the sessions tab")
+    // ---- machines: the session's machine listed as its session's ----
+    tab("Settings")
+    if wait(el("open-machines"), 30, "Machines") {
+      el("open-machines").tap()
+      wait(prefixed("machine-session-"), 60, "the Machines page lists the session's machine")
+      shot("machines")
+      back()
+    }
 
-    // ---- a kill and relaunch mid-flow: the session list comes back, no setup page, still signed in ----
+    // ---- a kill and relaunch mid-flow: no setup page, still signed in ----
     relaunch()
     signInIfAsked(10)
     XCTAssertFalse(el("setup-state-empty").waitForExistence(timeout: 10), "no Reset or recover after a relaunch")
-    try must(wait(el("term-" + sid), 90, "the running session after a relaunch"))
+    tab("Sessions")
+    try must(wait(el("srow-\(sid)"), 90, "the running session after a relaunch"))
     shot("after-relaunch")
+    el("srow-\(sid)").tap()
 
-    // ---- terminal: turned away → the grant page → Deny, then Allow with Face ID → a command runs ----
-    el("term-" + sid).tap()
-    try must(wait(el("term-in"), 30, "terminal page"))
-    if wait(el("term-allow"), 60, "the terminal asks for a grant") {
+    // ---- terminal: turned away → the grant review → Deny, then Allow with Face ID → a command runs ----
+    try must(wait(el("term-\(sid)"), 30, "Terminal"))
+    el("term-\(sid)").tap()
+    let allow = app.webViews.buttons["Allow terminal for 10 minutes"]
+    if wait(allow, 60, "the terminal asks for a grant") {
       shot("terminal-needs-grant")
-      el("term-allow").tap()
-      if wait(el("secure-grant-allow"), 30, "the grant page") {
-        shot("grant-page")
-        el("secure-back").tap() // Deny
-        XCTAssertTrue(wait(el("term-allow"), 20, "denied: still turned away"), "deny")
-        el("term-allow").tap()
-        wait(el("secure-grant-allow"), 30, "the grant page again")
+      allow.tap()
+      if arrives(el("secure-grant-allow"), 30, "the grant review") {
+        XCTAssertTrue(el("grant-meaning").label.contains("Terminal"), "the review names the feature")
+        shot("grant-review")
+        el("secure-back").tap()
+        XCTAssertTrue(wait(allow, 20, "denied: still turned away"), "deny")
+        allow.tap()
+        _ = arrives(el("secure-grant-allow"), 30, "the grant review again")
         faceIDMatches()
         el("secure-grant-allow").tap()
-        XCTAssertTrue(gone(el("secure-grant-allow"), 90), "the grant page closes after Face ID")
-        XCTAssertTrue(wait(el("term-in"), 30, "back on the terminal") && gone(el("term-allow"), 60), "allowed: the terminal opens")
+        XCTAssertTrue(gone(el("secure-grant-allow"), 90), "the review closes after Face ID")
+        XCTAssertTrue(gone(allow, 60), "allowed: the terminal opens")
       }
     }
-    // the session's screen is Claude Code's input (no Claude login on a test box): what is typed and sent shows on it
-    let marker = "replica\(Int.random(in: 1000...9999))"
-    el("term-in").tap()
-    for c in marker { el("term-in").typeText(String(c)) }   // one key at a time, as a thumb types
-    el("term-send").tap()
-    let out = app.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS %@", marker)).firstMatch
-    XCTAssertTrue(out.waitForExistence(timeout: 60), "what was typed shows on the session's screen")
-    shot("terminal-output")
-    background(3)
-    XCTAssertTrue(el("term-in").waitForExistence(timeout: 20), "the terminal survives backgrounding")
-    el("term-close").tap()
+    let input = app.webViews.textFields["Terminal input"].firstMatch
+    if wait(input, 30, "the terminal input") {
+      let marker = "replica\(Int.random(in: 1000...9999))"
+      input.tap()
+      for c in marker { input.typeText(String(c)) }
+      app.webViews.buttons["Send"].tap()
+      let out = app.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS %@", marker)).firstMatch
+      XCTAssertTrue(out.waitForExistence(timeout: 60), "what was typed shows on the session's screen")
+      shot("terminal-output")
+      background(3)
+      XCTAssertTrue(input.waitForExistence(timeout: 20), "the terminal survives backgrounding")
+    }
+    back()
 
-    // ---- the Inbox, from a session: jarvis2-request in the session's machine (the setup session runs it there)
-    // asks for a grant for itself → badge → Review → Deny; another → Allow with Face ID ----
+    // ---- the Inbox, from a session: deny one grant request, allow another with Face ID ----
     XCTAssertEqual(relay("inbox-session:\(sid):status"), "ok", "the session filed a grant request")
     if inboxReview("session-deny") {
       XCTAssertTrue(el("request-call").label.contains("session"), "the caller is the session: \(el("request-call").label)")
@@ -308,72 +235,73 @@ final class ReplicaUITests: XCTestCase {
     }
     XCTAssertEqual(relay("inbox-session:\(sid):archive"), "ok", "the session filed another")
     if inboxReview("session-allow") { inboxAllowed("session", button: "secure-grant-allow") }
-    el("tab-sessions").tap()
 
-    // ---- grants: More → Grants → a standing rule, then forget it ----
-    if wait(el("more-" + sid), 30, "more button") {
-      el("more-" + sid).tap()
-      if wait(el("menu-grants-"), 10, "menu grants") {
-        el("menu-grants-").tap()
-        if wait(el("grant-review"), 30, "grants page") {
-          shot("grants")
-          XCTAssertTrue(el("grant-forget-terminal").exists, "the terminal's grant is listed in force")
-          el("grant-holder-scheduler").tap()
-          el("grant-len-5").tap()
-          el("grant-review").tap()
-          if wait(el("secure-grant-allow"), 30, "the grant page (scheduler)") {
-            faceIDMatches()
-            el("secure-grant-allow").tap()
-            XCTAssertTrue(gone(el("secure-grant-allow"), 90), "the grant page closes after Face ID")
-            if wait(el("grant-forget-scheduler"), 60, "the scheduler's grant listed") {
-              shot("grants-two")
-              el("grant-forget-scheduler").tap()
-              if wait(el("ask-ok"), 10, "forget question") { el("ask-ok").tap() }
-              XCTAssertTrue(gone(el("grant-forget-scheduler"), 30), "forgotten")
-            }
+    // ---- grants: a 5-minute scheduler grant, then forget it ----
+    tab("Sessions")
+    if wait(el("srow-\(sid)"), 30, "the session") { el("srow-\(sid)").tap() }
+    if wait(el("grants-\(sid)"), 30, "Grants") {
+      el("grants-\(sid)").tap()
+      if wait(el("grant-review"), 30, "grants page") {
+        shot("grants")
+        XCTAssertTrue(el("grant-forget-terminal").exists, "the terminal's grant is listed in force")
+        pick("grant-holder", "Scheduler")
+        pick("grant-len", "5 min")
+        el("grant-review").tap()
+        if arrives(el("secure-grant-allow"), 30, "the grant review (scheduler)") {
+          faceIDMatches()
+          el("secure-grant-allow").tap()
+          XCTAssertTrue(gone(el("secure-grant-allow"), 90), "the review closes after Face ID")
+          if wait(el("grant-forget-scheduler"), 60, "the scheduler's grant listed") {
+            shot("grants-two")
+            el("grant-forget-scheduler").tap()
+            answer("Forget")
+            XCTAssertTrue(gone(el("grant-forget-scheduler"), 30), "forgotten")
           }
-          if el("page-back").exists { el("page-back").tap() }
         }
+        back()
       }
     }
 
-    // ---- settings + repos: add the throwaway repo (its deploy key made by the core on a Face ID), remove it ----
-    el("tab-settings").tap()
-    sleep(2); shot("settings")
+    // ---- repos: add the throwaway repo (its deploy key made by the core on a Face ID), the setup session asks to remove
+    // it (deny), remove it here, then the setup session asks to add it again (allow) ----
     let repo = env["REPLICA_REPO"] ?? ""
     let repoName = String(repo.split(separator: "/").last ?? "")
-    if !repo.isEmpty, wait(el("repo-url"), 30, "the repos card") {
-      el("repo-url").tap()
-      for c in repo + "\n" { el("repo-url").typeText(String(c)) }   // one key at a time (a burst into the URL keyboard reorders letters)
-      if wait(el("secure-repo-go"), 30, "the add-repo page") {
-        shot("repo-add")
-        faceIDMatches()
-        el("secure-repo-go").tap()
-        if wait(el("repo-key-" + repoName), 90, "the repo listed with its deploy key") {
-          shot("repo-added")
-          XCTAssertEqual(relay("repo-added"), "ok", "GitHub shows the repo's deploy key")
-          // the Inbox, from the setup session (Claude): it asks to remove the repo → Deny → the repo stays
-          XCTAssertEqual(relay("inbox-setup-remove"), "ok", "the setup session filed a remove request")
-          if inboxReview("setup-deny") {
-            XCTAssertTrue(el("request-call").label.contains("Claude"), "the caller is the setup session: \(el("request-call").label)")
-            inboxDeny("setup")
-          }
-          el("tab-settings").tap()
-          XCTAssertTrue(wait(el("repo-key-" + repoName), 30, "denied: the repo is still listed"), "deny kept the repo")
-          el("repo-remove-" + repoName).tap()
-          if wait(el("secure-repo-go"), 30, "the remove-repo page") {
-            faceIDMatches()
-            el("secure-repo-go").tap()
-            XCTAssertTrue(gone(el("repo-key-" + repoName), 90), "the repo is removed")
-            shot("repo-removed")
+    if !repo.isEmpty {
+      tab("Settings")
+      if wait(el("open-repos"), 30, "Repos") {
+        el("open-repos").tap()
+        if wait(el("repo-add"), 30, "Add repo") {
+          el("repo-add").tap()
+          let f = el("repo-url")
+          if wait(f, 30, "the repo field") {
+            f.tap(); slowType(f, repo + "\n")
+            if arrives(el("secure-repo-go"), 30, "the add-repo review") {
+              shot("repo-add")
+              faceIDMatches()
+              el("secure-repo-go").tap()
+              if wait(el("repo-key-" + repoName), 90, "the repo listed with its deploy key") {
+                shot("repo-added")
+                XCTAssertEqual(relay("repo-added"), "ok", "GitHub shows the repo's deploy key")
+                XCTAssertEqual(relay("inbox-setup-remove"), "ok", "the setup session filed a remove request")
+                if inboxReview("setup-deny") {
+                  XCTAssertTrue(el("request-call").label.contains("Claude"), "the caller is the setup session")
+                  inboxDeny("setup")
+                }
+                tab("Settings")
+                XCTAssertTrue(wait(el("repo-key-" + repoName), 30, "denied: the repo is still listed"), "deny kept the repo")
+                el("repo-remove-" + repoName).tap()
+                if arrives(el("secure-repo-go"), 30, "the remove-repo review") {
+                  faceIDMatches()
+                  el("secure-repo-go").tap()
+                  XCTAssertTrue(gone(el("repo-key-" + repoName), 90), "the repo is removed")
+                  shot("repo-removed")
+                }
+              }
+            }
           }
         }
-        if el("secure-error").exists { note("repo-error", el("secure-error").label) }
       }
-    }
-    XCTAssertEqual(relay("repo-check"), "ok", "GitHub shows the deploy key added and removed")
-    // the Inbox, from the setup session: it asks to add the repo again → Review → Add with Face ID → GitHub has the key
-    if !repo.isEmpty {
+      XCTAssertEqual(relay("repo-check"), "ok", "GitHub shows the deploy key added and removed")
       XCTAssertEqual(relay("inbox-setup-add"), "ok", "the setup session filed an add request")
       if inboxReview("setup-allow") {
         XCTAssertTrue(el("request-signed").label.contains(repo), "what is signed names the repo")
@@ -382,63 +310,49 @@ final class ReplicaUITests: XCTestCase {
       }
     }
 
-    // ---- a session stuck at boot (its store locked again right after Create) is destroyed at once ----
-    el("tab-sessions").tap()
-    _ = wait(el("newBtn"), 30, "sessions tab")
-    do {
-      if openNewSession() {
-        if wait(el("secure-store-rh-secret"), 30, "rh-secret offered") { el("secure-store-rh-secret").tap() }
-        faceIDMatches(90)
-        el("secure-create").tap()
-        _ = wait(el("newBtn"), 120, "back on the list")
-        // lock it before the machine boots (the image pull takes a minute or more)
-        el("tab-stores").tap()
-        if wait(el("stores-manage"), 30, "stores tab (stuck)") {
-          el("stores-manage").tap()
-          if wait(el("lock-rh-secret"), 30, "rh-secret unlocked by the new session") { el("lock-rh-secret").tap(); _ = gone(el("lock-rh-secret"), 30) }
-          el("secure-back").tap()
+    // ---- a session stuck at boot (its store locked again right after Start) is destroyed at once ----
+    if openNewSession() {
+      if wait(el("secure-store-rh-secret"), 30, "rh-secret offered") { el("secure-store-rh-secret").tap() }
+      faceIDMatches(90)
+      el("secure-create").tap()
+      _ = arrives(el("newBtn"), 120, "back on the list")
+      openStores()
+      if wait(el("lock-rh-secret"), 30, "rh-secret unlocked by the new session") { el("lock-rh-secret").tap(); _ = gone(el("lock-rh-secret"), 30) }
+      back()
+      tab("Sessions")
+      sleep(150)
+      shot("stuck-session")
+      let others = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH 'srow-' AND identifier != %@", "srow-" + sid))
+      if others.count > 0 {
+        let stuck = others.firstMatch
+        let stuckSid = String(stuck.identifier.dropFirst("srow-".count))
+        stuck.tap()
+        if wait(el("destroy-\(stuckSid)"), 20, "Destroy (stuck)") {
+          el("destroy-\(stuckSid)").tap()
+          answer("Destroy session", timeout: 30)
+          let t0 = Date()
+          let wait10 = app.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS 'up to 10 min'")).firstMatch
+          if wait10.waitForExistence(timeout: 5) { XCTFail("a never-booted session's destroy waits for a snapshot: \(wait10.label)") }
+          XCTAssertTrue(gone(el("srow-\(stuckSid)"), 90), "a session stuck at boot is destroyed within 90 s")
+          note("stuck-destroy-seconds", "\(Int(Date().timeIntervalSince(t0)))")
+          shot("stuck-destroyed")
         }
-        el("tab-sessions").tap()
-        sleep(150) // the machine boots and loops on the locked store
-        shot("stuck-session")
-        let mores = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH 'more-' AND identifier != %@", "more-" + sid))
-        if mores.count > 0 {
-          let stuck = mores.firstMatch.identifier
-          el(stuck).tap()
-          // the card re-renders every 2 s while the machine loops on its locked store; a tap that lands mid-render was
-          // lost twice in a row (2026-10-11 replica): note it and tap again, as a thumb would
-          if !el("menu-destroy").waitForExistence(timeout: 5) { note("stuck-more-retap", "the first tap on More opened no menu"); el(stuck).tap() }
-          if wait(el("menu-destroy"), 10, "destroy (stuck)") {
-            el("menu-destroy").tap()
-            if wait(el("ask-ok"), 30, "destroy question (stuck)") { el("ask-ok").tap() }
-            let t0 = Date()
-            // the whole card: anything naming the session (its buttons, its title)
-            let stuckSid = String(stuck.dropFirst(5))
-            let card = app.descendants(matching: .any).matching(NSPredicate(format: "identifier CONTAINS %@ OR label CONTAINS %@", stuckSid, stuckSid)).firstMatch
-            let wait10 = app.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS 'up to 10 min'")).firstMatch
-            if wait10.waitForExistence(timeout: 5) { XCTFail("a never-booted session's destroy waits for a snapshot: \(wait10.label)") }
-            XCTAssertTrue(gone(card, 90), "a session stuck at boot is destroyed within 90 s")
-            note("stuck-destroy-seconds", "\(Int(Date().timeIntervalSince(t0)))")
-            shot("stuck-destroyed")
-          }
-        } else { XCTFail("no second session to destroy") }
-      }
+      } else { XCTFail("no second session to destroy") }
     }
 
-    // ---- destroy the running session (it would end with the Recover anyway) ----
-    if wait(el("more-" + sid), 30, "more button (destroy)") {
-      el("more-" + sid).tap()
-      if wait(el("menu-destroy"), 10, "menu destroy") {
-        el("menu-destroy").tap()
-        if wait(el("ask-ok"), 60, "destroy question") { el("ask-ok").tap() }
-        let pill = app.descendants(matching: .any).matching(NSPredicate(format: "label BEGINSWITH 'destroying'")).firstMatch
-        if pill.waitForExistence(timeout: 20) { note("destroy-pill", pill.label); shot("destroying") }
-        XCTAssertTrue(gone(el("more-" + sid), 900), "the session is destroyed")
+    // ---- destroy the running session ----
+    tab("Sessions")
+    if wait(el("srow-\(sid)"), 30, "the running session") {
+      el("srow-\(sid)").tap()
+      if wait(el("destroy-\(sid)"), 20, "Destroy") {
+        el("destroy-\(sid)").tap()
+        answer("Destroy session", timeout: 60)
+        XCTAssertTrue(gone(el("srow-\(sid)"), 900), "the session is destroyed")
       }
     }
 
     // ---- Recover with the kit: Settings → Reset or recover → Recover (restart) → every store back ----
-    el("tab-settings").tap()
+    tab("Settings")
     if wait(el("open-setup"), 30, "Reset or recover in Settings") {
       el("open-setup").tap()
       try must(wait(el("setup-choose-recover"), 60, "the setup page (set up: mine)"))
@@ -449,23 +363,21 @@ final class ReplicaUITests: XCTestCase {
       el("setup-recover-go").tap()
       if wait(el("setup-restart-confirm"), 30, "restart and recover") {
         shot("setup-restart")
+        faceIDMatches(120)
         el("setup-restart-confirm").tap()
       }
       try must(wait(el("setup-done"), 600, "recovered"))
       shot("setup-recovered")
       el("secure-back").tap()
-      el("tab-stores").tap()
-      if wait(el("stores-manage"), 30, "stores after Recover") {
-        el("stores-manage").tap()
-        wait(el("unlock-rh-plain"), 60, "rh-plain back")
-        XCTAssertTrue(el("mark-rh-plain").exists, "rh-plain came back not sensitive")
-        XCTAssertTrue(el("unlock-rh-secret").exists && !el("mark-rh-secret").exists, "rh-secret came back sensitive")
+      openStores()
+      if wait(el("unlock-rh-plain"), 60, "rh-plain back") {
+        XCTAssertFalse(el("sensitive-rh-plain").exists, "rh-plain came back not sensitive")
+        XCTAssertTrue(el("sensitive-rh-secret").exists, "rh-secret came back sensitive")
         shot("stores-recovered")
-        el("secure-back").tap()
       }
     }
     relaunch()
-    XCTAssertTrue(el("tab-sessions").waitForExistence(timeout: 90), "the app opens after the Recover and a relaunch")
+    XCTAssertTrue(app.tabBars.buttons["Sessions"].waitForExistence(timeout: 90), "the app opens after the Recover and a relaunch")
     shot("end")
     XCTAssertEqual(relay("done"), "ok")
   }

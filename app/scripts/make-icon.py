@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Draw the Jarvis 2 app icon (the Jarvis arc-reactor ring with a "2" at its centre in place of the triangle and
-core) -> assets/icon.png (app.json "icon") and ios/Shell/Assets.xcassets/AppIcon.appiconset/icon.png (what the
+core) -> assets/icon.png (app.json "icon") and ../ios/Jarvis2/Assets.xcassets/AppIcon.appiconset/icon.png (the native
 native build actually uses). The "2" is drawn as strokes (no font file), so it renders the same anywhere.
 1024x1024 RGB, no alpha (App Store rejects alpha). Rendered at 2x and downsampled for smooth edges.
 The web favicon is the ring (with its 2) alone on a transparent background, no square tile:
@@ -43,7 +43,7 @@ img.paste(glow, (0, 0), glow.convert("L").point(lambda v: 255 if v > 20 else 0))
 img = img.resize((1024, 1024), Image.LANCZOS).convert("RGB")
 out = os.path.join(os.path.dirname(__file__), "..", "assets", "icon.png")
 img.save(out, optimize=True); print("wrote", os.path.normpath(out))
-img.save(os.path.join(os.path.dirname(__file__), "..", "ios", "Shell", "Assets.xcassets", "AppIcon.appiconset", "icon.png"), optimize=True)
+img.save(os.path.join(os.path.dirname(__file__), "..", "..", "ios", "Jarvis2", "Assets.xcassets", "AppIcon.appiconset", "icon.png"), optimize=True)
 # favicons: the ring alone — its shapes plus their soft glow as alpha — cropped to the ring
 ringimg = Image.new("RGBA", (S, S), (0, 0, 0, 0))
 # the glow in the ring's own cyan (its blurred RGB would show as a grey smudge on a light tab bar)

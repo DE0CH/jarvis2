@@ -1,101 +1,78 @@
 name: transitions
-# Records the simulator's screen while UITests/TransitionsUITests.swift walks every switch between the React
-# Native extension and the shell's secure pages (enter, Back, a finished action, launch, after a background),
-# once in light and once in dark, against the real core + router on the runner (as app.yml's walkthrough).
-# Then TransitionsUITests/testBackStress (UITests/BackStress.swift): Back and the edge swipe from every secure page
-# under stress (loops, Back during the entry, background, memory warning, the extension killed or slow, via the
-# runner's helper ci/replica-host.py); it fails on a blank screen over 1.5 s.
-# The videos are the artifact: cut them into frames per transition with app/ios/ci/transition-frames.sh.
-# Run by hand (workflow_dispatch) or when the shell's or the test's code changes.
+# Records the simulator's screen while UITests/TransitionsUITests.swift walks every navigation of the native app: each
+# tab, each push and pop (the edge swipe too), each sheet in and out (the Face ID reviews, New session, Reset or
+# recover), background and back, a relaunch; light and dark. Against the real core + router on the runner (as ios.yml's
+# walkthrough). A step fails when the screen stays blank (no navigation bar, tab bar or sheet content, or a near-uniform
+# screenshot) for over 1.5 s. The videos and screenshots are the artifact.
 on:
   workflow_dispatch:
   push:
-    paths: [app/ios/Shell/**, app/ios/Extension/**, app/ios/Shared/**, app/ios/UITests/TransitionsUITests.swift, app/ios/UITests/BackStress.swift, app/ios/ci/replica-host.py, app/src/lib/shell.native.ts, .github/workflows/transitions.yml]
+    paths: [ios/Jarvis2/App/**, ios/Jarvis2/Review/**, ios/Jarvis2/Setup/**, ios/UITests/TransitionsUITests.swift, ios/UITests/UITestKit.swift, .github/workflows/transitions.yml]
 concurrency:
   group: transitions-${{ github.ref }}
   cancel-in-progress: false
 jobs:
   record:
     runs-on: xcode-27
-    timeout-minutes: 150
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with: { node-version: 22 }
       - uses: actions/setup-go@v5
         with: { go-version: "1.25" }
       - name: stand-ins
         run: |
           W="$RUNNER_TEMP/w"
-          NO_CORE=1 bash app/ios/ci/standins.sh "$W"
+          NO_CORE=1 bash ios/ci/standins.sh "$W"
           mkdir -p out
           echo '{"harnesses":{"claude":{"stores":["claude-login"]},"opencode":{"stores":[]}}}' > "$W/policy.json"
-      - name: Install + JS bundle
-        working-directory: app
-        run: |
-          npm ci --no-audit --no-fund
-          mkdir -p ios/Extension/res
-          npx expo export:embed --platform ios --dev false --entry-file node_modules/expo-router/entry.js \
-            --bundle-output ios/Extension/main.jsbundle --assets-dest ios/Extension/res
-          mkdir -p ios/Extension/res/assets
       - run: brew install xcodegen
-      - name: Generate project + pods
-        working-directory: app/ios
-        run: xcodegen generate && pod install
       - name: Xcode 27.0 and a booted iPhone 17 (iPhone18,3) on iOS 27.0, as Deyao's phone
         uses: ./.github/actions/ios-simulator
-      - name: Stream logs
-        run: |
-          mkdir -p out
-          nohup xcrun simctl spawn "$SIM_UDID" log stream --style compact --level debug \
-            --predicate 'process == "JarvisUI" OR process == "Jarvis2"' > out/sim.log 2>&1 &
       - name: Build for testing
-        working-directory: app/ios
+        working-directory: ios
         run: |
+          xcodegen generate
           set -o pipefail
-          xcodebuild build-for-testing -workspace Jarvis2.xcworkspace -scheme Jarvis2 \
-            -destination "id=$SIM_UDID" -derivedDataPath ../../dd \
+          xcodebuild build-for-testing -project Jarvis2.xcodeproj -scheme Jarvis2 \
+            -destination "id=$SIM_UDID" -derivedDataPath ../dd \
             JARVIS_BASE=http://127.0.0.1:18080/ JARVIS_CI_FLAG=JARVIS_CI JARVIS_CI_KEYS_BASE=http://127.0.0.1:18099/ \
-            2>&1 | tee ../../xcodebuild.log | grep -E "error:|\*\* " || true
-          grep -q "TEST BUILD SUCCEEDED" ../../xcodebuild.log
-      - name: Record, light then dark, then the Back stress
+            2>&1 | tee ../xcodebuild.log | grep -E "error:|\*\* " || true
+          grep -q "TEST BUILD SUCCEEDED" ../xcodebuild.log
+      - name: Record, light then dark
         run: |
           W="$RUNNER_TEMP/w"
-          nohup python3 app/ios/ci/replica-host.py "$SIM_UDID" - > out/host.log 2>&1 &
+          nohup python3 ios/ci/replica-host.py "$SIM_UDID" - > out/host.log 2>&1 &
           kit="jarvis2-kit:2:$(openssl pkcs8 -topk8 -nocrypt -in e2e/testdata/master-test.pem -outform DER | base64 | tr -d '\n')"
           ok=0
-          for run in light dark stress; do
-            a=$run; t=testTransitions
-            [ $run = stress ] && { a=light; t=testBackStress; }
+          for a in light dark; do
             kill $(cat "$W/core.pid" "$W/router.pid" 2>/dev/null) 2>/dev/null || true; pkill -x core || true; sleep 1
-            rm -rf data-$run && mkdir -p data-$run
-            (nohup "$W/core-loop.sh" "$PWD/out/core-$run.log" > /dev/null 2>&1 & echo $! > "$W/core.pid")
+            rm -rf data-$a && mkdir -p data-$a
+            (nohup "$W/core-loop.sh" "$PWD/out/core-$a.log" > /dev/null 2>&1 & echo $! > "$W/core.pid")
             for i in $(seq 30); do curl -sf http://127.0.0.1:8090/key > /dev/null && break; sleep 1; done
             (set -a; . "$W/router-backup.env"; set +a
-             NO_ACCESS=1 SETUP_KEY="$(cat "$W/keys/setup.pub")" CORE_URL=http://127.0.0.1:8090 DATA_DIR=$PWD/data-$run WEB_DIR=$PWD/web TASKS_DIR=$PWD/tasks SNAPSHOT_WAIT_SECONDS=2 POLICY_FILE="$W/policy.json" \
-              SESSION_IMAGE=ghcr.io/de0ch/jarvis2-session:ci@sha256:0000000000000000000000000000000000000000000000000000000000000000 ADDR=127.0.0.1:18080 MACHINE_ADDR=127.0.0.1:18081 nohup "$W/router" > out/router-$run.log 2>&1 & echo $! > "$W/router.pid")
+             NO_ACCESS=1 SETUP_KEY="$(cat "$W/keys/setup.pub")" CORE_URL=http://127.0.0.1:8090 DATA_DIR=$PWD/data-$a WEB_DIR=$PWD/web TASKS_DIR=$PWD/tasks SNAPSHOT_WAIT_SECONDS=2 POLICY_FILE="$W/policy.json" \
+              SESSION_IMAGE=ghcr.io/de0ch/jarvis2-session:ci@sha256:0000000000000000000000000000000000000000000000000000000000000000 ADDR=127.0.0.1:18080 MACHINE_ADDR=127.0.0.1:18081 nohup "$W/router" > out/router-$a.log 2>&1 & echo $! > "$W/router.pid")
             sleep 2
             xcrun simctl keychain "$SIM_UDID" reset
             xcrun simctl uninstall "$SIM_UDID" dev.de0ch.jarvis2 || true
             xcrun simctl ui "$SIM_UDID" appearance $a
-            date +%s.%N > out/video-$run.start
-            xcrun simctl io "$SIM_UDID" recordVideo --codec=h264 --force out/transitions-$run.mov > out/record-$run.log 2>&1 &
+            xcrun simctl io "$SIM_UDID" recordVideo --codec=h264 --force out/transitions-$a.mov > out/record-$a.log 2>&1 &
             rec=$!
             sleep 2
-            (cd app/ios && TEST_RUNNER_JARVIS2_KIT="$kit" \
-              xcodebuild test-without-building -workspace Jarvis2.xcworkspace -scheme Jarvis2 \
-              -only-testing:Jarvis2UITests/TransitionsUITests/$t \
-              -destination "id=$SIM_UDID" -derivedDataPath ../../dd \
-              -resultBundlePath ../../result-$run.xcresult 2>&1 | tee ../../test-$run.log | grep -E "error:|Test Case|\*\* " || true)
+            (cd ios && TEST_RUNNER_JARVIS2_KIT="$kit" TEST_RUNNER_JARVIS2_APPEARANCE=$a \
+              xcodebuild test-without-building -project Jarvis2.xcodeproj -scheme Jarvis2 \
+              -only-testing:Jarvis2UITests/TransitionsUITests/testTransitions \
+              -destination "id=$SIM_UDID" -derivedDataPath ../dd \
+              -resultBundlePath ../result-$a.xcresult 2>&1 | tee ../test-$a.log | grep -E "error:|Test Case|\*\* " || true)
             kill -INT $rec; wait $rec || true
-            grep -q "TEST EXECUTE SUCCEEDED\|\*\* TEST SUCCEEDED" test-$run.log || ok=1
+            grep -q "TEST EXECUTE SUCCEEDED\|\*\* TEST SUCCEEDED" test-$a.log || ok=1
           done
           exit $ok
       - name: Export results
         if: always()
         run: |
-          for a in light dark stress; do mkdir -p out/$a; xcrun xcresulttool export attachments --path result-$a.xcresult --output-path out/$a || true; done
-          mkdir -p out/crash; find ~/Library/Logs/DiagnosticReports -newer app/package.json -name "*.ips" -exec cp {} out/crash/ \; 2>/dev/null || true
+          for a in light dark; do mkdir -p out/$a; xcrun xcresulttool export attachments --path result-$a.xcresult --output-path out/$a || true; done
+          mkdir -p out/crash; find ~/Library/Logs/DiagnosticReports -newer ios/project.yml -name "*.ips" -exec cp {} out/crash/ \; 2>/dev/null || true
           cat test-*.log > out/test.log 2>/dev/null || true
           grep -n "error:" xcodebuild.log | head -100 > out/errors.txt || true
       - uses: actions/upload-artifact@v4

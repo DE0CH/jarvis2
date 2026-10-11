@@ -1,0 +1,21 @@
+name: web
+# The Jarvis 2 web page (app/, an Expo app exported for the web only): typecheck and export; the router serves ../web at /.
+on:
+  push:
+    paths: [app/**, .github/workflows/web.yml]
+  workflow_dispatch:
+jobs:
+  web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - name: typecheck + web export
+        working-directory: app
+        run: |
+          npm ci --no-audit --no-fund
+          npx tsc --noEmit
+          npx expo export --platform web --output-dir ../web
+      - uses: actions/upload-artifact@v4
+        with: { name: web, path: web }

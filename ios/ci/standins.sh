@@ -10,12 +10,12 @@
 #     Unless NO_CORE=1 the core (:8090, empty) and a router (:18080, reading the stand-in bucket) are started.
 # usage: standins.sh W
 set -euo pipefail
-W="$1"; ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
+W="$1"; ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 mkdir -p "$W"
 python3 -m venv "$W/venv" && "$W/venv/bin/pip" -q install cryptography boto3
 command -v rclone >/dev/null || brew install rclone
 PY="$W/venv/bin/python -B"
-$PY "$ROOT/app/ios/ci/standin.py" keys "$W"
+$PY "$ROOT/ios/ci/standin.py" keys "$W"
 
 secret=$(openssl rand -hex 16)
 printf 'ACCESS_KEY=ciaccess\nSECRET_KEY=%s\n' "$secret" > "$W/s3.env"
@@ -24,7 +24,7 @@ nohup rclone serve s3 --addr 127.0.0.1:18098 --auth-key "ciaccess,$secret" "$W/s
 nohup "$W/venv/bin/python" -m http.server --bind 127.0.0.1 --directory "$W/keys" 18099 > "$W/keys-server.log" 2>&1 &
 for i in $(seq 30); do curl -s -o /dev/null http://127.0.0.1:18098/ && curl -sf -o /dev/null http://127.0.0.1:18099/box.pub && break; sleep 1; done
 HETZNER_S3_ENDPOINT=http://127.0.0.1:18098 HETZNER_S3_REGION=fsn1 HETZNER_S3_ACCESS_KEY=ciaccess HETZNER_S3_SECRET_KEY="$secret" \
-  $PY "$ROOT/app/ios/ci/standin.py" seed "$W"
+  $PY "$ROOT/ios/ci/standin.py" seed "$W"
 
 (cd "$ROOT/core" && go build -tags fakefly -o "$W/core" .)
 (cd "$ROOT/router" && go build -o "$W/router" .)

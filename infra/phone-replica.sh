@@ -2,7 +2,7 @@
 # phone-replica.sh — the phone replica, one command: a throwaway box (infra/rehearsal-box.sh, MODE=replica: Access as
 # in production, one email login + the /setup service token), the app's RELEASE build on the simulator closest to
 # Deyao's iPhone on a free GitHub macOS runner (.github/workflows/replica.yml), every user flow tapped by
-# app/ios/UITests/ReplicaUITests.swift against that box and real Fly sessions, then teardown. The gate before
+# ios/UITests/ReplicaUITests.swift against that box and real Fly sessions, then teardown. The gate before
 # shipping a TestFlight build (docs/RUNBOOK.md "The phone replica").
 #
 # This script is the setup session and the person's mailbox around the phone, answering the UI test through a piping

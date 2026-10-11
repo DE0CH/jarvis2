@@ -1,6 +1,6 @@
 name: replica
-# The phone replica (infra/phone-replica.sh starts it): the app's RELEASE build (the TestFlight configuration, shell and
-# React Native extension; only the router address and the keys' git ref point at the throwaway box) on the simulator
+# The phone replica (infra/phone-replica.sh starts it): the app's RELEASE build (the TestFlight configuration of the native
+# SwiftUI app in ios/; only the router address and the keys' git ref point at the throwaway box) on the simulator
 # matching Deyao's iPhone (iPhone 17 = iPhone18,3, iOS 27.0, Xcode 27.0: .github/actions/ios-simulator, pinned),
 # with Face ID enrolled and every flow tapped by ReplicaUITests against the real box and real Fly sessions. The video,
 # screenshots and logs are the run's artifact `replica`.
@@ -29,50 +29,40 @@ jobs:
       - name: Record the device
         run: |
           mkdir -p out && echo "device: $SIM_DEVICE" | tee out/device.txt
-      - name: Install + JS bundle (as for TestFlight)
-        working-directory: app
-        run: |
-          npm ci --no-audit --no-fund
-          mkdir -p ios/Extension/res
-          npx expo export:embed --platform ios --dev false --entry-file node_modules/expo-router/entry.js \
-            --bundle-output ios/Extension/main.jsbundle --assets-dest ios/Extension/res
-          mkdir -p ios/Extension/res/assets
       - run: brew install xcodegen
-      - name: Generate project + pods
-        working-directory: app/ios
-        run: xcodegen generate && pod install
       - name: Enrol Face ID, stream logs
         run: |
           xcrun simctl spawn "$SIM_UDID" notifyutil -s com.apple.BiometricKit.enrollmentChanged 1
           xcrun simctl spawn "$SIM_UDID" notifyutil -p com.apple.BiometricKit.enrollmentChanged
           nohup xcrun simctl spawn "$SIM_UDID" log stream --style compact --level debug \
-            --predicate 'process == "JarvisUI" OR process == "Jarvis2"' > out/sim.log 2>&1 &
+            --predicate 'process == "Jarvis2"' > out/sim.log 2>&1 &
       - name: Build for testing (Release; the box's router and keys ref only)
-        working-directory: app/ios
+        working-directory: ios
         env:
           BASE: ${{ inputs.base }}
           KEYS_REF: ${{ inputs.keys_ref }}
         run: |
+          xcodegen generate
           set -o pipefail
-          xcodebuild build-for-testing -workspace Jarvis2.xcworkspace -scheme Jarvis2 -configuration Release \
-            -destination "id=$SIM_UDID" -derivedDataPath ../../dd \
+          xcodebuild build-for-testing -project Jarvis2.xcodeproj -scheme Jarvis2 -configuration Release \
+            -destination "id=$SIM_UDID" -derivedDataPath ../dd \
             JARVIS_BASE="$BASE" JARVIS_KEYS_REF="$KEYS_REF" \
-            2>&1 | tee ../../xcodebuild.log | grep -E "error:|\*\* " || true
-          grep -q "TEST BUILD SUCCEEDED" ../../xcodebuild.log
+            2>&1 | tee ../xcodebuild.log | grep -E "error:|\*\* " || true
+          grep -q "TEST BUILD SUCCEEDED" ../xcodebuild.log
       - name: Every flow (video + screenshots)
         env:
           RELAY: ${{ inputs.relay }}
           EMAIL: ${{ inputs.email }}
           REPO: ${{ inputs.repo }}
         run: |
-          nohup python3 app/ios/ci/replica-host.py "$SIM_UDID" "$RELAY" > out/host.log 2>&1 &
+          nohup python3 ios/ci/replica-host.py "$SIM_UDID" "$RELAY" > out/host.log 2>&1 &
           sleep 1
           nohup xcrun simctl io "$SIM_UDID" recordVideo --codec=h264 --force out/replica.mp4 > out/video.log 2>&1 &
           VP=$!
-          (cd app/ios && TEST_RUNNER_REPLICA_EMAIL="$EMAIL" TEST_RUNNER_REPLICA_REPO="$REPO" \
-            xcodebuild test-without-building -workspace Jarvis2.xcworkspace -scheme Jarvis2 -configuration Release \
-            -only-testing:Jarvis2UITests/ReplicaUITests/testReplica -destination "id=$SIM_UDID" -derivedDataPath ../../dd \
-            -resultBundlePath ../../replica.xcresult 2>&1 | tee ../../test.log | grep -E "error:|Test Case|\*\* " || true)
+          (cd ios && TEST_RUNNER_REPLICA_EMAIL="$EMAIL" TEST_RUNNER_REPLICA_REPO="$REPO" \
+            xcodebuild test-without-building -project Jarvis2.xcodeproj -scheme Jarvis2 -configuration Release \
+            -only-testing:Jarvis2UITests/ReplicaUITests/testReplica -destination "id=$SIM_UDID" -derivedDataPath ../dd \
+            -resultBundlePath ../replica.xcresult 2>&1 | tee ../test.log | grep -E "error:|Test Case|\*\* " || true)
           kill -INT $VP; sleep 5
           grep -q "TEST EXECUTE SUCCEEDED\|\*\* TEST SUCCEEDED" test.log
       - name: Export results
@@ -83,7 +73,7 @@ jobs:
           cp test.log out/ 2>/dev/null || true
           grep -n "error:" xcodebuild.log | head -100 > out/build-errors.txt || true
           mkdir -p out/crash
-          find ~/Library/Logs/DiagnosticReports -newer app/package.json -name "*.ips" -exec cp {} out/crash/ \; 2>/dev/null || true
+          find ~/Library/Logs/DiagnosticReports -newer ios/project.yml -name "*.ips" -exec cp {} out/crash/ \; 2>/dev/null || true
       - uses: actions/upload-artifact@v4
         if: always()
         with: { name: replica, path: out }

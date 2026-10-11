@@ -1,10 +1,11 @@
-name: app
-# The Jarvis 2 app (app/): the web export, the shell's crypto against the real core, the iOS app on a
-# simulator walked end to end against the REAL core (fakefly build) and router running on the runner,
-# and — on main — a TestFlight build (cloud-signed with the App Store Connect API key).
+name: ios
+# The Jarvis 2 iPhone/iPad app (ios/, native SwiftUI): compile (Release and CI flavours), the app's crypto against the
+# real core, the simulator walkthrough against the REAL core (fakefly build) and router on the runner, and on main a
+# TestFlight build (archived unsigned, cloud-signed at export with the App Store Connect API key; lessons/75), gated on
+# a passing phone replica of the same ios/.
 on:
   push:
-    paths: [app/**, core/**, router/**, tasks/**, infra/setup.py, e2e/testdata/**, policy/**, .github/workflows/app.yml]
+    paths: [ios/**, core/**, router/**, tasks/**, infra/setup.py, e2e/testdata/**, policy/**, .github/workflows/ios.yml]
   workflow_dispatch:
     inputs:
       only:
@@ -13,45 +14,52 @@ on:
         options: [all, testflight]
         default: all
       replica_gate:
-        description: "the phone replica gate (a passing replica run on this app); skip only to ship without it"
+        description: "the phone replica gate (a passing replica run on this ios/); skip only to ship without it"
         type: choice
         options: [require, skip]
         default: require
 concurrency:
-  group: app-${{ github.ref }}-${{ github.event_name }}
+  group: ios-${{ github.ref }}-${{ github.event_name }}
   cancel-in-progress: false
 jobs:
-  web:
+  compile:
     if: inputs.only != 'testflight'
-    runs-on: ubuntu-latest
+    runs-on: macos-26
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with: { node-version: 22 }
-      - name: typecheck + web export (the router serves ../web at /)
-        working-directory: app
+      - run: brew install xcodegen
+      - name: Build, Release and CI flavours (fails in minutes, before the stand-ins)
+        working-directory: ios
         run: |
-          npm ci --no-audit --no-fund
-          npx tsc --noEmit
-          npx expo export --platform web --output-dir ../web
+          xcodegen generate
+          set -o pipefail
+          ok=0
+          for f in "" JARVIS_CI; do
+            xcodebuild build -project Jarvis2.xcodeproj -scheme Jarvis2 -configuration Release -destination 'generic/platform=iOS Simulator' \
+              -derivedDataPath ../dd-$f CODE_SIGNING_ALLOWED=NO JARVIS_CI_FLAG=$f 2>&1 | tee ../build-$f.log | grep -E "error:|warning: .*(deprecated|concurren)|\*\* " || true
+            grep -q "BUILD SUCCEEDED" ../build-$f.log || ok=1
+          done
+          exit $ok
+      - if: always()
+        run: grep -h "error:" build-*.log | sort -u | head -200 > errors.txt || true
       - uses: actions/upload-artifact@v4
-        with: { name: web, path: web }
+        if: always()
+        with: { name: compile, path: "*.txt" }
 
   interop:
     if: inputs.only != 'testflight'
-    # Shell/CoreCrypto.swift + Shell/CoreSetup.swift (CryptoKit) against the real Go core (fakefly, a throwaway
-    # box key) and the backups as a real router serves them from a local S3 stand-in (rclone serve s3, which checks
-    # SigV4) seeded by infra/setup.py's own code: identity + state, the kit string, the backups, Recover with the
-    # public TEST master key, stores, unlock, approvals, the Fly token, the wipe, refusals
+    # Security/CoreCrypto.swift + CoreSetup.swift + SignedAction.swift (CryptoKit) against the real Go core (fakefly, a
+    # throwaway box key) and the backups as a real router serves them from a local S3 stand-in seeded by infra/setup.py
     runs-on: macos-26
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with: { go-version: "1.25" }
       - name: stand-ins (keys, S3 with seeded backups, core, router)
-        run: bash app/ios/ci/standins.sh "$RUNNER_TEMP/w"
+        run: bash ios/ci/standins.sh "$RUNNER_TEMP/w"
       - name: swift run Interop
-        working-directory: app/ios/interop
+        working-directory: ios/interop
         run: |
           W="$RUNNER_TEMP/w"
           INTEROP_CORE=http://127.0.0.1:8090 INTEROP_ROUTER=http://127.0.0.1:18080 INTEROP_KEYS="$W/keys" INTEROP_BACKUPS="$W/backups.json" \
@@ -61,59 +69,38 @@ jobs:
 
   simulator:
     if: inputs.only != 'testflight'
+    needs: compile
     runs-on: xcode-27
     timeout-minutes: 150
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with: { node-version: 22 }
       - uses: actions/setup-go@v5
         with: { go-version: "1.25" }
-      - name: typecheck the shell first (fails in a minute, not after the pods build) — release and CI flavours
-        working-directory: app/ios
-        run: |
-          for d in "" "-D JARVIS_CI"; do
-            xcrun -sdk iphonesimulator swiftc -typecheck -parse-as-library -swift-version 5 $d \
-              -target arm64-apple-ios26.0-simulator Shell/*.swift Shared/*.swift
-          done
       - name: stand-ins (keys + their server, S3 with seeded backups, the core and router binaries)
         run: |
           W="$RUNNER_TEMP/w"
-          NO_CORE=1 bash app/ios/ci/standins.sh "$W"
+          NO_CORE=1 bash ios/ci/standins.sh "$W"
           mkdir -p out
-          # the test policy: the claude harness brings claude-login (hidden in the app's pickers)
+          # the test policy: the claude harness brings claude-login
           echo '{"harnesses":{"claude":{"stores":["claude-login"]},"opencode":{"stores":[]}}}' > "$W/policy.json"
-      - name: Install
-        working-directory: app
-        run: npm ci --no-audit --no-fund
-      - name: JS bundle (runs inside the extension)
-        working-directory: app
-        run: |
-          mkdir -p ios/Extension/res
-          npx expo export:embed --platform ios --dev false --entry-file node_modules/expo-router/entry.js \
-            --bundle-output ios/Extension/main.jsbundle --assets-dest ios/Extension/res
-          mkdir -p ios/Extension/res/assets && ls -la ios/Extension/main.jsbundle
       - run: brew install xcodegen
-      - name: Generate project + pods
-        working-directory: app/ios
-        run: xcodegen generate && pod install
       - name: Xcode 27.0 and a booted iPhone 17 (iPhone18,3) on iOS 27.0, as Deyao's phone
         uses: ./.github/actions/ios-simulator
       - name: Stream logs
         run: |
           mkdir -p out
-          nohup xcrun simctl spawn "$SIM_UDID" log stream --style compact --level debug \
-            --predicate 'process == "JarvisUI" OR process == "Jarvis2"' > out/sim.log 2>&1 &
-      - name: Build for testing (the shell talks to the router, the key server and the S3 stand-in on the runner)
-        working-directory: app/ios
+          nohup xcrun simctl spawn "$SIM_UDID" log stream --style compact --level debug --predicate 'process == "Jarvis2"' > out/sim.log 2>&1 &
+      - name: Build for testing (the app talks to the router, the key server and the S3 stand-in on the runner)
+        working-directory: ios
         run: |
+          xcodegen generate
           set -o pipefail
-          xcodebuild build-for-testing -workspace Jarvis2.xcworkspace -scheme Jarvis2 \
-            -destination "id=$SIM_UDID" -derivedDataPath ../../dd \
+          xcodebuild build-for-testing -project Jarvis2.xcodeproj -scheme Jarvis2 \
+            -destination "id=$SIM_UDID" -derivedDataPath ../dd \
             JARVIS_BASE=http://127.0.0.1:18080/ JARVIS_CI_FLAG=JARVIS_CI JARVIS_CI_KEYS_BASE=http://127.0.0.1:18099/ \
-            2>&1 | tee ../../xcodebuild.log | grep -E "error:|\*\* " || true
-          grep -q "TEST BUILD SUCCEEDED" ../../xcodebuild.log
-      - name: UI test, light then dark (fresh core, router and keychain each time)
+            2>&1 | tee ../xcodebuild.log | grep -E "error:|\*\* " || true
+          grep -q "TEST BUILD SUCCEEDED" ../xcodebuild.log
+      - name: UI test, light then dark (fresh core, router and keychain each time), recorded
         run: |
           W="$RUNNER_TEMP/w"
           # the kit the walkthrough recovers with: the public TEST master key (the stand-in backups are sealed to it)
@@ -132,11 +119,14 @@ jobs:
             xcrun simctl keychain "$SIM_UDID" reset
             xcrun simctl uninstall "$SIM_UDID" dev.de0ch.jarvis2 || true
             xcrun simctl ui "$SIM_UDID" appearance $a
-            (cd app/ios && TEST_RUNNER_JARVIS2_APPEARANCE=$a TEST_RUNNER_JARVIS2_KIT="$kit" \
-              xcodebuild test-without-building -workspace Jarvis2.xcworkspace -scheme Jarvis2 \
+            xcrun simctl io "$SIM_UDID" recordVideo --codec=h264 --force out/walkthrough-$a.mov > out/record-$a.log 2>&1 &
+            rec=$!
+            (cd ios && TEST_RUNNER_JARVIS2_APPEARANCE=$a TEST_RUNNER_JARVIS2_KIT="$kit" \
+              xcodebuild test-without-building -project Jarvis2.xcodeproj -scheme Jarvis2 \
               -only-testing:Jarvis2UITests/Jarvis2UITests/testWalkthrough \
-              -destination "id=$SIM_UDID" -derivedDataPath ../../dd \
-              -resultBundlePath ../../result-$a.xcresult 2>&1 | tee ../../test-$a.log | grep -E "error:|Test Case|\*\* " || true)
+              -destination "id=$SIM_UDID" -derivedDataPath ../dd \
+              -resultBundlePath ../result-$a.xcresult 2>&1 | tee ../test-$a.log | grep -E "error:|Test Case|\*\* " || true)
+            kill -INT $rec; wait $rec || true
             grep -q "TEST EXECUTE SUCCEEDED\|\*\* TEST SUCCEEDED" test-$a.log || ok=1
           done
           exit $ok
@@ -149,78 +139,64 @@ jobs:
           grep -n "error:" xcodebuild.log | head -100 > out/errors.txt || true
           cp "$RUNNER_TEMP/w/"*.log out/ 2>/dev/null || true
           mkdir -p out/crash
-          find ~/Library/Logs/DiagnosticReports -newer app/package.json -name "*.ips" -exec cp {} out/crash/ \; 2>/dev/null || true
+          find ~/Library/Logs/DiagnosticReports -newer ios/project.yml -name "*.ips" -exec cp {} out/crash/ \; 2>/dev/null || true
       - uses: actions/upload-artifact@v4
         if: always()
         with: { name: results, path: out }
 
   testflight:
-    # main only, after the walkthrough and the interop test pass: archive (cloud signing with the ASC API
-    # key), upload; the internal group "Owner" (all builds) gets it once Apple has processed it
+    # main only, after the walkthrough and the interop test pass, and only for an ios/ the phone replica passed on
     if: >-
       always() && github.ref == 'refs/heads/main' && (inputs.only == 'testflight' ||
-      (needs.simulator.result == 'success' && needs.interop.result == 'success' && needs.web.result == 'success'))
-    needs: [simulator, interop, web]
+      (needs.simulator.result == 'success' && needs.interop.result == 'success'))
+    needs: [simulator, interop]
     runs-on: macos-26
-    timeout-minutes: 120
+    environment: release
+    timeout-minutes: 60
     env:
       ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
       ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
     steps:
       - uses: actions/checkout@v4
         with: { fetch-depth: 0 }
-      - name: The phone replica gate (infra/phone-replica.sh passed on this very app)
+      - name: The phone replica gate (infra/phone-replica.sh passed on this very ios/)
         if: inputs.replica_gate != 'skip'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          # a successful replica.yml run whose commit has the same app/ as this one: the build shipped is the build tapped
           for sha in $(gh run list -R "$GITHUB_REPOSITORY" -w replica.yml -s success -L 30 --json headSha -q '.[].headSha'); do
-            if git cat-file -e "$sha^{commit}" 2>/dev/null && git diff --quiet "$sha" "$GITHUB_SHA" -- app/; then
-              echo "the replica passed on $sha (same app/)"; exit 0
+            if git cat-file -e "$sha^{commit}" 2>/dev/null && git diff --quiet "$sha" "$GITHUB_SHA" -- ios/ policy/; then
+              echo "the replica passed on $sha (same ios/)"; exit 0
             fi
           done
-          echo "::error::no passing phone replica for this app: run infra/phone-replica.sh, then this workflow with only=testflight"
+          echo "::error::no passing phone replica for this ios/: run infra/phone-replica.sh, then this workflow with only=testflight"
           exit 1
-      - uses: actions/setup-node@v4
-        with: { node-version: 22 }
-      - name: Install + JS bundle
-        working-directory: app
-        run: |
-          npm ci --no-audit --no-fund
-          mkdir -p ios/Extension/res
-          npx expo export:embed --platform ios --dev false --entry-file node_modules/expo-router/entry.js \
-            --bundle-output ios/Extension/main.jsbundle --assets-dest ios/Extension/res
-          mkdir -p ios/Extension/res/assets
       - run: brew install xcodegen
-      - name: Generate project + pods
-        working-directory: app/ios
-        run: xcodegen generate && pod install
       - name: API key
         env:
           ASC_PRIVATE_KEY: ${{ secrets.ASC_PRIVATE_KEY }}
-        run: |
-          mkdir -p ~/.asc && printf '%s\n' "$ASC_PRIVATE_KEY" > ~/.asc/AuthKey.p8 && chmod 600 ~/.asc/AuthKey.p8
+        run: mkdir -p ~/.asc && printf '%s\n' "$ASC_PRIVATE_KEY" > ~/.asc/AuthKey.p8 && chmod 600 ~/.asc/AuthKey.p8
       - name: Archive (unsigned; the export signs with Apple's cloud-managed distribution certificate)
-        working-directory: app/ios
+        working-directory: ios
         run: |
+          xcodegen generate
           set -o pipefail
-          # signing at archive time would mint a new development certificate on every runner (the team's
-          # limit is reached), so the archive stays unsigned and the export below signs it in the cloud
-          xcodebuild archive -workspace Jarvis2.xcworkspace -scheme Jarvis2 -configuration Release \
-            -destination 'generic/platform=iOS' -archivePath ../../Jarvis2.xcarchive \
+          # signing at archive time would mint a development certificate on every runner (lessons/75)
+          xcodebuild archive -project Jarvis2.xcodeproj -scheme Jarvis2 -configuration Release \
+            -destination 'generic/platform=iOS' -archivePath ../Jarvis2.xcarchive \
             CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" DEVELOPMENT_TEAM=S64YL394S3 \
-            CURRENT_PROJECT_VERSION=${{ github.run_number }} 2>&1 | tee ../../archive.log | grep -E "error:|warning: .*sign|\*\* " || true
-          grep -q "ARCHIVE SUCCEEDED" ../../archive.log
-          # a release build never carries the CI stand-in's address (KeySource.swift reads it only when
-          # compiled with JARVIS_CI, which this archive isn't)
+            CURRENT_PROJECT_VERSION=$(( ${{ github.run_number }} + 1000 )) 2>&1 | tee ../archive.log | grep -E "error:|warning: .*sign|\*\* " || true
+          grep -q "ARCHIVE SUCCEEDED" ../archive.log
+          # a release build never carries the CI stand-in's address or another keys ref
           for k in JarvisCIKeysBase JarvisKeysRef; do
-            v=$(/usr/libexec/PlistBuddy -c "Print :$k" ../../Jarvis2.xcarchive/Products/Applications/Jarvis2.app/Info.plist 2>/dev/null || true)
+            v=$(/usr/libexec/PlistBuddy -c "Print :$k" ../Jarvis2.xcarchive/Products/Applications/Jarvis2.app/Info.plist 2>/dev/null || true)
             [ -z "$v" ] || { echo "release Info.plist has $k=$v"; exit 1; }
           done
+          # and the pinned harness policy is git's
+          cmp ../Jarvis2.xcarchive/Products/Applications/Jarvis2.app/stores.json ../policy/stores.json
       - name: Export + upload to App Store Connect
         run: |
-          cat > ExportOptions.plist <<'EOF'
+          cat > ExportOptions.plist <<'PLIST'
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
           <plist version="1.0"><dict>
@@ -230,7 +206,7 @@ jobs:
             <key>signingStyle</key><string>automatic</string>
             <key>manageAppVersionAndBuildNumber</key><false/>
           </dict></plist>
-          EOF
+          PLIST
           set -o pipefail
           xcodebuild -exportArchive -archivePath Jarvis2.xcarchive -exportOptionsPlist ExportOptions.plist -exportPath export \
             -allowProvisioningUpdates -authenticationKeyPath ~/.asc/AuthKey.p8 \

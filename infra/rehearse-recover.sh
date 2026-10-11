@@ -19,7 +19,7 @@
 #      the only argument runs just that (after a crash); KEEP=1 skips it (then run it yourself).
 #
 # The app's side (Reset, Recover, unlock, approving a session) is the shell's own CoreSetup/CoreCrypto in
-# app/ios/interop's Rehearse target (needs a swift.org toolchain on Linux: SWIFT_BIN, default ~/swift/*/usr/bin).
+# ios/interop's Rehearse target (needs a swift.org toolchain on Linux: SWIFT_BIN, default ~/swift/*/usr/bin).
 #
 # Test-only differences from production: infra/rehearsal-box.sh (MODE=rehearse: the router runs NO_ACCESS=1 behind an
 # Access app for the rehearsal's service token only). The kit is the public TEST master key, so the bucket holds
@@ -37,8 +37,8 @@ if [ "${1:-}" = teardown ]; then teardown; exit 0; fi
 [ "${KEEP:-}" = 1 ] || trap teardown EXIT
 
 step "the app's side (swift build)"
-(cd "$ROOT/app/ios/interop" && PATH="$SWIFT_BIN:$PATH" swift build --product Rehearse 2>&1 | tail -1)
-RH="$ROOT/app/ios/interop/.build/debug/Rehearse"
+(cd "$ROOT/ios/interop" && PATH="$SWIFT_BIN:$PATH" swift build --product Rehearse 2>&1 | tail -1)
+RH="$ROOT/ios/interop/.build/debug/Rehearse"
 
 prepare
 export REHEARSE_BASE="https://$HOST/" REHEARSE_ACCESS_ID="$SETUP_ACCESS_ID" REHEARSE_ACCESS_SECRET="$SETUP_ACCESS_SECRET"

@@ -1,5 +1,5 @@
 // "What you sign (exact)": the first of the three fields a request's review page shows (docs/DESIGN.md
-// "Requests"). It is rendered here, in the shell, from the very content the phone signs — the core's signed begin
+// "Requests"). It is rendered here, in the app, from the very content the phone signs — the core's signed begin
 // document, the core-signed challenge, the session's core-signed cert and the checked grant — never from the
 // router's words, so a lying router can't make it say something other than what gets signed. Foundation only:
 // the interop test (app/ios/interop) renders it from the real core's documents too.
@@ -30,16 +30,17 @@ enum SignedAction {
   }
 
   /// a succession, from the core-signed challenge (Checks.review)
-  static func approval(_ r: Checks.Reviewed) -> String {
+  /// `of`: the session the challenge continues, from its predecessor's core-signed cert (Checks.continues)
+  static func approval(_ r: Checks.Reviewed, of id: LineIdentity? = nil) -> String {
     let sens = r.sensitive.isEmpty ? "" : " (sensitive: \(list(r.sensitive)))"
     switch r.kind {
     case .newSession:
       return "Core: approve a new session machine on image \(r.image) with stores \(list(r.stores))\(sens), harness \(r.harness), permission mode \(r.permissionMode)." + inputs(r)
     case .resumeUpgrade:
-      return "Core: continue the paused session on a new machine on image \(r.image) with stores \(list(r.stores))\(sens), harness \(r.harness), permission mode \(r.permissionMode)." + inputs(r)
+      return "Core: continue the paused session \(id?.words ?? "") on a new machine on image \(r.image) with stores \(list(r.stores))\(sens), harness \(r.harness), permission mode \(r.permissionMode)." + inputs(r)
     case .addStore:
       let added = r.addedStore ?? ""
-      return "Core: add store \(added)\(r.sensitive.contains(added) ? " (sensitive)" : "") to the running machine \(r.challenge.request.machine?.id ?? ""), which keeps its keys; it then holds \(list(r.stores))."
+      return "Core: add store \(added)\(r.sensitive.contains(added) ? " (sensitive)" : "") to the running machine \(r.challenge.request.machine?.id ?? "") of \(id?.words ?? "its session"), which keeps its keys; it then holds \(list(r.stores))."
     case .other:
       return "Core: sign a challenge of kind \(r.challenge.request.kind) with stores \(list(r.stores))\(sens)."
     }
@@ -62,8 +63,8 @@ enum SignedAction {
 
   /// a grant: signed by this iPhone (not the core) for the line in the session's core-signed cert; the router's draft
   /// is checked field for field against it before signing (Checks.reviewGrant)
-  static func grant(meaning: String, line: String) -> String {
-    "Phone grant for session line \(line) (the session's machine checks it, not the core): \(meaning)"
+  static func grant(meaning: String, line: String, of id: LineIdentity? = nil) -> String {
+    "Phone grant for \(id?.words ?? "session line \(line)") (the session's machine checks it, not the core)\(id?.sensitive == true ? ", a session holding a sensitive store" : ""): \(meaning)"
   }
 
   /// the request's call as one line: `POST /api/requests/repo/add {"repo":"DE0CH/claude-env"}`

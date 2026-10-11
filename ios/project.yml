@@ -1,4 +1,6 @@
 name: Jarvis2
+# The Jarvis 2 iPhone and iPad app: one native SwiftUI app (Deyao, 2026-10-11), Apple frameworks and our Swift only (no
+# packages, no pods). `xcodegen generate` makes Jarvis2.xcodeproj (not in git).
 options:
   bundleIdPrefix: dev.de0ch
   deploymentTarget:
@@ -9,15 +11,15 @@ settings:
     CODE_SIGN_STYLE: Manual
     DEVELOPMENT_TEAM: ""
     SWIFT_VERSION: "5.0"
-    ENABLE_USER_SCRIPT_SANDBOXING: NO
-    EX_ENABLE_EXTENSION_POINT_GENERATION: YES
-    MARKETING_VERSION: "0.1"
+    SWIFT_STRICT_CONCURRENCY: targeted
+    ENABLE_USER_SCRIPT_SANDBOXING: YES
+    MARKETING_VERSION: "2.0"
     CURRENT_PROJECT_VERSION: "1"
-    # the router the shell talks to (and hands to the React Native UI); CI's simulator build overrides it
-    # on the xcodebuild command line with the router running on the runner
+    # the router the app talks to; CI's simulator build overrides it on the xcodebuild line with the router on the runner
     JARVIS_BASE: "https://jarvis2.deyaochen.com/"
-    # CI only (the simulator walkthrough's xcodebuild sets these): JARVIS_CI_FLAG=JARVIS_CI compiles in the
-    # code that reads the key stand-in's address (KeySource.swift); release builds leave both empty
+    # CI only (the simulator walkthrough's xcodebuild sets these): JARVIS_CI_FLAG=JARVIS_CI compiles in the code that
+    # reads the key stand-in's address (KeySource.swift) and the router's test policy (PinnedPolicy); release builds
+    # leave both empty
     JARVIS_CI_FLAG: ""
     JARVIS_CI_KEYS_BASE: ""
     # the phone replica only (infra/phone-replica.sh): the git ref of DE0CH/jarvis2 the keys come from (KeySource.swift);
@@ -28,67 +30,28 @@ targets:
     type: application
     platform: iOS
     sources:
-      - Shell
-      - Shared
-    dependencies:
-      - target: JarvisUI
-    postBuildScripts:
-      # the extension's React Native frameworks are copied (and signed) into this app's Frameworks folder;
-      # the shell itself links none of them — only the extension's process loads them
-      - name: Embed the extension's frameworks
-        basedOnDependencyAnalysis: false
-        script: |
-          set -e
-          export PODS_ROOT="${SRCROOT}/Pods"
-          export PODS_BUILD_DIR="${BUILD_DIR}"
-          export PODS_CONFIGURATION_BUILD_DIR="${BUILD_DIR}/${CONFIGURATION}${EFFECTIVE_PLATFORM_NAME}"
-          export PODS_XCFRAMEWORKS_BUILD_DIR="${PODS_CONFIGURATION_BUILD_DIR}/XCFrameworkIntermediates"
-          "${PODS_ROOT}/Target Support Files/Pods-JarvisUI/Pods-JarvisUI-frameworks.sh"
+      - path: Jarvis2
+      # which stores each harness brings, pinned in the app from git (PinnedPolicy, Security/LinePins.swift)
+      - path: ../policy/stores.json
+        buildPhase: resources
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: dev.de0ch.jarvis2
         SWIFT_ACTIVE_COMPILATION_CONDITIONS: "$(inherited) $(JARVIS_CI_FLAG)"
         PRODUCT_NAME: Jarvis2
         GENERATE_INFOPLIST_FILE: YES
-        INFOPLIST_FILE: Shell/Info.plist
+        INFOPLIST_FILE: Jarvis2/Info.plist
         INFOPLIST_KEY_CFBundleDisplayName: "Jarvis 2"
         INFOPLIST_KEY_UILaunchScreen_Generation: YES
         INFOPLIST_KEY_UIApplicationSceneManifest_Generation: YES
+        INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents: YES
         INFOPLIST_KEY_NSFaceIDUsageDescription: "Face ID approves what Jarvis 2 asks you to sign and unlocks secret stores."
         INFOPLIST_KEY_ITSAppUsesNonExemptEncryption: NO
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
-        TARGETED_DEVICE_FAMILY: "1"
+        # iPhone and iPad
+        TARGETED_DEVICE_FAMILY: "1,2"
         INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone: "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight"
-  JarvisUI:
-    type: extensionkit-extension
-    platform: iOS
-    sources:
-      - path: Extension
-        excludes: ["res/**"]
-      - path: Shared
-      - path: Extension/res/assets
-        type: folder
-        buildPhase: resources
-    settings:
-      base:
-        PRODUCT_BUNDLE_IDENTIFIER: dev.de0ch.jarvis2.ui
-        PRODUCT_NAME: JarvisUI
-        INFOPLIST_KEY_CFBundleDisplayName: "Jarvis 2 UI"
-        GENERATE_INFOPLIST_FILE: YES
-        INFOPLIST_FILE: Extension/Info.plist
-        OTHER_LDFLAGS: ["$(inherited)", "-lc++"]
-        # React Native's dynamic frameworks sit in the APP's Frameworks folder (an extension may not carry
-        # its own: App Store validation ITMS-90206); the extension finds them from Extensions/JarvisUI.appex
-        LD_RUNPATH_SEARCH_PATHS: ["$(inherited)", "@executable_path/../../Frameworks", "@executable_path/Frameworks"]
-    postBuildScripts:
-      # CocoaPods adds no resources phase to an ExtensionKit target (lessons/73 in claude-env)
-      - name: Pods resources (extension)
-        basedOnDependencyAnalysis: false
-        script: |
-          set -e
-          D="${PODS_ROOT}/Target Support Files/Pods-JarvisUI"
-          [ -f "$D/Pods-JarvisUI-resources.sh" ] && "$D/Pods-JarvisUI-resources.sh"
-          true
+        INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad: "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight"
   Jarvis2UITests:
     type: bundle.ui-testing
     platform: iOS
@@ -100,6 +63,7 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: dev.de0ch.jarvis2.uitests
         GENERATE_INFOPLIST_FILE: YES
         TEST_TARGET_NAME: Jarvis2
+        TARGETED_DEVICE_FAMILY: "1,2"
 schemes:
   Jarvis2:
     build:

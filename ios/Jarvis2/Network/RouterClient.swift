@@ -1,22 +1,31 @@
-// The shell's own client of the router (docs/API.md) — an ordinary network path: integrity comes from the
-// core's signatures (checked here against the core keys pinned when this iPhone set the core up) and the phone's
-// (made here). The shell also
-// owns sign-in: ASWebAuthenticationSession on /api/auth/start → jarvis2://auth#token=<Access JWT>, kept in
-// the shell's Keychain, sent as `cf-access-token`, and handed to the React Native UI over XPC.
+// The app's client of the router (docs/API.md) — an ordinary network path: integrity comes from the core's signatures
+// (checked here against the core keys pinned when this iPhone set the core up) and the phone's (made here). Sign-in:
+// ASWebAuthenticationSession on /api/auth/start → jarvis2://auth#token=<Access JWT>, kept in the Keychain and sent as
+// `cf-access-token` on every request (never cookies, except into the terminal page's WebView: TerminalView).
 import AuthenticationServices
 import Foundation
 import UIKit
 
-struct RouterError: LocalizedError { let message: String; var errorDescription: String? { message } }
+/// a failed request, in words; `status` and `body` for the callers that act on them (a 403 {needsGrant}, a 404)
+struct RouterError: LocalizedError {
+  let message: String
+  var status = 0
+  var body: JSON = .null
+  var errorDescription: String? { message }
+}
+/// Cloudflare Access refused the login and the sign-in sheet didn't complete
+struct SignedOut: LocalizedError { var errorDescription: String? { "Signed out of Cloudflare Access." } }
 
 @MainActor
 final class RouterClient: NSObject, ASWebAuthenticationPresentationContextProviding {
   static let shared = RouterClient()
   let base: URL = {
     let s = (Bundle.main.object(forInfoDictionaryKey: "JarvisBase") as? String).flatMap { $0.isEmpty ? nil : $0 } ?? "https://jarvis2.deyaochen.com/"
-    return URL(string: s.hasSuffix("/") ? s : s + "/")!
+    return URL(string: s.hasSuffix("/") ? s : s + "/") ?? URL(string: "https://jarvis2.deyaochen.com/")!
   }()
   var token: String { Keychain.string("access-token") ?? "" }
+  /// told when sign-in failed or came back (AppModel shows the signed-out screen)
+  var onSignedOut: ((Bool) -> Void)?
 
   // ---- sign-in ----
   private var signing: Task<String, Never>?
@@ -26,17 +35,22 @@ final class RouterClient: NSObject, ASWebAuthenticationPresentationContextProvid
     if let signing { return await signing.value }
     let t = Task { @MainActor () -> String in
       defer { signing = nil }
-      var c = URLComponents(url: base.appendingPathComponent("api/auth/start"), resolvingAgainstBaseURL: false)!
-      c.queryItems = [URLQueryItem(name: "redirect", value: "jarvis2://auth")]
+      var c = URLComponents(url: base.appending(path: "api/auth/start"), resolvingAgainstBaseURL: false)
+      c?.queryItems = [URLQueryItem(name: "redirect", value: "jarvis2://auth")]
+      guard let start = c?.url else { return "" }
       let url: URL? = await withCheckedContinuation { k in
-        let s = ASWebAuthenticationSession(url: c.url!, callback: .customScheme("jarvis2")) { u, _ in k.resume(returning: u) }
+        let s = ASWebAuthenticationSession(url: start, callback: .customScheme("jarvis2")) { u, _ in k.resume(returning: u) }
         s.presentationContextProvider = self
         webSession = s
         if !s.start() { k.resume(returning: nil) }
       }
       webSession = nil
-      guard let frag = url?.fragment, let tok = URLComponents(string: "x:?" + frag)?.queryItems?.first(where: { $0.name == "token" })?.value, !tok.isEmpty else { return "" }
+      guard let frag = url?.fragment, let tok = URLComponents(string: "x:?" + frag)?.queryItems?.first(where: { $0.name == "token" })?.value, !tok.isEmpty else {
+        onSignedOut?(true)
+        return ""
+      }
       Keychain.setString("access-token", tok)
+      onSignedOut?(false)
       return tok
     }
     signing = t
@@ -49,17 +63,21 @@ final class RouterClient: NSObject, ASWebAuthenticationPresentationContextProvid
   }
 
   // ---- requests ----
-  /// Access turned the request away: it ended on the Access login, or a 401/403 that isn't JSON, or the
-  /// router's own "Access login required"
+  /// Access turned the request away: it ended on the Access login, or a 401/403 that isn't JSON, or the router's own
+  /// "Access login required"
   private func refused(_ resp: HTTPURLResponse, _ data: Data) -> Bool {
     if (resp.url?.host ?? "").hasSuffix("cloudflareaccess.com") { return true }
     guard resp.statusCode == 401 || resp.statusCode == 403 else { return false }
     let ct = resp.value(forHTTPHeaderField: "Content-Type") ?? ""
     return !ct.contains("json") || String(decoding: data, as: UTF8.self).contains("Access login required")
   }
+  func url(_ path: String) -> URL {
+    // a path with a query ("api/search?q=…") is resolved as a relative reference, so the query stays a query
+    URL(string: path, relativeTo: base)?.absoluteURL ?? base.appending(path: path)
+  }
   func raw(_ method: String, _ path: String, _ body: [String: Any]? = nil, timeout: TimeInterval = 60) async throws -> (Int, Data) {
     for attempt in 0..<2 {
-      var r = URLRequest(url: base.appendingPathComponent(path))
+      var r = URLRequest(url: url(path))
       r.httpMethod = method
       r.timeoutInterval = timeout
       if let body { r.httpBody = try JSONSerialization.data(withJSONObject: body); r.setValue("application/json", forHTTPHeaderField: "Content-Type") }
@@ -69,22 +87,37 @@ final class RouterClient: NSObject, ASWebAuthenticationPresentationContextProvid
       guard let h = resp as? HTTPURLResponse else { throw RouterError(message: "no HTTP answer") }
       if refused(h, data) {
         if attempt == 0, !(await signIn()).isEmpty { continue }
-        throw RouterError(message: "Signed out of Cloudflare Access.")
+        throw SignedOut()
       }
       return (h.statusCode, data)
     }
-    throw RouterError(message: "Signed out of Cloudflare Access.")
+    throw SignedOut()
   }
   /// JSON answer; errors (the router's {error} or the core's signed error doc) as their message
   func json<T: Decodable>(_ method: String, _ path: String, _ body: [String: Any]? = nil, as: T.Type = T.self) async throws -> T {
     let (status, data) = try await raw(method, path, body)
-    guard status == 200 else { throw RouterError(message: Self.reason(data) ?? "HTTP \(status) from \(path)") }
+    guard (200..<300).contains(status) else { throw Self.failure(method, path, status, data) }
     return try JSONDecoder().decode(T.self, from: data)
+  }
+  /// any router call, its answer as JSON
+  @discardableResult
+  func call(_ method: String, _ path: String, _ body: [String: Any]? = nil, timeout: TimeInterval = 60) async throws -> JSON {
+    let (status, data) = try await raw(method, path, body, timeout: timeout)
+    guard (200..<300).contains(status) else { throw Self.failure(method, path, status, data) }
+    return JSON.parse(data)
+  }
+  func get(_ path: String) async throws -> JSON { try await call("GET", path) }
+
+  static func failure(_ method: String, _ path: String, _ status: Int, _ data: Data) -> RouterError {
+    let hint: [Int: String] = [400: "bad request", 401: "not authorised", 403: "forbidden", 404: "not found", 409: "conflict", 413: "request too large",
+                               423: "locked", 429: "rate-limited, try again shortly", 500: "router error", 502: "bad gateway", 503: "unavailable", 504: "timed out"]
+    let why = reason(data) ?? hint[status] ?? "request failed"
+    return RouterError(message: why, status: status, body: JSON.parse(data))
   }
   static func reason(_ data: Data) -> String? {
     guard let j = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
     if let p = j["payload"] as? String, let pj = try? JSONSerialization.jsonObject(with: Data(p.utf8)) as? [String: Any], let e = pj["error"] as? String { return "core: " + e }
-    return j["error"] as? String
+    return (j["error"] as? String) ?? (j["message"] as? String)
   }
 
   // ---- the core, relayed: every answer checked against the pinned core key ----
@@ -94,7 +127,19 @@ final class RouterClient: NSObject, ASWebAuthenticationPresentationContextProvid
     let n = CoreCrypto.nonce()
     let d = try CoreCrypto.decode(try await json("POST", "api/core/stores", ["nonce": n], as: SignedDoc.self), by: try CoreTrust.key(), as: StoresDoc.self, what: "the store list")
     guard d.kind == "stores", d.nonce == n else { throw TrustError.stale("store list") }
+    coreVouchesWriters = d.writers == true
     return d
+  }
+  /// the core's signed store list says it names each store's writer (then a missing one is refused); nil = not read yet
+  private var coreVouchesWriters: Bool?
+  private func writersRequired() async throws -> Bool {
+    if let w = coreVouchesWriters { return w }
+    _ = try await storesDoc()
+    return coreVouchesWriters ?? false
+  }
+  /// the setup key from git, only when a writer needs checking
+  private func setupKeyIfNeeded(_ w: StoreWriter?) async throws -> String? {
+    w?.by == "setup" ? try await KeySource.key("setup.pub") : nil
   }
   func unlocked() async throws -> [UnlockRow] {
     let n = CoreCrypto.nonce()
@@ -111,6 +156,8 @@ final class RouterClient: NSObject, ASWebAuthenticationPresentationContextProvid
     guard b.kind == "unlock-begin", b.store == store else { throw TrustError.stale("unlock of \(b.store)") }
     if let got = b.forNonce, !got.isEmpty, got != (forNonce ?? "") { throw TrustError.stale("unlock of \(b.store) for another session") }
     if forNonce == nil, let got = b.forNonce, !got.isEmpty { throw TrustError.stale("unlock of \(b.store) for one session") }
+    // the share opens only a blob the core or the setup session wrote
+    try Checks.writer(b.writer, store: b.store, e: b.e, dataSha256: b.dataSha256, setupKey: try await setupKeyIfNeeded(b.writer), required: try await writersRequired())
     return b
   }
   func unlockFinish(_ b: UnlockBegin, share: [String: String]) async throws {
@@ -130,11 +177,13 @@ final class RouterClient: NSObject, ASWebAuthenticationPresentationContextProvid
     guard d.kind == "store-created", d.name == name else { throw TrustError.stale("create") }
   }
 
-  // ---- deploy keys: a repo added or removed in Settings (core/deploykeys.go) ----
+  // ---- deploy keys: a repo added or removed (core/deploykeys.go) ----
   /// the core's signed begin document, checked: this action, this repo, its store, the one token store it opens
   func deployKeyBegin(action: String, repo: String, sensitive: Bool) async throws -> (doc: SignedDoc, begin: DeployKeyBegin) {
     let d = try await json("POST", "api/repos/key/begin", ["action": action, "repo": repo, "sensitive": sensitive], as: SignedDoc.self)
-    return (d, try Checks.deployKeyBegin(d, coreKey: try CoreTrust.key(), action: action, repo: repo, sensitive: sensitive))
+    let b = try Checks.deployKeyBegin(d, coreKey: try CoreTrust.key(), action: action, repo: repo, sensitive: sensitive)
+    try Checks.writer(b.tokenWriter, store: b.tokenStore, e: b.e, dataSha256: b.tokenDataSha256, setupKey: try await setupKeyIfNeeded(b.tokenWriter), required: try await writersRequired())
+    return (d, b)
   }
   /// the phone's signature over the begin document and its share of the token store; the answer, checked
   func deployKeyFinish(_ b: DeployKeyBegin, signature: Data, share: Data) async throws -> DeployKeyAnswer {
@@ -143,13 +192,13 @@ final class RouterClient: NSObject, ASWebAuthenticationPresentationContextProvid
   }
 
   // ---- setting the core up: Reset and Recover ----
-  /// the core's keys, the box key's signature over them and its signed state (the caller checks both:
-  /// CoreSetup.check). Throws CoreNotRunning when there is no core to ask (its pod restarting, e.g. after a wipe:
-  /// the router answers 503 {coreDown}; a 502/504 from the edge means the same)
+  /// the core's keys, the box key's signature over them and its signed state (the caller checks both: CoreSetup.check).
+  /// Throws CoreNotRunning when there is no core to ask (its pod restarting, e.g. after a wipe: 503 {coreDown}; 502/504
+  /// from the edge mean the same)
   func identity() async throws -> CoreSetup.Identity {
     let (status, data) = try await raw("GET", "api/core/identity", nil)
     if status == 503 || status == 502 || status == 504 { throw CoreNotRunning() }
-    guard status == 200 else { throw RouterError(message: Self.reason(data) ?? "HTTP \(status) from api/core/identity") }
+    guard status == 200 else { throw Self.failure("GET", "api/core/identity", status, data) }
     return try JSONDecoder().decode(CoreSetup.Identity.self, from: data)
   }
   struct CoreNotRunning: Error {}
@@ -169,39 +218,18 @@ final class RouterClient: NSObject, ASWebAuthenticationPresentationContextProvid
     struct B: Decodable { let objects: [CoreSetup.BackupObject] }
     return try await json("GET", "api/backups", as: B.self).objects
   }
-  /// the router's machine sizes and models (api/sizes, api/models), as the New session page offers them
-  struct Choice: Decodable, Identifiable, Equatable { let id: String; let label: String?; let harness: String? }
-  func models() async -> [Choice] {
-    struct M: Decodable { let models: [Choice]? }
-    return (try? await json("GET", "api/models", as: M.self).models) ?? []
-  }
-  func sizes() async -> [Choice] {
-    struct S: Decodable { let sizes: [Choice]? }
-    return (try? await json("GET", "api/sizes", as: S.self).sizes) ?? []
-  }
-  /// the repos (Settings → Repos): each with its deploy key in its own store
-  struct RepoDTO: Decodable, Identifiable, Equatable { let name: String; let url: String; let repo: String; let store: String; let sensitive: Bool?; var id: String { name } }
-  func repos() async -> [RepoDTO] {
-    struct St: Decodable { let repos: [RepoDTO]? }
-    return (try? await json("GET", "api/repos", as: St.self).repos) ?? []
-  }
-  /// the stores each harness brings (the router adds them to a session; the app doesn't offer them)
-  struct PolicyDTO: Decodable { struct H: Decodable { let stores: [String]? }; let harnesses: [String: H] }
-  func harnessStores() async -> [String: [String]] {
-    guard let p = try? await json("GET", "api/policy", as: PolicyDTO.self) else { return [:] }
-    return p.harnesses.mapValues { $0.stores ?? [] }
-  }
 
-  // ---- sessions + approvals ----
-  struct ApprovalDTO: Decodable { let id: String; let kind: String; let session: String?; let label: String?; let challenge: SignedDoc; let options: [String: String]? }
-  struct SessionDTO: Decodable { let id: String; let state: String; let createRequestId: String?; let label: String?; let name: String? }
+  // ---- approvals ----
+  /// an approval with its signed challenge (checked by Checks.review against the pinned core key)
+  /// imageSig: CI's signature over the image the challenge names (keys/ci.pub; Attestation)
+  struct ApprovalDTO: Decodable { let id: String; let kind: String; let session: String?; let label: String?; let challenge: SignedDoc; let options: [String: String]?; let imageSig: String? }
+  struct SessionDTO: Decodable { let id: String; let state: String; let createRequestId: String? }
   struct StateDTO: Decodable { let sessions: [SessionDTO]; let approvals: [ApprovalDTO] }
   struct RespondDTO: Decodable { let answer: SignedDoc; let session: String }
-  func state() async throws -> StateDTO { try await json("GET", "api/state") }
-  func approval(_ id: String) async throws -> ApprovalDTO? { try await state().approvals.first { $0.id == id } }
-  func createSession(_ body: [String: Any]) async throws { let _: [String: String?] = try await json("POST", "api/sessions", body) }
+  func approvalsState() async throws -> StateDTO { try await json("GET", "api/state") }
+  func approval(_ id: String) async throws -> ApprovalDTO? { try await approvalsState().approvals.first { $0.id == id } }
   func respond(_ id: String, signature: Data) async throws -> RespondDTO { try await json("POST", "api/approvals/\(id)/respond", ["signature": signature.base64EncodedString()]) }
-  func reject(_ id: String) async throws { let _: [String: Bool] = try await json("POST", "api/approvals/\(id)/reject") }
+  func reject(_ id: String) async throws { try await call("POST", "api/approvals/\(id)/reject") }
 
   // ---- grants (the session's cert is checked against the pinned core key) ----
   func sessionCert(_ session: String) async throws -> SessionCert {
@@ -220,4 +248,15 @@ final class RouterClient: NSObject, ASWebAuthenticationPresentationContextProvid
   func addGrant(_ session: String, payload: String, sig: Data) async throws -> StoredGrantDTO {
     try await json("POST", "api/sessions/\(session)/grants", ["payload": payload, "sig": sig.base64EncodedString()])
   }
+
+  // ---- the Inbox (docs/API.md "Requests") ----
+  /// one Inbox entry (GET api/requests/:id); nil when it is gone
+  func inboxItem(_ id: String) async throws -> InboxItem? {
+    let (status, data) = try await raw("GET", "api/requests/\(id)")
+    if status == 404 { return nil }
+    guard status == 200 else { throw Self.failure("GET", "api/requests/\(id)", status, data) }
+    return InboxItem(j: JSON.parse(data))
+  }
+  func inboxDeny(_ id: String) async throws { try await call("DELETE", "api/requests/\(id)") }
+  func inboxDone(_ id: String) async { _ = try? await raw("POST", "api/requests/\(id)/done") }
 }

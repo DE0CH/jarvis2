@@ -1,0 +1,276 @@
+// New session: ONE page (Deyao, 2026-10-10) with everything Jarvis 1's New session page has: prompt, title, stores,
+// harness, repos, permission mode, model, auto-pause, API proxy and size. Start asks the router for the session, checks
+// the core's challenge carries exactly the stores picked here (plus the harness's own), the harness, the permission
+// mode and (with a core that vouches) these settings, then under ONE Face ID signs it AND unlocks every store the
+// session gets that is locked, for that session only, so it never waits at boot on a locked store.
+// DE0CH/claude-env comes pre-selected with its store when it is on the repo list (Deyao, 2026-10-11); sensitive stores
+// are never pre-selected, and picking one shows a warning.
+import SwiftUI
+
+struct NewSessionView: View {
+  @Environment(AppModel.self) private var model
+  @Environment(\.dismiss) private var dismiss
+  @State private var stores: [StoreView] = []
+  @State private var picked: Set<String> = []
+  @State private var harness = "claude"
+  @State private var perm = "bypass"
+  @State private var oneShot = false
+  @State private var prompt = ""
+  @State private var label = ""
+  @State private var modelId = ""
+  @State private var size = "medium"
+  @State private var repos: Set<String> = []
+  @State private var repoDefaulted = false
+  @State private var autoPause = true
+  @State private var apiProxy = false
+  @State private var scoped = false
+  @State private var loaded = false
+  @State private var loadError: String?
+  @State private var busy: String?
+  @State private var failure: String?
+
+  static let defaultRepo = "DE0CH/claude-env"
+  private var hidden: Set<String> { model.harnessHidden }
+  private var offered: [StoreView] { stores.filter { !$0.isCore && !hidden.contains($0.name) } }
+  private var pickedSensitive: [String] { stores.filter { $0.sensitive && picked.contains($0.name) }.map(\.name) }
+  private var models: [Choice] { model.models.filter { ($0.harness ?? "claude") == harness } }
+  private var allStores: [String] { Array(picked.union(PinnedPolicy.stores(harness, router: model.policy))).sorted() }
+  private var toUnlock: [String] { allStores.filter { n in stores.contains { $0.name == n && !$0.unlocked && !$0.empty } } }
+  private var trimmedPrompt: String { prompt.trimmingCharacters(in: .whitespacesAndNewlines) }
+  private var canStart: Bool { loaded && busy == nil && !(oneShot && trimmedPrompt.isEmpty) }
+
+  var body: some View {
+    Form {
+      Section {
+        Picker("Kind", selection: $oneShot) { Text("Session").tag(false); Text("One-shot").tag(true) }
+          .pickerStyle(.segmented)
+          .accessibilityIdentifier("ns-mode")
+        TextField(oneShot ? "The one job for this session" : "First prompt (optional)", text: $prompt, axis: .vertical)
+          .lineLimit(3...10)
+          .accessibilityIdentifier("ns-prompt")
+        TextField("Title (optional)", text: $label).accessibilityIdentifier("ns-title")
+      } footer: {
+        Text(oneShot ? "Claude runs the prompt, then the session is archived and destroyed. If Claude asks you something, the session waits until you answer."
+             : "The first prompt is typed into the session once it is up.")
+      }
+
+      Section {
+        if let loadError { ErrorRow(text: loadError) }
+        else if !loaded { ProgressView() }
+        else if offered.isEmpty { Text("No stores to add.").foregroundStyle(.secondary) }
+        ForEach(offered) { s in
+          CheckRow(on: picked.contains(s.name), id: "secure-store-\(s.name)", action: { toggle(s.name) }) {
+            HStack(spacing: 6) {
+              Text(s.name)
+              if s.sensitive { StatusPill(text: "Sensitive", color: .red) }
+              if !s.unlocked { StatusPill(text: "Locked") }
+              if s.empty { StatusPill(text: "empty") }
+            }
+          }
+        }
+        if !pickedSensitive.isEmpty {
+          Label("This session will hold sensitive secrets: \(pickedSensitive.joined(separator: ", ")). Only pick them for a session you'll treat with care.", systemImage: "exclamationmark.triangle.fill")
+            .foregroundStyle(.orange)
+            .accessibilityIdentifier("secure-sensitive-warning")
+        }
+      } header: { Text("Secret stores") }
+
+      let brought = PinnedPolicy.stores(harness, router: model.policy)
+      if !brought.isEmpty {
+        Section {
+          ForEach(brought, id: \.self) { n in
+            let st = stores.first { $0.name == n }
+            HStack(spacing: 6) {
+              Label(n, systemImage: "shippingbox")
+              Spacer()
+              if st?.sensitive == true { StatusPill(text: "Sensitive: refused", color: .red) }
+              if st?.unlocked == false { StatusPill(text: "Locked") }
+            }
+            .accessibilityElement(children: .combine)
+            .accessibilityIdentifier("ns-harness-store-\(n)")
+          }
+        } header: { Text("The harness brings") } footer: {
+          Text("Added by the router for this harness. Start refuses a sensitive one, or any store you didn't pick that isn't on this list.")
+        }
+      }
+
+      Section("Harness") {
+        ForEach(Harness.all) { h in
+          CheckRow(on: harness == h.id, id: "secure-harness-\(h.id)", action: { harness = h.id }) {
+            VStack(alignment: .leading) { Text(h.title); Text(h.sub).font(.footnote).foregroundStyle(.secondary) }
+          }
+        }
+      }
+
+      Section {
+        ForEach(model.repos) { r in
+          CheckRow(on: repos.contains(r.name), id: "ns-repo-\(r.name)", action: { toggleRepo(r) }) {
+            VStack(alignment: .leading) { Text(r.repo); Text(r.store).font(.footnote).foregroundStyle(.secondary) }
+          }
+        }
+      } header: { Text("Repos") } footer: {
+        if model.repos.isEmpty { Text("No repos yet: add some in Settings → Repos.") }
+        else if repos.isEmpty { Text("No repo selected: the session starts with an empty workspace.") }
+      }
+
+      Section("Permission mode") {
+        CheckRow(on: perm == "auto", id: "secure-mode-auto", action: { perm = "auto" }) {
+          VStack(alignment: .leading) { Text("Auto"); Text("Auto-approve safe actions; the permission classifier gates the rest.").font(.footnote).foregroundStyle(.secondary) }
+        }
+        CheckRow(on: perm == "bypass", id: "secure-mode-bypass", action: { perm = "bypass" }) {
+          VStack(alignment: .leading) { Text("Dangerously skip permissions"); Text("No prompts at all (--dangerously-skip-permissions).").font(.footnote).foregroundStyle(.secondary) }
+        }
+      }
+
+      Section("Options") {
+        if !models.isEmpty {
+          Picker("Model", selection: $modelId) { ForEach(models) { m in Text(m.label ?? m.id).tag(m.id) } }
+            .accessibilityIdentifier("ns-model")
+        }
+        if !model.sizes.isEmpty {
+          Picker("Machine size", selection: $size) { ForEach(model.sizes) { s in Text("\(s.id.capitalized) · \(s.label ?? "")").tag(s.id) } }
+            .accessibilityIdentifier("ns-size")
+        }
+        if !oneShot {
+          Toggle("Auto-pause when idle", isOn: $autoPause).accessibilityIdentifier("ns-autopause")
+        }
+        Toggle("API proxy", isOn: $apiProxy).accessibilityIdentifier("ns-apiproxy")
+      } footer: {
+        Text((oneShot ? "" : "Auto-pause pauses the machine after 1 h with nothing running; Resume brings it back with the conversation and files. ")
+             + "The API proxy logs every request to and response from the Anthropic API into ~/artifacts/api-log.")
+      }
+
+      Section {
+        if loaded && !toUnlock.isEmpty {
+          Text(scoped ? "Start also unlocks \(toUnlock.joined(separator: ", ")) (locked now) for this session only, with the same Face ID. The core locks \(toUnlock.count == 1 ? "it" : "them") again once the machine has its secrets; a paused session carries its secrets to its next machine."
+               : "Start also unlocks \(toUnlock.joined(separator: ", ")) (locked now), with the same Face ID.")
+            .accessibilityIdentifier("ns-unlocks")
+        }
+        if let failure { ErrorRow(text: failure, id: "secure-error") }
+        SigningFooter()
+      }
+    }
+    .navigationTitle("New session")
+    .navigationBarTitleDisplayMode(.inline)
+    .toolbar {
+      ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() }.disabled(busy != nil).accessibilityIdentifier("secure-back") }
+      ToolbarItem(placement: .confirmationAction) {
+        Button(busy ?? "Start") { Task { await start() } }.disabled(!canStart).accessibilityIdentifier("secure-create")
+      }
+    }
+    .interactiveDismissDisabled(busy != nil)
+    .task { await load() }
+    .onChange(of: harness) { pickModel() }
+    .onChange(of: model.models) { pickModel() }
+    .onChange(of: model.repos) { defaultRepo() }
+  }
+
+  private func toggle(_ n: String) { if picked.contains(n) { picked.remove(n) } else { picked.insert(n) } }
+  /// picking a repo picks its deploy-key store too when that is offered and not sensitive
+  private func toggleRepo(_ r: RepoEntry) {
+    repoDefaulted = true
+    if repos.contains(r.name) { repos.remove(r.name); return }
+    repos.insert(r.name)
+    if let s = offered.first(where: { $0.name == r.store }), !s.sensitive { picked.insert(s.name) }
+  }
+  /// DE0CH/claude-env, once, when the page first has both the repo list and the stores
+  private func defaultRepo() {
+    guard !repoDefaulted, !stores.isEmpty, !model.repos.isEmpty else { return }
+    repoDefaulted = true
+    if let r = model.repos.first(where: { $0.repo.caseInsensitiveCompare(Self.defaultRepo) == .orderedSame }), !repos.contains(r.name) { toggleRepo(r) }
+  }
+  private func pickModel() { if !models.contains(where: { $0.id == modelId }) { modelId = models.first?.id ?? "" } }
+  private func apply(_ list: [StoreView]) {
+    let first = stores.isEmpty
+    stores = list
+    if first && picked.isEmpty, offered.contains(where: { $0.name == "default" && !$0.sensitive }) { picked = ["default"] }
+    picked = picked.intersection(offered.map(\.name))
+    defaultRepo()
+  }
+  private func load() async {
+    pickModel()
+    if model.stores.loaded { apply(model.stores.items); loaded = true }
+    if model.repos.isEmpty { await model.refresh() }
+    do {
+      let d = try await RouterClient.shared.storesDoc()
+      scoped = d.scopedUnlocks == true
+      apply(d.stores)
+      loaded = true
+    } catch { if !loaded { loadError = errText(error) } }
+    if model.models.isEmpty { await model.loadLists() }
+    pickModel()
+    defaultRepo()
+  }
+
+  private func start() async {
+    failure = nil
+    let want = picked.sorted(), rid = CoreCrypto.nonce()
+    let title = label.trimmingCharacters(in: .whitespacesAndNewlines)
+    do {
+      let key = try CoreTrust.key()
+      busy = "Requesting…"
+      let chosen = model.repos.filter { repos.contains($0.name) }
+      let body: [String: Any] = ["requestId": rid, "stores": want, "harness": harness, "permissionMode": perm, "label": title,
+                                 "prompt": trimmedPrompt, "model": modelId, "size": size, "oneShot": oneShot,
+                                 "autoPause": !oneShot && autoPause, "repos": chosen.map(\.url).joined(separator: ","), "apiProxy": apiProxy]
+      try await RouterClient.shared.call("POST", "api/sessions", body)
+      // the core's challenge comes before any machine exists
+      var found: RouterClient.ApprovalDTO?
+      let until = Date.now.addingTimeInterval(60)
+      while found == nil && Date.now < until {
+        let st = try await RouterClient.shared.approvalsState()
+        if let s = st.sessions.first(where: { $0.createRequestId == rid }) {
+          if s.state == "failed" { throw RouterError(message: "The router couldn't make the request.") }
+          found = st.approvals.first { $0.session == s.id && $0.kind == "new-session" }
+        }
+        if found == nil { try await Task.sleep(for: .milliseconds(700)) }
+      }
+      guard let a = found else { throw RouterError(message: "No approval yet: it will wait in the Inbox.") }
+      let r = try Checks.review(challenge: a.challenge, coreKey: key)
+      // sign only what was chosen here
+      try Checks.matchesPicked(r, stores: want, harnessStores: model.policy[harness] ?? [], harness: harness, permissionMode: perm)
+      // what the router added beyond the picks must be the harness's own by this app's pinned policy, and never
+      // sensitive (audit finding 2: a lying api/policy could otherwise slip a sensitive store into the signature)
+      _ = try await ImageAttestation.check(image: r.image, sig: a.imageSig)
+      _ = try Checks.onlyHarnessExtras(r, picked: want, pinnedHarness: PinnedPolicy.stores(harness, router: model.policy))
+      // …and, with a core that vouches, exactly these settings: the cert carries them to the machine (DESIGN "Inputs")
+      try Checks.matchesSettings(r, .init(label: title, prompt: trimmedPrompt, model: modelId, repos: chosen.map(\.url), oneShot: oneShot, apiProxy: apiProxy))
+      // the stores the challenge carries that are locked now (fresh from the core): opened under the same Face ID
+      let now = try await RouterClient.shared.stores()
+      let locked = r.stores.filter { n in now.contains { $0.name == n && !$0.unlocked && !$0.empty } }
+      busy = "Signing…"
+      let reason = "Start \"\(title.isEmpty ? "New session" : title)\"" + (locked.isEmpty ? "" : " and unlock \(locked.joined(separator: ", "))")
+      guard let sig = try await StoreUnlock.signAndUnlock(payload: a.challenge.payload, stores: locked, reason: reason, for: scoped ? r.challenge.nonce : nil) else {
+        throw TrustError.stale("signature")
+      }
+      busy = "Starting…"
+      let ans = try await RouterClient.shared.respond(a.id, signature: sig)
+      try Checks.answerFor(r, answer: ans.answer, coreKey: key)
+      model.secureCompleted(true)
+    } catch {
+      busy = nil
+      failure = errText(error)
+    }
+  }
+}
+
+/// a row that is picked or not (a checkmark), as Settings lists choices; VoiceOver and UI tests see it as selected
+struct CheckRow<Content: View>: View {
+  let on: Bool
+  let id: String
+  let action: () -> Void
+  @ViewBuilder let content: () -> Content
+  var body: some View {
+    Button(action: action) {
+      HStack {
+        content()
+        Spacer()
+        Image(systemName: "checkmark").foregroundStyle(.tint).opacity(on ? 1 : 0)
+      }
+      .contentShape(.rect)
+    }
+    .foregroundStyle(.primary)
+    .accessibilityIdentifier(id)
+    .accessibilityAddTraits(on ? .isSelected : [])
+  }
+}

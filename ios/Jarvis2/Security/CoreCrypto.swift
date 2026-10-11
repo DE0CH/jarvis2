@@ -1,4 +1,4 @@
-// The shell's side of the core's formats (core/crypto.go, core/core.go), with no UI, network or Keychain in
+// The app's side of the core's formats (core/crypto.go, core/core.go), with no UI, network or Keychain in
 // it, so the same file is compiled into the interop test (ios/interop) that runs it against the real core.
 //   - a signed document is {payload, sig}: sig = base64 DER ECDSA-P256-SHA256 over the payload's bytes;
 //   - public keys are base64 of the 65-byte uncompressed X9.63 point;
@@ -151,6 +151,8 @@ struct SuccessionRequest: Codable {
   let kind: String
   let predecessor: SignedDoc?
   let predecessorId: String?
+  /// the line's first machine ("" or nil = a new line)
+  var line: String? = nil
   let machine: StartedMachine?
   let image: String?
   let stores: [String]?
@@ -171,7 +173,13 @@ struct StoreView: Codable, Identifiable, Equatable {
 }
 /// scopedUnlocks: the core takes unlocks for one session (unlock_begin's "for"; then `unlocked` = open to every
 /// session); nil from a core that predates them
-struct StoresDoc: Codable { let kind: String; let nonce: String; let stores: [StoreView]; let scopedUnlocks: Bool? }
+struct StoresDoc: Codable {
+  let kind: String; let nonce: String; let stores: [StoreView]; let scopedUnlocks: Bool?
+  /// the core vouches for who wrote each store's blob (unlock-begin's `writer`); then an unlock without one is refused
+  var writers: Bool? = nil
+}
+/// who wrote a store's sealed blob: the core itself, or the setup session (its key's signature over the blob, Checks.writer)
+struct StoreWriter: Codable, Equatable { let by: String; var sig: String? = nil; var dataSha256: String? = nil }
 /// forNonce: the one challenge or cert the unlock is for ("" or nil = standing, open to every session)
 struct UnlockRow: Codable, Identifiable, Equatable {
   let id: String; let store: String; let since: String; let forNonce: String?
@@ -180,7 +188,9 @@ struct UnlockRow: Codable, Identifiable, Equatable {
 struct UnlockedDoc: Codable { let kind: String; let nonce: String; let unlocked: [UnlockRow] }
 struct UnlockBegin: Codable {
   let kind: String; let pending: String; let store: String; let e: String; let t: String; let forNonce: String?
-  enum CodingKeys: String, CodingKey { case kind, pending, store, e, t, forNonce = "for" }
+  var writer: StoreWriter? = nil
+  var dataSha256: String? = nil
+  enum CodingKeys: String, CodingKey { case kind, pending, store, e, t, forNonce = "for", writer, dataSha256 }
 }
 struct KindDoc: Codable { let kind: String; let id: String?; let store: String?; let name: String?; let stores: Int?; let core: String? }
 
@@ -282,6 +292,9 @@ enum Checks {
 struct DeployKeyBegin: Codable, Equatable {
   let kind: String, pending: String, action: String, repo: String, store: String
   let sensitive: Bool, replaces: Bool, title: String, tokenStore: String, e: String, t: String
+  /// who wrote the token store's blob (as unlock-begin's writer)
+  var tokenWriter: StoreWriter? = nil
+  var tokenDataSha256: String? = nil
 }
 /// the core's answer once it is done: "deploy-key-added" (with the key's fingerprint) or "deploy-key-removed"
 struct DeployKeyAnswer: Codable {
@@ -332,6 +345,7 @@ extension Checks {
 /// against, and the stores the session holds
 struct SessionCert: Codable {
   let kind: String
+  var machine: StartedMachine? = nil
   let stores: [String]?
   let options: Options?
   let phone: String?
@@ -386,5 +400,96 @@ extension Checks {
     default: throw TrustError.mismatch("kind")
     }
     return g
+  }
+}
+
+// ---- which session a signed document is about (audit 2026-10-11: never the router's word) ------------------------
+/// A session line as the core signed it: the identity a review page shows and binds to. From a cert (the session's
+/// own, or the predecessor a succession challenge carries); `label` and `prompt` are the settings Deyao gave it on New
+/// session, which a core that vouches puts in every cert (options.config); an earlier core's certs carry none.
+struct LineIdentity: Equatable {
+  let line: String
+  let machine: String?
+  let issuedAt: String?
+  let label: String?
+  let prompt: String?
+  let sensitive: Bool
+  let stores: [String]
+
+  init(cert c: SessionCert) {
+    line = c.line
+    machine = c.machine?.id
+    issuedAt = c.issuedAt
+    let cfg = Checks.object(c.options?.config)
+    label = (cfg?["label"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+    prompt = (cfg?["prompt"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+    sensitive = c.sensitive == true
+    stores = c.stores ?? []
+  }
+  /// one line naming it: “label” (line …, machine …), or the line alone for an untitled session
+  var words: String {
+    let name = label.map { "“\($0)”" } ?? "an untitled session"
+    var ids = "line \(line)"
+    if let machine, machine != line { ids += ", machine \(machine)" }
+    return "\(name) (\(ids))"
+  }
+}
+
+extension Checks {
+  /// The session a succession challenge continues: its predecessor's cert, checked against the core key; the
+  /// challenge's own line (when it names one) must be that cert's. nil for a new line (no predecessor).
+  static func continues(_ r: Reviewed, coreKey: String) throws -> LineIdentity? {
+    guard let p = r.challenge.request.predecessor else { return nil }
+    let c = try cert(p, coreKey: coreKey)
+    if let l = r.challenge.request.line, !l.isEmpty, l != c.line { throw TrustError.mismatch("the challenge's line isn't its predecessor's") }
+    if let pid = r.challenge.request.predecessorId, !pid.isEmpty, let m = c.machine, m.id != pid { throw TrustError.mismatch("the predecessor named isn't the cert's machine") }
+    if r.kind == .addStore, let m = r.challenge.request.machine, let cm = c.machine, cm.id != m.id { throw TrustError.mismatch("the machine isn't the predecessor's") }
+    return LineIdentity(cert: c)
+  }
+
+  /// The page was opened for a session the app knows by its New-session title (unsigned, the router's record); the
+  /// signed identity must not name another one. Both untitled: nothing to compare (the page shows the line instead).
+  static func sameSession(_ id: LineIdentity, expectedLabel: String?) throws {
+    guard let want = expectedLabel, !want.isEmpty, let got = id.label else { return }
+    if want != got { throw TrustError.mismatch("the signed session is “\(got)”, not “\(want)”") }
+  }
+
+  /// New session: every store the challenge carries beyond those picked on the page must be one the harness brings
+  /// by the app's own (pinned) policy, and none of them may be sensitive: a sensitive store is only ever a tap on
+  /// the page. Returns those extra stores.
+  static func onlyHarnessExtras(_ r: Reviewed, picked: [String], pinnedHarness: [String]) throws -> [String] {
+    let extra = r.stores.filter { !picked.contains($0) }
+    for n in extra {
+      if !pinnedHarness.contains(n) { throw TrustError.mismatch("store \(n) wasn't picked and isn't the harness's") }
+      if r.sensitive.contains(n) { throw TrustError.mismatch("the harness's store \(n) is sensitive: pick it on the page yourself") }
+    }
+    return extra
+  }
+}
+
+// ---- who wrote a store, and which image CI built (agreed with the R1 server fixes, 2026-10-11) ------------------
+extension Checks {
+  /// The blob the phone's share opens must be one the core wrapped itself, or one the setup session wrote (its key's
+  /// signature over "jarvis2-store-blob\n<store>\n<E>\n<sha256 of the blob>"). A core whose signed store list says
+  /// it vouches for writers (`required`) must name one; an earlier core names none and is let through.
+  static func writer(_ w: StoreWriter?, store: String, e: String, dataSha256: String?, setupKey: String?, required: Bool) throws {
+    guard let w else {
+      if required { throw TrustError.mismatch("the core names no writer for store \(store)") }
+      return
+    }
+    switch w.by {
+    case "core": return
+    case "setup":
+      guard let sig = w.sig, let sum = w.dataSha256 ?? dataSha256, !sum.isEmpty, let key = setupKey else { throw TrustError.mismatch("store \(store)'s writer can't be checked") }
+      let text = "jarvis2-store-blob\n\(store)\n\(e)\n\(sum)"
+      guard CoreCrypto.valid(Data(text.utf8), sig: sig, by: key) else { throw TrustError.badSignature("store \(store)'s writer (not the setup key)") }
+    default: throw TrustError.mismatch("store \(store) was written by \(w.by)")
+    }
+  }
+
+  /// CI's signature over the session image (keys/ci.pub): "jarvis2-session-image <ref>"
+  static func imageAttested(_ image: String, sig: String?, ciKey: String) -> Bool {
+    guard let sig, !image.isEmpty else { return false }
+    return CoreCrypto.valid(Data("jarvis2-session-image \(image)".utf8), sig: sig, by: ciKey)
   }
 }
