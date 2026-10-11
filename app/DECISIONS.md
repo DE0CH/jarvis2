@@ -158,6 +158,16 @@ fixes, 34–40 carried over from the old app and still true, 41–43 the web pag
     where the app would open a review, it files an Inbox request ("approve it in the Jarvis 2 app").
 43. `web.yml` typechecks and exports it; the router serves the export at `/`.
 
+## Finishing the native app (2026-10-11, late; decided while Deyao was away)
+
+44. **Reset sends the blobs form** (R2) to a core with a store key (an empty bundle), like Recover; an earlier core gets
+    the older empty bundle. Once this build has shipped, the core takes only the blobs form.
+45. **The terminal never shows a blank page**: a native progress view covers the web view until the page has loaded; a
+    load failure says why, with Try again.
+46. **A Face ID sheet that never came up is asked for again** (simulator only, LocalAuthentication -1000 "UI activation
+    timed out", 3 tries): a busy iOS 27 simulator failed the replica's Reset that way. A real phone's Secure Enclave
+    prompt is untouched.
+
 ## Unfinished / known gaps
 
 - Free text (prompt, title) reaches the machine signed only with a core that vouches (the held core doesn't).
