@@ -143,8 +143,10 @@ struct RecoveryKit {
 
 // ---- the core's documents (core/core.go) ----
 struct StartedMachine: Codable, Equatable { let id: String; let requested: String?; let image: String; let encryptionKey: String; let signingKey: String }
-/// the core's signed options: the harness and the permission mode ("auto" | "bypass")
-struct Options: Codable, Equatable { let harness: String?; var permissionMode: String? = nil }
+/// the core's signed options: the harness, the permission mode ("auto" | "bypass"), and from a core that vouches for
+/// inputs (docs/DESIGN.md "Inputs to a machine") the session's settings (config: a JSON object) and one machine's
+/// one-time inputs (once: a resume's prompt, a rollback)
+struct Options: Codable, Equatable { let harness: String?; var permissionMode: String? = nil; var config: String? = nil; var once: String? = nil }
 struct SuccessionRequest: Codable {
   let kind: String
   let predecessor: SignedDoc?
@@ -190,6 +192,33 @@ enum Checks {
     let kind: Kind; let challenge: Challenge; let stores: [String]; let sensitive: [String]; let harness: String; let image: String; let addedStore: String?
     /// from the signed challenge itself: "bypass" or "auto" (an absent mode is auto, as the core normalises it)
     var permissionMode: String { challenge.request.options.permissionMode == "bypass" ? "bypass" : "auto" }
+    /// the signed settings (nil: none — an older core, or a burn)
+    var config: [String: Any]? { Checks.object(challenge.request.options.config) }
+    var once: [String: Any]? { Checks.object(challenge.request.options.once) }
+  }
+
+  /// a JSON value as one line, keys sorted (what the page shows of a signed value it has no field for)
+  static func compact(_ v: Any?) -> String {
+    guard let v, JSONSerialization.isValidJSONObject(v),
+          let d = try? JSONSerialization.data(withJSONObject: v, options: [.sortedKeys, .withoutEscapingSlashes]) else { return v.map { "\($0)" } ?? "none" }
+    return String(decoding: d, as: UTF8.self)
+  }
+
+  static func object(_ s: String?) -> [String: Any]? {
+    guard let s, !s.isEmpty, let d = s.data(using: .utf8) else { return nil }
+    return (try? JSONSerialization.jsonObject(with: d)) as? [String: Any]
+  }
+
+  /// the keys a session's settings may have (machine/vouch.go SessionConfig) and a one-time input (OnceInputs);
+  /// a challenge with anything else is refused: the phone must show all that it signs
+  static let configKeys: Set<String> = ["v", "label", "prompt", "model", "repos", "oneShot", "apiProxy", "attachments", "restore", "task"]
+  static let onceKeys: Set<String> = ["prompt", "rollback"]
+
+  static func checkKnown(_ r: Reviewed) throws {
+    if let c = r.config, !Set(c.keys).isSubset(of: configKeys) { throw TrustError.mismatch("settings this app can't show") }
+    if let o = r.once, !Set(o.keys).isSubset(of: onceKeys) { throw TrustError.mismatch("one-time inputs this app can't show") }
+    if r.challenge.request.options.config?.isEmpty == false && r.config == nil { throw TrustError.mismatch("settings that aren't a JSON object") }
+    if r.challenge.request.options.once?.isEmpty == false && r.once == nil { throw TrustError.mismatch("one-time inputs that aren't a JSON object") }
   }
 
   /// the challenge is core-signed; what it asks for comes from its own fields
@@ -203,7 +232,28 @@ enum Checks {
     else if !pred.isEmpty { kind = .resumeUpgrade }
     else { kind = .newSession }
     let image = r.machine?.image ?? r.image ?? ""
-    return Reviewed(kind: kind, challenge: ch, stores: r.stores ?? [], sensitive: r.sensitive ?? [], harness: r.options.harness ?? "", image: image, addedStore: r.addedStore)
+    let rv = Reviewed(kind: kind, challenge: ch, stores: r.stores ?? [], sensitive: r.sensitive ?? [], harness: r.options.harness ?? "", image: image, addedStore: r.addedStore)
+    try checkKnown(rv)
+    return rv
+  }
+
+  /// what the New session page chose besides stores, harness and mode: with a core that vouches, the signed settings
+  /// must be exactly these (nil = not checked: an older caller). No attachments, restore or task from this page.
+  struct Settings {
+    var label: String; var prompt: String; var model: String; var repos: [String]; var oneShot: Bool; var apiProxy: Bool
+  }
+
+  static func matchesSettings(_ r: Reviewed, _ s: Settings) throws {
+    guard let c = r.config else { return } // an older core: no settings travel in the cert (the machine takes none)
+    func str(_ k: String) -> String { (c[k] as? String) ?? "" }
+    guard str("label") == s.label else { throw TrustError.mismatch("title") }
+    guard str("prompt") == s.prompt else { throw TrustError.mismatch("first prompt") }
+    if !s.model.isEmpty { guard str("model") == s.model else { throw TrustError.mismatch("model") } }
+    guard ((c["repos"] as? [String]) ?? []) == s.repos else { throw TrustError.mismatch("repos") }
+    guard ((c["oneShot"] as? Bool) ?? false) == s.oneShot else { throw TrustError.mismatch("one-shot") }
+    guard ((c["apiProxy"] as? Bool) ?? false) == s.apiProxy else { throw TrustError.mismatch("API proxy") }
+    for k in ["attachments", "restore", "task"] where c[k] != nil { throw TrustError.mismatch(k) }
+    guard r.once == nil else { throw TrustError.mismatch("one-time inputs") }
   }
 
   /// the secure New session page: the challenge carries exactly the stores picked there (plus the harness's

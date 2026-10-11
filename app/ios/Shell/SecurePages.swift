@@ -292,6 +292,9 @@ struct SecureNewSession: View {
       let r = try Checks.review(challenge: a.challenge, coreKey: key)
       let hs = lists.harnessStores[harness] ?? []
       try Checks.matchesPicked(r, stores: want, harnessStores: hs, harness: harness, permissionMode: perm)  // sign only what was chosen here
+      // …and, with a core that vouches, exactly these settings: the cert carries them to the machine (DESIGN "Inputs")
+      try Checks.matchesSettings(r, .init(label: title, prompt: prompt.trimmingCharacters(in: .whitespacesAndNewlines), model: model,
+                                          repos: chosen.map(\.url), oneShot: oneShot, apiProxy: apiProxy))
       // the stores the challenge carries that are locked now (fresh from the core): opened under the same Face ID
       let now = try await RouterClient.shared.stores()
       shell.prefetched = now
@@ -383,6 +386,43 @@ struct SecureUnlock: View {
   }
 }
 
+// ---- the signed settings and one-time inputs of a challenge (core Options.Config / Once), as signed ------------
+/// Everything here comes from the core-signed challenge, never the router's words: what the machine will take.
+struct SignedSettings: View {
+  let r: Checks.Reviewed
+  var body: some View {
+    let c = r.config ?? [:], o = r.once ?? [:]
+    let s = { (k: String) -> String in (c[k] as? String) ?? "" }
+    VStack(alignment: .leading, spacing: 0) {
+      if r.kind == .newSession {
+        if !s("label").isEmpty { Lbl(text: "Title"); Muted(text: s("label")).accessibilityIdentifier("signed-label") }
+        if !s("prompt").isEmpty { Lbl(text: "First prompt"); Muted(text: s("prompt")).textSelection(.enabled).accessibilityIdentifier("signed-prompt") }
+        if let atts = c["attachments"] as? [[String: Any]], !atts.isEmpty {
+          Lbl(text: "Attachments (checked by hash on the machine)")
+          Muted(text: atts.map { a in "\((a["name"] as? String) ?? "?") (\(((a["sha256"] as? String) ?? "").prefix(12))…)" }.joined(separator: "\n")).accessibilityIdentifier("signed-attachments")
+        }
+        if let rs = c["restore"] as? [String: Any] {
+          Lbl(text: "Restores")
+          Muted(text: "the archived snapshot of machine \((rs["machine"] as? String) ?? "?") (sha256 \(((rs["sha256"] as? String) ?? "").prefix(12))…)").accessibilityIdentifier("signed-restore")
+        }
+        if let repos = c["repos"] as? [String], !repos.isEmpty { Lbl(text: "Repos"); Muted(text: repos.joined(separator: "\n")).accessibilityIdentifier("signed-repos") }
+        if !s("model").isEmpty { Lbl(text: "Model"); Muted(text: s("model")) }
+        if (c["oneShot"] as? Bool) == true { Muted(text: "One-shot: it runs its prompt, then is archived and destroyed.").padding(.top, 4) }
+        if (c["apiProxy"] as? Bool) == true { Muted(text: "API proxy: every API request and response is logged into ~/artifacts/api-log.").padding(.top, 4) }
+        if let t = c["task"] as? [String: Any] {
+          Lbl(text: "Task"); Muted(text: "\((t["name"] as? String) ?? "") — parameters: \(Checks.compact(t["params"]))")
+        }
+      }
+      if let p = o["prompt"] as? String, !p.isEmpty {
+        Lbl(text: "Prompt typed into the resumed conversation"); Muted(text: p).textSelection(.enabled).accessibilityIdentifier("signed-once-prompt")
+      }
+      if let m = o["rollback"] as? String, !m.isEmpty {
+        Callout(text: "Rolls the conversation back: every transcript line from the first containing “\(m)” is dropped.", amber: true).padding(.top, 8).accessibilityIdentifier("signed-once-rollback")
+      }
+    }
+  }
+}
+
 // ---- an approval (new session from the web, resume on the latest image, add a store) -------------------
 struct SecureApproval: View {
   let shell: Shell
@@ -419,17 +459,18 @@ struct SecureApproval: View {
           Lbl(text: "Secret stores"); StoreLines(stores: r.stores, sensitive: r.sensitive, harness: harnessStores)
         case .newSession:
           if let rs = a.options?["restore"], !rs.isEmpty {
-            Muted(text: "Restores the archived session \(rs): its first machine restores that snapshot (the router's word — not part of what you sign).").padding(.top, 8).accessibilityIdentifier("secure-restore")
+            Muted(text: r.config?["restore"] != nil ? "Restores the archived session \(rs): the snapshot below is part of what you sign."
+                  : "Restores the archived session \(rs) (this core doesn't sign which snapshot: the machine restores none).").padding(.top, 8).accessibilityIdentifier("secure-restore")
           } else {
             Muted(text: "Requested outside this app (the web page or another device): check it is yours.").padding(.top, 8)
           }
-          if a.options?["oneShot"] == "1" { Muted(text: "One-shot: it runs its prompt, then is archived and destroyed.").padding(.top, 4) }
           Lbl(text: "Secret stores"); StoreLines(stores: r.stores, sensitive: r.sensitive, harness: harnessStores)
         case .other:
           Muted(text: "A request this page has no special view for — what you sign is below.").padding(.top, 8)
           Lbl(text: "Secret stores"); StoreLines(stores: r.stores, sensitive: r.sensitive, harness: harnessStores)
           Lbl(text: "The challenge"); Text(r.challenge.request.kind).kitText(1, mono: true).foregroundStyle(Radix.gray.s[12])
         }
+        SignedSettings(r: r)
         let warn = r.kind == .addStore ? r.sensitive.filter { $0 == r.addedStore } : r.sensitive
         if !warn.isEmpty {
           Callout(text: "This session will hold sensitive secrets: \(warn.joined(separator: ", ")).", amber: true).padding(.top, 12).accessibilityIdentifier("secure-sensitive-warning")

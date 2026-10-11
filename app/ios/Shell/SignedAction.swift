@@ -20,14 +20,23 @@ enum SignedAction {
     return s
   }
 
+  /// the signed settings and one-time inputs, word for word (what the machine takes: docs/DESIGN.md "Inputs")
+  static func inputs(_ r: Checks.Reviewed) -> String {
+    var s = ""
+    if let c = r.challenge.request.options.config, !c.isEmpty { s += " Settings it takes: \(Checks.compact(r.config))." }
+    else if r.kind == .newSession || r.kind == .resumeUpgrade { s += " No settings travel in the cert (this core doesn't carry them): no prompt, title, model or repos beyond the stores' own." }
+    if let o = r.challenge.request.options.once, !o.isEmpty { s += " One-time inputs for this machine: \(Checks.compact(r.once))." }
+    return s
+  }
+
   /// a succession, from the core-signed challenge (Checks.review)
   static func approval(_ r: Checks.Reviewed) -> String {
     let sens = r.sensitive.isEmpty ? "" : " (sensitive: \(list(r.sensitive)))"
     switch r.kind {
     case .newSession:
-      return "Core: approve a new session machine on image \(r.image) with stores \(list(r.stores))\(sens), harness \(r.harness), permission mode \(r.permissionMode)."
+      return "Core: approve a new session machine on image \(r.image) with stores \(list(r.stores))\(sens), harness \(r.harness), permission mode \(r.permissionMode)." + inputs(r)
     case .resumeUpgrade:
-      return "Core: continue the paused session on a new machine on image \(r.image) with stores \(list(r.stores))\(sens), harness \(r.harness), permission mode \(r.permissionMode)."
+      return "Core: continue the paused session on a new machine on image \(r.image) with stores \(list(r.stores))\(sens), harness \(r.harness), permission mode \(r.permissionMode)." + inputs(r)
     case .addStore:
       let added = r.addedStore ?? ""
       return "Core: add store \(added)\(r.sensitive.contains(added) ? " (sensitive)" : "") to the running machine \(r.challenge.request.machine?.id ?? ""), which keeps its keys; it then holds \(list(r.stores))."

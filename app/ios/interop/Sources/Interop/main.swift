@@ -195,23 +195,43 @@ func start(_ image: String) -> StartedMachine {
   try! CoreCrypto.decode(doc(call("/start", ["image": image, "region": "lhr", "size": "small"]).1), by: coreKey, as: StartedDoc.self, what: "start").machine
 }
 
+// the core starts only the session image pinned by digest (core/vouch.go)
+let img = "ghcr.io/de0ch/jarvis2-session:1@sha256:" + String(repeating: "1", count: 64)
+let img2 = "ghcr.io/de0ch/jarvis2-session:2@sha256:" + String(repeating: "2", count: 64)
+
+// a core that vouches for inputs carries the session's settings in the challenge; the page checks them and refuses
+// a key it can't show
+let conf = #"{"v":1,"label":"T","prompt":"do it","repos":["https://github.com/DE0CH/claude-env.git"],"oneShot":true}"#
+let chC = challenge(["predecessor": NSNull(), "stores": ["default"], "options": ["harness": "claude", "permissionMode": "auto", "config": conf], "image": img])
+let rC = try! Checks.review(challenge: chC, coreKey: coreKey)
+check((rC.config?["prompt"] as? String) == "do it", "the signed settings are read from the challenge")
+let picked = Checks.Settings(label: "T", prompt: "do it", model: "", repos: ["https://github.com/DE0CH/claude-env.git"], oneShot: true, apiProxy: false)
+check(!throwsErr { try Checks.matchesSettings(rC, picked) }, "the settings match what the page chose")
+var other = picked; other.prompt = "exfiltrate"
+check(throwsErr { try Checks.matchesSettings(rC, other) }, "refused when the signed prompt isn't the page's")
+other = picked; other.repos = []
+check(throwsErr { try Checks.matchesSettings(rC, other) }, "refused when the signed repos aren't the page's")
+check(SignedAction.approval(rC).contains("do it"), "what you sign names the settings word for word")
+let chX = challenge(["predecessor": NSNull(), "stores": ["default"], "options": ["harness": "claude", "config": #"{"v":1,"evil":"x"}"#], "image": img])
+check(throwsErr { _ = try Checks.review(challenge: chX, coreKey: coreKey) }, "a setting the app can't show is refused")
+
 // new session
-let ch1 = challenge(["predecessor": NSNull(), "stores": ["default", "claude-login"], "options": ["harness": "claude", "permissionMode": "bypass"], "image": "img"])
+let ch1 = challenge(["predecessor": NSNull(), "stores": ["default", "claude-login"], "options": ["harness": "claude", "permissionMode": "bypass"], "image": img])
 let r1 = try! Checks.review(challenge: ch1, coreKey: coreKey)
-check(r1.kind == .newSession && r1.stores == ["claude-login", "default"] && r1.harness == "claude" && r1.image == "img", "new-session challenge read from its own fields")
+check(r1.kind == .newSession && r1.stores == ["claude-login", "default"] && r1.harness == "claude" && r1.image == img, "new-session challenge read from its own fields")
 check(r1.permissionMode == "bypass", "the permission mode is read from the signed challenge (\(r1.permissionMode))")
 check(!throwsErr { try Checks.matchesPicked(r1, stores: ["default"], harnessStores: ["claude-login"], harness: "claude", permissionMode: "bypass") }, "matches what was picked plus the harness's store")
 check(throwsErr { try Checks.matchesPicked(r1, stores: ["default", "gmail"], harnessStores: ["claude-login"], harness: "claude", permissionMode: "bypass") }, "refused when the stores differ")
 check(throwsErr { try Checks.matchesPicked(r1, stores: ["default"], harnessStores: ["claude-login"], harness: "opencode", permissionMode: "bypass") }, "refused when the harness differs")
 check(throwsErr { try Checks.matchesPicked(r1, stores: ["default"], harnessStores: ["claude-login"], harness: "claude", permissionMode: "auto") }, "refused when the permission mode differs")
-let chAuto = challenge(["predecessor": NSNull(), "stores": ["default"], "options": ["harness": "claude"], "image": "img"])
+let chAuto = challenge(["predecessor": NSNull(), "stores": ["default"], "options": ["harness": "claude"], "image": img])
 check((try? Checks.review(challenge: chAuto, coreKey: coreKey))?.permissionMode == "auto", "a challenge without a mode reads as auto (the core's default)")
 check(throwsErr { _ = try Checks.review(challenge: SignedDoc(payload: ch1.payload, sig: try! P256.Signing.PrivateKey().signature(for: Data(ch1.payload.utf8)).derRepresentation.base64EncodedString()), coreKey: coreKey) }, "a challenge not signed by the core is refused")
 let forged = try! P256.Signing.PrivateKey().signature(for: Data(ch1.payload.utf8)).derRepresentation.base64EncodedString()
 check(call("/approve/by-phone", ["challenge": docJSON(ch1), "signature": forged]).0 == 403, "the core refuses a signature by another key")
 let (a1s, a1) = approve(ch1)
 check(a1s == 200 && !throwsErr { try Checks.answerFor(r1, answer: a1!, coreKey: coreKey) }, "the phone's signature → the core's approval")
-let m1 = start("img")
+let m1 = start(img)
 let (c1s, c1d) = call("/certify", ["approval": docJSON(a1!), "machine": m1.id])
 check(c1s == 200, "the approval certifies the started machine")
 let cert1 = doc(c1d)
@@ -255,7 +275,7 @@ let sig = try! phoneSigning.signature(for: Data(grantText(good).utf8)).derRepres
 check(CoreCrypto.valid(Data(grantText(good).utf8), sig: sig, by: sc?.phone ?? ""), "the phone's signature checks against the key in the cert (what the machine does)")
 
 // a task's line: an ordinary new-session challenge whose signed harness is task:<template>
-let chT = challenge(["predecessor": NSNull(), "stores": ["default"], "options": ["harness": "task:hello", "permissionMode": "auto"], "image": "img"])
+let chT = challenge(["predecessor": NSNull(), "stores": ["default"], "options": ["harness": "task:hello", "permissionMode": "auto"], "image": img])
 let rT = try? Checks.review(challenge: chT, coreKey: coreKey)
 check(rT?.kind == .newSession && rT?.harness == "task:hello" && rT?.permissionMode == "auto", "a task's challenge is a new session on harness task:hello (\(rT?.harness ?? "?"))")
 if let rt = rT {
@@ -274,18 +294,18 @@ check(throwsErr { try Checks.answerFor(r2, answer: a1!, coreKey: coreKey) }, "an
 
 // resume on the latest image: approval first, then the machine
 check(call("/kill", ["machine": m1.id]).0 == 200, "kill the machine (pause)")
-let ch3 = challenge(["predecessor": docJSON(a2!), "stores": ["claude-login", "default", "gmail"], "options": ["harness": "claude", "permissionMode": "auto"], "image": "img2"])
+let ch3 = challenge(["predecessor": docJSON(a2!), "stores": ["claude-login", "default", "gmail"], "options": ["harness": "claude", "permissionMode": "auto"], "image": img2])
 let r3 = try! Checks.review(challenge: ch3, coreKey: coreKey)
-check(r3.kind == .resumeUpgrade && r3.image == "img2" && r3.permissionMode == "auto", "resume-upgrade challenge read from its own fields (mode \(r3.permissionMode))")
+check(r3.kind == .resumeUpgrade && r3.image == img2 && r3.permissionMode == "auto", "resume-upgrade challenge read from its own fields (mode \(r3.permissionMode))")
 let (a3s, a3) = approve(ch3)
 check(a3s == 200 && !throwsErr { try Checks.answerFor(r3, answer: a3!, coreKey: coreKey) }, "the phone approves the resume")
-let m2 = start("img2")
+let m2 = start(img2)
 check(call("/certify", ["approval": docJSON(a3!), "machine": m2.id]).0 == 200, "…and the new machine is certified")
 
 // a sensitive line: no standing rule
-let ch4 = challenge(["predecessor": NSNull(), "stores": ["gmail"], "options": ["harness": "claude"], "image": "img"])
+let ch4 = challenge(["predecessor": NSNull(), "stores": ["gmail"], "options": ["harness": "claude"], "image": img])
 let (a4s, a4) = approve(ch4)
-let (c4s, c4d) = a4 == nil ? (0, Data()) : call("/certify", ["approval": docJSON(a4!), "machine": start("img").id])
+let (c4s, c4d) = a4 == nil ? (0, Data()) : call("/certify", ["approval": docJSON(a4!), "machine": start(img).id])
 if a4s == 200, c4s == 200, let sc4 = try? Checks.cert(doc(c4d), coreKey: coreKey) {
   check(sc4.sensitive == true, "a session with a sensitive store has a sensitive cert")
   var r4 = rule; r4["session"] = sc4.line
