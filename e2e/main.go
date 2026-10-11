@@ -274,7 +274,7 @@ func main() {
 	step("store key names: recorded by setup, listed to the session for every store (not only its own)")
 	must2(call(router, "POST", "/setup/store-keys", map[string]any{"name": "e2e-extra", "keys": []string{"E2E_EXTRA"}}, nil))
 	expectOnMachine(m1, "su - claude -c 'jarvis2 stores' | grep -c '^e2e-extra \\[sensitive, locked\\]: E2E_EXTRA$'", "1")
-	expectOnMachine(m1, "su - claude -c 'jarvis2 stores' | grep -c '^e2e \\[in this session\\]: (key names not recorded)$'", "1")
+	expectOnMachine(m1, "su - claude -c 'jarvis2 stores' | grep -c '^e2e \\[in this session, locked\\]: (key names not recorded)$'", "1")
 
 	step("add a store from the machine (e2e-extra, unlocked for that add-store only; e2e comes from the carried secrets)")
 	go flyExec(m1, []string{"su", "-", "claude", "-c", "jarvis2 add-store e2e-extra"})
