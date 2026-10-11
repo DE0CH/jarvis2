@@ -64,7 +64,7 @@ func TestConfigTravelsInTheCertAndOnceNeedsThePhone(t *testing.T) {
 	} {
 		in := base
 		in.Options = opt
-		ch, err := c.Succession(in)
+		ch, err := routerSuccession(c, in)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -82,19 +82,19 @@ func TestConfigTravelsInTheCertAndOnceNeedsThePhone(t *testing.T) {
 	// its successor resumes unattended with the config and WITHOUT the one-time input
 	c.KillWithSnapshot(id2, nil)
 	in3 := SuccessionInput{Predecessor: &cert2, Image: oc.Machine.Image, Stores: []string{"default"}, Options: Options{Config: conf}}
-	ch3, _ := c.Succession(in3)
+	ch3, _ := routerSuccession(c, in3)
 	a3 := pl(t)(c.ApproveByDeadMachine(&ch3))
 	if a3["kind"] != "approval" {
 		t.Fatalf("got %v", a3)
 	}
 	in3.Options.Once = `{"prompt":"continue"}` // carrying it over again: refused
-	ch4, _ := c.Succession(in3)
+	ch4, _ := routerSuccession(c, in3)
 	if _, err := c.ApproveByDeadMachine(&ch4); err == nil {
 		t.Fatal("a one-time input was carried over unattended")
 	}
 	// sizes
 	big := SuccessionInput{Image: img, Stores: []string{"default"}, Options: Options{Config: strings.Repeat("x", maxConfig+1)}}
-	if _, err := c.Succession(big); err == nil {
+	if _, err := routerSuccession(c, big); err == nil {
 		t.Fatal("an oversized config")
 	}
 }
@@ -104,11 +104,11 @@ func TestAMachineSucceedingItselfTakesNoOneTimeInput(t *testing.T) {
 	conf := `{"v":1}`
 	cert, id := start(t, c, approve(t, c, p, SuccessionInput{Image: img, Stores: []string{"default"}, Options: Options{Config: conf}}))
 	for _, opt := range []Options{{Config: conf, Once: `{"prompt":"x"}`}, {Config: `{"v":1,"prompt":"x"}`}} {
-		if _, err := c.Succession(SuccessionInput{Predecessor: &cert, Machine: id, Stores: []string{"default", "gmail"}, Options: opt}); err == nil {
+		if _, err := routerSuccession(c, SuccessionInput{Predecessor: &cert, Machine: id, Stores: []string{"default", "gmail"}, Options: opt}); err == nil {
 			t.Fatalf("add-store with %+v", opt)
 		}
 	}
-	ch := pl(t)(c.Succession(SuccessionInput{Predecessor: &cert, Machine: id, Stores: []string{"default", "gmail"}, Options: Options{Config: conf}}))
+	ch := pl(t)(routerSuccession(c, SuccessionInput{Predecessor: &cert, Machine: id, Stores: []string{"default", "gmail"}, Options: Options{Config: conf}}))
 	if ch["kind"] != "challenge" {
 		t.Fatal(ch)
 	}
@@ -134,7 +134,7 @@ func TestAResumeRestoresOnlyTheSnapshotItsPredecessorSigned(t *testing.T) {
 	if d["snapshot"] != sum {
 		t.Fatalf("the kill record moved to %v", d["snapshot"])
 	}
-	ch, _ := c.Succession(SuccessionInput{Predecessor: &cert, Image: oc.Machine.Image, Stores: []string{"default"}})
+	ch, _ := routerSuccession(c, SuccessionInput{Predecessor: &cert, Image: oc.Machine.Image, Stores: []string{"default"}})
 	a, _ := c.ApproveByDeadMachine(&ch)
 	next, id2 := start(t, c, a)
 	if nc := certOf(t, next); nc.Snapshot != sum || nc.PredID != old {
@@ -142,7 +142,7 @@ func TestAResumeRestoresOnlyTheSnapshotItsPredecessorSigned(t *testing.T) {
 	}
 	// killed without a snapshot: the successor's cert names none (it starts with no predecessor state)
 	c.KillWithSnapshot(id2, nil)
-	ch2, _ := c.Succession(SuccessionInput{Predecessor: &next, Image: oc.Machine.Image, Stores: []string{"default"}})
+	ch2, _ := routerSuccession(c, SuccessionInput{Predecessor: &next, Image: oc.Machine.Image, Stores: []string{"default"}})
 	a2, _ := c.ApproveByDeadMachine(&ch2)
 	third, _ := start(t, c, a2)
 	if certOf(t, third).Snapshot != "" {
@@ -155,7 +155,7 @@ func TestAfterADowngradeOnlyTheNewKeySignsTheSnapshot(t *testing.T) {
 	cert, id := newLine(t, c, p, "default", "gmail")
 	enc, _ := ecdh.P256().GenerateKey(rand.Reader)
 	sig, _ := ecdh.P256().GenerateKey(rand.Reader)
-	ch, err := c.Succession(SuccessionInput{Predecessor: &cert, Machine: id, Stores: []string{"default"},
+	ch, err := routerSuccession(c, SuccessionInput{Predecessor: &cert, Machine: id, Stores: []string{"default"},
 		NewEncryptionKey: b64.EncodeToString(enc.PublicKey().Bytes()), NewSigningKey: b64.EncodeToString(sig.PublicKey().Bytes())})
 	if err != nil {
 		t.Fatal(err)

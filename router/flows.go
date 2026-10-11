@@ -125,8 +125,12 @@ func (r *Router) succession(pred *Doc, machine string, stores []string, harness,
 	if pred != nil {
 		predecessor = pred
 	}
+	// the defaults are the router's: the core refuses rather than fills in (R2)
 	if mode != "bypass" {
 		mode = "auto"
+	}
+	if harness == "" {
+		harness = "claude"
 	}
 	opts := map[string]string{"harness": harness, "permissionMode": mode} // both signed (core Options)
 	if config != "" {
@@ -138,7 +142,11 @@ func (r *Router) succession(pred *Doc, machine string, stores []string, harness,
 	if image == nullImage {
 		opts = map[string]string{}
 	}
-	return r.core.Call("/succession", map[string]any{"predecessor": predecessor, "machine": machine, "stores": stores, "options": opts, "image": image})
+	in := map[string]any{"predecessor": predecessor, "machine": machine, "stores": sortedSet(stores), "options": opts, "image": image}
+	if pred == nil {
+		in["salt"] = randID() + randID() // a new line: two identical requests get different nonces
+	}
+	return r.core.Call("/succession", in)
 }
 
 // the router's waits on the core's single-shot machine calls (tests shorten them)
@@ -668,11 +676,15 @@ func (r *Router) DowngradeBegin(machine string, stores []string, encKey, sigKey 
 	if s.ID == "" || s.MachineID != machine || s.Cert == nil {
 		return nil, fmt.Errorf("this machine isn't a running session")
 	}
-	opts := map[string]string{"harness": s.Harness, "permissionMode": certMode(s.Cert)}
+	harness := s.Harness
+	if harness == "" {
+		harness = "claude"
+	}
+	opts := map[string]string{"harness": harness, "permissionMode": certMode(s.Cert)}
 	if c := lineConfig(&s); c != "" {
 		opts["config"] = c
 	}
-	return r.core.Call("/succession", map[string]any{"predecessor": s.Cert, "machine": machine, "stores": stores,
+	return r.core.Call("/succession", map[string]any{"predecessor": s.Cert, "machine": machine, "stores": sortedSet(stores),
 		"options": opts, "newEncryptionKey": encKey, "newSigningKey": sigKey})
 }
 
@@ -808,4 +820,18 @@ func certMode(c *Doc) string {
 	}
 	json.Unmarshal([]byte(c.Payload), &x)
 	return normMode(x.Options.PermissionMode)
+}
+
+// sortedSet: the stores sorted, each once (the core takes them only so)
+func sortedSet(xs []string) []string {
+	seen := map[string]bool{}
+	out := []string{}
+	for _, x := range xs {
+		if !seen[x] {
+			seen[x] = true
+			out = append(out, x)
+		}
+	}
+	sort.Strings(out)
+	return out
 }

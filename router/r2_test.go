@@ -52,3 +52,22 @@ func TestTheRouterKeepsWhatComesBesideACert(t *testing.T) {
 		t.Fatalf("input log %q", lines)
 	}
 }
+
+// R2: the core takes exact values only, so the router fills in the defaults, sorts the stores and salts a new line
+func TestTheRouterFillsInSuccessionDefaults(t *testing.T) {
+	rg, vc := v2Rig(t)
+	if _, err := rg.r.succession(nil, "", []string{"gmail", "default", "gmail"}, "", "", "img", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	b := vc.last("/succession")
+	o := b["options"].(map[string]any)
+	st := b["stores"].([]any)
+	salt, _ := b["salt"].(string)
+	if o["harness"] != "claude" || o["permissionMode"] != "auto" || len(st) != 2 || st[0] != "default" || st[1] != "gmail" || len(salt) < 16 {
+		t.Fatalf("succession %v", b)
+	}
+	rg.r.succession(rg.cert, "", []string{"default"}, "claude", "bypass", "img", "", "")
+	if b := vc.last("/succession"); b["salt"] != nil || b["options"].(map[string]any)["permissionMode"] != "bypass" {
+		t.Fatalf("a successor: %v", b)
+	}
+}

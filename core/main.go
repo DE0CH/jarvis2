@@ -132,7 +132,9 @@ func Handler(c *Core) http.Handler {
 		return c.Start(sr)
 	})
 	h("POST /init", func(r *http.Request, b body) (any, error) { return c.Init(str(b, "machine")) })
-	h("POST /certify", func(r *http.Request, b body) (any, error) { return c.Certify(doc(b, "approval"), doc(b, "started"), str(b, "carry")) })
+	h("POST /certify", func(r *http.Request, b body) (any, error) {
+		return c.Certify(doc(b, "approval"), doc(b, "started"), str(b, "carry"))
+	})
 	h("POST /kill", func(r *http.Request, b body) (any, error) {
 		var snap *SnapshotClaim
 		if len(b["snapshot"]) != 0 && string(b["snapshot"]) != "null" {

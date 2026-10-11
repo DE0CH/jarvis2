@@ -105,8 +105,9 @@ type Request struct {
 	Options     Options         `json:"options"`
 	AddedStore  string          `json:"addedStore,omitempty"` // set when the machine succeeds itself with one more store
 	Downgrade   bool            `json:"downgrade,omitempty"`  // the machine succeeds itself with a subset of its stores and new keys
-	// Salt: random, on a new line only, so two identical new-session requests get different nonces (the nonce is
-	// the request's MAC, and an approval nonce is used once); a successor's nonce is already unique per predecessor
+	// Salt: the caller's, on a new line only, so two identical new-session requests get different nonces (the nonce
+	// is the request's MAC, and an approval nonce is used once: a repeated salt only gets its second approval refused);
+	// a successor's nonce is already unique per predecessor
 	Salt string `json:"salt,omitempty"`
 }
 
@@ -765,8 +766,9 @@ type SuccessionInput struct {
 	NewEncryptionKey string   `json:"newEncryptionKey"`
 	NewSigningKey    string   `json:"newSigningKey"`
 	Image            string   `json:"image"`
-	Stores           []string `json:"stores"`
+	Stores           []string `json:"stores"` // sorted, each once
 	Options          Options  `json:"options"`
+	Salt             string   `json:"salt"` // a new line only: hex, 16–64 characters
 }
 
 // Succession: a challenge derived from the request (nothing stored), before any machine exists
@@ -777,11 +779,17 @@ func (c *Core) Succession(in SuccessionInput) (SignedDoc, error) {
 		return SignedDoc{}, fail(400, "config at most %d bytes, once at most %d", maxConfig, maxOnce)
 	}
 	req := Request{Kind: "succession", Predecessor: in.Predecessor, Options: in.Options}
-	if in.Image != NullImage && req.Options.Harness == "" {
-		req.Options.Harness = "claude"
+	// the caller fills in defaults; the core takes the exact values or refuses (R2)
+	if in.Image != NullImage && (req.Options.Harness == "" || req.Options.PermissionMode != "auto" && req.Options.PermissionMode != "bypass") {
+		return SignedDoc{}, fail(400, "options: a harness, and permissionMode auto or bypass")
 	}
-	if in.Image != NullImage && req.Options.PermissionMode != "bypass" {
-		req.Options.PermissionMode = "auto"
+	if !sort.StringsAreSorted(in.Stores) {
+		return SignedDoc{}, fail(400, "stores: sorted, each once")
+	}
+	for i := 1; i < len(in.Stores); i++ {
+		if in.Stores[i] == in.Stores[i-1] {
+			return SignedDoc{}, fail(400, "stores: sorted, each once")
+		}
 	}
 	var pc Cert
 	if in.Predecessor != nil {
@@ -801,7 +809,7 @@ func (c *Core) Succession(in SuccessionInput) (SignedDoc, error) {
 		b, _ := json.Marshal(req)
 		return c.sign(map[string]any{"kind": "challenge", "nonce": c.mac("challenge", string(b)), "request": req})
 	}
-	set := map[string]bool{}
+	req.Stores, req.Sensitive = []string{}, []string{}
 	for _, n := range in.Stores {
 		if b, ok := c.stores[n]; !ok {
 			return SignedDoc{}, fail(400, "unknown store %s", n)
@@ -813,21 +821,10 @@ func (c *Core) Succession(in SuccessionInput) (SignedDoc, error) {
 			// its token is opened only by deploy_key_finish, for one phone-approved call (DESIGN "Deploy keys")
 			return SignedDoc{}, fail(403, "%s never goes to a session", DeployKeyTokenStore)
 		}
-		if !set[n] {
-			set[n] = true
-			req.Stores = append(req.Stores, n)
-			if !c.notSensitive[n] {
-				req.Sensitive = append(req.Sensitive, n)
-			}
+		req.Stores = append(req.Stores, n)
+		if !c.notSensitive[n] {
+			req.Sensitive = append(req.Sensitive, n)
 		}
-	}
-	sort.Strings(req.Stores)
-	sort.Strings(req.Sensitive)
-	if req.Sensitive == nil {
-		req.Sensitive = []string{}
-	}
-	if req.Stores == nil {
-		req.Stores = []string{}
 	}
 	if in.Machine != "" {
 		// a running machine succeeds itself from one of its certs: one more store (answered by the phone), or
@@ -868,11 +865,10 @@ func (c *Core) Succession(in SuccessionInput) (SignedDoc, error) {
 		}
 		req.Image = in.Image
 		if req.PredID == "" {
-			salt := make([]byte, 16)
-			if _, err := rand.Read(salt); err != nil {
-				return SignedDoc{}, fail(500, "no randomness")
+			if b, err := hex.DecodeString(in.Salt); err != nil || len(b) < 8 || len(b) > 32 {
+				return SignedDoc{}, fail(400, "salt: a new line takes the caller's random salt (hex, 16–64 characters)")
 			}
-			req.Salt = hex.EncodeToString(salt)
+			req.Salt = in.Salt
 		}
 	}
 	b, _ := json.Marshal(req)

@@ -15,7 +15,7 @@ func downgradeTo(t *testing.T, c *Core, f *fakeFly, cert SignedDoc, id, carry st
 	t.Helper()
 	nEnc, _ := ecdh.P256().GenerateKey(rand.Reader)
 	nSig, _ := ecdh.P256().GenerateKey(rand.Reader)
-	ch, err := c.Succession(SuccessionInput{Predecessor: &cert, Machine: id, Stores: keep, NewEncryptionKey: m2k(nEnc), NewSigningKey: m2k(nSig)})
+	ch, err := routerSuccession(c, SuccessionInput{Predecessor: &cert, Machine: id, Stores: keep, NewEncryptionKey: m2k(nEnc), NewSigningKey: m2k(nSig)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -46,11 +46,11 @@ func TestADowngradeCantBeUndoneWithAnOlderCertOrBlob(t *testing.T) {
 	}
 	pl(t)(c.KillWithSnapshot(id, nil))
 	// the router resumes from the cert before the downgrade: refused at succession…
-	if _, err := c.Succession(SuccessionInput{Predecessor: &cert1, Image: f.machineImage(c, &cert1), Stores: []string{"default", "gmail"}}); err == nil {
+	if _, err := routerSuccession(c, SuccessionInput{Predecessor: &cert1, Image: f.machineImage(c, &cert1), Stores: []string{"default", "gmail"}}); err == nil {
 		t.Fatal("an older cert of the killed machine was taken as the predecessor")
 	}
 	// …and the honest resume from the newest cert can't reopen gmail from the old blob
-	ch3, err := c.Succession(SuccessionInput{Predecessor: &cert2, Image: f.machineImage(c, &cert2), Stores: []string{"default"}})
+	ch3, err := routerSuccession(c, SuccessionInput{Predecessor: &cert2, Image: f.machineImage(c, &cert2), Stores: []string{"default"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -76,7 +76,7 @@ func TestADowngradeCantBeUndoneWithAnOlderCertOrBlob(t *testing.T) {
 func TestAnAddStoreApprovalCantBeReplayedAfterADowngrade(t *testing.T) {
 	c, f, p := setup(t)
 	cert1, id := newLine(t, c, p, "default")
-	ch, err := c.Succession(SuccessionInput{Predecessor: &cert1, Machine: id, Stores: []string{"default", "gmail"}})
+	ch, err := routerSuccession(c, SuccessionInput{Predecessor: &cert1, Machine: id, Stores: []string{"default", "gmail"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -110,7 +110,7 @@ func TestCreateBeforeTheClaimLeavesNoTrace(t *testing.T) {
 	}
 	// an empty store (whose writer hasn't settled its sensitivity) goes into no session
 	pl(t)(c.CreateStore("tunnel"))
-	if _, err := c.Succession(SuccessionInput{Image: img, Stores: []string{"tunnel"}}); err == nil || !strings.Contains(err.Error(), "empty") {
+	if _, err := routerSuccession(c, SuccessionInput{Image: img, Stores: []string{"tunnel"}}); err == nil || !strings.Contains(err.Error(), "empty") {
 		t.Fatalf("a session named an empty store: %v", err)
 	}
 }
@@ -119,7 +119,7 @@ func TestCreateBeforeTheClaimLeavesNoTrace(t *testing.T) {
 func TestTheDeployKeyTokenNeverGoesToASessionOrAnUnlock(t *testing.T) {
 	c, _, p := setup(t)
 	pl(t)(c.WriteStore(writeStore(t, c, p, DeployKeyTokenStore, map[string]string{DeployKeyTokenKey: "ghp"})))
-	if _, err := c.Succession(SuccessionInput{Image: img, Stores: []string{"default", DeployKeyTokenStore}}); err == nil {
+	if _, err := routerSuccession(c, SuccessionInput{Image: img, Stores: []string{"default", DeployKeyTokenStore}}); err == nil {
 		t.Fatal("a session was offered the deploy-key token")
 	}
 	if _, err := c.UnlockBegin(DeployKeyTokenStore, ""); err == nil {

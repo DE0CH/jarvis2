@@ -20,7 +20,7 @@ func challengeNonce(ch SignedDoc) string {
 // only, the phone's approval, the machine, its cert
 func startWithUnlocks(t *testing.T, c *Core, p *phone, stores ...string) (SignedDoc, string) {
 	t.Helper()
-	ch, err := c.Succession(SuccessionInput{Image: img, Stores: stores})
+	ch, err := routerSuccession(c, SuccessionInput{Image: img, Stores: stores})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -132,7 +132,7 @@ func TestAStandingUnlockStaysOpenAfterAPull(t *testing.T) {
 
 func TestAnUnusedUnlockForOneSessionLapses(t *testing.T) {
 	c, _, p := setup(t)
-	ch, _ := c.Succession(SuccessionInput{Image: img, Stores: []string{"default"}})
+	ch, _ := routerSuccession(c, SuccessionInput{Image: img, Stores: []string{"default"}})
 	unlockFor(t, c, p, "default", challengeNonce(ch))
 	now := time.Now()
 	c.now = func() time.Time { return now.Add(scopedUnlockTTL + time.Minute) }
@@ -149,7 +149,7 @@ func TestAResumeCarriesTheSecretsWithNoStoreUnlocked(t *testing.T) {
 	cert, id := startWithUnlocks(t, c, p, "default", "gmail")
 	out := pull(t, c, cert, "")
 	pl(t)(c.KillWithSnapshot(id, nil))
-	ch, _ := c.Succession(SuccessionInput{Predecessor: &cert, Image: f.machineImage(c, &cert), Stores: []string{"default", "gmail"}})
+	ch, _ := routerSuccession(c, SuccessionInput{Predecessor: &cert, Image: f.machineImage(c, &cert), Stores: []string{"default", "gmail"}})
 	a := pl(t)(c.ApproveByDeadMachine(&ch))
 	if a["kind"] != "approval" {
 		t.Fatal(a)
@@ -174,7 +174,7 @@ func TestAResumeCarriesTheSecretsWithNoStoreUnlocked(t *testing.T) {
 	locked(t, err, "default")
 	// the next resume carries on from the successor's blob; the old one is no longer this line's newest machine's
 	pl(t)(c.KillWithSnapshot(id2, nil))
-	ch3, _ := c.Succession(SuccessionInput{Predecessor: &cert2, Image: f.machineImage(c, &cert2), Stores: []string{"default", "gmail"}})
+	ch3, _ := routerSuccession(c, SuccessionInput{Predecessor: &cert2, Image: f.machineImage(c, &cert2), Stores: []string{"default", "gmail"}})
 	a3, _ := c.ApproveByDeadMachine(&ch3)
 	cert3, _ := start(t, c, a3)
 	_, err = c.PullSecrets(&cert3, out.Carry)
@@ -187,11 +187,11 @@ func TestAResumedMachineThatNeverPulledKeepsTheChain(t *testing.T) {
 	cert, id := startWithUnlocks(t, c, p, "default")
 	out := pull(t, c, cert, "")
 	pl(t)(c.KillWithSnapshot(id, nil))
-	ch, _ := c.Succession(SuccessionInput{Predecessor: &cert, Image: f.machineImage(c, &cert), Stores: []string{"default"}})
+	ch, _ := routerSuccession(c, SuccessionInput{Predecessor: &cert, Image: f.machineImage(c, &cert), Stores: []string{"default"}})
 	a, _ := c.ApproveByDeadMachine(&ch)
 	cert2, id2 := startCarry(t, c, a, out.Carry) // rebound beside the cert
 	pl(t)(c.KillWithSnapshot(id2, nil))          // it died before it pulled
-	ch3, _ := c.Succession(SuccessionInput{Predecessor: &cert2, Image: f.machineImage(c, &cert2), Stores: []string{"default"}})
+	ch3, _ := routerSuccession(c, SuccessionInput{Predecessor: &cert2, Image: f.machineImage(c, &cert2), Stores: []string{"default"}})
 	a3, _ := c.ApproveByDeadMachine(&ch3)
 	cert3, id3 := start(t, c, a3)
 	if v := values(t, f.machines[id3].enc, pull(t, c, cert3, cert2.Carry)); v["A"] != "1" {
@@ -231,7 +231,7 @@ func TestADowngradeDropsItsStoresFromTheCarry(t *testing.T) {
 	m := f.machines[id]
 	nEnc, _ := ecdh.P256().GenerateKey(rand.Reader)
 	nSig, _ := ecdh.P256().GenerateKey(rand.Reader)
-	ch, err := c.Succession(SuccessionInput{Predecessor: &cert, Machine: id, Stores: []string{"default"}, NewEncryptionKey: m2k(nEnc), NewSigningKey: m2k(nSig)})
+	ch, err := routerSuccession(c, SuccessionInput{Predecessor: &cert, Machine: id, Stores: []string{"default"}, NewEncryptionKey: m2k(nEnc), NewSigningKey: m2k(nSig)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -253,7 +253,7 @@ func TestAnAddedStoreIsUnlockedForItsChallengeOnly(t *testing.T) {
 	c, f, p := setup(t)
 	cert, id := startWithUnlocks(t, c, p, "default")
 	out := pull(t, c, cert, "")
-	ch, err := c.Succession(SuccessionInput{Predecessor: &cert, Machine: id, Stores: []string{"default", "gmail"}})
+	ch, err := routerSuccession(c, SuccessionInput{Predecessor: &cert, Machine: id, Stores: []string{"default", "gmail"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -280,11 +280,11 @@ func TestDestroyEndsTheCarry(t *testing.T) {
 	cert, id := startWithUnlocks(t, c, p, "default")
 	out := pull(t, c, cert, "")
 	pl(t)(c.KillWithSnapshot(id, nil))
-	ch, _ := c.Succession(SuccessionInput{Predecessor: &cert, Image: NullImage})
+	ch, _ := routerSuccession(c, SuccessionInput{Predecessor: &cert, Image: NullImage})
 	a, _ := c.ApproveByDeadMachine(&ch)
 	pl(t)(c.Certify(&a, nil, ""))
 	// the line is burnt: no successor can be certified, and the dead machine's own cert gets nothing
-	ch2, _ := c.Succession(SuccessionInput{Predecessor: &cert, Image: f.machineImage(c, &cert), Stores: []string{"default"}})
+	ch2, _ := routerSuccession(c, SuccessionInput{Predecessor: &cert, Image: f.machineImage(c, &cert), Stores: []string{"default"}})
 	if _, err := c.ApproveByDeadMachine(&ch2); err == nil {
 		t.Fatal("a burnt line resumed")
 	}

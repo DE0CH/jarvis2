@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -240,7 +241,7 @@ func unlockFor(t *testing.T, c *Core, p *phone, store, forNonce string) string {
 // approve: the iPhone answers a succession challenge
 func approve(t *testing.T, c *Core, p *phone, in SuccessionInput) SignedDoc {
 	t.Helper()
-	ch, err := c.Succession(in)
+	ch, err := routerSuccession(c, in)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -541,7 +542,7 @@ func TestLockWipesWhenTheLastIDGoes(t *testing.T) {
 
 func TestPhoneSignatureMustCoverExactlyTheChallenge(t *testing.T) {
 	c, _, p := setup(t)
-	ch, _ := c.Succession(SuccessionInput{Image: img, Stores: []string{"default"}})
+	ch, _ := routerSuccession(c, SuccessionInput{Image: img, Stores: []string{"default"}})
 	if _, err := c.ApproveByPhone(&ch, p.sign("something else"), ""); err == nil {
 		t.Fatal("accepted a signature over something else")
 	}
@@ -623,7 +624,7 @@ func TestResumeByDeadMachineExactlyOnce(t *testing.T) {
 	var oc Cert
 	json.Unmarshal([]byte(cert.Payload), &oc)
 	in := SuccessionInput{Predecessor: &cert, Image: oc.Machine.Image, Stores: []string{"default"}}
-	ch, _ := c.Succession(in)
+	ch, _ := routerSuccession(c, in)
 	if _, err := c.ApproveByDeadMachine(&ch); err == nil {
 		t.Fatal("resumed from a live machine")
 	}
@@ -638,7 +639,7 @@ func TestResumeByDeadMachineExactlyOnce(t *testing.T) {
 	start(t, c, ad)
 	// the same predecessor can't have a second successor (no fork), even if killed again
 	c.KillWithSnapshot(old, nil)
-	ch2, _ := c.Succession(in)
+	ch2, _ := routerSuccession(c, in)
 	if _, err := c.ApproveByDeadMachine(&ch2); err == nil {
 		t.Fatal("forked: a used predecessor got a second approval")
 	}
@@ -659,7 +660,7 @@ func TestApproveByDeadMachineRefusesChanges(t *testing.T) {
 		{Predecessor: &cert, Image: oc.Machine.Image, Stores: []string{"default"}, Options: Options{Harness: "opencode"}},
 		{Predecessor: &cert, Image: "ghcr.io/de0ch/jarvis2-session:2@sha256:2222222222222222222222222222222222222222222222222222222222222222", Stores: []string{"default"}},
 	} {
-		ch, _ := c.Succession(in)
+		ch, _ := routerSuccession(c, in)
 		if _, err := c.ApproveByDeadMachine(&ch); err == nil {
 			t.Fatalf("changed %+v without the phone", in)
 		}
@@ -691,11 +692,11 @@ func TestBurnIsASuccessionToTheNullImage(t *testing.T) {
 		{Predecessor: &cert, Image: NullImage, Stores: []string{"default"}},
 		{Predecessor: &cert, Image: NullImage, Options: Options{Harness: "claude"}},
 	} {
-		if _, err := c.Succession(bad); err == nil {
+		if _, err := routerSuccession(c, bad); err == nil {
 			t.Fatalf("accepted a burn with %+v", bad)
 		}
 	}
-	ch, _ := c.Succession(burn)
+	ch, _ := routerSuccession(c, burn)
 	if _, err := c.ApproveByDeadMachine(&ch); err == nil {
 		t.Fatal("burned a live machine")
 	}
@@ -710,7 +711,7 @@ func TestBurnIsASuccessionToTheNullImage(t *testing.T) {
 	}
 	var oc Cert
 	json.Unmarshal([]byte(cert.Payload), &oc)
-	ch2, _ := c.Succession(SuccessionInput{Predecessor: &cert, Image: oc.Machine.Image, Stores: []string{"default"}})
+	ch2, _ := routerSuccession(c, SuccessionInput{Predecessor: &cert, Image: oc.Machine.Image, Stores: []string{"default"}})
 	if _, err := c.ApproveByDeadMachine(&ch2); err == nil {
 		t.Fatal("a burnt machine resumed")
 	}
@@ -735,11 +736,11 @@ func TestAddAStoreToARunningSession(t *testing.T) {
 	cert, id := newLine(t, c, p, "default")
 	set := []string{"default", "gmail"}
 	// succession(machine → same machine, old set + one): only the iPhone answers it, and it is a cert at once
-	ch := pl(t)(c.Succession(SuccessionInput{Predecessor: &cert, Machine: id, Stores: set}))
+	ch := pl(t)(routerSuccession(c, SuccessionInput{Predecessor: &cert, Machine: id, Stores: set}))
 	if ch["request"].(map[string]any)["addedStore"] != "gmail" {
 		t.Fatal("challenge doesn't name the added store")
 	}
-	chd, _ := c.Succession(SuccessionInput{Predecessor: &cert, Machine: id, Stores: set})
+	chd, _ := routerSuccession(c, SuccessionInput{Predecessor: &cert, Machine: id, Stores: set})
 	if _, err := c.ApproveByDeadMachine(&chd); err == nil {
 		t.Fatal("approve_by_dead_machine added a store")
 	}
@@ -764,7 +765,7 @@ func TestAddAStoreToARunningSession(t *testing.T) {
 		{Predecessor: &cert, Machine: id, Stores: []string{"gmail"}},
 		{Predecessor: &cert, Machine: id, Stores: set, Options: Options{Harness: "opencode"}},
 	} {
-		if ch, err := c.Succession(bad); err == nil {
+		if ch, err := routerSuccession(c, bad); err == nil {
 			if _, err := c.ApproveByPhone(&ch, p.sign(ch.Payload), ""); err == nil {
 				t.Fatalf("accepted %v", bad.Stores)
 			}
@@ -772,7 +773,7 @@ func TestAddAStoreToARunningSession(t *testing.T) {
 	}
 	// a killed machine can't grow its set, and a resume from it keeps the grown set automatically
 	c.KillWithSnapshot(id, nil)
-	chr, _ := c.Succession(SuccessionInput{Predecessor: &c2, Image: f.machineImage(c, &c2), Stores: set})
+	chr, _ := routerSuccession(c, SuccessionInput{Predecessor: &c2, Image: f.machineImage(c, &c2), Stores: set})
 	a, err := c.ApproveByDeadMachine(&chr)
 	if err != nil {
 		t.Fatal(err)
@@ -817,14 +818,14 @@ func TestSensitivityOnlyGrows(t *testing.T) {
 	if _, err := c.CreateStore("notes"); err == nil {
 		t.Fatal("downgraded by re-creating")
 	}
-	ch := pl(t)(c.Succession(SuccessionInput{Image: img, Stores: []string{"default", "gmail", "notes"}}))
+	ch := pl(t)(routerSuccession(c, SuccessionInput{Image: img, Stores: []string{"default", "gmail", "notes"}}))
 	if fmt.Sprint(ch["request"].(map[string]any)["sensitive"]) != "[gmail notes]" {
 		t.Fatalf("got %v", ch["request"])
 	}
 	if _, err := c.WriteStore(writeStore(t, c, p, FlyStore, map[string]string{"FLY_API_TOKEN": "evil"})); err == nil {
 		t.Fatal("wrote the Fly store")
 	}
-	if _, err := c.Succession(SuccessionInput{Image: img, Stores: []string{FlyStore}}); err == nil {
+	if _, err := routerSuccession(c, SuccessionInput{Image: img, Stores: []string{FlyStore}}); err == nil {
 		t.Fatal("the Fly store went to a session")
 	}
 }
@@ -845,11 +846,11 @@ func TestDowngradeInPlace(t *testing.T) {
 		{Predecessor: &cert, Machine: id, Stores: []string{"default", "claude"}, NewEncryptionKey: in.NewEncryptionKey, NewSigningKey: in.NewSigningKey},
 		{Predecessor: &cert, Machine: id, Stores: []string{"default"}, NewEncryptionKey: m2k(m.enc), NewSigningKey: m2k(m.sig)},
 	} {
-		if _, err := c.Succession(bad); err == nil {
+		if _, err := routerSuccession(c, bad); err == nil {
 			t.Fatalf("accepted %+v", bad.Stores)
 		}
 	}
-	ch, err := c.Succession(in)
+	ch, err := routerSuccession(c, in)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -878,7 +879,7 @@ func TestDowngradeInPlace(t *testing.T) {
 	// a further downgrade must be signed with the NEW key (the one in the cert it continues)
 	n2, _ := ecdh.P256().GenerateKey(rand.Reader)
 	n3, _ := ecdh.P256().GenerateKey(rand.Reader)
-	ch2, err := c.Succession(SuccessionInput{Predecessor: &cert2, Machine: id, Stores: []string{}, NewEncryptionKey: m2k(n2), NewSigningKey: m2k(n3)})
+	ch2, err := routerSuccession(c, SuccessionInput{Predecessor: &cert2, Machine: id, Stores: []string{}, NewEncryptionKey: m2k(n2), NewSigningKey: m2k(n3)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -922,7 +923,7 @@ func TestTheLineIdSurvivesResume(t *testing.T) {
 	var oc Cert
 	json.Unmarshal([]byte(cert.Payload), &oc)
 	c.KillWithSnapshot(first, nil)
-	ch, _ := c.Succession(SuccessionInput{Predecessor: &cert, Image: oc.Machine.Image, Stores: []string{"default"}})
+	ch, _ := routerSuccession(c, SuccessionInput{Predecessor: &cert, Image: oc.Machine.Image, Stores: []string{"default"}})
 	a, _ := c.ApproveByDeadMachine(&ch)
 	cert2, second := start(t, c, a)
 	if m := pl(t)(cert2, nil); m["line"] != first || second == first {
@@ -939,7 +940,7 @@ func TestRaisingToBypassOnResumeNeedsThePhone(t *testing.T) {
 	var oc Cert
 	json.Unmarshal([]byte(cert.Payload), &oc)
 	c.KillWithSnapshot(first, nil)
-	ch, _ := c.Succession(SuccessionInput{Predecessor: &cert, Image: oc.Machine.Image, Stores: []string{"default"},
+	ch, _ := routerSuccession(c, SuccessionInput{Predecessor: &cert, Image: oc.Machine.Image, Stores: []string{"default"},
 		Options: Options{Harness: "claude", PermissionMode: "bypass"}})
 	if _, err := c.ApproveByDeadMachine(&ch); err == nil {
 		t.Fatal("a dead machine approved raising the mode to bypass")
@@ -1023,5 +1024,59 @@ func TestTheCoreHasNoDuplicateOrReadbackRoutes(t *testing.T) {
 		if err != nil || resp.StatusCode != 404 {
 			t.Fatalf("%s: %v %v", p, err, resp)
 		}
+	}
+}
+
+// routerSuccession: Succession as the router calls it — it fills in the defaults (harness, permission mode), sorts the
+// stores and salts a new line; the core takes exact values only
+func routerSuccession(c *Core, in SuccessionInput) (SignedDoc, error) {
+	if in.Image != NullImage {
+		if in.Options.Harness == "" {
+			in.Options.Harness = "claude"
+		}
+		if in.Options.PermissionMode != "bypass" {
+			in.Options.PermissionMode = "auto"
+		}
+	}
+	set := map[string]bool{}
+	stores := []string{}
+	for _, n := range in.Stores {
+		if !set[n] {
+			set[n] = true
+			stores = append(stores, n)
+		}
+	}
+	sort.Strings(stores)
+	in.Stores = stores
+	if in.Predecessor == nil && in.Salt == "" {
+		in.Salt = randID()
+	}
+	return c.Succession(in)
+}
+
+func TestSuccessionTakesExactValuesOnly(t *testing.T) {
+	c, _, _ := setup(t)
+	good := SuccessionInput{Image: img, Stores: []string{"default", "gmail"}, Options: Options{Harness: "claude", PermissionMode: "auto"}, Salt: randID()}
+	for name, bad := range map[string]func(*SuccessionInput){
+		"no harness":      func(in *SuccessionInput) { in.Options.Harness = "" },
+		"no mode":         func(in *SuccessionInput) { in.Options.PermissionMode = "" },
+		"another mode":    func(in *SuccessionInput) { in.Options.PermissionMode = "yolo" },
+		"unsorted stores": func(in *SuccessionInput) { in.Stores = []string{"gmail", "default"} },
+		"a store twice":   func(in *SuccessionInput) { in.Stores = []string{"default", "default"} },
+		"no salt":         func(in *SuccessionInput) { in.Salt = "" },
+		"a short salt":    func(in *SuccessionInput) { in.Salt = "abcd" },
+		"a salt not hex":  func(in *SuccessionInput) { in.Salt = strings.Repeat("z", 32) },
+	} {
+		in := good
+		in.Stores = append([]string{}, good.Stores...)
+		bad(&in)
+		if _, err := c.Succession(in); err == nil {
+			t.Fatalf("%s: answered", name)
+		}
+	}
+	ch := pl(t)(c.Succession(good))
+	r := ch["request"].(map[string]any)
+	if r["salt"] != good.Salt || r["options"].(map[string]any)["permissionMode"] != "auto" {
+		t.Fatalf("got %v", r)
 	}
 }
