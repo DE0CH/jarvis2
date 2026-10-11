@@ -96,7 +96,9 @@ func waitEmpty(notKey old: String?, minutes: Int = 15) -> (keys: PublicKeys, sta
   fail("no new, empty core within \(minutes) minutes")
 }
 func claim(_ c: PublicKeys, _ stores: [RecoveredStore]) -> Int {
-  let body = try! CoreSetup.claim(core: c, phone: phone, master: master, bundle: try! CoreSetup.bundle(stores))
+  // the app's bundle: every store wrapped to the core's signed store key for this phone (Reset: none)
+  let sk = try! CoreCrypto.storeKey(json("POST", "api/core/store-key", ["phone": phone.agreementKey], as: SignedDoc.self), coreKey: c.signingKey, phone: phone.agreementKey)
+  let body = try! CoreSetup.claim(core: c, phone: phone, master: master, bundle: try! CoreSetup.blobsBundle(stores, storeKey: sk))
   let d = try! CoreCrypto.decode(json("POST", "api/core/claim", body, as: SignedDoc.self), by: c.signingKey, as: KindDoc.self, what: "the core's answer")
   guard d.kind == "claimed" else { fail("the claim's answer is \(d.kind)") }
   return d.stores ?? 0

@@ -122,7 +122,7 @@ check(rs == 200, "the core is set up (HTTP \(rs) \(String(decoding: rb.prefix(20
 let rec = try? CoreCrypto.decode(doc(rb), by: coreKeys.signingKey, as: KindDoc.self, what: "claimed")
 check(rec?.kind == "claimed" && rec?.stores == 5, "the answer is the core's signed 'claimed' (5 stores, the core's own excluded)")
 check(claim(try! CoreSetup.claim(core: coreKeys, phone: phone, master: kitMaster, bundle: bundle)).0 == 409, "a second claim is refused")
-check(claim(try! CoreSetup.claim(core: coreKeys, phone: phone, master: fresh, bundle: try! CoreSetup.bundle([]))).0 == 409, "…and a Reset's claim with a new key too")
+check(claim(try! CoreSetup.claim(core: coreKeys, phone: phone, master: fresh, bundle: try! CoreSetup.blobsBundle([], storeKey: recoverStoreKey))).0 == 409, "…and a Reset's claim with a new key too")
 let st1 = (try? CoreSetup.check(identity(), boxKey: boxKey))?.state
 check(st1 != nil && CoreSetup.status(st1!, myMaster: kitMaster.publicKey, myPhone: phone) == .mine, "the core's state now names this master key and this phone (mine)")
 check(st1 != nil && CoreSetup.status(st1!, myMaster: fresh.publicKey, myPhone: phone) == .foreign, "…a phone with another master key sees it as foreign")
@@ -342,10 +342,23 @@ if a4s == 200, c4s == 200, let sc4 = try? Checks.cert(doc(c4d), coreKey: coreKey
 } else { check(false, "a sensitive session certifies") }
 
 // ---- deploy keys: a repo added and removed, each approved by the phone (the core's fake GitHub in CI) ----
+/// the begin body the app sends (RouterClient.deployKeyBegin): the store and title it names, and for an add the key
+/// pair it made, the private half's store wrapped to the store key
+func keyBegin(_ action: String, _ repo: String, sensitive: Bool) -> ([String: Any], (publicKey: String, blob: StoreBlob)?) {
+  let store = Checks.repoStore(repo), title = "jarvis2 " + store
+  var body: [String: Any] = ["action": action, "repo": repo, "sensitive": sensitive, "store": store, "title": title]
+  guard action == "add" else { return (body, nil) }
+  let kp = try! OpenSSH.ed25519(comment: title)
+  let blob = try! CoreCrypto.wrapStore(name: store, values: OpenSSH.storeValues(repo: repo, privateKeyFile: kp.privateKeyFile), storeKey: recoverStoreKey)
+  body["publicKey"] = kp.publicKey
+  body["blob"] = blob.json
+  return (body, (publicKey: kp.publicKey, blob: blob))
+}
 func deployKey(_ action: String, _ repo: String, sensitive: Bool = false, signer: P256.Signing.PrivateKey? = nil, base: String = core, prefix: String = "/deploy-keys") -> (Int, DeployKeyBegin?, Data) {
-  let (bs, bd) = call(prefix + "/begin", ["action": action, "repo": repo, "sensitive": sensitive], base: base)
+  let (body, sent) = keyBegin(action, repo, sensitive: sensitive)
+  let (bs, bd) = call(prefix + "/begin", body, base: base)
   guard bs == 200, let d = try? JSONDecoder().decode(SignedDoc.self, from: bd) else { return (bs, nil, bd) }
-  guard let b = try? Checks.deployKeyBegin(d, coreKey: coreKey, action: action, repo: repo, sensitive: sensitive) else { return (0, nil, bd) }
+  guard let b = try? Checks.deployKeyBegin(d, coreKey: coreKey, action: action, repo: repo, sensitive: sensitive, sent: sent) else { return (0, nil, bd) }
   let sig = try! (signer ?? phoneSigning).signature(for: Data(d.payload.utf8)).derRepresentation.base64EncodedString()
   let x = try! phoneAgreement.sharedSecretFromKeyAgreement(with: P256.KeyAgreement.PublicKey(x963Representation: Data(base64Encoded: b.e)!)).withUnsafeBytes { Data($0) }
   let (fs, fd) = call(prefix + "/finish", ["pending": b.pending, "signature": sig, "share": try! CoreCrypto.sealShare(x, to: b.t)], base: base)
@@ -354,12 +367,18 @@ func deployKey(_ action: String, _ repo: String, sensitive: Bool = false, signer
 check(Checks.repoStore("DE0CH/china_train") == "github-china-train" && Checks.repoStore("someone/Thing.js") == "github-someone-thing-js" && Checks.repoStore("de0ch/Jarvis2") == "github-jarvis2", "the app's store names are the core's")
 let (dk1s, dk1b, dk1d) = deployKey("add", "DE0CH/china-train")
 let dk1 = dk1b.flatMap { try? Checks.deployKeyAnswer(doc(dk1d), coreKey: coreKey, begin: $0) }
-check(dk1s == 200 && dk1?.kind == "deploy-key-added" && dk1?.store == "github-china-train" && dk1?.sensitive == false && (dk1?.fingerprint ?? "").hasPrefix("SHA256:"), "add a repo: the core makes its key, the store github-china-train (HTTP \(dk1s))")
+check(dk1s == 200 && dk1?.kind == "deploy-key-added" && dk1?.store == "github-china-train" && dk1?.sensitive == false && dk1?.publicKey != nil && dk1?.publicKey == dk1b?.publicKey, "add a repo: the core adds the app's key, the store github-china-train (HTTP \(dk1s))")
 check(list().first { $0.name == "github-china-train" }.map { !$0.sensitive && !$0.empty && !$0.unlocked } == true, "…the repo's store: not sensitive, with contents, locked")
 check(list().first { $0.name == "github-deploy-keys" }?.unlocked == false, "…and the token store was opened for that call only")
-let (bjs, bjd) = call("/deploy-keys/begin", ["action": "add", "repo": "DE0CH/jarvis2", "sensitive": false])
-let bj = bjs == 200 ? try? Checks.deployKeyBegin(doc(bjd), coreKey: coreKey, action: "add", repo: "DE0CH/jarvis2", sensitive: false) : nil
-check(bj?.sensitive == true && bj?.store == "github-jarvis2", "Jarvis 2's own repo is always sensitive (the begin document says so before Face ID)")
+// Jarvis 2's own repo: the app always asks for it sensitive (RepoKeyView) and refuses a begin that isn't (the core
+// takes what is asked)
+let (bjBody, bjSent) = keyBegin("add", "DE0CH/jarvis2", sensitive: true)
+let (bjs, bjd) = call("/deploy-keys/begin", bjBody)
+let bj = bjs == 200 ? try? Checks.deployKeyBegin(doc(bjd), coreKey: coreKey, action: "add", repo: "DE0CH/jarvis2", sensitive: true, sent: bjSent) : nil
+check(bj?.sensitive == true && bj?.store == "github-jarvis2", "Jarvis 2's own repo asked for sensitive: the begin document says so before Face ID")
+let (bnBody, bnSent) = keyBegin("add", "DE0CH/jarvis2", sensitive: false)
+let (bns, bnd) = call("/deploy-keys/begin", bnBody)
+check(bns == 200 && throwsErr { _ = try Checks.deployKeyBegin(doc(bnd), coreKey: coreKey, action: "add", repo: "DE0CH/jarvis2", sensitive: false, sent: bnSent) }, "…and the app refuses a begin for it that isn't sensitive")
 check(bjs == 200 && throwsErr { _ = try Checks.deployKeyBegin(doc(bjd), coreKey: coreKey, action: "remove", repo: "DE0CH/jarvis2", sensitive: false) }, "the page refuses a begin for another action")
 // the Inbox review's "What you sign (exact)" is rendered from this signed document
 let bjText = bj.map(SignedAction.deployKey) ?? ""
