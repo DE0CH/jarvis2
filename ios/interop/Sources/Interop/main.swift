@@ -99,7 +99,13 @@ check(nocore?.map(\.name) == ["default"] && (try? CoreSetup.bundle(nocore ?? [])
 // ---- Recover: the claim, signed with the kit's master key ----
 let phoneSigning = P256.Signing.PrivateKey(), phoneAgreement = P256.KeyAgreement.PrivateKey()
 let phone = PublicKeys(signingKey: phoneSigning.publicKey.x963Representation.base64EncodedString(), agreementKey: phoneAgreement.publicKey.x963Representation.base64EncodedString())
-let bundle = try! CoreSetup.bundle(stores)
+// R2: the app wraps every store itself to the core's signed store key (P + K), so the core never sees their plaintext
+let (sks, skd) = call("/store-key", ["phone": phone.agreementKey])
+let recoverStoreKey = (try? CoreCrypto.storeKey(doc(skd), coreKey: coreKeys.signingKey, phone: phone.agreementKey)) ?? ""
+check(sks == 200 && !recoverStoreKey.isEmpty, "an empty core signs the store key for this phone (HTTP \(sks))")
+check(throwsErr { _ = try CoreCrypto.storeKey(doc(skd), coreKey: coreKeys.signingKey, phone: coreKeys.agreementKey) }, "…and the app refuses one for another phone")
+let bundle = try! CoreSetup.blobsBundle(stores, storeKey: recoverStoreKey)
+check(!String(decoding: bundle, as: UTF8.self).contains("FLY_API_TOKEN"), "the blobs bundle carries no store's values in the clear (the Fly token goes as flyToken)")
 func claim(_ body: [String: Any]) -> (Int, Data) { call("/claim", body) }
 var bad = try! CoreSetup.claim(core: coreKeys, phone: phone, master: kitMaster, bundle: bundle)
 bad["masterSig"] = try! fresh.sign(bad["statement"] as! String)
@@ -352,6 +358,34 @@ let (rms, rmb, rmd) = deployKey("remove", "DE0CH/china-train")
 check(rms == 200 && rmb.flatMap { try? Checks.deployKeyAnswer(doc(rmd), coreKey: coreKey, begin: $0) }?.kind == "deploy-key-removed", "remove: the key and the store go")
 check(!list().contains { $0.name == "github-china-train" }, "…the store is gone from the core's list")
 // through the router (Settings → Repos): the list follows the core's answer
+// ---- R2: the app makes the key pair and wraps its store; the core adds that key and keeps that blob ----
+struct SSHVector: Decodable { let seedHex: String; let checkint: String; let comment: String; let publicKey: String; let privateKeyFile: String; let storeValue: String }
+if let vb = FileManager.default.contents(atPath: "testdata/openssh-ed25519.json"), let v = try? JSONDecoder().decode(SSHVector.self, from: vb) {
+  let seed = Data(stride(from: 0, to: v.seedHex.count, by: 2).map { i in UInt8(v.seedHex[v.seedHex.index(v.seedHex.startIndex, offsetBy: i)..<v.seedHex.index(v.seedHex.startIndex, offsetBy: i + 2)], radix: 16)! })
+  let kv = try? OpenSSH.ed25519(comment: v.comment, seed: seed, checkint: UInt32(v.checkint, radix: 16))
+  check(kv?.publicKey == v.publicKey && kv?.privateKeyFile == v.privateKeyFile, "the app's OpenSSH key matches the core's vector")
+  check(OpenSSH.storeValues(repo: "DE0CH/china-train", privateKeyFile: v.privateKeyFile)["GITHUB_DEPLOY_KEY_DE0CH_CHINA_TRAIN"] == v.storeValue, "…and its store value")
+} else {
+  check(false, "the OpenSSH vector (testdata/openssh-ed25519.json) is readable")
+}
+let kp = try! OpenSSH.ed25519(comment: "jarvis2 github-r2-app")
+let skNow = try! CoreCrypto.storeKey(doc(call("/store-key", ["phone": phone.agreementKey]).1), coreKey: coreKey, phone: phone.agreementKey)
+let appBlob = try! CoreCrypto.wrapStore(name: "github-r2-app", values: OpenSSH.storeValues(repo: "DE0CH/r2-app", privateKeyFile: kp.privateKeyFile), storeKey: skNow)
+let (abStatus, abd) = call("/deploy-keys/begin", ["action": "add", "repo": "DE0CH/r2-app", "sensitive": false, "store": "github-r2-app",
+                                             "title": "jarvis2 github-r2-app", "publicKey": kp.publicKey, "blob": appBlob.json])
+let abeg = abStatus == 200 ? try? Checks.deployKeyBegin(doc(abd), coreKey: coreKey, action: "add", repo: "DE0CH/r2-app", sensitive: false, sent: (kp.publicKey, appBlob)) : nil
+check(abeg != nil, "the core's begin names the app's public key and blob (HTTP \(abStatus))")
+let otherBlob = try! CoreCrypto.wrapStore(name: "github-r2-app", values: ["X": "y"], storeKey: skNow)
+check(abStatus == 200 && throwsErr { _ = try Checks.deployKeyBegin(doc(abd), coreKey: coreKey, action: "add", repo: "DE0CH/r2-app", sensitive: false, sent: (kp.publicKey, otherBlob)) }, "…the page refuses a begin naming another blob")
+if let b = abeg {
+  let sig = try! phoneSigning.signature(for: Data(doc(abd).payload.utf8)).derRepresentation.base64EncodedString()
+  let x = try! phoneAgreement.sharedSecretFromKeyAgreement(with: P256.KeyAgreement.PublicKey(x963Representation: Data(base64Encoded: b.e)!)).withUnsafeBytes { Data($0) }
+  let (afs, afd) = call("/deploy-keys/finish", ["pending": b.pending, "signature": sig, "share": try! CoreCrypto.sealShare(x, to: b.t)])
+  let a = try? Checks.deployKeyAnswer(doc(afd), coreKey: coreKey, begin: b)
+  check(afs == 200 && a?.kind == "deploy-key-added" && a?.publicKey == kp.publicKey && a?.store == "github-r2-app", "the core added the app's key (HTTP \(afs))")
+  check(unlock("github-r2-app", share: realShare).0 == 200, "…and the app-wrapped store opens with the phone's share")
+}
+
 let rbase = need("INTEROP_ROUTER")
 struct ReposDTO: Decodable { struct R: Decodable { let name: String; let repo: String; let store: String; let sensitive: Bool? }; let repos: [R] }
 let (ras, _, _) = deployKey("add", "DE0CH/claude-env", base: rbase, prefix: "/api/repos/key")
