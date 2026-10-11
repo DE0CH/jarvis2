@@ -281,6 +281,7 @@ func (r *Router) buildHandlers() {
 		}
 		writeJSON(w, 200, snap)
 	})
+	r.registerTermPage(app) // termpage.go: the terminal as a web page (the iPhone app shows it in a web view)
 	app("POST /api/sessions/{id}/terminal", func(w http.ResponseWriter, req *http.Request) {
 		var in struct {
 			Text       string   `json:"text"`

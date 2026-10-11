@@ -1,0 +1,332 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
+<meta name="color-scheme" content="dark">
+<title>Terminal</title>
+<!--
+  The session's terminal (router/termpage.go, GET /term/{id}). Behaviour as the app's old React Native page
+  (app/src/pages/Terminal.tsx + ui/ansi.ts): one tmux capture at a time, a second after the last answered, drawn
+  from its colour escapes; keys and text sent in order, one request at a time; the remote window fitted to this
+  screen. The iPhone app shows this page in a web view and listens on the `jarvis2` message handler:
+    {action: "grant", holder: "terminal"}  open the app's own Face ID review for a terminal grant
+    {action: "signin"}                     the Access login expired: sign in again, then call window.jarvis2Refresh()
+  In a plain browser the grant button files an Inbox request instead and an expired login reloads the page once.
+-->
+<style>
+  :root { --bg: #0b0d11; --bar: #161a22; --fg: #d4d4d4; --line: #222; --muted: #9aa1ab; --font: 12.5px; --lh: 16px; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg); -webkit-text-size-adjust: 100%; }
+  body { font: 14px -apple-system, system-ui, sans-serif; overflow: hidden; }
+  #app { position: fixed; left: 0; right: 0; top: 0; height: var(--vh, 100%); display: flex; flex-direction: column;
+    padding-left: env(safe-area-inset-left); padding-right: env(safe-area-inset-right); }
+  #top { display: none; align-items: center; gap: 8px; padding: calc(8px + env(safe-area-inset-top)) 10px 8px; background: var(--bar); border-bottom: 1px solid var(--line); }
+  #top.on { display: flex; }
+  #top b { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+  #status { font-size: 11px; color: var(--muted); white-space: nowrap; }
+  #statusRow { display: flex; justify-content: flex-end; padding: 2px 10px 0; }
+  #banner { display: none; padding: 8px 12px; background: #2a2113; color: #f1c27d; font-size: 13px; }
+  #banner.on { display: block; }
+  #banner p { margin: 0 0 6px; overflow-wrap: anywhere; }
+  #screenWrap { flex: 1; min-height: 0; overflow: auto; padding: 6px; -webkit-overflow-scrolling: touch; }
+  #screen { font: var(--font)/var(--lh) ui-monospace, "SF Mono", Menlo, monospace; white-space: pre; margin: 0; color: var(--fg); }
+  #screen div { height: var(--lh); }
+  #measure { position: absolute; visibility: hidden; white-space: pre; font: var(--font)/var(--lh) ui-monospace, "SF Mono", Menlo, monospace; }
+  #keys { display: flex; gap: 6px; overflow-x: auto; padding: 6px 8px; background: var(--bar); border-top: 1px solid var(--line); scrollbar-width: none; flex: none; }
+  #keys::-webkit-scrollbar { display: none; }
+  button { font: 500 13px -apple-system, system-ui, sans-serif; color: #e6e8eb; background: #2a2f3a; border: 0; border-radius: 6px;
+    padding: 6px 10px; min-height: 32px; white-space: nowrap; -webkit-tap-highlight-color: transparent; touch-action: manipulation; }
+  button:active { background: #3a404d; }
+  button.primary { background: #0a84ff; color: #fff; }
+  #inputRow { display: flex; gap: 8px; padding: 6px 8px calc(8px + env(safe-area-inset-bottom)); background: var(--bar); flex: none; }
+  body.kb #inputRow { padding-bottom: 8px; }
+  #in { flex: 1; min-width: 0; font: 16px ui-monospace, "SF Mono", Menlo, monospace; color: var(--fg); background: #0f1218;
+    border: 1px solid #333a46; border-radius: 6px; padding: 6px 8px; }
+  #in:focus { outline: none; border-color: #0a84ff; }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="top"><b id="title"></b><span id="topStatus"></span></div>
+  <div id="statusRow"><span id="status" role="status" aria-label="Terminal status">connecting…</span></div>
+  <div id="banner" role="alert"><p id="bannerText"></p><button id="allow" class="primary" type="button" hidden>Allow terminal for 10 minutes</button></div>
+  <div id="screenWrap"><pre id="screen" aria-label="Terminal screen"></pre></div>
+  <div id="keys" aria-label="Terminal keys"></div>
+  <div id="inputRow">
+    <input id="in" type="text" aria-label="Terminal input" placeholder="type, then Send (adds Enter)"
+      autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" enterkeyhint="send">
+    <button id="send" type="button">Send</button>
+  </div>
+</div>
+<span id="measure">MMMMMMMMMM</span>
+<script>
+"use strict";
+(() => {
+  const SID = "__SESSION_ID__";
+  const ROOT = new URL("../", location.href);           // the page is /term/<id>: the router's root is one up
+  const api = (p) => new URL("api/sessions/" + encodeURIComponent(SID) + "/" + p, ROOT).toString();
+  const native = () => (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.jarvis2) || null;
+  const $ = (id) => document.getElementById(id);
+  const statusEl = $("status"), banner = $("banner"), bannerText = $("bannerText"), allowBtn = $("allow"), screen = $("screen"), input = $("in");
+
+  // a plain browser has no navigation bar around the page: a minimal one with the session's id
+  if (!native()) { $("top").classList.add("on"); $("title").textContent = SID; $("statusRow").style.display = "none"; $("topStatus").appendChild(statusEl); }
+
+  // ---- the capture's colour escapes (port of app/src/ui/ansi.ts) ----
+  const BASE = ["#000000", "#cd3131", "#0dbc79", "#e5e510", "#2472c8", "#bc3fbc", "#11a8cd", "#e5e5e5",
+    "#666666", "#f14c4c", "#23d18b", "#f5f543", "#3b8eea", "#d670d6", "#29b8db", "#ffffff"];
+  const TERM_FG = "#d4d4d4", TERM_BG = "#0b0d11";
+  const hex2 = (n) => n.toString(16).padStart(2, "0");
+  function c256(n) {
+    if (n < 16) return BASE[n];
+    if (n >= 232) { const v = 8 + (n - 232) * 10; return "#" + hex2(v) + hex2(v) + hex2(v); }
+    const i = n - 16, l = [0, 95, 135, 175, 215, 255];
+    return "#" + hex2(l[Math.floor(i / 36)]) + hex2(l[Math.floor(i / 6) % 6]) + hex2(l[i % 6]);
+  }
+  function sgr(st, params) {
+    const s = Object.assign({}, st);
+    if (!params.length) params = [0];
+    for (let i = 0; i < params.length; i++) {
+      const p = params[i];
+      if (p === 0) { for (const k of Object.keys(s)) delete s[k]; }
+      else if (p === 1) s.bold = true;
+      else if (p === 2) s.dim = true;
+      else if (p === 3) s.italic = true;
+      else if (p === 4) s.underline = true;
+      else if (p === 7) s.inverse = true;
+      else if (p === 22) { s.bold = false; s.dim = false; }
+      else if (p === 23) s.italic = false;
+      else if (p === 24) s.underline = false;
+      else if (p === 27) s.inverse = false;
+      else if (p >= 30 && p <= 37) s.fg = BASE[p - 30];
+      else if (p >= 90 && p <= 97) s.fg = BASE[p - 90 + 8];
+      else if (p === 39) delete s.fg;
+      else if (p >= 40 && p <= 47) s.bg = BASE[p - 40];
+      else if (p >= 100 && p <= 107) s.bg = BASE[p - 100 + 8];
+      else if (p === 49) delete s.bg;
+      else if ((p === 38 || p === 48) && params[i + 1] === 5) { const c = c256(params[i + 2] || 0); if (p === 38) s.fg = c; else s.bg = c; i += 2; }
+      else if ((p === 38 || p === 48) && params[i + 1] === 2) {
+        const c = "#" + hex2(params[i + 2] || 0) + hex2(params[i + 3] || 0) + hex2(params[i + 4] || 0);
+        if (p === 38) s.fg = c; else s.bg = c; i += 4;
+      }
+    }
+    return s;
+  }
+  const same = (a, b) => a.fg === b.fg && a.bg === b.bg && !!a.bold === !!b.bold && !!a.dim === !!b.dim && !!a.italic === !!b.italic && !!a.underline === !!b.underline && !!a.inverse === !!b.inverse;
+  function parseScreen(text, cursor) {
+    const lines = text.replace(/\r/g, "").split("\n");
+    let st = {};
+    return lines.map((line, y) => {
+      const cells = [];
+      const re = /\x1b\[([0-9;:]*)([A-Za-z])|\x1b[\]P_^][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[()][0-9A-Za-z]|\x1b./g;
+      let last = 0, m;
+      const push = (t) => { for (const ch of Array.from(t)) cells.push({ ch, style: st }); };
+      while ((m = re.exec(line))) {
+        push(line.slice(last, m.index));
+        if (m[2] === "m") st = sgr(st, (m[1] || "").split(/[;:]/).filter((x) => x !== "").map((x) => parseInt(x, 10) || 0));
+        last = re.lastIndex;
+      }
+      push(line.slice(last));
+      if (cursor && cursor[1] === y) {
+        while (cells.length <= cursor[0]) cells.push({ ch: " ", style: {} });
+        const c = cells[cursor[0]];
+        cells[cursor[0]] = { ch: c.ch, style: Object.assign({}, c.style, { inverse: !c.style.inverse }) };
+      }
+      const runs = [];
+      for (const c of cells) {
+        const r = runs[runs.length - 1];
+        if (r && same(r.style, c.style)) r.text += c.ch; else runs.push({ text: c.ch, style: c.style });
+      }
+      return runs;
+    });
+  }
+  function colours(s) {
+    let fg = s.fg || TERM_FG, bg = s.bg;
+    if (s.inverse) { const f = fg; fg = bg || TERM_BG; bg = f; }
+    return { color: s.dim && fg.length === 7 ? fg + "99" : fg, bg };
+  }
+  function draw(lines) {
+    const frag = document.createDocumentFragment();
+    for (const runs of lines) {
+      const div = document.createElement("div");
+      if (!runs.length) div.textContent = " ";
+      for (const r of runs) {
+        const span = document.createElement("span"), c = colours(r.style);
+        span.textContent = r.text;                       // text only: nothing from the capture becomes markup
+        span.style.color = c.color;
+        if (c.bg) span.style.background = c.bg;
+        if (r.style.bold) span.style.fontWeight = "700";
+        if (r.style.italic) span.style.fontStyle = "italic";
+        if (r.style.underline) span.style.textDecoration = "underline";
+        div.appendChild(span);
+      }
+      frag.appendChild(div);
+    }
+    screen.replaceChildren(frag);
+    screen.setAttribute("aria-label", "Terminal screen: " + lines.map((rs) => rs.map((r) => r.text).join("")).join("\n").trim().slice(-2000));
+  }
+
+  // ---- errors: a grant the phone hasn't given, an expired login, anything else as it came ----
+  let reloaded = false;
+  function show(text, grant) {
+    bannerText.textContent = text;
+    allowBtn.hidden = !grant;
+    banner.classList.add("on");
+  }
+  function clearBanner() { banner.classList.remove("on"); allowBtn.hidden = true; }
+  function signin() {
+    const n = native();
+    if (n) { n.postMessage({ action: "signin" }); show("Signing in again…", false); return; }
+    if (!sessionStorage.getItem("jarvis2-term-reloaded")) { sessionStorage.setItem("jarvis2-term-reloaded", "1"); location.reload(); return; }
+    show("Signed out of Cloudflare Access: reload the page to sign in.", false);
+  }
+  // what a refused answer means: "auth" (the Access login), "grant" (the terminal isn't allowed), or the message
+  async function reason(res) {
+    const ct = res.headers.get("content-type") || "";
+    const text = await res.text().catch(() => "");
+    let j = null;
+    if (ct.includes("json")) { try { j = JSON.parse(text); } catch (e) {} }
+    if ((res.status === 401 || res.status === 403) && (!j || /Access login required/.test(j.error || ""))) return { kind: "auth" };
+    if (j && j.needsGrant) return { kind: "grant" };
+    let msg = j ? String(j.error || j.message || "") : text.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim().slice(0, 300);
+    if (j && typeof j.payload === "string") { try { const p = JSON.parse(j.payload); if (p.error) msg = "core: " + p.error; } catch (e) {} }
+    if (/grant/i.test(msg)) return { kind: "grant" };
+    return { kind: "error", msg: (msg || "request failed") + " (HTTP " + res.status + ")" };
+  }
+  async function call(method, path, body) {
+    let res;
+    try {
+      res = await fetch(api(path), { method, credentials: "same-origin", cache: "no-store",
+        headers: body ? { "Content-Type": "application/json" } : {}, body: body ? JSON.stringify(body) : undefined });
+    } catch (e) {
+      // an Access redirect to cloudflareaccess.com fails as a network error (CORS): the login expired, or we're offline
+      if (navigator.onLine === false) return { ok: false, kind: "error", msg: "This device is offline." };
+      return { ok: false, kind: "auth" };
+    }
+    if (res.redirected && /cloudflareaccess\.com$/.test(new URL(res.url).hostname)) return { ok: false, kind: "auth" };
+    if (!res.ok) return Object.assign({ ok: false }, await reason(res));
+    try { return { ok: true, data: await res.json() }; } catch (e) { return { ok: false, kind: "auth" }; }
+  }
+  function failed(r) {
+    if (r.kind === "auth") signin();
+    else if (r.kind === "grant") show("This session's terminal needs a grant.", true);
+    else show(r.msg, false);
+  }
+
+  // the app opens its own Face ID review; a browser files a request in the phone's Inbox instead
+  const allow = allowBtn;
+  allow.addEventListener("click", async () => {
+    const n = native();
+    if (n) { n.postMessage({ action: "grant", holder: "terminal" }); return; }
+    allow.disabled = true;
+    try {
+      const res = await fetch(new URL("api/requests/grant", ROOT).toString(), { method: "POST", credentials: "same-origin",
+        headers: { "Content-Type": "application/json" }, body: JSON.stringify({ session: SID, holder: "terminal", minutes: 10 }) });
+      if (res.ok) show("Sent to the Inbox: approve it in the Jarvis 2 app.", false);
+      else { const r = await reason(res); r.kind === "auth" ? signin() : show(r.msg || "This session's terminal needs a grant.", r.kind === "grant"); }
+    } catch (e) { signin(); }
+    allow.disabled = false;
+  });
+
+  // ---- one snapshot at a time, the next a second after the last answered ----
+  let lastKey = "", timer = null, polling = false, again = false;
+  async function tick() {
+    if (polling) { again = true; return; }
+    polling = true; clearTimeout(timer);
+    const r = await call("GET", "terminal");
+    polling = false;
+    if (r.ok) {
+      sessionStorage.removeItem("jarvis2-term-reloaded");
+      clearBanner();
+      const f = r.data || {};
+      const [x, y, w, h, vis] = String(f.cursor || "").split(",").map((v) => parseInt(v, 10));
+      statusEl.textContent = w ? "live · " + w + "×" + h : "live";
+      const key = (f.screen || "") + "|" + (f.cursor || "");
+      if (key !== lastKey) { lastKey = key; draw(parseScreen(String(f.screen || ""), vis ? [x, y] : null)); }
+    } else {
+      statusEl.textContent = "no picture";
+      failed(r);
+    }
+    if (again) { again = false; return tick(); }
+    // a login being repaired by the app waits for its jarvis2Refresh; everything else polls on
+    if (!(r.kind === "auth" && native())) timer = setTimeout(tick, 1000);
+  }
+  // the app calls this after a grant was signed or a sign-in finished
+  window.jarvis2Refresh = () => { clearBanner(); fitted = ""; fit(); tick(); };
+
+  // ---- input strictly in order, one request at a time; text typed meanwhile joins the next ----
+  const queue = [];
+  let sending = false;
+  async function send(body) {
+    const last = queue[queue.length - 1];
+    if (body.text && !body.keys && last && last.text && !last.keys) last.text += body.text; else queue.push(Object.assign({}, body));
+    if (sending) return;
+    sending = true;
+    try {
+      while (queue.length) {
+        const b = queue.shift();
+        const r = await call("POST", "terminal", b);
+        if (!r.ok) failed(r);
+      }
+    } finally { sending = false; }
+    setTimeout(tick, 150);
+  }
+  function sendText() { const t = input.value; input.value = ""; send(t ? { text: t, keys: ["Enter"] } : { keys: ["Enter"] }); }
+  $("send").addEventListener("click", sendText);
+  input.addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.isComposing) { e.preventDefault(); sendText(); } });
+
+  // a tap on a key or Send keeps the keyboard up: no focus change on press, and the input focused again after it
+  function keepFocus(b) {
+    let had = false;
+    b.addEventListener("pointerdown", () => { had = document.activeElement === input; });
+    b.addEventListener("mousedown", (e) => e.preventDefault());
+    b.addEventListener("click", () => { if (had && document.activeElement !== input) input.focus(); });
+  }
+  keepFocus($("send"));
+
+  // the keys the router passes to tmux (router/terminal.go tmuxKeys)
+  const KEYS = [["Enter", "Enter"], ["Esc", "Escape"], ["Tab", "Tab"], ["⇧Tab", "BTab"], ["↑", "Up"], ["↓", "Down"], ["←", "Left"], ["→", "Right"],
+    ["⌫", "BSpace"], ["^C", "C-c"], ["^D", "C-d"], ["^R", "C-r"], ["^U", "C-u"], ["PgUp", "PageUp"], ["PgDn", "PageDown"]];
+  const ARIA = { Enter: "Enter", Escape: "Escape", Tab: "Tab", BTab: "Shift Tab", Up: "Up", Down: "Down", Left: "Left", Right: "Right",
+    BSpace: "Backspace", "C-c": "Control C", "C-d": "Control D", "C-r": "Control R", "C-u": "Control U", PageUp: "Page up", PageDown: "Page down" };
+  for (const [label, key] of KEYS) {
+    const b = document.createElement("button");
+    b.type = "button"; b.textContent = label; b.setAttribute("aria-label", ARIA[key] || label);
+    // a key must not take the focus from the input (that would drop the keyboard); the row still scrolls sideways
+    keepFocus(b);
+    b.addEventListener("click", () => send({ keys: [key] }));
+    $("keys").appendChild(b);
+  }
+
+  // ---- the page follows the visible area (the keyboard), and the remote window fits the screen in cells ----
+  const wrap = $("screenWrap"), measure = $("measure");
+  let fitted = "", fitTimer = null;
+  function viewport() {
+    const vv = window.visualViewport;
+    const h = vv ? vv.height : window.innerHeight;
+    document.documentElement.style.setProperty("--vh", h + "px");
+    document.body.classList.toggle("kb", !!vv && window.innerHeight - vv.height > 80);
+    if (vv) window.scrollTo(0, 0);
+  }
+  function fit() {
+    const cw = measure.getBoundingClientRect().width / 10 || 7.5;
+    const lh = parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--lh")) || 16;
+    const cols = Math.max(20, Math.min(300, Math.floor((wrap.clientWidth - 12) / cw)));
+    const rows = Math.max(5, Math.min(120, Math.floor((wrap.clientHeight - 12) / lh)));
+    const k = cols + "x" + rows;
+    if (k === fitted) return;
+    fitted = k;
+    clearTimeout(fitTimer);
+    fitTimer = setTimeout(async () => { const r = await call("POST", "terminal", { cols, rows }); if (!r.ok) failed(r); }, 400);
+  }
+  viewport();
+  if (window.visualViewport) { visualViewport.addEventListener("resize", () => { viewport(); fit(); }); visualViewport.addEventListener("scroll", viewport); }
+  window.addEventListener("resize", () => { viewport(); fit(); });
+  if (window.ResizeObserver) new ResizeObserver(fit).observe(wrap);
+  fit();
+  tick();
+})();
+</script>
+</body>
+</html>
