@@ -477,3 +477,55 @@ func TestOneShotEnv(t *testing.T) {
 		t.Fatal("auto-pause is on by default")
 	}
 }
+
+func TestAttentionDMNamesTheAppTitle(t *testing.T) {
+	c, now := defaultPilot, time.Now()
+	l := &Liveness{}
+	d := running("s1", l)
+	d.Sessions["s1"].AppTitle = "Bilingual Japanese news"
+	no := func(string) bool { return false }
+	idle := &Registry{Status: "idle", StatusUpdatedAt: 1, LiveName: "workspace-c1", NameSource: "derived"}
+	report(l, now, idle)
+	planTick(d, now, 0, c, no, no)
+	report(l, now.Add(c.Attention), idle)
+	a := planTick(d, now.Add(c.Attention), 0, c, no, no)
+	if len(a) != 1 || !strings.Contains(a[0].Text, "“Bilingual Japanese news”") {
+		t.Fatalf("got %+v", a)
+	}
+	if n := sessionName(&Session{ID: "s2"}, idle); n != "workspace-c1" {
+		t.Fatalf("with nothing else the derived name still beats the id, got %q", n)
+	}
+}
+
+func TestAttentionDMNotRepeatedAfterRestart(t *testing.T) {
+	c, now := defaultPilot, time.Now()
+	l := &Liveness{}
+	d := running("s1", l)
+	no := func(string) bool { return false }
+	idle := &Registry{Status: "idle", StatusUpdatedAt: 7}
+	report(l, now, idle)
+	planTick(d, now, 0, c, no, no)
+	report(l, now.Add(c.Attention), idle)
+	if a := planTick(d, now.Add(c.Attention), 0, c, no, no); !strings.Contains(kinds(a), "dm") {
+		t.Fatalf("no first ping: %+v", a)
+	}
+	// a router restart: only the persisted fields survive
+	l2 := &Liveness{AttentionSent: l.AttentionSent}
+	d2 := running("s1", l2)
+	for _, at := range []time.Time{now.Add(2 * c.Attention), now.Add(4 * c.Attention)} {
+		report(l2, at, idle)
+		if a := planTick(d2, at, 0, c, no, no); strings.Contains(kinds(a), "dm") {
+			t.Fatalf("same idle episode pinged again after a restart: %+v", a)
+		}
+	}
+	// a new turn that settles again is a new episode
+	report(l2, now.Add(5*c.Attention), &Registry{Status: "busy", StatusUpdatedAt: 8})
+	planTick(d2, now.Add(5*c.Attention), 0, c, no, no)
+	idle2 := &Registry{Status: "idle", StatusUpdatedAt: 9}
+	report(l2, now.Add(6*c.Attention), idle2)
+	planTick(d2, now.Add(6*c.Attention), 0, c, no, no)
+	report(l2, now.Add(7*c.Attention), idle2)
+	if a := planTick(d2, now.Add(7*c.Attention), 0, c, no, no); !strings.Contains(kinds(a), "dm") {
+		t.Fatalf("a new idle episode wasn't pinged: %+v", a)
+	}
+}

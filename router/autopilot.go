@@ -37,6 +37,8 @@ type Liveness struct {
 	OneShot         bool      `json:"oneShot,omitempty"`
 	NeedsGrant      string    `json:"needsGrant,omitempty"` // a holder the machine refused; the app offers a grant
 	DowngradeSeenAt int64     `json:"downgradeSeenAt,omitempty"`
+	// the settled episode already DMed ("idle:<statusUpdatedAt>"), so a router restart doesn't ping it again
+	AttentionSent string `json:"attentionSent,omitempty"`
 	Reg             *Registry `json:"registry,omitempty"`
 	LastReport      time.Time `json:"lastReport,omitempty"`
 
@@ -321,14 +323,28 @@ func attentionKind(g *Registry) string {
 	return "dead"
 }
 
-// sessionName: as Jarvis 1 names a session in its DMs
-func sessionName(s *Session, g *Registry) string {
-	names := []string{s.Label, s.Title, s.ID}
+// attentionKey: one settled episode — its kind and the turn it settled on (a new turn is a new episode)
+func attentionKey(kind string, g *Registry) string {
+	var at int64
 	if g != nil {
-		names = append([]string{g.AiTitle, g.LiveName}, names...)
+		at = g.StatusUpdatedAt
+	}
+	return fmt.Sprintf("%s:%d", kind, at)
+}
+
+// sessionName: the name a session's DMs carry — its card/channel title (sessionTitle: the app's title, Deyao's own
+// name, the label), else the live AI title, else the CLI's derived Remote Control name ("workspace-c1"), last
+func sessionName(s *Session, g *Registry) string {
+	names := []string{s.AppTitle, s.UserTitle, s.Label}
+	if g != nil {
+		names = append(names, g.AiTitle)
+	}
+	names = append(names, s.Title)
+	if g != nil {
+		names = append(names, g.LiveName)
 	}
 	for _, n := range names {
-		if n != "" {
+		if n = strings.TrimSpace(n); n != "" {
 			return n
 		}
 	}
@@ -376,11 +392,11 @@ func planTick(d *persisted, now time.Time, storedExp int64, c pilotConfig, busy,
 		if operating || l.OneShot {
 			l.settled = nil
 		} else if kind := attentionKind(g); kind == "" {
-			l.settled = nil
-		} else if l.settled == nil || l.settled.kind != kind {
-			l.settled = &settledEpisode{kind: kind, since: now}
+			l.settled, l.AttentionSent = nil, ""
+		} else if key := attentionKey(kind, g); l.settled == nil || l.settled.kind != kind {
+			l.settled = &settledEpisode{kind: kind, since: now, notified: l.AttentionSent == key}
 		} else if !l.settled.notified && now.Sub(l.settled.since) >= c.Attention {
-			l.settled.notified = true
+			l.settled.notified, l.AttentionSent = true, key
 			if !(kind == "idle" && l.NotifyIdleOff) {
 				add(pilotAction{Kind: "dm", Session: id, Text: attentionText(kind, name)})
 			}
