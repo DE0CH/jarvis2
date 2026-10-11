@@ -292,6 +292,10 @@ enum Checks {
 struct DeployKeyBegin: Codable, Equatable {
   let kind: String, pending: String, action: String, repo: String, store: String
   let sensitive: Bool, replaces: Bool, title: String, tokenStore: String, e: String, t: String
+  /// a core that takes the app's key (R2): the public key, the blob's E and the sha256 of its data, as the app sent them
+  var publicKey: String? = nil
+  var blobE: String? = nil
+  var blobSha256: String? = nil
   /// who wrote the token store's blob (as unlock-begin's writer)
   var tokenWriter: StoreWriter? = nil
   var tokenDataSha256: String? = nil
@@ -300,6 +304,7 @@ struct DeployKeyBegin: Codable, Equatable {
 struct DeployKeyAnswer: Codable {
   let kind: String, pending: String, repo: String, store: String
   let sensitive: Bool?, fingerprint: String?, deleted: Int?
+  var publicKey: String? = nil
 }
 
 extension Checks {
@@ -320,8 +325,14 @@ extension Checks {
 
   /// the begin document is the core's, for exactly this action on this repo: its store, its title on GitHub,
   /// the one token store it opens; asked-for sensitivity is kept (the core may only add it)
-  static func deployKeyBegin(_ doc: SignedDoc, coreKey: String, action: String, repo: String, sensitive: Bool) throws -> DeployKeyBegin {
+  /// `sent`: the key and blob the app sent (a core that takes them must echo exactly these)
+  static func deployKeyBegin(_ doc: SignedDoc, coreKey: String, action: String, repo: String, sensitive: Bool,
+                             sent: (publicKey: String, blob: StoreBlob)? = nil) throws -> DeployKeyBegin {
     let b = try CoreCrypto.decode(doc, by: coreKey, as: DeployKeyBegin.self, what: "the deploy-key request")
+    if let sent, b.publicKey != nil {
+      guard b.publicKey == sent.publicKey, b.blobE == sent.blob.wrapped.e,
+            b.blobSha256 == CoreCrypto.sha256hex(Data(sent.blob.data.utf8)) else { throw TrustError.mismatch("the key the core holds isn't the one this iPhone made") }
+    }
     guard b.kind == "deploy-key-begin", b.action == action else { throw TrustError.mismatch("action") }
     guard b.repo.lowercased() == repo.lowercased() else { throw TrustError.mismatch("repo") }
     guard b.store == repoStore(repo), b.title == "jarvis2 " + b.store else { throw TrustError.mismatch("store") }
@@ -497,5 +508,85 @@ extension Checks {
   static func imageAttested(_ image: String, sig: String?, ciKey: String) -> Bool {
     guard let sig, !image.isEmpty else { return false }
     return CoreCrypto.valid(Data("jarvis2-session-image \(image)".utf8), sig: sig, by: ciKey)
+  }
+}
+
+// ---- the app wraps stores itself (R2, 2026-10-11): to the core's signed store key, and a repo's deploy key ----------
+/// A store's sealed blob, as setup.py's blob() and the core's WrapToPoint make it: the values under a data key (the
+/// store's name as associated data), the data key wrapped to the store key C = P + K (the phone's and the core's
+/// agreement keys), which only the phone's share and the core together open.
+struct StoreBlob: Codable, Equatable {
+  struct Wrapped: Codable, Equatable { let e: String; let wrapped: String }
+  let name: String
+  let wrapped: Wrapped
+  let data: String
+  var json: [String: Any] { ["name": name, "wrapped": ["e": wrapped.e, "wrapped": wrapped.wrapped], "data": data] }
+}
+/// the core's signed answer to POST /store-key: C = P + K for this phone
+struct StoreKeyDoc: Codable { let kind: String; let phone: String; let storeKey: String }
+
+extension CoreCrypto {
+  static let storeDataKeyInfo = "jarvis2/store-data-key"
+
+  /// the store key for this phone's agreement key, from the core's signed answer (`coreKey`: that core's signing key)
+  static func storeKey(_ doc: SignedDoc, coreKey: String, phone: String) throws -> String {
+    let d = try decode(doc, by: coreKey, as: StoreKeyDoc.self, what: "the store key")
+    guard d.kind == "store-key", MasterKey.same(d.phone, phone) else { throw TrustError.stale("store key") }
+    guard let b = Data(base64Encoded: d.storeKey), (try? P256.KeyAgreement.PublicKey(x963Representation: b)) != nil else { throw TrustError.badSignature("the store key") }
+    return d.storeKey
+  }
+
+  /// the store's values sealed to the store key
+  static func wrapStore(name: String, values: [String: String], storeKey: String) throws -> StoreBlob {
+    guard let cb = Data(base64Encoded: storeKey) else { throw TrustError.badSignature("the store key") }
+    let c = try P256.KeyAgreement.PublicKey(x963Representation: cb)
+    let dk = SymmetricKey(size: .bits256)
+    let e = P256.KeyAgreement.PrivateKey()
+    let kek = try e.sharedSecretFromKeyAgreement(with: c)
+      .hkdfDerivedSymmetricKey(using: SHA256.self, salt: Data(), sharedInfo: Data(storeDataKeyInfo.utf8), outputByteCount: 32)
+    guard let wrapped = try AES.GCM.seal(dk.withUnsafeBytes { Data($0) }, using: kek).combined else { throw TrustError.badSignature("wrapping") }
+    let enc = JSONEncoder(); enc.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+    guard let data = try AES.GCM.seal(try enc.encode(values), using: dk, authenticating: Data(name.utf8)).combined else { throw TrustError.badSignature("sealing") }
+    return StoreBlob(name: name, wrapped: .init(e: e.publicKey.x963Representation.base64EncodedString(), wrapped: wrapped.base64EncodedString()), data: data.base64EncodedString())
+  }
+}
+
+/// A repo's deploy key, made by the app (R2): an ed25519 pair in OpenSSH's formats, as core/deploykeys.go wrote them.
+enum OpenSSH {
+  private static func string(_ d: Data) -> Data { var n = UInt32(d.count).bigEndian; return Data(bytes: &n, count: 4) + d }
+  private static func uint32(_ v: UInt32) -> Data { var n = v.bigEndian; return Data(bytes: &n, count: 4) }
+
+  struct KeyPair { let publicKey: String; let privateKeyFile: String; let wire: Data }
+
+  /// `seed` and `checkint` fixed only by tests; a real key takes fresh randomness
+  static func ed25519(comment: String, seed: Data? = nil, checkint: UInt32? = nil) throws -> KeyPair {
+    let k = try seed.map { try Curve25519.Signing.PrivateKey(rawRepresentation: $0) } ?? Curve25519.Signing.PrivateKey()
+    let pub = k.publicKey.rawRepresentation
+    let wire = string(Data("ssh-ed25519".utf8)) + string(pub)
+    let ci = checkint ?? UInt32.random(in: .min ... .max)
+    var priv = uint32(ci) + uint32(ci) + string(Data("ssh-ed25519".utf8)) + string(pub) + string(k.rawRepresentation + pub) + string(Data(comment.utf8))
+    var pad: UInt8 = 1
+    while priv.count % 8 != 0 { priv.append(pad); pad += 1 }
+    let body = Data("openssh-key-v1".utf8) + Data([0]) + string(Data("none".utf8)) + string(Data("none".utf8)) + string(Data())
+      + uint32(1) + string(wire) + string(priv)
+    let b64 = body.base64EncodedString()
+    var lines: [String] = []
+    var i = b64.startIndex
+    while i < b64.endIndex { let j = b64.index(i, offsetBy: 70, limitedBy: b64.endIndex) ?? b64.endIndex; lines.append(String(b64[i..<j])); i = j }
+    let file = "-----BEGIN OPENSSH PRIVATE KEY-----\n" + lines.joined(separator: "\n") + "\n-----END OPENSSH PRIVATE KEY-----\n"
+    return KeyPair(publicKey: "ssh-ed25519 " + wire.base64EncodedString(), privateKeyFile: file, wire: wire)
+  }
+  /// GitHub's fingerprint: SHA256:<base64 of the wire bytes' sha256, no padding>
+  static func fingerprint(wire: Data) -> String {
+    "SHA256:" + Data(SHA256.hash(data: wire)).base64EncodedString().replacingOccurrences(of: "=", with: "")
+  }
+  /// DE0CH/china-train → DE0CH_CHINA_TRAIN
+  static func slug(_ repo: String) -> String {
+    String(repo.uppercased().unicodeScalars.map { s -> Character in (s >= "A" && s <= "Z") || (s >= "0" && s <= "9") ? Character(s) : "_" })
+  }
+  /// the repo store's values, as machines read them (machine/deploykeys.go)
+  static func storeValues(repo: String, privateKeyFile: String) -> [String: String] {
+    let s = slug(repo)
+    return ["GITHUB_DEPLOY_REPO_\(s)": repo, "GITHUB_DEPLOY_KEY_\(s)": Data(privateKeyFile.utf8).base64EncodedString()]
   }
 }

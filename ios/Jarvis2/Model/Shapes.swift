@@ -182,6 +182,10 @@ struct Machine: Identifiable, Equatable, Hashable {
   var routerUrl: String { j["routerUrl"].string ?? "" }
   var test: Bool { j["test"].bool == true }
   var noDestroy: String? { j["noDestroy"].text }
+  /// what stands out about it ("" = nothing)
+  var attention: String? { j["attention"].text }
+  /// a Jarvis 1 session it belongs to (shown, never linked)
+  var otherSession: String? { j["otherSession"].text }
 }
 
 /// a router list (sizes, models): id + label, a model also its harness

@@ -40,17 +40,17 @@ private struct InboxRow: View {
     Button(action: review) {
       VStack(alignment: .leading, spacing: 4) {
         HStack(alignment: .firstTextBaseline) {
-          Text(action).font(.headline).foregroundStyle(.primary).accessibilityIdentifier("request-title-\(it.id)")
+          Text(action).font(.headline).foregroundStyle(Color.primary).accessibilityIdentifier("request-title-\(it.id)")
           Spacer()
           if let p = model.pending["q:" + it.id] { StatusPill(text: p, color: .orange, spinning: true) } else { StatusPill(text: kindName, color: .blue) }
         }
-        Text("From \(it.callerText)\(it.created.map { " · " + Fmt.ago($0) } ?? "")").font(.subheadline).foregroundStyle(.secondary)
-        Text(it.callLine).font(.caption.monospaced()).foregroundStyle(.secondary).lineLimit(2)
+        Text("From \(it.callerText)\(it.created.map { " · " + Fmt.ago($0) } ?? "")").font(.subheadline).foregroundStyle(Color.secondary)
+        Text(it.callLine).font(.caption.monospaced()).foregroundStyle(Color.secondary).lineLimit(2)
         if !it.explanation.isEmpty {
-          Text("“\(it.explanation)”").font(.subheadline).italic().foregroundStyle(.secondary).lineLimit(2)
+          Text("“\(it.explanation)”").font(.subheadline).italic().foregroundStyle(Color.secondary).lineLimit(2)
             .accessibilityIdentifier("request-reason-\(it.id)")
         }
-        if let e = it.expires { Text("Goes away \(Fmt.when(e)) if not answered").font(.footnote).foregroundStyle(.tertiary) }
+        if let e = it.expires { Text("Goes away \(Fmt.when(e)) if not answered").font(.footnote).foregroundStyle(Color.secondary) }
       }
     }
     .accessibilityIdentifier("request-review-\(it.id)")

@@ -179,9 +179,22 @@ final class RouterClient: NSObject, ASWebAuthenticationPresentationContextProvid
 
   // ---- deploy keys: a repo added or removed (core/deploykeys.go) ----
   /// the core's signed begin document, checked: this action, this repo, its store, the one token store it opens
+  /// A core that takes the app's key (R2): the app makes the ed25519 pair, wraps the private half into the repo's store
+  /// blob to the core's store key, and sends both; the core's signed begin must echo them. An earlier core (no store key)
+  /// makes the key itself.
   func deployKeyBegin(action: String, repo: String, sensitive: Bool) async throws -> (doc: SignedDoc, begin: DeployKeyBegin) {
-    let d = try await json("POST", "api/repos/key/begin", ["action": action, "repo": repo, "sensitive": sensitive], as: SignedDoc.self)
-    let b = try Checks.deployKeyBegin(d, coreKey: try CoreTrust.key(), action: action, repo: repo, sensitive: sensitive)
+    let store = Checks.repoStore(repo), title = "jarvis2 " + store
+    var body: [String: Any] = ["action": action, "repo": repo, "sensitive": sensitive, "store": store, "title": title]
+    var sent: (publicKey: String, blob: StoreBlob)?
+    if action == "add", let sk = try await storeKey(coreKey: try CoreTrust.key()) {
+      let kp = try OpenSSH.ed25519(comment: title)
+      let blob = try CoreCrypto.wrapStore(name: store, values: OpenSSH.storeValues(repo: repo, privateKeyFile: kp.privateKeyFile), storeKey: sk)
+      body["publicKey"] = kp.publicKey
+      body["blob"] = blob.json
+      sent = (kp.publicKey, blob)
+    }
+    let d = try await json("POST", "api/repos/key/begin", body, as: SignedDoc.self)
+    let b = try Checks.deployKeyBegin(d, coreKey: try CoreTrust.key(), action: action, repo: repo, sensitive: sensitive, sent: sent)
     try Checks.writer(b.tokenWriter, store: b.tokenStore, e: b.e, dataSha256: b.tokenDataSha256, setupKey: try await setupKeyIfNeeded(b.tokenWriter), required: try await writersRequired())
     return (d, b)
   }
@@ -189,6 +202,16 @@ final class RouterClient: NSObject, ASWebAuthenticationPresentationContextProvid
   func deployKeyFinish(_ b: DeployKeyBegin, signature: Data, share: Data) async throws -> DeployKeyAnswer {
     let body: [String: Any] = ["pending": b.pending, "signature": signature.base64EncodedString(), "share": try CoreCrypto.sealShare(share, to: b.t)]
     return try Checks.deployKeyAnswer(try await json("POST", "api/repos/key/finish", body, as: SignedDoc.self), coreKey: try CoreTrust.key(), begin: b)
+  }
+
+  /// the core's store key C = P + K for this phone's agreement key, checked against `coreKey`; nil from a core that
+  /// predates it (404: the app then uses the earlier forms)
+  func storeKey(coreKey: String) async throws -> String? {
+    let phone = try PhoneKeys.shared.publicKeys().agreementKey
+    let (status, data) = try await raw("POST", "api/core/store-key", ["phone": phone])
+    if status == 404 { return nil }
+    guard status == 200 else { throw Self.failure("POST", "api/core/store-key", status, data) }
+    return try CoreCrypto.storeKey(try JSONDecoder().decode(SignedDoc.self, from: data), coreKey: coreKey, phone: phone)
   }
 
   // ---- setting the core up: Reset and Recover ----

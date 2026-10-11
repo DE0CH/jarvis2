@@ -37,7 +37,7 @@ class JarvisUITestCase: XCTestCase {
   }
 
   // ---- elements ----
-  func el(_ id: String) -> XCUIElement { app.descendants(matching: .any)[id] }
+  func el(_ id: String) -> XCUIElement { app.descendants(matching: .any).matching(identifier: id).firstMatch }
   func prefixed(_ p: String) -> XCUIElement { app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH %@", p)).firstMatch }
   func labelled(_ text: String) -> XCUIElement { app.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS %@", text)).firstMatch }
   @discardableResult func wait(_ e: XCUIElement, _ s: TimeInterval, _ what: String) -> Bool {
@@ -92,7 +92,7 @@ class JarvisUITestCase: XCTestCase {
       let f = alert.textFields.firstMatch
       if f.waitForExistence(timeout: 5) { f.tap(); f.typeText(text) }
     }
-    let b = alert.buttons[button]
+    let b = alert.buttons.matching(NSPredicate(format: "label == %@", button)).firstMatch
     guard wait(b, 5, "alert button \(button)") else { return false }
     b.tap()
     return true
@@ -102,7 +102,7 @@ class JarvisUITestCase: XCTestCase {
     let p = el(pickerId)
     guard wait(p, 10, "picker \(pickerId)") else { return }
     p.tap()
-    let o = app.buttons[option].firstMatch
+    let o = app.buttons.matching(NSPredicate(format: "label == %@", option)).firstMatch
     if o.waitForExistence(timeout: 5) { o.tap() } else {
       let c = app.collectionViews.buttons[option].firstMatch
       if c.waitForExistence(timeout: 3) { c.tap() } else { XCTFail("[\(tag)] no option \(option) in \(pickerId)"); note("tree-pick-\(pickerId)", app.debugDescription) }

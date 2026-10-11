@@ -1,37 +1,112 @@
-// Machines: every Fly machine in jarvis2-sessions (api/machines), live from Fly, each with the session it belongs to or
-// "No session", and "test" when it points at a test router. Destroy only for a machine with no session; the router
-// re-checks that and destroys it through the core's kill.
+// Machines: every Fly machine and volume in every Fly org Jarvis can see (api/machines, router/flyorgs.go): this
+// Jarvis's own app (jarvis2-sessions) with each machine's session or "No session", and the other apps read-only (an org
+// read through Jarvis 1 says so). Whatever stands out is flagged in amber. Destroy only for a machine of this Jarvis's
+// own app that belongs to no session; the router re-checks that and destroys it through the core's kill.
 import SwiftUI
 
 struct MachinesView: View {
   @Environment(AppModel.self) private var model
 
+  private static let orgOrder = ["jarvis2-370", "kamyee", "personal"]
+  private var orgs: [JSON] {
+    model.machinesDoc["orgs"].array.sorted { a, b in
+      let ia = Self.orgOrder.firstIndex(of: a["org"].string ?? "") ?? 99, ib = Self.orgOrder.firstIndex(of: b["org"].string ?? "") ?? 99
+      return ia < ib
+    }
+  }
+
   var body: some View {
-    let ms = model.machines
+    let doc = model.machinesDoc
     List {
-      if let e = ms.error { ErrorRow(text: "Could not list machines: \(e)") }
-      if ms.loaded {
+      if let e = model.machines.error { ErrorRow(text: "Could not list machines: \(e)") }
+      if model.machines.loaded {
         Section {
-          ForEach(ms.items) { m in MachineRow(m: m) }
+          let n = doc["attention"].int ?? 0
+          if n > 0 {
+            Label("\(Fmt.plural(n, "thing")) stand\(n == 1 ? "s" : "") out", systemImage: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+              .accessibilityElement(children: .combine).accessibilityIdentifier("machines-attention")
+          } else {
+            Label("Nothing stands out.", systemImage: "checkmark.circle").foregroundStyle(.green)
+              .accessibilityElement(children: .combine).accessibilityIdentifier("machines-attention")
+          }
+          if let e = doc["configError"].text { ErrorRow(text: e) }
         } footer: {
-          let orphans = ms.items.count { $0.sessionId == nil }
-          Text("\(Fmt.plural(ms.items.count, "machine")) in the Fly app jarvis2-sessions, \(orphans > 0 ? "\(orphans) with no session" : "all belong to sessions"). A paused session has no machine.")
+          let own = model.machines.items
+          let orphans = own.count { $0.sessionId == nil }
+          Text("\(Fmt.plural(own.count, "machine")) in \(doc["app"].string ?? "jarvis2-sessions"), \(orphans > 0 ? "\(orphans) with no session" : "all belong to sessions"). A paused session has no machine.")
         }
+        if orgs.isEmpty {
+          // a router that lists only its own app
+          Section(doc["app"].string ?? "jarvis2-sessions") { ForEach(model.machines.items) { m in MachineRow(m: m, own: true) } }
+        }
+        ForEach(Array(orgs.enumerated()), id: \.offset) { _, org in OrgSections(org: org) }
       }
     }
-    .overlay {
-      if !ms.loaded && ms.error == nil { ProgressView("Loading…") }
-      else if ms.loaded && ms.items.isEmpty { ContentUnavailableView("No machines", systemImage: "server.rack", description: Text("Nothing is running or stopped in the app.")) }
-    }
+    .overlay { if !model.machines.loaded && model.machines.error == nil { ProgressView("Loading…") } }
     .navigationTitle("Machines")
     .refreshable { await model.loadMachines() }
     .task { while !Task.isCancelled { await model.loadMachines(); try? await Task.sleep(for: .seconds(15)) } }
   }
 }
 
+/// one org: a section per app (or one saying it has none, or its error)
+private struct OrgSections: View {
+  let org: JSON
+  var body: some View {
+    let name = org["org"].string ?? ""
+    let via = org["via"].string ?? "fly"
+    let apps = org["apps"].array
+    if org["error"].text != nil || apps.isEmpty {
+      Section {
+        if let e = org["error"].text { ErrorRow(text: e) }
+        else { Text("No apps in this org.").foregroundStyle(.secondary) }
+      } header: { Text("Org \(name)\(via == "fly" ? "" : " · via \(via)")") }
+    }
+    ForEach(Array(apps.enumerated()), id: \.offset) { _, app in
+      let own = app["own"].bool == true
+      let machines = app["machines"].array.map(Machine.init)
+      let volumes = app["volumes"].array
+      Section {
+        if let e = app["error"].text { ErrorRow(text: e) }
+        ForEach(machines) { m in MachineRow(m: m, own: own) }
+        ForEach(Array(volumes.enumerated()), id: \.offset) { _, v in VolumeRow(v: v) }
+        if machines.isEmpty && volumes.isEmpty && app["error"].text == nil { Text("No machines or volumes.").foregroundStyle(.secondary) }
+      } header: {
+        HStack {
+          Text("Org \(name)\(via == "fly" ? "" : " · via \(via)") · \(app["app"].string ?? "")")
+          Spacer()
+          StatusPill(text: own ? "this Jarvis" : "read-only", color: own ? .blue : .secondary)
+        }
+      } footer: {
+        Text([app["label"].text ?? "an app no Jarvis uses", Fmt.plural(machines.count, "machine"), Fmt.plural(volumes.count, "volume"), app["status"].text].compactMap { $0 }.joined(separator: " · "))
+      }
+      .accessibilityIdentifier("app-\(app["app"].string ?? "")")
+    }
+  }
+}
+
+private struct VolumeRow: View {
+  let v: JSON
+  var body: some View {
+    VStack(alignment: .leading, spacing: 3) {
+      HStack {
+        Label(v["name"].text ?? v["id"].string ?? "", systemImage: "externaldrive").font(.headline)
+        Spacer()
+        StatusPill(text: v["state"].text ?? "volume", color: v["attachedTo"].text == nil ? .orange : .secondary)
+      }
+      Text([v["id"].string, v["sizeGb"].int.map { "\($0) GB" }, v["region"].text.map { Fmt.region[$0] ?? $0 }, v["attachedTo"].text.map { "attached to \($0)" } ?? "not attached", v["created"].string?.isoDate.map { "created " + Fmt.ago($0) }].compactMap { $0 }.joined(separator: " · "))
+        .font(.footnote).foregroundStyle(.secondary)
+      if let a = v["attention"].text { Label(a, systemImage: "exclamationmark.triangle").font(.footnote).foregroundStyle(.orange) }
+    }
+  }
+}
+
 private struct MachineRow: View {
   @Environment(AppModel.self) private var model
   let m: Machine
+  let own: Bool
+  private var canDestroy: Bool { own && m.sessionId == nil && m.noDestroy == nil }
+
   var body: some View {
     VStack(alignment: .leading, spacing: 3) {
       HStack {
@@ -44,22 +119,26 @@ private struct MachineRow: View {
       if let sid = m.sessionId {
         Text("\(m.current ? "Session" : "Earlier machine of"): \(model.session(sid)?.title ?? sid)").font(.subheadline)
           .accessibilityIdentifier("machine-session-\(m.id)")
-      } else {
+      } else if let other = m.otherSession {
+        Text("Jarvis 1 session \(other)").font(.subheadline)
+      } else if own {
         Text("No session").font(.subheadline.weight(.medium)).foregroundStyle(.orange).accessibilityIdentifier("machine-orphan-\(m.id)")
       }
+      if let a = m.attention { Label(a, systemImage: "exclamationmark.triangle").font(.footnote).foregroundStyle(.orange) }
       Text([Fmt.region[m.region].map { "\($0) (\(m.region))" } ?? m.region, [m.size, m.guest].filter { !$0.isEmpty }.joined(separator: " · ")].filter { !$0.isEmpty }.joined(separator: " · "))
         .font(.footnote).foregroundStyle(.secondary)
       Text(m.created.map { "Created \(Fmt.ago($0))" } ?? "Created: unknown").font(.footnote).foregroundStyle(.secondary)
-      Text(m.routerUrl.isEmpty ? "Router: none set" : "Router: \(URL(string: m.routerUrl)?.host() ?? m.routerUrl)\(m.test ? " (a test router)" : "")").font(.footnote).foregroundStyle(.secondary)
+      if own { Text(m.routerUrl.isEmpty ? "Router: none set" : "Router: \(URL(string: m.routerUrl)?.host() ?? m.routerUrl)\(m.test ? " (a test router)" : "")").font(.footnote).foregroundStyle(.secondary) }
       Text(shortImage).font(.caption.monospaced()).foregroundStyle(.secondary).textSelection(.enabled)
-      if m.sessionId == nil, let why = m.noDestroy { Text("Destroy isn't offered: \(why).").font(.footnote).foregroundStyle(.secondary) }
+      if own, m.sessionId == nil, let why = m.noDestroy { Text("Destroy isn't offered: \(why).").font(.footnote).foregroundStyle(.secondary) }
     }
     .accessibilityElement(children: .contain)
     .accessibilityIdentifier("machine-\(m.id)")
     .swipeActions {
-      if m.sessionId == nil && m.noDestroy == nil {
-        Button("Destroy", systemImage: "trash", role: .destructive) { Task { await destroy() } }
-      }
+      if canDestroy { Button("Destroy", systemImage: "trash", role: .destructive) { Task { await destroy() } } }
+    }
+    .contextMenu {
+      if canDestroy { Button("Destroy", systemImage: "trash", role: .destructive) { Task { await destroy() } } }
     }
   }
   private var shortImage: String {

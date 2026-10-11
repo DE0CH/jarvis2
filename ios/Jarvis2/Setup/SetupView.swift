@@ -78,12 +78,12 @@ struct SetupView: View {
       }
       Section {
         Button { pick(reset: true) } label: {
-          Label { VStack(alignment: .leading) { Text("Reset"); Text("Start fresh with a new recovery kit. Everything starts empty.").font(.footnote).foregroundStyle(.secondary) } }
+          Label { VStack(alignment: .leading) { Text("Reset").foregroundStyle(Color.primary); Text("Start fresh with a new recovery kit. Everything starts empty.").font(.footnote).foregroundStyle(Color.secondary) } }
             icon: { Image(systemName: "sparkles") }
         }
         .accessibilityIdentifier("setup-choose-reset")
         Button { pick(reset: false) } label: {
-          Label { VStack(alignment: .leading) { Text("Recover"); Text("Bring everything back with the recovery kit in your password manager.").font(.footnote).foregroundStyle(.secondary) } }
+          Label { VStack(alignment: .leading) { Text("Recover").foregroundStyle(Color.primary); Text("Bring everything back with the recovery kit in your password manager.").font(.footnote).foregroundStyle(Color.secondary) } }
             icon: { Image(systemName: "arrow.counterclockwise") }
         }
         .accessibilityIdentifier("setup-choose-recover")
@@ -253,7 +253,19 @@ struct SetupView: View {
       // a new pairing: fresh phone keys, bound to the faces enrolled now (.biometryCurrentSet)
       PhoneKeys.shared.renew()
       let phone = try PhoneKeys.shared.publicKeys()
-      _ = try await RouterClient.shared.claim(try await withDevice(try CoreSetup.claim(core: c, phone: phone, master: m, bundle: try CoreSetup.bundle(stores), device: try PhoneKeys.shared.devicePublic())), core: c)
+      let device = try PhoneKeys.shared.devicePublic()
+      // a core that takes blobs gets every store wrapped here (it never sees them in the clear); an earlier core
+      // (no store key, or 400 "bad bundle") takes the stores sealed to it as before
+      var claimed = false
+      if let sk = try await RouterClient.shared.storeKey(coreKey: c.signingKey) {
+        do {
+          _ = try await RouterClient.shared.claim(try await withDevice(try CoreSetup.claim(core: c, phone: phone, master: m, bundle: try CoreSetup.blobsBundle(stores, storeKey: sk), device: device)), core: c)
+          claimed = true
+        } catch let e as RouterError where e.status == 400 && e.message.contains("bad bundle") {}
+      }
+      if !claimed {
+        _ = try await RouterClient.shared.claim(try await withDevice(try CoreSetup.claim(core: c, phone: phone, master: m, bundle: try CoreSetup.bundle(stores), device: device)), core: c)
+      }
       finish(c, master: m.publicKey, text: "Jarvis 2 is recovered.")
     } catch {
       busy = nil

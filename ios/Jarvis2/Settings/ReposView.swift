@@ -102,13 +102,13 @@ struct AddRepoView: View {
           Button { pick(r.fullName) } label: {
             VStack(alignment: .leading, spacing: 2) {
               HStack(spacing: 6) {
-                Text(r.fullName).font(.headline).foregroundStyle(.primary)
+                Text(r.fullName).font(.headline).foregroundStyle(Color.primary)
                 if r.isPrivate { StatusPill(text: "private") }
                 if r.isFork { StatusPill(text: "fork") }
                 if r.archived { StatusPill(text: "archived") }
                 if isAdded { StatusPill(text: "added", color: .green) }
               }
-              Text([r.description, r.language, r.pushedAt.map { "pushed " + Fmt.ago($0) }].compactMap { $0 }.joined(separator: " · ")).font(.footnote).foregroundStyle(.secondary).lineLimit(1)
+              Text([r.description, r.language, r.pushedAt.map { "pushed " + Fmt.ago($0) }].compactMap { $0 }.joined(separator: " · ")).font(.footnote).foregroundStyle(Color.secondary).lineLimit(1)
             }
           }
           .disabled(isAdded)

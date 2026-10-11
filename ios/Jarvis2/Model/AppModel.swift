@@ -52,6 +52,8 @@ final class AppModel {
   var scopedUnlocks = false
   var openUnlocks: [UnlockRow] = []
   var machines = Loaded<Machine>()
+  /// the whole answer of api/machines: every Fly org and app (router/flyorgs.go)
+  var machinesDoc: JSON = .null
   var tasks = TasksOverview()
   var tasksLoaded = false
   var tasksError: String?
@@ -196,7 +198,11 @@ final class AppModel {
   func loadMachines() async { await machinesRun?.run() }
   private func fetchMachines() async {
     machinesAt = .now
-    do { machines = Loaded(items: try await RouterClient.shared.get("api/machines")["machines"].array.map(Machine.init), loaded: true, error: nil) }
+    do {
+      let j = try await RouterClient.shared.get("api/machines")
+      machinesDoc = j
+      machines = Loaded(items: j["machines"].array.map(Machine.init), loaded: true, error: nil)
+    }
     catch { machines.error = errText(error) }
   }
   func loadTasks() async { await tasksRun?.run() }

@@ -119,3 +119,23 @@ enum CoreSetup {
     return ["statement": st, "masterSig": try master.sign(st)]
   }
 }
+
+// ---- Recover with blobs (R2): the app wraps each store to the core's store key itself -----------------------------
+extension CoreSetup {
+  /// the bundle a core that takes blobs reads: every store but `core` wrapped to the store key, the core store's Fly
+  /// token on its own, which stores are not sensitive, and which repo owns each deploy-key store
+  static func blobsBundle(_ stores: [RecoveredStore], storeKey: String) throws -> Data {
+    struct B: Encodable {
+      let blobs: [StoreBlob]; let flyToken: String?; let format = "blobs"; let notSensitive: [String]; let owners: [String: String]; let stores = "blobs"
+    }
+    let rest = stores.filter { $0.name != StoreView.coreStore }
+    let blobs = try rest.map { try CoreCrypto.wrapStore(name: $0.name, values: $0.values, storeKey: storeKey) }
+    var owners: [String: String] = [:]
+    for s in rest where s.name.hasPrefix("github-") {
+      if let repo = s.values.first(where: { $0.key.hasPrefix("GITHUB_DEPLOY_REPO_") })?.value { owners[s.name] = repo }
+    }
+    let fly = stores.first { $0.name == StoreView.coreStore }?.values["FLY_API_TOKEN"]
+    let e = JSONEncoder(); e.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+    return try e.encode(B(blobs: blobs, flyToken: fly, notSensitive: rest.filter { !$0.sensitive }.map(\.name), owners: owners))
+  }
+}

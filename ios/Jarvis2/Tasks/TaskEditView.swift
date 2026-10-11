@@ -142,7 +142,7 @@ private struct OptionLabel: View {
   var body: some View {
     VStack(alignment: .leading) {
       Text(o.label)
-      if let s = o.sub, !s.isEmpty { Text(s).font(.footnote).foregroundStyle(.secondary) }
+      if let s = o.sub, !s.isEmpty { Text(s).font(.footnote).foregroundStyle(Color.secondary) }
     }
   }
 }

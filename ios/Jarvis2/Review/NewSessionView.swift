@@ -128,7 +128,7 @@ struct NewSessionView: View {
     Section("Harness") {
       ForEach(Harness.all) { h in
         CheckRow(on: harness == h.id, id: "secure-harness-\(h.id)", action: { harness = h.id }) {
-          VStack(alignment: .leading) { Text(h.title); Text(h.sub).font(.footnote).foregroundStyle(.secondary) }
+          VStack(alignment: .leading) { Text(h.title); Text(h.sub).font(.footnote).foregroundStyle(Color.secondary) }
         }
       }
     }
@@ -138,7 +138,7 @@ struct NewSessionView: View {
     Section {
       ForEach(model.repos) { r in
         CheckRow(on: repos.contains(r.name), id: "ns-repo-\(r.name)", action: { toggleRepo(r) }) {
-          VStack(alignment: .leading) { Text(r.repo); Text(r.store).font(.footnote).foregroundStyle(.secondary) }
+          VStack(alignment: .leading) { Text(r.repo); Text(r.store).font(.footnote).foregroundStyle(Color.secondary) }
         }
       }
     } header: { Text("Repos") } footer: {
@@ -150,10 +150,10 @@ struct NewSessionView: View {
   @ViewBuilder private var modeSection: some View {
     Section("Permission mode") {
       CheckRow(on: perm == "auto", id: "secure-mode-auto", action: { perm = "auto" }) {
-        VStack(alignment: .leading) { Text("Auto"); Text("Auto-approve safe actions; the permission classifier gates the rest.").font(.footnote).foregroundStyle(.secondary) }
+        VStack(alignment: .leading) { Text("Auto"); Text("Auto-approve safe actions; the permission classifier gates the rest.").font(.footnote).foregroundStyle(Color.secondary) }
       }
       CheckRow(on: perm == "bypass", id: "secure-mode-bypass", action: { perm = "bypass" }) {
-        VStack(alignment: .leading) { Text("Dangerously skip permissions"); Text("No prompts at all (--dangerously-skip-permissions).").font(.footnote).foregroundStyle(.secondary) }
+        VStack(alignment: .leading) { Text("Dangerously skip permissions"); Text("No prompts at all (--dangerously-skip-permissions).").font(.footnote).foregroundStyle(Color.secondary) }
       }
     }
   }
@@ -296,7 +296,7 @@ struct CheckRow<Content: View>: View {
       }
       .contentShape(.rect)
     }
-    .foregroundStyle(.primary)
+    .foregroundStyle(Color.primary)
     .accessibilityIdentifier(id)
     .accessibilityAddTraits(on ? .isSelected : [])
   }
