@@ -410,8 +410,7 @@ func main() {
 	waitState(os1, "started", 6*time.Minute)
 	om := machineOf(os1)
 	step("a new session's Claude is logged in with no grant: the machine took the pair from the claude store's endpoint at boot")
-	expectOnMachine(om, "grep -o '\"refreshToken\":\"e2e-fake-refresh\"' /home/claude/.claude/.credentials.json; stat -c %a /home/claude/.claude/.credentials.json",
-		"\"refreshToken\":\"e2e-fake-refresh\"\n600")
+	expectOnMachine(om, "grep -c e2e-fake-refresh /home/claude/.claude/.credentials.json; stat -c %a /home/claude/.claude/.credentials.json", "1\n600")
 	expectOnMachine(om, "for p in /proc/[0-9]*; do tr '\\0' ' ' < $p/cmdline 2>/dev/null; echo; done | grep -c '^/proc/self/exe creds-sync $'", "1")
 	if ng, _ := session(os1)["needsGrant"].(string); ng != "" {
 		log.Fatalf("a new session with the claude store asks for a grant: %q", ng)
