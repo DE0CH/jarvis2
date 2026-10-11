@@ -46,6 +46,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 )
@@ -456,7 +457,7 @@ func cloneRepos(repos []string) {
 // ---- snapshots ------------------------------------------------------------------------------------
 
 // what a snapshot holds (relative to $HOME): the conversation, the work, the artefacts
-var snapshotPaths = []string{".claude/projects", ".claude.json", ".claude/.first-prompt-sent", "workspace", "artifacts", allowFile, changesFile, lineKeysFile}
+var snapshotPaths = []string{".claude/projects", ".claude.json", ".claude/.first-prompt-sent", "workspace", "artifacts", allowFile, changesFile, lineKeysFile, deliveredFile}
 
 func makeSnapshot() ([]byte, error) {
 	home, _ := os.UserHomeDir()
@@ -645,20 +646,69 @@ func noSnapshot(c *client) error {
 	return nil
 }
 
+// The snapshot is this machine's LAST state (R1 audit, 2026-10-11): the router asks for one only to pause or destroy
+// the machine, and the core fixes the snapshot its kill names as what the successor restores. So the machine signs
+// exactly one in its life: before taking it, it stops every process of the session (SIGSTOP), so nothing changes
+// after it, and a later snapshot command gets that same one again. A router that keeps an earlier signed snapshot
+// therefore has none to keep, and can't roll a successor back to a state from before the session's last work.
+var (
+	finalSnapshot    = dir + "/final-snapshot.tar.gz"
+	finalSnapshotSig = dir + "/final-snapshot.sig"
+	// snapshotKey: the machine's current signing key (re-read: a downgrade changes it under the agent)
+	snapshotKey = func() (*ecdh.PrivateKey, error) { p, err := loadPrivate(); return p.sig, err }
+)
+
+var frozen atomic.Bool // the session is stopped for its final snapshot: no execs, no deliveries
+
+func notFrozen() error {
+	if frozen.Load() {
+		return errors.New("the session is stopped for its final snapshot")
+	}
+	return nil
+}
+
+// freezeSession: SIGSTOP to every process this user may signal except this one (kill(-1)); only on a Fly machine
+var freezeSession = func() {
+	if os.Getenv("FLY_MACHINE_ID") == "" {
+		return
+	}
+	if err := syscall.Kill(-1, syscall.SIGSTOP); err != nil {
+		log.Printf("freezing the session: %v", err)
+	}
+}
+
+func finalSnapshotBody() ([]byte, string, error) {
+	body, err := os.ReadFile(finalSnapshot)
+	if err != nil {
+		return nil, "", err
+	}
+	sig, err := readTrim(finalSnapshotSig)
+	return body, sig, err
+}
+
 func uploadSnapshot(c *client) error {
-	writeChanges() // restore.go: the repos' state, for the router's uncommitted-work check
-	body, err := makeSnapshot()
-	if err != nil {
-		return err
-	}
-	sum := sha256.Sum256(body)
-	priv, err := loadPrivate()
-	if err != nil {
-		return err
-	}
-	sig, err := sign(priv.sig, []byte(hex.EncodeToString(sum[:])))
-	if err != nil {
-		return err
+	body, sig, err := finalSnapshotBody()
+	if err != nil { // the first: freeze, take, sign, keep
+		frozen.Store(true)
+		freezeSession()
+		writeChanges() // restore.go: the repos' state, for the router's uncommitted-work check
+		if body, err = makeSnapshot(); err != nil {
+			return err
+		}
+		sum := sha256.Sum256(body)
+		key, err := snapshotKey()
+		if err != nil {
+			return err
+		}
+		if sig, err = sign(key, []byte(hex.EncodeToString(sum[:]))); err != nil {
+			return err
+		}
+		if err := os.WriteFile(finalSnapshot, body, 0o600); err != nil {
+			return err
+		}
+		if err := os.WriteFile(finalSnapshotSig, []byte(sig), 0o600); err != nil {
+			return err
+		}
 	}
 	_, _, status, err := c.raw("POST", "/m/snapshot", body, "X-Snapshot-Sig", sig)
 	if err != nil {
@@ -754,17 +804,8 @@ func downgrade(keep []string) error {
 	if err := c.json("POST", "/m/downgrade", map[string]any{"stores": keep, "newEncryptionKey": encPub, "newSigningKey": sigPub}, &begin); err != nil {
 		return err
 	}
-	var ch struct {
-		Kind    string `json:"kind"`
-		Request struct {
-			Downgrade bool     `json:"downgrade"`
-			Machine   *Machine `json:"machine"`
-			Stores    []string `json:"stores"`
-		} `json:"request"`
-	}
-	if err := verifyDoc(coreKey, begin.Challenge, &ch); err != nil || ch.Kind != "challenge" || !ch.Request.Downgrade ||
-		ch.Request.Machine == nil || ch.Request.Machine.ID != c.me || ch.Request.Machine.SigningKey != sigPub || ch.Request.Machine.EncryptionKey != encPub {
-		return fmt.Errorf("the challenge isn't a core-signed downgrade of this machine to the new keys (%v)", err)
+	if err := checkDowngradeChallenge(coreKey, begin.Challenge, c.me, encPub, sigPub, keep); err != nil {
+		return err
 	}
 	signature, err := sign(c.sig, []byte(begin.Challenge.Payload))
 	if err != nil {
@@ -776,10 +817,9 @@ func downgrade(keep []string) error {
 	if err := c.json("POST", "/m/downgrade/finish", map[string]any{"challenge": begin.Challenge, "signature": signature}, &fin); err != nil {
 		return err
 	}
-	var cert Cert
-	if err := verifyDoc(coreKey, fin.Cert, &cert); err != nil || cert.Kind != "succession-cert" || cert.Machine == nil ||
-		cert.Machine.ID != c.me || cert.Machine.SigningKey != sigPub || cert.Machine.EncryptionKey != encPub {
-		return fmt.Errorf("the new cert isn't core-signed for the new keys (%v)", err)
+	cert, err := checkDowngradeCert(coreKey, fin.Cert, c.me, encPub, sigPub, keep)
+	if err != nil {
+		return err
 	}
 	// the new cert is in hand: switch to the new keys, shred the old ones, re-pull the remaining secrets
 	p, _ := json.Marshal(private{b64.EncodeToString(enc.Bytes()), b64.EncodeToString(sig.Bytes())})
@@ -809,6 +849,40 @@ func downgrade(keep []string) error {
 	return nil
 }
 
+// checkDowngradeChallenge: what the old key signs is a core-signed downgrade of this machine to its new keys,
+// keeping exactly the stores asked for (the router chooses the challenge's list: R1 audit)
+func checkDowngradeChallenge(coreKey string, d *SignedDoc, me, encPub, sigPub string, keep []string) error {
+	var ch struct {
+		Kind    string `json:"kind"`
+		Request struct {
+			Downgrade bool     `json:"downgrade"`
+			Machine   *Machine `json:"machine"`
+			Stores    []string `json:"stores"`
+		} `json:"request"`
+	}
+	if err := verifyDoc(coreKey, d, &ch); err != nil || ch.Kind != "challenge" || !ch.Request.Downgrade ||
+		ch.Request.Machine == nil || ch.Request.Machine.ID != me || ch.Request.Machine.SigningKey != sigPub || ch.Request.Machine.EncryptionKey != encPub {
+		return fmt.Errorf("the challenge isn't a core-signed downgrade of this machine to the new keys (%v)", err)
+	}
+	if !sameStores(ch.Request.Stores, keep) {
+		return fmt.Errorf("the challenge keeps %v, not the %v asked for: not signed", ch.Request.Stores, keep)
+	}
+	return nil
+}
+
+// checkDowngradeCert: the new cert names this machine, its new keys and exactly the kept stores
+func checkDowngradeCert(coreKey string, d *SignedDoc, me, encPub, sigPub string, keep []string) (Cert, error) {
+	var cert Cert
+	if err := verifyDoc(coreKey, d, &cert); err != nil || cert.Kind != "succession-cert" || cert.Machine == nil ||
+		cert.Machine.ID != me || cert.Machine.SigningKey != sigPub || cert.Machine.EncryptionKey != encPub {
+		return cert, fmt.Errorf("the new cert isn't core-signed for the new keys (%v)", err)
+	}
+	if !sameStores(cert.Stores, keep) {
+		return cert, fmt.Errorf("the new cert names %v, not the %v asked for", cert.Stores, keep)
+	}
+	return cert, nil
+}
+
 // shredWrite: overwrite the file's old bytes before replacing its contents
 func shredWrite(path string, data []byte, mode os.FileMode) error {
 	if fi, err := os.Stat(path); err == nil {
@@ -819,11 +893,24 @@ func shredWrite(path string, data []byte, mode os.FileMode) error {
 	return os.WriteFile(path, data, mode)
 }
 
-// writeSecrets: ~/.secrets in the format Jarvis 1's entrypoint writes (shell-quoted export lines)
+// sameStores: the same set of store names
+func sameStores(a, b []string) bool {
+	x, y := append([]string{}, a...), append([]string{}, b...)
+	sort.Strings(x)
+	sort.Strings(y)
+	return strings.Join(x, "\x00") == strings.Join(y, "\x00")
+}
+
+// writeSecrets: ~/.secrets in the format Jarvis 1's entrypoint writes (shell-quoted export lines). A key that isn't
+// an env name is left out (a store's writer isn't vouched for by this machine; the file is sourced by shells).
 func writeSecrets(m map[string]string) error {
 	home, _ := os.UserHomeDir()
 	keys := make([]string, 0, len(m))
 	for k := range m {
+		if !envNameRE.MatchString(k) {
+			log.Printf("~/.secrets: left out a key that isn't an env name (%d bytes)", len(k))
+			continue
+		}
 		keys = append(keys, k)
 	}
 	sort.Strings(keys)

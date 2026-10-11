@@ -26,6 +26,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -83,6 +84,73 @@ var (
 	predecessorKey  string // set by prepare from the predecessor's core-signed cert
 	restoredArchive bool   // set by restoreArchived
 )
+
+// deliveredFile: what this line's own requests have already delivered (relative to $HOME; in snapshotPaths, so a
+// successor knows too): a one-time wakeup's request once, a cron's request once per run, in order and no faster
+// than half its period (R1 audit: the router kept a signed request and could deliver it again and again)
+const deliveredFile = ".jarvis2-delivered.json"
+
+type delivered struct {
+	Run int   `json:"run"`
+	At  int64 `json:"at"` // unix seconds
+}
+
+var deliveredMu sync.Mutex
+
+// notReplayed: records the delivery, or refuses a repeat of one already made (wakeup, cron); other kinds pass
+func notReplayed(d Delivery, now time.Time) error {
+	if (d.Kind != "wakeup" && d.Kind != "cron") || d.Request == nil {
+		return nil
+	}
+	deliveredMu.Lock()
+	defer deliveredMu.Unlock()
+	home, _ := os.UserHomeDir()
+	p := filepath.Join(home, deliveredFile)
+	seen := map[string]delivered{}
+	if b, err := os.ReadFile(p); err == nil {
+		json.Unmarshal(b, &seen)
+	}
+	key := d.Kind + " " + d.Request.Sig
+	last, ok := seen[key]
+	if d.Kind == "wakeup" && ok {
+		return errors.New("this wakeup was already delivered")
+	}
+	if d.Kind == "cron" && ok {
+		every := int64(24 * 60 * 60)
+		if body, err := base64.StdEncoding.DecodeString(d.Request.Body); err == nil {
+			var b struct {
+				Every int64 `json:"everySeconds"`
+			}
+			if json.Unmarshal(body, &b) == nil && b.Every > 0 {
+				every = max(b.Every, 15*60)
+			}
+		}
+		if d.Run <= last.Run {
+			return fmt.Errorf("cron run %d was already delivered (last %d)", d.Run, last.Run)
+		}
+		if now.Unix()-last.At < every/2 {
+			return errors.New("this cron ran less than half its period ago")
+		}
+	}
+	seen[key] = delivered{Run: d.Run, At: now.Unix()}
+	if len(seen) > 2000 { // keep the newest
+		type kv struct {
+			k string
+			v delivered
+		}
+		all := make([]kv, 0, len(seen))
+		for k, v := range seen {
+			all = append(all, kv{k, v})
+		}
+		sort.Slice(all, func(i, j int) bool { return all[i].v.At > all[j].v.At })
+		seen = map[string]delivered{}
+		for _, x := range all[:2000] {
+			seen[x.k] = x.v
+		}
+	}
+	b, _ := json.Marshal(seen)
+	return os.WriteFile(p, b, 0o600)
+}
 
 // SignedRequest: a request this line's machine made to the router, exactly as signed (client.raw)
 type SignedRequest struct {
@@ -224,6 +292,12 @@ func deliver(c *client, d Delivery) error {
 		return err
 	}
 	if err := checkAttest(coreKey, c.me, d.Kind, attested, d.Attest); err != nil {
+		return err
+	}
+	if err := notFrozen(); err != nil {
+		return err
+	}
+	if err := notReplayed(d, time.Now()); err != nil {
 		return err
 	}
 	return sendToHarness(cert.Options.Harness, certMode(cert), "jarvis", text)

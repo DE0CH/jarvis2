@@ -197,6 +197,9 @@ func (c *capped) Write(p []byte) (int, error) {
 
 func runExec(c *client, e Exec) {
 	r, err := authorise(e, time.Now())
+	if err == nil {
+		err = notFrozen()
+	}
 	res := ExecResult{ID: r.ID}
 	if err != nil {
 		res.Code, res.Error = -1, err.Error()
