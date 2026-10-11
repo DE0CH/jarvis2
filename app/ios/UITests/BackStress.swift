@@ -81,7 +81,7 @@ struct BackStress {
     note("timing-\(what)", String(format: "arrived=%@ after %.1f s, longest blank %.2f s", ok ? "yes" : "no", Date().timeIntervalSince(t0), worst))
     if !ok {
       attach(XCUIScreen.main.screenshot(), "MISSING-\(what)")
-      XCTFail("[\(tag)] \(what): the app (\(target.identifier)) didn't come back within \(Int(s)) s (secure page still up: \(el("secure-banner").exists))")
+      XCTFail("[\(tag)] \(what): the app didn't come back within \(Int(s)) s (secure page still up: \(el("secure-banner").exists))")
     }
     return ok && !failed
   }

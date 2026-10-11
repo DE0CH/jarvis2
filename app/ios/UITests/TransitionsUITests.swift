@@ -157,9 +157,6 @@ final class TransitionsUITests: XCTestCase {
     sleep(2)
     let s = BackStress(test: self, app: app, tag: "stress")
 
-    // the app itself on screen when the extension ends (in front, in the background) and on a memory warning
-    s.killWhileShown(el("newBtn"))
-
     let sessions = { self.el("tab-sessions").tap(); _ = self.el("newBtn").waitForExistence(timeout: 30) }
     sessions()
     s.run(.init(name: "newsession", open: { self.el("newBtn").tap() }, arrived: el("secure-create"), target: el("newBtn"), reset: sessions))
@@ -192,6 +189,10 @@ final class TransitionsUITests: XCTestCase {
         s.run(.init(name: "grant", open: { self.el("grant-review").tap() }, arrived: el("grant-meaning"), target: el("grant-review"), reset: grants))
       }
     }
+
+    // last: the app itself on screen when the extension ends (in front, in the background) and on a memory warning
+    sessions()
+    s.killWhileShown(el("newBtn"))
     app.terminate()
   }
   func sessions_() { el("tab-sessions").tap(); _ = el("newBtn").waitForExistence(timeout: 30) }

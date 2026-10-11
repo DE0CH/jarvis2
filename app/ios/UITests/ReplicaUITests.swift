@@ -227,8 +227,6 @@ final class ReplicaUITests: XCTestCase {
       let s = BackStress(test: self, app: app, tag: "replica-stress")
       let sessions = { self.el("tab-sessions").tap(); _ = self.el("newBtn").waitForExistence(timeout: 60) }
       sessions()
-      s.killWhileShown(el("newBtn"))
-      sessions()
       s.run(.init(name: "newsession", open: { self.el("newBtn").tap() }, arrived: el("secure-create"), target: el("newBtn"), reset: sessions), loops: 2)
       let stores = { _ = self.el("tab-stores").waitForExistence(timeout: 60); self.el("tab-stores").tap(); _ = self.el("stores-manage").waitForExistence(timeout: 60) }
       stores()
@@ -236,6 +234,9 @@ final class ReplicaUITests: XCTestCase {
       let settings = { _ = self.el("tab-settings").waitForExistence(timeout: 60); self.el("tab-settings").tap(); _ = self.el("open-setup").waitForExistence(timeout: 60) }
       settings()
       s.run(.init(name: "setup", open: { self.el("open-setup").tap() }, arrived: el("setup-choose-recover"), target: el("open-setup"), reset: settings), loops: 2)
+      sessions()
+      s.killWhileShown(el("newBtn"))
+      sessions()
       shot("after-back-stress")
     }
 
