@@ -379,3 +379,6 @@ entry points only ("if I decide to break it later then it's fine").
     the core), never the router's list; a public repo with no store isn't cloned until the core is released.
 86. **The OpenClaw runtime bundle is pinned by sha256** in the image (`session-image/openclaw-runtime.json`), and
     Jarvis 1's `restore-snapshot` is a no-op in the Jarvis 2 image.
+87. **A pause right after a start waits up to 90 s for the machine to finish booting** when it already has its
+    secrets (it is seconds from booted): its successor's cert names only the snapshot this machine signs, so a kill
+    mid-boot would leave the line with no state at all. A machine still waiting on a locked store isn't waited for.
