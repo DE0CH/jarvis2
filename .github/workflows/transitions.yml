@@ -16,7 +16,7 @@ concurrency:
   cancel-in-progress: false
 jobs:
   record:
-    runs-on: macos-26
+    runs-on: xcode-27
     timeout-minutes: 150
     steps:
       - uses: actions/checkout@v4
@@ -42,25 +42,26 @@ jobs:
       - name: Generate project + pods
         working-directory: app/ios
         run: xcodegen generate && pod install
-      - name: Boot simulator + stream logs
+      - name: Xcode 27.0 and a booted iPhone 17 (iPhone18,3) on iOS 27.0, as Deyao's phone
+        uses: ./.github/actions/ios-simulator
+      - name: Stream logs
         run: |
-          xcrun simctl boot "iPhone 17" || true
-          xcrun simctl bootstatus "iPhone 17" -b
-          nohup xcrun simctl spawn "iPhone 17" log stream --style compact --level debug \
+          mkdir -p out
+          nohup xcrun simctl spawn "$SIM_UDID" log stream --style compact --level debug \
             --predicate 'process == "JarvisUI" OR process == "Jarvis2"' > out/sim.log 2>&1 &
       - name: Build for testing
         working-directory: app/ios
         run: |
           set -o pipefail
           xcodebuild build-for-testing -workspace Jarvis2.xcworkspace -scheme Jarvis2 \
-            -destination 'platform=iOS Simulator,name=iPhone 17' -derivedDataPath ../../dd \
+            -destination "id=$SIM_UDID" -derivedDataPath ../../dd \
             JARVIS_BASE=http://127.0.0.1:18080/ JARVIS_CI_FLAG=JARVIS_CI JARVIS_CI_KEYS_BASE=http://127.0.0.1:18099/ \
             2>&1 | tee ../../xcodebuild.log | grep -E "error:|\*\* " || true
           grep -q "TEST BUILD SUCCEEDED" ../../xcodebuild.log
       - name: Record, light then dark, then the Back stress
         run: |
           W="$RUNNER_TEMP/w"
-          nohup python3 app/ios/ci/replica-host.py "iPhone 17" - > out/host.log 2>&1 &
+          nohup python3 app/ios/ci/replica-host.py "$SIM_UDID" - > out/host.log 2>&1 &
           kit="jarvis2-kit:2:$(openssl pkcs8 -topk8 -nocrypt -in e2e/testdata/master-test.pem -outform DER | base64 | tr -d '\n')"
           ok=0
           for run in light dark stress; do
@@ -74,17 +75,17 @@ jobs:
              NO_ACCESS=1 SETUP_KEY="$(cat "$W/keys/setup.pub")" CORE_URL=http://127.0.0.1:8090 DATA_DIR=$PWD/data-$run WEB_DIR=$PWD/web TASKS_DIR=$PWD/tasks SNAPSHOT_WAIT_SECONDS=2 POLICY_FILE="$W/policy.json" \
               SESSION_IMAGE=ghcr.io/de0ch/jarvis2-session:ci@sha256:0000000000000000000000000000000000000000000000000000000000000000 ADDR=127.0.0.1:18080 MACHINE_ADDR=127.0.0.1:18081 nohup "$W/router" > out/router-$run.log 2>&1 & echo $! > "$W/router.pid")
             sleep 2
-            xcrun simctl keychain "iPhone 17" reset
-            xcrun simctl uninstall "iPhone 17" dev.de0ch.jarvis2 || true
-            xcrun simctl ui "iPhone 17" appearance $a
+            xcrun simctl keychain "$SIM_UDID" reset
+            xcrun simctl uninstall "$SIM_UDID" dev.de0ch.jarvis2 || true
+            xcrun simctl ui "$SIM_UDID" appearance $a
             date +%s.%N > out/video-$run.start
-            xcrun simctl io "iPhone 17" recordVideo --codec=h264 --force out/transitions-$run.mov > out/record-$run.log 2>&1 &
+            xcrun simctl io "$SIM_UDID" recordVideo --codec=h264 --force out/transitions-$run.mov > out/record-$run.log 2>&1 &
             rec=$!
             sleep 2
             (cd app/ios && TEST_RUNNER_JARVIS2_KIT="$kit" \
               xcodebuild test-without-building -workspace Jarvis2.xcworkspace -scheme Jarvis2 \
               -only-testing:Jarvis2UITests/TransitionsUITests/$t \
-              -destination 'platform=iOS Simulator,name=iPhone 17' -derivedDataPath ../../dd \
+              -destination "id=$SIM_UDID" -derivedDataPath ../../dd \
               -resultBundlePath ../../result-$run.xcresult 2>&1 | tee ../../test-$run.log | grep -E "error:|Test Case|\*\* " || true)
             kill -INT $rec; wait $rec || true
             grep -q "TEST EXECUTE SUCCEEDED\|\*\* TEST SUCCEEDED" test-$run.log || ok=1

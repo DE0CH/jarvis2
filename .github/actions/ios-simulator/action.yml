@@ -1,0 +1,79 @@
+name: ios-simulator
+description: >-
+  Xcode and a booted simulator matching Deyao's iPhone (iPhone 17 = model iPhone18,3, iOS 27.0), pinned exactly.
+  Run it on the `xcode-27` runner image (GitHub's free macOS image with Xcode 27.0 27A266a and the iOS 27.0
+  simulator runtime preinstalled, so nothing is downloaded). Sets env SIM_UDID (use `-destination "id=$SIM_UDID"`
+  and the UDID in every simctl call: the image also has stock devices named "iPhone 17") and SIM_DEVICE (one line
+  saying what it is). Fails instead of falling back when a pinned version is missing.
+inputs:
+  xcode:
+    description: the Xcode version (/Applications/Xcode_<version>.app)
+    default: "27.0"
+  xcode-build:
+    description: that Xcode's exact build number
+    default: 27A266a
+  ios:
+    description: the iOS simulator runtime version (Deyao's iPhone runs iOS 27.0)
+    default: "27.0"
+  model:
+    description: the device's model identifier (Deyao's iPhone 17 is iPhone18,3)
+    default: iPhone18,3
+  name:
+    description: the simulator's name
+    default: jarvis-iphone
+outputs:
+  udid:
+    description: the simulator's UDID
+    value: ${{ steps.sim.outputs.udid }}
+runs:
+  using: composite
+  steps:
+    - id: sim
+      shell: bash
+      env:
+        XC: ${{ inputs.xcode }}
+        XC_BUILD: ${{ inputs.xcode-build }}
+        IOS: ${{ inputs.ios }}
+        MODEL: ${{ inputs.model }}
+        NAME: ${{ inputs.name }}
+      run: |
+        set -euo pipefail
+        start=$(date +%s)
+        X="/Applications/Xcode_$XC.app"
+        [ -d "$X" ] || { echo "::error::$X is not on this runner (image ${ImageOS:-?} ${ImageVersion:-?}): $(ls -d /Applications/Xcode*.app | tr '\n' ' ')"; exit 1; }
+        sudo xcode-select -s "$X"
+        xcodebuild -version
+        got=$(xcodebuild -version | awk '/Build version/ {print $3}')
+        [ "$got" = "$XC_BUILD" ] || { echo "::error::$X is build $got, pinned $XC_BUILD"; exit 1; }
+        runtime() { xcrun simctl list runtimes -j | python3 -c "
+        import json, sys
+        rs = [r for r in json.load(sys.stdin)['runtimes'] if r['platform'] == 'iOS' and r['isAvailable'] and r['version'] == sys.argv[1]]
+        print(rs[0]['identifier'] if rs else '')" "$IOS"; }
+        RT=$(runtime)
+        if [ -z "$RT" ]; then
+          # not on the image: Apple's own download of the runtime that matches this Xcode (no Apple ID needed)
+          echo "no iOS $IOS runtime on the image: downloading it"; xcrun simctl list runtimes
+          xcodebuild -downloadPlatform iOS -buildVersion "$IOS"
+          RT=$(runtime)
+        fi
+        [ -n "$RT" ] || { echo "::error::no iOS $IOS simulator runtime"; xcrun simctl list runtimes; exit 1; }
+        # the device type whose profile names the model identifier (iPhone18,3), not a display name
+        DT=$(xcrun simctl list devicetypes -j | python3 -c "
+        import json, plistlib, sys, os
+        for t in json.load(sys.stdin)['devicetypes']:
+            p = os.path.join(t.get('bundlePath', ''), 'Contents/Resources/profile.plist')
+            try:
+                m = plistlib.load(open(p, 'rb')).get('modelIdentifier')
+            except Exception:
+                continue
+            if m == sys.argv[1]:
+                print(t['identifier'] + '\t' + t['name']); break" "$MODEL")
+        [ -n "$DT" ] || { echo "::error::no simulator device type for $MODEL"; xcrun simctl list devicetypes; exit 1; }
+        UDID=$(xcrun simctl create "$NAME" "${DT%%$'\t'*}" "$RT")
+        xcrun simctl boot "$UDID"
+        xcrun simctl bootstatus "$UDID" -b > /dev/null
+        osver=$(xcrun simctl getenv "$UDID" SIMULATOR_RUNTIME_VERSION 2>/dev/null || echo "?")
+        line="${DT#*$'\t'} ($MODEL), iOS $osver ($RT), Xcode $XC ($got), runner image ${ImageOS:-?} ${ImageVersion:-?}, ready in $(( $(date +%s) - start )) s"
+        echo "$line"; echo "simulator: $line" >> "$GITHUB_STEP_SUMMARY"
+        echo "udid=$UDID" >> "$GITHUB_OUTPUT"
+        { echo "SIM_UDID=$UDID"; echo "SIM_DEVICE=$line"; } >> "$GITHUB_ENV"

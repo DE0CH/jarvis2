@@ -61,7 +61,7 @@ jobs:
 
   simulator:
     if: inputs.only != 'testflight'
-    runs-on: macos-26
+    runs-on: xcode-27
     timeout-minutes: 150
     steps:
       - uses: actions/checkout@v4
@@ -97,18 +97,19 @@ jobs:
       - name: Generate project + pods
         working-directory: app/ios
         run: xcodegen generate && pod install
-      - name: Boot simulator + stream logs
+      - name: Xcode 27.0 and a booted iPhone 17 (iPhone18,3) on iOS 27.0, as Deyao's phone
+        uses: ./.github/actions/ios-simulator
+      - name: Stream logs
         run: |
-          xcrun simctl boot "iPhone 17" || true
-          xcrun simctl bootstatus "iPhone 17" -b
-          nohup xcrun simctl spawn "iPhone 17" log stream --style compact --level debug \
+          mkdir -p out
+          nohup xcrun simctl spawn "$SIM_UDID" log stream --style compact --level debug \
             --predicate 'process == "JarvisUI" OR process == "Jarvis2"' > out/sim.log 2>&1 &
       - name: Build for testing (the shell talks to the router, the key server and the S3 stand-in on the runner)
         working-directory: app/ios
         run: |
           set -o pipefail
           xcodebuild build-for-testing -workspace Jarvis2.xcworkspace -scheme Jarvis2 \
-            -destination 'platform=iOS Simulator,name=iPhone 17' -derivedDataPath ../../dd \
+            -destination "id=$SIM_UDID" -derivedDataPath ../../dd \
             JARVIS_BASE=http://127.0.0.1:18080/ JARVIS_CI_FLAG=JARVIS_CI JARVIS_CI_KEYS_BASE=http://127.0.0.1:18099/ \
             2>&1 | tee ../../xcodebuild.log | grep -E "error:|\*\* " || true
           grep -q "TEST BUILD SUCCEEDED" ../../xcodebuild.log
@@ -128,13 +129,13 @@ jobs:
              NO_ACCESS=1 SETUP_KEY="$(cat "$W/keys/setup.pub")" CORE_URL=http://127.0.0.1:8090 DATA_DIR=$PWD/data-$a WEB_DIR=$PWD/web TASKS_DIR=$PWD/tasks SNAPSHOT_WAIT_SECONDS=2 POLICY_FILE="$W/policy.json" \
               SESSION_IMAGE=ghcr.io/de0ch/jarvis2-session:ci@sha256:0000000000000000000000000000000000000000000000000000000000000000 ADDR=127.0.0.1:18080 MACHINE_ADDR=127.0.0.1:18081 nohup "$W/router" > out/router-$a.log 2>&1 & echo $! > "$W/router.pid")
             sleep 2 && curl -sf http://127.0.0.1:18080/api/state > /dev/null && echo "router up ($a)"
-            xcrun simctl keychain "iPhone 17" reset
-            xcrun simctl uninstall "iPhone 17" dev.de0ch.jarvis2 || true
-            xcrun simctl ui "iPhone 17" appearance $a
+            xcrun simctl keychain "$SIM_UDID" reset
+            xcrun simctl uninstall "$SIM_UDID" dev.de0ch.jarvis2 || true
+            xcrun simctl ui "$SIM_UDID" appearance $a
             (cd app/ios && TEST_RUNNER_JARVIS2_APPEARANCE=$a TEST_RUNNER_JARVIS2_KIT="$kit" \
               xcodebuild test-without-building -workspace Jarvis2.xcworkspace -scheme Jarvis2 \
               -only-testing:Jarvis2UITests/Jarvis2UITests/testWalkthrough \
-              -destination 'platform=iOS Simulator,name=iPhone 17' -derivedDataPath ../../dd \
+              -destination "id=$SIM_UDID" -derivedDataPath ../../dd \
               -resultBundlePath ../../result-$a.xcresult 2>&1 | tee ../../test-$a.log | grep -E "error:|Test Case|\*\* " || true)
             grep -q "TEST EXECUTE SUCCEEDED\|\*\* TEST SUCCEEDED" test-$a.log || ok=1
           done

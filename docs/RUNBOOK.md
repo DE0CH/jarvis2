@@ -250,8 +250,8 @@ locked store is destroyed within 90 s.
 (`MODE=replica`: the hostname admits one email, `bot@deyaochen.com`, by a real one-time-PIN login, and `/setup` the
 service token; the router checks both JWTs with `ALLOWED_EMAIL` = that email), then `.github/workflows/replica.yml` on
 a free GitHub macOS runner: the app's Release build (the TestFlight configuration, shell and extension; only
-`JARVIS_BASE` and `JARVIS_KEYS_REF` point at the box) on an iPhone 17 simulator (Deyao's iPhone18,3) with the newest
-iOS runtime the runner has, Face ID enrolled. `app/ios/UITests/ReplicaUITests.swift` taps every flow: the Access
+`JARVIS_BASE` and `JARVIS_KEYS_REF` point at the box) on an iPhone 17 simulator (Deyao's iPhone18,3) on iOS 27.0,
+Face ID enrolled. `app/ios/UITests/ReplicaUITests.swift` taps every flow: the Access
 sign-in sheet (the PIN read from the bot's mailbox by this script and relayed to the runner through ppng.io), Reset
 (the kit read off the page, backgrounded mid-flow), stores (a Face ID failure, then unlock and lock), New session (one
 page, its stores and the harness's unlocked) running on Fly within 10 minutes, a kill and relaunch, the terminal
@@ -274,9 +274,14 @@ box name at a time (a lock); the rehearsal and the replica use different names a
   Deyao's go), the replica runs the core main builds — the one the shipped app expects — not the pinned one;
   `REPLICA_PINNED_CORE=1` runs the pinned core (what production has today: e.g. Settings → Repos says "the running
   core predates deploy keys").
-- **The simulator:** iPhone 17 (Deyao's iPhone18,3) with the newest runtime the runner image has; on macos-26 that
-  is iOS 26.5 with Xcode 26.6 (his phone runs iOS 27.0, which needs Xcode 27; the workflow tries to download it and
-  records what it used in `device.txt`).
+- **The simulator:** the composite action `.github/actions/ios-simulator`, shared by `replica.yml`, `app.yml`'s
+  walkthrough and `transitions.yml`: Xcode 27.0 (build 27A266a), the iOS 27.0 runtime (Deyao's phone runs 27.0) and
+  the device type whose profile says iPhone18,3 (iPhone 17), all pinned; a missing pin fails the run rather than
+  falling back. It runs on GitHub's free `xcode-27` runner image, which ships that Xcode and runtime, so nothing is
+  downloaded (only if the runtime were missing does it fetch it with `xcodebuild -downloadPlatform`). The jobs address
+  the simulator by `$SIM_UDID` (the image has stock devices with the same name); `device.txt` and the run summary say
+  what was used. A new iOS on his phone = bump the action's `ios`/`xcode`/`xcode-build` defaults (and `runs-on` when
+  the Xcode moves to another image).
 - **What only the replica differs in:** `JARVIS_BASE` and `JARVIS_KEYS_REF` in the Release build; Face ID on the
   simulator is LAContext in front of the software key (no Secure Enclave there); the Access login admits the bot's
   mailbox, not Deyao's.
