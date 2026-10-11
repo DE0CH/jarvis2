@@ -93,13 +93,14 @@ machines, and run exactly one command inside a machine, `/usr/local/bin/jarvis2-
 | `mark_sensitive(name)` | The one-way upgrade: the name leaves the non-sensitive set. Open. |
 | `write_store(contents)` | New contents for a store, already wrapped to `P + K` by the writer. Open (the router guards it). |
 | `stores(nonce)` | The signed list: each store, sensitive or not, empty, unlocked. |
-| `succession(predecessor or null, stores, options, image)` | A signed challenge, before any machine exists; it lists which stores are sensitive. |
+| `succession(predecessor or null, stores, options, image)` | A signed challenge, before any machine exists; it lists which stores are sensitive. `options` = harness, permission mode, the session's settings (`config`) and one machine's one-time inputs (`once`): below, "Inputs to a machine". |
 | `approve_by_phone(challenge, sig)` | The phone is the highest privilege: any challenge it signs is approved. |
-| `approve_by_dead_machine(challenge)` | Automatic: the predecessor is killed (Fly-confirmed) and not used, and the stores, image and options are identical — or it is a burn. Never a new line, never a machine succeeding itself. |
+| `approve_by_dead_machine(challenge)` | Automatic: the predecessor is killed (Fly-confirmed) and not used, and the stores, image and options are identical (the predecessor's `once` left out; this challenge has none) — or it is a burn. Never a new line, never a machine succeeding itself. |
 | `approve_by_old_key(challenge, sig)` | Automatic: a downgrade (same machine, a subset of its stores, a new key pair) signed with the signing key in the cert it continues. |
-| `start(image)` | Open (normally the router, which guards it; it can't lead to a secret): Fly create → `jarvis2-init` (its output: the machine's keys) → a started machine. If init fails, the core destroys the machine. |
-| `certify(approval, machine)` | The approval and a started machine running the approved image → the succession cert. One machine per approval, one line per machine, one successor per predecessor (killed and not used). The null image: no machine, a burn cert. For a machine succeeding itself the approval is the new cert at once. |
-| `kill(machine)` | Fly destroy, confirmed by Fly → killed. |
+| `start(image)` | Open (normally the router, which guards it; it can't lead to a secret): Fly create → `jarvis2-init` (its output: the machine's keys) → a started machine. If init fails, the core destroys the machine. The image is `ghcr.io/de0ch/jarvis2-session` pinned by digest; the machine's Fly config gets only what the core sets (its key, the router's address). |
+| `certify(approval, machine)` | The approval and a started machine running the approved image (the digest Fly reports is the approval's) → the succession cert, naming the snapshot the predecessor signed at its kill. One machine per approval, one line per machine, one successor per predecessor (killed and not used). The null image: no machine, a burn cert. For a machine succeeding itself the approval is the new cert at once. |
+| `kill(machine, snapshot?)` | Fly destroy, confirmed by Fly → killed. `snapshot` = the sha256 of the machine's last snapshot and its signature over it with its current key: kept as what its successor restores. |
+| `attest(machine, input, origin, sha256)` / `input_log(from)` / `chain_from(head)` | The input log: sign and append to a hash chain (no parsing); certs are appended by the core itself. `chain_from` once, on an empty log: continues from the persisted head of an earlier core's. |
 | `unlock_begin(name, for)` / `unlock_finish(pending, phone share)` | The split-key unlock. `for` = the nonce of the one challenge or cert it is for (a Start, an add-store, a waiting session): only that cert reads it and its pull locks it again (below, "Carried secrets"); no `for` = a standing unlock, open until locked. |
 | `lock(unlock id)` / `list_unlocked(nonce)` | Release; the signed list of open unlocks (each with what it is for). |
 | `pull_secrets(cert, carry)` | The cert's stores sealed to that machine's encryption key — so no other proof is needed — each from an unlock open to that cert, else from the line's carried secrets; answers the next carry blob for that machine. |
@@ -241,7 +242,7 @@ by the core, approved by the phone; the box alone can never make one, and no AI 
   `start(image)` → `certify(approval, machine)` → succession cert. (The router may start the machine while
   Deyao is still deciding, and destroy it on a reject.)
 - **Pause:** the machine signs its snapshot (artefacts + transcript) with its signing key and uploads it →
-  `kill`. Its carried secrets (sealed by the core at its last pull) are already next to the snapshot. Skipped/failed
+  `kill(machine, snapshot hash + its signature)`: the successor's cert names that snapshot and no other. Its carried secrets (sealed by the core at its last pull) are already next to the snapshot. Skipped/failed
   snapshot = nothing to resume; no secret moves.
 - **Resume, nothing changed (also unattended, e.g. scheduled):** `succession(old, …)` ← approve_by_dead_machine
   → `start` → `certify` → succession cert → `forward_carry` → the machine pulls its secrets from the carried blob,
@@ -339,8 +340,61 @@ public keys and lets boot go on: it takes the core's key from its own Fly config
 the machine; only the core's token, and the setup session's org token, can create or change machines in the app,
 the router's is read-only), fetches its core-signed succession cert through the router, checks it against the
 core key and that it names its own keys; if the predecessor is a real machine it fetches the snapshot and checks
-it against the predecessor's signing key from the cert. Then it starts the harness from the cert's options and
-pulls its secrets. Any failed check → start nothing.
+it against the hash the cert names and the predecessor's signing key from the cert. Then it starts the harness from
+the cert's options and pulls its secrets. Any failed check → start nothing. Everything else it takes: below.
+
+## Inputs to a machine (Deyao, 2026-10-11)
+
+Deyao's question: once a session is certified (new or an unattended resume), can the machine that receives its
+secrets run another image, another entry point, or anything carrying state other than the certified transcript?
+The rule: **every input our infrastructure delivers into a machine that holds secrets — at start, resume, restore,
+and later (wakeups, nudges, attachments, an added store) — is vouched for by one of**
+
+- **(a) the cert**: what the phone approved, or what an unattended resume carried over unchanged;
+- **(b) the predecessor's signature**: its snapshot, whose hash the cert names (the core took it from the signed kill);
+- **(c) the line's own signature**: what a machine of this line asked for itself (a wakeup, a cron), kept by the router
+  exactly as signed and checked against the line's signing keys, which travel in the signed snapshot;
+- **(d) a trusted provider over an authenticated channel**: GitHub over SSH with the repo's deploy key (or HTTPS for a
+  public repo the cert names), the GitHub release a runtime bundle is pinned to by sha256.
+
+Router-only data never reaches a program or the agent, **except values whose strict format can't carry an
+instruction** (listed below). "Data" is no exemption: a prompt, a title, a transcript all steer the agent. This
+guards the **entry points** only: it establishes a chain of trust from Deyao's approval to the running agent that
+the router or box can't break. What the session itself chooses to read afterwards (the web, email, files it fetches,
+Deyao telling it to) is outside it, and so are shell grants (below, "Grants"): a phone grant or standing rule is
+Deyao handing a feature a shell, and the session's own allow list is the session's choice.
+
+| Input | Who vouches |
+|---|---|
+| The image | (a) the approval names `ghcr.io/de0ch/jarvis2-session` pinned by its linux/amd64 digest; certify refuses a machine whose Fly-reported digest differs. A resume runs the predecessor's digest. |
+| The entry point | the image (Fly config has no init/cmd, no files, mounts or services; only the core's token can create or change machines) |
+| The env | none needed: the core sets only `JARVIS2_CORE_KEY` and `JARVIS2_URL` (from its own deployment); the machine also throws away anything else at boot (keeps the image's own ENV, recorded at build, and Fly's `FLY_*`) |
+| Title, first prompt, model, repos, one-shot, API proxy, attachments (by sha256), a restore (machine + snapshot sha256), task parameters | (a) `Options.Config`, fixed for the line; the first prompt and attachments only for its first machine |
+| A resume's prompt, a rollback | (a) `Options.Once`: only the phone approves one; never carried over |
+| The predecessor's state (transcripts, workspace, artifacts, `~/artifacts/on-start`, `.claude` settings and hooks, the allow list, the line keys) | (b) the one snapshot the cert names, signed by the predecessor |
+| An archived snapshot (restore) | (a) its sha256 in the config, plus the old cert (core-signed) and its machine's signature |
+| Repo contents (CLAUDE.md, hooks, skills) | (d) GitHub, for exactly the repos the cert names (with the held core: the repos of the deploy-key stores in the cert) |
+| Secrets | the cert's stores, sealed to the machine by the core |
+| Wakeups, crons | (c) the session's own signed request + the core's attestation |
+| The watchdog's nudge, "continue" after a re-login | the image: texts built into it; the router picks when, never what (numbers only) |
+| An added store | (a) the new cert, phone-approved |
+| The OpenClaw runtime | (d) the GitHub release, pinned by sha256 in the image |
+| Jarvis 1's restore-snapshot (would fetch unsigned state from the Storage Box when a store holds its credentials) | disabled in the image |
+
+**Format exceptions** (the router's word alone, `GET /m/config`, each refused unless it matches): the session id
+(`[a-z0-9-]`), the Discord channel id (digits), the live-sync interval (5–86400 s), a task run's id and its trigger
+(a word), the tunnel proof (a token, `[A-Za-z0-9._~+/=-]`).
+
+**The input log** (the record, beside the voucher): every input delivered after a machine started carries the core's
+attestation over (machine, input hash, kind, origin) and the machine refuses one without it. The core appends each,
+and every cert it issues, to a hash chain of core-signed entries; the router persists them to its volume
+(`input-log.jsonl`, `GET /api/input-log`) and starts a new core's chain from the last persisted head. The core only
+hashes, signs and appends.
+
+**With the held core** (no `Config`, `Once`, snapshot hash or input log) the machine takes none of these settings: no
+prompt, title, model, rollback, restore, one-shot, API proxy or task parameters; it clones only the repos of its
+deploy-key stores; it restores any snapshot its predecessor signed (the old rule); deliveries go the old way (a
+command under a grant).
 
 ## iPhone approval screen
 
@@ -408,6 +462,9 @@ limit and start-up time.
 - A session's line can't fork: each predecessor is used at most once (succession and burn both consume it).
 - A bug or compromise outside the core (router, Jarvis, the box) can block or fail actions, never move a store
   to a machine not approved for it.
+- A machine that holds secrets runs only the approved image's own entry point, and takes at its entry points only
+  inputs the cert, its predecessor's signature, its own line's signature or a trusted provider vouches for, each
+  later input recorded in the core's input log ("Inputs to a machine").
 
 ## Grants (shell access for router features, checked by the machine)
 
@@ -438,5 +495,9 @@ any of the line's stores is sensitive, and the **line id** (the line's first mac
 
 - Where the core's log lives. Plan: AWS CloudWatch Logs (append-only: no API deletes a single event; only a whole stream/group; the core's credential gets append rights only; free tier 5 GB/month covers it), added AFTER the core is running. Until then the log is local to the core.
 - The secure pages' exact design (New session one page, review stops: 2026-10-10).
-- Free text (prompts, wakeups) into high-privilege machines.
+- Free text into high-privilege machines: the first prompt, a resume prompt and the session's own wakeups are vouched
+  for ("Inputs to a machine"); wakeups made from the app or web (not by the session) and peer messages from other
+  sessions are not delivered to a machine whose cert vouches, until the phone can sign them.
+- Shell grants: a standing rule hands a feature (the router) a shell for its length; every exec under one bypasses
+  the input log. Narrowing each holder to fixed commands is not done.
 - Layer 1 hardening (CI-only builds and deploys) — see `SECURITY.md` PENDING 5–6.

@@ -331,3 +331,51 @@ for unattended resumes he chose "the session carries its secrets" (DESIGN "Carri
     task's first line, an add-store), for that session only, as New session does; a resume on a new image or mode
     unlocks nothing (it carries its secrets). With a core that predates scoped unlocks (the held core) these pages
     unlock nothing, as before, and New session's Start unlocks as before (standing).
+
+## Inputs to a machine, 2026-10-11
+
+Deyao asked whether a certified session's machine could be made to run another image, another entry point, or
+take state other than its certified transcript; then set the rule (DESIGN "Inputs to a machine"): the image pulls
+its options and data and checks them against the cert; every input at an entry point is vouched for by the cert,
+the predecessor's signature, the line's own signature or a trusted provider; router-only data reaches nothing
+except strict-format values; every later input is attested by the core into a hash-chained log; the guard covers
+entry points only ("if I decide to break it later then it's fine").
+
+75. **The core sets the machine's whole env** (its key, and `JARVIS2_URL` from the core's own `MACHINE_URL`, default
+    production's peer address); `start`'s `env` is ignored. The machine also re-execs with a clean env at boot, so
+    it holds with the held core too. Change: the URL baked into the image instead.
+76. **Settings travel as one opaque JSON string (`Options.Config`)**, not core fields: the core stays trivial (it
+    compares it for an unattended resume, never reads it); the machine reads it strictly (an unknown key refuses
+    the cert) and the shell refuses a key it can't show. One-time inputs (`Options.Once`: a resume prompt, a
+    rollback) are a second string the dead-machine approval requires empty and ignores in the predecessor.
+77. **The first prompt, attachments and a restore live in the line's config** and are used only by its first machine
+    (a successor never re-sends them); the title, model, repos, one-shot, API proxy and task parameters hold for the
+    line. A rename later doesn't reach the machine; the resumed title comes from the transcript (signed), not the
+    app's title (`SESSION_RESUME_TITLE` dropped).
+78. **Attachments are vouched by sha256 + size in the config**, computed by the router when the session is made; the
+    phone shows names and hash prefixes. The shell doesn't hash the files itself (it never holds them), so this
+    binds what the phone approved, not what Deyao uploaded. Change: the shell fetches and hashes them.
+79. **Env settings (`/api/sessions/:id/env`) no longer reach a machine whose cert vouches**: arbitrary names are
+    exactly the hole (`LD_PRELOAD`, `ANTHROPIC_BASE_URL`, …). The router still stores and sends them (an old image on
+    the held core uses them); the new machine drops them.
+80. **The snapshot hash comes from the kill**: the router passes the machine's signed snapshot claim with `kill`; the
+    core checks it against the machine's current key (updated on a downgrade) and keeps the first one. A kill without
+    a valid claim = the successor starts with no predecessor state (withholding was always possible; swapping in an
+    older snapshot of the same machine is not).
+81. **Wakeups and crons are the session's own signed request** (c), delivered by the machine itself (inbox socket or
+    harness-send) with the core's attestation; the line's signing keys travel in the snapshot. A machine whose cert
+    vouches no longer puts the scheduler on its allow list when it arms one. Wakeups made from the app/web, the
+    router's free-text `Deliver`, and peer messages from other sessions are refused for such a machine (nothing
+    vouches for them). Change: phone-signed wakeups from the app.
+82. **The watchdog nudge and "continue" are texts built into the image**; the router sends only the kind and two
+    numbers. Delivering one to a sensitive line needs no grant now (it carries nothing chosen by the router).
+83. **The input log is persisted by the router** (`DATA_DIR/input-log.jsonl`, `GET /api/input-log`), checkpointed by
+    continuing a new core's chain from the last persisted entry's hash (`chain_from`). The router can drop entries
+    from its copy; it can't forge or reorder them (core-signed, hash-chained). Change: CloudWatch (DESIGN "Open").
+84. **Images are pinned by the linux/amd64 manifest digest** (what Fly reports; the index digest `docker push` prints
+    never matches): `infra/image-digest.sh`, run by `images.yml` when it pins `router.yaml`. The core refuses any other
+    repository and any unpinned reference.
+85. **Repos with the held core = the deploy-key stores in the cert** (their `GITHUB_DEPLOY_REPO_*` value, written by
+    the core), never the router's list; a public repo with no store isn't cloned until the core is released.
+86. **The OpenClaw runtime bundle is pinned by sha256** in the image (`session-image/openclaw-runtime.json`), and
+    Jarvis 1's `restore-snapshot` is a no-op in the Jarvis 2 image.
