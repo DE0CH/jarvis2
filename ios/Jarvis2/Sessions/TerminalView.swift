@@ -11,10 +11,31 @@ struct TerminalView: View {
   @Environment(AppModel.self) private var model
   let sessionId: String
   let title: String
+  /// until the page has loaded, a native progress view stands over the dark web view (never a blank screen)
+  @State private var page: TerminalPage = .loading
+  @State private var attempt = 0
 
   var body: some View {
-    TerminalWeb(sessionId: sessionId, model: model)
+    TerminalWeb(sessionId: sessionId, model: model, attempt: attempt, page: $page)
       .background(Color(red: 0.043, green: 0.051, blue: 0.071))
+      .overlay {
+        switch page {
+        case .loading:
+          ProgressView("Opening the terminal…").tint(.white).foregroundStyle(.white).accessibilityIdentifier("terminal-loading")
+        case .failed(let why):
+          ContentUnavailableView {
+            Label("The terminal didn't open", systemImage: "exclamationmark.triangle")
+          } description: {
+            Text(why)
+          } actions: {
+            Button("Try again") { page = .loading; attempt += 1 }.buttonStyle(.borderedProminent)
+          }
+          .foregroundStyle(.white)
+          .accessibilityIdentifier("terminal-failed")
+        case .ready:
+          EmptyView()
+        }
+      }
       .toolbarVisibility(.hidden, for: .tabBar)
       .navigationTitle(title)
       .navigationBarTitleDisplayMode(.inline)
@@ -33,11 +54,15 @@ struct TerminalView: View {
   }
 }
 
+enum TerminalPage: Equatable { case loading, ready, failed(String) }
+
 private struct TerminalWeb: UIViewRepresentable {
   let sessionId: String
   let model: AppModel
+  let attempt: Int
+  @Binding var page: TerminalPage
 
-  func makeCoordinator() -> Coordinator { Coordinator(sessionId: sessionId, model: model) }
+  func makeCoordinator() -> Coordinator { Coordinator(sessionId: sessionId, model: model, page: $page) }
 
   func makeUIView(context: Context) -> WKWebView {
     let cfg = WKWebViewConfiguration()
@@ -54,10 +79,13 @@ private struct TerminalWeb: UIViewRepresentable {
     web.accessibilityIdentifier = "terminal"
     web.navigationDelegate = context.coordinator
     context.coordinator.web = web
+    context.coordinator.attempt = attempt
     context.coordinator.load()
     return web
   }
-  func updateUIView(_ web: WKWebView, context: Context) {}
+  func updateUIView(_ web: WKWebView, context: Context) {
+    if context.coordinator.attempt != attempt { context.coordinator.attempt = attempt; context.coordinator.load() }
+  }
   static func dismantleUIView(_ web: WKWebView, coordinator: Coordinator) {
     web.configuration.userContentController.removeScriptMessageHandler(forName: "jarvis2")
     web.stopLoading()
@@ -68,7 +96,17 @@ private struct TerminalWeb: UIViewRepresentable {
     let sessionId: String
     let model: AppModel
     weak var web: WKWebView?
-    init(sessionId: String, model: AppModel) { self.sessionId = sessionId; self.model = model }
+    var attempt = 0
+    let page: Binding<TerminalPage>
+    init(sessionId: String, model: AppModel, page: Binding<TerminalPage>) { self.sessionId = sessionId; self.model = model; self.page = page }
+
+    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) { page.wrappedValue = .ready }
+    func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) { failed(error) }
+    func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) { failed(error) }
+    private func failed(_ error: Error) {
+      if (error as NSError).code == NSURLErrorCancelled { return }
+      page.wrappedValue = .failed(error.localizedDescription)
+    }
 
     /// the page's fetches carry the Access login as a header (the page only talks to its own origin)
     static func tokenScript(_ token: String) -> String {

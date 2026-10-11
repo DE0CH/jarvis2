@@ -108,6 +108,9 @@ final class TransitionsUITests: JarvisUITestCase {
         if el("term-\(sid)").waitForExistence(timeout: 20) {
           el("term-\(sid)").tap()
           arrives(app.webViews.firstMatch, 20, "the terminal page")
+          // the native progress view covers the web view until the page has loaded; then the page itself shows
+          XCTAssertTrue(gone(el("terminal-loading"), 30), "[\(tag)] the terminal page loads")
+          arrives(app.webViews.textFields["Terminal input"].firstMatch, 20, "the terminal page's input row")
           shot("terminal")
           back()
         }
