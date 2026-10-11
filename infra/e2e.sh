@@ -10,16 +10,36 @@
 set -euo pipefail
 : "${JARVIS2_FLY_TOKEN:?}"
 PEER="${E2E_PEER:-jarvis2-e2e}"; PP="${E2E_PORT:-28}"
+[ "$PEER" != jarvis2-box ] || { echo "E2E_PEER jarvis2-box is production's" >&2; exit 1; }
+# sweep: destroy every machine in jarvis2-sessions whose JARVIS2_URL names THIS run's peer (earlier runs' leftovers at the
+# start, this run's own at the end, on success, failure or interruption). Never one naming another peer: production's
+# machines name jarvis2-box.
+sweep() {
+  curl -fsS -H "Authorization: Bearer $JARVIS2_FLY_TOKEN" https://api.machines.dev/v1/apps/jarvis2-sessions/machines 2>/dev/null \
+    | python3 -I -c '
+import json, sys
+want = "http://" + sys.argv[1] + "._peer.internal:8081"
+for m in json.load(sys.stdin):
+    if m.get("state") != "destroyed" and ((m.get("config") or {}).get("env") or {}).get("JARVIS2_URL") == want:
+        print(m["id"])' "$PEER" \
+    | while read -r m; do
+        curl -fsS -o /dev/null -X DELETE -H "Authorization: Bearer $JARVIS2_FLY_TOKEN" \
+          "https://api.machines.dev/v1/apps/jarvis2-sessions/machines/$m?force=true" && echo "e2e: destroyed leftover machine $m ($PEER)"
+      done || true
+}
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 W="$(mktemp -d)"; chmod 700 "$W"
 PIDS=()
 cleanup() {
   mkdir -p "${E2E_LOGS:-/tmp/jarvis2-e2e-logs}" && cp "$W"/*.log "${E2E_LOGS:-/tmp/jarvis2-e2e-logs}/" 2>/dev/null || true
   for p in "${PIDS[@]}"; do kill "$p" 2>/dev/null || true; done
+  sweep
   FLY_API_TOKEN="$JARVIS2_FLY_TOKEN" flyctl wireguard remove jarvis2-370 "$PEER" >/dev/null 2>&1 || true
   rm -rf "$W"
 }
 trap cleanup EXIT
+trap 'exit 130' INT TERM HUP
+sweep
 
 (cd "$ROOT/core" && go build -o "$W/core" .)
 (cd "$ROOT/router" && go build -o "$W/router" .)

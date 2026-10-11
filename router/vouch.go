@@ -172,7 +172,9 @@ func (r *Router) sessionConfig(s *Session) (string, error) {
 		}
 		c.Restore = &RestoreRef{Machine: oc.Machine.ID, Sha256: sum}
 	}
-	if isTaskHarness(s.Harness) {
+	if s.taskConfig != nil {
+		c.Task = s.taskConfig
+	} else if isTaskHarness(s.Harness) {
 		r.st.Do(func(d *persisted) {
 			if i := instanceBySession(tasksOf(d), s.ID); i != nil {
 				c.Task = &TaskConfig{Instance: i.ID, Name: i.Name, Params: map[string]any{}}

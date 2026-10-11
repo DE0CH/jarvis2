@@ -44,6 +44,7 @@ type Session struct {
 	Waiting        string      `json:"waiting,omitempty"`        // what a pause or destroy is waiting on, in plain words (the app shows it)
 	LockedStore    string      `json:"lockedStore,omitempty"`    // the store the machine waits on at boot (its secrets pull got 423 "store X is locked")
 	OldCore        bool        `json:"oldCore,omitempty"`        // corechange.go: its line is an earlier core's; destroyed once paused
+	taskConfig     *TaskConfig // vouch.go: a task line's instance + parameters while its first challenge is made (not kept)
 }
 
 type Approval struct {

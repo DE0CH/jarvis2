@@ -92,6 +92,7 @@ type NewSession struct {
 	APIProxy       bool           `json:"apiProxy"`    // SESSION_API_PROXY (sessionops.go)
 	Attachments    *AttachmentsIn `json:"attachments"` // first-prompt attachments (uploads.go)
 	Origin         *Origin        `json:"-"`           // inbox.go: who asked, from the credential (the handler sets it)
+	Task           *TaskConfig    `json:"-"`           // tasks.go: a task line's instance and parameters (into the cert's config)
 }
 
 const nullImage = "null" // a succession to it burns the predecessor (core.NullImage)
@@ -237,6 +238,7 @@ func (r *Router) CreateSession(in NewSession) (string, error) {
 	if err != nil || dup != "" {
 		return dup, err
 	}
+	s.taskConfig = in.Task
 	config, err := r.sessionConfig(s) // vouch.go: the settings the phone signs with the line
 	if err != nil {
 		r.st.Do(func(d *persisted) { delete(d.Sessions, s.ID) })

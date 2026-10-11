@@ -870,8 +870,12 @@ func (r *Router) CreateTask(in instanceIn) (map[string]any, error) {
 // newTaskLine: the instance's session line (the phone approves it as a new session)
 func (r *Router) newTaskLine(inst *TaskInstance, requestID string) error {
 	off := false
+	tc := &TaskConfig{Instance: inst.ID, Name: inst.Name, Params: map[string]any{}}
+	for k, v := range inst.Params {
+		tc.Params[k] = v
+	}
 	sid, err := taskOps.create(r, NewSession{RequestID: requestID, Label: "Task: " + inst.Name, Harness: taskHarnessPrefix + inst.Template,
-		Stores: inst.Stores, Size: inst.Size, AutoPause: &off, PermissionMode: "auto"})
+		Stores: inst.Stores, Size: inst.Size, AutoPause: &off, PermissionMode: "auto", Task: tc})
 	if err != nil {
 		return err
 	}
