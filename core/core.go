@@ -150,7 +150,7 @@ func (c *Core) succession(r Request, m *StartedMachine, nonce, now string) Cert 
 	}
 	snap := ""
 	if r.PredID != "" && r.PredID != m.ID {
-		snap = c.snapshots[r.PredID]
+		snap = c.killed[r.PredID]
 	}
 	predCert := ""
 	if r.Predecessor != nil {
@@ -195,10 +195,10 @@ type Core struct {
 	latest map[string]string
 
 	started map[string]*StartedMachine
-	killed  map[string]bool // approve_by_dead_machine's two sets
-	used    map[string]bool
-	// snapshots: a killed machine → sha256 of the snapshot it signed (vouch.go); its successor's cert names it
-	snapshots map[string]string
+	// killed: a machine Fly confirmed destroyed → sha256 of the snapshot it signed at its kill ("" = none; vouch.go);
+	// its successor's cert names it. With used: approve_by_dead_machine's two sets.
+	killed map[string]string
+	used   map[string]bool
 
 	audit     []SignedDoc // audit.go: the input log (the newest auditKeep entries), its head and length
 	auditHead string
@@ -243,7 +243,7 @@ func NewCore(fly Fly) (*Core, error) {
 	}
 	return &Core{signer: s, agreement: a, nonceKey: nk, carryKey: ck,
 		approvalsUsed: map[string]bool{}, latest: map[string]string{},
-		started: map[string]*StartedMachine{}, killed: map[string]bool{}, used: map[string]bool{}, snapshots: map[string]string{},
+		started: map[string]*StartedMachine{}, killed: map[string]string{}, used: map[string]bool{},
 		stores: map[string]*StoreBlob{}, notSensitive: map[string]bool{}, pending: map[string]pendingUnlock{}, unlocked: map[string]*unlocked{}, pendingKeys: map[string]pendingDeployKey{}, repoOwner: map[string]string{},
 		fly: fly, github: newGitHub(), now: time.Now}, nil
 }
@@ -651,7 +651,7 @@ func (c *Core) Certify(approval *SignedDoc, machine string) (SignedDoc, error) {
 	if c.approvalsUsed[a.Nonce] {
 		return SignedDoc{}, fail(409, "this approval was already used")
 	}
-	if r.PredID != "" && (!c.killed[r.PredID] || c.used[r.PredID]) {
+	if r.PredID != "" && (!c.isKilled(r.PredID) || c.used[r.PredID]) {
 		return SignedDoc{}, fail(409, "predecessor %s is not a killed, unused machine", r.PredID)
 	}
 	if err := c.isLatest(r.Predecessor); err != nil {
@@ -667,7 +667,7 @@ func (c *Core) Certify(approval *SignedDoc, machine string) (SignedDoc, error) {
 		return c.sign(Cert{Kind: "burn-cert", PredID: r.PredID, Stores: []string{}, Nonce: a.Nonce, IssuedAt: now})
 	}
 	m, ok := c.started[machine]
-	if !ok || c.killed[machine] || c.latest[machine] != "" {
+	if !ok || c.isKilled(machine) || c.latest[machine] != "" {
 		return SignedDoc{}, fail(409, "machine %s is not a started machine without a line", machine)
 	}
 	if m.Requested != r.Image {
@@ -711,12 +711,11 @@ func (c *Core) KillWithSnapshot(id string, snapshot *SnapshotClaim) (SignedDoc, 
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if !c.killed[id] {
-		c.snapshots[id] = sum // the first kill fixes it; a repeated kill can't swap the snapshot
+	if !c.isKilled(id) {
+		c.killed[id] = sum // the first kill fixes it; a repeated kill can't swap the snapshot
 	}
-	c.killed[id] = true
 	c.logf("machine %s killed (snapshot %s)", id, orNull(sum))
-	return c.sign(map[string]any{"kind": "killed", "id": id, "snapshot": c.snapshots[id]})
+	return c.sign(map[string]any{"kind": "killed", "id": id, "snapshot": c.killed[id]})
 }
 
 // NullImage: a succession to the null image burns the predecessor — start() makes no machine, only marks the
@@ -802,7 +801,7 @@ func (c *Core) Succession(in SuccessionInput) (SignedDoc, error) {
 		if _, ok := c.started[in.Machine]; !ok || req.PredID != in.Machine {
 			return SignedDoc{}, fail(400, "a machine succeeds itself from its own cert")
 		}
-		if c.killed[in.Machine] || persistentOptions(pc.Options) != req.Options {
+		if c.isKilled(in.Machine) || persistentOptions(pc.Options) != req.Options {
 			return SignedDoc{}, fail(400, "the same live machine with the same options (and no one-time inputs)")
 		}
 		m := pc.Machine
@@ -904,7 +903,7 @@ func (c *Core) answer(ch challenge, by string) (SignedDoc, error) {
 	if r.AddedStore != "" || r.Downgrade {
 		// once per cert: the machine is alive and the challenge continues its newest cert, which this answer
 		// supersedes — so a saved challenge and signature answered again (or after a downgrade) gets nothing
-		if r.Machine == nil || c.killed[r.Machine.ID] {
+		if r.Machine == nil || c.isKilled(r.Machine.ID) {
 			return SignedDoc{}, fail(409, "the machine is gone")
 		}
 		if err := c.isLatest(r.Predecessor); err != nil {
@@ -953,7 +952,7 @@ func (c *Core) ApproveByDeadMachine(d *SignedDoc) (SignedDoc, error) {
 	if r.AddedStore != "" || r.Downgrade {
 		return SignedDoc{}, fail(403, "a machine succeeding itself isn't approved by approve_by_dead_machine")
 	}
-	if r.PredID == "" || !c.killed[r.PredID] || c.used[r.PredID] {
+	if r.PredID == "" || !c.isKilled(r.PredID) || c.used[r.PredID] {
 		return SignedDoc{}, fail(403, "predecessor is not a killed, unused machine")
 	}
 	if r.Image == NullImage {
@@ -1200,3 +1199,9 @@ func orNull(s string) string {
 }
 
 var _ = errors.New
+
+// isKilled: Fly confirmed the machine destroyed (callers hold c.mu)
+func (c *Core) isKilled(id string) bool {
+	_, ok := c.killed[id]
+	return ok
+}

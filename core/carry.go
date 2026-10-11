@@ -142,7 +142,7 @@ func (c *Core) openCarry(blob string) (*carryPayload, error) {
 // killed, and only the stores the cert names. A blob from before a downgrade opens for nothing after it. nil
 // otherwise (callers hold c.mu).
 func (c *Core) openCarryFor(blob string, cert *Cert) map[string]map[string]string {
-	if blob == "" || cert.Machine == nil || c.killed[cert.Machine.ID] || c.latest[cert.Machine.ID] != cert.Nonce {
+	if blob == "" || cert.Machine == nil || c.isKilled(cert.Machine.ID) || c.latest[cert.Machine.ID] != cert.Nonce {
 		return nil
 	}
 	p, err := c.openCarry(blob)
