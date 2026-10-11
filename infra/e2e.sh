@@ -6,15 +6,17 @@
 # Leaves nothing behind but the core's and router's logs (in $E2E_LOGS, default /tmp/jarvis2-e2e-logs): the
 # peer is removed, the processes stopped. Never touches the production core.
 #   JARVIS2_FLY_TOKEN   the jarvis2-370 org token
+#   E2E_PEER (default jarvis2-e2e), E2E_PORT (default 28 → 28090/28080): another peer and ports let two runs go at once
 set -euo pipefail
 : "${JARVIS2_FLY_TOKEN:?}"
+PEER="${E2E_PEER:-jarvis2-e2e}"; PP="${E2E_PORT:-28}"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 W="$(mktemp -d)"; chmod 700 "$W"
 PIDS=()
 cleanup() {
   mkdir -p "${E2E_LOGS:-/tmp/jarvis2-e2e-logs}" && cp "$W"/*.log "${E2E_LOGS:-/tmp/jarvis2-e2e-logs}/" 2>/dev/null || true
   for p in "${PIDS[@]}"; do kill "$p" 2>/dev/null || true; done
-  FLY_API_TOKEN="$JARVIS2_FLY_TOKEN" flyctl wireguard remove jarvis2-370 jarvis2-e2e >/dev/null 2>&1 || true
+  FLY_API_TOKEN="$JARVIS2_FLY_TOKEN" flyctl wireguard remove jarvis2-370 "$PEER" >/dev/null 2>&1 || true
   rm -rf "$W"
 }
 trap cleanup EXIT
@@ -32,21 +34,21 @@ open(f"{w}/box.pub", "w").write(base64.b64encode(k.public_key().public_bytes(s.E
 PY
 # the test's policy: harnesses bring no stores (the production policy's would need a Claude login store)
 echo '{"harnesses":{"claude":{"stores":[]},"opencode":{"stores":[]}}}' > "$W/policy.json"
-FLY_API_TOKEN="$JARVIS2_FLY_TOKEN" flyctl wireguard remove jarvis2-370 jarvis2-e2e >/dev/null 2>&1 || true
-(umask 077; FLY_API_TOKEN="$JARVIS2_FLY_TOKEN" flyctl wireguard create jarvis2-370 lhr jarvis2-e2e "$W/wg.conf" >/dev/null)
+FLY_API_TOKEN="$JARVIS2_FLY_TOKEN" flyctl wireguard remove jarvis2-370 "$PEER" >/dev/null 2>&1 || true
+(umask 077; FLY_API_TOKEN="$JARVIS2_FLY_TOKEN" flyctl wireguard create jarvis2-370 lhr "$PEER" "$W/wg.conf" >/dev/null)
 
 # the test router must never reach Deyao's Discord, the Storage Box or Jarvis 1: none of their keys go in
 mkdir -p "$W/data" "$W/web"
 # the core sets the router's address in every machine it makes (core/vouch.go), from its own deployment
-BOX_KEY_FILE="$W/box-key.pem" ADDR=127.0.0.1:28090 MACHINE_URL=http://jarvis2-e2e._peer.internal:8081 "$W/core" > "$W/core.log" 2>&1 & PIDS+=($!)
+BOX_KEY_FILE="$W/box-key.pem" ADDR=127.0.0.1:${PP}090 MACHINE_URL="http://$PEER._peer.internal:8081" "$W/core" > "$W/core.log" 2>&1 & PIDS+=($!)
 # the core starts only the session image pinned by its linux/amd64 digest
 E2E_SESSION_IMAGE="$("$ROOT/infra/image-digest.sh" "${E2E_SESSION_IMAGE:-ghcr.io/de0ch/jarvis2-session:latest}")"
 env -u LOBSTER_TOKEN -u STORAGEBOX_HOST -u STORAGEBOX_USER -u STORAGEBOX_PASSWORD -u FLY_READ_TOKEN -u GITHUB_READ_TOKEN \
   -u JARVIS1_CREDENTIALS_ID -u JARVIS1_CREDENTIALS_SECRET -u JARVIS1_SERVICES_ID -u JARVIS1_SERVICES_SECRET \
-  CORE_URL=http://127.0.0.1:28090 NO_ACCESS=1 RECORDS_OFF=1 LIVE_SYNC_SECONDS=20 ADDR=127.0.0.1:28080 DATA_DIR="$W/data" WEB_DIR="$W/web" \
-  WG_CONFIG="$W/wg.conf" MACHINE_URL=http://jarvis2-e2e._peer.internal:8081 POLICY_FILE="$W/policy.json" TASKS_DIR="$ROOT/tasks" \
+  CORE_URL=http://127.0.0.1:${PP}090 NO_ACCESS=1 RECORDS_OFF=1 LIVE_SYNC_SECONDS=20 ADDR=127.0.0.1:${PP}080 DATA_DIR="$W/data" WEB_DIR="$W/web" \
+  WG_CONFIG="$W/wg.conf" MACHINE_URL="http://$PEER._peer.internal:8081" POLICY_FILE="$W/policy.json" TASKS_DIR="$ROOT/tasks" \
   SESSION_IMAGE="$E2E_SESSION_IMAGE" \
   "$W/router" > "$W/router.log" 2>&1 & PIDS+=($!)
 sleep 3
-(cd "$ROOT/e2e" && E2E_ROUTER_LOG="$W/router.log" E2E_DATA_DIR="$W/data" E2E_ROUTER=http://127.0.0.1:28080 E2E_CORE=http://127.0.0.1:28090 E2E_MASTER_KEY_FILE="$ROOT/e2e/testdata/master-test.pem" E2E_BOX_PUB="$(cat "$W/box.pub")" \
+(cd "$ROOT/e2e" && E2E_ROUTER_LOG="$W/router.log" E2E_DATA_DIR="$W/data" E2E_ROUTER=http://127.0.0.1:${PP}080 E2E_CORE=http://127.0.0.1:${PP}090 E2E_MASTER_KEY_FILE="$ROOT/e2e/testdata/master-test.pem" E2E_BOX_PUB="$(cat "$W/box.pub")" \
   E2E_FLY_TOKEN="$JARVIS2_FLY_TOKEN" go run .) || { echo "--- router log"; tail -40 "$W/router.log"; exit 1; }
