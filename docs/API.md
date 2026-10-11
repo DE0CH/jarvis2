@@ -288,6 +288,7 @@ against `SETUP_KEY` (`k8s/apps/router.yaml`), within ±2 min, each signature onc
 `GET /setup/status` — the router's health: the names of its secrets that are set (values never), the session
 image, whether the core answers, and `githubRepos` — `{total, private}` repos the picker's `GITHUB_READ_TOKEN`
 sees (or `{error}`; same 5-minute cache as `/api/github/repos`). `private: 0` = the token has no permission picked.
+`flyOrgs` — the Machines view's orgs as counts only: `[{org, via, error, apps: [name…], machines, attention}]`.
 
 ## Machines (`/m/*`)
 

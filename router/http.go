@@ -121,7 +121,20 @@ func (r *Router) buildHandlers() {
 			}
 			gh["total"], gh["private"] = len(repos), priv
 		}
-		writeJSON(w, 200, map[string]any{"secrets": present, "sessionImage": r.cfg.SessionImage, "coreUp": coreErr == nil, "version": os.Getenv("VERSION"), "githubRepos": gh})
+		// the Machines view's orgs, as counts only (flyorgs.go): each org's source and error, apps, machines, flagged
+		flyOrgs := []map[string]any{}
+		ownMs, _ := listFlyMachines()
+		orgs, _ := r.flyOrgsOverview(ownMs, time.Now())
+		for _, o := range orgs {
+			apps, machines := []string{}, 0
+			for _, a := range o.Apps {
+				apps = append(apps, a.App)
+				machines += len(a.Machines)
+			}
+			flyOrgs = append(flyOrgs, map[string]any{"org": o.Org, "via": o.Via, "error": o.Error, "apps": apps, "machines": machines,
+				"attention": flyAttentionCount([]flyOrgView{o})})
+		}
+		writeJSON(w, 200, map[string]any{"secrets": present, "sessionImage": r.cfg.SessionImage, "coreUp": coreErr == nil, "version": os.Getenv("VERSION"), "githubRepos": gh, "flyOrgs": flyOrgs})
 	}))
 	setup("GET /setup/identity", "GET", "/identity")
 	setup("POST /setup/stores", "POST", "/stores")
