@@ -287,7 +287,7 @@ func callerText(d *persisted, c Caller) string {
 	case "app":
 		return "the Jarvis 2 app"
 	case "setup":
-		return "Claude (setup session, signed with the setup key)"
+		return "Claude (setup session)"
 	case "session":
 		title := c.Session
 		if s := d.Sessions[c.Session]; s != nil {
@@ -601,6 +601,17 @@ func (r *Router) registerInbox(app appRoute, m machineRoute, public publicRoute)
 	}
 	public("GET /setup/requests", setupOnly(func(w http.ResponseWriter, req *http.Request, _ []byte) {
 		writeJSON(w, 200, map[string]any{"requests": r.Inbox()})
+	}))
+	// the sessions and their current machines (ids and states only): the phone replica runs jarvis2-request in a
+	// session's machine (flyctl exec) and finds it here, since machines carry no router env any more
+	public("GET /setup/sessions", setupOnly(func(w http.ResponseWriter, req *http.Request, _ []byte) {
+		out := []map[string]any{}
+		r.st.Do(func(d *persisted) {
+			for _, s := range d.Sessions {
+				out = append(out, map[string]any{"id": s.ID, "machineId": s.MachineID, "state": s.State, "title": sessionTitle(*s)})
+			}
+		})
+		writeJSON(w, 200, map[string]any{"sessions": out})
 	}))
 	public("GET /setup/repos", setupOnly(func(w http.ResponseWriter, req *http.Request, _ []byte) {
 		writeJSON(w, 200, map[string]any{"repos": r.Repos()})

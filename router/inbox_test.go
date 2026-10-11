@@ -226,3 +226,20 @@ func TestApprovalsInTheInboxWithTheirCaller(t *testing.T) {
 		t.Fatal("not dropped")
 	}
 }
+
+func TestSetupSessionsAndRequests(t *testing.T) {
+	r := newTestRouter(t)
+	addSession(r, "sA", "started", "mA", false)
+	code, out := inboxDo(t, r, "GET", "/setup/sessions", "", false)
+	if code != 200 || out["sessions"].([]any)[0].(map[string]any)["machineId"] != "mA" {
+		t.Fatalf("%d %v", code, out)
+	}
+	code, out = inboxDo(t, r, "POST", "/setup/requests/repo/add", `{"repo": "DE0CH/claude-env", "explanation": "for the skill"}`, false)
+	if code != 200 {
+		t.Fatalf("%d %v", code, out)
+	}
+	it, _ := r.InboxItem(out["id"].(string))
+	if it.CallerText != "Claude (setup session)" || it.Call.Path != "/setup/requests/repo/add" {
+		t.Fatalf("%+v", it)
+	}
+}

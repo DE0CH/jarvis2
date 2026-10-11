@@ -25,6 +25,7 @@ both). Values never print.
   infra/setup.py backup-core FILE      the core's Fly token, FLY_API_TOKEN from FILE (infra/fly-token.sh):
                                        sent to the core sealed to its key, and backed up as the `core` store
   infra/setup.py repos                 the router's repo list (repo, store, key fingerprint)
+  infra/setup.py sessions              the router's sessions: id, current machine, state, title
   infra/setup.py requests              what waits in the phone's Inbox (requests and approvals)
   infra/setup.py request add-repo OWNER/NAME --why TEXT [--sensitive]
   infra/setup.py request remove-repo OWNER/NAME --why TEXT
@@ -268,6 +269,9 @@ def main():
     elif cmd == "repos":
         for r in call("GET", "/setup/repos")["repos"]:
             print(r["repo"], r["store"], r.get("fingerprint") or "no key yet", "sensitive" if r.get("sensitive") else "")
+    elif cmd == "sessions":
+        for s in call("GET", "/setup/sessions")["sessions"]:
+            print(s["id"], s["machineId"] or "-", s["state"], s["title"])
     elif cmd == "requests":
         for q in call("GET", "/setup/requests")["requests"]:
             c = q.get("call") or {}

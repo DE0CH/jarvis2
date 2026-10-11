@@ -158,12 +158,8 @@ while :; do
     inbox-setup-remove) : > "$LOGS/inbox.log"; python3 "$ROOT/infra/setup.py" request remove-repo "DE0CH/$TREPO" --why "replica: Claude asks to remove it (deny this)" > "$LOGS/inbox.log" 2>&1 && answer ok || answer "request failed: $(tail -1 "$LOGS/inbox.log")" ;;
     inbox-session:*) # jarvis2-request inside the session's own machine (flyctl exec as the org): the router names the session
       IFS=: read -r _ sid holder <<<"$msg"; : > "$LOGS/inbox.log"; m=""
-      for _ in $(seq 1 18); do   # up to 90 s: the list can lag a machine that was just replaced
-        m=$(FLY_API_TOKEN="$JARVIS2_FLY_TOKEN" flyctl machines list -a jarvis2-sessions --json 2>>"$LOGS/inbox.log" | python3 -c "
-import json, sys
-ms = [x for x in json.load(sys.stdin) if (x.get('config', {}).get('env') or {}).get('JARVIS2_SESSION_ID') == sys.argv[1] and x.get('state') not in ('destroyed', 'destroying')]
-ms.sort(key=lambda x: (x.get('state') != 'started', x.get('created_at', '')), reverse=False)
-print(ms[0]['id'] if ms else '')" "$sid" 2>>"$LOGS/inbox.log")
+      for _ in $(seq 1 18); do   # up to 90 s: the router's record of the session's current machine
+        m=$(python3 "$ROOT/infra/setup.py" sessions 2>>"$LOGS/inbox.log" | awk -v s="$sid" '$1 == s && $2 != "-" {print $2}')
         [ -n "$m" ] && break; sleep 5
       done
       if [ -n "$m" ] && FLY_API_TOKEN="$JARVIS2_FLY_TOKEN" flyctl machine exec "$m" -a jarvis2-sessions \

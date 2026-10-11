@@ -170,7 +170,7 @@ for that feature is stored), or on Deny.
 item = { id, kind: "repo-key" | "grant" | "unlock" | "new-session" | "resume-upgrade" | "add-store", approval /* bool */,
          params: {action, repo, sensitive, session, holder, minutes, days}, session, sessionName,
          caller: {kind: "web" | "app" | "session" | "setup" | "router", session}, callerText /* "session “X” (s…)",
-         "the web page", "Claude (setup session, signed with the setup key)" */, call: {method, path, args},
+         "the web page", "Claude (setup session)" */, call: {method, path, args},
          explanation, created, expires, options /* an approval's form fields */,
          open: {kind /* the shell page */, options /* its options, with inboxId */} }
 ```
@@ -183,6 +183,7 @@ item = { id, kind: "repo-key" | "grant" | "unlock" | "new-session" | "resume-upg
 | `POST /api/requests/:id/done` | the shell's page went through: the request leaves the Inbox |
 | `GET /setup/requests`, `GET /m/api/requests` | the same list for Claude; a session sees only its own |
 | `GET /setup/repos` | the router's repo list (`infra/setup.py repos`) |
+| `GET /setup/sessions` | `{sessions: [{id, machineId, state, title}]}` (`infra/setup.py sessions`; the phone replica finds a session's machine here) |
 
 The app never takes the title from the router: the list renders it from `kind` + `params` (`src/lib/inbox.ts`), and
 the review page renders "What you sign (exact)" from the signed content (`Shell/SignedAction.swift`). The shell checks
