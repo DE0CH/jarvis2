@@ -289,6 +289,42 @@ func TestLoginDecisions(t *testing.T) {
 	}
 }
 
+// a session with the store `claude` logs in by itself (machine/claudelogin.go): no write and so no grant asked
+// for while its machine catches up; only a machine still behind after SelfLoginGrace gets the old write
+func TestSelfLoginNoGrant(t *testing.T) {
+	c, now := defaultPilot, time.Now()
+	stored := now.Add(time.Hour).UnixMilli()
+	l := &Liveness{AutoPauseOff: true}
+	d := running("s1", l)
+	d.Sessions["s1"].Stores = []string{"claude", "default"}
+	no := func(string) bool { return false }
+	report(l, now, &Registry{Status: "busy", CredsExpiresAt: 0}) // a fresh machine, the first report before its sync
+	if a := planTick(d, now, stored, c, no, no); strings.Contains(kinds(a), "login") {
+		t.Fatalf("a self-login session got a login write: %+v", a)
+	}
+	// stuck on "Please run /login" while still behind: wait for the machine's own pair
+	report(l, now, &Registry{Status: "idle", CredsExpiresAt: 0, AuthFailed: "u1"})
+	if a := planTick(d, now.Add(time.Minute), stored, c, no, no); strings.Contains(kinds(a), "login") {
+		t.Fatalf("repaired before the pair caught up: %+v", a)
+	}
+	// in step and stuck → "continue" only, no write
+	report(l, now, &Registry{Status: "idle", CredsExpiresAt: stored, AuthFailed: "u1"})
+	a := planTick(d, now.Add(2*time.Minute), stored, c, no, no)
+	if len(a) != 1 || a[0].Kind != "login" || a[0].Repair != "u1" || !a[0].NoWrite {
+		t.Fatalf("continue only: %+v", a)
+	}
+	l.loginBusy = false
+	// behind past the grace (a machine from before the self-login) → the old write
+	report(l, now.Add(3*time.Minute), &Registry{Status: "busy", CredsExpiresAt: stored - 1})
+	if a := planTick(d, now.Add(3*time.Minute), stored, c, no, no); len(a) != 0 {
+		t.Fatalf("a write inside the grace: %+v", a)
+	}
+	report(l, now.Add(3*time.Minute+c.SelfLoginGrace), &Registry{Status: "busy", CredsExpiresAt: stored - 1})
+	if a := planTick(d, now.Add(3*time.Minute+c.SelfLoginGrace), stored, c, no, no); len(a) != 1 || a[0].NoWrite || a[0].Kind != "login" {
+		t.Fatalf("write after the grace: %+v", a)
+	}
+}
+
 func TestDowngradeOnceAndDialog(t *testing.T) {
 	c, now := defaultPilot, time.Now()
 	c.Attention = 1000 * time.Hour

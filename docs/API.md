@@ -58,8 +58,11 @@ was lost: dirty repos as its final snapshot recorded them, a repo check that cou
 refusals and the "switch model?" dialog (holder `status` reads the pane); a Jarvis watchdog peer message every
 15 min while idle with background jobs; and login repair: when the session's credentials expire before Jarvis
 1's shared pair (`JARVIS1_CREDENTIALS_ID/SECRET` in the router's env) or its transcript ends on "Please run
-/login", write the pair (holder `login`) and, for the latter, deliver "continue". A command the machine refuses
-sets `needsGrant` to that holder and the loop leaves it alone for 10 min.
+/login", write the pair (holder `login`) and, for the latter, deliver "continue". A session holding the store
+`claude` logs in and keeps in step by itself (machine/claudelogin.go): the router writes nothing there unless it
+stays behind for 5 min, and only delivers "continue" to a stuck one once its pair is in step. A command the machine
+refuses sets `needsGrant` to that holder and the loop leaves it alone for 10 min, or until a phone grant for that
+holder is saved.
 
 `state`: `approval` (waiting for the iPhone; no machine yet) → `starting` (the core makes the machine) →
 `initialising` → `started` (running) → `pausing` → `paused` (no machine) → `resuming` → … ; `destroying` →

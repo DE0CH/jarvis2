@@ -15,11 +15,17 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
+	"syscall"
 	"time"
 )
 
-const jarvis1Credentials = "https://jarvis.deyaochen.com/api/credentials"
+var (
+	jarvis1Credentials = "https://jarvis.deyaochen.com/api/credentials" // tests point it elsewhere
+	credsSyncEvery     = 30 * time.Second
+)
 
 type sharedLogin struct {
 	Credentials string `json:"credentials"`
@@ -78,10 +84,92 @@ func expiresAt(raw []byte) int64 {
 	return d.O.ExpiresAt
 }
 
+// sessionClaudeLogin: a session's first Claude login, at boot, before the harness starts (Deyao, 2026-10-11:
+// a new session logs in by itself, no grant, no Face ID). With the `claude` store in the cert, the machine takes
+// Jarvis 1's pair over the store's Access-confined token (a trusted provider over an authenticated channel,
+// DESIGN "Inputs to a machine" (d); never router input), keeps a pair already here that expires later (a
+// resumed snapshot's), and starts credsSync for the machine's life. Returns Jarvis 1's account record
+// (~/.claude.json oauthAccount + userID) for CLAUDE_ACCOUNT, "" when there is none.
+func sessionClaudeLogin(secrets map[string]string) string {
+	id, sec := secrets["JARVIS1_CREDENTIALS_ID"], secrets["JARVIS1_CREDENTIALS_SECRET"]
+	if id == "" || sec == "" {
+		return ""
+	}
+	os.Setenv("JARVIS1_CREDENTIALS_ID", id)
+	os.Setenv("JARVIS1_CREDENTIALS_SECRET", sec)
+	if u := secrets["JARVIS1_CREDENTIALS_URL"]; strings.HasPrefix(u, "https://") {
+		// another credentials endpoint, from the store itself (vouched like its token): the end-to-end test's
+		// stand-in for Jarvis 1, which must never reach the real one
+		jarvis1Credentials = u
+	}
+	var account string
+	var l sharedLogin
+	var err error
+	for i := 0; i < 3; i++ { // a short retry: the harness starts right after, logged in or not (credsSync catches up)
+		if l, err = fetchSharedLogin(); err == nil {
+			break
+		}
+		time.Sleep(2 * time.Second)
+	}
+	if err != nil {
+		log.Printf("claude login: Jarvis 1's pair at boot: %v (credsSync keeps trying)", err)
+	} else {
+		account = l.Account
+		switch took, err := takeIfLater([]byte(l.Credentials)); {
+		case err != nil:
+			log.Printf("claude login: writing the credentials file: %v", err)
+		case took:
+			log.Printf("claude login: took Jarvis 1's pair at boot")
+		default:
+			log.Printf("claude login: the pair here expires as late or later; kept")
+		}
+	}
+	startCredsSync(id, sec)
+	return account
+}
+
+// startCredsSync: credsSync in its own process (`jarvis2-machine creds-sync`) for the machine's life; a var so
+// tests don't start one
+var startCredsSync = func(id, sec string) {
+	cmd := exec.Command("/proc/self/exe", "creds-sync")
+	home, _ := os.UserHomeDir()
+	cmd.Env = []string{"HOME=" + home, "PATH=" + os.Getenv("PATH"), "JARVIS1_CREDENTIALS_ID=" + id, "JARVIS1_CREDENTIALS_SECRET=" + sec,
+		"JARVIS1_CREDENTIALS_URL=" + jarvis1Credentials}
+	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true} // outlives the exec into Jarvis 1's entrypoint
+	if err := cmd.Start(); err != nil {
+		log.Printf("claude login: credsSync: %v", err)
+		return
+	}
+	log.Printf("claude login: credsSync running (every 30 s, with Jarvis 1)")
+}
+
+// takeIfLater: write the pair unless the file here already expires as late or later; atomic, 0600
+func takeIfLater(creds []byte) (bool, error) {
+	ne := expiresAt(creds)
+	if ne == 0 {
+		return false, errors.New("the pair has no expiresAt")
+	}
+	if cur, err := os.ReadFile(credsPath()); err == nil && expiresAt(cur) >= ne {
+		return false, nil
+	}
+	if err := os.MkdirAll(filepath.Dir(credsPath()), 0o700); err != nil {
+		return false, err
+	}
+	tmp := credsPath() + ".new"
+	if err := os.WriteFile(tmp, creds, 0o600); err != nil {
+		return false, err
+	}
+	return true, os.Rename(tmp, credsPath())
+}
+
 // credsSync: every 30 s, push this machine's pair when it changed, and take Jarvis 1's when it expires later
 func credsSync() {
+	if u := os.Getenv("JARVIS1_CREDENTIALS_URL"); strings.HasPrefix(u, "https://") {
+		jarvis1Credentials = u // what boot used (sessionClaudeLogin)
+	}
 	var pushed []byte
-	for ; ; time.Sleep(30 * time.Second) {
+	for ; ; time.Sleep(credsSyncEvery) {
 		local, err := os.ReadFile(credsPath())
 		if err != nil {
 			continue
@@ -99,9 +187,8 @@ func credsSync() {
 			log.Printf("claude login: fetch failed: %v", err)
 			continue
 		}
-		if l.ExpiresAt > expiresAt(local) {
-			tmp := credsPath() + ".new"
-			if os.WriteFile(tmp, []byte(l.Credentials), 0o600) == nil && os.Rename(tmp, credsPath()) == nil {
+		if max(l.ExpiresAt, expiresAt([]byte(l.Credentials))) > expiresAt(local) {
+			if took, err := takeIfLater([]byte(l.Credentials)); err == nil && took {
 				pushed = []byte(l.Credentials)
 				log.Printf("claude login: took Jarvis 1's newer pair")
 			}

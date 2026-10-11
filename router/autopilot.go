@@ -23,6 +23,7 @@ import (
 	"log"
 	"net/http"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -45,6 +46,7 @@ type Liveness struct {
 	stall           *stallClock
 	loginRepaired   *repairMark
 	loginBusy       bool
+	credsBehind     time.Time            // a self-login session (store `claude`): since when its pair has been behind Jarvis 1's
 	grantRetry      map[string]time.Time // holder → not before
 	oneShotFiring   bool
 	dialogCheckedAt int64 // statusUpdatedAt of the waiting episode whose pane was checked for the dialog
@@ -74,12 +76,13 @@ type repairMark struct {
 }
 
 type pilotConfig struct {
-	IdlePause, WaitingCancel, Attention, StallNudge, StaleReport, GrantRetry, RepairEvery, DowngradeLookback time.Duration
+	IdlePause, WaitingCancel, Attention, StallNudge, StaleReport, GrantRetry, RepairEvery, DowngradeLookback, SelfLoginGrace time.Duration
 }
 
 var defaultPilot = pilotConfig{
 	IdlePause: time.Hour, WaitingCancel: time.Hour, Attention: 5 * time.Minute, StallNudge: 15 * time.Minute,
 	StaleReport: 3 * time.Minute, GrantRetry: 10 * time.Minute, RepairEvery: 10 * time.Minute, DowngradeLookback: 15 * time.Minute,
+	SelfLoginGrace: 5 * time.Minute,
 }
 
 const pilotTick = 30 * time.Second
@@ -248,6 +251,9 @@ type pilotAction struct {
 	Session string
 	Text    string // dm, nudge
 	Repair  string // login: the uuid of the "Please run /login" reply being repaired
+	// login: the machine keeps its own pair in step (store `claude`, machine/claudelogin.go): no write, only
+	// "continue" for a session stuck on "Please run /login"
+	NoWrite bool
 	Name    string
 	Jobs    int // nudge: the numbers its text is built from (the image builds the same text: vouch.go)
 	Minutes int
@@ -406,16 +412,32 @@ func planTick(d *persisted, now time.Time, storedExp int64, c pilotConfig, busy,
 		}
 
 		// Claude login: Jarvis 1's pair expires later than the session's, or the session stopped on "Please run /login"
-		if g != nil && !operating && !l.loginBusy && s.Harness != "opencode" && storedExp > now.UnixMilli() && l.mayExec("login", now) {
-			write := g.CredsExpiresAt < storedExp
+		// A session holding the store `claude` logs in by itself and keeps its pair in step (machine/claudelogin.go):
+		// the router writes nothing there (no grant asked for) unless its pair stays behind past SelfLoginGrace (a
+		// machine from before the self-login: the old repair path), and a stuck one only gets "continue" once its
+		// pair is in step again.
+		selfLogin := slices.Contains(s.Stores, "claude")
+		if g == nil || g.CredsExpiresAt >= storedExp {
+			l.credsBehind = time.Time{}
+		} else if l.credsBehind.IsZero() {
+			l.credsBehind = now
+		}
+		behind := g != nil && g.CredsExpiresAt < storedExp
+		if selfLogin && behind && now.Sub(l.credsBehind) < c.SelfLoginGrace {
+			behind = false // credsSync catches up within a minute; the status report follows
+		}
+		noWrite := selfLogin && !behind
+		if g != nil && !operating && !l.loginBusy && s.Harness != "opencode" && storedExp > now.UnixMilli() && (noWrite || l.mayExec("login", now)) {
 			repair := ""
 			if u := g.AuthFailed; u != "" && g.Status == "idle" && (l.loginRepaired == nil || (l.loginRepaired.uuid != u && now.Sub(l.loginRepaired.at) >= c.RepairEvery)) {
-				repair = u
-				l.loginRepaired = &repairMark{uuid: u, at: now}
+				if !(selfLogin && g.CredsExpiresAt < storedExp && !behind) { // a self-login pair still catching up: wait for it
+					repair = u
+					l.loginRepaired = &repairMark{uuid: u, at: now}
+				}
 			}
-			if write || repair != "" {
+			if (behind && !noWrite) || repair != "" {
 				l.loginBusy = true
-				add(pilotAction{Kind: "login", Session: id, Repair: repair, Name: name})
+				add(pilotAction{Kind: "login", Session: id, Repair: repair, Name: name, NoWrite: noWrite})
 			}
 		}
 

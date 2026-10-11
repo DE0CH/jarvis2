@@ -198,6 +198,15 @@ func (r *Router) AddGrant(session string, doc *Doc) (*StoredGrant, error) {
 		}
 		sg = &StoredGrant{ID: randID(), Session: session, Holder: holder, Kind: g.Kind, Ends: end, Doc: doc}
 		d.Grants[sg.ID] = sg
+		// the feature the machine turned away is tried again at the next tick, under this grant: without this the
+		// loop kept its 10-minute back-off after a refusal, so a 10-minute grant often ran out unused and the
+		// callout stayed — the button looked like it did nothing (2026-10-11)
+		if s.Live != nil {
+			delete(s.Live.grantRetry, holder)
+			if s.Live.NeedsGrant == holder {
+				s.Live.NeedsGrant = ""
+			}
+		}
 		for id, q := range d.Inbox { // a pending request for this feature is answered (inbox.go)
 			if q.Kind == requestKindGrant && q.Params.Session == session && q.Params.Holder == holder {
 				delete(d.Inbox, id)

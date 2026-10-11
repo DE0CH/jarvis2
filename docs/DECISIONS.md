@@ -392,3 +392,17 @@ entry points only ("if I decide to break it later then it's fine").
 88. **The held core's machines keep the old behaviour** (machine/legacy.go): a cert without `vouch: 2` gets the env the
     machine was started with, as before the guard, so production keeps its prompts, titles, models, repos, restores
     and rollbacks until the core is released. The strict rules apply only to a cert that carries them.
+89. **A session logs into Claude by itself** (Deyao, 2026-10-11: no grant, no Face ID). Decision 22's boot step was
+    written (`machine/claudelogin.go`) but never called for sessions, so every session's first login was the
+    router's `login` exec — which a vouching machine refuses without a grant: after the core release every new
+    session asked for "login repair". Now boot takes Jarvis 1's pair over the `claude` store's confined token
+    before the harness starts (a pair already here that expires later, a resume's, is kept), passes Jarvis 1's
+    account record as `CLAUDE_ACCOUNT`, and runs `credsSync` as its own process for the machine's life. Trusted
+    provider path (DESIGN "Inputs to a machine" (d)), not router input. The router writes nothing into a session
+    holding `claude` (no grant asked for); it falls back to the old write only when such a session stays behind
+    Jarvis 1 for 5 minutes (a machine from before this), and a stuck one gets "continue" once its own pair is in
+    step. The store may name another endpoint (`JARVIS1_CREDENTIALS_URL`, https only): the end-to-end test's
+    stand-in, a fake pair in `e2e/testdata`.
+90. **A phone grant clears the refusal back-off** (2026-10-11): the loop backed off 10 minutes after a refusal and
+    a saved grant didn't reset it, so a 10-minute grant usually ran out before the next try and the "Allow" button
+    looked dead. `AddGrant` now clears `needsGrant` and the back-off for that holder; the next tick (30 s) uses it.

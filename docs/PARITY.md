@@ -40,7 +40,7 @@ watches.
 
 ## Automatic behaviour
 - Auto-pause, Escape-cancel of a stale prompt (holder `status`), "needs you"/idle/dead DMs (+ `notify-idle` mute), model-downgrade DM (holder `status`), stall nudge, one-shot destroy: present (`router/autopilot.go`, `router/oneshot.go`). Refused commands set `needsGrant`.
-- Claude credential refresh: via Jarvis 1 (shared login). Login repair + "continue": present (holder `login`).
+- Claude credential refresh: via Jarvis 1 (shared login), by the machine itself for a session with the store `claude` (no grant). Login repair + "continue": present (holder `login`, for a session without it).
 - Fly budget cap and "Also on Fly": present (`router/budget.go`, read-only `FLY_READ_TOKEN`).
 - Browserbase budget DM: stays in Jarvis 1.
 - Discord channel per session (DT, SB): present (`router/discord.go`, lobster, category "Jarvis 2"), named by the title above and renamed as it changes (2 edits per 10 min), exported to `claude-records/<date> <title>/discord/` and deleted on destroy. Topic has no Remote Control link.

@@ -147,8 +147,12 @@ func main() {
 			{"name": "core", "values": map[string]string{"FLY_API_TOKEN": os.Getenv("E2E_FLY_TOKEN")}},
 			{"name": "e2e", "values": map[string]string{"E2E_SECRET": secret}},
 			{"name": "e2e-extra", "values": map[string]string{"E2E_EXTRA": "extra-" + secret}},
+			// the Claude login store: a stand-in for Jarvis 1's credentials endpoint (a fake pair, public), named
+			// in the store itself; the test router never reaches Jarvis 1
+			{"name": "claude", "values": map[string]string{"JARVIS1_CREDENTIALS_ID": "e2e-id", "JARVIS1_CREDENTIALS_SECRET": "e2e-secret",
+				"JARVIS1_CREDENTIALS_URL": fakeJarvis1}},
 		},
-		"notSensitive": []string{"e2e"},
+		"notSensitive": []string{"e2e", "claude"},
 	})
 	sum := sha256.Sum256(bundle)
 	mpub, _ := master.PublicKey.ECDH()
@@ -395,13 +399,23 @@ func main() {
 	step("one-shot: once the supervisor marks the prompt done the router destroys it by itself, forcefully, and DMs the work lost")
 	// no stores: a new line with the same stores, options and image as the first session would get the same
 	// challenge nonce (the core derives it from the request), which the core refuses to certify twice
-	s, b = call(router, "POST", "/api/sessions", map[string]any{"label": "e2e one-shot", "stores": []string{}, "size": "small", "harness": "claude",
+	// stores [claude]: the machine logs into Claude by itself at boot, with no grant (machine/claudelogin.go)
+	s, b = call(router, "POST", "/api/sessions", map[string]any{"label": "e2e one-shot", "stores": []string{"claude"}, "size": "small", "harness": "claude",
 		"oneShot": true, "prompt": "e2e: nothing to do"}, nil)
 	must(s, b, "create one-shot")
 	a = waitApproval("new-session", "")
+	checkChallenge(a, []string{"claude"}, "")
+	unlock(p, "claude", nonceOf(*a.Challenge))
 	os1 := approve(p, a)
 	waitState(os1, "started", 6*time.Minute)
 	om := machineOf(os1)
+	step("a new session's Claude is logged in with no grant: the machine took the pair from the claude store's endpoint at boot")
+	expectOnMachine(om, "grep -o '\"refreshToken\":\"e2e-fake-refresh\"' /home/claude/.claude/.credentials.json; stat -c %a /home/claude/.claude/.credentials.json",
+		"\"refreshToken\":\"e2e-fake-refresh\"\n600")
+	expectOnMachine(om, "for p in /proc/[0-9]*; do tr '\\0' ' ' < $p/cmdline 2>/dev/null; echo; done | grep -c '^/proc/self/exe creds-sync $'", "1")
+	if ng, _ := session(os1)["needsGrant"].(string); ng != "" {
+		log.Fatalf("a new session with the claude store asks for a grant: %q", ng)
+	}
 	// a repo with an uncommitted file and no upstream, then the supervisor's marker (no Claude login here, so
 	// claude never finishes a prompt by itself)
 	expectOnMachine(om, "su - claude -c 'mkdir -p ~/workspace/lost && cd ~/workspace/lost && git init -q && echo x > f && echo ok'", "ok")
@@ -529,6 +543,9 @@ var unlockIDs []string
 
 // unlock: forNonce = the challenge or cert nonce the unlock is for (what the app's Start, add-store and Unlock…
 // send); "" = a standing unlock (the Stores page)
+// fakeJarvis1: the test's Jarvis 1 credentials endpoint (testdata/jarvis1-credentials.json on main: a fake pair)
+const fakeJarvis1 = "https://raw.githubusercontent.com/DE0CH/jarvis2/main/e2e/testdata/jarvis1-credentials.json"
+
 func unlock(p *phone, store, forNonce string) {
 	var d Doc
 	must2(call(router, "POST", "/api/core/unlock/begin", map[string]string{"store": store, "for": forNonce}, &d))

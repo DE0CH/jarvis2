@@ -1,8 +1,9 @@
 package main
 
 // Login repair (Jarvis 1's syncClaudeLogin, lib/claudelogin.js). The Claude login is Jarvis 1's: one OAuth pair
-// shared by both Jarvises (machine/claudelogin.go keeps each machine in step every 30 s). This is the router's
-// repair path for a session that still ends up behind: its credentials file expires before Jarvis 1's pair, or
+// shared by both Jarvises (machine/claudelogin.go: a session with the store `claude` takes it at boot and keeps in
+// step every 30 s by itself, so the router writes nothing there). This is the router's repair path for a session
+// that still ends up behind (no `claude` store, or a machine from before the self-login, behind past SelfLoginGrace): its credentials file expires before Jarvis 1's pair, or
 // its transcript ends on "Please run /login". The router fetches the pair from Jarvis 1 with the confined
 // Access service token in its env (JARVIS1_CREDENTIALS_ID/SECRET, which reaches only /api/credentials), writes
 // it into ~/.claude/.credentials.json through holder "login" (never replacing a pair that expires later), and
@@ -105,6 +106,12 @@ func writeCredsCmd(credentials string) string {
 }
 
 func (r *Router) repairLogin(a pilotAction) {
+	if a.NoWrite { // the machine keeps its own pair in step: only the stuck turn needs "continue"
+		if a.Repair != "" {
+			r.deliverContinue(a)
+		}
+		return
+	}
 	p, err := r.sharedLogin()
 	if err != nil {
 		log.Printf("[login] %s: %v", a.Session, err)
@@ -126,12 +133,16 @@ func (r *Router) repairLogin(a pilotAction) {
 	if a.Repair == "" {
 		return
 	}
+	r.deliverContinue(a)
+}
+
+func (r *Router) deliverContinue(a pilotAction) {
 	if err := r.DeliverCanned(a.Session, Delivery{Kind: "continue"}, "continue"); err != nil {
 		r.noteRefusal(a.Session, "scheduler", err)
 		log.Printf("[login] %s: credentials written, delivering \"continue\" failed: %v", a.Session, err)
 		return
 	}
-	log.Printf("[login] %s (%s): was stuck on \"Please run /login\" — credentials written, \"continue\" delivered", a.Session, a.Name)
+	log.Printf("[login] %s (%s): was stuck on \"Please run /login\" — credentials in step, \"continue\" delivered", a.Session, a.Name)
 }
 
 func firstLine(s string) string {

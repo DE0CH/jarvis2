@@ -38,6 +38,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"maps"
 	"net/http"
 	"os"
 	"os/exec"
@@ -122,6 +123,8 @@ func main() {
 		err = downgrade(os.Args[2:])
 	case "agent":
 		err = agent()
+	case "creds-sync":
+		credsSync() // claudelogin.go: started by boot for a session with the `claude` store; never returns
 	case "allow":
 		err = allowCmd(os.Args[2:])
 	case "allow-at-least":
@@ -341,6 +344,11 @@ func prepare() error {
 			os.Setenv(k, val)
 		}
 		runTask(c, t, secrets, certMode(cert)) // task.go: the template instead of a harness; never returns
+	}
+	// 6. the Claude login (claudelogin.go): Jarvis 1's shared pair, taken by the machine itself, kept in step
+	if account := sessionClaudeLogin(secrets); account != "" && secrets["CLAUDE_ACCOUNT"] == "" {
+		secrets = maps.Clone(secrets)
+		secrets["CLAUDE_ACCOUNT"] = account // Jarvis 1's entrypoint merges it into ~/.claude.json
 	}
 	if !v.V2 {
 		log.Printf("starting the harness")
