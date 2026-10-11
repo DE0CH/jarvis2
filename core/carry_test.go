@@ -148,7 +148,7 @@ func TestAResumeCarriesTheSecretsWithNoStoreUnlocked(t *testing.T) {
 	c, f, p := setup(t)
 	cert, id := startWithUnlocks(t, c, p, "default", "gmail")
 	out := pull(t, c, cert, "")
-	pl(t)(c.Kill(id))
+	pl(t)(c.KillWithSnapshot(id, nil))
 	ch, _ := c.Succession(SuccessionInput{Predecessor: &cert, Image: f.machineImage(c, &cert), Stores: []string{"default", "gmail"}})
 	a := pl(t)(c.ApproveByDeadMachine(&ch))
 	if a["kind"] != "approval" {
@@ -174,7 +174,7 @@ func TestAResumeCarriesTheSecretsWithNoStoreUnlocked(t *testing.T) {
 	_, err := c.PullSecrets(&cert, out.Carry)
 	locked(t, err, "default")
 	// the next resume carries on from the successor's blob; the old one is no longer this line's newest machine's
-	pl(t)(c.Kill(id2))
+	pl(t)(c.KillWithSnapshot(id2, nil))
 	ch3, _ := c.Succession(SuccessionInput{Predecessor: &cert2, Image: f.machineImage(c, &cert2), Stores: []string{"default", "gmail"}})
 	a3, _ := c.ApproveByDeadMachine(&ch3)
 	cert3, _ := start(t, c, a3)
@@ -187,12 +187,12 @@ func TestAResumedMachineThatNeverPulledKeepsTheChain(t *testing.T) {
 	c, f, p := setup(t)
 	cert, id := startWithUnlocks(t, c, p, "default")
 	out := pull(t, c, cert, "")
-	pl(t)(c.Kill(id))
+	pl(t)(c.KillWithSnapshot(id, nil))
 	ch, _ := c.Succession(SuccessionInput{Predecessor: &cert, Image: f.machineImage(c, &cert), Stores: []string{"default"}})
 	a, _ := c.ApproveByDeadMachine(&ch)
 	cert2, id2 := start(t, c, a)
 	fw := pl(t)(c.ForwardCarry(out.Carry, &cert2)) // the router, right after certify
-	pl(t)(c.Kill(id2))                             // it died before it pulled
+	pl(t)(c.KillWithSnapshot(id2, nil))            // it died before it pulled
 	ch3, _ := c.Succession(SuccessionInput{Predecessor: &cert2, Image: f.machineImage(c, &cert2), Stores: []string{"default"}})
 	a3, _ := c.ApproveByDeadMachine(&ch3)
 	cert3, id3 := start(t, c, a3)
@@ -281,10 +281,10 @@ func TestDestroyEndsTheCarry(t *testing.T) {
 	c, f, p := setup(t)
 	cert, id := startWithUnlocks(t, c, p, "default")
 	out := pull(t, c, cert, "")
-	pl(t)(c.Kill(id))
+	pl(t)(c.KillWithSnapshot(id, nil))
 	ch, _ := c.Succession(SuccessionInput{Predecessor: &cert, Image: NullImage})
 	a, _ := c.ApproveByDeadMachine(&ch)
-	pl(t)(c.Certify(&a, ""))
+	pl(t)(c.Certify(&a, nil))
 	// the line is burnt: no successor can be certified, and the dead machine's own cert gets nothing
 	ch2, _ := c.Succession(SuccessionInput{Predecessor: &cert, Image: f.machineImage(c, &cert), Stores: []string{"default"}})
 	if _, err := c.ApproveByDeadMachine(&ch2); err == nil {

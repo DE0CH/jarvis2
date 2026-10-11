@@ -255,7 +255,7 @@ func (r *Router) killMachine(machine string) (*Doc, error) {
 			in["snapshot"] = map[string]string{"sha256": sum, "sig": strings.TrimSpace(string(sig))}
 		}
 	}
-	return r.core.Call("/kill", in)
+	return r.killUntilDestroyed(in)
 }
 
 // ---- the values the machine takes from the router alone (each a strict format) --------------------------------

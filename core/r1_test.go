@@ -44,7 +44,7 @@ func TestADowngradeCantBeUndoneWithAnOlderCertOrBlob(t *testing.T) {
 	if _, err := c.ApproveByOldKey(&ch, sig); err == nil {
 		t.Fatal("a downgrade was answered twice")
 	}
-	pl(t)(c.Kill(id))
+	pl(t)(c.KillWithSnapshot(id, nil))
 	// the router resumes from the cert before the downgrade: refused at succession…
 	if _, err := c.Succession(SuccessionInput{Predecessor: &cert1, Image: f.machineImage(c, &cert1), Stores: []string{"default", "gmail"}}); err == nil {
 		t.Fatal("an older cert of the killed machine was taken as the predecessor")

@@ -17,6 +17,7 @@ import (
 
 type fakeFlyMachine struct {
 	enc, sig  *ecdh.PrivateKey
+	image     string
 	destroyed bool
 }
 
@@ -35,14 +36,14 @@ func newFly() Fly {
 
 func (f *FakeFly) Configure(token string) {}
 
-func (f *FakeFly) Create(r StartRequest) (string, string, error) {
+// Create: the machine is up at once (a real one takes minutes: the router's Init retries cover that)
+func (f *FakeFly) Create(r StartRequest, guest map[string]any, env map[string]string) (string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.n++
 	id := fmt.Sprintf("fake%06d", f.n)
 	e, _ := ecdh.P256().GenerateKey(rand.Reader)
 	s, _ := ecdh.P256().GenerateKey(rand.Reader)
-	f.machines[id] = &fakeFlyMachine{enc: e, sig: s}
 	// Fly reports the digest it pulled (registry/repository@digest); SwapDigest plays a registry serving
 	// other bytes than the approval named
 	ref, digest, _ := strings.Cut(r.Image, "@")
@@ -55,7 +56,21 @@ func (f *FakeFly) Create(r StartRequest) (string, string, error) {
 	if i := strings.LastIndex(ref, ":"); i > strings.LastIndex(ref, "/") {
 		ref = ref[:i]
 	}
-	return id, ref + "@" + digest, nil
+	f.machines[id] = &fakeFlyMachine{enc: e, sig: s, image: ref + "@" + digest}
+	return id, nil
+}
+
+func (f *FakeFly) Inspect(id string) (FlyMachine, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	m, ok := f.machines[id]
+	if !ok {
+		return FlyMachine{}, fmt.Errorf("not found")
+	}
+	if m.destroyed {
+		return FlyMachine{State: "destroyed", Image: m.image}, nil
+	}
+	return FlyMachine{State: "started", Image: m.image}, nil
 }
 
 func (f *FakeFly) Init(id string) (MachineKeys, error) {
@@ -74,13 +89,6 @@ func (f *FakeFly) Destroy(id string) error {
 	}
 	m.destroyed = true
 	return nil
-}
-
-func (f *FakeFly) ConfirmDestroyed(id string) (bool, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	m, ok := f.machines[id]
-	return ok && m.destroyed, nil
 }
 
 // A GitHub stand-in for CI only: deploy keys kept in memory per repo. A repo named "*/no-admin" answers 403, as

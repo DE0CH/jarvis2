@@ -195,10 +195,15 @@ func TestRestartPatchesEnvAndRollsBack(t *testing.T) {
 	}
 	waitFor(t, "start asked", func() bool { return sc.lastStart() != nil })
 	st := sc.lastStart()
-	env := st["env"].(map[string]any)
-	if st["size"] != "large" || env["FEATURE_FLAG"] != "on" || env["DEBUG"] != "1" || env["SESSION_API_PROXY"] != "1" ||
+	if _, has := st["env"]; st["size"] != "large" || has {
+		t.Fatalf("start %v (the core sets a machine's env itself: the router sends none)", st)
+	}
+	// the settings reach the machine as the router's machine config, from the session
+	var s0 Session
+	r.st.Do(func(d *persisted) { s0 = *d.Sessions["s1"] })
+	if env := r.machineEnv(&s0); env["FEATURE_FLAG"] != "on" || env["DEBUG"] != "1" || env["SESSION_API_PROXY"] != "1" ||
 		env["JARVIS2_ROLLBACK"] != "uuid-1234" || env["JARVIS2_ROLLBACK_PRED"] != "m1" {
-		t.Fatalf("start %v", st)
+		t.Fatalf("machine env %v", env)
 	}
 	waitFor(t, "job finished", func() bool { j := r.ops.jobView("s1"); return j != nil && j["finishedAt"] != nil })
 	// the patch stays for later starts; the rollback only for the start after m1
@@ -265,7 +270,9 @@ func TestResumeWithSizeAndModel(t *testing.T) {
 	}
 	waitFor(t, "start asked", func() bool { return sc.lastStart() != nil })
 	st := sc.lastStart()
-	if st["size"] != "small" || st["env"].(map[string]any)["SESSION_MODEL"] != "claude-fable-5-1" {
+	var s0 Session
+	r.st.Do(func(d *persisted) { s0 = *d.Sessions["s1"] })
+	if _, has := st["env"]; st["size"] != "small" || has || r.machineEnv(&s0)["SESSION_MODEL"] != "claude-fable-5-1" {
 		t.Fatalf("%v", st)
 	}
 	// the core saw a plain dead-machine resume (size and model aren't in its options)

@@ -164,7 +164,7 @@ var listFlyMachines = func() ([]flyMachineDetail, error) {
 
 // the core's kill (flows.go makes the same call on a pause); swappable in tests
 var orphanKill = func(r *Router, id string) error {
-	_, err := r.core.Call("/kill", map[string]string{"machine": id})
+	_, err := r.killUntilDestroyed(map[string]any{"machine": id})
 	return err
 }
 

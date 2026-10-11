@@ -52,7 +52,7 @@ func TestConfigTravelsInTheCertAndOnceNeedsThePhone(t *testing.T) {
 	if oc.Options.Config != conf {
 		t.Fatalf("config %q", oc.Options.Config)
 	}
-	c.Kill(old)
+	c.KillWithSnapshot(old, nil)
 	base := SuccessionInput{Predecessor: &cert, Image: oc.Machine.Image, Stores: []string{"default"}}
 	// an unattended resume: the same config, or nothing at all changes
 	for _, opt := range []Options{
@@ -80,7 +80,7 @@ func TestConfigTravelsInTheCertAndOnceNeedsThePhone(t *testing.T) {
 		t.Fatal("the cert lost the approved one-time input")
 	}
 	// its successor resumes unattended with the config and WITHOUT the one-time input
-	c.Kill(id2)
+	c.KillWithSnapshot(id2, nil)
 	in3 := SuccessionInput{Predecessor: &cert2, Image: oc.Machine.Image, Stores: []string{"default"}, Options: Options{Config: conf}}
 	ch3, _ := c.Succession(in3)
 	a3 := pl(t)(c.ApproveByDeadMachine(&ch3))
@@ -141,7 +141,7 @@ func TestAResumeRestoresOnlyTheSnapshotItsPredecessorSigned(t *testing.T) {
 		t.Fatalf("the successor's cert names snapshot %q", nc.Snapshot)
 	}
 	// killed without a snapshot: the successor's cert names none (it starts with no predecessor state)
-	c.Kill(id2)
+	c.KillWithSnapshot(id2, nil)
 	ch2, _ := c.Succession(SuccessionInput{Predecessor: &next, Image: oc.Machine.Image, Stores: []string{"default"}})
 	a2, _ := c.ApproveByDeadMachine(&ch2)
 	third, _ := start(t, c, a2)
@@ -213,7 +213,7 @@ func TestACoreWithoutARouterAddressStartsNothing(t *testing.T) {
 	c, f, _ := setup(t)
 	for _, u := range []string{"", "http://evil/$(x)", "file:///etc"} {
 		t.Setenv("MACHINE_URL", u)
-		if _, err := c.Start(StartRequest{Image: img}); err == nil {
+		if _, err := c.Start(StartRequest{Image: img, Size: "small"}); err == nil {
 			t.Fatalf("started a machine with MACHINE_URL %q", u)
 		}
 	}

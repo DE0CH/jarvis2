@@ -194,7 +194,12 @@ type Core struct {
 	// downgrade (or an add-store answered again) can't be undone with a cert from before it.
 	latest map[string]string
 
-	started map[string]*StartedMachine
+	// created: a machine this core created and hasn't initialised or killed yet → the image start asked for.
+	// signing: a machine this core initialised and Fly hasn't destroyed → its current signing key (init, then a
+	// downgrade's new key: what its kill's snapshot is checked with). Everything else about a machine lives in the
+	// core-signed "started" document and the certs.
+	created map[string]string
+	signing map[string]string
 	// killed: a machine Fly confirmed destroyed → sha256 of the snapshot it signed at its kill ("" = none; vouch.go);
 	// its successor's cert names it. With used: approve_by_dead_machine's two sets.
 	killed map[string]string
@@ -243,7 +248,7 @@ func NewCore(fly Fly) (*Core, error) {
 	}
 	return &Core{signer: s, agreement: a, nonceKey: nk, carryKey: ck,
 		approvalsUsed: map[string]bool{}, latest: map[string]string{},
-		started: map[string]*StartedMachine{}, killed: map[string]string{}, used: map[string]bool{},
+		created: map[string]string{}, signing: map[string]string{}, killed: map[string]string{}, used: map[string]bool{},
 		stores: map[string]*StoreBlob{}, notSensitive: map[string]bool{}, pending: map[string]pendingUnlock{}, unlocked: map[string]*unlocked{}, pendingKeys: map[string]pendingDeployKey{}, repoOwner: map[string]string{},
 		fly: fly, github: newGitHub(), now: time.Now}, nil
 }
@@ -604,43 +609,72 @@ func (c *Core) Stores(nonce string) (SignedDoc, error) {
 type StartRequest struct {
 	Image  string `json:"image"`
 	Region string `json:"region"`
-	Size   string `json:"size"`
-	// Env: ignored. A machine's config gets only what the core sets (vouch.go machineEnv): everything else the
-	// machine takes from the router is checked against its cert.
-	Env map[string]string `json:"env"`
+	Size   string `json:"size"` // small | medium | large (sizes, fly.go)
 }
 
-// Start: anyone may ask (normally the router): it makes a machine and reads its keys, nothing more — a
-// machine without a cert gets no secrets. Creates the machine, runs the image's init command (its output is
-// the machine's public keys) and records the started machine.
+// Start: anyone may ask (normally the router): one Fly create, nothing more — a machine without a cert gets no
+// secrets. Its config env is the core's alone (vouch.go machineEnv). The router then calls Init until the machine
+// is up, and kills it if it never comes up.
 func (c *Core) Start(r StartRequest) (SignedDoc, error) {
 	if imageDigest(r.Image) == "" {
 		return SignedDoc{}, fail(400, "start needs an image of %s pinned by digest", SessionRepo)
 	}
-	if r.Env = c.machineEnv(); r.Env == nil { // the machine's trust anchor and the router's address, set by the core, never the caller
+	guest, ok := sizes[r.Size]
+	if !ok {
+		return SignedDoc{}, fail(400, "size: small, medium or large")
+	}
+	env := c.machineEnv() // the machine's trust anchor and the router's address, set by the core, never the caller
+	if env == nil {
 		return SignedDoc{}, fail(503, "this core has no MACHINE_URL (its deployment's router address): it starts no machine")
 	}
-	id, image, err := c.fly.Create(r)
+	id, err := c.fly.Create(r, guest, env)
 	if err != nil {
 		return SignedDoc{}, fail(502, "fly create: %v", err)
 	}
-	keys, err := c.fly.Init(id)
-	if err != nil {
-		c.fly.Destroy(id)
-		return SignedDoc{}, fail(502, "fly exec init: %v", err)
-	}
-	m := &StartedMachine{ID: id, Requested: r.Image, Image: image, EncryptionKey: keys.EncryptionKey, SigningKey: keys.SigningKey}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.started[id] = m
-	c.logf("machine %s started (%s)", id, image)
+	c.created[id] = r.Image
+	c.logf("machine %s created (%s)", id, r.Image)
+	return c.sign(map[string]any{"kind": "created", "id": id, "image": r.Image})
+}
+
+// Init: one try at reading a created machine's keys — Fly must report it started, then the image's init command
+// prints them (Fly exec: their link to the machine is Fly's word). 409 while it isn't up yet (the router retries).
+// The answer, the signed "started" document, is what certify takes.
+func (c *Core) Init(id string) (SignedDoc, error) {
+	c.mu.Lock()
+	requested, ok := c.created[id]
+	c.mu.Unlock()
+	if !ok {
+		return SignedDoc{}, fail(409, "machine %s isn't one this core created and hasn't initialised", id)
+	}
+	fm, err := c.fly.Inspect(id)
+	if err != nil {
+		return SignedDoc{}, fail(502, "fly: %v", err)
+	}
+	if fm.State != "started" {
+		return SignedDoc{}, fail(409, "machine %s is %s, not started", id, fm.State)
+	}
+	keys, err := c.fly.Init(id)
+	if err != nil {
+		return SignedDoc{}, fail(502, "fly exec init: %v", err)
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if _, ok := c.created[id]; !ok {
+		return SignedDoc{}, fail(409, "machine %s was killed or initialised meanwhile", id)
+	}
+	delete(c.created, id)
+	c.signing[id] = keys.SigningKey
+	m := &StartedMachine{ID: id, Requested: requested, Image: fm.Image, EncryptionKey: keys.EncryptionKey, SigningKey: keys.SigningKey}
+	c.logf("machine %s started (%s)", id, fm.Image)
 	return c.sign(map[string]any{"kind": "started", "machine": m})
 }
 
-// Certify: an approval + a started machine running the approved image → the succession cert (the machine's
-// only permission). One machine per approval, one line per machine, one successor per predecessor. An
-// approval for the null image takes no machine and burns the predecessor.
-func (c *Core) Certify(approval *SignedDoc, machine string) (SignedDoc, error) {
+// Certify: an approval + a started machine (Init's signed document) running the approved image → the succession
+// cert (the machine's only permission). One machine per approval, one line per machine, one successor per
+// predecessor. An approval for the null image takes no machine and burns the predecessor.
+func (c *Core) Certify(approval, started *SignedDoc) (SignedDoc, error) {
 	var a Approval
 	if err := c.verifyOwn(approval, &a); err != nil || a.Kind != "approval" {
 		return SignedDoc{}, fail(400, "not an approval this core signed")
@@ -659,15 +693,22 @@ func (c *Core) Certify(approval *SignedDoc, machine string) (SignedDoc, error) {
 	}
 	now := c.now().UTC().Format(time.RFC3339)
 	if r.Image == NullImage {
-		if machine != "" {
+		if started != nil {
 			return SignedDoc{}, fail(400, "a burn takes no machine")
 		}
 		c.approvalsUsed[a.Nonce], c.used[r.PredID] = true, true
 		c.logf("burned %s (%s)", r.PredID, a.By)
 		return c.sign(Cert{Kind: "burn-cert", PredID: r.PredID, Stores: []string{}, Nonce: a.Nonce, IssuedAt: now})
 	}
-	m, ok := c.started[machine]
-	if !ok || c.isKilled(machine) || c.latest[machine] != "" {
+	var st struct {
+		Kind    string          `json:"kind"`
+		Machine *StartedMachine `json:"machine"`
+	}
+	if err := c.verifyOwn(started, &st); err != nil || st.Kind != "started" || st.Machine == nil {
+		return SignedDoc{}, fail(400, "not a started machine this core signed")
+	}
+	m, machine := st.Machine, st.Machine.ID
+	if _, live := c.signing[machine]; !live || c.isKilled(machine) || c.latest[machine] != "" {
 		return SignedDoc{}, fail(409, "machine %s is not a started machine without a line", machine)
 	}
 	if m.Requested != r.Image {
@@ -684,37 +725,48 @@ func (c *Core) Certify(approval *SignedDoc, machine string) (SignedDoc, error) {
 	return c.signCert(c.succession(r, m, a.Nonce, now), a.By)
 }
 
-// Kill: Fly destroy, confirmed by Fly → killed. snapshot (optional): the sha256 of the snapshot the machine took
-// and its signature over that hash with the machine's current signing key; its successor restores that one only.
-// Without it (no snapshot, or none that checks) the successor starts with no predecessor state.
-func (c *Core) Kill(id string) (SignedDoc, error) { return c.KillWithSnapshot(id, nil) }
-
+// KillWithSnapshot: one Fly destroy, then Fly must report the machine destroyed (409 until it does: the router
+// asks again) → killed. snapshot (optional): the sha256 of the snapshot the machine took and its signature over that
+// hash with the machine's current signing key; its successor restores that one only. Without it (no snapshot, or
+// none that checks) the successor starts with no predecessor state. The first kill fixes the snapshot.
 func (c *Core) KillWithSnapshot(id string, snapshot *SnapshotClaim) (SignedDoc, error) {
 	if id == "" || id == "null" {
 		return SignedDoc{}, fail(400, "kill rejects null")
 	}
-	sum := ""
+	c.mu.Lock()
+	done, sum := c.isKilled(id), c.killed[id]
+	key := c.signing[id]
+	c.mu.Unlock()
+	if done {
+		return c.sign(map[string]any{"kind": "killed", "id": id, "snapshot": sum})
+	}
 	if snapshot != nil && snapshot.Sha256 != "" {
-		c.mu.Lock()
-		m := c.started[id]
-		c.mu.Unlock()
-		if m == nil || !hex64RE.MatchString(snapshot.Sha256) || !VerifyWith(m.SigningKey, []byte(snapshot.Sha256), snapshot.Sig) {
+		if key == "" || !hex64RE.MatchString(snapshot.Sha256) || !VerifyWith(key, []byte(snapshot.Sha256), snapshot.Sig) {
 			return SignedDoc{}, fail(403, "the snapshot isn't signed by machine %s's current key", id)
 		}
 		sum = snapshot.Sha256
 	}
-	if err := c.fly.Destroy(id); err != nil {
-		return SignedDoc{}, fail(502, "fly destroy: %v", err)
+	fm, err := c.fly.Inspect(id)
+	if err != nil {
+		return SignedDoc{}, fail(502, "fly: %v", err)
 	}
-	if gone, err := c.fly.ConfirmDestroyed(id); err != nil || !gone {
-		return SignedDoc{}, fail(502, "fly did not confirm %s destroyed: %v", id, err)
+	if fm.State != "destroyed" {
+		derr := c.fly.Destroy(id)
+		if fm, err = c.fly.Inspect(id); err != nil {
+			return SignedDoc{}, fail(502, "fly: %v", err)
+		}
+		if fm.State != "destroyed" {
+			return SignedDoc{}, fail(409, "machine %s is %s, not destroyed yet (destroy: %v)", id, fm.State, derr)
+		}
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if !c.isKilled(id) {
-		c.killed[id] = sum // the first kill fixes it; a repeated kill can't swap the snapshot
+		c.killed[id] = sum
 	}
-	c.logf("machine %s killed (snapshot %s)", id, orNull(sum))
+	delete(c.created, id)
+	delete(c.signing, id)
+	c.logf("machine %s killed (snapshot %s)", id, orNull(c.killed[id]))
 	return c.sign(map[string]any{"kind": "killed", "id": id, "snapshot": c.killed[id]})
 }
 
@@ -798,7 +850,7 @@ func (c *Core) Succession(in SuccessionInput) (SignedDoc, error) {
 	if in.Machine != "" {
 		// a running machine succeeds itself from one of its certs: one more store (answered by the phone), or
 		// a subset with a new key pair (a downgrade)
-		if _, ok := c.started[in.Machine]; !ok || req.PredID != in.Machine {
+		if _, ok := c.signing[in.Machine]; !ok || req.PredID != in.Machine {
 			return SignedDoc{}, fail(400, "a machine succeeds itself from its own cert")
 		}
 		if c.isKilled(in.Machine) || persistentOptions(pc.Options) != req.Options {
@@ -911,10 +963,8 @@ func (c *Core) answer(ch challenge, by string) (SignedDoc, error) {
 		}
 		c.latest[r.Machine.ID] = ch.Nonce
 		if r.Downgrade {
-			if m := c.started[r.Machine.ID]; m != nil { // its kill's snapshot is signed with the new key from now on
-				nm := *m
-				nm.EncryptionKey, nm.SigningKey = r.Machine.EncryptionKey, r.Machine.SigningKey
-				c.started[r.Machine.ID] = &nm
+			if _, ok := c.signing[r.Machine.ID]; ok { // its kill's snapshot is signed with the new key from now on
+				c.signing[r.Machine.ID] = r.Machine.SigningKey
 			}
 		}
 		return c.signCert(c.succession(r, r.Machine, ch.Nonce, now), by)

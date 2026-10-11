@@ -107,8 +107,9 @@ func storeValues(t *testing.T, c *Core, p *phone, name string) map[string]string
 
 func TestDeployKeyAddMakesAKeyAStoreAndAGitHubKey(t *testing.T) {
 	var logs bytes.Buffer
+	prev := log.Writer()
 	log.SetOutput(&logs)
-	defer log.SetOutput(os.Stderr)
+	defer log.SetOutput(prev)
 	c, g, p := deployKeyCore(t)
 	m, err := deployKey(t, c, p, "add", "DE0CH/china-train", false)
 	if err != nil {

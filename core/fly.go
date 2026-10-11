@@ -1,6 +1,6 @@
 package main
 
-// The Fly Machines API, used only by start and kill. The token is held by the core alone (from a Recover
+// The Fly Machines API, used only by start, init and kill. The token is held by the core alone (from a Recover
 // bundle, or sealed to the core by the setup session) and is narrowed to this app and to one command inside a
 // machine: jarvis2-init, with no arguments. Its output is the machine's public keys, so their link to the
 // machine is Fly's guarantee, not anything the machine or the router says. The app is fixed here, in git: a
@@ -15,7 +15,6 @@ import (
 	"net/http"
 	"strings"
 	"sync"
-	"time"
 )
 
 type MachineKeys struct {
@@ -23,12 +22,18 @@ type MachineKeys struct {
 	SigningKey    string `json:"signingKey"`
 }
 
+// Fly: single calls, no waiting or retrying (the router retries; DESIGN "The core").
 type Fly interface {
 	Configure(token string) // from the core store (Recover) or SetFlyToken
-	Create(r StartRequest) (id, image string, err error)
-	Init(id string) (MachineKeys, error) // runs jarvis2-init; its output is the machine's public keys
+	Create(r StartRequest, guest map[string]any, env map[string]string) (id string, err error)
+	Inspect(id string) (FlyMachine, error) // its state and the image Fly runs (registry/repository@digest)
+	Init(id string) (MachineKeys, error)   // one run of jarvis2-init; its output is the machine's public keys
 	Destroy(id string) error
-	ConfirmDestroyed(id string) (bool, error)
+}
+
+type FlyMachine struct {
+	State string // created, starting, started, …, destroyed
+	Image string // what Fly reports it runs: registry/repository@sha256:…
 }
 
 // the session image's one command the core may run (session-image/Dockerfile); the Fly token allows only it
@@ -98,13 +103,22 @@ func (f *FlyAPI) call(method, path string, body any, out any) error {
 	return nil
 }
 
-func (f *FlyAPI) Create(r StartRequest) (string, string, error) {
-	guest, ok := sizes[r.Size]
-	if !ok {
-		guest = sizes["medium"]
-	}
+func (f *FlyAPI) Create(r StartRequest, guest map[string]any, env map[string]string) (string, error) {
 	var m struct {
-		ID     string `json:"id"`
+		ID string `json:"id"`
+	}
+	body := map[string]any{"region": r.Region, "config": map[string]any{
+		"image": r.Image, "guest": guest, "env": env, "restart": map[string]any{"policy": "no"},
+	}}
+	if err := f.call("POST", "/machines", body, &m); err != nil {
+		return "", err
+	}
+	return m.ID, nil
+}
+
+func (f *FlyAPI) Inspect(id string) (FlyMachine, error) {
+	var m struct {
+		State  string `json:"state"`
 		Config struct {
 			Image string `json:"image"`
 		} `json:"config"`
@@ -112,29 +126,14 @@ func (f *FlyAPI) Create(r StartRequest) (string, string, error) {
 			Registry, Repository, Tag, Digest string
 		} `json:"image_ref"`
 	}
-	body := map[string]any{"region": r.Region, "config": map[string]any{
-		"image": r.Image, "guest": guest, "env": r.Env, "restart": map[string]any{"policy": "no"},
-	}}
-	if err := f.call("POST", "/machines", body, &m); err != nil {
-		return "", "", err
-	}
-	// the first pull of the session image on a Fly host takes minutes: wait up to 10, then give up and
-	// destroy the machine rather than leave it running unknown to anyone
-	var werr error
-	for i := 0; i < 10; i++ {
-		if werr = f.call("GET", "/machines/"+m.ID+"/wait?state=started&timeout=60", nil, nil); werr == nil {
-			break
-		}
-	}
-	if werr != nil {
-		f.call("DELETE", "/machines/"+m.ID+"?force=true", nil, nil)
-		return "", "", werr
+	if err := f.call("GET", "/machines/"+id, nil, &m); err != nil {
+		return FlyMachine{}, err
 	}
 	image := m.Config.Image
 	if m.ImageRef.Digest != "" {
 		image = m.ImageRef.Registry + "/" + m.ImageRef.Repository + "@" + m.ImageRef.Digest
 	}
-	return m.ID, image, nil
+	return FlyMachine{State: m.State, Image: image}, nil
 }
 
 func (f *FlyAPI) exec(id string, cmd []string, timeout int) (string, error) {
@@ -152,38 +151,19 @@ func (f *FlyAPI) exec(id string, cmd []string, timeout int) (string, error) {
 	return out.Stdout, nil
 }
 
-// Init: jarvis2-init waits for the machine's keys (made at boot), prints them and lets boot go on
+// Init: jarvis2-init waits for the machine's keys (made at boot), prints them and lets boot go on. One run.
 func (f *FlyAPI) Init(id string) (MachineKeys, error) {
 	var k MachineKeys
-	var last error
-	for i := 0; i < 10; i++ {
-		out, err := f.exec(id, []string{initPath}, 60)
-		if err == nil && json.Unmarshal([]byte(strings.TrimSpace(out)), &k) == nil && k.EncryptionKey != "" && k.SigningKey != "" {
-			return k, nil
-		}
-		last = err
-		time.Sleep(3 * time.Second)
+	out, err := f.exec(id, []string{initPath}, 60)
+	if err != nil {
+		return k, err
 	}
-	return k, fmt.Errorf("jarvis2-init gave no keys: %v", last)
+	if json.Unmarshal([]byte(strings.TrimSpace(out)), &k) != nil || k.EncryptionKey == "" || k.SigningKey == "" {
+		return k, fmt.Errorf("jarvis2-init gave no keys")
+	}
+	return k, nil
 }
 
 func (f *FlyAPI) Destroy(id string) error {
 	return f.call("DELETE", "/machines/"+id+"?force=true", nil, nil)
-}
-
-// ConfirmDestroyed: Fly must report this existing machine as destroyed; a "not found" doesn't count
-func (f *FlyAPI) ConfirmDestroyed(id string) (bool, error) {
-	for i := 0; i < 20; i++ {
-		var m struct {
-			State string `json:"state"`
-		}
-		if err := f.call("GET", "/machines/"+id, nil, &m); err != nil {
-			return false, err
-		}
-		if m.State == "destroyed" {
-			return true, nil
-		}
-		time.Sleep(time.Second)
-	}
-	return false, nil
 }

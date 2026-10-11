@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"os"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 )
@@ -140,6 +141,61 @@ func (r *Router) succession(pred *Doc, machine string, stores []string, harness,
 	return r.core.Call("/succession", map[string]any{"predecessor": predecessor, "machine": machine, "stores": stores, "options": opts, "image": image})
 }
 
+// the router's waits on the core's single-shot machine calls (tests shorten them)
+var (
+	initStep, initMax = 5 * time.Second, 12 * time.Minute // a session image's first pull on a Fly host takes minutes
+	killStep, killMax = time.Second, 30 * time.Second
+)
+
+// startMachine: the core's start (one Fly create), then its init until Fly reports the machine up and the image's
+// init command gave its keys → the core's signed "started" document. A machine that never comes up is killed.
+// A core from before R2 answers "started" from /start itself (it waited and retried inside).
+func (r *Router) startMachine(image, size string) (*Doc, error) {
+	if size == "" {
+		size = "medium"
+	}
+	d, err := r.core.Call("/start", map[string]any{"image": image, "region": r.cfg.Region, "size": size})
+	if err != nil {
+		return nil, err
+	}
+	var c struct {
+		Kind string `json:"kind"`
+		ID   string `json:"id"`
+	}
+	d.Decode(&c)
+	if c.Kind != "created" {
+		return d, nil
+	}
+	deadline := time.Now().Add(initMax)
+	for {
+		st, err := r.core.Call("/init", map[string]string{"machine": c.ID})
+		if err == nil {
+			return st, nil
+		}
+		var ce *CoreError
+		retry := errors.As(err, &ce) && (ce.Status == 502 || ce.Status == 409 && strings.Contains(ce.Msg, "not started"))
+		if !retry || time.Now().After(deadline) {
+			r.killUntilDestroyed(map[string]any{"machine": c.ID})
+			return nil, err
+		}
+		time.Sleep(initStep)
+	}
+}
+
+// killUntilDestroyed: the core's kill (one Fly destroy) again until Fly reports the machine destroyed (409 before).
+// A core from before R2 waited inside its kill.
+func (r *Router) killUntilDestroyed(in map[string]any) (*Doc, error) {
+	deadline := time.Now().Add(killMax)
+	for {
+		d, err := r.core.Call("/kill", in)
+		var ce *CoreError
+		if err == nil || !errors.As(err, &ce) || ce.Status != 409 || time.Now().After(deadline) {
+			return d, err
+		}
+		time.Sleep(killStep)
+	}
+}
+
 // startAndCertify: an approval → a machine on the approved image → its cert. The core's start is open (it
 // can't lead to a secret); certify binds the approval to that one machine.
 func (r *Router) startAndCertify(sid string, approval *Doc) {
@@ -156,7 +212,7 @@ func (r *Router) startAndCertify(sid string, approval *Doc) {
 		}
 	})
 	r.setState(sid, "starting", "")
-	d, err := r.core.Call("/start", map[string]any{"image": a.Request.Image, "region": r.cfg.Region, "size": s.Size, "env": r.machineEnv(&s)})
+	d, err := r.startMachine(a.Request.Image, s.Size)
 	if err != nil {
 		r.setState(sid, "failed", "start: "+err.Error())
 		return
@@ -173,9 +229,10 @@ func (r *Router) startAndCertify(sid string, approval *Doc) {
 		d.Started[m.ID] = m
 		d.Machines[m.ID] = sid
 	})
-	cert, err := r.core.Call("/certify", map[string]any{"approval": approval, "machine": m.ID})
+	// "started": the core's signed document (a core from before R2 reads "machine" instead)
+	cert, err := r.core.Call("/certify", map[string]any{"approval": approval, "machine": m.ID, "started": d})
 	if err != nil {
-		r.core.Call("/kill", map[string]string{"machine": m.ID})
+		r.killUntilDestroyed(map[string]any{"machine": m.ID})
 		r.setState(sid, "failed", "certify: "+err.Error())
 		return
 	}
