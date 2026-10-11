@@ -24,6 +24,8 @@ type FakeFly struct {
 	mu       sync.Mutex
 	n        int
 	machines map[string]*fakeFlyMachine
+	// SwapDigest: report this digest instead of the requested one (a test of certify's digest check)
+	SwapDigest string
 }
 
 func newFly() Fly {
@@ -41,8 +43,19 @@ func (f *FakeFly) Create(r StartRequest) (string, string, error) {
 	e, _ := ecdh.P256().GenerateKey(rand.Reader)
 	s, _ := ecdh.P256().GenerateKey(rand.Reader)
 	f.machines[id] = &fakeFlyMachine{enc: e, sig: s}
-	// a resume passes the pinned ref@digest: keep one digest, like Fly reports it
-	return id, strings.SplitN(r.Image, "@", 2)[0] + "@sha256:0000000000000000000000000000000000000000000000000000000000000000", nil
+	// Fly reports the digest it pulled (registry/repository@digest); SwapDigest plays a registry serving
+	// other bytes than the approval named
+	ref, digest, _ := strings.Cut(r.Image, "@")
+	if f.SwapDigest != "" {
+		digest = f.SwapDigest
+	}
+	if digest == "" {
+		digest = "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+	}
+	if i := strings.LastIndex(ref, ":"); i > strings.LastIndex(ref, "/") {
+		ref = ref[:i]
+	}
+	return id, ref + "@" + digest, nil
 }
 
 func (f *FakeFly) Init(id string) (MachineKeys, error) {

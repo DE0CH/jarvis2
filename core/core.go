@@ -55,6 +55,12 @@ type Options struct {
 	// the harness's permission mode (auto | bypass): signed, so a resume that changes it — above all raising to
 	// bypass — isn't approved by a dead machine and needs the phone (Deyao, 2026-10-09)
 	PermissionMode string `json:"permissionMode,omitempty"`
+	// Config: the session's settings (first prompt, title, model, repos, …: a JSON object the core doesn't read),
+	// fixed for the line: the phone approves it with a new line, an unattended resume carries it over unchanged.
+	// Once: this one machine's one-time inputs (a resume's prompt, a rollback marker): only the phone approves one,
+	// and a successor never inherits it (vouch.go).
+	Config string `json:"config,omitempty"`
+	Once   string `json:"once,omitempty"`
 }
 
 // a succession request, made before any machine exists. Machine is set only when a running machine succeeds
@@ -97,6 +103,11 @@ type Cert struct {
 	Phone     string `json:"phone,omitempty"`
 	Sensitive bool   `json:"sensitive"`
 	Line      string `json:"line"` // the line's first machine: what grants name, stable across successions
+	// Snapshot: sha256 of the snapshot the predecessor signed when it was killed ("" = it left none): the only one
+	// the machine restores (vouch.go). Vouch: 2 = a core that vouches for every input (the machine refuses what the
+	// cert doesn't name; a cert without it comes from an earlier core).
+	Snapshot string `json:"snapshot,omitempty"`
+	Vouch    int    `json:"vouch,omitempty"`
 }
 
 // succession: the cert for a machine on a line (callers hold c.mu)
@@ -109,8 +120,12 @@ func (c *Core) succession(r Request, m *StartedMachine, nonce, now string) Cert 
 	if line == "" {
 		line = m.ID
 	}
+	snap := ""
+	if r.PredID != "" && r.PredID != m.ID {
+		snap = c.snapshots[r.PredID]
+	}
 	return Cert{Kind: "succession-cert", PredID: r.PredID, Machine: m, Stores: r.Stores, Options: r.Options,
-		Nonce: nonce, IssuedAt: now, Phone: c.phoneSigning, Sensitive: sensitive, Line: line}
+		Nonce: nonce, IssuedAt: now, Phone: c.phoneSigning, Sensitive: sensitive, Line: line, Snapshot: snap, Vouch: 2}
 }
 
 type unlocked struct {
@@ -145,6 +160,12 @@ type Core struct {
 	started map[string]*StartedMachine
 	killed  map[string]bool // approve_by_dead_machine's two sets
 	used    map[string]bool
+	// snapshots: a killed machine → sha256 of the snapshot it signed (vouch.go); its successor's cert names it
+	snapshots map[string]string
+
+	audit     []SignedDoc // audit.go: the input log (the newest auditKeep entries), its head and length
+	auditHead string
+	auditSeq  int
 
 	stores       map[string]*StoreBlob // nil value = created, still empty
 	notSensitive map[string]bool       // the only sensitivity state: every store not in it is sensitive
@@ -183,7 +204,7 @@ func NewCore(fly Fly) (*Core, error) {
 	}
 	return &Core{signer: s, agreement: a, nonceKey: nk, carryKey: ck,
 		approvalsUsed: map[string]bool{}, certified: map[string]bool{},
-		started: map[string]*StartedMachine{}, killed: map[string]bool{}, used: map[string]bool{},
+		started: map[string]*StartedMachine{}, killed: map[string]bool{}, used: map[string]bool{}, snapshots: map[string]string{},
 		stores: map[string]*StoreBlob{}, notSensitive: map[string]bool{}, pending: map[string]pendingUnlock{}, unlocked: map[string]*unlocked{}, pendingKeys: map[string]pendingDeployKey{},
 		fly: fly, github: newGitHub(), now: time.Now}, nil
 }
@@ -529,25 +550,22 @@ func (c *Core) Stores(nonce string) (SignedDoc, error) {
 // ---- machines (the Fly API is used only here: start, kill) -----------------------------------------
 
 type StartRequest struct {
-	Image  string            `json:"image"`
-	Region string            `json:"region"`
-	Size   string            `json:"size"`
-	Env    map[string]string `json:"env"` // non-secret settings (the router's), never secrets; the core adds its key
+	Image  string `json:"image"`
+	Region string `json:"region"`
+	Size   string `json:"size"`
+	// Env: ignored. A machine's config gets only what the core sets (vouch.go machineEnv): everything else the
+	// machine takes from the router is checked against its cert.
+	Env map[string]string `json:"env"`
 }
 
 // Start: anyone may ask (normally the router): it makes a machine and reads its keys, nothing more — a
 // machine without a cert gets no secrets. Creates the machine, runs the image's init command (its output is
 // the machine's public keys) and records the started machine.
 func (c *Core) Start(r StartRequest) (SignedDoc, error) {
-	if r.Image == "" || r.Image == NullImage {
-		return SignedDoc{}, fail(400, "start needs an image")
+	if imageDigest(r.Image) == "" {
+		return SignedDoc{}, fail(400, "start needs an image of %s pinned by digest", SessionRepo)
 	}
-	env := map[string]string{}
-	for k, v := range r.Env {
-		env[k] = v
-	}
-	env[coreKeyEnv] = c.signer.PublicKey() // the machine's one trust anchor, set by the core, never the router
-	r.Env = env
+	r.Env = c.machineEnv() // the machine's trust anchor and the router's address, set by the core, never the caller
 	id, image, err := c.fly.Create(r)
 	if err != nil {
 		return SignedDoc{}, fail(502, "fly create: %v", err)
@@ -598,18 +616,35 @@ func (c *Core) Certify(approval *SignedDoc, machine string) (SignedDoc, error) {
 	if m.Requested != r.Image {
 		return SignedDoc{}, fail(409, "machine %s runs %s, the approval is for %s", machine, m.Requested, r.Image)
 	}
+	if d := imageDigest(r.Image); d == "" || reportedDigest(m.Image) != d {
+		return SignedDoc{}, fail(409, "machine %s runs %s, not the approved digest of %s", machine, m.Image, r.Image)
+	}
 	c.approvalsUsed[a.Nonce], c.certified[machine] = true, true
 	if r.PredID != "" {
 		c.used[r.PredID] = true
 	}
 	c.logf("certified %s for %s (%s) %s → %v", machine, a.Nonce[:12], a.By, orNull(r.PredID), r.Stores)
-	return c.sign(c.succession(r, m, a.Nonce, now))
+	return c.signCert(c.succession(r, m, a.Nonce, now), a.By)
 }
 
-// Kill: Fly destroy, confirmed by Fly → killed
-func (c *Core) Kill(id string) (SignedDoc, error) {
+// Kill: Fly destroy, confirmed by Fly → killed. snapshot (optional): the sha256 of the snapshot the machine took
+// and its signature over that hash with the machine's current signing key; its successor restores that one only.
+// Without it (no snapshot, or none that checks) the successor starts with no predecessor state.
+func (c *Core) Kill(id string) (SignedDoc, error) { return c.KillWithSnapshot(id, nil) }
+
+func (c *Core) KillWithSnapshot(id string, snapshot *SnapshotClaim) (SignedDoc, error) {
 	if id == "" || id == "null" {
 		return SignedDoc{}, fail(400, "kill rejects null")
+	}
+	sum := ""
+	if snapshot != nil && snapshot.Sha256 != "" {
+		c.mu.Lock()
+		m := c.started[id]
+		c.mu.Unlock()
+		if m == nil || !hex64RE.MatchString(snapshot.Sha256) || !VerifyWith(m.SigningKey, []byte(snapshot.Sha256), snapshot.Sig) {
+			return SignedDoc{}, fail(403, "the snapshot isn't signed by machine %s's current key", id)
+		}
+		sum = snapshot.Sha256
 	}
 	if err := c.fly.Destroy(id); err != nil {
 		return SignedDoc{}, fail(502, "fly destroy: %v", err)
@@ -618,10 +653,13 @@ func (c *Core) Kill(id string) (SignedDoc, error) {
 		return SignedDoc{}, fail(502, "fly did not confirm %s destroyed: %v", id, err)
 	}
 	c.mu.Lock()
+	defer c.mu.Unlock()
+	if !c.killed[id] {
+		c.snapshots[id] = sum // the first kill fixes it; a repeated kill can't swap the snapshot
+	}
 	c.killed[id] = true
-	c.logf("machine %s killed", id)
-	c.mu.Unlock()
-	return c.sign(map[string]any{"kind": "killed", "id": id})
+	c.logf("machine %s killed (snapshot %s)", id, orNull(sum))
+	return c.sign(map[string]any{"kind": "killed", "id": id, "snapshot": c.snapshots[id]})
 }
 
 // NullImage: a succession to the null image burns the predecessor — start() makes no machine, only marks the
@@ -645,6 +683,9 @@ type SuccessionInput struct {
 func (c *Core) Succession(in SuccessionInput) (SignedDoc, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if len(in.Options.Config) > maxConfig || len(in.Options.Once) > maxOnce {
+		return SignedDoc{}, fail(400, "config at most %d bytes, once at most %d", maxConfig, maxOnce)
+	}
 	req := Request{Kind: "succession", Predecessor: in.Predecessor, Options: in.Options}
 	if in.Image != NullImage && req.Options.Harness == "" {
 		req.Options.Harness = "claude"
@@ -694,8 +735,8 @@ func (c *Core) Succession(in SuccessionInput) (SignedDoc, error) {
 		if _, ok := c.started[in.Machine]; !ok || req.PredID != in.Machine {
 			return SignedDoc{}, fail(400, "a machine succeeds itself from its own cert")
 		}
-		if c.killed[in.Machine] || pc.Options != req.Options {
-			return SignedDoc{}, fail(400, "the same live machine with the same options")
+		if c.killed[in.Machine] || persistentOptions(pc.Options) != req.Options {
+			return SignedDoc{}, fail(400, "the same live machine with the same options (and no one-time inputs)")
 		}
 		m := pc.Machine
 		if in.NewEncryptionKey != "" || in.NewSigningKey != "" {
@@ -794,7 +835,14 @@ func (c *Core) answer(ch challenge, by string) (SignedDoc, error) {
 	r := ch.Request
 	now := c.now().UTC().Format(time.RFC3339)
 	if r.AddedStore != "" || r.Downgrade {
-		return c.sign(c.succession(r, r.Machine, ch.Nonce, now))
+		if r.Downgrade {
+			if m := c.started[r.Machine.ID]; m != nil { // its kill's snapshot is signed with the new key from now on
+				nm := *m
+				nm.EncryptionKey, nm.SigningKey = r.Machine.EncryptionKey, r.Machine.SigningKey
+				c.started[r.Machine.ID] = &nm
+			}
+		}
+		return c.signCert(c.succession(r, r.Machine, ch.Nonce, now), by)
 	}
 	return c.sign(Approval{Kind: "approval", Nonce: ch.Nonce, Request: r, By: by})
 }
@@ -840,8 +888,8 @@ func (c *Core) ApproveByDeadMachine(d *SignedDoc) (SignedDoc, error) {
 	if err := c.verifyOwn(r.Predecessor, &pc); err != nil {
 		return SignedDoc{}, err
 	}
-	if !equalStrings(pc.Stores, r.Stores) || pc.Options != r.Options || pc.Machine.Image != r.Image {
-		return SignedDoc{}, fail(403, "store set, image or options differ from the predecessor's")
+	if !equalStrings(pc.Stores, r.Stores) || persistentOptions(pc.Options) != r.Options || pc.Machine.Image != r.Image {
+		return SignedDoc{}, fail(403, "store set, image or options differ from the predecessor's (or a one-time input is asked for)")
 	}
 	c.logf("approve_by_dead_machine: %s → a new machine", r.PredID)
 	return c.answer(ch, "dead-machine")

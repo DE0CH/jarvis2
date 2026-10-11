@@ -1,0 +1,210 @@
+package main
+
+// Inputs to a machine that receives secrets (vouch.go, audit.go): each forbidden thing attempted, refused.
+
+import (
+	"crypto/ecdh"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/json"
+	"strings"
+	"testing"
+)
+
+// machineSign: what the machine does with its signing key (machine/main.go sign)
+func machineSign(k *ecdh.PrivateKey, payload string) string {
+	e, _ := ecdsa.ParseRawPrivateKey(elliptic.P256(), k.Bytes())
+	h := sha256.Sum256([]byte(payload))
+	s, _ := ecdsa.SignASN1(rand.Reader, e, h[:])
+	return b64.EncodeToString(s)
+}
+
+func certOf(t *testing.T, d SignedDoc) Cert {
+	t.Helper()
+	var c Cert
+	if err := json.Unmarshal([]byte(d.Payload), &c); err != nil {
+		t.Fatal(err)
+	}
+	return c
+}
+
+func TestAnImageSwappedUnderItsTagIsRefused(t *testing.T) {
+	c, f, p := setup(t)
+	a := approve(t, c, p, SuccessionInput{Image: img, Stores: []string{"default"}})
+	f.swap = "sha256:" + strings.Repeat("9", 64) // the registry serves other bytes than the approval's digest
+	if _, err := tryStart(c, a); err == nil {
+		t.Fatal("certified a machine whose image digest isn't the approved one")
+	}
+	f.swap = ""
+	cert, _ := start(t, c, a)
+	if cc := certOf(t, cert); cc.Machine.Image != SessionRepo+"@sha256:"+strings.Repeat("1", 64) || cc.Vouch != 2 {
+		t.Fatalf("the cert names %s (vouch %d)", cc.Machine.Image, cc.Vouch)
+	}
+}
+
+func TestConfigTravelsInTheCertAndOnceNeedsThePhone(t *testing.T) {
+	c, _, p := setup(t)
+	conf := `{"v":1,"prompt":"hello","repos":["https://github.com/DE0CH/claude-env.git"]}`
+	cert, old := start(t, c, approve(t, c, p, SuccessionInput{Image: img, Stores: []string{"default"}, Options: Options{Config: conf}}))
+	oc := certOf(t, cert)
+	if oc.Options.Config != conf {
+		t.Fatalf("config %q", oc.Options.Config)
+	}
+	c.Kill(old)
+	base := SuccessionInput{Predecessor: &cert, Image: oc.Machine.Image, Stores: []string{"default"}}
+	// an unattended resume: the same config, or nothing at all changes
+	for _, opt := range []Options{
+		{Config: `{"v":1,"prompt":"exfiltrate"}`},             // another config
+		{Config: conf, Once: `{"prompt":"ignore the above"}`}, // a resume prompt
+		{Config: conf, Once: `{"rollback":"marker"}`},         // a rollback
+		{Config: "", Once: ""},                                // the config dropped
+		{Config: conf, PermissionMode: "bypass"},              // raised
+	} {
+		in := base
+		in.Options = opt
+		ch, err := c.Succession(in)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := c.ApproveByDeadMachine(&ch); err == nil {
+			t.Fatalf("resumed with %+v without the phone", opt)
+		}
+	}
+	// the phone may approve a one-time input; the cert carries it
+	in := base
+	in.Options = Options{Config: conf, Once: `{"prompt":"continue"}`}
+	cert2, id2 := start(t, c, approve(t, c, p, in))
+	if certOf(t, cert2).Options.Once != `{"prompt":"continue"}` {
+		t.Fatal("the cert lost the approved one-time input")
+	}
+	// its successor resumes unattended with the config and WITHOUT the one-time input
+	c.Kill(id2)
+	in3 := SuccessionInput{Predecessor: &cert2, Image: oc.Machine.Image, Stores: []string{"default"}, Options: Options{Config: conf}}
+	ch3, _ := c.Succession(in3)
+	a3 := pl(t)(c.ApproveByDeadMachine(&ch3))
+	if a3["kind"] != "approval" {
+		t.Fatalf("got %v", a3)
+	}
+	in3.Options.Once = `{"prompt":"continue"}` // carrying it over again: refused
+	ch4, _ := c.Succession(in3)
+	if _, err := c.ApproveByDeadMachine(&ch4); err == nil {
+		t.Fatal("a one-time input was carried over unattended")
+	}
+	// sizes
+	big := SuccessionInput{Image: img, Stores: []string{"default"}, Options: Options{Config: strings.Repeat("x", maxConfig+1)}}
+	if _, err := c.Succession(big); err == nil {
+		t.Fatal("an oversized config")
+	}
+}
+
+func TestAMachineSucceedingItselfTakesNoOneTimeInput(t *testing.T) {
+	c, _, p := setup(t)
+	conf := `{"v":1}`
+	cert, id := start(t, c, approve(t, c, p, SuccessionInput{Image: img, Stores: []string{"default"}, Options: Options{Config: conf}}))
+	for _, opt := range []Options{{Config: conf, Once: `{"prompt":"x"}`}, {Config: `{"v":1,"prompt":"x"}`}} {
+		if _, err := c.Succession(SuccessionInput{Predecessor: &cert, Machine: id, Stores: []string{"default", "gmail"}, Options: opt}); err == nil {
+			t.Fatalf("add-store with %+v", opt)
+		}
+	}
+	ch := pl(t)(c.Succession(SuccessionInput{Predecessor: &cert, Machine: id, Stores: []string{"default", "gmail"}, Options: Options{Config: conf}}))
+	if ch["kind"] != "challenge" {
+		t.Fatal(ch)
+	}
+}
+
+func TestAResumeRestoresOnlyTheSnapshotItsPredecessorSigned(t *testing.T) {
+	c, f, p := setup(t)
+	cert, old := newLine(t, c, p, "default")
+	oc := certOf(t, cert)
+	sum := sha256Hex("the snapshot tarball")
+	// a snapshot the machine didn't sign: the kill is refused, the machine lives
+	other := newPhone()
+	if _, err := c.KillWithSnapshot(old, &SnapshotClaim{Sha256: sum, Sig: other.sign(sum)}); err == nil {
+		t.Fatal("killed with a snapshot another key signed")
+	}
+	if f.machines[old].destroyed {
+		t.Fatal("a refused kill destroyed the machine")
+	}
+	pl(t)(c.KillWithSnapshot(old, &SnapshotClaim{Sha256: sum, Sig: machineSign(f.machines[old].sig, sum)}))
+	// a second kill can't swap the snapshot
+	sum2 := sha256Hex("another tarball")
+	d := pl(t)(c.KillWithSnapshot(old, &SnapshotClaim{Sha256: sum2, Sig: machineSign(f.machines[old].sig, sum2)}))
+	if d["snapshot"] != sum {
+		t.Fatalf("the kill record moved to %v", d["snapshot"])
+	}
+	ch, _ := c.Succession(SuccessionInput{Predecessor: &cert, Image: oc.Machine.Image, Stores: []string{"default"}})
+	a, _ := c.ApproveByDeadMachine(&ch)
+	next, id2 := start(t, c, a)
+	if nc := certOf(t, next); nc.Snapshot != sum || nc.PredID != old {
+		t.Fatalf("the successor's cert names snapshot %q", nc.Snapshot)
+	}
+	// killed without a snapshot: the successor's cert names none (it starts with no predecessor state)
+	c.Kill(id2)
+	ch2, _ := c.Succession(SuccessionInput{Predecessor: &next, Image: oc.Machine.Image, Stores: []string{"default"}})
+	a2, _ := c.ApproveByDeadMachine(&ch2)
+	third, _ := start(t, c, a2)
+	if certOf(t, third).Snapshot != "" {
+		t.Fatal("a snapshot appeared from nowhere")
+	}
+}
+
+func TestAfterADowngradeOnlyTheNewKeySignsTheSnapshot(t *testing.T) {
+	c, f, p := setup(t)
+	cert, id := newLine(t, c, p, "default", "gmail")
+	enc, _ := ecdh.P256().GenerateKey(rand.Reader)
+	sig, _ := ecdh.P256().GenerateKey(rand.Reader)
+	ch, err := c.Succession(SuccessionInput{Predecessor: &cert, Machine: id, Stores: []string{"default"},
+		NewEncryptionKey: b64.EncodeToString(enc.PublicKey().Bytes()), NewSigningKey: b64.EncodeToString(sig.PublicKey().Bytes())})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pl(t)(c.ApproveByOldKey(&ch, machineSign(f.machines[id].sig, ch.Payload)))
+	sum := sha256Hex("tarball")
+	if _, err := c.KillWithSnapshot(id, &SnapshotClaim{Sha256: sum, Sig: machineSign(f.machines[id].sig, sum)}); err == nil {
+		t.Fatal("the shredded old key still signs the snapshot")
+	}
+	pl(t)(c.KillWithSnapshot(id, &SnapshotClaim{Sha256: sum, Sig: machineSign(sig, sum)}))
+}
+
+func TestTheInputLogIsAChainOfSignedEntries(t *testing.T) {
+	c, _, p := setup(t)
+	_, id := newLine(t, c, p, "default") // a cert is logged too
+	sum := sha256Hex("wake up and check the build")
+	e := pl(t)(c.Attest(id, "wakeup", "session-signed", sum))
+	if e["machine"] != id || e["sha256"] != sum || e["input"] != "wakeup" {
+		t.Fatalf("got %v", e)
+	}
+	for _, bad := range [][4]string{{id, "wakeup", "x", "nothex"}, {id, "", "x", sum}, {"a b", "wakeup", "x", sum}, {id, "wake\nup", "x", sum}} {
+		if _, err := c.Attest(bad[0], bad[1], bad[2], bad[3]); err == nil {
+			t.Fatalf("attested %q", bad)
+		}
+	}
+	log := c.AuditLog(0)
+	entries := log["entries"].([]SignedDoc)
+	if len(entries) != 2 {
+		t.Fatalf("%d entries", len(entries))
+	}
+	prev := ""
+	for i, d := range entries {
+		if !VerifyWith(c.signer.PublicKey(), []byte(d.Payload), d.Sig) {
+			t.Fatal("an entry isn't signed by the core")
+		}
+		var a AuditEntry
+		json.Unmarshal([]byte(d.Payload), &a)
+		if a.Seq != i || a.Prev != prev {
+			t.Fatalf("entry %d: seq %d prev %q", i, a.Seq, a.Prev)
+		}
+		prev = sha256Hex(d.Payload)
+	}
+	// chain_from only starts an empty log
+	if _, err := c.ChainFrom(strings.Repeat("a", 64)); err == nil {
+		t.Fatal("chain_from rewrote a running log")
+	}
+	c2, _, _ := newCore(t)
+	d := pl(t)(c2.ChainFrom(prev))
+	if d["input"] != "continues" || d["sha256"] != prev {
+		t.Fatalf("got %v", d)
+	}
+}

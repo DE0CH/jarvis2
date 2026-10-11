@@ -135,7 +135,26 @@ func Handler(c *Core) http.Handler {
 		return c.Start(sr)
 	})
 	h("POST /certify", func(r *http.Request, b body) (any, error) { return c.Certify(doc(b, "approval"), str(b, "machine")) })
-	h("POST /kill", func(r *http.Request, b body) (any, error) { return c.Kill(str(b, "machine")) })
+	h("POST /kill", func(r *http.Request, b body) (any, error) {
+		var snap *SnapshotClaim
+		if len(b["snapshot"]) != 0 && string(b["snapshot"]) != "null" {
+			snap = &SnapshotClaim{}
+			if json.Unmarshal(b["snapshot"], snap) != nil {
+				return nil, fail(400, "snapshot: {sha256, sig}")
+			}
+		}
+		return c.KillWithSnapshot(str(b, "machine"), snap)
+	})
+	// ---- the input log (audit.go) ----
+	h("POST /attest", func(r *http.Request, b body) (any, error) {
+		return c.Attest(str(b, "machine"), str(b, "input"), str(b, "origin"), str(b, "sha256"))
+	})
+	h("POST /input-log/chain-from", func(r *http.Request, b body) (any, error) { return c.ChainFrom(str(b, "head")) })
+	h("POST /input-log", func(r *http.Request, b body) (any, error) {
+		var from int
+		json.Unmarshal(b["from"], &from)
+		return c.AuditLog(from), nil
+	})
 
 	// ---- succession ----
 	h("POST /succession", func(r *http.Request, b body) (any, error) {
