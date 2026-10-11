@@ -155,7 +155,7 @@ func Handler(c *Core) http.Handler {
 	h("POST /approve/by-dead-machine", func(r *http.Request, b body) (any, error) { return c.ApproveByDeadMachine(doc(b, "challenge")) })
 
 	// ---- unlock ----
-	h("POST /unlock/begin", func(r *http.Request, b body) (any, error) { return c.UnlockBegin(str(b, "store")) })
+	h("POST /unlock/begin", func(r *http.Request, b body) (any, error) { return c.UnlockBegin(str(b, "store"), str(b, "for")) })
 	h("POST /unlock/finish", func(r *http.Request, b body) (any, error) {
 		var s Sealed
 		json.Unmarshal(b["share"], &s)
@@ -178,8 +178,10 @@ func Handler(c *Core) http.Handler {
 
 	// ---- machines pull ----
 	h("POST /pull-secrets", func(r *http.Request, b body) (any, error) {
-		return c.PullSecrets(doc(b, "cert"))
+		return c.PullSecrets(doc(b, "cert"), str(b, "carry"))
 	})
+	// carry.go: the line's carried secrets rebound to a cert's machine (its successor, or itself with a new cert)
+	h("POST /carry/forward", func(r *http.Request, b body) (any, error) { return c.ForwardCarry(str(b, "carry"), doc(b, "cert")) })
 	h("POST /log", func(r *http.Request, b body) (any, error) { return c.Log(str(b, "nonce")) })
 	return mux
 }

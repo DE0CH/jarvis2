@@ -115,7 +115,16 @@ func (c *Core) succession(r Request, m *StartedMachine, nonce, now string) Cert 
 
 type unlocked struct {
 	values map[string]string
-	ids    map[string]time.Time
+	ids    map[string]unlockHold
+}
+
+// unlockHold: one open unlock of a store. For = "" is a standing unlock (open to every cert that names the store
+// until locked: the Stores page); otherwise the nonce of the one challenge or cert it was opened for (a Start, an
+// add-store, a waiting session's Unlock…): only that cert's pull reads it, its pull releases it, and it lapses
+// after scopedUnlockTTL (carry.go).
+type unlockHold struct {
+	since time.Time
+	For   string
 }
 
 type Core struct {
@@ -143,6 +152,8 @@ type Core struct {
 	unlocked     map[string]*unlocked
 	pendingKeys  map[string]pendingDeployKey // deploy-key adds/removes waiting for the phone (deploykeys.go)
 
+	carryKey []byte // carry.go: the AES key of the sessions' carried secrets; made at start, never leaves the core
+
 	fly    Fly
 	github GitHub // deploy keys only, with the token the phone unlocks for that one call
 	log    []string
@@ -152,6 +163,7 @@ type Core struct {
 type pendingUnlock struct {
 	store StoreBlob
 	t     *ecdh.PrivateKey
+	For   string // the challenge or cert nonce the unlock is for ("" = standing)
 }
 
 func NewCore(fly Fly) (*Core, error) {
@@ -165,7 +177,11 @@ func NewCore(fly Fly) (*Core, error) {
 	}
 	nk := make([]byte, 32)
 	rand.Read(nk)
-	return &Core{signer: s, agreement: a, nonceKey: nk,
+	ck := make([]byte, 32)
+	if _, err := rand.Read(ck); err != nil {
+		return nil, err
+	}
+	return &Core{signer: s, agreement: a, nonceKey: nk, carryKey: ck,
 		approvalsUsed: map[string]bool{}, certified: map[string]bool{},
 		started: map[string]*StartedMachine{}, killed: map[string]bool{}, used: map[string]bool{},
 		stores: map[string]*StoreBlob{}, notSensitive: map[string]bool{}, pending: map[string]pendingUnlock{}, unlocked: map[string]*unlocked{}, pendingKeys: map[string]pendingDeployKey{},
@@ -489,10 +505,13 @@ func (c *Core) WriteStore(b StoreBlob) (SignedDoc, error) {
 	return c.sign(map[string]any{"kind": "store-written", "name": b.Name, "sensitive": !c.notSensitive[b.Name]})
 }
 
-// Stores: the signed list (names, sensitivity, empty, unlocked) — the phone learns sensitivity from the core
+// Stores: the signed list (names, sensitivity, empty, unlocked) — the phone learns sensitivity from the core.
+// unlocked = open for every session (a standing unlock); an unlock for one session doesn't count. scopedUnlocks
+// tells the app this core takes unlocks for one session (unlock_begin's "for").
 func (c *Core) Stores(nonce string) (SignedDoc, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	c.expireScoped()
 	type row struct {
 		Name      string `json:"name"`
 		Sensitive bool   `json:"sensitive"`
@@ -501,11 +520,10 @@ func (c *Core) Stores(nonce string) (SignedDoc, error) {
 	}
 	out := []row{}
 	for n, b := range c.stores {
-		_, u := c.unlocked[n]
-		out = append(out, row{n, !c.notSensitive[n], b == nil, u})
+		out = append(out, row{n, !c.notSensitive[n], b == nil, c.standing(n)})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
-	return c.sign(map[string]any{"kind": "stores", "nonce": nonce, "stores": out})
+	return c.sign(map[string]any{"kind": "stores", "nonce": nonce, "stores": out, "scopedUnlocks": true})
 }
 
 // ---- machines (the Fly API is used only here: start, kill) -----------------------------------------
@@ -855,13 +873,18 @@ func (c *Core) ApproveByOldKey(d *SignedDoc, sig string) (SignedDoc, error) {
 // ---- unlock / lock -------------------------------------------------------------------------------
 
 // UnlockBegin: a one-off key pair for this unlock; the phone computes its share from the blob's E (shown
-// here, signed, with the store's name)
-func (c *Core) UnlockBegin(name string) (SignedDoc, error) {
+// here, signed, with the store's name). forNonce: "" = a standing unlock (open to every session until locked);
+// else the nonce of the one challenge or cert the unlock is for — only that cert's pull reads it, and its pull
+// locks it again (carry.go).
+func (c *Core) UnlockBegin(name, forNonce string) (SignedDoc, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	blob := c.stores[name]
 	if blob == nil {
 		return SignedDoc{}, fail(404, "no store %s with contents", name)
+	}
+	if forNonce != "" && !isNonce(forNonce) {
+		return SignedDoc{}, fail(400, "for: not a challenge or cert nonce")
 	}
 	s := *blob
 	t, err := ecdh.P256().GenerateKey(rand.Reader)
@@ -869,8 +892,8 @@ func (c *Core) UnlockBegin(name string) (SignedDoc, error) {
 		return SignedDoc{}, err
 	}
 	id := randID()
-	c.pending[id] = pendingUnlock{store: s, t: t}
-	return c.sign(map[string]any{"kind": "unlock-begin", "pending": id, "store": name, "e": s.Wrapped.E, "t": b64.EncodeToString(t.PublicKey().Bytes())})
+	c.pending[id] = pendingUnlock{store: s, t: t, For: forNonce}
+	return c.sign(map[string]any{"kind": "unlock-begin", "pending": id, "store": name, "e": s.Wrapped.E, "t": b64.EncodeToString(t.PublicKey().Bytes()), "for": forNonce})
 }
 
 const infoShare = "jarvis2/unlock-share"
@@ -901,18 +924,23 @@ func (c *Core) UnlockFinish(pending string, share Sealed) (SignedDoc, error) {
 	json.Unmarshal(plain, &vals)
 	u := c.unlocked[s.Name]
 	if u == nil {
-		u = &unlocked{values: vals, ids: map[string]time.Time{}}
+		u = &unlocked{values: vals, ids: map[string]unlockHold{}}
 		c.unlocked[s.Name] = u
 	}
 	id := randID()
-	u.ids[id] = c.now()
-	c.logf("store %s unlocked (%s)", s.Name, id)
-	return c.sign(map[string]any{"kind": "unlocked", "id": id, "store": s.Name})
+	u.ids[id] = unlockHold{since: c.now(), For: p.For}
+	if p.For == "" {
+		c.logf("store %s unlocked (%s, standing)", s.Name, id)
+	} else {
+		c.logf("store %s unlocked (%s) for %s only", s.Name, id, p.For[:12])
+	}
+	return c.sign(map[string]any{"kind": "unlocked", "id": id, "store": s.Name, "for": p.For})
 }
 
 func (c *Core) Lock(id string) (SignedDoc, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	c.expireScoped()
 	for name, u := range c.unlocked {
 		if _, ok := u.ids[id]; ok {
 			delete(u.ids, id)
@@ -929,15 +957,17 @@ func (c *Core) Lock(id string) (SignedDoc, error) {
 func (c *Core) ListUnlocked(nonce string) (SignedDoc, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	c.expireScoped()
 	type row struct {
 		ID    string `json:"id"`
 		Store string `json:"store"`
 		Since string `json:"since"`
+		For   string `json:"for"` // "" = standing; else the one challenge or cert it is for
 	}
 	rows := []row{}
 	for name, u := range c.unlocked {
-		for id, t := range u.ids {
-			rows = append(rows, row{id, name, t.UTC().Format(time.RFC3339)})
+		for id, h := range u.ids {
+			rows = append(rows, row{id, name, h.since.UTC().Format(time.RFC3339), h.For})
 		}
 	}
 	sort.Slice(rows, func(i, j int) bool { return rows[i].Since < rows[j].Since })
@@ -947,21 +977,35 @@ func (c *Core) ListUnlocked(nonce string) (SignedDoc, error) {
 // ---- pull secrets ---------------------------------------------------------------------------------
 
 // PullSecrets: the answer is sealed to the machine's encryption key from the cert, so only that machine
-// can open it and nothing else needs to authenticate the caller
-func (c *Core) PullSecrets(certDoc *SignedDoc) (SignedDoc, error) {
+// can open it and nothing else needs to authenticate the caller. Each store comes from an unlock open to this cert
+// (a standing one, or one for this cert's nonce), else from the line's carried secrets (carry.go: the blob this
+// core sealed at the machine's or its predecessor's last pull, which the router keeps with the snapshot); neither
+// = 423. A pull that goes through locks the unlocks that were for this cert and answers a new carry blob for this
+// machine.
+func (c *Core) PullSecrets(certDoc *SignedDoc, carry string) (SignedDoc, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	c.expireScoped()
 	var cert Cert
 	if err := c.verifyOwn(certDoc, &cert); err != nil || cert.Kind != "succession-cert" || cert.Machine == nil {
 		return SignedDoc{}, fail(400, "not a succession cert this core signed")
 	}
+	carried := c.openCarryFor(carry, &cert) // nil when absent, not this line's, or not this core's
+	perStore := map[string]map[string]string{}
 	merged := map[string]string{}
+	fromCarry := []string{}
 	for _, n := range cert.Stores {
-		u, ok := c.unlocked[n]
+		vals, ok := c.openFor(n, cert.Nonce)
+		if !ok {
+			if vals, ok = carried[n]; ok {
+				fromCarry = append(fromCarry, n)
+			}
+		}
 		if !ok {
 			return SignedDoc{}, fail(423, "store %s is locked", n)
 		}
-		for k, v := range u.values {
+		perStore[n] = vals
+		for k, v := range vals {
 			merged[k] = v
 		}
 	}
@@ -970,8 +1014,13 @@ func (c *Core) PullSecrets(certDoc *SignedDoc) (SignedDoc, error) {
 	if err != nil {
 		return SignedDoc{}, err
 	}
-	c.logf("secrets pulled by %s (%v)", cert.Machine.ID, cert.Stores)
-	return c.sign(map[string]any{"kind": "secrets", "machine": cert.Machine.ID, "sealed": sealed})
+	next, err := c.sealCarry(&cert, perStore)
+	if err != nil {
+		return SignedDoc{}, err
+	}
+	released := c.releaseFor(cert.Nonce)
+	c.logf("secrets pulled by %s (%v; carried %v; locked again %v)", cert.Machine.ID, cert.Stores, fromCarry, released)
+	return c.sign(map[string]any{"kind": "secrets", "machine": cert.Machine.ID, "sealed": sealed, "carry": next})
 }
 
 func (c *Core) Log(nonce string) (SignedDoc, error) {

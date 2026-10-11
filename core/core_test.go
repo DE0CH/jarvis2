@@ -180,9 +180,16 @@ func setup(t *testing.T) (*Core, *fakeFly, *phone) {
 	return c, f, p
 }
 
+// unlock: a standing unlock (the Stores page): open to every session until locked
 func unlock(t *testing.T, c *Core, p *phone, store string) string {
 	t.Helper()
-	b, err := c.UnlockBegin(store)
+	return unlockFor(t, c, p, store, "")
+}
+
+// unlockFor: an unlock for the one challenge or cert with this nonce ("" = standing)
+func unlockFor(t *testing.T, c *Core, p *phone, store, forNonce string) string {
+	t.Helper()
+	b, err := c.UnlockBegin(store, forNonce)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -354,7 +361,10 @@ func TestWipeOnlyByTheCurrentMasterKey(t *testing.T) {
 	c, _, master := newCore(t)
 	exited := make(chan bool, 1)
 	c.exit = func() { exited <- true }
-	stmt := func(core string) string { b, _ := json.Marshal(map[string]string{"kind": "wipe", "core": core}); return string(b) }
+	stmt := func(core string) string {
+		b, _ := json.Marshal(map[string]string{"kind": "wipe", "core": core})
+		return string(b)
+	}
 	w := stmt(c.Key()["signingKey"])
 	if _, err := c.Wipe(w, master.sign(w)); err == nil {
 		t.Fatal("wiped an empty core")
@@ -409,13 +419,13 @@ func TestNewSessionUnlockAndPullSecrets(t *testing.T) {
 	if !m.inited {
 		t.Fatal("the machine wasn't inited through Fly")
 	}
-	if _, err := c.PullSecrets(&cert); err == nil {
+	if _, err := c.PullSecrets(&cert, ""); err == nil {
 		t.Fatal("pulled while locked")
 	}
 	unlock(t, c, p, "default")
 	unlock(t, c, p, "gmail")
 	unlock(t, c, p, "claude")
-	d, err := c.PullSecrets(&cert)
+	d, err := c.PullSecrets(&cert, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -435,7 +445,7 @@ func TestNewSessionUnlockAndPullSecrets(t *testing.T) {
 func TestAWrongPhoneShareDoesntUnlock(t *testing.T) {
 	c, _, _ := setup(t)
 	other := newPhone()
-	b, _ := c.UnlockBegin("default")
+	b, _ := c.UnlockBegin("default", "")
 	id, s := other.share(b)
 	if _, err := c.UnlockFinish(id, s); err == nil {
 		t.Fatal("another phone's share unlocked the store")
@@ -445,7 +455,7 @@ func TestAWrongPhoneShareDoesntUnlock(t *testing.T) {
 	blob := writeStore(t, c2, p2, "default", testValues["default"])
 	blob.Name = "gmail"
 	pl(t)(c2.WriteStore(blob))
-	b2, _ := c2.UnlockBegin("gmail")
+	b2, _ := c2.UnlockBegin("gmail", "")
 	id2, s2 := p2.share(b2)
 	if _, err := c2.UnlockFinish(id2, s2); err == nil {
 		t.Fatal("a renamed store blob unlocked")
@@ -654,7 +664,7 @@ func TestAddAStoreToARunningSession(t *testing.T) {
 	c2, _ := c.ApproveByPhone(&chd, p.sign(chd.Payload))
 	unlock(t, c, p, "default")
 	unlock(t, c, p, "gmail")
-	if _, err := c.PullSecrets(&c2); err != nil {
+	if _, err := c.PullSecrets(&c2, ""); err != nil {
 		t.Fatal(err)
 	}
 	// not zero, not two, not a swap, not a different harness
@@ -699,7 +709,7 @@ func TestSensitivityOnlyGrows(t *testing.T) {
 	if _, err := c.CreateStore(FlyStore); err == nil {
 		t.Fatal("created the Fly store")
 	}
-	if _, err := c.UnlockBegin("notes"); err == nil {
+	if _, err := c.UnlockBegin("notes", ""); err == nil {
 		t.Fatal("unlocked an empty store")
 	}
 	if w := pl(t)(c.WriteStore(writeStore(t, c, p, "notes", map[string]string{"N": "1"}))); w["sensitive"] != false {
@@ -764,7 +774,7 @@ func TestDowngradeInPlace(t *testing.T) {
 		t.Fatal(err)
 	}
 	// the new cert pulls only the subset, sealed to the new key
-	d := pl(t)(c.PullSecrets(&cert2))
+	d := pl(t)(c.PullSecrets(&cert2, ""))
 	var out struct{ Sealed Sealed }
 	b, _ := json.Marshal(d)
 	json.Unmarshal(b, &out)

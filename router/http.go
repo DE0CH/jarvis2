@@ -483,7 +483,13 @@ func (r *Router) buildHandlers() {
 			writeJSON(w, 404, map[string]string{"error": "no cert"})
 			return
 		}
-		d, err := r.core.Call("/pull-secrets", map[string]any{"cert": cert})
+		// carry.go: the line's carried secrets go with the pull; a pull that goes through answers the next blob
+		release := carryLock(machine)
+		d, err := r.core.Call("/pull-secrets", map[string]any{"cert": cert, "carry": r.carryForPull(machine, cert)})
+		if err == nil {
+			r.pulled(machine, cert, d)
+		}
+		release()
 		r.noteSecretsPull(machine, err) // the app says which locked store the machine waits on, and offers to unlock it
 		if err != nil {
 			writeErr(w, err)

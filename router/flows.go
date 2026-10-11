@@ -177,6 +177,9 @@ func (r *Router) startAndCertify(sid string, approval *Doc) {
 			x.Cert, x.MachineID, x.Image, x.State, x.Error, x.PausedAt = cert, m.ID, m.Image, "initialising", "", nil
 		}
 	})
+	if p := predOf(cert); p != "" {
+		r.forwardCarry(p, cert, m.ID) // carry.go: a resume carries the line's secrets, no store unlocked
+	}
 }
 
 func (r *Router) addApproval(a *Approval) {
@@ -282,6 +285,7 @@ func (r *Router) Respond(id, signature string) (*Doc, string, error) {
 				s.Cert, s.Stores = ans, c.Stores
 			}
 		})
+		r.forwardCarry(a.Machine, ans, a.Machine) // its carried stores go on; the added one comes from its unlock
 		return ans, a.Session, nil
 	}
 	go r.startAndCertify(a.Session, ans)
@@ -501,6 +505,7 @@ func (r *Router) finish(id string) {
 			if sid == id {
 				os.Remove(r.st.snapshotPath(m))
 				os.Remove(r.st.snapshotPath(m) + ".sig")
+				r.dropCarry(m) // the carried secrets go with the line (the core has burnt it too)
 			}
 		}
 		s.State, s.MachineID = "destroyed", ""
@@ -579,6 +584,7 @@ func (r *Router) DowngradeFinish(machine string, challenge *Doc, signature strin
 			s.Cert, s.Stores = cert, c.Stores
 		}
 	})
+	r.forwardCarry(machine, cert, machine) // the dropped stores leave the carried secrets at once
 	return cert, nil
 }
 
