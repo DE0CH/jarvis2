@@ -59,7 +59,7 @@ struct SchedulesView: View {
           }
         } else { ProgressView() }
       }
-      Section("New") {
+      Section {
         Picker("Kind", selection: $kind) { Text("Once").tag("wakeup"); Text("Repeating").tag("cron") }
           .pickerStyle(.segmented).accessibilityIdentifier("sch-kind")
         TextField("What the session gets at that time, as a message", text: $prompt, axis: .vertical)
@@ -81,7 +81,7 @@ struct SchedulesView: View {
         TextField(kind == "wakeup" ? "Name (default)" : "Name (daily)", text: $name)
           .textInputAutocapitalization(.never).autocorrectionDisabled().accessibilityIdentifier("sch-name")
         if let formError { ErrorRow(text: formError, id: "sch-err") }
-      } footer: { Text("Arming the same name again replaces it.") }
+      } header: { Text("New") } footer: { Text("Arming the same name again replaces it.") }
     }
     .navigationTitle("Schedules")
     .navigationBarTitleDisplayMode(.inline)

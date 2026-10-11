@@ -223,7 +223,7 @@ struct SetupView: View {
   private func wipe(with m: MasterKey) async throws {
     guard let old = core else { return }
     busy = "Restarting Jarvis 2…"
-    try await RouterClient.shared.wipe(try await withDevice(try CoreSetup.wipe(core: old, master: m)), core: old)
+    try await RouterClient.shared.wipe(try await withDevice(try CoreSetup.wipe(core: old, master: m, device: try PhoneKeys.shared.devicePublic())), core: old)
     let (k, st) = try await waitForEmptyCore(after: old)
     core = k; state = st; status = .empty
   }
@@ -253,7 +253,7 @@ struct SetupView: View {
       // a new pairing: fresh phone keys, bound to the faces enrolled now (.biometryCurrentSet)
       PhoneKeys.shared.renew()
       let phone = try PhoneKeys.shared.publicKeys()
-      _ = try await RouterClient.shared.claim(try await withDevice(try CoreSetup.claim(core: c, phone: phone, master: m, bundle: try CoreSetup.bundle(stores))), core: c)
+      _ = try await RouterClient.shared.claim(try await withDevice(try CoreSetup.claim(core: c, phone: phone, master: m, bundle: try CoreSetup.bundle(stores), device: try PhoneKeys.shared.devicePublic())), core: c)
       finish(c, master: m.publicKey, text: "Jarvis 2 is recovered.")
     } catch {
       busy = nil
@@ -280,7 +280,7 @@ struct SetupView: View {
       busy = "Setting up…"
       PhoneKeys.shared.renew()
       let phone = try PhoneKeys.shared.publicKeys()
-      _ = try await RouterClient.shared.claim(try await withDevice(try CoreSetup.claim(core: c, phone: phone, master: m, bundle: try CoreSetup.bundle([]))), core: c)
+      _ = try await RouterClient.shared.claim(try await withDevice(try CoreSetup.claim(core: c, phone: phone, master: m, bundle: try CoreSetup.bundle([]), device: try PhoneKeys.shared.devicePublic())), core: c)
       finish(c, master: m.publicKey, text: "Jarvis 2 is reset. Its stores start empty.")
     } catch { busy = nil; failure = plain(error, "Setting up didn't work. Your kit is still the one shown; try again.") }
   }

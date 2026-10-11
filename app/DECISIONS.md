@@ -1,334 +1,165 @@
-# Design decisions in the Jarvis 2 app (for Deyao to review)
+# Design decisions in the Jarvis 2 apps (for Deyao to review)
 
-Carried over from the mock (DE0CH/jarvis2-mock DECISIONS.md) unless marked new.
+Two codebases (Deyao, 2026-10-11): the **iPhone and iPad app** is one native SwiftUI app in `ios/` (Apple frameworks and
+our Swift only); the **web page** is the Expo app in `app/`, web only. Items 1–22 are about the iOS app, 23–29 the
+security fixes from the 2026-10-11 audit (`~/artifacts/away/audit/app.json`), 30–33 what was agreed with the R1 server
+fixes, 34–40 carried over from the old app and still true, 41–43 the web page.
 
-1. **New session is ONE page in the shell** (Deyao, 2026-10-10: "new session page should just be one page").
-   **+ New session** opens it directly: Session / One-shot, the prompt, the title, the **secret stores**, the
-   **harness**, repos (picking one picks its deploy-key store when that isn't sensitive), permission mode, model
-   (the harness's), auto-pause, API proxy and machine size, laid out like Jarvis 1's page (`SecureNewSession`).
-   **DE0CH/claude-env comes pre-selected** with its store `github-claude-env` when it is on the repo list (Deyao,
-   2026-10-11: "claude env should be selected by default"); a tap de-selects it, and nothing is pre-selected when it
-   isn't on the list (the walkthrough checks both). The
-   page opens filled: the shell fetches the core's store list and the router's lists (models, sizes, repos, harness
-   stores) at launch and after every secure page. **Start** asks the router for the session, waits for the core's
-   challenge (it comes before any machine exists, so in about a second), checks it carries exactly the stores picked
-   on that page plus the harness's own (policy), the harness and the permission mode picked there, then under **one
-   Face ID** signs it and unlocks every store in it that is locked and not empty, harness stores included
-   (`PhoneKeys.signAndShares`, one LAContext; the page says so above Start). The prompt, title and other options
-   travel unsigned, as before. The web keeps its own form (pending request, non-sensitive stores).
-2. **Sensitive stores:** the React Native form (and the web form) never lists them; normal mode may
-   pre-select non-sensitive stores only. A sensitive store is added only by a tap on the secure page, which
-   then shows an amber warning. Any approval whose challenge includes a sensitive store shows the warning
-   too (the core marks them in the signed challenge, so the router can't hide it).
-3. **One secure page per approval kind, opened from a "Waiting for you" section** at the top of the
-   Sessions tab (Review). The page reads the kind from the core-signed challenge's own fields, never from the
-   router's label: new session (no predecessor, an image), resume on the latest image (a predecessor, an
-   image), add a store (a machine and `addedStore`); anything else shows as a plain "Approve" with what is
-   signed. It shows stores (harness stores badged), harness, the image, and Approve / Reject. **The phone
-   refuses nothing it can show** (2026-10-09 redesign: the phone is the highest privilege); the only check
-   afterwards is that the core's answer (an `approval`, or a `succession-cert` for an added store) carries
-   this challenge's nonce.
-4. **Resume with latest image** is in the session's More menu (paused sessions); the router asks for the
-   approval first (nothing happens to the session until then; Reject leaves it paused) and the app opens the
-   approval page by itself.
-5. **Stores page in the shell** (Stores tab → "Unlock / lock…"): each store from the core's signed list
-   (sensitive, empty, unlocked) with Unlock (Face ID → the Enclave's share → sealed to the core's one-off
-   key; off for an empty store), the core's signed list of open unlocks (with my nonce) each with Lock,
-   "Mark sensitive…" with an inline confirm (one way), and **New store** (a name → `stores/create`: empty,
-   not sensitive; the setup session writes its values). Lock needs no Face ID. The React Native Stores tab and
-   the web page list the stores unverified, view only.
-6. **Reset or recover: one page in the shell** (Deyao, 2026-10-10: two paths, no one else involved). It opens by
-   itself at launch when this iPhone hasn't set a core up, or when the router reports a core other than the pinned
-   one (Back leaves it; the app can still view, nothing can be signed); also from Settings → "Reset or recover…".
-   It first checks the core: the box key's signature on its keys (`keys/box.pub` from GitHub), then the core's
-   signature on its state. **Reset** shows a new kit with Copy and "I've saved it", then claims the empty core with
-   no stores; **Recover** takes the kit, reads the backups through the router (`api/backups`), checks and opens them,
-   and claims the empty core with every store. A core that is set up asks first for the kit it was set up with and
-   wipes it (the page waits for the new, empty core). On the core's signed `claimed` the page pins the core's keys
-   and its own master public key and forgets the master key. Errors are one plain sentence, the technical part
-   behind "Details". Copy (`CoreSetup.swift`, `SetupPage.swift`): "Jarvis 2 is empty. Choose one:" / "Jarvis 2 is
-   set up on this iPhone." / "…set up with your recovery kit, for another iPhone." / "…set up with a different
-   recovery kit."; Reset "Start fresh with a new recovery kit. Everything starts empty."; Recover "Bring everything
-   back with the recovery kit in your password manager."
-7. **Phone keys:** two Secure Enclave P-256 keys (signing + key agreement), `.biometryAny`, Face ID on every
-   use; public keys made at first launch without Face ID. The **simulator** uses software keys (its Face ID
-   can't be driven from CI); the secure banner says which.
-8. **New: sign-in belongs to the shell.** ASWebAuthenticationSession on `/api/auth/start?redirect=jarvis2://auth`,
-   the token in the shell's Keychain, handed to the React Native UI over XPC with the router's address (one
-   source: the shell's Info.plist). A refusal (ended on cloudflareaccess.com, a non-JSON 401/403, or the
-   router's "Access login required") opens the sheet again and retries once. No sign-in screen on launch:
-   the first refused request opens the sheet.
-9. **Not in the React Native app yet** (the router doesn't have them, or they need a native module the extension
-   doesn't carry): content stores, devices and lease pills (forwarded to Jarvis 1, which doesn't take Jarvis 2
-   sessions yet — PLAN.md "Later"), first-prompt attachments (a file picker; the router has `POST /api/uploads`).
-   Everything else Jarvis 1's dashboard has is back (items 23–38).
-10. **The image** shows as the ref the core read from Fly (on approval pages); the GitHub build attestation
-    ("CI build from <date>") isn't checked yet.
-11. **iPhone only** (`TARGETED_DEVICE_FAMILY = 1`), portrait + landscape.
-12. **The web page** can view everything, request a new session (non-sensitive stores; harness on the form),
-    reject approvals, pause/resume/destroy; approvals happen only in the app.
-13. **TestFlight from GitHub Actions** (not Xcode Cloud): the archive is built unsigned and the export signs
-    it with Apple's cloud-managed distribution certificate (App Store Connect API key in repo secrets) —
-    signing at archive time would mint a development certificate per runner, and the team is at its limit.
-    Build number = the workflow's run number; internal group "Owner" (all builds). App record "Jarvis 2"
-    (6820459076); icon = the Jarvis ring with a "2" at its centre (`app/scripts/make-icon.py`). `workflow_dispatch` with `only=testflight` ships without
-    rerunning the walkthrough.
-15. **React Native's frameworks sit in the app's `Frameworks/`**, not inside the extension (App Store
-    validation refuses an extension that carries its own); the extension loads them via its rpath. The shell
-    binary links none of them.
-14. **CI walkthrough** runs twice (light, dark), each against a fresh, empty core + router and a reset simulator
-    keychain: Reset or recover (an old kit refused, then Recover with the public TEST kit, the backups through the
-    router from the S3 stand-in) → stores (create, unlock; the core's own and the harness's stores hidden, a
-    marker-sensitive store sensitive) → new session (the one secure page; Start also opens the locked harness store,
-    read back from the core) → grants (chosen on the Grants page; a 10-minute grant and a standing rule allowed on the
-    review page, one denied, one forgotten) → schedules (a wakeup, a cron) → terminal → pause → transcript → resume with a prompt
-    → resume with the latest image → destroy → previous (remove) → search → settings → Reset (the TEST kit wipes the
-    core, which CI runs in a restart loop as Kubernetes would; a new kit shown, saved, claimed; the stores empty).
-    After each switch to or from a secure page it fails when the screen stays blank for over 1.5 s. transitions.yml
-    records every switch on video (item 42).
+## The native app
 
-16. **The recovery kit format** (what Deyao keeps in the password manager, ONE entry): `jarvis2-kit:2:<master
-    key>`, the base64 PKCS#8 DER of the P-256 private key (the body of a PEM "PRIVATE KEY" block, so `openssl pkey`
-    reads it). Whitespace and line breaks in a paste are ignored; a `jarvis2-kit:1:` kit is refused with a plain
-    sentence. The master key is made in software (it must go into the kit, so not the Enclave) and exists only in the
-    setup page's memory and in the kit. A pasted kit is wiped on success, on leaving the page, and 10 minutes after
-    it was pasted.
-17. **The earlier master key page, held key and kit page are gone**; the app deletes the held key an earlier build
-    kept in the Keychain at launch.
-18. **New: what the shell trusts comes from GitHub, not the router**: `keys/box.pub` (the core's identity) and
-    `keys/setup.pub` (the backups' signatures) are fetched from
-    `https://raw.githubusercontent.com/DE0CH/jarvis2/main/keys/` when needed (no cache). The backups come through
-    the router, which can't read or change them (sealed to the master key, signed by the setup key). Only a CI build
-    can point the key source elsewhere: the code that reads the overrides is compiled only with `JARVIS_CI` (`JARVIS_CI_FLAG`, set on
-    the simulator job's xcodebuild line), and the TestFlight job fails if the archive's Info.plist carries
-    any override. Any build may name another git ref of the same repo (`JarvisKeysRef`, a branch name, never a URL):
-    the phone replica's Release build reads its throwaway box's keys from a rehearsal branch; the TestFlight job
-    fails if the archive names one (Claude, 2026-10-10, for the replica to be the Release build).
-19. **New: the S3 stand-in in CI is `rclone serve s3`** (MinIO's downloads are gone, HTTP 410; moto doesn't
-    check signatures) — it checks SigV4, so a wrong secret fails as on Hetzner. `ios/ci/standin.py` seeds it
-    by calling infra/setup.py's own `backup` / `mark_sensitive_backup` with a per-run setup key and the public
-    TEST master key, and the router on the runner reads it; extra buckets hold a backup signed by another key (must
-    be refused) and one without the core store (accepted: the token comes later). The keys are served by a local
-    `http.server`.
-20. **New: harness stores are hidden** (GET `api/policy`): not offered in any picker, left out of the
-    session/record/approval summaries; the secure approval page still lists them (badged "Harness") since
-    they are part of what is signed. The `core` store never shows (the core keeps it out of its list).
-21. **The `core` store may be missing from the backups**: a Recover goes on, and the setup session sends the core
-    its Fly token (`infra/setup.py backup-core`).
-22. **Backups are refused whole** when any object under `stores/` or `sensitive/` isn't signed by the setup
-    key, names another store, comes twice, or doesn't open with the master key: a tampered bucket stops the Recover rather
-    than quietly dropping a store.
+1. **One SwiftUI app, no React Native, ExtensionKit, XPC or snapshot covers** (Deyao, 2026-10-11). The old app split a
+   trusted Swift shell from an untrusted React Native extension in its own process; now the whole app is trusted code, so
+   the "secure pages" are ordinary sheets of the app. What made them secure stays: what the phone signs is rendered from
+   the signed content, every signature takes Face ID, the keys stay in the Secure Enclave and the Keychain (same Keychain
+   service `dev.de0ch.jarvis2.shell`, so an installed app keeps its keys and pinned core across the update).
+2. **No third-party Swift packages.** None was needed: QR codes come from CoreImage, the terminal from WebKit, crypto from
+   CryptoKit. Two community agent skills guide the code (`.claude/skills/swiftui-pro`, `swift-concurrency-pro`, Paul
+   Hudson, MIT).
+3. **iOS 26.0 minimum**, built with the newest Xcode on GitHub's runners; the CI simulator is Xcode 27.0 / iOS 27.0 on an
+   iPhone 17 (iPhone18,3), the shared `.github/actions/ios-simulator`. iOS 27-only APIs are not used.
+4. **Swift 5 language mode with targeted concurrency checking** (models `@MainActor`, Secure Enclave work off the main
+   actor). Swift 6 strict mode would surface data-race errors that only CI can show (no Mac here); the code is written to
+   pass it later.
+5. **Navigation**: a `TabView` with `.sidebarAdaptable` (tab bar on iPhone, sidebar on iPad): Sessions, Inbox (badge),
+   Tasks, Settings, and the system Search tab. Four tabs plus Search keeps the iPhone free of a "More" tab: Previous sits
+   in Sessions' toolbar; Stores, Repos and Machines under Settings; task schedules inside Tasks.
+6. **Sessions is a `NavigationSplitView`**: grouped list (Running / Scheduled / Paused / Failed) beside the selected
+   session's page on iPad, a stack on iPhone. Rows have swipe actions (Pause / Resume, Destroy) and a context menu with the
+   old More menu; the page has every action as a list row, plus Terminal (or Remote) in the toolbar.
+7. **Questions are alerts** (Destroy? Resume with a prompt? Delete permanently with the title typed), errors from a user's
+   action are one alert, and a short note ("Session id copied") appears at the bottom for three seconds. Pull to refresh
+   on every list (Apple's pattern; Jarvis 1's dashboard rules don't apply to this app).
+8. **The Face ID reviews are sheets** (`Review/`): New session, an approval, a grant, an unlock, a repo key. Cancel (or
+   Deny) in the top-left, the action (Start, Approve, Allow, Add) in the top-right, a swipe down is a Cancel; a sheet that is
+   working can't be swiped away. Each page ends with which key signs (Secure Enclave with Face ID, or the simulator's
+   software key).
+9. **Reset or recover is a full-screen cover** at first launch and after the router reports another core, and from
+   Settings. Close leaves it (the app can still view, nothing can be signed).
+10. **The terminal is the router's page** (`GET /term/{id}`, `router/web/terminal.html`) in a `WKWebView` (Deyao: "just
+    open a web page"): WebKit's content runs in its own process, so the app carries no terminal code. The page is loaded
+    with the app's Access login: the `cf-access-token` header on the first load, the `CF_Authorization` cookie for the
+    router's host and a fetch wrapper that adds the header, all in a non-persistent data store. `WKWebView` rather than
+    SwiftUI's own `WebView`, which has no script message handler: the page asks the app for a grant (`jarvis2` handler,
+    `grant`) and for a fresh login (`signin`); the app opens its Face ID review and calls `window.jarvis2Refresh()`.
+11. **Sign-in**: `ASWebAuthenticationSession` on `/api/auth/start`, the token in the Keychain, sent as `cf-access-token`.
+    A refused request opens the sheet again and retries once; a cancelled sign-in shows one "Signed out" screen.
+12. **The router's shapes are read through a lenient JSON value** (`Model/JSON.swift`), so a new or differently typed
+    field never empties a list. Nothing signed is read that way: signed documents are decoded and checked by
+    `Security/CoreCrypto.swift`.
+13. **Nothing is optimistic**: an action keeps its pending label until the router reports the outcome; one action per
+    session (or record, task) at a time; reads of the router's state are coalesced (a call while one runs gets one
+    follow-up). 15 s polling, 2 s while a session is moving, and at once when the app comes to the foreground.
+14. **New session is one page** (Deyao, 2026-10-10): kind (session / one-shot), prompt, title, stores, harness, repos,
+    permission mode, model, size, auto-pause, API proxy. `default` is pre-picked when it isn't sensitive; DE0CH/claude-env
+    and its store are pre-picked when the repo is on the list (Deyao, 2026-10-11), never a sensitive store. Start makes the
+    session, waits for the core's challenge, checks it (items 24, 31) and signs it under one Face ID that also unlocks the
+    session's locked stores for that session only.
+15. **Stores are managed in the Stores page itself** (Settings → Stores): unlock (Face ID), lock, mark sensitive (a
+    confirmation, one way), new empty store, the core's signed list of open unlocks, and each store's key names (from the
+    router; never values).
+16. **Repos**: Settings → Repos lists each repo with its store and key fingerprint, "No key" with Make key after a Recover,
+    and Remove; Add repo is a searchable list of the repos the router's GitHub token sees plus a field for owner/name or a
+    URL. A core refusal (e.g. the coming 409 "store github-x belongs to owner/repo" when another repo owns the store name)
+    shows on the review page in the core's own words.
+17. **Search** is the system search tab with two scopes (Conversations, iCloud files) and a filter menu (kind, time, by
+    session); a hit opens the conversation around it or the file's indexed text.
+18. **Tasks** keeps Jarvis 1's model (instances, templates, daily schedules) in one tab; a new task's approval opens by
+    itself.
+19. **iPhone and iPad** (`TARGETED_DEVICE_FAMILY 1,2`), every orientation on iPad.
+20. **Version 2.0**, build number = the `ios` workflow's run number + 1000 (above the old app's builds).
+21. **TestFlight from GitHub Actions** (`ios.yml`), archived unsigned and cloud-signed at export with the App Store Connect
+    API key (lessons/75), bundle id `dev.de0ch.jarvis2`, the job in the `release` environment (main only). It ships only
+    when a phone replica passed on the same `ios/` and `policy/`, and checks the archive carries no CI key source, no
+    other keys ref, and the pinned policy is git's.
+22. **Tests**: the walkthrough (`UITests/Jarvis2UITests.swift`, light and dark against the real core and router on the
+    runner), the transitions run (`TransitionsUITests`: every tab, push, pop, edge swipe, sheet, background and relaunch,
+    recorded; a blank screen over 1.5 s or a near-uniform screenshot fails it), the phone replica (`ReplicaUITests`, the
+    Release build against a real box with Face ID driven by the runner) and the crypto interop test against the real core.
+    The old Back-stress test (an extension killed or slow) has nothing left to test and is gone.
 
-23. **Grants: chosen in the app, reviewed on a shell page** (Deyao, 2026-10-10: the grant page is a safety review
-    stop). There is no generic "sign this text" call: the React Native UI builds the whole request — the Grants
-    page's chooser (feature; 1/2/5/10 minutes or a standing rule until 7/30/90/365 days), or a one-tap button where a
-    feature was turned away (the terminal page's banner, a card's box: 10 minutes, or a rule for 30 days) — and opens
-    the secure **grant page** (kind `grant`: session, feature, minutes or `until`). The page has nothing to change:
-    it reads the session's **core-signed cert** (`GET api/sessions/:id/cert`, checked against the pinned core key)
-    for the line, the stores, whether the session is sensitive and which phone it trusts, refuses a standing rule
-    for a sensitive session (the machine would) or an unknown feature, and shows one sentence of what it means ("Terminal may run commands as the session's user in “X” for 10 minutes (until
-    14:32)") with **Allow** and **Deny**. Allow asks the router for the draft, checks it field for field against those choices
-    (`Checks.reviewGrant`: kind, the holder's key, the cert's line, scope `shell`, issued now, exactly the minutes
-    or the end date, no extra fields, and that the cert names this phone), signs it with the same Secure Enclave
-    key as approvals (one Face ID, whose prompt says the same sentence) and stores it (`POST …/grants`); the
-    stored grant must come back for that feature and kind. Interop covers the cert and the checks against the
-    real core.
-24. **New: the feature→key list (`GET api/holders`) is the router's word.** Every holder key belongs to the
-    router, so a router that lied about which key is "terminal" could only hand a grant to another of its own
-    features; the line (from the core's cert) and the duration are what bind the grant, and those are checked.
-25. **New: the session's card** carries what `/api/state` reports: Jarvis 1's status pill (working / needs you /
-    idle · N background / booting / done · archiving), the auto-pause line (countdown, off, one-shot), Claude's
-    failed login, the queued resume prompt, wakeups and crons (a blue box; a paused session with any is in
-    the "Scheduled" group), a `needsGrant` box with **Allow <feature> for 10 minutes** and **Make a standing rule**
-    (both open the grant page), and a link to its Discord channel. More: Grants…, Schedules…, Auto-pause when
-    idle and Idle notifications (two-phase switches with a check mark), Resume with latest image, Destroy.
-26. **New: Resume asks for an optional prompt** in the same dialog (delivered as a message once the session is
-    up); **Destroy** first lists uncommitted / unpushed work (`/changes`), and when the archive fails offers
-    "Destroy anyway" (`?force=1`). A paused session has **Transcript** (its snapshot's tail).
-27. **New: the terminal draws the tmux capture as React Native text** (ui/ansi.ts parses the colour escapes; the
-    cursor cell is inverted) instead of Jarvis 1's xterm.js in a WebView: the extension carries no WebView, and
-    the router only sends snapshots anyway. Same page otherwise (always dark, key row, input bar on the keyboard,
-    one snapshot a second, resize to fit). When the phone hasn't granted the terminal it says so and offers
-    "Allow terminal for 10 minutes". It is offered while initialising too.
-28. **New: Schedules page per session** (More → Schedules…): the armed wakeups and crons with Cancel, and a form
-    to arm one (once in N minutes, or daily at HH:MM in the device's zone / every N hours), plus a shortcut to a
-    standing rule for the scheduler. Jarvis 1 only listed them; the router has the app routes, so the page can.
-29. **New: "Records" is called Previous again** (Jarvis 1's name). Each card: Restore (a new line; the phone
-    approves it like a new session, and the approval opens by itself), Transcript (the archive's tail), Remove
-    (off the list, the archive stays) and Delete (the archive too; type the title).
-30. **New: Fly spend** in Settings (spent / cap, rate, running machines, the DM and pause thresholds) and as a
-    banner when warned or capped; "Also on Fly" under the sessions as in Jarvis 1. Banners also for a Claude
-    login that failed in a session and a Fly read error.
-31. **New: Settings → Claude account** is a link to Jarvis 1 (re-login, usage and the token live there).
-    New session has One-shot (needs a prompt) and the auto-pause switch, carried through the secure page; the
-    approval page shows one-shot and a restore's source (the router's word, not signed).
+## The audit's app findings (2026-10-11) and their fixes
 
-32. **New: Repos** (in Settings since item 41; the list, the GitHub picker over the router's read-only token) and
-    **Repos** + **API proxy** in New session (carried through the secure page; repos go as the comma-joined URLs
-    the machine clones over SSH with each repo's deploy key from its store). Nothing is pre-picked.
-33. **New: Remote page** for OpenCode / OpenClaw sessions (their primary action instead of Terminal): the web UI
-    link, the Paseo pairing link + QR. The router reads them in the machine as the `remote` feature, so a 403
-    offers "Allow the remote page for 10 minutes". **Usage** (the Claude quota, read through Jarvis 1) is a
-    Settings card. Cards show the router's own lock (`busy`, `wake`) as the action label on every device.
+23. **Resume-with-a-change wasn't bound to a session (finding 1)**, **approval and unlock pages named the session from the
+    router (finding 5)**: every approval page now reads the session from the challenge's predecessor, a core-signed cert
+    checked against the pinned core key (`Checks.continues`): its signed title and first prompt (from a core that vouches),
+    its line and machine, when it was issued, whether it holds a sensitive store. The challenge's line and predecessor id
+    must be that cert's; an add-store's machine must be the predecessor's. "What you sign" names that session
+    (`SignedAction.approval(of:)`). A resume or add-store with no predecessor is refused. The router's label shows only as
+    "Listed by the router as … (unverified)".
+24. **New session signed any extra store the router called a harness store (finding 2)**: the stores each harness brings
+    are pinned in the app from git (`policy/stores.json` bundled; `PinnedPolicy`), and Start refuses a challenge with a
+    store that wasn't picked and isn't the harness's by that list, or a harness store that is sensitive
+    (`Checks.onlyHarnessExtras`). The harness's stores are listed on the page with their sensitivity. A CI build also takes
+    the router's test policy.
+25. **Grant and unlock pages took the session→cert mapping from the router (findings 3, 4)**: they show the session from
+    its core-signed cert (title, first prompt, line, machine, sensitive warning in red), the signed text names it, and the
+    page refuses when the cert's signed title differs from the session's title in the app's list.
+26. **Line pins (findings 3–5)**: the app remembers which line each session id is the first time it verifies a cert for it
+    (opening a session's page, a grant, an unlock, an approval) and refuses any later cert or predecessor that names another
+    line for that id (`LinePins`). A session's line never changes (a resume keeps it; a restore is a new session); a Reset or
+    Recover clears the pins. The first sighting is still the router's word.
+27. **Untitled sessions and the held core**: a cert from the production core held today carries no signed settings, so the
+    pages can't show a signed title; they say so in orange and show the line, machine, issue time and stores instead, and
+    don't refuse (refusing would stop every grant and approval until the core is released). Full binding comes with the
+    core release.
+28. **Face ID binding (finding 6)**: the phone's Secure Enclave keys are made with `.biometryCurrentSet`, so enrolling
+    another face or an alternate appearance (which needs only the passcode) makes them unusable. Trade-off: after any change
+    to Face ID's enrolled faces Deyao pairs the phone again with Recover (his kit; running sessions end, paused ones are
+    archived). To make that clean, every Reset and Recover now makes fresh phone keys before the claim; an installed phone
+    keeps its older `.biometryAny` keys until its next Reset or Recover. A key the Enclave refuses shows one message saying
+    so.
+29. **Silent re-pin and the box key (finding 7)**: the app never pins a core except at the end of a Reset or Recover; a core
+    that claims "set up on this iPhone" but isn't the pinned one asks for a Recover. Not fixed in the app: binding the core
+    to something the box can't forge (an image attestation of the core, or a box key the cluster can't mount) needs a core
+    change, which is held; see STATUS.
 
-34. **New: the permission mode is signed** (core Options carry `permissionMode`; Deyao: only raising to bypass
-    needs the phone). The secure New session page picks it for real (pre-filled from the form) and checks the
-    challenge carries it; every approval page reads it from the signed challenge, never the router's fields, and
-    shows "Permission mode: bypass" highlighted (amber) or "auto". A resume in another mode than the line's cert
-    comes as a `resume-upgrade` approval (titled "Approve resume"), and the app's Resume opens it by itself.
-    More → Switch to bypass / auto mode: a paused session switches at its next resume; raising a running one to
-    bypass needs a fresh phone grant for the terminal, so the router's 403 `{needsGrant, phoneGrant}` opens the
-    grant page and the switch runs again once it is signed.
+## Agreed with the R1 server fixes (2026-10-11)
 
-35. **New: Tasks and Schedules tabs** (Jarvis 1's, on the router's `/api/tasks`). A task is its own session line on
-    harness `task:<template>`: **Make task** (name + the template's fields) creates it and the line's
-    `new-session` approval ("Task: <name>") opens by itself in the app — the secure page names the harness "Task
-    script “<template>”". Runs then need no phone: Run, the run list (queued → starting → running → result),
-    a run's output and log, Stop. **Run on latest image** is the task's resume-upgrade (the phone approves the
-    newer image, opened by itself); **New line…** asks the phone again when a task's line is gone or failed.
-    A store field (`optionsFrom: "stores"`) is filled from the core's store list (sensitive ones marked); sizes and
-    models from the router's lists; store fields can't change after creation (the router refuses, the form says
-    so). Daily schedules (HH:MM + time zone, on/off on the card). Task lines are left out of the Sessions list.
+30. **Device key countersignature**: the app has a long-lived Secure Enclave "device" key (made once per install, kept
+    across Reset/Recover, `.userPresence`). Claim and wipe statements carry it as `device` inside the master-signed text,
+    and the request bodies carry `deviceKey` and `deviceSig` (its signature over the statement). `infra/setup.py` trusts a
+    new master only from the device it pinned.
+31. **Store writers**: an unlock's (and a deploy key's token store's) blob must be written by the core or by the setup
+    session (the setup key's signature over `jarvis2-store-blob\n<store>\n<E>\n<sha256>`), else the phone computes no
+    share. Enforced when the core's signed store list says `writers: true`; an earlier core is let through.
+32. **Image attestation**: CI signs each session image with a key whose public half is `keys/ci.pub`; the router passes
+    `imageSig` with every approval. Until `keys/ci.pub` exists in git the approval page says "not attested yet"; after, an
+    unattested image is refused (New session and approvals). This replaces the unbuilt GitHub-attestation check.
+33. **TestFlight secrets** live in the GitHub environment `release`, which only main can use.
 
-36. **New: Search tab** (Jarvis 1's, second in the tab list): **Conversations** — every conversation of both Jarvises
-    (Jarvis 1's search, forwarded by the router), the same filters (Chat / Actions / Records, time range, By session) and
-    a hit opens the conversation around it, with **Resume** when the hit is a paused Jarvis 2 session (its live copy is
-    filed under the session's id) or **Restore** when its archive is on the Previous list; **iCloud files** — Jarvis 1's
-    iCloud index: name, folder, kind, size, the matching passage; a file opens what the index read from it, with the
-    path's Copy button. Jarvis 1 had no iCloud screen (only its API); this one is new. Jarvis 1's search box on the
-    Sessions and Previous tabs (filtering cards by transcript) isn't ported.
-37. **New: copy buttons through the shell.** The extension carries no clipboard module (a pod wouldn't embed into
-    the ExtensionKit target, lessons/73), so React Native asks the shell over XPC (`ShellBridge.copyText` →
-    `HostService.copyText`), which writes `UIPasteboard` in the foreground app (plain text, ≤ 64 KB; the recovery kit
-    keeps its own local-only, expiring copy). The web page uses the browser's clipboard. Copy appears on the Remote page
-    (web UI link, pairing link — now in the app too), a session's More menu (its id) and an iCloud file's path; a toast
-    says what was copied.
-38. **New: the Claude app's title names the session** (`serverTitle`, read by the machine): cards, Discord channels and
-    archive folders follow a rename in the Claude app, as in Jarvis 1. **Previous** hides Restore for an archive indexed
-    by hand (`POST api/records`: no signed snapshot) and says why.
+## Carried over (still true)
 
-39. **Settings has one entry for this**: "Jarvis 2" (running or not) with "Reset or recover…"; the core's keys
-    are no longer shown.
+34. **Sensitive stores** are never pre-selected; picking one shows an amber warning; any approval whose signed challenge
+    marks one says so.
+35. **The recovery kit** is one string, `jarvis2-kit:2:<master key>` (base64 PKCS#8 DER of the P-256 private key);
+    whitespace ignored; a version-1 kit is refused in plain words. The master key exists only in the setup page's memory
+    and in the kit; a pasted kit is forgotten on leaving the page and 10 minutes after pasting; Copy is local-only and
+    expires after two minutes.
+36. **What the app trusts besides the router comes from git**: `keys/box.pub`, `keys/setup.pub` (and `keys/ci.pub`),
+    fetched from GitHub with no cache; only a CI build can point elsewhere (`JARVIS_CI`), and the phone replica's Release
+    build may name another git ref of the same repo (`JarvisKeysRef`).
+37. **Backups are refused whole** when any object isn't signed by the setup key, names another store, comes twice or
+    doesn't open with the master key. The `core` store may be missing (the setup session sends the core its Fly token).
+38. **Grants are chosen in the app, reviewed on the Face ID page**: feature, 1–10 minutes or a standing rule until a date;
+    the router's draft is checked field for field (`Checks.reviewGrant`) before signing; a standing rule is refused for a
+    sensitive session. The feature→key list (`api/holders`) is the router's word (every holder key is the router's).
+39. **The Inbox** lists every request filed by a session, the web page or the setup session and every approval; its
+    review page shows the three fields (what you sign, rendered from the signed content; the call the router recorded;
+    the caller's reason, unverified) above the page's own content, and Deny.
+40. **The permission mode is signed**; a resume in another mode, with a prompt or a rollback is an approval the app
+    opens by itself.
 
-40. **Jarvis 1's look, exactly (Deyao, 2026-10-10: "Keep them the same as jarvis 1, like font size etc").** Two
-    causes. (a) In the extension React Native has no `UIApplication`, so its font-size multiplier came out 0 and
-    every text run fell back to iOS's 12 pt default: the whole app was one small size. `src/ui/rntext.native.tsx`
-    gives every kit text run `dynamicTypeRamp="body"` (its multiplier from `UIFontMetrics`, which works in an
-    extension: exactly 1.0 at the default text size, and it still follows the iPhone's text size like Jarvis 1)
-    and text fields `allowFontScaling={false}` (the kit's fields are a fixed 16 pt anyway); the web keeps React
-    Native's own components. (b) The shell's SwiftUI pages approximated the kit. `Shell/Kit.swift` now ports
-    `src/ui/kit.tsx` + `theme/tokens.ts` value for value: the type ramp (size, line height with the glyphs centred
-    in the line box, letter spacing, weight), Heading, P, Muted, Lbl (alpha gray, upper-case tracking), Button
-    sizes 1–3 in every variant with the pressed fill, Card, TextField/TextArea (surface, gray border → focus
-    colour), Callout, Badge, ChoiceCard/ChoiceText, Segmented and a CodeBox; `SecureFrame` follows `page.tsx`'s top
-    bar and column. Store rows on the shell's pages are kit Cards. The page is drawn as one layer
-    (`compositingGroup`), so the push motion's shadow no longer lands on every text run as a halo.
+## The web page (app/)
 
-41. **New: Settings → Repos, each repo with its own deploy key** (Deyao, 2026-10-10; docs/DESIGN.md "Deploy keys").
-    The Repos tab is gone; its card sits in Settings after Usage. **Add repo** (the GitHub picker, or "owner/name" /
-    a GitHub URL typed; Return submits) opens the shell's secure page **Add repo** (kind `repo-key`): it asks the core
-    for the request at once and shows what the core signed — the repo, "what happens" in one paragraph, the store as a
-    store line (Sensitive badge), "replaces" in amber when the store exists, a **Sensitive store** check (on and
-    fixed when the core says so: Jarvis 2's own repo, or a store sensitive already; ticking it asks the core again),
-    and that Face ID opens `github-deploy-keys` for this one request. **Add** checks the request (this action, this
-    repo, its store and title, the one token store), then ONE Face ID signs the request and computes the share
-    (`PhoneKeys.signAndShare`, one LAContext), and the core's answer must be for this request (`Checks.deployKeyAnswer`).
-    Each listed repo shows its store and key fingerprint, **No key** (amber) when the core's store list lacks its store
-    (after a Recover) with **Make key**, and **Remove** (the same page, "Remove repo"). The web page lists the repos
-    only. New session pre-selects a picked repo's store when it isn't sensitive and says which to tick on the secure
-    page otherwise. The walkthrough adds `DE0CH/china-train` against the CI core's fake GitHub, sees `DE0CH/jarvis2`
-    come up sensitive, and removes the first; interop covers the checks and the refusals against the real core and
-    router.
-
-42. **Switching between the app and the secure pages looks native** (Deyao, TestFlight build 57: "some animations
-    are broken, like the ones that exit secure mode"; "many blank screens now and then, like after creating a
-    session"). Recorded frame by frame on the simulator (`.github/workflows/transitions.yml`: `TransitionsUITests`
-    under `simctl io recordVideo`, light and dark; `ios/ci/transition-frames.py` cuts the video into a sheet per
-    switch). What was wrong, and the fix (`Shell` in `Jarvis2App.swift`):
-    - **Every exit had no motion**: SwiftUI drew the re-inserted extension (and its cover picture) above the
-      leaving page, so the page vanished in one frame. Now one explicit `progress` (0 = app, 1 = page) drives the
-      page's offset, the app sliding back a third and its dim; no `if/else` transitions.
-    - **Create**: the page left to the leading edge while the picture under it moved right, the button flipped
-      back to "Opening…", then React Native slid its form off again (a double motion, with a frame of the old
-      screen). A finished action now tells React Native first, with the extension re-added under the page;
-      React Native answers once it has drawn the result (`secureSettled`, new on `HostService`), and the page
-      pops over the live app (item 44: what the shell waits for). Every exit is a pop to the right.
-    - **Entering** showed ~70 ms of blank screen (the full-size picture decoded on its first draw) and the push
-      then jumped to its end: the picture is decoded beforehand (`preparingForDisplay`) and the extension's view
-      goes 50 ms later, once the picture is on screen.
-    - **Done at first launch** (Reset or recover) showed a blank screen for seconds while the bundle started: the
-      page stays (its button busy) until React Native has drawn real content (`markAppReady` in the root layout:
-      the list with its first state, its error, or sign-in), at most 15 s.
-    - `secureFinished` was sent 0.5 s after leaving on whatever connection the shell held, often the removed
-      extension's dead one (a form could stay "Opening…"): it now goes right after the new connection's hello, and
-      events that arrive before JavaScript listens wait in `ShellBridge`.
-    The page's own data comes from the lists fetched ahead (no spinner then a jump). Security is unchanged: the
-    extension's view is never in the window while a page takes input; it is re-added only once the shell has
-    decided to leave, under the opaque page, taking no taps. The walkthrough fails when a switch leaves the
-    screen blank for over 1.5 s (`arrives`). Evidence: `~/artifacts/away/animations/` of the session.
-
-43. **A session waiting on a locked store says so.** The router notes the core's 423 on a machine's secrets pull
-    (`session.lockedStore`, cleared by the next pull that goes through); the card and the terminal page say
-    "Waiting for store X to be unlocked." with **Unlock…**, which opens the shell's unlock review (kind `unlock`:
-    the session's stores from its core-signed cert, the locked ones from the core's signed list; Allow unlocks
-    them all under one Face ID, Deny leaves). The machine retries the pull every 2 s (was 4 s, logged every
-    minute), so it carries on within seconds. One Start already unlocks the stores a new session gets (item 1);
-    the walkthrough checks the harness store `claude-login`, locked before, is open after Start.
-
-44. **Back never ends on a blank screen** (Deyao, TestFlight build 77: "Tapping back from secure still sometimes get
-    me the blank screen"). Causes found (`UITests/BackStress.swift`, run by transitions.yml and the replica):
-    - **iOS ends the extension's process while its view is away** (a secure page up, or the app in the background:
-      an extension with no view on screen is first in line under memory pressure). Back re-added the view, React
-      Native started cold (bundle, sign-in state, the first `api/state`), and the shell took its picture away after a
-      fixed 2 s: a blank screen until React Native drew, seconds on a phone. And nothing noticed an extension that
-      ended while the app itself was on screen: blank until the app was killed (ExtensionKit doesn't relaunch it).
-      Before the fix the stress run (build 77's shell) went blank on every page after Back with the extension
-      killed, killed in the background, or slow (5 s stopped); loops, Back during the entry, double taps, the
-      background alone and memory warnings passed. After it every case passes with no blank frame.
-    - The reveal trusted a JavaScript `requestAnimationFrame`, not the new scene's window having drawn; a late
-      `secureSettled` from an earlier exit could end a later wait; a Back in the page's first 50 ms left the
-      extension's view removed for good; a picture taken of an extension that hadn't drawn yet popped over blank.
-    Fix (`Shell` in `Jarvis2App.swift`, `HostLink` in the extension): the extension answers `whenDrawn` (new on
-    `ExtensionService`) once React Native said it has real content (`markAppReady` → `appReady`) AND its root view
-    is in an on-screen scene's window, three frames on; the picture (or the page) stays until that answer for the
-    current mount. The shell checks the extension is alive while it waits (`hello` answers from the XPC queue even
-    while React Native starts; none in 2 s = gone or hung) and relaunches it in place (a new EXHostViewController,
-    `Shell.mount`, 0.8 s after the loss: a host made in the same instant never connects) on a dead or broken connection (invalidation, interruption, a deactivation with an error, no
-    answer after the app comes back), covering the app with its last picture meanwhile (one is kept from when the
-    app last drew, entered a page or went to the background); at most 4 relaunches a
-    minute, and a last-resort 20 s cap (logged) for an extension that answers but never draws. `secureSettled` must
-    name its exit; every scheduled step carries the transition it belongs to; pictures are taken only of a drawn
-    extension (otherwise Back keeps the page up until the app has drawn). After a relaunch the app starts at its
-    first screen (React Native's navigation state died with the process).
-    **New: the edge swipe** on a secure page (16 pt at the leading edge): the page follows the finger over the
-    picture and leaves as Back does past half way or on a flick; not while the page is busy or Back goes to another
-    step (Reset or recover's sub-steps), and not without a picture under it.
-45. **New: the Inbox tab** (Deyao, 2026-10-11: "a notification tab of stuff waiting for my approval"), second in the tab
-    list, with a red count on the tab (and in the wide sidebar) — no push, no Discord. It lists every request filed
-    by a session, the web page or Claude's setup session and every approval the router holds (docs/DESIGN.md
-    "Requests"). Each card: the action as the title (rendered here from kind + arguments, `src/lib/inbox.ts`), "From
-    <caller> · <when>", the call (`POST /api/requests/repo/add {"repo":…}`, mono), the caller's reason (amber rule,
-    "Reason given (unverified)", italic, two lines), when it goes away, **Review** and **Deny**. Review opens the
-    shell's page for it (repo key, grant, unlock or approval) with `inboxId`; that page then shows three fields above
-    its own content, strongest first (`Shell/Inbox.swift`): **What you sign (exact)** (bold, a blue 2-pt frame;
-    rendered by the shell from the signed content, `Shell/SignedAction.swift`), **Requested via (router)** (gray box:
-    who called which endpoint), **Reason given by <caller> (unverified)** (italic, an amber rule), and **Deny
-    request**. A request whose arguments differ from the page's says so in red. Allow is the page's own button; once
-    it went through the shell tells the router (`…/done`). The "Waiting for you" section on Sessions is gone; one
-    line there points to the Inbox while anything waits. Pages opened from the app's own buttons are unchanged (no
-    three fields, no detour). **The web page** files a request where the app would open a secure page (Add/Remove
-    repo, Make key, Allow a feature, a standing rule, Unlock): "Sent to the Inbox: approve it in the Jarvis 2 app".
-46. **Fix: a standing rule asked for in the app came up as a 10-minute grant.** The secure request's own `kind` (the
-    page, "grant") overwrote the grant's `kind: "rule"` in the options; the grant's kind travels as `grantKind` now.
+41. **Web only**: no iOS build, no shell bridge; the `.native.*` files, the React Native extension and the Radix-to-Swift
+    generator are gone.
+42. It can view everything, request a new session (non-sensitive stores), reject approvals, pause, resume and destroy;
+    where the app would open a review, it files an Inbox request ("approve it in the Jarvis 2 app").
+43. `web.yml` typechecks and exports it; the router serves the export at `/`.
 
 ## Unfinished / known gaps
 
-- **Keyboard avoidance for React Native forms** still comes only from React Native (lessons/73: the
-  extension sees keyboard height 0; the shell should resize the extension's area).
-- **Free text** (prompt, title) goes to the machine unsigned (SECRETS-CONTROLLER.md "Open").
-- **Fake machines never become `started`** in CI (nothing pulls secrets), so the walkthrough pauses and
-  resumes sessions in `initialising`; the Pause button is offered there too.
-- Approval pages show the router's session label (unsigned) next to the signed content.
-- No GitHub build-attestation check of the session image (item 10).
-- After a reinstall the phone's keys are new, but an already-recovered core refuses a second recovery (409):
-  the core has to be restarted (= a new core) and recovered again.
+- Free text (prompt, title) reaches the machine signed only with a core that vouches (the held core doesn't).
+- Content stores, devices and lease pills, first-prompt attachments (a file picker) are not in either app yet.
+- After a reinstall that loses the Keychain, the phone's keys and device key are new: an already-recovered core refuses a
+  second claim; restart the core (a new, empty core) and Recover.

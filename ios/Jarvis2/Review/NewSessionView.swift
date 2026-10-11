@@ -41,114 +41,14 @@ struct NewSessionView: View {
 
   var body: some View {
     Form {
-      Section {
-        Picker("Kind", selection: $oneShot) { Text("Session").tag(false); Text("One-shot").tag(true) }
-          .pickerStyle(.segmented)
-          .accessibilityIdentifier("ns-mode")
-        TextField(oneShot ? "The one job for this session" : "First prompt (optional)", text: $prompt, axis: .vertical)
-          .lineLimit(3...10)
-          .accessibilityIdentifier("ns-prompt")
-        TextField("Title (optional)", text: $label).accessibilityIdentifier("ns-title")
-      } footer: {
-        Text(oneShot ? "Claude runs the prompt, then the session is archived and destroyed. If Claude asks you something, the session waits until you answer."
-             : "The first prompt is typed into the session once it is up.")
-      }
-
-      Section {
-        if let loadError { ErrorRow(text: loadError) }
-        else if !loaded { ProgressView() }
-        else if offered.isEmpty { Text("No stores to add.").foregroundStyle(.secondary) }
-        ForEach(offered) { s in
-          CheckRow(on: picked.contains(s.name), id: "secure-store-\(s.name)", action: { toggle(s.name) }) {
-            HStack(spacing: 6) {
-              Text(s.name)
-              if s.sensitive { StatusPill(text: "Sensitive", color: .red) }
-              if !s.unlocked { StatusPill(text: "Locked") }
-              if s.empty { StatusPill(text: "empty") }
-            }
-          }
-        }
-        if !pickedSensitive.isEmpty {
-          Label("This session will hold sensitive secrets: \(pickedSensitive.joined(separator: ", ")). Only pick them for a session you'll treat with care.", systemImage: "exclamationmark.triangle.fill")
-            .foregroundStyle(.orange)
-            .accessibilityIdentifier("secure-sensitive-warning")
-        }
-      } header: { Text("Secret stores") }
-
-      let brought = PinnedPolicy.stores(harness, router: model.policy)
-      if !brought.isEmpty {
-        Section {
-          ForEach(brought, id: \.self) { n in
-            let st = stores.first { $0.name == n }
-            HStack(spacing: 6) {
-              Label(n, systemImage: "shippingbox")
-              Spacer()
-              if st?.sensitive == true { StatusPill(text: "Sensitive: refused", color: .red) }
-              if st?.unlocked == false { StatusPill(text: "Locked") }
-            }
-            .accessibilityElement(children: .combine)
-            .accessibilityIdentifier("ns-harness-store-\(n)")
-          }
-        } header: { Text("The harness brings") } footer: {
-          Text("Added by the router for this harness. Start refuses a sensitive one, or any store you didn't pick that isn't on this list.")
-        }
-      }
-
-      Section("Harness") {
-        ForEach(Harness.all) { h in
-          CheckRow(on: harness == h.id, id: "secure-harness-\(h.id)", action: { harness = h.id }) {
-            VStack(alignment: .leading) { Text(h.title); Text(h.sub).font(.footnote).foregroundStyle(.secondary) }
-          }
-        }
-      }
-
-      Section {
-        ForEach(model.repos) { r in
-          CheckRow(on: repos.contains(r.name), id: "ns-repo-\(r.name)", action: { toggleRepo(r) }) {
-            VStack(alignment: .leading) { Text(r.repo); Text(r.store).font(.footnote).foregroundStyle(.secondary) }
-          }
-        }
-      } header: { Text("Repos") } footer: {
-        if model.repos.isEmpty { Text("No repos yet: add some in Settings → Repos.") }
-        else if repos.isEmpty { Text("No repo selected: the session starts with an empty workspace.") }
-      }
-
-      Section("Permission mode") {
-        CheckRow(on: perm == "auto", id: "secure-mode-auto", action: { perm = "auto" }) {
-          VStack(alignment: .leading) { Text("Auto"); Text("Auto-approve safe actions; the permission classifier gates the rest.").font(.footnote).foregroundStyle(.secondary) }
-        }
-        CheckRow(on: perm == "bypass", id: "secure-mode-bypass", action: { perm = "bypass" }) {
-          VStack(alignment: .leading) { Text("Dangerously skip permissions"); Text("No prompts at all (--dangerously-skip-permissions).").font(.footnote).foregroundStyle(.secondary) }
-        }
-      }
-
-      Section("Options") {
-        if !models.isEmpty {
-          Picker("Model", selection: $modelId) { ForEach(models) { m in Text(m.label ?? m.id).tag(m.id) } }
-            .accessibilityIdentifier("ns-model")
-        }
-        if !model.sizes.isEmpty {
-          Picker("Machine size", selection: $size) { ForEach(model.sizes) { s in Text("\(s.id.capitalized) · \(s.label ?? "")").tag(s.id) } }
-            .accessibilityIdentifier("ns-size")
-        }
-        if !oneShot {
-          Toggle("Auto-pause when idle", isOn: $autoPause).accessibilityIdentifier("ns-autopause")
-        }
-        Toggle("API proxy", isOn: $apiProxy).accessibilityIdentifier("ns-apiproxy")
-      } footer: {
-        Text((oneShot ? "" : "Auto-pause pauses the machine after 1 h with nothing running; Resume brings it back with the conversation and files. ")
-             + "The API proxy logs every request to and response from the Anthropic API into ~/artifacts/api-log.")
-      }
-
-      Section {
-        if loaded && !toUnlock.isEmpty {
-          Text(scoped ? "Start also unlocks \(toUnlock.joined(separator: ", ")) (locked now) for this session only, with the same Face ID. The core locks \(toUnlock.count == 1 ? "it" : "them") again once the machine has its secrets; a paused session carries its secrets to its next machine."
-               : "Start also unlocks \(toUnlock.joined(separator: ", ")) (locked now), with the same Face ID.")
-            .accessibilityIdentifier("ns-unlocks")
-        }
-        if let failure { ErrorRow(text: failure, id: "secure-error") }
-        SigningFooter()
-      }
+      promptSection
+      storesSection
+      harnessStoresSection
+      harnessSection
+      reposSection
+      modeSection
+      optionsSection
+      startSection
     }
     .navigationTitle("New session")
     .navigationBarTitleDisplayMode(.inline)
@@ -163,6 +63,131 @@ struct NewSessionView: View {
     .onChange(of: harness) { pickModel() }
     .onChange(of: model.models) { pickModel() }
     .onChange(of: model.repos) { defaultRepo() }
+  }
+
+  @ViewBuilder private var promptSection: some View {
+    Section {
+      Picker("Kind", selection: $oneShot) { Text("Session").tag(false); Text("One-shot").tag(true) }
+        .pickerStyle(.segmented)
+        .accessibilityIdentifier("ns-mode")
+      TextField(oneShot ? "The one job for this session" : "First prompt (optional)", text: $prompt, axis: .vertical)
+        .lineLimit(3...10)
+        .accessibilityIdentifier("ns-prompt")
+      TextField("Title (optional)", text: $label).accessibilityIdentifier("ns-title")
+    } footer: {
+      Text(oneShot ? "Claude runs the prompt, then the session is archived and destroyed. If Claude asks you something, the session waits until you answer."
+           : "The first prompt is typed into the session once it is up.")
+    }
+  }
+
+  @ViewBuilder private var storesSection: some View {
+    Section {
+      if let loadError { ErrorRow(text: loadError) }
+      else if !loaded { ProgressView() }
+      else if offered.isEmpty { Text("No stores to add.").foregroundStyle(.secondary) }
+      ForEach(offered) { s in
+        CheckRow(on: picked.contains(s.name), id: "secure-store-\(s.name)", action: { toggle(s.name) }) {
+          HStack(spacing: 6) {
+            Text(s.name)
+            if s.sensitive { StatusPill(text: "Sensitive", color: .red) }
+            if !s.unlocked { StatusPill(text: "Locked") }
+            if s.empty { StatusPill(text: "empty") }
+          }
+        }
+      }
+      if !pickedSensitive.isEmpty {
+        Label("This session will hold sensitive secrets: \(pickedSensitive.joined(separator: ", ")). Only pick them for a session you'll treat with care.", systemImage: "exclamationmark.triangle.fill")
+          .foregroundStyle(.orange)
+          .accessibilityIdentifier("secure-sensitive-warning")
+      }
+    } header: { Text("Secret stores") }
+  }
+
+  @ViewBuilder private var harnessStoresSection: some View {
+    let brought = PinnedPolicy.stores(harness, router: model.policy)
+    if !brought.isEmpty {
+      Section {
+        ForEach(brought, id: \.self) { n in
+          let st = stores.first(where: { $0.name == n })
+          HStack(spacing: 6) {
+            Label(n, systemImage: "shippingbox")
+            Spacer()
+            if st?.sensitive == true { StatusPill(text: "Sensitive: refused", color: .red) }
+            if st?.unlocked == false { StatusPill(text: "Locked") }
+          }
+          .accessibilityElement(children: .combine)
+          .accessibilityIdentifier("ns-harness-store-\(n)")
+        }
+      } header: { Text("The harness brings") } footer: {
+        Text("Added by the router for this harness. Start refuses a sensitive one, or any store you didn't pick that isn't on this list.")
+      }
+    }
+  }
+
+  @ViewBuilder private var harnessSection: some View {
+    Section("Harness") {
+      ForEach(Harness.all) { h in
+        CheckRow(on: harness == h.id, id: "secure-harness-\(h.id)", action: { harness = h.id }) {
+          VStack(alignment: .leading) { Text(h.title); Text(h.sub).font(.footnote).foregroundStyle(.secondary) }
+        }
+      }
+    }
+  }
+
+  @ViewBuilder private var reposSection: some View {
+    Section {
+      ForEach(model.repos) { r in
+        CheckRow(on: repos.contains(r.name), id: "ns-repo-\(r.name)", action: { toggleRepo(r) }) {
+          VStack(alignment: .leading) { Text(r.repo); Text(r.store).font(.footnote).foregroundStyle(.secondary) }
+        }
+      }
+    } header: { Text("Repos") } footer: {
+      if model.repos.isEmpty { Text("No repos yet: add some in Settings → Repos.") }
+      else if repos.isEmpty { Text("No repo selected: the session starts with an empty workspace.") }
+    }
+  }
+
+  @ViewBuilder private var modeSection: some View {
+    Section("Permission mode") {
+      CheckRow(on: perm == "auto", id: "secure-mode-auto", action: { perm = "auto" }) {
+        VStack(alignment: .leading) { Text("Auto"); Text("Auto-approve safe actions; the permission classifier gates the rest.").font(.footnote).foregroundStyle(.secondary) }
+      }
+      CheckRow(on: perm == "bypass", id: "secure-mode-bypass", action: { perm = "bypass" }) {
+        VStack(alignment: .leading) { Text("Dangerously skip permissions"); Text("No prompts at all (--dangerously-skip-permissions).").font(.footnote).foregroundStyle(.secondary) }
+      }
+    }
+  }
+
+  @ViewBuilder private var optionsSection: some View {
+    Section {
+      if !models.isEmpty {
+        Picker("Model", selection: $modelId) { ForEach(models) { m in Text(m.label ?? m.id).tag(m.id) } }
+          .accessibilityIdentifier("ns-model")
+      }
+      if !model.sizes.isEmpty {
+        Picker("Machine size", selection: $size) { ForEach(model.sizes) { s in Text("\(s.id.capitalized) · \(s.label ?? "")").tag(s.id) } }
+          .accessibilityIdentifier("ns-size")
+      }
+      if !oneShot {
+        Toggle("Auto-pause when idle", isOn: $autoPause).accessibilityIdentifier("ns-autopause")
+      }
+      Toggle("API proxy", isOn: $apiProxy).accessibilityIdentifier("ns-apiproxy")
+    } header: { Text("Options") } footer: {
+      Text((oneShot ? "" : "Auto-pause pauses the machine after 1 h with nothing running; Resume brings it back with the conversation and files. ")
+           + "The API proxy logs every request to and response from the Anthropic API into ~/artifacts/api-log.")
+    }
+  }
+
+  @ViewBuilder private var startSection: some View {
+    Section {
+      if loaded && !toUnlock.isEmpty {
+        Text(scoped ? "Start also unlocks \(toUnlock.joined(separator: ", ")) (locked now) for this session only, with the same Face ID. The core locks \(toUnlock.count == 1 ? "it" : "them") again once the machine has its secrets; a paused session carries its secrets to its next machine."
+             : "Start also unlocks \(toUnlock.joined(separator: ", ")) (locked now), with the same Face ID.")
+          .accessibilityIdentifier("ns-unlocks")
+      }
+      if let failure { ErrorRow(text: failure, id: "secure-error") }
+      SigningFooter()
+    }
   }
 
   private func toggle(_ n: String) { if picked.contains(n) { picked.remove(n) } else { picked.insert(n) } }

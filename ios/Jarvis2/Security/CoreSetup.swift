@@ -97,23 +97,25 @@ enum CoreSetup {
   }
 
   /// the claim statement: this master key sets up this core for this iPhone, with this bundle
-  static func statement(master: String, core: PublicKeys, phone: PublicKeys, bundle: Data) throws -> String {
-    struct St: Encodable { let kind = "claim"; let master: String; let core: PublicKeys; let phone: PublicKeys; let bundleSha256: String }
+  /// `device`: this install's long-lived device key (PhoneKeys.devicePublic), inside the master-signed text so the setup
+  /// session takes it only from there (a router can't attach its own); the core ignores the field
+  static func statement(master: String, core: PublicKeys, phone: PublicKeys, bundle: Data, device: String? = nil) throws -> String {
+    struct St: Encodable { let kind = "claim"; let master: String; let core: PublicKeys; let phone: PublicKeys; let bundleSha256: String; let device: String? }
     let e = JSONEncoder(); e.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
-    return String(decoding: try e.encode(St(master: master, core: core, phone: phone, bundleSha256: CoreCrypto.sha256hex(bundle))), as: UTF8.self)
+    return String(decoding: try e.encode(St(master: master, core: core, phone: phone, bundleSha256: CoreCrypto.sha256hex(bundle), device: device)), as: UTF8.self)
   }
 
   /// the body of POST /api/core/claim
-  static func claim(core: PublicKeys, phone: PublicKeys, master: MasterKey, bundle: Data) throws -> [String: Any] {
-    let st = try statement(master: master.publicKey, core: core, phone: phone, bundle: bundle)
+  static func claim(core: PublicKeys, phone: PublicKeys, master: MasterKey, bundle: Data, device: String? = nil) throws -> [String: Any] {
+    let st = try statement(master: master.publicKey, core: core, phone: phone, bundle: bundle, device: device)
     return ["statement": st, "masterSig": try master.sign(st), "bundle": try CoreCrypto.seal(bundle, to: core.agreementKey, info: CoreCrypto.claimInfo)]
   }
 
   /// the body of POST /api/core/wipe: the core's own master key ends it (a new, empty core takes its place)
-  static func wipe(core: PublicKeys, master: MasterKey) throws -> [String: Any] {
+  static func wipe(core: PublicKeys, master: MasterKey, device: String? = nil) throws -> [String: Any] {
     let e = JSONEncoder(); e.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
-    struct W: Encodable { let kind = "wipe"; let core: String }
-    let st = String(decoding: try e.encode(W(core: core.signingKey)), as: UTF8.self)
+    struct W: Encodable { let kind = "wipe"; let core: String; let device: String? }
+    let st = String(decoding: try e.encode(W(core: core.signingKey, device: device)), as: UTF8.self)
     return ["statement": st, "masterSig": try master.sign(st)]
   }
 }

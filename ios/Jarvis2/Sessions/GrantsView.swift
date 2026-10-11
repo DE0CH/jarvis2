@@ -50,7 +50,7 @@ struct GrantsView: View {
           }
         } else { ProgressView() }
       }
-      Section("New") {
+      Section {
         Picker("Feature", selection: $holder) {
           ForEach(Holder.all) { h in Text(h.title).tag(h.id) }
         }
@@ -67,7 +67,7 @@ struct GrantsView: View {
           .accessibilityIdentifier("grant-days")
         }
         Button("Review and allow…", systemImage: "faceid", action: review).accessibilityIdentifier("grant-review")
-      } footer: {
+      } header: { Text("New") } footer: {
         Text("The next screen shows exactly what will be signed: Allow with Face ID, or Deny. A standing rule is for things that happen while you are away (wakeups, auto-pause).")
       }
     }

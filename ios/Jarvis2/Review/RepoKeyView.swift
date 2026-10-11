@@ -39,14 +39,14 @@ struct RepoKeyView: View {
             Text("The core deletes the deploy key “\(b.title)” on GitHub and the store \(b.store). Sessions that hold the store lose access to the repo.")
           }
         }
-        Section("Store") {
+        Section {
           StoreLines(stores: [b.store], sensitive: b.sensitive ? [b.store] : [])
           if action == "add" {
             Toggle("Sensitive store", isOn: Binding(get: { b.sensitive }, set: { v in if !forced && busy == nil { Task { await begin(sensitive: v) } } }))
               .disabled(forced || busy != nil)
               .accessibilityIdentifier("secure-repo-sensitive")
           }
-        } footer: {
+        } header: { Text("Store") } footer: {
           if action == "add" {
             Text(forced ? "Always: a push to this repo can change Jarvis 2 itself, or the store is sensitive already (which never goes back)."
                  : "One way: a sensitive store can't be made not sensitive later.")
