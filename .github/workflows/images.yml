@@ -5,7 +5,7 @@ name: images
 on:
   push:
     branches: [main]
-    paths: [core/**, router/**, machine/**, session-image/**, policy/**, tasks/**, app/**, .github/workflows/images.yml]
+    paths: [core/**, router/**, machine/**, session-image/**, policy/**, tasks/**, app/**, infra/setup.py, infra/setup_trust_test.py, .github/workflows/images.yml]
   workflow_dispatch:
 permissions:
   contents: write
@@ -23,6 +23,7 @@ jobs:
       - run: cd core && go vet ./... && go test ./... && go build -tags fakefly ./...
       - run: cd router && go vet ./... && go test ./...
       - run: cd machine && go vet ./... && go test ./...
+      - run: pip install -q cryptography && python3 infra/setup_trust_test.py
   build:
     needs: test
     runs-on: ubuntu-latest

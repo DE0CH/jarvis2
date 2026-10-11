@@ -152,24 +152,106 @@ def identity():
 
 
 def set_up():
-    """the core, only once it is set up (Reset or Recover in the app): the master key and the phone it names"""
+    """the core, only once it is set up (Reset or Recover in the app) by Deyao: the master key and the phone it names.
+    Claim is first-come, so the core's word isn't enough (R1 audit): its master key must be the one pinned in the
+    bucket, or its claim must be countersigned by Deyao's pinned device key (a Reset in his app)."""
     me = identity()
     if not me["master"] or not me["phone"]:
         raise SystemExit("the core is empty: Deyao sets it up in the app first (Reset or Recover)")
+    trust(me)
     return me
 
 
+# ---- whose core it is: the pins (pins.json in the bucket, signed by the setup key) ----------------------------
+#
+# master: the master public key the stores belong to; device: the app's long-lived device key (kept across Reset and
+# Recover). A claim under the pinned master pins the device key it carries; a claim countersigned by the pinned device
+# key moves the master pin (Deyao's Reset). Anything else — a core someone else claimed first — gets nothing from here.
+
+def load_pins():
+    try:
+        o = s3().get_object(Bucket=BUCKET, Key="pins.json")["Body"].read()
+    except Exception as e:
+        if "NoSuchKey" in str(e) or "404" in str(e):
+            return {}
+        raise
+    d = json.loads(o)
+    if not _verify(keyfile("setup.pub"), d["doc"].encode(), d["sig"]):
+        raise SystemExit("pins.json in the bucket isn't signed by the setup key")
+    p = json.loads(d["doc"])
+    if p.get("kind") != "setup-pins":
+        raise SystemExit("pins.json isn't the setup pins")
+    return p
+
+
+def save_pins(master, device):
+    doc = json.dumps({"kind": "setup-pins", "master": master, "device": device, "at": int(time.time())})
+    s3().put_object(Bucket=BUCKET, Key="pins.json", Body=json.dumps(signed(doc)).encode())
+
+
+def claim_of(me):
+    """the claim statement the core holds (checked: signed by its master key, naming this core and its phone), the
+    device key it names (the app's long-lived key, inside the master-signed statement) and whether the router kept
+    that device's countersignature over exactly this statement"""
+    cc = call("GET", "/setup/core-cert")
+    st_text = cc.get("statement") or ""
+    if not _verify(me["master"], st_text.encode(), cc.get("masterSig") or ""):
+        raise SystemExit("the core's claim isn't signed by its master key")
+    st = json.loads(st_text)
+    if st.get("master") != me["master"] or st.get("core", {}).get("signingKey") != me["signingKey"] or \
+            st.get("core", {}).get("agreementKey") != me["agreementKey"] or st.get("phone") != me["phone"]:
+        raise SystemExit("the core's claim names another master, core or phone")
+    device = st.get("device") or ""
+    countersigned = bool(device) and any(
+        d.get("statement") == st_text and d.get("deviceKey") == device and _verify(device, st_text.encode(), d.get("deviceSig") or "")
+        for d in call("GET", "/setup/claim-device"))
+    return device, countersigned
+
+
+def trust(me):
+    pins = load_pins()
+    if not pins.get("master"):
+        raise SystemExit("no master key pinned yet: once the core is known to be Deyao's (a Recover by him), "
+                         "run `infra/setup.py pin-master` (docs/RUNBOOK.md)")
+    device, countersigned = claim_of(me)
+    if pins["master"] == me["master"]:
+        if device and device != pins.get("device"):  # his app's device key, named in a claim his master key signed
+            save_pins(me["master"], device)
+        return
+    if pins.get("device") and device == pins["device"] and countersigned:
+        save_pins(me["master"], device)  # Deyao's Reset: a new master, countersigned by his device
+        print(f"note: new master key {me['master'][:16]}… pinned (its claim is countersigned by the pinned device key)", file=sys.stderr)
+        return
+    raise SystemExit("REFUSED: the core is set up with a master key that isn't the pinned one, and its claim isn't "
+                     "countersigned by Deyao's device key. Someone other than Deyao's app may have claimed it: nothing "
+                     "is written, backed up or sent. Restart the core from git (RUNBOOK \"Emptying the core\") and set it up in the app.")
+
+
+# the stores this writer means to be NOT sensitive (created first); every other store it writes is sensitive. The
+# core's open create_store lets anyone (the router) create a name first, so the writer checks the core's word against
+# this list and marks a store sensitive before it writes into it (R1 audit). A change here is a visible commit.
 # ---- stores ---------------------------------------------------------------------------------------------
 
 def blob(name, values, phone_agreement, core_agreement):
-    """core.StoreBlob: the values under a data key (the name as associated data), the key wrapped to P + K"""
+    """core.StoreBlob: the values under a data key (the name as associated data), the key wrapped to P + K, and the
+    writer's signature, which the phone checks (keys/setup.pub) before it unlocks the blob (core.WriterText)"""
     dk = os.urandom(32)
     combined = _pub(*_add(_pt(phone_agreement), _pt(core_agreement)))
     e = ec.generate_private_key(ec.SECP256R1())
     shared_x = e.exchange(ec.ECDH(), combined)
     wrapped = _gcm(_kdf(shared_x, "jarvis2/store-data-key"), dk)
-    return {"name": name, "wrapped": {"e": base64.b64encode(_x963(e.public_key())).decode(), "wrapped": base64.b64encode(wrapped).decode()},
-            "data": base64.b64encode(_gcm(dk, json.dumps(values).encode(), name.encode())).decode()}
+    E = base64.b64encode(_x963(e.public_key())).decode()
+    data = base64.b64encode(_gcm(dk, json.dumps(values).encode(), name.encode())).decode()
+    text = f"jarvis2-store-blob\n{name}\n{E}\n{hashlib.sha256(data.encode()).hexdigest()}".encode()
+    sig = base64.b64encode(setup_key().sign(text, ec.ECDSA(hashes.SHA256()))).decode()
+    return {"name": name, "wrapped": {"e": E, "wrapped": base64.b64encode(wrapped).decode()}, "data": data, "writerSig": sig}
+
+
+# the stores this writer means to be NOT sensitive (created first); every other store it writes is sensitive. The
+# core's open create_store lets anyone (the router) create a name first, so the writer checks the core's word against
+# this list and marks a store sensitive before it writes into it (R1 audit). A change here is a visible commit.
+NOT_SENSITIVE = ("default", "openrouter", "claude", "tunnel") + tuple(
+    n for n in os.environ.get("JARVIS2_NOT_SENSITIVE", "").split(",") if n)  # test boxes add their own (rehearsals)
 
 
 def s3():
@@ -238,15 +320,34 @@ def main():
         names = None if args[1:] == ["--forget"] else [a.partition("=")[0] for a in args[1:]]
         call("POST", "/setup/store-keys", {"name": args[0], "keys": names})
         print(f"ok: {args[0]}: key names forgotten" if names is None else f"ok: {args[0]}: {len(names)} key names recorded")
+    elif cmd == "pin-master":
+        me = identity()
+        if not me["master"]:
+            raise SystemExit("the core is empty")
+        device, _ = claim_of(me)
+        save_pins(me["master"], device or load_pins().get("device"))
+        print(f"ok: master key {me['master'][:16]}… pinned" + (" with the app's device key" if device else ""))
     elif cmd == "create":
+        if args[0] not in NOT_SENSITIVE:
+            raise SystemExit(f"{args[0]} isn't in NOT_SENSITIVE (infra/setup.py): a store not listed there stays sensitive")
+        set_up()
         call("POST", "/setup/stores/create", {"name": args[0]})
         print(f"ok: store {args[0]} created (empty, not sensitive)")
     elif cmd == "write":
         name, vals = args[0], dict(value(a) for a in args[1:])
         me = set_up()
+        want_sensitive = name not in NOT_SENSITIVE
+        have = store_list().get(name)
+        if want_sensitive and have is not None and not have["sensitive"]:
+            # created not sensitive by someone else (the open create_store): upgraded before anything is in it
+            call("POST", "/setup/stores/mark-sensitive", {"name": name})
+            mark_sensitive_backup(name)
+            print(f"note: {name} existed as not sensitive; marked sensitive before writing", file=sys.stderr)
         b = blob(name, vals, me["phone"]["agreementKey"], me["agreementKey"])
         d = call("POST", "/setup/stores/write", {"store": b})
         sens = json.loads(d["payload"])["sensitive"]
+        if want_sensitive and not sens:
+            raise SystemExit(f"the core still calls {name} not sensitive after the write: no backup made")
         backup(name, vals, sens, me["master"])
         call("POST", "/setup/store-keys", {"name": name, "keys": sorted(vals)})
         print(f"ok: store {name} written with {len(vals)} keys (sensitive={sens}), backed up, key names recorded")

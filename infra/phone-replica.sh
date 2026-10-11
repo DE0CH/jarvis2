@@ -130,6 +130,8 @@ fill_stores() {
   RH_PLAIN="plain-$rnd" RH_SECRET="secret-$rnd" JARVIS1_CREDENTIALS_ID="claude-id-$rnd" JARVIS1_CREDENTIALS_SECRET="claude-secret-$rnd" \
   CF_ACCESS_CLIENT_ID="tunnel-id-$rnd" CF_ACCESS_CLIENT_SECRET="tunnel-secret-$rnd" bash -c "
     set -e
+    export JARVIS2_NOT_SENSITIVE=rh-plain
+    $S pin-master
     $S create rh-plain
     $S write rh-plain RH_PLAIN
     $S write rh-secret RH_SECRET

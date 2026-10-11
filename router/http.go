@@ -145,7 +145,22 @@ func (r *Router) buildHandlers() {
 			r.relay(w, "POST", corePath, b)
 		})
 	}
-	device("POST /api/core/claim", "/claim")
+	// the claim also carries the app's device-key countersignature (deviceKey, deviceSig over the statement): the
+	// core ignores it; the router keeps it for the setup session (claimdevice.go), which trusts a new master key
+	// only with it
+	app("POST /api/core/claim", func(w http.ResponseWriter, req *http.Request) {
+		if !r.cfg.NoAccess && req.Header.Get("cf-access-token") == "" {
+			writeJSON(w, 403, map[string]string{"error": "only the iPhone app sets the core up"})
+			return
+		}
+		b, _ := io.ReadAll(io.LimitReader(req.Body, 16<<20))
+		r.keepClaimDevice(b)
+		r.relay(w, "POST", "/claim", b)
+	})
+	setup("GET /setup/core-cert", "GET", "/core-cert")
+	mux.Handle("GET /setup/claim-device", r.requireSetup(func(w http.ResponseWriter, req *http.Request) {
+		writeJSON(w, 200, r.claimDevices())
+	}))
 	device("POST /api/core/wipe", "/wipe")
 	r.registerBackups(app)
 	app("GET /api/policy", func(w http.ResponseWriter, req *http.Request) { writeJSON(w, 200, r.policy) })

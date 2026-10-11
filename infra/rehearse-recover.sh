@@ -88,6 +88,8 @@ export V_PLAIN="plain-$rnd" V_SECRET="secret-$rnd" V_MARKED="marked-$rnd" V_CLAU
 export RH_PLAIN="$V_PLAIN" RH_SECRET="$V_SECRET" RH_MARKED="$V_MARKED" JARVIS1_CREDENTIALS_ID="$V_CLAUDE" \
   JARVIS1_CREDENTIALS_SECRET="claude-secret-$rnd" CF_ACCESS_CLIENT_ID="$V_TUNNEL" CF_ACCESS_CLIENT_SECRET="tunnel-secret-$rnd"
 S="python3 $ROOT/infra/setup.py"
+export JARVIS2_NOT_SENSITIVE=rh-plain,rh-marked
+$S pin-master # a throwaway box and bucket: its own Reset is the one to trust
 $S create rh-plain
 $S create rh-marked
 $S write rh-plain RH_PLAIN
