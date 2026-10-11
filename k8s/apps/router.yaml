@@ -17,8 +17,8 @@ spec:
   strategy: { type: Recreate }
   selector: { matchLabels: { app: router } }
   template:
-    # secrets-rev(-backup): bumped by infra/router-secrets.py so a changed Secret restarts the pod (envFrom is read at start)
-    metadata: { labels: { app: router }, annotations: { jarvis2/secrets-rev: "043246abae2f", jarvis2/secrets-rev-backup: "cc2fe4a5bfde" } }
+    # secrets-rev(-backup|-github): bumped by infra/router-secrets.py so a changed Secret restarts the pod (envFrom is read at start)
+    metadata: { labels: { app: router }, annotations: { jarvis2/secrets-rev: "043246abae2f", jarvis2/secrets-rev-backup: "cc2fe4a5bfde", jarvis2/secrets-rev-github: "5d4b8b75a9b6" } }
     spec:
       automountServiceAccountToken: false
       enableServiceLinks: false
@@ -40,8 +40,10 @@ spec:
             - { name: ACCESS_SETUP_AUD, value: fdd80d914f37f8f73409c3e44c11282cffefa5e20663d2d9de50bb087159ee89 }
           # the router's non-sensitive secrets (lobster's token, Storage Box keys, …): k8s/secrets/router.enc.yaml,
           # and the backup bucket's read credential (it serves the locked backups to the app's Recover):
-          # k8s/secrets/router-backup.enc.yaml — both SOPS-encrypted to the box's age key (infra/router-secrets.py)
-          envFrom: [{ secretRef: { name: router-secrets, optional: true } }, { secretRef: { name: router-secrets-backup, optional: true } }]
+          # k8s/secrets/router-backup.enc.yaml, and the repo picker's GITHUB_READ_TOKEN: k8s/secrets/router-github.enc.yaml
+          # — all SOPS-encrypted to the box's age key (infra/router-secrets.py). router-secrets-github stays LAST: with a
+          # key in several envFrom sources the last one wins, and the default part still holds an old GITHUB_READ_TOKEN
+          envFrom: [{ secretRef: { name: router-secrets, optional: true } }, { secretRef: { name: router-secrets-backup, optional: true } }, { secretRef: { name: router-secrets-github, optional: true } }]
           volumeMounts: [{ name: data, mountPath: /data }, { name: wg, mountPath: /wg, readOnly: true }]
           resources: { requests: { cpu: 20m, memory: 64Mi }, limits: { memory: 1Gi } }
           securityContext: { runAsNonRoot: true, runAsUser: 65532, runAsGroup: 65532, allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: { drop: [ALL] }, seccompProfile: { type: RuntimeDefault } }

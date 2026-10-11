@@ -106,7 +106,21 @@ func (r *Router) buildHandlers() {
 			}
 		}
 		_, coreErr := r.core.Key()
-		writeJSON(w, 200, map[string]any{"secrets": present, "sessionImage": r.cfg.SessionImage, "coreUp": coreErr == nil, "version": os.Getenv("VERSION")})
+		// what the repo picker's token sees, as counts only: a token with no permission picked lists public repos
+		// only (private 0), the "No match." in Settings → Repos
+		gh := map[string]any{}
+		if repos, _, err := r.GitHubRepos(false); err != nil {
+			gh["error"] = err.Error()
+		} else {
+			priv := 0
+			for _, x := range repos {
+				if x.Private {
+					priv++
+				}
+			}
+			gh["total"], gh["private"] = len(repos), priv
+		}
+		writeJSON(w, 200, map[string]any{"secrets": present, "sessionImage": r.cfg.SessionImage, "coreUp": coreErr == nil, "version": os.Getenv("VERSION"), "githubRepos": gh})
 	}))
 	setup("GET /setup/identity", "GET", "/identity")
 	setup("POST /setup/stores", "POST", "/stores")

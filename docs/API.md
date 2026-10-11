@@ -101,7 +101,7 @@ gone (moved to records); `failed` (with `error`).
 | `GET /api/repos` | Deyao's repo list, for Settings → Repos and New session's `repos`: `{repos: [{name, url /* https://github.com/<repo>.git */, repo /* owner/name */, store /* github-<repo> */, sensitive, fingerprint?, keyAt?}]}`. GitHub repos only; an entry is added or removed only by the core's answer to `POST /api/repos/key/finish` (below). |
 | `POST /api/repos/key/begin {action: add \| remove, repo: owner/name \| GitHub URL, sensitive?}` | Relayed to the core's `deploy-keys/begin` (the repo normalised to `owner/name`): its signed begin document, which the shell's secure page checks and the phone answers. 400 for a non-GitHub repo or another action; 501 `{error}` from a core older than deploy keys. |
 | `POST /api/repos/key/finish {pending, signature, share}` | Relayed to `deploy-keys/finish`; on the core's signed `deploy-key-added` the repo goes on the list (with `sensitive`, `fingerprint`), on `deploy-key-removed` it comes off. The answer is the core's, unchanged. |
-| `GET /api/github/repos` | `{repos: [{fullName, url, htmlUrl, private, fork, archived, description, language, pushedAt, owner}], cachedAt, configured}` (5 min cache, `?refresh=1`), listed with `GITHUB_READ_TOKEN` (router env; metadata read only — sessions push with their repos' deploy keys). 503 without it. |
+| `GET /api/github/repos` | `{repos: [{fullName, url, htmlUrl, private, fork, archived, description, language, pushedAt, owner}], cachedAt, configured}` (5 min cache, `?refresh=1`), listed with `GITHUB_READ_TOKEN` (router env; Metadata read picked explicitly, else GitHub lists public repos only — sessions push with their repos' deploy keys). 503 without it. |
 | `GET /api/usage` | Forwarded to Jarvis 1's `/api/usage` (query kept) with the services token: Jarvis 1 holds the Claude login. |
 | `GET /api/search`, `/api/search/context`, `/api/search/status`; `GET /api/icloud/search`, `/api/icloud/file`, `/api/icloud/status`; `POST /api/icloud/relist` | The app's Search tab: forwarded to Jarvis 1's transcript search and iCloud index unchanged (path, query, body) with the services token `JARVIS1_SERVICES_ID/SECRET` and no `X-Jarvis2-Session`; Jarvis 1's shapes (its `selfhost/API.md`). 503 without the token. |
 
@@ -214,7 +214,8 @@ against `SETUP_KEY` (`k8s/apps/router.yaml`), within ±2 min, each signature onc
 | `POST /setup/fly-token` | `/fly-token {sealed}`: `{"FLY_API_TOKEN"}` sealed to the core's agreement key (HKDF info `"jarvis2/fly-token"`) → the core's signed `{"kind":"fly-token-set"}`; 409 while the core is empty |
 
 `GET /setup/status` — the router's health: the names of its secrets that are set (values never), the session
-image, whether the core answers.
+image, whether the core answers, and `githubRepos` — `{total, private}` repos the picker's `GITHUB_READ_TOKEN`
+sees (or `{error}`; same 5-minute cache as `/api/github/repos`). `private: 0` = the token has no permission picked.
 
 ## Machines (`/m/*`)
 

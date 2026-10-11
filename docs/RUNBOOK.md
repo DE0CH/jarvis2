@@ -61,6 +61,10 @@ the private half in the store `github-<repo>` (`github-jarvis2` always sensitive
 deletes both. A Recover brings no repo stores back (no backup): "Make key" again, which also deletes the old key on
 GitHub. Sessions that include a repo's store clone, pull and push it over SSH (`machine/deploykeys.go`).
 
+If the picker says "No match." for a repo that exists (a private one), the router's `GITHUB_READ_TOKEN` sees public
+repos only: `infra/setup.py status` shows `githubRepos.private: 0`. Mint `jarvis2-repo-list` again with Metadata read
+picked and write `--part github` (The router's secrets, below); then "refresh list" in the app.
+
 If the core says the token can't manage a repo's deploy keys, the token in `github-deploy-keys` lacks Repository
 "Administration: read and write" on it: mint `jarvis2-deploy-keys` again (`github-web pat-create-all
 jarvis2-deploy-keys ~/.jarvis2/gh-deploy-keys.token Administration=write`) and write the store (`setup.py write
@@ -96,23 +100,30 @@ state, after checking its keys against `keys/box.pub`.
 ## The router's secrets
 
 Non-sensitive only (nothing that can reach a code push), SOPS-encrypted to `keys/box-age.pub`; Flux decrypts them
-on the box with the age key the box got in user-data. Two Secrets, each rewritten whole by
+on the box with the age key the box got in user-data. Three Secrets, each rewritten whole by
 `infra/router-secrets.py` (nobody can read the old values back), so name every key of the one you write:
 
 - `infra/router-secrets.py KEY[=SRC]…` → `k8s/secrets/router.enc.yaml`:
   `LOBSTER_TOKEN STORAGEBOX_HOST STORAGEBOX_USER STORAGEBOX_PASSWORD FLY_READ_TOKEN=file:~/.jarvis2/fly-read.tok
-  JARVIS1_CREDENTIALS_ID=file:… JARVIS1_CREDENTIALS_SECRET=file:… JARVIS1_SERVICES_ID=file:… JARVIS1_SERVICES_SECRET=file:… GITHUB_READ_TOKEN=file:…
-  JARVIS2_TUNNEL_KEY=file:… JARVIS2_REMOTES_CLIENT_ID=…` (`GITHUB_READ_TOKEN`: a fine-grained token listing repos only,
-  `github-web pat-create-read`; `JARVIS2_TUNNEL_KEY`: the tunnel proof key, the same value as the cf-tunnel Worker's
+  JARVIS1_CREDENTIALS_ID=file:… JARVIS1_CREDENTIALS_SECRET=file:… JARVIS1_SERVICES_ID=file:… JARVIS1_SERVICES_SECRET=file:…
+  JARVIS2_TUNNEL_KEY=file:… JARVIS2_REMOTES_CLIENT_ID=…` (`JARVIS2_TUNNEL_KEY`: the tunnel proof key, the same value as the cf-tunnel Worker's
   secret `JARVIS2_TUNNEL_KEY` — without it no OpenCode/OpenClaw web UI; `JARVIS2_REMOTES_CLIENT_ID`: optional, the
   client id of the service token that may read `/api/remotes`)
   (`jarvis2-claude-credentials` and `jarvis2-services` are Jarvis 1 Access service tokens that claude-env's cf-tunnel
   Worker confines to their own paths, `CONFINED_TOKENS`) (the read-only Fly token: `infra/fly-read-token.sh`).
+- `infra/router-secrets.py --part github GITHUB_READ_TOKEN=file:…` → `k8s/secrets/router-github.enc.yaml`: the
+  repo picker's list token, the fine-grained PAT `jarvis2-repo-list` (`github-web pat-create-read jarvis2-repo-list
+  <out>`: all repositories, no expiry, **Metadata read picked explicitly**). A fine-grained token with NO permission
+  picked sees public repos only, even on "All repositories" (0 private; Settings → Repos says "No match." for a
+  private repo). Check after a rollout with `infra/setup.py status`: `githubRepos.private` > 0. The default part
+  (`router.enc.yaml`, written 2026-10-10) still holds an older public-only `GITHUB_READ_TOKEN` (that token is
+  deleted on GitHub); `router-secrets-github` is the LAST `envFrom` in `k8s/apps/router.yaml`, so it wins. The next
+  time the default part is rewritten, leave `GITHUB_READ_TOKEN` out of it.
 - `infra/router-secrets.py --part backup BACKUP_READ_ACCESS_KEY BACKUP_READ_SECRET_KEY` →
   `k8s/secrets/router-backup.enc.yaml`: the backup bucket's read credential, with which the router serves the
   locked backups to the app's Recover (`infra/backup-read-key.py install` writes it; below).
 
-After a box rebuild, re-run both (the age key is new).
+After a box rebuild, re-run all three (the age key is new).
 
 ### The backup bucket's read credential
 
