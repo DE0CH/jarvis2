@@ -273,6 +273,7 @@ final class ReplicaUITests: XCTestCase {
         el("secure-repo-go").tap()
         if wait(el("repo-key-" + repoName), 90, "the repo listed with its deploy key") {
           shot("repo-added")
+          XCTAssertEqual(relay("repo-added"), "ok", "GitHub shows the repo's deploy key")
           el("repo-remove-" + repoName).tap()
           if wait(el("secure-repo-go"), 30, "the remove-repo page") {
             faceIDMatches()
@@ -313,7 +314,12 @@ final class ReplicaUITests: XCTestCase {
             el("menu-destroy").tap()
             if wait(el("ask-ok"), 30, "destroy question (stuck)") { el("ask-ok").tap() }
             let t0 = Date()
-            XCTAssertTrue(gone(el(stuck), 90), "a session stuck at boot is destroyed within 90 s")
+            // the whole card: anything naming the session (its buttons, its title)
+            let stuckSid = String(stuck.dropFirst(5))
+            let card = app.descendants(matching: .any).matching(NSPredicate(format: "identifier CONTAINS %@ OR label CONTAINS %@", stuckSid, stuckSid)).firstMatch
+            let wait10 = app.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS 'up to 10 min'")).firstMatch
+            if wait10.waitForExistence(timeout: 5) { XCTFail("a never-booted session's destroy waits for a snapshot: \(wait10.label)") }
+            XCTAssertTrue(gone(card, 90), "a session stuck at boot is destroyed within 90 s")
             note("stuck-destroy-seconds", "\(Int(Date().timeIntervalSince(t0)))")
             shot("stuck-destroyed")
           }

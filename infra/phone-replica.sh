@@ -10,7 +10,8 @@
 #   otp         the Access login's one-time PIN, read from the bot's mailbox (bot@deyaochen.com, BOT_EMAIL_PASSWORD)
 #   reset-done  after the app's Reset: the stores written with infra/setup.py (dummy values; the harness's claude and
 #               tunnel; github-deploy-keys = a 7-day PAT for the throwaway repo only; the core's Fly token, 6 h)
-#   repo-check  the throwaway repo had a deploy key added and has none left
+#   repo-added  the throwaway repo has its one deploy key now (the app shows the repo added)
+#   repo-check  …and none left after the app removed it
 #   done        the end
 # What the test box needs that production keeps elsewhere: its keys/box.pub on a branch rehearsal-keys-<time> (the
 # Release build reads keys from that git ref: JarvisKeysRef, KeySource.swift), a throwaway private repo
@@ -147,6 +148,8 @@ while :; do
   case "$msg" in
     otp) answer "$(otp "$(($(date +%s) - 30))" || echo none)" ;;
     reset-done) record_core; if fill_stores > "$LOGS/fill.log" 2>&1; then answer filled; else tail -5 "$LOGS/fill.log"; answer "fill failed"; fi ;;
+    repo-added) n=$(gh api "repos/DE0CH/$TREPO/keys" -q 'length' 2>/dev/null || echo "?")
+      if [ "$n" = 1 ]; then touch "$W/key-seen"; answer ok; else answer "keys=$n"; fi ;;
     repo-check) left=$(gh api "repos/DE0CH/$TREPO/keys" -q 'length' 2>/dev/null || echo "?")
       if [ -e "$W/key-seen" ] && [ "$left" = 0 ]; then answer ok; else answer "seen=$([ -e "$W/key-seen" ] && echo yes || echo no) left=$left"; fi ;;
     done) record_core; answer ok; break ;;
