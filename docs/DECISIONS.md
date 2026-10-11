@@ -389,3 +389,6 @@ entry points only ("if I decide to break it later then it's fine").
     any machine of the app, so no core change or restart; the router offers it only for a machine it never started, with
     no session mapping or cert, at least 15 minutes old. No separate destroy token for the router (one more credential
     that could destroy session machines). A machine is "test" when its JARVIS2_URL host isn't `jarvis2-box._peer.internal`.
+88. **The held core's machines keep the old behaviour** (machine/legacy.go): a cert without `vouch: 2` gets the env the
+    machine was started with, as before the guard, so production keeps its prompts, titles, models, repos, restores
+    and rollbacks until the core is released. The strict rules apply only to a cert that carries them.

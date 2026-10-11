@@ -207,18 +207,35 @@ func main() {
 	}
 
 	step("new session (stores [e2e]): Start unlocks e2e for this session only; locked again once the machine pulled")
-	s, b := call(router, "POST", "/api/sessions", map[string]any{"label": "e2e test", "stores": []string{"e2e"}, "size": "small", "harness": "claude"}, nil)
+	// E2E_HELD_CORE=1: the core is the held production one (no vouching, no per-session unlocks): the session must get
+	// its settings from the router as before the input guard (machine/legacy.go); the run ends after that check
+	held := os.Getenv("E2E_HELD_CORE") == "1"
+	newBody := map[string]any{"label": "e2e test", "stores": []string{"e2e"}, "size": "small", "harness": "claude"}
+	if held {
+		newBody["prompt"], newBody["repos"] = "e2e held-core prompt", "https://github.com/DE0CH/jarvis2.git"
+	}
+	s, b := call(router, "POST", "/api/sessions", newBody, nil)
 	must(s, b, "create")
 	a := waitApproval("new-session", "")
 	checkChallenge(a, []string{"e2e"}, "")
 	unlock(p, "e2e", nonceOf(*a.Challenge))
-	if storeOpen("e2e") {
+	if storeOpen("e2e") && !held {
 		log.Fatal("an unlock for one session shows as open to every session")
 	}
 	id := approve(p, a)
 	waitState(id, "started", 6*time.Minute)
 	m1 := machineOf(id)
 	expectOnMachine(m1, "grep -c E2E_SECRET /home/claude/.secrets", "1")
+	if held {
+		step("held core: the harness gets the router's settings as before (title, prompt, model) and the repo is cloned")
+		envOf := "tr '\\0' '\\n' < /proc/$(pgrep -f session-supervisor | head -1)/environ"
+		expectOnMachine(m1, envOf+" | grep -c '^SESSION_LABEL=e2e test$'", "1")
+		expectOnMachine(m1, envOf+" | grep -c '^SESSION_PROMPT=e2e held-core prompt$'", "1")
+		expectOnMachine(m1, envOf+" | grep -c '^SESSION_MODEL=.'", "1")
+		expectOnMachine(m1, "test -d /home/claude/workspace/jarvis2/.git && echo cloned", "cloned")
+		log.Printf("E2E PASSED (held core: settings from the router as before)")
+		return
+	}
 	expectNoUnlocks("after the Start's pull")
 	expectOnMachine(m1, "echo marker-"+secret+" > /home/claude/artifacts/e2e-marker && chown claude /home/claude/artifacts/e2e-marker && echo ok", "ok")
 

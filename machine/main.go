@@ -270,7 +270,12 @@ func prepare() error {
 	if err != nil {
 		return err
 	}
-	v.Ex = fetchExceptions(c) // the few router values whose format can't carry an instruction
+	useLegacyEnv(v) // legacy.go: a cert from the held core keeps the behaviour from before the guard
+	if v.V2 {
+		v.Ex = fetchExceptions(c) // the few router values whose format can't carry an instruction
+	} else {
+		v.Ex = legacyExceptions()
+	}
 	writeVouched(v)
 	firstMachine := cert.PredID == ""
 
@@ -290,10 +295,16 @@ func prepare() error {
 		}
 		if v.Once.Rollback != "" { // rollback.go: only a rollback the phone approved, on the verified snapshot
 			applyRollback(v.Once.Rollback)
+		} else if !v.V2 {
+			legacyRollback(cert.PredID)
 		}
 	}
 	// 2b. a new line restoring a destroyed session's archived snapshot (restore.go): only the one the cert names
-	if err := restoreArchived(c, coreKey, me, &cert, v); err != nil {
+	restoreFn := func() error { return restoreArchived(c, coreKey, me, &cert, v) }
+	if !v.V2 {
+		restoreFn = func() error { return legacyRestoreArchived(c, coreKey, me, &cert) }
+	}
+	if err := restoreFn(); err != nil {
 		return fmt.Errorf("restore: %w", err)
 	}
 	trustLineKeys(cert) // deliver.go: this line's signing keys, for what it asked to be delivered later
@@ -310,7 +321,11 @@ func prepare() error {
 	if err := setupDeployKeys(secrets); err != nil {
 		log.Printf("deploy keys: %v", err)
 	}
-	cloneRepos(reposToClone(v, secrets))
+	if v.V2 {
+		cloneRepos(reposToClone(v, secrets))
+	} else {
+		cloneRepos(legacyRepos())
+	}
 
 	// 5. booted: from now on a snapshot command gets a real snapshot; then Jarvis 1's entrypoint runs the harness
 	if err := os.WriteFile(bootedPath, []byte(time.Now().UTC().Format(time.RFC3339)), 0o644); err != nil {
@@ -318,11 +333,18 @@ func prepare() error {
 	}
 	clean := os.Environ() // already the clean env (ensureCleanEnv)
 	if t, ok := strings.CutPrefix(cert.Options.Harness, taskHarnessPrefix); ok {
-		for _, kv := range taskVouchedEnv(v) { // task.go reads these from the process env
+		for _, kv := range taskVouchedEnv(v) { // task.go reads these from the process env (the held core: already there)
+			if !v.V2 {
+				break
+			}
 			k, val, _ := strings.Cut(kv, "=")
 			os.Setenv(k, val)
 		}
 		runTask(c, t, secrets, certMode(cert)) // task.go: the template instead of a harness; never returns
+	}
+	if !v.V2 {
+		log.Printf("starting the harness")
+		return syscall.Exec(jarvis1, []string{jarvis1}, legacyHarnessEnv(c, cert, me, string(sj), secrets))
 	}
 	env := harnessEnv(clean, v, me, firstMachine, string(sj), secrets)
 	if !firstMachine && v.Once.Prompt != "" {

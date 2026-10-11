@@ -130,6 +130,7 @@ func ensureCleanEnv() error {
 	if len(dropped) > 0 {
 		log.Printf("env: dropping what the core didn't set: %s", strings.Join(dropped, " "))
 	}
+	saveStartedEnv(cur) // legacy.go: a cert from the held core still uses it (read only once the cert says so)
 	return syscall.Exec("/proc/self/exe", os.Args, clean)
 }
 

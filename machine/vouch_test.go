@@ -282,3 +282,26 @@ func TestAResumeRestoresOnlyTheSnapshotTheCertNames(t *testing.T) {
 		t.Fatal("a refused snapshot was unpacked")
 	}
 }
+
+func TestTheHeldCoresCertKeepsTheStartedEnv(t *testing.T) {
+	old := startedEnvPath
+	startedEnvPath = filepath.Join(t.TempDir(), "started")
+	t.Cleanup(func() { startedEnvPath = old })
+	t.Setenv(coreKeyEnv, "corekey")
+	saveStartedEnv([]string{"SESSION_PROMPT=line one\nline two", "SESSION_LABEL=t", "JARVIS2_REPOS=https://github.com/DE0CH/jarvis2.git", coreKeyEnv + "=other"})
+	saveStartedEnv([]string{"SESSION_LABEL=a re-exec doesn't overwrite it"})
+	held, _ := vouch(Cert{Kind: "succession-cert", Machine: &Machine{ID: "m1"}})
+	useLegacyEnv(held)
+	if os.Getenv("SESSION_PROMPT") != "line one\nline two" || os.Getenv("SESSION_LABEL") != "t" || os.Getenv(coreKeyEnv) != "corekey" {
+		t.Fatalf("prompt %q label %q key %q", os.Getenv("SESSION_PROMPT"), os.Getenv("SESSION_LABEL"), os.Getenv(coreKeyEnv))
+	}
+	if r := legacyRepos(); len(r) != 1 || r[0] != "https://github.com/DE0CH/jarvis2.git" {
+		t.Fatalf("repos %v", r)
+	}
+	// a cert that vouches: the saved env is dropped unread
+	os.Setenv("SESSION_PROMPT", "")
+	useLegacyEnv(Vouched{V2: true})
+	if _, err := os.Stat(startedEnvPath); err == nil || os.Getenv("SESSION_PROMPT") != "" {
+		t.Fatal("a vouching cert used the started env")
+	}
+}

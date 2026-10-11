@@ -391,10 +391,10 @@ and every cert it issues, to a hash chain of core-signed entries; the router per
 (`input-log.jsonl`, `GET /api/input-log`) and starts a new core's chain from the last persisted head. The core only
 hashes, signs and appends.
 
-**With the held core** (no `Config`, `Once`, snapshot hash or input log) the machine takes none of these settings: no
-prompt, title, model, rollback, restore, one-shot, API proxy or task parameters; it clones only the repos of its
-deploy-key stores; it restores any snapshot its predecessor signed (the old rule); deliveries go the old way (a
-command under a grant).
+**With the held core** (a cert without `vouch: 2`) the machine keeps its behaviour from before the guard exactly: the
+settings come from the env it was started with (saved when boot drops it, used only for such a cert), repos from
+`JARVIS2_REPOS`, a restore from `JARVIS2_RESTORE_CERT`, a rollback from `JARVIS2_ROLLBACK`; any snapshot its predecessor
+signed; deliveries the old way (a command under a grant). The guard starts with the core release.
 
 ## iPhone approval screen
 

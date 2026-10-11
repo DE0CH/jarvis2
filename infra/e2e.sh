@@ -6,6 +6,8 @@
 # Leaves nothing behind but the core's and router's logs (in $E2E_LOGS, default /tmp/jarvis2-e2e-logs): the
 # peer is removed, the processes stopped. Never touches the production core.
 #   JARVIS2_FLY_TOKEN   the jarvis2-370 org token
+#   E2E_CORE_REF + E2E_HELD_CORE=1: run against the core of that ref (the held one) and check only that a session gets
+#     its settings from the router as before
 #   E2E_PEER (default jarvis2-e2e), E2E_PORT (default 28 → 28090/28080): another peer and ports let two runs go at once
 set -euo pipefail
 : "${JARVIS2_FLY_TOKEN:?}"
@@ -41,7 +43,14 @@ trap cleanup EXIT
 trap 'exit 130' INT TERM HUP
 sweep
 
-(cd "$ROOT/core" && go build -o "$W/core" .)
+# E2E_CORE_REF: build the core from that git ref instead (e.g. the held production core's commit, with E2E_HELD_CORE=1)
+if [ -n "${E2E_CORE_REF:-}" ]; then
+  git -C "$ROOT" worktree add -q --detach "$W/core-src" "$E2E_CORE_REF"
+  (cd "$W/core-src/core" && go build -o "$W/core" .)
+  git -C "$ROOT" worktree remove --force "$W/core-src"
+else
+  (cd "$ROOT/core" && go build -o "$W/core" .)
+fi
 (cd "$ROOT/router" && go build -o "$W/router" .)
 python3 - "$W" <<'PY'
 import base64, sys
