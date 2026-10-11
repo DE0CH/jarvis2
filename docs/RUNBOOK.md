@@ -11,7 +11,9 @@ through git, and a box git can't fix is replaced.
 new, empty core: see "Setting the core up"), and never while the core Deployment in `k8s/apps/core.yaml` carries the
 annotation `jarvis2/core-pin: hold`: a core change that waits for Deyao's go (he then Recovers). To roll it out once
 he says so, delete the annotation, push, then `gh workflow run images -R DE0CH/jarvis2` (a k8s/ push alone doesn't
-run it): it pins the newest core and Flux restarts it.
+run it): it pins the newest core and Flux restarts it. A core from aa0443a on starts no machine without `MACHINE_URL`: in the same commit
+add `- { name: MACHINE_URL, value: "http://jarvis2-box._peer.internal:8081" }` to the core container's env (test cores
+get their own peer's address from `infra/e2e.sh` / `infra/rehearsal-box.sh`).
 
 ## The keys (`keys/`)
 

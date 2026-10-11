@@ -31,13 +31,13 @@ HETZNER_S3_ENDPOINT=http://127.0.0.1:18098 HETZNER_S3_REGION=fsn1 HETZNER_S3_ACC
 cat > "$W/core-loop.sh" <<EOF
 #!/bin/bash
 # the core, started again whenever it ends (a wipe); log to \$1
-while true; do BOX_KEY_FILE="$W/box-key.pem" ADDR=127.0.0.1:8090 "$W/core" >> "\$1" 2>&1; sleep 1; done
+while true; do BOX_KEY_FILE="$W/box-key.pem" MACHINE_URL=http://ci-router._peer.internal:8081 ADDR=127.0.0.1:8090 "$W/core" >> "\$1" 2>&1; sleep 1; done
 EOF
 chmod +x "$W/core-loop.sh"
 # the router's env for the stand-in bucket (sourced by app.yml)
 printf 'BACKUP_READ_ACCESS_KEY=ciaccess\nBACKUP_READ_SECRET_KEY=%s\nBACKUP_ENDPOINT=http://127.0.0.1:18098\nBACKUP_BUCKET=jarvis2-backup-ci\n' "$secret" > "$W/router-backup.env"
 if [ "${NO_CORE:-}" != 1 ]; then
-  BOX_KEY_FILE="$W/box-key.pem" ADDR=127.0.0.1:8090 nohup "$W/core" > "$W/core.log" 2>&1 &
+  BOX_KEY_FILE="$W/box-key.pem" MACHINE_URL=http://ci-router._peer.internal:8081 ADDR=127.0.0.1:8090 nohup "$W/core" > "$W/core.log" 2>&1 &
   for i in $(seq 30); do curl -sf -o /dev/null http://127.0.0.1:8090/key && break; sleep 1; done
   mkdir -p "$W/router-data" "$W/web"
   echo '{"harnesses":{"claude":{"stores":["claude-login"]}}}' > "$W/policy.json"

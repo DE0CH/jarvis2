@@ -565,7 +565,9 @@ func (c *Core) Start(r StartRequest) (SignedDoc, error) {
 	if imageDigest(r.Image) == "" {
 		return SignedDoc{}, fail(400, "start needs an image of %s pinned by digest", SessionRepo)
 	}
-	r.Env = c.machineEnv() // the machine's trust anchor and the router's address, set by the core, never the caller
+	if r.Env = c.machineEnv(); r.Env == nil { // the machine's trust anchor and the router's address, set by the core, never the caller
+		return SignedDoc{}, fail(503, "this core has no MACHINE_URL (its deployment's router address): it starts no machine")
+	}
 	id, image, err := c.fly.Create(r)
 	if err != nil {
 		return SignedDoc{}, fail(502, "fly create: %v", err)

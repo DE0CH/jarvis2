@@ -42,22 +42,29 @@ func reportedDigest(ref string) string {
 	return ref[i+1:]
 }
 
-// machineURLEnv: the core's own setting for the router's address on Fly's private network (its deployment; the
-// default is production's), set in every machine's config by the core alone
+// machineURLEnv: the core's own setting for the router's address on Fly's private network (MACHINE_URL of its
+// deployment: k8s/apps/core.yaml for production, infra/e2e.sh / rehearsal-box.sh for test cores), set in every
+// machine's config by the core alone. No default: a core without it starts no machine (a test core must never make
+// a machine that reaches production's router).
 const machineURLEnv = "JARVIS2_URL"
 
-const defaultMachineURL = "http://jarvis2-box._peer.internal:8081"
+var machineURLRE = regexp.MustCompile(`^http://[A-Za-z0-9][A-Za-z0-9._-]{0,200}(:[0-9]{1,5})?/?$`)
 
 func machineURL() string {
-	if u := strings.TrimSpace(os.Getenv("MACHINE_URL")); u != "" {
-		return u
+	u := strings.TrimSpace(os.Getenv("MACHINE_URL"))
+	if !machineURLRE.MatchString(u) {
+		return ""
 	}
-	return defaultMachineURL
+	return u
 }
 
-// machineEnv: the whole env a machine's Fly config gets (the request's is ignored)
+// machineEnv: the whole env a machine's Fly config gets (the request's is ignored); nil without MACHINE_URL
 func (c *Core) machineEnv() map[string]string {
-	return map[string]string{coreKeyEnv: c.signer.PublicKey(), machineURLEnv: machineURL()}
+	u := machineURL()
+	if u == "" {
+		return nil
+	}
+	return map[string]string{coreKeyEnv: c.signer.PublicKey(), machineURLEnv: u}
 }
 
 const (

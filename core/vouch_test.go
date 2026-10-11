@@ -208,3 +208,16 @@ func TestTheInputLogIsAChainOfSignedEntries(t *testing.T) {
 		t.Fatalf("got %v", d)
 	}
 }
+
+func TestACoreWithoutARouterAddressStartsNothing(t *testing.T) {
+	c, f, _ := setup(t)
+	for _, u := range []string{"", "http://evil/$(x)", "file:///etc"} {
+		t.Setenv("MACHINE_URL", u)
+		if _, err := c.Start(StartRequest{Image: img}); err == nil {
+			t.Fatalf("started a machine with MACHINE_URL %q", u)
+		}
+	}
+	if len(f.machines) != 0 {
+		t.Fatal("a machine was created")
+	}
+}

@@ -341,9 +341,12 @@ the predecessor's signature, the line's own signature or a trusted provider; rou
 except strict-format values; every later input is attested by the core into a hash-chained log; the guard covers
 entry points only ("if I decide to break it later then it's fine").
 
-75. **The core sets the machine's whole env** (its key, and `JARVIS2_URL` from the core's own `MACHINE_URL`, default
-    production's peer address); `start`'s `env` is ignored. The machine also re-execs with a clean env at boot, so
-    it holds with the held core too. Change: the URL baked into the image instead.
+75. **The core sets the machine's whole env** (its key, and `JARVIS2_URL` from the core's own `MACHINE_URL`, with no
+    default: a core without it starts no machine, so a test core can never make a machine that reaches production's
+    router — an e2e run on the first version, which defaulted to production, made one, 08010e6c7e6138, 06:47 UTC);
+    `start`'s `env` is ignored. Production's `MACHINE_URL` goes into `k8s/apps/core.yaml` with the release (a change
+    to the core's template restarts it, so not before). The machine also re-execs with a clean env at boot, so it
+    holds with the held core too. Change: the URL baked into the image instead.
 76. **Settings travel as one opaque JSON string (`Options.Config`)**, not core fields: the core stays trivial (it
     compares it for an unattended resume, never reads it); the machine reads it strictly (an unknown key refuses
     the cert) and the shell refuses a key it can't show. One-time inputs (`Options.Once`: a resume prompt, a

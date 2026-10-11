@@ -243,6 +243,9 @@ func main() {
 	if env := flyMachineEnv(m1); len(env) != 2 || env["JARVIS2_CORE_KEY"] == "" || env["JARVIS2_URL"] == "" {
 		log.Fatalf("the machine's Fly config env is %v, want only JARVIS2_CORE_KEY and JARVIS2_URL", env)
 	}
+	if u := flyMachineEnv(m1)["JARVIS2_URL"]; strings.Contains(u, "jarvis2-box") {
+		log.Fatalf("an e2e machine points at production's router (%s)", u)
+	}
 	expectOnMachine(m1, "tr '\\0' '\\n' < /proc/$(pgrep -f session-supervisor | head -1)/environ | grep -cE '^(JARVIS2_REPOS|SESSION_RESUME_TITLE|JARVIS2_ROLLBACK|JARVIS2_RESTORE_CERT|SESSION_REPOS)=' || true", "0")
 
 	step("status: the machine reports itself; the session's local Jarvis API arms a wakeup (delivered later as its own signed request: no scheduler shell)")

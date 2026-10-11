@@ -142,8 +142,11 @@ func writeStore(t *testing.T, c *Core, p *phone, name string, vals map[string]st
 	return StoreBlob{Name: name, Wrapped: w, Data: b64.EncodeToString(gcmSeal(dk, plain, []byte(name)))}
 }
 
+const testMachineURL = "http://jarvis2-test._peer.internal:8081"
+
 func newCore(t *testing.T) (*Core, *fakeFly, *phone) {
 	t.Helper()
+	t.Setenv("MACHINE_URL", testMachineURL)
 	f := newFakeFly()
 	c, err := NewCore(f)
 	if err != nil {
@@ -418,7 +421,7 @@ func TestMachinesGetTheCoreKeyFromTheCore(t *testing.T) {
 	if _, err := c.Start(StartRequest{Image: img, Env: evil}); err != nil {
 		t.Fatal(err)
 	}
-	want := map[string]string{coreKeyEnv: c.Key()["signingKey"], machineURLEnv: defaultMachineURL}
+	want := map[string]string{coreKeyEnv: c.Key()["signingKey"], machineURLEnv: testMachineURL}
 	if len(f.env) != len(want) || f.env[coreKeyEnv] != want[coreKeyEnv] || f.env[machineURLEnv] != want[machineURLEnv] {
 		t.Fatalf("got %v", f.env)
 	}
