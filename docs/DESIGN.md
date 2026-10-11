@@ -254,6 +254,37 @@ by the core, approved by the phone; the box alone can never make one, and no AI 
 - **End a session:** `kill`, then burn: `succession(old, no stores, no options, null image)` ← respond by
   dead machine → `certify(approval, none)` → burn cert.
 
+## Requests: the Inbox (Deyao, 2026-10-11)
+
+Anything that needs the phone's Face ID and is asked for somewhere other than the phone itself — by a session, the
+web page or the setup session (Claude) — waits in the app's **Inbox** tab (a badge counts it; no push, no Discord).
+A caller calls an **intent endpoint** on the router (`…/requests/repo/add`, `repo/remove`, `grant`, `unlock`; a
+session also `add-store`) with the intent's arguments and its own explanation. The router keeps the request
+(persisted, deduplicated by kind + arguments, gone after 7 days, at most 20 per caller) with **who called**, worked out
+from the credential the call carried — the machine key (a session), the setup key (Claude), Deyao's Access login
+(the web page, or the app when its device token is sent) — never from what the caller says about itself, and the
+exact call it made. The router's own approvals (new session, resume on the latest image, add a store) are listed in
+the same Inbox with their caller and call recorded when they were made.
+
+Opening one shows the shell's secure page for it (the same review stop the app's own buttons use) with three
+read-only fields on top, in **decreasing trust and increasing level of explanation**:
+
+1. **What you sign (exact)** — fully trusted. Rendered by the shell from the very content the phone signs (the core's
+   signed begin document, the core-signed challenge, the session's core-signed cert and the checked grant), never
+   from router prose (`Shell/SignedAction.swift`): the lowest level, what happens mechanically. Drawn strongest; the
+   one that matters.
+2. **Requested via (router)** — as trustworthy as the router: the caller and the endpoint with its arguments. The
+   intent.
+3. **Reason given by <caller> (unverified)** — the caller's own words: plain text (control and format characters
+   dropped, at most 600 characters and 8 lines), shown as theirs and never as instructions or markup. The why.
+
+**Allow** is the page's own action, unchanged (one Face ID over what field 1 shows); **Deny** drops the request (an
+approval is rejected). Nothing a non-phone caller does can approve anything: a request is only a pointer to a secure
+page, and the phone's signature over the exact content stays the only approval. Requests made in the app itself keep
+their direct flow (no Inbox detour). What a caller may ask for: a session only for itself (a grant, an unlock, a
+store) and for a repo to be added (a new key in its own store, which no session holds until Deyao picks it); not
+removing a repo or anything about another session. The web page, the app and the setup session may ask for any kind.
+
 ## Machine side (in the image)
 
 Boot makes the machine's keys and waits. `jarvis2-init` (run by the core through Fly, no arguments) prints the

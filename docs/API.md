@@ -123,7 +123,8 @@ router's word, not the phone's (the core's options can't carry it).
 
 ```
 approval = { id, kind: "new-session" | "resume-upgrade" | "add-store", created, session, machine /* add-store */,
-             label, challenge /* the core-signed challenge doc */, options /* the form's fields, for display */ }
+             label, challenge /* the core-signed challenge doc */, options /* the form's fields, for display */,
+             origin: {caller, call} /* who asked, from the credential (Requests) */, explanation /* a session's add-store */ }
 ```
 
 | Call | Does |
@@ -134,6 +135,55 @@ approval = { id, kind: "new-session" | "resume-upgrade" | "add-store", created, 
 
 The phone may approve anything; it shows exactly what it signs (`request.stores`, `request.sensitive`,
 `request.options`, `request.image`, `request.addedStore`).
+
+## Requests (the app's Inbox, `router/inbox.go`)
+
+A request asks the phone for something that needs Face ID; it waits in the app's Inbox until Deyao reviews it on the
+shell's secure page (docs/DESIGN.md "Requests"). The **intent endpoints** are the same under three prefixes, one per
+kind of caller; the router records the caller from the credential (never from the body) and the call:
+
+| Prefix | Caller | Credential |
+|---|---|---|
+| `/api/requests/…` | the web page, or the app (`cf-access-token` header) | Deyao's Access login |
+| `/setup/requests/…` | Claude, the setup session | the setup key's signature (as every `/setup` call) |
+| `/m/api/requests/…` | a session (`$JARVIS_URL/api/requests/…` through the machine's proxy; `jarvis2-request` in the image) | the machine key |
+
+| Intent | Body (`explanation` in every one) | Who |
+|---|---|---|
+| `POST …/repo/add` | `{repo /* owner/name or a GitHub URL */, sensitive?}` | anyone |
+| `POST …/repo/remove` | `{repo}` | not a session |
+| `POST …/grant` | `{session, holder, minutes /* 1–10, default 10 */}` or `{session, holder, days /* 1–365: a standing rule */}` | a session only for itself (it may leave `session` out) |
+| `POST …/unlock` | `{session}`: the locked stores that session waits on | a session only for itself |
+| `POST /m/api/requests/add-store` | `{store}` → the router's `add-store` approval (as `POST /m/add-store`) | a session, for itself |
+
+`explanation`: the caller's reason, required from a session and the setup session (plain text; control and format
+characters dropped; ≤ 600 characters, ≤ 8 lines; 400 otherwise). Answer `{id, duplicate, expires}`: the same kind and
+arguments already pending answer that request (`duplicate: true`); 400 for bad arguments, 403 for what this caller may
+not ask; at most 20 pending per caller. A request goes after 7 days, when its session is destroyed, when it is done
+(a repo request when the core's deploy-key answer for that repo comes back by any path; a grant request when a grant
+for that feature is stored), or on Deny.
+
+```
+item = { id, kind: "repo-key" | "grant" | "unlock" | "new-session" | "resume-upgrade" | "add-store", approval /* bool */,
+         params: {action, repo, sensitive, session, holder, minutes, days}, session, sessionName,
+         caller: {kind: "web" | "app" | "session" | "setup" | "router", session}, callerText /* "session “X” (s…)",
+         "the web page", "Claude (setup session, signed with the setup key)" */, call: {method, path, args},
+         explanation, created, expires, options /* an approval's form fields */,
+         open: {kind /* the shell page */, options /* its options, with inboxId */} }
+```
+
+| Call | Does |
+|---|---|
+| `GET /api/requests` | `{requests: [item]}`, newest first; also `inbox` in `GET /api/state` (the badge) |
+| `GET /api/requests/:id` | one item (404 when answered, denied or expired); the shell reads the call and the reason here |
+| `DELETE /api/requests/:id` | Deny: dropped (an approval is rejected, as `…/approvals/:id/reject`) |
+| `POST /api/requests/:id/done` | the shell's page went through: the request leaves the Inbox |
+| `GET /setup/requests`, `GET /m/api/requests` | the same list for Claude; a session sees only its own |
+| `GET /setup/repos` | the router's repo list (`infra/setup.py repos`) |
+
+The app never takes the title from the router: the list renders it from `kind` + `params` (`src/lib/inbox.ts`), and
+the review page renders "What you sign (exact)" from the signed content (`Shell/SignedAction.swift`). The shell checks
+that the item's `open.options` equal its own page's (repo, action, session, feature, length) and says so when not.
 
 ## The core, relayed (`/api/core/*`)
 
@@ -232,7 +282,7 @@ off.
 | `GET /m/restore-snapshot` | A restoring session's first machine only: the archived snapshot, same format, signed by the OLD machine named in `JARVIS2_RESTORE_CERT`. 404 otherwise. |
 | `POST /m/pull-secrets` | The router adds this machine's cert and relays to the core; answers the core's signed `secrets` doc (sealed to the machine's key). |
 | `GET /m/commands` | Long poll (≤ 50 s): `{commands: ["snapshot"]}` or `{commands: []}`. |
-| `POST /m/add-store` | Body `{store}`: asks Deyao (an `add-store` approval) to add one store to this session. |
+| `POST /m/add-store` | Body `{store}`: asks Deyao (an `add-store` approval) to add one store to this session. With a reason: `POST /m/api/requests/add-store` (Requests). |
 | `POST /m/downgrade` | Body `{stores, newEncryptionKey, newSigningKey}` → `{challenge}`, which the machine signs with its OLD key. |
 | `POST /m/downgrade/finish` | Body `{challenge, signature}` → core `approve/by-old-key` → `{cert}`; from now on the router knows the machine by its new key. |
 | `GET /m/tunnel-proof` | `{proof, id}`: hex HMAC-SHA256(`JARVIS2_TUNNEL_KEY`, `"jarvis2-tunnel:" + <this machine's session id>`), which the cf-tunnel Worker checks when the `jarvis2-tunnel` token registers that id. The machine puts it in `TUNNEL_AGENT_SECRET` at boot (never in the Fly config). 404 without the key; 403 for a machine with no running session. |

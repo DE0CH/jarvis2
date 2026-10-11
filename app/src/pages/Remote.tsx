@@ -10,7 +10,6 @@ import QRCode from "qrcode";
 import { SvgXml } from "react-native-svg";
 import { api } from "../lib/api";
 import { requestGrant } from "../lib/grants";
-import { hasShell } from "../lib/shell";
 import { failed } from "../lib/store";
 import { CopyButton } from "../ui/bits";
 import { Button, Flex, Lbl, Muted, P, Spinner } from "../ui/kit";
@@ -43,7 +42,7 @@ export function Remote({ spec }: { spec: RemoteSpec }) {
     <Page title={spec.title} id="remote-page">
       {err ? <>
           <P size={2} color="red" mt={3} id="rm-error">{err}</P>
-          {grant && hasShell && <Flex mt={3}><Button id="rm-allow" onPress={() => requestGrant(spec.id, spec.title, { holder: "remote", kind: "grant", minutes: 10 }, (ok) => { if (ok) setN((x) => x + 1); })}>Allow the remote page for 10 minutes</Button></Flex>}
+          {grant && <Flex mt={3}><Button id="rm-allow" onPress={() => requestGrant(spec.id, spec.title, { holder: "remote", kind: "grant", minutes: 10 }, (ok) => { if (ok) setN((x) => x + 1); })}>Allow the remote page for 10 minutes</Button></Flex>}
         </>
         : !info ? <Flex justify="center" gap={2} align="center" mt={6}><Spinner /><P size={3} color="gray">Loading…</P></Flex>
         : <>

@@ -281,3 +281,15 @@ shouldnt unlock the whole infra [store] for that one task."
     Until then the router and app ship (the router answers 501 "the running core predates deploy keys") and sessions
     have no push access to any repo: the old per-repo PATs (`jarvis2-sessions-*-push`) are deleted and their store
     backups removed (delete markers; the versions stay in the versioned bucket).
+67. **Requests (the Inbox), Claude's choices** (Deyao, 2026-10-11 asked for the Inbox and the three fields; the rest is
+    Claude's): a request waits **7 days** (Deyao may be away for days; then it goes without a trace), at most **20
+    pending per caller** (a looping session can't flood the Inbox), and the same kind + arguments pending already
+    answer that request instead of a second one (the first reason is kept). **A session may ask only for itself**
+    (a grant, an unlock, a store) **and for a repo to be added** — harmless: the key goes into a new store of its own,
+    which no session holds until Deyao picks it in New session; it may not ask to remove a repo or for anything about
+    another session. The web page, the app and the setup session may ask for any kind. A reason is **required** from a
+    session and from the setup session, optional from Deyao's own web page. **Who called** is the router's word, from
+    the credential (machine key, setup key, Access login; the app vs. the web page by the device token header) — the
+    router is the one recording it, so it is shown as "Requested via (router)", below what is signed. The setup
+    session gets `GET /setup/repos` (the router's repo list) so it checks before asking for a repo. Unlock requests
+    name a session (the stores it waits on), as the shell's unlock page does; no "unlock store X" with no session.

@@ -295,6 +295,9 @@ let (bjs, bjd) = call("/deploy-keys/begin", ["action": "add", "repo": "DE0CH/jar
 let bj = bjs == 200 ? try? Checks.deployKeyBegin(doc(bjd), coreKey: coreKey, action: "add", repo: "DE0CH/jarvis2", sensitive: false) : nil
 check(bj?.sensitive == true && bj?.store == "github-jarvis2", "Jarvis 2's own repo is always sensitive (the begin document says so before Face ID)")
 check(bjs == 200 && throwsErr { _ = try Checks.deployKeyBegin(doc(bjd), coreKey: coreKey, action: "remove", repo: "DE0CH/jarvis2", sensitive: false) }, "the page refuses a begin for another action")
+// the Inbox review's "What you sign (exact)" is rendered from this signed document
+let bjText = bj.map(SignedAction.deployKey) ?? ""
+check(bjText.contains("DE0CH/jarvis2") && bjText.contains("store github-jarvis2 (sensitive)") && bjText.contains("store github-deploy-keys for this one call"), "the signed action renders from the core's begin document: \(bjText)")
 check(bjs == 200 && throwsErr { _ = try Checks.deployKeyBegin(doc(bjd), coreKey: coreKey, action: "add", repo: "DE0CH/claude-env", sensitive: false) }, "…or another repo")
 check(deployKey("add", "DE0CH/x", signer: P256.Signing.PrivateKey()).0 == 403, "a signature by another key is refused")
 let (nas, _, nad) = deployKey("add", "DE0CH/no-admin")
@@ -310,6 +313,20 @@ let rl = try? JSONDecoder().decode(ReposDTO.self, from: call("/api/repos", base:
 check(ras == 200 && rl?.repos.map(\.repo) == ["DE0CH/claude-env"] && rl?.repos.first?.store == "github-claude-env", "through the router: the repo is on the list with its store")
 _ = deployKey("remove", "DE0CH/claude-env", base: rbase, prefix: "/api/repos/key")
 check((try? JSONDecoder().decode(ReposDTO.self, from: call("/api/repos", base: rbase).1))?.repos.isEmpty == true, "…and off it after remove")
+
+// ---- the Inbox (router/inbox.go): a request filed through an intent endpoint opens the same review page ----
+let (qs, qd) = call("/api/requests/repo/add", ["repo": "https://github.com/DE0CH/claude-env", "explanation": "for the skill"], base: rbase)
+let qid = ((try? JSONSerialization.jsonObject(with: qd)) as? [String: Any])?["id"] as? String ?? ""
+let (gs, gd) = call("/api/requests/" + qid, base: rbase)
+let qi = (try? JSONSerialization.jsonObject(with: gd)) as? [String: Any] ?? [:]
+let qopen = qi["open"] as? [String: Any] ?? [:], qopts = qopen["options"] as? [String: Any] ?? [:]
+let qcall = qi["call"] as? [String: Any] ?? [:]
+check(qs == 200 && gs == 200 && qopen["kind"] as? String == "repo-key" && qopts["repo"] as? String == "DE0CH/claude-env" && qopts["inboxId"] as? String == qid, "a filed request opens the repo-key page for that repo (HTTP \(qs) \(gs))")
+check(SignedAction.mismatch(page: qopts.merging(["kind": "repo-key", "requestId": "x"]) { a, _ in a }, request: qopts) == "", "…its options match the page's")
+check(SignedAction.mismatch(page: qopts.merging(["repo": "DE0CH/other"]) { _, b in b }, request: qopts) == "repo", "…a page for another repo shows the mismatch")
+check(SignedAction.call(method: qcall["method"] as? String ?? "", path: qcall["path"] as? String ?? "", args: qcall["args"] as? [String: Any]) == #"POST /api/requests/repo/add {"repo":"DE0CH/claude-env"}"#, "…the API call as the review shows it")
+check(qi["explanation"] as? String == "for the skill" && (qi["callerText"] as? String ?? "") != "", "…with the caller's words and who called")
+check(call("/api/requests/" + qid + "/done", [String: Any](), base: rbase).0 == 200 && call("/api/requests/" + qid, base: rbase).0 == 404, "…and done takes it out of the Inbox")
 
 // ---- lock ----
 let lk = try? CoreCrypto.decode(doc(call("/lock", ["id": u?.id ?? ""]).1), by: coreKey, as: KindDoc.self, what: "locked")

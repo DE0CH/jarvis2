@@ -13,15 +13,16 @@ import * as SystemUI from "expo-system-ui";
 import "../lib/webInit";
 import { useAuthState, loadAuth, signIn } from "../lib/auth";
 import { markAppReady } from "../lib/shell";
-import { useStore, setTab, start, TABS, type Tab } from "../lib/store";
+import { useStore, setTab, start, TABS, useInboxCount, type Tab } from "../lib/store";
 import { useTheme } from "../theme";
-import { Button, Flex, Heading, P, Spinner, Text } from "../ui/kit";
+import { Button, CountBadge, Flex, Heading, P, Spinner, Text } from "../ui/kit";
 import { OverlayHosts, useWide } from "../ui/overlays";
 
 function Sidebar() {
   const t = useTheme(), ins = useSafeAreaInsets();
   const tab = useStore((s) => s.tab), path = usePathname();
   const onList = path === "/";
+  const inbox = useInboxCount();
   const go = (k: Tab) => { setTab(k); if (!onList) router.dismissTo("/"); };
   return (
     <View nativeID="sidebar" accessibilityRole="menu" style={{ width: 220, paddingTop: 20 + ins.top, paddingHorizontal: 12, paddingLeft: 12 + ins.left, paddingBottom: 20, gap: 2, borderRightWidth: 1, borderRightColor: t.gray.a[5], backgroundColor: t.background }}>
@@ -31,7 +32,10 @@ function Sidebar() {
         return (
           <Pressable key={k} {...({ dataSet: { tab: k } } as any)} accessibilityRole="menuitem" accessibilityState={{ selected: on }} onPress={() => go(k)}
             style={({ hovered }: any) => ({ paddingHorizontal: 12, paddingVertical: 8, borderRadius: 9, backgroundColor: on ? t.accent.a[3] : hovered ? t.gray.a[3] : "transparent" })}>
-            <Text size={2} weight={on ? "medium" : "regular"} style={{ color: on ? t.accent.a[11] : t.gray[11] }}>{l}</Text>
+            <View style={{ flexDirection: "row", alignItems: "center" }}>
+              <Text size={2} weight={on ? "medium" : "regular"} style={{ color: on ? t.accent.a[11] : t.gray[11] }}>{l}</Text>
+              {k === "inbox" && <CountBadge n={inbox} id="sidebar-badge-inbox" />}
+            </View>
           </Pressable>
         );
       })}

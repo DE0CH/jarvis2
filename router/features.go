@@ -9,8 +9,8 @@ import (
 	"encoding/json"
 	"errors"
 	"log"
-	"time"
 	"net/http"
+	"time"
 )
 
 type (
@@ -29,6 +29,7 @@ func (r *Router) registerFeatures(app appRoute, m machineRoute, public publicRou
 	r.registerArchive(app, m)        // archive.go, restore.go (budget.go needs no routes: /api/state via stateHooks)
 	r.registerSessionOps(app, m)     // sessionops.go, uploads.go, repos.go
 	r.registerTasks(app, m)          // tasks.go: task instances (one-shot session lines), runs, schedules
+	r.registerInbox(app, m, public)  // inbox.go: requests waiting for the phone (the app's Inbox)
 }
 
 // startFeatures: called once from main after the router is built

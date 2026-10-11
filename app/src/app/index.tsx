@@ -4,7 +4,7 @@
 // coming back to the foreground refreshes by itself.
 import { ScrollView, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { useStore, setTab, refresh, TABS, type Tab } from "../lib/store";
+import { useStore, setTab, refresh, TABS, useInboxCount, type Tab } from "../lib/store";
 import { sessionTitle, usd } from "../lib/api";
 import { useTheme } from "../theme";
 import { Button, Callout, Heading, IconButton, Spinner, Tabs } from "../ui/kit";
@@ -12,6 +12,7 @@ import { TopBar, openPage } from "../ui/page";
 import { openNewSession } from "../lib/sessions";
 import { useWide } from "../ui/overlays";
 import { Sessions } from "../views/Sessions";
+import { Inbox } from "../views/Inbox";
 import { Records } from "../views/Records";
 import { Search } from "../views/Search";
 import { Stores } from "../views/Stores";
@@ -38,6 +39,7 @@ export default function Dashboard() {
   const t = useTheme(), ins = useSafeAreaInsets(), wide = useWide();
   const tab = useStore((s) => s.tab);
   const refreshing = useStore((s) => s.refreshing);
+  const inbox = useInboxCount();
   return (
     <View style={{ flex: 1, backgroundColor: t.background }}>
       <TopBar max={wide ? 1320 : 820}>
@@ -49,9 +51,10 @@ export default function Dashboard() {
       <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={{ paddingBottom: 24 + ins.bottom }}>
         <View style={{ width: "100%", maxWidth: wide ? 1320 : 820, alignSelf: "center", paddingHorizontal: wide ? 32 : 16, paddingTop: 16 }}>
           <Banners />
-          {!wide && <Tabs value={tab} onChange={(v) => setTab(v as Tab)} items={TABS} />}
+          {!wide && <Tabs value={tab} onChange={(v) => setTab(v as Tab)} items={TABS} badges={{ inbox }} />}
           <View nativeID={"view-" + tab}>
             {tab === "sessions" && <Sessions />}
+            {tab === "inbox" && <Inbox />}
             {tab === "search" && <Search />}
             {tab === "stores" && <Stores />}
             {tab === "records" && <Records />}

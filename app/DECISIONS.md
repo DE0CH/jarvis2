@@ -299,6 +299,23 @@ Carried over from the mock (DE0CH/jarvis2-mock DECISIONS.md) unless marked new.
     **New: the edge swipe** on a secure page (16 pt at the leading edge): the page follows the finger over the
     picture and leaves as Back does past half way or on a flick; not while the page is busy or Back goes to another
     step (Reset or recover's sub-steps), and not without a picture under it.
+45. **New: the Inbox tab** (Deyao, 2026-10-11: "a notification tab of stuff waiting for my approval"), second in the tab
+    list, with a red count on the tab (and in the wide sidebar) — no push, no Discord. It lists every request filed
+    by a session, the web page or Claude's setup session and every approval the router holds (docs/DESIGN.md
+    "Requests"). Each card: the action as the title (rendered here from kind + arguments, `src/lib/inbox.ts`), "From
+    <caller> · <when>", the call (`POST /api/requests/repo/add {"repo":…}`, mono), the caller's reason (amber rule,
+    "Reason given (unverified)", italic, two lines), when it goes away, **Review** and **Deny**. Review opens the
+    shell's page for it (repo key, grant, unlock or approval) with `inboxId`; that page then shows three fields above
+    its own content, strongest first (`Shell/Inbox.swift`): **What you sign (exact)** (bold, a blue 2-pt frame;
+    rendered by the shell from the signed content, `Shell/SignedAction.swift`), **Requested via (router)** (gray box:
+    who called which endpoint), **Reason given by <caller> (unverified)** (italic, an amber rule), and **Deny
+    request**. A request whose arguments differ from the page's says so in red. Allow is the page's own button; once
+    it went through the shell tells the router (`…/done`). The "Waiting for you" section on Sessions is gone; one
+    line there points to the Inbox while anything waits. Pages opened from the app's own buttons are unchanged (no
+    three fields, no detour). **The web page** files a request where the app would open a secure page (Add/Remove
+    repo, Make key, Allow a feature, a standing rule, Unlock): "Sent to the Inbox: approve it in the Jarvis 2 app".
+46. **Fix: a standing rule asked for in the app came up as a 10-minute grant.** The secure request's own `kind` (the
+    page, "grant") overwrote the grant's `kind: "rule"` in the options; the grant's kind travels as `grantKind` now.
 
 ## Unfinished / known gaps
 

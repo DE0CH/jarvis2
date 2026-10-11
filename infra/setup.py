@@ -22,6 +22,15 @@ both). Values never print.
                                        --not-sensitive
   infra/setup.py backup-core FILE      the core's Fly token, FLY_API_TOKEN from FILE (infra/fly-token.sh):
                                        sent to the core sealed to its key, and backed up as the `core` store
+  infra/setup.py repos                 the router's repo list (repo, store, key fingerprint)
+  infra/setup.py requests              what waits in the phone's Inbox (requests and approvals)
+  infra/setup.py request add-repo OWNER/NAME --why TEXT [--sensitive]
+  infra/setup.py request remove-repo OWNER/NAME --why TEXT
+  infra/setup.py request grant SESSION HOLDER [--minutes N | --days N] --why TEXT
+  infra/setup.py request unlock SESSION --why TEXT
+                                       a request in the Inbox of the Jarvis 2 app (docs/API.md "Requests"): Deyao
+                                       reviews what would be signed and allows it with Face ID, or denies it. The
+                                       router records it as from "Claude (setup session)"; --why is required
 
 Everything is sealed to the master public key the core was set up with (Reset or Recover in the app), which
 this script reads from the core's signed state, after checking the core's keys against keys/box.pub — so it
@@ -247,8 +256,56 @@ def main():
         call("POST", "/setup/fly-token", {"sealed": seal_to(me["agreementKey"], json.dumps(tok).encode(), "jarvis2/fly-token")})
         backup("core", tok, True, me["master"])
         print("ok: the core has its Fly token, and the core store's backup is written")
+    elif cmd == "repos":
+        for r in call("GET", "/setup/repos")["repos"]:
+            print(r["repo"], r["store"], r.get("fingerprint") or "no key yet", "sensitive" if r.get("sensitive") else "")
+    elif cmd == "requests":
+        for q in call("GET", "/setup/requests")["requests"]:
+            c = q.get("call") or {}
+            print(q["id"], q["kind"], json.dumps(q.get("params") or {}, sort_keys=True), "from", q["callerText"], "·", c.get("method", ""), c.get("path", ""))
+    elif cmd == "request":
+        print(json.dumps(file_request(args), indent=1))
     else:
         raise SystemExit(__doc__)
+
+
+def opt(args, name, default=None):
+    """--name VALUE out of args (args is changed)"""
+    if name in args:
+        i = args.index(name)
+        if i + 1 >= len(args):
+            raise SystemExit(f"{name} needs a value")
+        v = args[i + 1]
+        del args[i:i + 2]
+        return v
+    return default
+
+
+def file_request(args):
+    """infra/setup.py request KIND …: an Inbox request, signed with the setup key (the router names the caller)"""
+    args = list(args)
+    why = opt(args, "--why")
+    sensitive = "--sensitive" in args
+    args = [a for a in args if a != "--sensitive"]
+    minutes, days = opt(args, "--minutes"), opt(args, "--days")
+    if not args or not why:
+        raise SystemExit("request KIND … --why TEXT (see infra/setup.py without arguments)")
+    kind, rest = args[0], args[1:]
+    if kind in ("add-repo", "remove-repo") and len(rest) == 1:
+        body = {"repo": rest[0], "explanation": why}
+        if kind == "add-repo" and sensitive:
+            body["sensitive"] = True
+        return call("POST", "/setup/requests/repo/" + ("add" if kind == "add-repo" else "remove"), body)
+    if kind == "grant" and len(rest) == 2:
+        body = {"session": rest[0], "holder": rest[1], "explanation": why}
+        if days:
+            body["days"] = int(days)
+        elif minutes:
+            body["minutes"] = int(minutes)
+        return call("POST", "/setup/requests/grant", body)
+    if kind == "unlock" and len(rest) == 1:
+        return call("POST", "/setup/requests/unlock", {"session": rest[0], "explanation": why})
+    raise SystemExit(f"unknown request: {' '.join(args)} (see infra/setup.py without arguments)")
 
 
 if __name__ == "__main__":

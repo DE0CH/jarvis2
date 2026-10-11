@@ -12,6 +12,8 @@ COPY --from=build /out/jarvis2-machine /usr/local/bin/jarvis2-machine
 # task templates (tasks/<name>/, router/tasks.go): a task line's machine runs one of these instead of a harness;
 # the image digest in the line's cert fixes which code that is
 COPY tasks/ /opt/jarvis2/tasks/
+# jarvis2-request: a session asks Deyao for something that needs his Face ID (an Inbox request, router/inbox.go)
+COPY --chmod=755 session-image/bin/jarvis2-request /usr/local/bin/jarvis2-request
 USER root
 # the one command the core runs through Fly (core/fly.go initPath): no arguments; it prints this machine's
 # public keys and lets boot go on

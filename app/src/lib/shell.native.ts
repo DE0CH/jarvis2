@@ -41,6 +41,8 @@ export function requestSecure(kind: SecureKind, options: Record<string, unknown>
   if (done) waiting.set(requestId, done);
   bridge?.requestSecureMode(JSON.stringify({ ...options, kind, requestId }));
 }
+/** the app opens these pages itself; nothing goes to the Inbox */
+export const webAsks = (_kind: SecureKind) => false;
 export async function shellSession(): Promise<{ base: string; token: string }> {
   if (!bridge) throw new Error("no shell");
   return JSON.parse(await bridge.session());

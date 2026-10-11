@@ -41,10 +41,10 @@ export function GrantsPage({ spec }: { spec: GrantsSpec }) {
       {!!m?.needsGrant && <Card mt={4} data={{ needsGrant: m.needsGrant }}>
         <Heading size={3} mb={1}>{holderTitle(m.needsGrant)} was turned away</Heading>
         <Muted>The machine refused the {holderTitle(m.needsGrant).toLowerCase()} feature ({HOLDERS[m.needsGrant]?.sub || "a router feature"}).</Muted>
-        {hasShell ? <Flex gap={2} mt={3} wrap>
+        <Flex gap={2} mt={3} wrap>
           <Button id="grant-quick" onPress={() => make("grant", m.needsGrant)}>{`Allow ${holderTitle(m.needsGrant).toLowerCase()} for 10 minutes`}</Button>
           <Button id="grant-rule" variant="soft" onPress={() => make("rule", m.needsGrant)}>Make a standing rule</Button>
-        </Flex> : <Muted mt={2}>Allow it in the Jarvis 2 app on the iPhone.</Muted>}
+        </Flex>
       </Card>}
       <Lbl>In force</Lbl>
       {err ? <P size={2} color="red">{err}</P>
@@ -60,15 +60,15 @@ export function GrantsPage({ spec }: { spec: GrantsSpec }) {
             <Muted>ends {when(g.ends)}</Muted>
             <Flex mt={3}><PButton pkey={"g:" + g.id} id={"grant-forget-" + g.holder} variant="soft" color="red" onPress={() => forget(g)} label="Forget" /></Flex>
           </Card>))}</Cards>}
-      {hasShell && <><Lbl>New</Lbl>
+      {<><Lbl>New</Lbl>
         <RadioCards id="grant-holder" value={holder} onChange={setHolder} options={Object.entries(HOLDERS).map(([k, v]) => ({ value: k, title: v.title, sub: v.sub }))} />
         <Lbl>How long</Lbl>
         <Segmented id="grant-len" value={len} onChange={setLen} items={[["1", "1 min"], ["2", "2 min"], ["5", "5 min"], ["10", "10 min"], ["rule", "Standing rule"]]} />
         {len === "rule" && <><Muted mt={2}>For things that happen while you are away (wakeups, auto-pause). Not for a session with a sensitive store. Until:</Muted>
           <Segmented id="grant-days" style={{ marginTop: 8 }} value={days} onChange={setDays} items={[["7", "7 days"], ["30", "30 days"], ["90", "90 days"], ["365", "1 year"]]} /></>}
-        <Flex mt={3}><Button id="grant-review" onPress={review}>Review and allow…</Button></Flex>
-        <Muted mt={2}>The next screen (drawn by the Jarvis 2 shell) shows exactly what will be signed: Allow with Face ID, or Deny.</Muted></>}
-      {!hasShell && <Muted mt={4}>Grants are signed in the Jarvis 2 app on the iPhone.</Muted>}
+        <Flex mt={3}><Button id="grant-review" onPress={review}>{hasShell ? "Review and allow…" : "Ask the iPhone…"}</Button></Flex>
+        <Muted mt={2}>{hasShell ? "The next screen (drawn by the Jarvis 2 shell) shows exactly what will be signed: Allow with Face ID, or Deny."
+          : "Grants are signed in the Jarvis 2 app on the iPhone: this sends the request to its Inbox."}</Muted></>}
     </Page>
   );
 }

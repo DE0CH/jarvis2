@@ -1,0 +1,87 @@
+#!/usr/bin/env python3
+"""Ask Deyao for something that needs his Face ID, from inside a Jarvis 2 session: a request in the Inbox of the
+Jarvis 2 app (docs/API.md "Requests"). He sees exactly what would be signed, the call this made (the router names
+this session as the caller, from the machine's key) and the reason given here, and allows or denies it.
+
+  jarvis2-request add-repo OWNER/NAME --why TEXT [--sensitive]   a deploy key (read + push) for a repo, in its own store
+  jarvis2-request grant HOLDER [--minutes N | --days N] --why TEXT
+                                    let a router feature into THIS session (terminal, scheduler, status, login,
+                                    archive, remote): 1-10 minutes, or a standing rule for N days
+  jarvis2-request unlock --why TEXT the locked stores this session waits on
+  jarvis2-request add-store STORE --why TEXT
+                                    one more store for this running session (its machine keeps its keys)
+  jarvis2-request list              this session's requests still waiting
+
+A session may ask only for itself (grant, unlock, add-store) and for a repo to be added; --why is required (plain
+text, at most 600 characters, 8 lines). Nothing happens until Deyao allows it; a request waits at most 7 days.
+Goes through the machine's local proxy ($JARVIS_URL, machine/apiproxy.go), which signs it with the machine key.
+"""
+import json, os, sys, urllib.error, urllib.request
+
+BASE = os.environ.get("JARVIS_URL", "http://127.0.0.1:7171").rstrip("/")
+
+
+def call(method, path, body=None):
+    req = urllib.request.Request(BASE + path, method=method, data=json.dumps(body).encode() if body is not None else None,
+                                 headers={"Content-Type": "application/json"})
+    try:
+        return json.load(urllib.request.urlopen(req, timeout=60))
+    except urllib.error.HTTPError as e:
+        b = e.read()
+        try:
+            msg = json.loads(b).get("error", b[:300])
+        except Exception:
+            msg = b[:300]
+        raise SystemExit(f"{method} {path}: HTTP {e.code}: {msg}")
+
+
+def opt(args, name):
+    if name in args:
+        i = args.index(name)
+        if i + 1 >= len(args):
+            raise SystemExit(f"{name} needs a value")
+        v = args[i + 1]
+        del args[i:i + 2]
+        return v
+    return None
+
+
+def main():
+    args = sys.argv[1:]
+    if not args or args[0] in ("-h", "--help"):
+        raise SystemExit(__doc__)
+    if args[0] == "list":
+        for q in call("GET", "/api/requests")["requests"]:
+            print(q["id"], q["kind"], json.dumps(q.get("params") or {}, sort_keys=True), "waiting since", q["created"])
+        return
+    why = opt(args, "--why")
+    minutes, days = opt(args, "--minutes"), opt(args, "--days")
+    sensitive = "--sensitive" in args
+    args = [a for a in args if a != "--sensitive"]
+    if not why:
+        raise SystemExit("--why TEXT is required: say why this is needed")
+    kind, rest = args[0], args[1:]
+    if kind == "add-repo" and len(rest) == 1:
+        body = {"repo": rest[0], "explanation": why}
+        if sensitive:
+            body["sensitive"] = True
+        out = call("POST", "/api/requests/repo/add", body)
+    elif kind == "grant" and len(rest) == 1:
+        body = {"holder": rest[0], "explanation": why}
+        if days:
+            body["days"] = int(days)
+        elif minutes:
+            body["minutes"] = int(minutes)
+        out = call("POST", "/api/requests/grant", body)
+    elif kind == "unlock" and not rest:
+        out = call("POST", "/api/requests/unlock", {"explanation": why})
+    elif kind == "add-store" and len(rest) == 1:
+        out = call("POST", "/api/requests/add-store", {"store": rest[0], "explanation": why})
+    else:
+        raise SystemExit(__doc__)
+    print(json.dumps(out))
+    print("Waiting in Deyao's Inbox (the Jarvis 2 app); nothing happens until he allows it.", file=sys.stderr)
+
+
+if __name__ == "__main__":
+    main()

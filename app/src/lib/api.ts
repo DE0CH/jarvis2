@@ -97,9 +97,19 @@ export type Approval = {
   id: string; kind: ApprovalKind; created?: string; session?: string | null; label?: string;
   challenge: SignedDoc; machine?: string; options?: Record<string, unknown>;
 };
+// an Inbox entry (router/inbox.go, docs/API.md "Requests"): a request waiting for the phone, or one of the router's
+// approvals. The list's title is rendered here from kind + params (lib/inbox.ts); the review page renders what is
+// signed from the signed content itself.
+export type InboxItem = {
+  id: string; kind: "repo-key" | "grant" | "unlock" | ApprovalKind; approval: boolean;
+  params: { action?: "add" | "remove"; repo?: string; sensitive?: boolean; session?: string; holder?: string; minutes?: number; days?: number };
+  session?: string; sessionName?: string; caller: { kind: string; session?: string }; callerText: string;
+  call: { method: string; path: string; args?: Record<string, unknown> }; explanation: string; created: string; expires?: string;
+  options?: Record<string, string>; open: { kind: string; options: Record<string, unknown> };
+};
 export type CoreStatus = { up: boolean; signingKey?: string; agreementKey?: string };
 export type State = {
-  sessions: Session[]; approvals: Approval[]; core: CoreStatus;
+  sessions: Session[]; approvals: Approval[]; core: CoreStatus; inbox?: InboxItem[];
   budget?: Budget | null; fly?: FlyView | null; flyApp?: string; repos?: RepoEntry[];
   loadError?: string | null; // client-side: the last api/state fetch failed
   loaded?: boolean; // client-side: api/state has answered at least once

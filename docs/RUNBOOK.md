@@ -74,6 +74,20 @@ Against real GitHub: `JARVIS2_LIVE_GITHUB_TOKEN_FILE=… JARVIS2_LIVE_REPO=<a th
 private repo> go test -run Live` in `core/` (the phone flow, then `git clone`/`push` over SSH with exactly that key,
 the other repo refused, remove).
 
+### Asking Deyao from a session or from the setup session (the Inbox)
+
+Claude never adds a repo or allows anything itself: it files a request and Deyao approves it in the app's Inbox
+(docs/API.md "Requests").
+
+- Setup session: `infra/setup.py request add-repo DE0CH/claude-env --why "…"` (also `remove-repo`, `grant SESSION
+  HOLDER [--minutes N | --days N]`, `unlock SESSION`); `infra/setup.py requests` lists what waits, `infra/setup.py
+  repos` the router's repo list (check it before asking for a repo that may be there already).
+- Inside a session: `jarvis2-request add-repo OWNER/NAME --why "…"`, `jarvis2-request grant HOLDER --minutes 5 --why
+  "…"`, `jarvis2-request unlock --why "…"`, `jarvis2-request add-store STORE --why "…"`, `jarvis2-request list`
+  (`session-image/bin/jarvis2-request`, through the machine's proxy).
+
+The reason is required, plain text, ≤ 600 characters. A request waits at most 7 days.
+
 ### Emptying the core without its kit
 
 A set-up core ends from the app only with the kit it was set up with (Reset or Recover asks for it). Without that
@@ -221,7 +235,10 @@ sign-in sheet (the PIN read from the bot's mailbox by this script and relayed to
 (the kit read off the page, backgrounded mid-flow), stores (a Face ID failure, then unlock and lock), New session (one
 page, its stores and the harness's unlocked) running on Fly within 10 minutes, a kill and relaunch, the terminal
 (turned away → the grant page → Deny, then Allow with Face ID → a command's output), Grants (a standing rule,
-forgotten), Settings → Repos (a throwaway repo's deploy key added and removed by the core; the script checks GitHub),
+forgotten), the Inbox from a session (`jarvis2-request` run in its machine by this script with `flyctl machine exec`:
+a grant request denied, another allowed with Face ID; the badge, the three fields, the caller), Settings → Repos (a
+throwaway repo's deploy key added and removed by the core; the script checks GitHub), the Inbox from the setup session
+(`setup.py request remove-repo` denied with the repo kept, then `request add-repo` allowed: the key made on GitHub),
 a session stuck at boot (its store locked right after Create) destroyed within 90 s, Destroy, then Recover with the
 kit (restart and recover) and every store back with its sensitivity, and a relaunch. A step fails on a missing
 element within its time, a near-blank screenshot, or a session not running in time. The run's video, screenshots and

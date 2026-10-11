@@ -43,6 +43,8 @@ struct SecureFrame<Content: View>: View {
           .background(RoundedRectangle(cornerRadius: K.radius[2], style: .continuous).fill(Radix.blue.a[3]))
           .padding(.top, 8)
           .accessibilityIdentifier("secure-banner")
+          // opened from the Inbox: what is signed, the call that asked for it, the caller's reason (Inbox.swift)
+          if let iid = shell.secureOptions["inboxId"] as? String, !iid.isEmpty { RequestReview(shell: shell, inboxId: iid) }
           content()
           Spacer(minLength: 48)
         }
@@ -359,6 +361,7 @@ struct SecureUnlock: View {
       let all = try await RouterClient.shared.stores()
       certStores = (c.stores ?? []).filter { $0 != StoreView.coreStore }
       locked = certStores.filter { n in all.contains { $0.name == n && !$0.unlocked && !$0.empty } }
+      shell.signedAction = SignedAction.unlock(stores: locked ?? [], session: label)
     } catch { loadError = errText(error) }
   }
   private func allow() async {
@@ -441,6 +444,7 @@ struct SecureApproval: View {
       let rv = try Checks.review(challenge: x.challenge, coreKey: try CoreTrust.key())
       harnessStores = (await RouterClient.shared.harnessStores())[rv.harness] ?? []
       r = rv; a = x
+      shell.signedAction = SignedAction.approval(rv)
     } catch { loadError = errText(error) }
   }
   private func approve() async {
@@ -613,6 +617,7 @@ struct SecureRepoKey: View {
     do {
       let r = try await RouterClient.shared.deployKeyBegin(action: action, repo: repo, sensitive: want)
       doc = r.doc; b = r.begin; sensitive = want
+      shell.signedAction = SignedAction.deployKey(r.begin)
       forced = r.begin.sensitive && !want
     } catch { failure = errText(error) }
     busy = nil

@@ -5,8 +5,8 @@ import { useSyncExternalStore } from "react";
 import { AppState, Platform } from "react-native";
 import { api, coreStores, loadPolicy, RUN_ACTIVE, type Choice, type CoreStore, type Policy, type Rec, type State, type TasksOverview } from "./api";
 
-export type Tab = "sessions" | "search" | "stores" | "records" | "tasks" | "schedules" | "settings";
-export const TABS: [Tab, string][] = [["sessions", "Sessions"], ["search", "Search"], ["stores", "Stores"], ["records", "Previous"], ["tasks", "Tasks"], ["schedules", "Schedules"], ["settings", "Settings"]];
+export type Tab = "sessions" | "inbox" | "search" | "stores" | "records" | "tasks" | "schedules" | "settings";
+export const TABS: [Tab, string][] = [["sessions", "Sessions"], ["inbox", "Inbox"], ["search", "Search"], ["stores", "Stores"], ["records", "Previous"], ["tasks", "Tasks"], ["schedules", "Schedules"], ["settings", "Settings"]];
 // tasks + their schedules (api/tasks): loaded while the Tasks or Schedules tab (or a task page) is open
 export type TasksState = { loading: boolean; loaded: boolean; data: TasksOverview; err: string | null };
 // what holds a session right now (api/state `busy`), as a button label
@@ -40,6 +40,8 @@ export function useStore<T>(sel: (s: Store) => T): T {
 export const getStore = () => snap;
 
 export function setTab(t: Tab) { S.tab = t; emit(); if (t === "records" || t === "search") loadRecords(); if (t === "stores" || t === "settings") loadStores(); if (t === "tasks" || t === "schedules") { loadTasks(); loadStores(); } }
+/** the Inbox badge: what waits for the phone */
+export const useInboxCount = () => useStore((s) => (s.state.inbox || []).length);
 export function pend(key: string, label: string | null) { label ? S.pending.set(key, label) : S.pending.delete(key); S.pending = new Map(S.pending); emit(); }
 
 // ---- notices: no alert()/confirm() — toasts at the bottom of the screen, questions as dialogs ----
@@ -111,7 +113,7 @@ let fastUntil = 0;
 const pollState = coalesce(async () => {
   try {
     const st = await api<State>("GET", "api/state");
-    S.state = { sessions: st.sessions || [], approvals: st.approvals || [], core: st.core || { up: false }, budget: st.budget ?? null, fly: st.fly ?? null, flyApp: st.flyApp, repos: st.repos || [], loaded: true, loadError: null };
+    S.state = { sessions: st.sessions || [], approvals: st.approvals || [], core: st.core || { up: false }, budget: st.budget ?? null, fly: st.fly ?? null, flyApp: st.flyApp, repos: st.repos || [], inbox: st.inbox || [], loaded: true, loadError: null };
   } catch (e: any) { S.state = { ...S.state, loadError: e.message }; }
   S.refreshing = false; emit();
   // a session is on its way somewhere: follow it closely

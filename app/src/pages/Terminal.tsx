@@ -13,7 +13,6 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { StatusBar } from "expo-status-bar";
 import { api } from "../lib/api";
 import { liveGrant, loadGrants, requestGrant } from "../lib/grants";
-import { hasShell } from "../lib/shell";
 import { useStore } from "../lib/store";
 import { LockedStore } from "../views/Sessions";
 import { ForceScheme } from "../theme";
@@ -118,7 +117,7 @@ export function TerminalPage({ spec }: { spec: TermSpec }) {
             {/* turned away for want of a grant: one plain line (the machine's refusal says the same in HTTP words); any
                 other error as it came. With no phone grant but the session's own allow list, the screen just works. */}
             <P size={1} style={{ color: "#f1c27d" }}>{allowed === false || /grant/i.test(err || "") ? "This session's terminal needs a grant." : err}</P>
-            {hasShell && <Flex gap={2}><Button size={1} id="term-allow" onPress={() => requestGrant(id, spec.title, { holder: "terminal", kind: "grant", minutes: 10 }, () => checkGrant())}>Allow terminal for 10 minutes</Button></Flex>}
+            {<Flex gap={2}><Button size={1} id="term-allow" onPress={() => requestGrant(id, spec.title, { holder: "terminal", kind: "grant", minutes: 10 }, () => checkGrant())}>Allow terminal for 10 minutes</Button></Flex>}
           </View>
         )}
         <TermBody>{(kb) => <>

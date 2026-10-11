@@ -126,6 +126,10 @@ func (r *Router) applyKeyAnswer(a keyAnswer) error {
 		return fmt.Errorf("the core's answer names no GitHub repo")
 	}
 	same := func(e RepoEntry) bool { return strings.EqualFold(e.Repo, repo) }
+	// a pending request for the same thing is answered too (inbox.go)
+	r.dropRequests(func(q *InboxRequest) bool {
+		return q.Kind == requestKindRepo && strings.EqualFold(q.Params.Repo, repo) && (q.Params.Action == "add") == (a.Kind == "deploy-key-added")
+	})
 	return r.updateRepos(func(rs []RepoEntry) []RepoEntry {
 		out := []RepoEntry{}
 		for _, e := range rs {

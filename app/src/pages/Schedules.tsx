@@ -5,7 +5,6 @@
 import { useEffect, useState } from "react";
 import { api, cronEvery, sessionTitle, when, type Cron, type Wakeup } from "../lib/api";
 import { useStore, ask, exclusive, failed, pend, refresh, toast } from "../lib/store";
-import { hasShell } from "../lib/shell";
 import { requestGrant } from "../lib/grants";
 import { Button, Card, Flex, Heading, Lbl, Muted, P, RadioCards, Segmented, Spinner, TextArea, TextField } from "../ui/kit";
 import { BtnLabel, PButton } from "../ui/bits";
@@ -73,7 +72,7 @@ export function SchedulesPage({ spec }: { spec: SchedulesSpec }) {
       right={<Button id="sch-save" disabled={!!busy} onPress={add}>{busy ? <><Spinner /><BtnLabel>{busy}</BtnLabel></> : "Arm"}</Button>}>
       <Muted mt={2}>{title}</Muted>
       <Muted mt={2}>At the time, the prompt arrives in the session as a message; a paused session is resumed first. The session has to allow the scheduler (it does when it arms one itself), or the phone does with a standing rule.</Muted>
-      {hasShell && m && <Flex mt={2}><Button size={1} variant="soft" color="gray" id="sch-rule" onPress={() => requestGrant(sid, title, { holder: "scheduler", kind: "rule" })}>Standing rule for the scheduler…</Button></Flex>}
+      {m && <Flex mt={2}><Button size={1} variant="soft" color="gray" id="sch-rule" onPress={() => requestGrant(sid, title, { holder: "scheduler", kind: "rule" })}>Standing rule for the scheduler…</Button></Flex>}
       <Lbl>Armed</Lbl>
       {err ? <P size={2} color="red">{err}</P>
         : !ws || !cs ? <Flex gap={2} align="center"><Spinner /><Muted>Loading…</Muted></Flex>

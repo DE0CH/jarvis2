@@ -35,6 +35,8 @@ final class Shell {
   var mode: Mode = .normal
   var route: Route = .setup
   var secureOptions: [String: Any] = [:]
+  /// "What you sign (exact)" for an Inbox request's review (Inbox.swift): the page sets it from the signed content
+  var signedAction: String?
   var identity: AppExtensionIdentity?
   var loadError: String?
   /// the push/pop motion: 0 = the app on screen, 1 = a secure page fully in (the app slid back under it)
@@ -177,6 +179,7 @@ final class Shell {
     }
     log("enter secure \(opts["kind"] ?? "")")
     secureOptions = opts
+    signedAction = nil
     transition += 1
     let tr = transition
     // the picture of the app as it is now; while the shell is already covering a relaunching extension with the
@@ -213,6 +216,8 @@ final class Shell {
   func exitSecure(_ why: String, done: Bool = false, id: String? = nil) {
     guard mode == .secure, !leaving else { return }
     log("exit secure: \(why)")
+    // an Inbox request whose page went through leaves the Inbox (an approval leaves by itself once answered)
+    if done, let iid = secureOptions["inboxId"] as? String, secureOptions["approvalId"] == nil { Task { await RouterClient.shared.inboxDone(iid) } }
     UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
     transition += 1
     let tr = transition

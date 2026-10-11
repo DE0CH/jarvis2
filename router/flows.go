@@ -91,6 +91,7 @@ type NewSession struct {
 	AutoPause      *bool          `json:"autoPause"`   // default on
 	APIProxy       bool           `json:"apiProxy"`    // SESSION_API_PROXY (sessionops.go)
 	Attachments    *AttachmentsIn `json:"attachments"` // first-prompt attachments (uploads.go)
+	Origin         *Origin        `json:"-"`           // inbox.go: who asked, from the credential (the handler sets it)
 }
 
 const nullImage = "null" // a succession to it burns the predecessor (core.NullImage)
@@ -180,6 +181,9 @@ func (r *Router) startAndCertify(sid string, approval *Doc) {
 
 func (r *Router) addApproval(a *Approval) {
 	a.ID, a.Created = randID(), time.Now().UTC()
+	if a.Origin == nil {
+		a.Origin = takeOrigin(a.Session) // inbox.go: the caller the handler noted
+	}
 	r.st.Do(func(d *persisted) { d.Approvals[a.ID] = a })
 }
 
@@ -233,7 +237,7 @@ func (r *Router) CreateSession(in NewSession) (string, error) {
 	opsOptions(s, opts)
 	go func() {
 		r.addApproval(&Approval{Kind: "new-session", Session: s.ID, Label: s.Label, Challenge: ch,
-			Options: opts})
+			Options: opts, Origin: in.Origin})
 	}()
 	return s.ID, nil
 }
@@ -507,6 +511,13 @@ func (r *Router) finish(id string) {
 // ---- add a store (asked by the machine) -------------------------------------------------------------------
 
 func (r *Router) AddStore(machine, store string) error {
+	var sid string
+	r.st.Do(func(d *persisted) { sid = d.Machines[machine] })
+	return r.AddStoreFrom(machine, store, Origin{Caller: Caller{Kind: "session", Session: sid}, Call: APICall{Method: "POST", Path: "/m/add-store", Args: map[string]any{"store": store}}}, "")
+}
+
+// AddStoreFrom: the add-store approval, with its caller and the caller's explanation (inbox.go)
+func (r *Router) AddStoreFrom(machine, store string, o Origin, explanation string) error {
 	var s Session
 	r.st.Do(func(d *persisted) {
 		if x := d.Sessions[d.Machines[machine]]; x != nil {
@@ -525,7 +536,7 @@ func (r *Router) AddStore(machine, store string) error {
 		return err
 	}
 	r.addApproval(&Approval{Kind: "add-store", Session: s.ID, Machine: machine, Label: s.Label, Challenge: ch,
-		Options: map[string]string{"store": store}})
+		Options: map[string]string{"store": store}, Origin: &o, Explanation: explanation})
 	return nil
 }
 

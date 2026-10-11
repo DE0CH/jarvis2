@@ -260,7 +260,17 @@ export function Segmented({ value, onChange, items, style, id }: { value: string
   );
 }
 // the Radix underline tab list, horizontally scrollable on a narrow screen
-export function Tabs({ value, onChange, items }: { value: string; onChange: (v: string) => void; items: [string, string][] }) {
+/** a count on a tab (the Inbox): a small solid pill after its name, nothing at 0 */
+export function CountBadge({ n, id }: { n: number; id?: string }) {
+  const t = useTheme();
+  if (!n) return null;
+  return (
+    <View {...ids(id)} accessibilityLabel={`${n} waiting`} style={{ minWidth: 18, height: 18, borderRadius: 9, paddingHorizontal: 5, backgroundColor: t.c.red[9], alignItems: "center", justifyContent: "center", marginLeft: 6 }}>
+      <RNText style={{ fontSize: 11, lineHeight: 14, fontWeight: "600", color: "#ffffff" }}>{n > 99 ? "99+" : String(n)}</RNText>
+    </View>
+  );
+}
+export function Tabs({ value, onChange, items, badges = {} }: { value: string; onChange: (v: string) => void; items: [string, string][]; badges?: Record<string, number> }) {
   const t = useTheme();
   return (
     <View nativeID="tablist" testID="tablist" style={{ marginHorizontal: -16, marginBottom: 12 }}>
@@ -272,8 +282,9 @@ export function Tabs({ value, onChange, items }: { value: string; onChange: (v: 
             <Pressable key={k} {...ids("tab-" + k, { tab: k })} accessibilityRole="tab" accessibilityState={{ selected: on }} accessibilityLabel={l} onPress={() => onChange(k)}
               style={{ height: 40, justifyContent: "center", paddingHorizontal: 8 }}>
               {({ pressed }) => <>
-                <View style={{ paddingHorizontal: 8, paddingVertical: 4, borderRadius: radius[2], backgroundColor: pressed ? t.gray.a[3] : "transparent" }}>
+                <View style={{ paddingHorizontal: 8, paddingVertical: 4, borderRadius: radius[2], backgroundColor: pressed ? t.gray.a[3] : "transparent", flexDirection: "row", alignItems: "center" }}>
                   <RNText style={{ fontSize: 14, lineHeight: 20, color: on ? t.gray[12] : t.gray.a[11], fontWeight: on ? "500" : "400" }}>{l}</RNText>
+                  <CountBadge n={badges[k] || 0} id={"tab-badge-" + k} />
                 </View>
                 {on && <View style={{ position: "absolute", left: 0, right: 0, bottom: 0, height: 2, backgroundColor: t.accent[9] }} />}
               </>}

@@ -27,7 +27,7 @@ export const restore = (r: Rec) => exclusive("r:" + r.id, async () => {
     await refreshUntil((s) => !!(a = s.approvals.find((x) => x.session === j.id)) || s.sessions.some((x) => x.id === j.id && x.state !== "approval"), 60000);
     if (getStore().tab === "records") setTab("sessions");
     if (a && hasShell) review(a);
-    else toast(hasShell ? "Restore requested — approve it at the top of the session list." : "Restore requested. Approve it in the Jarvis 2 app on the iPhone.", "ok");
+    else toast(hasShell ? "Restore requested — approve it in the Inbox." : "Restore requested. Approve it in the Inbox of the Jarvis 2 app on the iPhone.", "ok");
     settle(120000);
   } catch (e: any) { failed(e); }
   finally { await loadRecords(); pend(key, null); }

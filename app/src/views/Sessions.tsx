@@ -1,13 +1,14 @@
 import { useRef } from "react";
 import { Linking, View } from "react-native";
 import { api, ago, isTaskLine, challengeRequest, cronEvery, holderTitle, HOLDERS, HARNESS, REGION, sessionTitle, storesOf, when, type Approval, type Session, type State } from "../lib/api";
-import { useStore, getStore, pend, refresh, refreshUntil, pendUntil, settle, ask, askText, toast, failed, exclusive, BUSY_LABEL } from "../lib/store";
+import { useStore, setTab, getStore, pend, refresh, refreshUntil, pendUntil, settle, ask, askText, toast, failed, exclusive, BUSY_LABEL } from "../lib/store";
 import { hasShell, requestSecure } from "../lib/shell";
 import { requestGrant } from "../lib/grants";
 import { canCopy, copyText } from "../lib/clipboard";
 import { Box, Button, Callout, CalloutText, Card, Flex, Heading, Lbl, Muted, P, Pill, Text } from "../ui/kit";
 import { BusyButton, PButton, useCoolAfterShift } from "../ui/bits";
 import { Cards } from "../ui/cards";
+import { InboxNote } from "./Inbox";
 import { openPage } from "../ui/page";
 import { openMenu, mouse, type MenuItem } from "../ui/overlays";
 
@@ -81,7 +82,7 @@ const upgrade = (id: string) => exclusive("s:" + id, async () => {
     await api("POST", `api/sessions/${id}/resume`, { upgrade: true });
     let a: Approval | undefined;
     await refreshUntil((s) => !!(a = s.approvals.find((x) => x.kind === "resume-upgrade" && x.session === id)) || find(s, id)?.state === "failed", 90000);
-    if (a) review(a); else if (hasShell) toast("No approval appeared yet — it will show at the top of the list when it does.");
+    if (a) review(a); else if (hasShell) toast("No approval appeared yet — it will show in the Inbox when it does.");
   } catch (e: any) { failed(e); }
   finally { pend("s:" + id, null); }
 });
@@ -127,7 +128,6 @@ export const destroySession = (id: string) => exclusive("s:" + id, async () => {
   } catch (e: any) { failed(e); await refresh(false); }
   finally { pend("s:" + id, null); }
 });
-const reject = (a: Approval) => pendUntil("a:" + a.id, "Rejecting…", () => api("POST", `api/approvals/${a.id}/reject`), (s) => !s.approvals.some((x) => x.id === a.id), 30000);
 // Permission mode (signed in the line's cert). Running: switched in place; raising to bypass needs a fresh
 // phone grant for the terminal feature, so a 403 {phoneGrant} opens the grant page and the switch runs again
 // once it is signed. Paused: kept for the next resume, which the iPhone approves.
@@ -182,27 +182,6 @@ function MoreButton({ m, cool }: { m: Session; cool: boolean }) {
   );
 }
 
-const KIND_TITLE: Record<string, string> = { "new-session": "New session", "resume-upgrade": "Resume (image or mode)", "add-store": "Add a store" };
-function ApprovalCard({ a }: { a: Approval }) {
-  const r = challengeRequest(a, useStore((s) => s.policy));
-  const restore = a.options && (a.options as any).restore;
-  const what = a.kind === "add-store" ? `Add ${r.addedStore || "?"}` : `Stores: ${r.stores.join(", ") || "none"} · ${HARNESS[r.harness] || r.harness} · ${r.permissionMode} mode`;
-  return (
-    <Card data={{ approval: a.id }}>
-      <Flex justify="space-between" align="flex-start" gap={2} mb={1}>
-        <Heading size={3} style={{ flex: 1 }}>{a.label || KIND_TITLE[a.kind] || a.kind}</Heading>
-        <Pill kind="info">{restore ? "Restore" : KIND_TITLE[a.kind] || a.kind}</Pill>
-      </Flex>
-      <Muted>{what}{a.created ? " · asked " + ago(a.created) : ""}</Muted>
-      {r.sensitive.length > 0 && <Callout color="amber" mt={2}>{"Includes sensitive stores: " + r.sensitive.join(", ")}</Callout>}
-      <Flex gap={2} pt={3}>
-        {hasShell ? <Button id={"review-" + a.id} onPress={() => review(a)}>Review</Button> : <Muted style={{ flex: 1 }}>Approve it in the Jarvis 2 app on the iPhone.</Muted>}
-        <PButton pkey={"a:" + a.id} variant="soft" color="gray" onPress={() => reject(a)} label="Reject" id={"reject-" + a.id} />
-      </Flex>
-    </Card>
-  );
-}
-
 // what will wake this session, one line each
 function Schedules({ m }: { m: Session }) {
   if (!hasSchedule(m)) return null;
@@ -220,10 +199,10 @@ function NeedsGrant({ m }: { m: Session }) {
   return (
     <Callout color="amber" mt={2} data={{ needsGrant: h }}>
       <CalloutText color="amber">{`The machine turned away ${holderTitle(h).toLowerCase()} (${HOLDERS[h]?.sub || "a router feature"}).`}</CalloutText>
-      {hasShell ? <Flex gap={2} mt={2} wrap>
+      {<Flex gap={2} mt={2} wrap>
         <Button size={1} id={"grant-" + m.id} onPress={() => requestGrant(m.id, title, { holder: h, kind: "grant", minutes: 10 })}>{`Allow ${holderTitle(h).toLowerCase()} for 10 minutes`}</Button>
         <Button size={1} variant="soft" id={"rule-" + m.id} onPress={() => requestGrant(m.id, title, { holder: h, kind: "rule" })}>Make a standing rule</Button>
-      </Flex> : <CalloutText color="amber">Allow it in the Jarvis 2 app on the iPhone.</CalloutText>}
+      </Flex>}
     </Callout>
   );
 }
@@ -235,8 +214,7 @@ export function LockedStore({ m, compact }: { m: Session; compact?: boolean }) {
   return (
     <Callout color="amber" mt={compact ? 0 : 2} data={{ lockedStore: m.lockedStore }}>
       <CalloutText color="amber">{`Waiting for store ${m.lockedStore} to be unlocked.`}</CalloutText>
-      {hasShell ? <Flex gap={2} mt={2} wrap><Button size={1} id={"unlock-" + m.id} onPress={open}>Unlock…</Button></Flex>
-        : <CalloutText color="amber">Unlock it in the Jarvis 2 app on the iPhone.</CalloutText>}
+      <Flex gap={2} mt={2} wrap><Button size={1} id={"unlock-" + m.id} onPress={open}>{hasShell ? "Unlock…" : "Ask the iPhone to unlock"}</Button></Flex>
     </Callout>
   );
 }
@@ -253,10 +231,11 @@ export function Sessions() {
   // task lines show in the Tasks tab
   const list = [...sessions].filter((m) => !isTaskLine(m)).sort((a, b) => String(b.created || "").localeCompare(String(a.created || "")) || a.id.localeCompare(b.id));
   const cool = useCoolAfterShift(list.map((m) => m.id).join("|"));
-  if (!list.length && !approvals.length) return <><P size={3} color="gray" align="center" mt={8} mb={8}>{"No sessions.\n" + (mouse() ? "Click" : "Tap") + " “New session”."}</P><FlyAccountSection /></>;
+  if (!list.length && !approvals.length) return <><InboxNote onOpen={() => setTab("inbox")} /><P size={3} color="gray" align="center" mt={8} mb={8}>{"No sessions.\n" + (mouse() ? "Click" : "Tap") + " “New session”."}</P><FlyAccountSection /></>;
   return (
     <>
-      {approvals.length > 0 && <Box data={{ group: "Approvals" }}><Lbl>Waiting for you</Lbl><Cards>{approvals.map((a) => <ApprovalCard key={a.id} a={a} />)}</Cards></Box>}
+      {/* what waits for the phone is in the Inbox tab (views/Inbox.tsx); one line here points there */}
+      <InboxNote onOpen={() => setTab("inbox")} />
       {GROUPS.map((g) => {
         const inGroup = list.filter((m) => groupOf(m) === g);
         if (!inGroup.length) return null;

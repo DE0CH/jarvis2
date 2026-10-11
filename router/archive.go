@@ -749,6 +749,7 @@ func (r *Router) registerArchive(app appRoute, m machineRoute) {
 			writeErr(w, err)
 			return
 		}
+		r.noteOrigin(sid, Origin{Caller: appCaller(req), Call: APICall{Method: "POST", Path: req.URL.Path}}) // inbox.go
 		writeJSON(w, 200, map[string]any{"id": sid, "requestId": in.RequestID})
 	})
 	m("POST /m/live-transcript", r.liveTranscript) // livesync.go

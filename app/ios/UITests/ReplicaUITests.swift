@@ -136,6 +136,39 @@ final class ReplicaUITests: XCTestCase {
     return ok
   }
 
+  // ---- the Inbox: a request filed elsewhere (the setup session, a session's jarvis2-request) shows on the Inbox tab's
+  // badge; Review opens the shell's page with the three fields (what is signed, the call, the caller's reason) ----
+  func inboxReview(_ what: String) -> Bool {
+    _ = wait(el("tab-inbox"), 30, "the Inbox tab")
+    XCTAssertTrue(wait(el("tab-badge-inbox"), 90, "the Inbox badge (\(what))"), "[\(what)] the badge counts the request")
+    el("tab-inbox").tap()
+    guard wait(prefixed("request-review-"), 60, "the request in the Inbox (\(what))") else { return false }
+    sleep(1); shot("inbox-" + what)
+    prefixed("request-review-").tap()
+    let ok = wait(el("request-call"), 30, "the review page (\(what))")
+    let signed = el("request-signed")
+    let until = Date().addingTimeInterval(30)
+    while Date() < until && signed.label.hasPrefix("Reading") { usleep(500_000) }
+    sleep(1); shot("inbox-review-" + what)
+    for id in ["request-signed", "request-call", "request-explanation"] where el(id).exists { note("\(what)-\(id)", el(id).label) }
+    XCTAssertFalse(el("request-mismatch").exists, "[\(what)] the request matches the page")
+    XCTAssertTrue(signed.label.hasPrefix("Core:") || signed.label.hasPrefix("Phone grant"), "[\(what)] what is signed, rendered from the signed content: \(signed.label)")
+    return ok
+  }
+  func inboxDeny(_ what: String) {
+    el("request-deny").tap()
+    XCTAssertTrue(gone(el("request-call"), 30), "[\(what)] Deny leaves the page")
+    XCTAssertTrue(gone(prefixed("request-review-"), 60) && gone(el("tab-badge-inbox"), 60), "[\(what)] denied: off the Inbox, no badge")
+    shot("inbox-denied-" + what)
+  }
+  func inboxAllowed(_ what: String, button: String) {
+    faceIDMatches()
+    el(button).tap()
+    XCTAssertTrue(gone(el("request-call"), 90), "[\(what)] the page closes after Face ID")
+    XCTAssertTrue(gone(prefixed("request-review-"), 60) && gone(el("tab-badge-inbox"), 60), "[\(what)] allowed: off the Inbox, no badge")
+    shot("inbox-allowed-" + what)
+  }
+
   func testReplica() throws {
     continueAfterFailure = true
     app.launch()
@@ -257,6 +290,18 @@ final class ReplicaUITests: XCTestCase {
     XCTAssertTrue(el("term-in").waitForExistence(timeout: 20), "the terminal survives backgrounding")
     el("term-close").tap()
 
+    // ---- the Inbox, from a session: jarvis2-request in the session's machine (the setup session runs it there)
+    // asks for a grant for itself → badge → Review → Deny; another → Allow with Face ID ----
+    XCTAssertEqual(relay("inbox-session:\(sid):status"), "ok", "the session filed a grant request")
+    if inboxReview("session-deny") {
+      XCTAssertTrue(el("request-call").label.contains("session"), "the caller is the session: \(el("request-call").label)")
+      XCTAssertTrue(el("request-explanation").label.contains("replica-the-session"), "the session's reason is shown")
+      inboxDeny("session")
+    }
+    XCTAssertEqual(relay("inbox-session:\(sid):scheduler"), "ok", "the session filed another")
+    if inboxReview("session-allow") { inboxAllowed("session", button: "secure-grant-allow") }
+    el("tab-sessions").tap()
+
     // ---- grants: More → Grants → a standing rule, then forget it ----
     if wait(el("more-" + sid), 30, "more button") {
       el("more-" + sid).tap()
@@ -299,6 +344,14 @@ final class ReplicaUITests: XCTestCase {
         if wait(el("repo-key-" + repoName), 90, "the repo listed with its deploy key") {
           shot("repo-added")
           XCTAssertEqual(relay("repo-added"), "ok", "GitHub shows the repo's deploy key")
+          // the Inbox, from the setup session (Claude): it asks to remove the repo → Deny → the repo stays
+          XCTAssertEqual(relay("inbox-setup-remove"), "ok", "the setup session filed a remove request")
+          if inboxReview("setup-deny") {
+            XCTAssertTrue(el("request-call").label.contains("Claude"), "the caller is the setup session: \(el("request-call").label)")
+            inboxDeny("setup")
+          }
+          el("tab-settings").tap()
+          XCTAssertTrue(wait(el("repo-key-" + repoName), 30, "denied: the repo is still listed"), "deny kept the repo")
           el("repo-remove-" + repoName).tap()
           if wait(el("secure-repo-go"), 30, "the remove-repo page") {
             faceIDMatches()
@@ -311,6 +364,15 @@ final class ReplicaUITests: XCTestCase {
       }
     }
     XCTAssertEqual(relay("repo-check"), "ok", "GitHub shows the deploy key added and removed")
+    // the Inbox, from the setup session: it asks to add the repo again → Review → Add with Face ID → GitHub has the key
+    if !repo.isEmpty {
+      XCTAssertEqual(relay("inbox-setup-add"), "ok", "the setup session filed an add request")
+      if inboxReview("setup-allow") {
+        XCTAssertTrue(el("request-signed").label.contains(repo), "what is signed names the repo")
+        inboxAllowed("setup", button: "secure-repo-go")
+        XCTAssertEqual(relay("repo-added"), "ok", "GitHub shows the deploy key made from the Inbox")
+      }
+    }
 
     // ---- a session stuck at boot (its store locked again right after Create) is destroyed at once ----
     el("tab-sessions").tap()

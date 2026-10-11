@@ -310,6 +310,14 @@ func (r *Router) buildHandlers() {
 		if in.RequestID == "" {
 			in.RequestID = randID()
 		}
+		args := map[string]any{"label": in.Label, "harness": in.Harness, "stores": in.Stores, "model": in.Model, "permissionMode": in.PermissionMode, "size": in.Size}
+		if in.Repos != "" {
+			args["repos"] = in.Repos
+		}
+		if in.Prompt != "" {
+			args["prompt"] = fmt.Sprintf("(%d characters)", len([]rune(in.Prompt)))
+		}
+		in.Origin = &Origin{Caller: appCaller(req), Call: APICall{Method: "POST", Path: "/api/sessions", Args: args}}
 		id, err := r.CreateSession(in)
 		if err != nil {
 			scheduleErr(w, err)
@@ -339,6 +347,7 @@ func (r *Router) buildHandlers() {
 			writeErr(w, err)
 			return
 		}
+		r.noteOrigin(req.PathValue("id"), Origin{Caller: appCaller(req), Call: APICall{Method: "POST", Path: req.URL.Path, Args: map[string]any{"upgrade": in.Upgrade}}})
 		if err := r.Resume(req.PathValue("id"), in.Upgrade); err != nil {
 			writeErr(w, err)
 			return

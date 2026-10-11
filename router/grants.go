@@ -198,6 +198,11 @@ func (r *Router) AddGrant(session string, doc *Doc) (*StoredGrant, error) {
 		}
 		sg = &StoredGrant{ID: randID(), Session: session, Holder: holder, Kind: g.Kind, Ends: end, Doc: doc}
 		d.Grants[sg.ID] = sg
+		for id, q := range d.Inbox { // a pending request for this feature is answered (inbox.go)
+			if q.Kind == requestKindGrant && q.Params.Session == session && q.Params.Holder == holder {
+				delete(d.Inbox, id)
+			}
+		}
 	})
 	return sg, err
 }

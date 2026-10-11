@@ -32,7 +32,8 @@ struct SecureGrant: View {
 
   // the request, as the React Native side made it (only what passes these checks can be allowed)
   private var holder: String { (options["holder"] as? String).flatMap { h in HOLDERS.contains { $0.id == h } ? h : nil } ?? "" }
-  private var kind: String { (options["kind"] as? String) == "rule" ? "rule" : "grant" }
+  // "grantKind": the secure request's own "kind" is the page's ("grant"), which once overwrote a rule's kind
+  private var kind: String { (options["grantKind"] as? String) == "rule" ? "rule" : "grant" }
   private var minutes: Int { (options["minutes"] as? Int).flatMap { (1...10).contains($0) ? $0 : nil } ?? 10 }
   /// a standing rule's end: the date asked for, kept to between an hour and a year from now
   private var until: Date {
@@ -85,6 +86,7 @@ struct SecureGrant: View {
       let c = try await RouterClient.shared.sessionCert(sessionId)
       holderKeys = try await RouterClient.shared.holders()
       cert = c
+      shell.signedAction = refusal.map { "Nothing can be signed: \($0)" } ?? SignedAction.grant(meaning: meaning, line: c.line)
     } catch { loadError = errText(error) }
   }
 

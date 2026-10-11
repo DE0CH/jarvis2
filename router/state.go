@@ -55,6 +55,9 @@ type Approval struct {
 	Challenge *Doc              `json:"challenge"`
 	BurnCert  *Doc              `json:"burnCert,omitempty"`
 	Options   map[string]string `json:"options,omitempty"`
+	// inbox.go: who asked for it (from the caller's credential) and the call it made, and the caller's own words
+	Origin      *Origin `json:"origin,omitempty"`
+	Explanation string  `json:"explanation,omitempty"`
 }
 
 type Record struct {
@@ -83,10 +86,11 @@ type persisted struct {
 	SessCerts map[string]*Doc         `json:"sessionCerts"`
 	Grants    map[string]*StoredGrant `json:"grants"` // id → a phone-signed grant or standing rule (grants.go)
 
-	Schedules map[string]*Schedule `json:"schedules,omitempty"` // session id → wakeups, crons, resume prompt (schedule.go)
-	Budget    *BudgetState         `json:"budget,omitempty"`    // budget.go: this month's Fly spend estimate
-	Uploads   map[string]*Upload   `json:"uploads,omitempty"`   // uploads.go: first-prompt attachments staged on the volume
-	Tasks     *TaskState           `json:"tasks,omitempty"`     // tasks.go: task instances (session lines), runs, daily schedules
+	Schedules map[string]*Schedule     `json:"schedules,omitempty"` // session id → wakeups, crons, resume prompt (schedule.go)
+	Budget    *BudgetState             `json:"budget,omitempty"`    // budget.go: this month's Fly spend estimate
+	Uploads   map[string]*Upload       `json:"uploads,omitempty"`   // uploads.go: first-prompt attachments staged on the volume
+	Tasks     *TaskState               `json:"tasks,omitempty"`     // tasks.go: task instances (session lines), runs, daily schedules
+	Inbox     map[string]*InboxRequest `json:"inbox,omitempty"`     // inbox.go: requests waiting for the phone
 }
 
 type State struct {
@@ -109,6 +113,9 @@ func LoadState(dir string) (*State, error) {
 	d := &s.data
 	if d.Sessions == nil {
 		d.Sessions = map[string]*Session{}
+	}
+	if d.Inbox == nil {
+		d.Inbox = map[string]*InboxRequest{}
 	}
 	if d.Approvals == nil {
 		d.Approvals = map[string]*Approval{}

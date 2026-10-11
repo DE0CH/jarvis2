@@ -106,7 +106,7 @@ function RepoRow({ x }: { x: RepoEntry }) {
           <Flex gap={1} align="center" wrap><Heading size={3}>{x.repo}</Heading>{sensitive && <Badge color="red">Sensitive</Badge>}{missing && <Badge color="amber">No key</Badge>}</Flex>
           <Muted id={"repo-key-" + x.name}>{missing ? `The store ${x.store} isn't in the core: make the key again.` : `Deploy key in ${x.store}${x.fingerprint ? " · " + x.fingerprint : ""}`}</Muted>
         </View>
-        {hasShell && <Flex gap={2}>
+        {<Flex gap={2}>
           {missing && <PButton pkey={"repo:" + x.repo} size={1} onPress={() => openKeyPage("add", x.repo, "repo:" + x.repo)} label="Make key" id={"repo-makekey-" + x.name} />}
           <PButton pkey={"repo-rm:" + x.repo} size={1} variant="soft" color="gray" onPress={() => openKeyPage("remove", x.repo, "repo-rm:" + x.repo)} label="Remove" id={"repo-remove-" + x.name} />
         </Flex>}
@@ -132,14 +132,15 @@ export function ReposCard() {
       <Heading size={3} mb={1}>Repos</Heading>
       <Muted>Each repo has its own deploy key on GitHub (read and push, that repo only), kept in its store github-&lt;repo&gt;. A session that includes the store clones, pulls and pushes the repo over SSH.</Muted>
       {repos.length ? repos.map((x) => <RepoRow key={x.repo} x={x} />) : <P size={2} color="gray" mt={3} id="repos-none">No repos yet.</P>}
-      {hasShell ? <>
+      {<>
         <Lbl>Add repo — pick one of yours</Lbl>
         <Picker disabled={busy} onPick={(r) => setText(r.fullName)} />
         <Lbl>Or type it</Lbl>
         <TextField id="repo-url" keyboardType="url" autoComplete="off" autoCapitalize="none" autoCorrect={false} placeholder="owner/name or https://github.com/owner/name" value={text} disabled={busy} onChangeText={setText} onSubmitEditing={add} />
         <Flex mt={3}><PButton pkey="repo:add" onPress={add} label="Add repo" id="repo-add-go" /></Flex>
-        <Muted mt={2}>Adding asks for Face ID: the core uses the GitHub token in the store github-deploy-keys for that one request.</Muted>
-      </> : <Muted mt={3}>Adding or removing a repo needs Face ID: use the Jarvis 2 app on the iPhone.</Muted>}
+        <Muted mt={2}>{hasShell ? "Adding asks for Face ID: the core uses the GitHub token in the store github-deploy-keys for that one request."
+          : "Adding or removing a repo needs Face ID: this sends the request to the Inbox in the Jarvis 2 app on the iPhone."}</Muted>
+      </>}
     </Card>
   );
 }

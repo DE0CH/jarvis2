@@ -47,7 +47,7 @@ export function TaskDetail({ spec }: { spec: TaskSpec }) {
   return (
     <Page title={inst.name} id="task-page" right={<InstanceAction inst={inst} id="td-run" />}>
       <Flex gap={2} align="center" mt={2} wrap><StatePill inst={inst} /><Muted>{tmpl ? tmpl.title : `${inst.template} (template missing)`} · created {new Date(inst.createdAt).toLocaleDateString()}</Muted></Flex>
-      {inst.state === "approval" && <Callout color="blue" mt={3}>The iPhone approves this task's line once (it opens at the top of the session list). Runs need no approval after that.</Callout>}
+      {inst.state === "approval" && <Callout color="blue" mt={3}>The iPhone approves this task's line once (it waits in the Inbox). Runs need no approval after that.</Callout>}
       {!!inst.detail && inst.state !== "approval" && <Muted mt={1}>{inst.detail}</Muted>}
       {!!inst.activeRun?.waiting && <Callout color="amber" mt={3}>{"Waiting: " + inst.activeRun.waiting}</Callout>}
       {!!paramSummary(inst, tmpl) && <Card mt={3} size={1} variant="surface"><P size={2} selectable>{paramSummary(inst, tmpl)}</P></Card>}
