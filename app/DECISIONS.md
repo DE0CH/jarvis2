@@ -281,7 +281,10 @@ Carried over from the mock (DE0CH/jarvis2-mock DECISIONS.md) unless marked new.
       an extension with no view on screen is first in line under memory pressure). Back re-added the view, React
       Native started cold (bundle, sign-in state, the first `api/state`), and the shell took its picture away after a
       fixed 2 s: a blank screen until React Native drew, seconds on a phone. And nothing noticed an extension that
-      ended while the app itself was on screen: blank until the app was killed.
+      ended while the app itself was on screen: blank until the app was killed (ExtensionKit doesn't relaunch it).
+      Before the fix the stress run (build 77's shell) went blank on every page after Back with the extension
+      killed, killed in the background, or slow (5 s stopped); loops, Back during the entry, double taps, the
+      background alone and memory warnings passed. After it every case passes with no blank frame.
     - The reveal trusted a JavaScript `requestAnimationFrame`, not the new scene's window having drawn; a late
       `secureSettled` from an earlier exit could end a later wait; a Back in the page's first 50 ms left the
       extension's view removed for good; a picture taken of an extension that hadn't drawn yet popped over blank.
@@ -290,8 +293,9 @@ Carried over from the mock (DE0CH/jarvis2-mock DECISIONS.md) unless marked new.
     is in an on-screen scene's window, three frames on; the picture (or the page) stays until that answer for the
     current mount. The shell checks the extension is alive while it waits (`hello` answers from the XPC queue even
     while React Native starts; none in 2 s = gone or hung) and relaunches it in place (a new EXHostViewController,
-    `Shell.mount`) on a dead or broken connection (invalidation, interruption, a deactivation with an error, no
-    answer after the app comes back), covering the app with its last picture meanwhile; at most 4 relaunches a
+    `Shell.mount`, 0.8 s after the loss: a host made in the same instant never connects) on a dead or broken connection (invalidation, interruption, a deactivation with an error, no
+    answer after the app comes back), covering the app with its last picture meanwhile (one is kept from when the
+    app last drew, entered a page or went to the background); at most 4 relaunches a
     minute, and a last-resort 20 s cap (logged) for an extension that answers but never draws. `secureSettled` must
     name its exit; every scheduled step carries the transition it belongs to; pictures are taken only of a drawn
     extension (otherwise Back keeps the page up until the app has drawn). After a relaunch the app starts at its

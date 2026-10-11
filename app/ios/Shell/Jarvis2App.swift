@@ -321,14 +321,24 @@ final class Shell {
   final class Flag { var on = false }
 
   /// a new EXHostViewController for the extension, in place: iOS starts a new process when the old one is gone
+  @ObservationIgnored private var relaunchFor = -1
   private func relaunch(_ why: String) {
+    guard relaunchFor != mount else { return }   // one relaunch per mount (an interruption, then its invalidation)
     relaunches = relaunches.filter { Date().timeIntervalSince($0) < 60 }
     guard relaunches.count < 4 else { log("not relaunching again (4 in a minute): \(why)"); return }
     relaunches.append(Date())
     log("relaunching the extension: \(why)")
-    extensionProxy = nil; hostVC = nil; pingAt = .distantPast
+    extensionProxy = nil; pingAt = .distantPast
     if drawnMount == mount { drawnMount = -1 }
-    mount += 1; mountedAt = Date()
+    mountedAt = Date()
+    // the new host a moment later: one made in the same instant the old process is torn down never connects
+    // ("Failed to check-in, peer may have been unloaded"), seen every time in the stress runs
+    let m = mount
+    relaunchFor = m
+    DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [self] in
+      guard m == mount, extensionMounted else { return }
+      hostVC = nil; mount += 1; mountedAt = Date()
+    }
   }
 
   /// the extension's process ended or its connection broke (`m` = the mount it belonged to)
@@ -384,6 +394,13 @@ final class Shell {
     guard m == mount else { return }
     if drawnMount != m { log(String(format: "extension drawn (mount %d) %.2f s after mounting", m, Date().timeIntervalSince(mountedAt))) }
     drawnMount = m
+    // a picture of the app as it is, kept to cover it should iOS end the extension while the app is on screen
+    // (otherwise blank for the seconds a cold start takes); taken again on every page and in the background
+    if mode == .normal && !leaving && !showSnapshot {
+      DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [self] in
+        if m == mount, mode == .normal, !leaving, !showSnapshot, let p = picture() { snapshot = p }
+      }
+    }
     checkReady()
   }
   /// React Native has handled the result of exit `id` and drawn it
