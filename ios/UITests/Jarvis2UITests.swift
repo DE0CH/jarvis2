@@ -106,15 +106,15 @@ final class Jarvis2UITests: JarvisUITestCase {
     sleep(2)
     shot("new-session")
     XCTAssertTrue(el("ns-prompt").exists && el("ns-title").exists && el("ns-mode").exists, "[\(tag)] prompt, title and one-shot are on the one page")
-    XCTAssertTrue(el("secure-mode-bypass").exists, "[\(tag)] the page picks the permission mode")
+
     XCTAssertTrue(el("secure-store-default").exists, "[\(tag)] default offered")
     XCTAssertFalse(el("secure-store-core").exists, "[\(tag)] the core store is not offered")
     XCTAssertFalse(el("secure-store-claude-login").exists, "[\(tag)] the harness's own store is not offered as a pick")
     XCTAssertTrue(el("ns-harness-store-claude-login").exists, "[\(tag)] …but listed as what the harness brings")
+    XCTAssertTrue(scrolledTo(el("secure-mode-bypass")), "[\(tag)] the page picks the permission mode")
     let unlocks = el("ns-unlocks")
-    if unlocks.waitForExistence(timeout: 5) == false { app.swipeUp() }
-    XCTAssertTrue(unlocks.exists && unlocks.label.contains("claude-login"), "[\(tag)] Start says it unlocks the locked harness store")
-    app.swipeDown()
+    XCTAssertTrue(scrolledTo(unlocks) && unlocks.label.contains("claude-login"), "[\(tag)] Start says it unlocks the locked harness store")
+    for _ in 0..<6 { app.swipeDown() }
     el("ns-title").tap(); el("ns-title").typeText("ci session")
     if el("secure-store-gmail").waitForExistence(timeout: 3) {
       el("secure-store-gmail").tap(); sleep(1)
@@ -262,7 +262,7 @@ final class Jarvis2UITests: JarvisUITestCase {
     }
 
     // ---- destroy → Previous
-    if wait(el("destroy-\(sid)"), 60, "Destroy") {
+    if (scrolledTo(el("destroy-\(sid)")) || true), wait(el("destroy-\(sid)"), 60, "Destroy") {
       el("destroy-\(sid)").tap()
       answer("Destroy session", timeout: 30)
       XCTAssertTrue(gone(el("srow-\(sid)"), 120), "[\(tag)] session gone from the list")
@@ -331,7 +331,7 @@ final class Jarvis2UITests: JarvisUITestCase {
 
     // ---- tasks: make one from the hello template (its line's approval opens by itself), run it, stop the run, schedule it
     tab("Tasks")
-    if wait(el("new-hello"), 30, "the hello template") {
+    if (scrolledTo(el("new-hello")) || true), wait(el("new-hello"), 30, "the hello template") {
       shot("tasks")
       el("new-hello").tap()
       if wait(el("tf-message"), 15, "new task form") {
@@ -373,7 +373,7 @@ final class Jarvis2UITests: JarvisUITestCase {
 
     // ---- Reset on a set-up core: only with its kit; a new, empty core, a new kit, the stores empty
     tab("Settings")
-    if wait(el("open-setup"), 15, "Reset or recover") {
+    if (scrolledTo(el("open-setup")) || true), wait(el("open-setup"), 15, "Reset or recover") {
       el("open-setup").tap()
       if wait(el("setup-state-mine"), 30, "setup page: set up on this iPhone") {
         shot("setup-mine")

@@ -78,7 +78,7 @@ final class TransitionsUITests: JarvisUITestCase {
       back(); back()
     }
     tab("Settings")
-    if wait(el("open-setup"), 10, "Reset or recover") {
+    if (scrolledTo(el("open-setup")) || true), wait(el("open-setup"), 10, "Reset or recover") {
       el("open-setup").tap()
       arrives(el("setup-state-mine"), 30, "Reset or recover from Settings")
       shot("setup")

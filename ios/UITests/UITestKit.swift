@@ -110,6 +110,12 @@ class JarvisUITestCase: XCTestCase {
   }
   /// one character at a time (a burst into a URL keyboard can reorder characters)
   func slowType(_ e: XCUIElement, _ text: String) { for ch in text { e.typeText(String(ch)); usleep(120_000) } }
+  /// scroll the current list until `e` is there (a Form draws rows lazily), then back to the top
+  @discardableResult func scrolledTo(_ e: XCUIElement, max: Int = 6) -> Bool {
+    var n = 0
+    while !e.exists && n < max { app.swipeUp(); n += 1 }
+    return e.exists
+  }
   func isOn(_ e: XCUIElement) -> Bool { (e.value as? String) == "1" || e.isSelected }
 
   // ---- the router on the runner (the test reads payloads; the app checks signatures) ----

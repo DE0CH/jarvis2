@@ -22,7 +22,7 @@ struct SessionDetailView: View {
               NavigationLink(value: SessionRoute.terminal) { Label("Terminal", systemImage: "terminal") }.accessibilityIdentifier("term-\(m.id)")
             }
           }
-          ToolbarItem(placement: .secondaryAction) {
+          ToolbarItem(placement: .topBarTrailing) {
             Menu("More", systemImage: "ellipsis.circle") { SessionMenu(m: m) }.accessibilityIdentifier("more-\(m.id)")
           }
         }

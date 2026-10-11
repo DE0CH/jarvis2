@@ -327,7 +327,7 @@ final class ReplicaUITests: JarvisUITestCase {
         let stuck = others.firstMatch
         let stuckSid = String(stuck.identifier.dropFirst("srow-".count))
         stuck.tap()
-        if wait(el("destroy-\(stuckSid)"), 20, "Destroy (stuck)") {
+        if (scrolledTo(el("destroy-\(stuckSid)")) || true), wait(el("destroy-\(stuckSid)"), 20, "Destroy (stuck)") {
           el("destroy-\(stuckSid)").tap()
           answer("Destroy session", timeout: 30)
           let t0 = Date()
@@ -344,7 +344,7 @@ final class ReplicaUITests: JarvisUITestCase {
     tab("Sessions")
     if wait(el("srow-\(sid)"), 30, "the running session") {
       el("srow-\(sid)").tap()
-      if wait(el("destroy-\(sid)"), 20, "Destroy") {
+      if (scrolledTo(el("destroy-\(sid)")) || true), wait(el("destroy-\(sid)"), 20, "Destroy") {
         el("destroy-\(sid)").tap()
         answer("Destroy session", timeout: 60)
         XCTAssertTrue(gone(el("srow-\(sid)"), 900), "the session is destroyed")
@@ -353,7 +353,7 @@ final class ReplicaUITests: JarvisUITestCase {
 
     // ---- Recover with the kit: Settings → Reset or recover → Recover (restart) → every store back ----
     tab("Settings")
-    if wait(el("open-setup"), 30, "Reset or recover in Settings") {
+    if (scrolledTo(el("open-setup")) || true), wait(el("open-setup"), 30, "Reset or recover in Settings") {
       el("open-setup").tap()
       try must(wait(el("setup-choose-recover"), 60, "the setup page (set up: mine)"))
       shot("setup-mine")

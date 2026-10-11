@@ -14,8 +14,8 @@ struct TerminalView: View {
 
   var body: some View {
     TerminalWeb(sessionId: sessionId, model: model)
-      .ignoresSafeArea(.container, edges: .bottom)
       .background(Color(red: 0.043, green: 0.051, blue: 0.071))
+      .toolbarVisibility(.hidden, for: .tabBar)
       .navigationTitle(title)
       .navigationBarTitleDisplayMode(.inline)
       .toolbarColorScheme(.dark, for: .navigationBar)
