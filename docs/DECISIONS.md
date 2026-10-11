@@ -372,9 +372,9 @@ entry points only ("if I decide to break it later then it's fine").
     vouches for them). Change: phone-signed wakeups from the app.
 82. **The watchdog nudge and "continue" are texts built into the image**; the router sends only the kind and two
     numbers. Delivering one to a sensitive line needs no grant now (it carries nothing chosen by the router).
-83. **The input log is persisted by the router** (`DATA_DIR/input-log.jsonl`, `GET /api/input-log`), checkpointed by
-    continuing a new core's chain from the last persisted entry's hash (`chain_from`). The router can drop entries
-    from its copy; it can't forge or reorder them (core-signed, hash-chained). Change: CloudWatch (DESIGN "Open").
+83. **The input log is persisted by the router** (`DATA_DIR/input-log.jsonl`, `GET /api/input-log`) from the core's
+    answers (R2: the core keeps only head and length). The router can drop entries from its copy; it can't forge or
+    reorder them (core-signed, hash-chained). Change: CloudWatch (DESIGN "Open").
 84. **Images are pinned by the linux/amd64 manifest digest** (what Fly reports; the index digest `docker push` prints
     never matches): `infra/image-digest.sh`, run by `images.yml` when it pins `router.yaml`. The core refuses any other
     repository and any unpinned reference.
@@ -413,7 +413,7 @@ entry points only ("if I decide to break it later then it's fine").
 92. **R1 audit fixes outside the app** (2026-10-11, decided while Deyao was away; ~/artifacts/away/audit/r1rest.json).
     Each finding re-checked on main, fixed at the cause, with a test that attempts the forbidden thing:
     - *A machine's newest cert* (core, HELD): the core keeps, per certified machine, its newest cert nonce (it replaces
-      the `certified` set, so no new structure). Succession, approve_by_dead_machine, certify, pull and forward_carry
+      the `certified` set, so no new structure). Succession, approve_by_dead_machine, certify, pull and the carry rebinding
       take only the newest; an add-store or downgrade answer needs the challenge to continue the newest and then
       supersedes it, so a saved challenge answered again gets nothing. Carry blobs name their cert; one opens only for
       that cert or the cert that directly continues it (`Cert.PredCert`). Smallest state that makes "dropped stores

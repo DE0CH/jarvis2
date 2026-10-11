@@ -86,8 +86,10 @@ type SnapshotClaim struct {
 	Sig    string `json:"sig"`
 }
 
-// signCert: a cert, and its entry in the input log (a cert is an input too: it decides what a machine gets)
-func (c *Core) signCert(cert Cert, by string) (SignedDoc, error) {
+// signCert: a cert, its entry in the input log beside it (a cert is an input too: it decides what a machine gets),
+// and, given the line's carry blob (its predecessor's, or this machine's previous cert's), that blob rebound to this
+// cert: only the stores it names, so a downgrade's dropped stores leave it at once (carry.go). Callers hold c.mu.
+func (c *Core) signCert(cert Cert, by, carry string) (SignedDoc, error) {
 	d, err := c.sign(cert)
 	if err != nil {
 		return d, err
@@ -99,8 +101,15 @@ func (c *Core) signCert(cert Cert, by string) (SignedDoc, error) {
 	if !auditWordRE.MatchString(by) {
 		by = "core"
 	}
-	if _, err := c.appendAudit(id, "cert", by, sha256Hex(d.Payload)); err != nil {
+	e, err := c.appendAudit(id, "cert", by, sha256Hex(d.Payload))
+	if err != nil {
 		return SignedDoc{}, err
+	}
+	d.Entry = &e
+	if carried := c.openCarryFor(carry, &cert); carried != nil {
+		if d.Carry, err = c.sealCarry(&cert, carried); err != nil {
+			return SignedDoc{}, err
+		}
 	}
 	return d, nil
 }

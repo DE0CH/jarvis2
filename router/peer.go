@@ -181,11 +181,6 @@ func trimTo(s string, n int) string {
 	return s
 }
 
-// deliverPeer: deliverHook (features.go). Fails when the machine refuses the scheduler (see isGrantRefusal).
-func deliverPeer(r *Router, session, from, text string) error {
-	return r.deliverPeer(session, from, text, "")
-}
-
 func (r *Router) deliverPeer(session, from, text, after string) error {
 	text = cleanPeerText(text)
 	if text == "" {

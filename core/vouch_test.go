@@ -39,8 +39,8 @@ func TestAnImageSwappedUnderItsTagIsRefused(t *testing.T) {
 	}
 	f.swap = ""
 	cert, _ := start(t, c, a)
-	if cc := certOf(t, cert); cc.Machine.Image != SessionRepo+"@sha256:"+strings.Repeat("1", 64) || cc.Vouch != 2 {
-		t.Fatalf("the cert names %s (vouch %d)", cc.Machine.Image, cc.Vouch)
+	if cc := certOf(t, cert); cc.Machine.Image != SessionRepo+"@sha256:"+strings.Repeat("1", 64) {
+		t.Fatalf("the cert names %s", cc.Machine.Image)
 	}
 }
 
@@ -160,7 +160,7 @@ func TestAfterADowngradeOnlyTheNewKeySignsTheSnapshot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	pl(t)(c.ApproveByOldKey(&ch, machineSign(f.machines[id].sig, ch.Payload)))
+	pl(t)(c.ApproveByOldKey(&ch, machineSign(f.machines[id].sig, ch.Payload), ""))
 	sum := sha256Hex("tarball")
 	if _, err := c.KillWithSnapshot(id, &SnapshotClaim{Sha256: sum, Sig: machineSign(f.machines[id].sig, sum)}); err == nil {
 		t.Fatal("the shredded old key still signs the snapshot")
@@ -170,9 +170,22 @@ func TestAfterADowngradeOnlyTheNewKeySignsTheSnapshot(t *testing.T) {
 
 func TestTheInputLogIsAChainOfSignedEntries(t *testing.T) {
 	c, _, p := setup(t)
-	_, id := newLine(t, c, p, "default") // a cert is logged too
+	cert, id := newLine(t, c, p, "default") // a cert is logged too: its entry comes back beside it
+	if cert.Entry == nil {
+		t.Fatal("no input-log entry beside the cert")
+	}
+	var ce AuditEntry
+	json.Unmarshal([]byte(cert.Entry.Payload), &ce)
+	if ce.Input != "cert" || ce.Machine != id || ce.Sha256 != sha256Hex(cert.Payload) {
+		t.Fatalf("the cert's entry: %+v", ce)
+	}
 	sum := sha256Hex("wake up and check the build")
-	e := pl(t)(c.Attest(id, "wakeup", "session-signed", sum))
+	ed, err := c.Attest(id, "wakeup", "session-signed", sum)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var e map[string]any
+	json.Unmarshal([]byte(ed.Payload), &e)
 	if e["machine"] != id || e["sha256"] != sum || e["input"] != "wakeup" {
 		t.Fatalf("got %v", e)
 	}
@@ -181,11 +194,8 @@ func TestTheInputLogIsAChainOfSignedEntries(t *testing.T) {
 			t.Fatalf("attested %q", bad)
 		}
 	}
-	log := c.AuditLog(0)
-	entries := log["entries"].([]SignedDoc)
-	if len(entries) != 2 {
-		t.Fatalf("%d entries", len(entries))
-	}
+	// the core keeps none of them: each left in its answer, and the two chain
+	entries := []SignedDoc{*cert.Entry, ed}
 	prev := ""
 	for i, d := range entries {
 		if !VerifyWith(c.signer.PublicKey(), []byte(d.Payload), d.Sig) {
@@ -198,14 +208,8 @@ func TestTheInputLogIsAChainOfSignedEntries(t *testing.T) {
 		}
 		prev = sha256Hex(d.Payload)
 	}
-	// chain_from only starts an empty log
-	if _, err := c.ChainFrom(strings.Repeat("a", 64)); err == nil {
-		t.Fatal("chain_from rewrote a running log")
-	}
-	c2, _, _ := newCore(t)
-	d := pl(t)(c2.ChainFrom(prev))
-	if d["input"] != "continues" || d["sha256"] != prev {
-		t.Fatalf("got %v", d)
+	if c.auditSeq != 2 || c.auditHead != prev {
+		t.Fatal("the head isn't the last entry's hash")
 	}
 }
 

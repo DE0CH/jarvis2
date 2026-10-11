@@ -31,6 +31,10 @@ func fail(status int, f string, a ...any) error { return &Err{status, fmt.Sprint
 type SignedDoc struct {
 	Payload string `json:"payload"`
 	Sig     string `json:"sig"`
+	// beside a cert only (not covered by Sig, each its own proof): the cert's input-log entry, signed (audit.go), and
+	// the line's carried secrets rebound to the cert's machine (carry.go). Ignored when a document is read back.
+	Entry *SignedDoc `json:"entry,omitempty"`
+	Carry string     `json:"carry,omitempty"`
 }
 
 // StoreBlob: a key store's contents: its values under a data key (the store's name as associated data, so a
@@ -128,10 +132,8 @@ type Cert struct {
 	Sensitive bool   `json:"sensitive"`
 	Line      string `json:"line"` // the line's first machine: what grants name, stable across successions
 	// Snapshot: sha256 of the snapshot the predecessor signed when it was killed ("" = it left none): the only one
-	// the machine restores (vouch.go). Vouch: 2 = a core that vouches for every input (the machine refuses what the
-	// cert doesn't name; a cert without it comes from an earlier core).
+	// the machine restores (vouch.go).
 	Snapshot string `json:"snapshot,omitempty"`
-	Vouch    int    `json:"vouch,omitempty"`
 	// PredCert: the nonce of the cert this one continues (the predecessor's newest, or this machine's previous one
 	// for an add-store or a downgrade); "" on a new line. Carried secrets sealed under it open for this cert, older
 	// ones don't (carry.go).
@@ -159,7 +161,7 @@ func (c *Core) succession(r Request, m *StartedMachine, nonce, now string) Cert 
 		predCert = pc.Nonce
 	}
 	return Cert{Kind: "succession-cert", PredID: r.PredID, Machine: m, Stores: r.Stores, Options: r.Options,
-		Nonce: nonce, IssuedAt: now, Phone: c.phoneSigning, Sensitive: sensitive, Line: line, Snapshot: snap, Vouch: 2, PredCert: predCert}
+		Nonce: nonce, IssuedAt: now, Phone: c.phoneSigning, Sensitive: sensitive, Line: line, Snapshot: snap, PredCert: predCert}
 }
 
 type unlocked struct {
@@ -204,8 +206,7 @@ type Core struct {
 	killed map[string]string
 	used   map[string]bool
 
-	audit     []SignedDoc // audit.go: the input log (the newest auditKeep entries), its head and length
-	auditHead string
+	auditHead string // audit.go: the input log's head and length (the router keeps the entries)
 	auditSeq  int
 
 	stores       map[string]*StoreBlob // nil value = created, still empty
@@ -655,7 +656,7 @@ func (c *Core) Init(id string) (SignedDoc, error) {
 // Certify: an approval + a started machine (Init's signed document) running the approved image → the succession
 // cert (the machine's only permission). One machine per approval, one line per machine, one successor per
 // predecessor. An approval for the null image takes no machine and burns the predecessor.
-func (c *Core) Certify(approval, started *SignedDoc) (SignedDoc, error) {
+func (c *Core) Certify(approval, started *SignedDoc, carry string) (SignedDoc, error) {
 	var a Approval
 	if err := c.verifyOwn(approval, &a); err != nil || a.Kind != "approval" {
 		return SignedDoc{}, fail(400, "not an approval this core signed")
@@ -703,7 +704,7 @@ func (c *Core) Certify(approval, started *SignedDoc) (SignedDoc, error) {
 		c.used[r.PredID] = true
 	}
 	c.logf("certified %s for %s (%s) %s → %v", machine, a.Nonce[:12], a.By, orNull(r.PredID), r.Stores)
-	return c.signCert(c.succession(r, m, a.Nonce, now), a.By)
+	return c.signCert(c.succession(r, m, a.Nonce, now), a.By, carry)
 }
 
 // KillWithSnapshot: one Fly destroy, then Fly must report the machine destroyed (409 until it does: the router
@@ -930,7 +931,7 @@ func (c *Core) readChallenge(d *SignedDoc) (challenge, error) {
 
 // answer: what an approval turns a challenge into — for a machine succeeding itself the new cert at
 // once, else an approval that certify() binds to one machine
-func (c *Core) answer(ch challenge, by string) (SignedDoc, error) {
+func (c *Core) answer(ch challenge, by, carry string) (SignedDoc, error) {
 	r := ch.Request
 	now := c.now().UTC().Format(time.RFC3339)
 	if r.AddedStore != "" || r.Downgrade {
@@ -948,14 +949,14 @@ func (c *Core) answer(ch challenge, by string) (SignedDoc, error) {
 				c.signing[r.Machine.ID] = r.Machine.SigningKey
 			}
 		}
-		return c.signCert(c.succession(r, r.Machine, ch.Nonce, now), by)
+		return c.signCert(c.succession(r, r.Machine, ch.Nonce, now), by, carry)
 	}
 	return c.sign(Approval{Kind: "approval", Nonce: ch.Nonce, Request: r, By: by})
 }
 
 // ApproveByPhone: the iPhone's Secure Enclave signature over exactly the challenge text. The phone is the
 // highest privilege: whatever challenge it signs is answered.
-func (c *Core) ApproveByPhone(d *SignedDoc, sig string) (SignedDoc, error) {
+func (c *Core) ApproveByPhone(d *SignedDoc, sig, carry string) (SignedDoc, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	ch, err := c.readChallenge(d)
@@ -967,7 +968,7 @@ func (c *Core) ApproveByPhone(d *SignedDoc, sig string) (SignedDoc, error) {
 	}
 	r := ch.Request
 	c.logf("phone approved %s: %s → %v", ch.Nonce[:12], orNull(r.PredID), r.Stores)
-	return c.answer(ch, "phone")
+	return c.answer(ch, "phone", carry)
 }
 
 // ApproveByDeadMachine: automatic — predecessor killed (Fly-confirmed) and never used, and store set, image and
@@ -988,7 +989,7 @@ func (c *Core) ApproveByDeadMachine(d *SignedDoc) (SignedDoc, error) {
 	}
 	if r.Image == NullImage {
 		c.logf("approve_by_dead_machine: burn of %s", r.PredID)
-		return c.answer(ch, "dead-machine")
+		return c.answer(ch, "dead-machine", "")
 	}
 	var pc Cert
 	if err := c.verifyOwn(r.Predecessor, &pc); err != nil {
@@ -1001,14 +1002,14 @@ func (c *Core) ApproveByDeadMachine(d *SignedDoc) (SignedDoc, error) {
 		return SignedDoc{}, fail(403, "store set, image or options differ from the predecessor's (or a one-time input is asked for)")
 	}
 	c.logf("approve_by_dead_machine: %s → a new machine", r.PredID)
-	return c.answer(ch, "dead-machine")
+	return c.answer(ch, "dead-machine", "")
 }
 
 // ApproveByOldKey: automatic — a succession of a machine to itself with a subset of its stores and a new key
 // pair, answered when it is signed with the signing key named in the predecessor cert (without that, anyone
 // could name their own keys and pull the remaining stores). The predecessor cert must be the machine's newest, and
 // the new cert supersedes it: the older certs pull and continue nothing (Core.latest).
-func (c *Core) ApproveByOldKey(d *SignedDoc, sig string) (SignedDoc, error) {
+func (c *Core) ApproveByOldKey(d *SignedDoc, sig, carry string) (SignedDoc, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	ch, err := c.readChallenge(d)
@@ -1024,7 +1025,7 @@ func (c *Core) ApproveByOldKey(d *SignedDoc, sig string) (SignedDoc, error) {
 		return SignedDoc{}, fail(403, "not signed by the key in the predecessor cert")
 	}
 	c.logf("downgrade: %s keeps %v, new keys", r.Machine.ID, r.Stores)
-	return c.answer(ch, "machine")
+	return c.answer(ch, "machine", carry)
 }
 
 // ---- unlock / lock -------------------------------------------------------------------------------

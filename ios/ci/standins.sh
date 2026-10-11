@@ -7,7 +7,8 @@
 #     router gets as BACKUP_READ_*; every bucket's objects also in W/backups.json;
 #   - the core (fakefly) and router binaries at W/core, W/router, and W/core-loop.sh, which runs the core again
 #     whenever it ends (as Kubernetes does: a wipe ends the core and a new, empty one takes its place).
-#     Unless NO_CORE=1 the core (:8090, empty) and a router (:18080, reading the stand-in bucket) are started.
+#     Unless NO_CORE=1 the core (:8090, empty) and a router (:18080, or ROUTER_PORT; reading the stand-in bucket) are
+#     started.
 # usage: standins.sh W
 set -euo pipefail
 W="$1"; ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -43,7 +44,7 @@ if [ "${NO_CORE:-}" != 1 ]; then
   echo '{"harnesses":{"claude":{"stores":["claude-login"]}}}' > "$W/policy.json"
   (set -a; . "$W/router-backup.env"; set +a
    NO_ACCESS=1 CORE_URL=http://127.0.0.1:8090 DATA_DIR="$W/router-data" WEB_DIR="$W/web" POLICY_FILE="$W/policy.json" TASKS_DIR="$ROOT/tasks" \
-     ADDR=127.0.0.1:18080 MACHINE_ADDR=127.0.0.1:18081 nohup "$W/router" > "$W/router.log" 2>&1 &)
-  for i in $(seq 30); do curl -sf -o /dev/null http://127.0.0.1:18080/api/state && break; sleep 1; done
+     ADDR=127.0.0.1:${ROUTER_PORT:-18080} MACHINE_ADDR=127.0.0.1:$((${ROUTER_PORT:-18080}+1)) nohup "$W/router" > "$W/router.log" 2>&1 &)
+  for i in $(seq 30); do curl -sf -o /dev/null http://127.0.0.1:${ROUTER_PORT:-18080}/api/state && break; sleep 1; done
   echo "core and router up"
 fi

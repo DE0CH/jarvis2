@@ -4,8 +4,8 @@ package main
 // machine's secrets per store, sealed under a key only the core holds, bound to that machine. The router keeps it
 // next to the machine's snapshot (snapshots/<machine>.carry on its volume) and hands it back to the core on the
 // machine's next pull and, right after a successor is certified (a resume) or the machine gets a new cert (an
-// add-store, a downgrade), to the core's carry/forward, which rebinds it to that machine and keeps only the stores
-// its cert names. The router can't open, alter or move it to another line; it can only lose it, and then the
+// add-store, a downgrade), to the core with the call that makes the new cert, which answers it rebound to that machine
+// beside the cert, keeping only the stores the cert names (the core before R2: its carry/forward). The router can't open, alter or move it to another line; it can only lose it, and then the
 // session waits for an unlock (the app's "Waiting for store X" → Unlock…). Destroy deletes it with the snapshot.
 //
 // A core that predates carried secrets (the held production core until Deyao releases the new one) answers no
@@ -81,7 +81,24 @@ func (r *Router) pulled(machine string, cert, answer *Doc) {
 	}
 }
 
-// forwardCarry: the line's blob (held for `from`: the predecessor, or the machine itself) rebound to the machine
+// carryAfter: a new cert's carry — the blob the core answered beside it (rebound to `to`), else (the core before R2)
+// its /carry/forward
+func (r *Router) carryAfter(from, to string, cert *Doc, ans *Answer) {
+	if ans == nil || ans.Carry == "" {
+		r.forwardCarry(from, cert, to)
+		return
+	}
+	defer carryLock(to)()
+	if from != to {
+		defer carryLock(from)()
+	}
+	r.saveCarry(to, ans.Carry)
+	if from != to {
+		r.dropCarry(from)
+	}
+}
+
+// forwardCarry: the core before R2: the line's blob (held for `from`: the predecessor, or the machine itself) rebound to the machine
 // the new cert names. Best effort: without it the machine's own pull still reads the predecessor's blob, and a
 // missing blob only means waiting for an unlock.
 func (r *Router) forwardCarry(from string, cert *Doc, to string) {

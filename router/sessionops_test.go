@@ -185,12 +185,13 @@ func newOpsRig(t *testing.T) (*rig, *startCore) {
 	return rg, sc
 }
 
-func TestRestartPatchesEnvAndRollsBack(t *testing.T) {
+// (a restart with a rollback needs the phone: the rollback is a one-time input in the cert, vouch_test.go)
+func TestRestartPatchesEnv(t *testing.T) {
 	rg, sc := newOpsRig(t)
 	r := rg.r
 	code, out := appDo(t, r, "POST", "/api/sessions/s1/restart",
-		`{"env":{"FEATURE_FLAG":"on","DEBUG":1},"rollback":{"dropFromMarker":"uuid-1234"},"size":"large","apiProxy":true}`)
-	if code != 202 || out["rollback"] != true {
+		`{"env":{"FEATURE_FLAG":"on","DEBUG":1},"size":"large","apiProxy":true}`)
+	if code != 202 {
 		t.Fatalf("%d %v", code, out)
 	}
 	waitFor(t, "start asked", func() bool { return sc.lastStart() != nil })
@@ -201,12 +202,11 @@ func TestRestartPatchesEnvAndRollsBack(t *testing.T) {
 	// the settings reach the machine as the router's machine config, from the session
 	var s0 Session
 	r.st.Do(func(d *persisted) { s0 = *d.Sessions["s1"] })
-	if env := r.machineEnv(&s0); env["FEATURE_FLAG"] != "on" || env["DEBUG"] != "1" || env["SESSION_API_PROXY"] != "1" ||
-		env["JARVIS2_ROLLBACK"] != "uuid-1234" || env["JARVIS2_ROLLBACK_PRED"] != "m1" {
+	if env := r.machineEnv(&s0); env["FEATURE_FLAG"] != "on" || env["DEBUG"] != "1" || env["SESSION_API_PROXY"] != "1" {
 		t.Fatalf("machine env %v", env)
 	}
 	waitFor(t, "job finished", func() bool { j := r.ops.jobView("s1"); return j != nil && j["finishedAt"] != nil })
-	// the patch stays for later starts; the rollback only for the start after m1
+	// the patch stays for later starts
 	var s Session
 	r.st.Do(func(d *persisted) { s = *d.Sessions["s1"] })
 	other := s

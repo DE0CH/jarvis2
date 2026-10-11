@@ -229,8 +229,18 @@ func (r *Router) startAndCertify(sid string, approval *Doc) {
 		d.Started[m.ID] = m
 		d.Machines[m.ID] = sid
 	})
-	// "started": the core's signed document (a core from before R2 reads "machine" instead)
-	cert, err := r.core.Call("/certify", map[string]any{"approval": approval, "machine": m.ID, "started": d})
+	// "started": the core's signed document (a core from before R2 reads "machine" instead); "carry": the line's
+	// carried secrets, answered rebound to this machine beside the cert
+	pred := ""
+	var ap struct {
+		Request struct {
+			PredID string `json:"predecessorId"`
+		} `json:"request"`
+	}
+	if approval.Decode(&ap) == nil {
+		pred = ap.Request.PredID
+	}
+	cert, ans, err := r.core.CallAnswer("/certify", map[string]any{"approval": approval, "machine": m.ID, "started": d, "carry": r.readCarry(pred)})
 	if err != nil {
 		r.killUntilDestroyed(map[string]any{"machine": m.ID})
 		r.setState(sid, "failed", "certify: "+err.Error())
@@ -242,8 +252,9 @@ func (r *Router) startAndCertify(sid string, approval *Doc) {
 			x.Cert, x.MachineID, x.Image, x.State, x.Error, x.PausedAt = cert, m.ID, m.Image, "initialising", "", nil
 		}
 	})
+	r.logInputs(ans.Entry) // vouch.go: the cert's input-log entry
 	if p := predOf(cert); p != "" {
-		r.forwardCarry(p, cert, m.ID) // carry.go: a resume carries the line's secrets, no store unlocked
+		r.carryAfter(p, m.ID, cert, ans) // carry.go: a resume carries the line's secrets, no store unlocked
 	}
 }
 
@@ -355,10 +366,15 @@ func (r *Router) Respond(id, signature string) (*Doc, string, error) {
 	if a == nil {
 		return nil, "", fmt.Errorf("no such approval")
 	}
-	ans, err := r.core.Call("/approve/by-phone", map[string]any{"challenge": a.Challenge, "signature": signature})
+	in := map[string]any{"challenge": a.Challenge, "signature": signature}
+	if a.Kind == "add-store" {
+		in["carry"] = r.readCarry(a.Machine) // answered rebound to the machine's new cert
+	}
+	ans, extra, err := r.core.CallAnswer("/approve/by-phone", in)
 	if err != nil {
 		return nil, "", err
 	}
+	r.logInputs(extra.Entry) // an add-store's new cert (an approval for a new line has none)
 	r.st.Do(func(d *persisted) { delete(d.Approvals, id) })
 	if a.Kind == "add-store" {
 		// adding a store answers with the machine's new cert at once
@@ -370,7 +386,7 @@ func (r *Router) Respond(id, signature string) (*Doc, string, error) {
 				s.Cert, s.Stores = ans, c.Stores
 			}
 		})
-		r.forwardCarry(a.Machine, ans, a.Machine) // its carried stores go on; the added one comes from its unlock
+		r.carryAfter(a.Machine, a.Machine, ans, extra) // its carried stores go on; the added one comes from its unlock
 		return ans, a.Session, nil
 	}
 	go r.startAndCertify(a.Session, ans)
@@ -663,10 +679,11 @@ func (r *Router) DowngradeBegin(machine string, stores []string, encKey, sigKey 
 // DowngradeFinish: the challenge signed with the machine's old key → its new cert; from now on the router
 // knows the machine by its new signing key
 func (r *Router) DowngradeFinish(machine string, challenge *Doc, signature string) (*Doc, error) {
-	cert, err := r.core.Call("/approve/by-old-key", map[string]any{"challenge": challenge, "signature": signature})
+	cert, ans, err := r.core.CallAnswer("/approve/by-old-key", map[string]any{"challenge": challenge, "signature": signature, "carry": r.readCarry(machine)})
 	if err != nil {
 		return nil, err
 	}
+	r.logInputs(ans.Entry)
 	var c struct {
 		Machine *Started `json:"machine"`
 		Stores  []string `json:"stores"`
@@ -681,7 +698,7 @@ func (r *Router) DowngradeFinish(machine string, challenge *Doc, signature strin
 			s.Cert, s.Stores = cert, c.Stores
 		}
 	})
-	r.forwardCarry(machine, cert, machine) // the dropped stores leave the carried secrets at once
+	r.carryAfter(machine, machine, cert, ans) // the dropped stores leave the carried secrets at once
 	return cert, nil
 }
 

@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -95,20 +96,39 @@ type fakeDelivery struct {
 	err   error
 }
 
+// install: deliveries recorded as "<session>: <kind> <the signed request's payload> [run n]"
 func (f *fakeDelivery) install(t *testing.T) {
-	old := deliverHookOrPeer
-	deliverHookOrPeer = func(r *Router, sid, from, text, after string) error {
+	old := deliverVouchedHook
+	deliverVouchedHook = func(r *Router, sid string, d Delivery) error {
 		f.mu.Lock()
 		defer f.mu.Unlock()
 		if f.err != nil {
 			return f.err
 		}
+		x := sid + ": " + d.Kind + " " + d.Request.Body
+		if d.Run > 0 {
+			x += fmt.Sprintf(" run %d", d.Run)
+		}
+		f.texts = append(f.texts, x)
+		return nil
+	}
+	t.Cleanup(func() { deliverVouchedHook = old })
+}
+
+// installPeer: the peer path (a resume prompt), recorded as "<session>: <text>"
+func (f *fakeDelivery) installPeer(t *testing.T) {
+	old := deliverHookOrPeer
+	deliverHookOrPeer = func(r *Router, sid, from, text, after string) error {
+		f.mu.Lock()
+		defer f.mu.Unlock()
 		f.texts = append(f.texts, sid+": "+text)
-		f.after = append(f.after, after)
 		return nil
 	}
 	t.Cleanup(func() { deliverHookOrPeer = old })
 }
+
+// signed: a wakeup or cron as the session's own signed request (its payload is the test's label)
+func signed(label string) *SignedRequest { return &SignedRequest{Body: label} }
 
 func (f *fakeDelivery) got() []string {
 	f.mu.Lock()
@@ -146,15 +166,15 @@ func TestWakeupFiresOnceAndClears(t *testing.T) {
 	f.install(t)
 	addSession(r, "s1", "started", "m1", false)
 	now := time.Now()
-	r.ArmWakeup("s1", &Wakeup{Name: "default", At: now.Add(-time.Second).UnixMilli(), Prompt: "go", ArmedAt: 1})
-	r.ArmWakeup("s1", &Wakeup{Name: "later", At: now.Add(time.Hour).UnixMilli(), Prompt: "not yet", ArmedAt: 2})
-	r.ArmWakeup("s1", &Wakeup{Name: "named", At: now.Add(-time.Second).UnixMilli(), Prompt: "x", ArmedAt: 3})
+	r.ArmWakeup("s1", &Wakeup{Name: "default", At: now.Add(-time.Second).UnixMilli(), Prompt: "go", ArmedAt: 1, Signed: signed("go")})
+	r.ArmWakeup("s1", &Wakeup{Name: "later", At: now.Add(time.Hour).UnixMilli(), Prompt: "not yet", ArmedAt: 2, Signed: signed("later")})
+	r.ArmWakeup("s1", &Wakeup{Name: "named", At: now.Add(-time.Second).UnixMilli(), Prompt: "x", ArmedAt: 3, Signed: signed("x")})
 	r.scheduleTick(now)
 	waitIdle(t)
 	r.scheduleTick(now)
 	waitIdle(t)
 	got := f.got()
-	if len(got) != 2 || !contains(got, "s1: go") || !contains(got, `s1: [scheduled wakeup "named"] x`) {
+	if len(got) != 2 || !contains(got, "s1: wakeup go") || !contains(got, "s1: wakeup x") {
 		t.Fatalf("delivered %q", got)
 	}
 	ws, _ := r.ListWakeups("s1")
@@ -178,13 +198,13 @@ func contains(xs []string, x string) bool {
 func TestWakeupRearmedDuringFireIsKept(t *testing.T) {
 	r := newTestRouter(t)
 	addSession(r, "s1", "started", "m1", false)
-	old := deliverHookOrPeer
-	deliverHookOrPeer = func(r *Router, sid, from, text, after string) error {
-		r.ArmWakeup("s1", &Wakeup{Name: "default", At: time.Now().Add(time.Hour).UnixMilli(), Prompt: "new", ArmedAt: 99})
+	old := deliverVouchedHook
+	deliverVouchedHook = func(r *Router, sid string, d Delivery) error {
+		r.ArmWakeup("s1", &Wakeup{Name: "default", At: time.Now().Add(time.Hour).UnixMilli(), Prompt: "new", ArmedAt: 99, Signed: signed("new")})
 		return nil
 	}
-	t.Cleanup(func() { deliverHookOrPeer = old })
-	r.ArmWakeup("s1", &Wakeup{Name: "default", At: time.Now().Add(-time.Second).UnixMilli(), Prompt: "old", ArmedAt: 1})
+	t.Cleanup(func() { deliverVouchedHook = old })
+	r.ArmWakeup("s1", &Wakeup{Name: "default", At: time.Now().Add(-time.Second).UnixMilli(), Prompt: "old", ArmedAt: 1, Signed: signed("old")})
 	r.scheduleTick(time.Now())
 	waitIdle(t)
 	ws, _ := r.ListWakeups("s1")
@@ -199,7 +219,7 @@ func TestWakeupFailuresBackOffThenDrop(t *testing.T) {
 	f := &fakeDelivery{err: errors.New("peer message not delivered: boom")}
 	f.install(t)
 	addSession(r, "s2", "started", "m2", false)
-	r.ArmWakeup("s2", &Wakeup{Name: "default", At: time.Now().Add(-time.Second).UnixMilli(), Prompt: "go", ArmedAt: 1})
+	r.ArmWakeup("s2", &Wakeup{Name: "default", At: time.Now().Add(-time.Second).UnixMilli(), Prompt: "go", ArmedAt: 1, Signed: signed("go")})
 	at := time.Now()
 	for i := 0; i < scheduleMaxAttempt; i++ {
 		r.scheduleTick(at)
@@ -220,7 +240,7 @@ func TestWakeupRefusedStaysPendingAndDMsOnce(t *testing.T) {
 	f := &fakeDelivery{err: errors.New("the machine refused or failed: no grant, and the holder isn't on this session's allow list")}
 	f.install(t)
 	addSession(r, "s3", "started", "m3", false)
-	r.ArmWakeup("s3", &Wakeup{Name: "default", At: time.Now().Add(-time.Second).UnixMilli(), Prompt: "go", ArmedAt: 1})
+	r.ArmWakeup("s3", &Wakeup{Name: "default", At: time.Now().Add(-time.Second).UnixMilli(), Prompt: "go", ArmedAt: 1, Signed: signed("go")})
 	at := time.Now()
 	for i := 0; i < 8; i++ {
 		r.scheduleTick(at)
@@ -257,21 +277,18 @@ func TestPausedSensitiveSessionIsNotResumedForNothing(t *testing.T) {
 	}
 }
 
-func TestCronFiresAdvancesAndRenews(t *testing.T) {
+func TestCronFiresAndAdvances(t *testing.T) {
 	r := newTestRouter(t)
 	f := &fakeDelivery{}
 	f.install(t)
 	addSession(r, "s5", "started", "m5", false)
 	now := time.Now()
-	r.ArmCron("s5", &Cron{Name: "daily", Prompt: "do", Every: 86400, TZ: "UTC", NextAt: now.Add(-time.Minute).UnixMilli(), ArmedAt: 1})
+	r.ArmCron("s5", &Cron{Name: "daily", Prompt: "do", Every: 86400, TZ: "UTC", NextAt: now.Add(-time.Minute).UnixMilli(), ArmedAt: 1, Signed: signed("daily")})
 	r.scheduleTick(now)
 	waitIdle(t)
 	got := f.got()
-	if len(got) != 1 || got[0] != `s5: [recurring wakeup "daily", daily — run 1] do` {
+	if len(got) != 1 || got[0] != "s5: cron daily run 1" {
 		t.Fatalf("%q", got)
-	}
-	if !strings.HasPrefix(f.after[0], "jarvis2-machine allow-at-least scheduler ") {
-		t.Fatalf("after %q", f.after[0])
 	}
 	cs, _ := r.ListCrons("s5")
 	if len(cs) != 1 || cs[0].Runs != 1 || cs[0].NextAt <= now.UnixMilli() || cs[0].LastFiredAt == nil {
@@ -282,7 +299,7 @@ func TestCronFiresAdvancesAndRenews(t *testing.T) {
 func TestResumePrompt(t *testing.T) {
 	r := newTestRouter(t)
 	f := &fakeDelivery{}
-	f.install(t)
+	f.installPeer(t)
 	addSession(r, "s6", "resuming", "", false)
 	r.SetResumePrompt("s6", "carry on\nwith B")
 	r.scheduleTick(time.Now())

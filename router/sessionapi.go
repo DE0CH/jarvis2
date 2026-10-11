@@ -54,7 +54,6 @@ func init() {
 }
 
 func (r *Router) registerSessionAPI(app appRoute, m machineRoute) {
-	deliverHook = deliverPeer
 	// ---- the app (Deyao) -------------------------------------------------------------------------------
 	app("GET /api/sessions/{id}/wakeup", func(w http.ResponseWriter, req *http.Request) { r.getWakeups(w, req.PathValue("id"), true) })
 	app("GET /api/sessions/{id}/wakeups", func(w http.ResponseWriter, req *http.Request) { r.getWakeups(w, req.PathValue("id"), false) })

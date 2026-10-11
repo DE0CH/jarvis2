@@ -8,7 +8,6 @@ package main
 
 import (
 	"encoding/json"
-	"errors"
 	"log"
 	"net/http"
 	"time"
@@ -26,7 +25,7 @@ func (r *Router) registerFeatures(app appRoute, m machineRoute, public publicRou
 	r.registerAutopilot(app, m)
 	r.registerHarnesses(app)         // harness.go: /api/models
 	r.registerRemote(app, m, public) // remote.go: remote pages, /api/remotes, tunnel proofs
-	r.registerSessionAPI(app, m)     // sessionapi.go: sets deliverHook (peer.go); wakeups, crons, /m/api
+	r.registerSessionAPI(app, m)     // sessionapi.go: wakeups, crons, /m/api
 	r.registerArchive(app, m)        // archive.go, restore.go (budget.go needs no routes: /api/state via stateHooks)
 	r.registerSessionOps(app, m)     // sessionops.go, uploads.go, repos.go
 	r.registerTasks(app, m)          // tasks.go: task instances (one-shot session lines), runs, schedules
@@ -105,32 +104,11 @@ func (r *Router) DM(text string) {
 	log.Printf("[dm] %s", text)
 }
 
-// Deliver: a message into the session's harness as a peer message (filled in by the scheduler feature); it
-// runs through a grant, so it fails when the session hasn't allowed it
-var deliverHook func(r *Router, session, from, text string) error
-
-func (r *Router) Deliver(session, from, text string) error {
-	if deliverHook == nil {
-		return errNoDeliver
-	}
-	if r.vouchedDeliveries(session) {
-		// a machine whose cert vouches takes only texts built into its image (vouch.go canned): the router picks
-		// when, never what
-		return errNotVouched
-	}
-	return deliverHook(r, session, from, text)
-}
-
 // DeliverCanned: a text built into the session image ("continue", the watchdog's nudge), as a delivery the core
-// attests; the old path (a command under the scheduler's grant) for a machine whose cert doesn't vouch
+// attests: the router picks when, never what
 func (r *Router) DeliverCanned(session string, d Delivery, text string) error {
-	if r.vouchedDeliveries(session) {
-		return r.deliverVouched(session, d)
-	}
-	return r.Deliver(session, "jarvis", text)
+	return r.deliverVouched(session, d)
 }
-
-var errNoDeliver = errors.New("message delivery isn't built yet")
 
 // envHooks: each adds to the env a machine starts with (start and resume; flows.go machineEnv). Not secret:
 // the env is unsigned.

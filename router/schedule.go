@@ -39,8 +39,6 @@ const (
 	resumePromptMax    = 4000
 	scheduleTick       = 30 * time.Second
 	scheduleMaxAttempt = 5
-	// how long the scheduler may stay on a cron session's allow list after a firing (renewed each time)
-	cronAllowMin = 31 * 24 * time.Hour
 )
 
 var scheduleNameRE = regexp.MustCompile(`^[A-Za-z0-9_-]{1,40}$`)
@@ -764,19 +762,9 @@ func (r *Router) fireWakeup(sid, name string, armedAt int64) error {
 	if w.Name == "" || w.ArmedAt != armedAt || w.At > time.Now().UnixMilli() {
 		return nil // cancelled, replaced or already fired
 	}
-	text := w.Prompt
-	if w.Name != wakeupDefault {
-		text = fmt.Sprintf("[scheduled wakeup %q] %s", w.Name, w.Prompt)
-	}
-	var err error
-	if r.vouchedDeliveries(sid) { // vouch.go: the session's own signed request, attested by the core
-		if w.Signed == nil {
-			err = errNotVouched
-		} else {
-			err = r.deliverVouched(sid, Delivery{Kind: "wakeup", Request: w.Signed})
-		}
-	} else {
-		err = r.deliverToSession(sid, "jarvis", text, "")
+	err := errNotVouched
+	if w.Signed != nil { // vouch.go: the session's own signed request, attested by the core
+		err = deliverVouchedHook(r, sid, Delivery{Kind: "wakeup", Request: w.Signed})
 	}
 	if err != nil {
 		return err
@@ -790,23 +778,6 @@ func (r *Router) fireWakeup(sid, name string, armedAt int64) error {
 	return nil
 }
 
-func everyText(every int64) string {
-	switch {
-	case every == 86400:
-		return "daily"
-	case every%86400 == 0:
-		return fmt.Sprintf("every %d d", every/86400)
-	case every%3600 == 0:
-		return fmt.Sprintf("every %d h", every/3600)
-	}
-	return fmt.Sprintf("every %d min", int(math.Round(float64(every)/60)))
-}
-
-// cronAllowFor: how long a cron keeps the scheduler on its session's allow list after arming or firing
-func cronAllowFor(every int64) time.Duration {
-	return max(cronAllowMin, 2*time.Duration(every)*time.Second+time.Hour)
-}
-
 func (r *Router) fireCron(sid, name string, armedAt int64) error {
 	var c Cron
 	r.st.Do(func(d *persisted) {
@@ -817,18 +788,9 @@ func (r *Router) fireCron(sid, name string, armedAt int64) error {
 	if c.Name == "" || c.ArmedAt != armedAt || c.NextAt > time.Now().UnixMilli() {
 		return nil
 	}
-	text := fmt.Sprintf("[recurring wakeup %q, %s — run %d] %s", c.Name, everyText(c.Every), c.Runs+1, c.Prompt)
-	// each firing renews the session's own approval of the scheduler (never shortens it)
-	renew := fmt.Sprintf("jarvis2-machine allow-at-least scheduler %ds", int64(cronAllowFor(c.Every)/time.Second))
-	var err error
-	if r.vouchedDeliveries(sid) { // vouch.go: no allow-list renewal either: the machine needs no shell for it
-		if c.Signed == nil {
-			err = errNotVouched
-		} else {
-			err = r.deliverVouched(sid, Delivery{Kind: "cron", Request: c.Signed, Run: c.Runs + 1})
-		}
-	} else {
-		err = r.deliverToSession(sid, "jarvis", text, renew)
+	err := errNotVouched
+	if c.Signed != nil { // vouch.go: the session's own signed request, attested by the core; no shell needed
+		err = deliverVouchedHook(r, sid, Delivery{Kind: "cron", Request: c.Signed, Run: c.Runs + 1})
 	}
 	if err != nil {
 		return err
@@ -918,6 +880,9 @@ func (r *Router) deliverToSession(sid, from, text, after string) error {
 		time.Sleep(scheduleWaitStep * 2)
 	}
 }
+
+// deliverVouchedHook: a seam for tests (vouch.go deliverVouched)
+var deliverVouchedHook = func(r *Router, sid string, d Delivery) error { return r.deliverVouched(sid, d) }
 
 // deliverHookOrPeer: a seam for tests
 var deliverHookOrPeer = func(r *Router, sid, from, text, after string) error {

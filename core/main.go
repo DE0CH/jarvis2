@@ -132,7 +132,7 @@ func Handler(c *Core) http.Handler {
 		return c.Start(sr)
 	})
 	h("POST /init", func(r *http.Request, b body) (any, error) { return c.Init(str(b, "machine")) })
-	h("POST /certify", func(r *http.Request, b body) (any, error) { return c.Certify(doc(b, "approval"), doc(b, "started")) })
+	h("POST /certify", func(r *http.Request, b body) (any, error) { return c.Certify(doc(b, "approval"), doc(b, "started"), str(b, "carry")) })
 	h("POST /kill", func(r *http.Request, b body) (any, error) {
 		var snap *SnapshotClaim
 		if len(b["snapshot"]) != 0 && string(b["snapshot"]) != "null" {
@@ -147,12 +147,6 @@ func Handler(c *Core) http.Handler {
 	h("POST /attest", func(r *http.Request, b body) (any, error) {
 		return c.Attest(str(b, "machine"), str(b, "input"), str(b, "origin"), str(b, "sha256"))
 	})
-	h("POST /input-log/chain-from", func(r *http.Request, b body) (any, error) { return c.ChainFrom(str(b, "head")) })
-	h("POST /input-log", func(r *http.Request, b body) (any, error) {
-		var from int
-		json.Unmarshal(b["from"], &from)
-		return c.AuditLog(from), nil
-	})
 
 	// ---- succession ----
 	h("POST /succession", func(r *http.Request, b body) (any, error) {
@@ -164,10 +158,10 @@ func Handler(c *Core) http.Handler {
 		return c.Succession(in)
 	})
 	h("POST /approve/by-phone", func(r *http.Request, b body) (any, error) {
-		return c.ApproveByPhone(doc(b, "challenge"), str(b, "signature"))
+		return c.ApproveByPhone(doc(b, "challenge"), str(b, "signature"), str(b, "carry"))
 	})
 	h("POST /approve/by-old-key", func(r *http.Request, b body) (any, error) {
-		return c.ApproveByOldKey(doc(b, "challenge"), str(b, "signature"))
+		return c.ApproveByOldKey(doc(b, "challenge"), str(b, "signature"), str(b, "carry"))
 	})
 	h("POST /approve/by-dead-machine", func(r *http.Request, b body) (any, error) { return c.ApproveByDeadMachine(doc(b, "challenge")) })
 
@@ -197,8 +191,6 @@ func Handler(c *Core) http.Handler {
 	h("POST /pull-secrets", func(r *http.Request, b body) (any, error) {
 		return c.PullSecrets(doc(b, "cert"), str(b, "carry"))
 	})
-	// carry.go: the line's carried secrets rebound to a cert's machine (its successor, or itself with a new cert)
-	h("POST /carry/forward", func(r *http.Request, b body) (any, error) { return c.ForwardCarry(str(b, "carry"), doc(b, "cert")) })
 	return mux
 }
 

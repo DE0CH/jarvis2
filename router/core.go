@@ -49,10 +49,24 @@ func (c *CoreClient) Raw(method, path string, body []byte) (int, []byte, error) 
 
 // Call: POST a JSON body, expect a signed document
 func (c *CoreClient) Call(path string, in any) (*Doc, error) {
+	d, _, err := c.CallAnswer(path, in)
+	return d, err
+}
+
+// Answer: what the core answers beside a cert (not under its signature; each its own proof): the cert's input-log
+// entry (core-signed) and the line's carried secrets rebound to the cert's machine (only the core opens them). Empty
+// from a core before R2 (it kept its log for reading and had /carry/forward).
+type Answer struct {
+	Entry *Doc   `json:"entry"`
+	Carry string `json:"carry"`
+}
+
+// CallAnswer: Call, with what came beside the signed document
+func (c *CoreClient) CallAnswer(path string, in any) (*Doc, *Answer, error) {
 	body, _ := json.Marshal(in)
 	status, b, err := c.Raw("POST", path, body)
 	if err != nil {
-		return nil, fmt.Errorf("core %s: %w", path, err)
+		return nil, nil, fmt.Errorf("core %s: %w", path, err)
 	}
 	var d Doc
 	if status != 200 {
@@ -61,12 +75,14 @@ func (c *CoreClient) Call(path string, in any) (*Doc, error) {
 		if json.Unmarshal(b, &d) == nil && d.Decode(&e) == nil && e.Error != "" {
 			msg = "core: " + e.Error
 		}
-		return nil, &CoreError{Status: status, Body: b, Msg: msg}
+		return nil, nil, &CoreError{Status: status, Body: b, Msg: msg}
 	}
 	if err := json.Unmarshal(b, &d); err != nil || d.Payload == "" {
-		return nil, fmt.Errorf("core %s: not a signed document", path)
+		return nil, nil, fmt.Errorf("core %s: not a signed document", path)
 	}
-	return &d, nil
+	var a Answer
+	json.Unmarshal(b, &a)
+	return &Doc{Payload: d.Payload, Sig: d.Sig}, &a, nil
 }
 
 // Key: the core's public keys (from /identity; the box signature and signed state are the app's and setup's to check)

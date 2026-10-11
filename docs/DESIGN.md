@@ -100,13 +100,12 @@ machines, and run exactly one command inside a machine, `/usr/local/bin/jarvis2-
 | `approve_by_old_key(challenge, sig)` | Automatic: a downgrade (same machine, a subset of its stores, a new key pair) signed with the signing key in the cert it continues. |
 | `start(image, region, size)` | Open (normally the router, which guards it; it can't lead to a secret): one Fly create → a created machine. The image is `ghcr.io/de0ch/jarvis2-session` pinned by digest; `size` is small, medium or large (anything else is refused); the machine's Fly config gets only what the core sets (its key, the router's address). |
 | `init(machine)` | One try, for a machine this core created: Fly must report it started, then one run of `jarvis2-init` (its output: the machine's keys) → the signed `started` document. 409 while it isn't up; the router retries and kills a machine that never comes up. |
-| `certify(approval, started)` | The approval and a started machine (init's signed document) running the approved image (the digest Fly reports is the approval's) → the succession cert, naming the snapshot the predecessor signed at its kill. One machine per approval, one line per machine, one successor per predecessor (killed and not used). The null image: no machine, a burn cert. For a machine succeeding itself the approval is the new cert at once. |
+| `certify(approval, started, carry?)` | The approval and a started machine (init's signed document) running the approved image (the digest Fly reports is the approval's) → the succession cert, naming the snapshot the predecessor signed at its kill. One machine per approval, one line per machine, one successor per predecessor (killed and not used). The null image: no machine, a burn cert. For a machine succeeding itself the approval is the new cert at once. Given the line's carry blob, certify (and an add-store's or downgrade's answer) answers it rebound to the new cert beside it, keeping only that cert's stores. |
 | `kill(machine, snapshot?)` | One Fly destroy, then Fly must report the machine destroyed → killed (409 before: the router asks again). `snapshot` = the sha256 of the machine's last snapshot and its signature over it with its current key: kept as what its successor restores. |
-| `attest(machine, input, origin, sha256)` / `input_log(from)` / `chain_from(head)` | The input log: sign and append to a hash chain (no parsing); certs are appended by the core itself. `chain_from` once, on an empty log: continues from the persisted head of an earlier core's. |
+| `attest(machine, input, origin, sha256)` | The input log: sign and append to a hash chain (no parsing); the answer is the entry. Certs are appended by the core itself, each cert's entry answered beside it. The core keeps only the head and the length; the router keeps the entries. |
 | `unlock_begin(name, for)` / `unlock_finish(pending, phone share)` | The split-key unlock. `for` = the nonce of the one challenge or cert it is for (a Start, an add-store, a waiting session): only that cert reads it and its pull locks it again (below, "Carried secrets"); no `for` = a standing unlock, open until locked. |
 | `lock(unlock id)` / `list_unlocked(nonce)` | Release; the signed list of open unlocks (each with what it is for). |
 | `pull_secrets(cert, carry)` | The cert's stores sealed to that machine's encryption key — so no other proof is needed — each from an unlock open to that cert, else from the line's carried secrets; answers the next carry blob for that machine. |
-| `forward_carry(carry, cert)` | The line's carried secrets rebound to the machine a cert names (its certified successor, or itself with a new cert), keeping only that cert's stores. Open: only this core opens a blob. |
 | `deploy_key_begin(action, repo, sensitive)` / `deploy_key_finish(pending, phone sig, phone share)` | A repo's deploy key, added or removed (below, "Deploy keys"): the signed request, then the phone's signature over it and its share of `github-deploy-keys`; the core uses that store's GitHub token for this one call and writes or deletes the store `github-<repo>`. |
 
 A succession from null is approved only by the phone: every new line starts with Deyao's click.
@@ -269,7 +268,7 @@ by the core, approved by the phone; the box alone can never make one, and no AI 
   `kill(machine, snapshot hash + its signature)`: the successor's cert names that snapshot and no other. Its carried secrets (sealed by the core at its last pull) are already next to the snapshot. Skipped/failed
   snapshot = nothing to resume; no secret moves.
 - **Resume, nothing changed (also unattended, e.g. scheduled):** `succession(old, …)` ← approve_by_dead_machine
-  → `start` → `certify` → succession cert → `forward_carry` → the machine pulls its secrets from the carried blob,
+  → `start` → `certify` (with the line's carry) → succession cert + the carry rebound → the machine pulls its secrets from the carried blob,
   no store unlocked, no Face ID.
 - **Resume with a change (e.g. newer image), approved:** `succession(old, …)` ← iPhone (shows the difference,
   Deyao clicks) → `start` → `certify`. Rejecting leaves the session paused as it was.
@@ -277,10 +276,10 @@ by the core, approved by the phone; the box alone can never make one, and no AI 
   every store's key names, never values — the router's record, kept by the setup session's writes; repo stores'
   names follow from the repo), then asks through the router (signed with its machine key) for
   one more store → `succession(machine → same machine, set + store)` → `approve_by_phone` (the same Face ID unlocks
-  the added store for that challenge only, if it is locked) → new cert → `forward_carry` → the machine pulls its
+  the added store for that challenge only, if it is locked) → new cert + its carry rebound → the machine pulls its
   secrets again (its stores from the carried blob, the added one from its unlock, locked again by that pull).
 - **Downgrade in place:** the machine makes a new key pair → `succession(machine → same machine, a subset, new
-  keys)` → the machine signs the challenge with its old key → `approve_by_old_key` → new cert → `forward_carry` (the
+  keys)` → the machine signs the challenge with its old key → `approve_by_old_key` → new cert + its carry rebound (the
   dropped stores leave the carried blob) → only then the machine shreds its old keys and the dropped stores'
   secrets, and re-pulls with the new keys.
 - **End a session:** `kill`, then burn: `succession(old, no stores, no options, null image)` ← respond by
@@ -305,9 +304,9 @@ unattended resumes (a wakeup, a cron, a task run with nobody there) he chose: **
   sealed for; the core reads a store from it only when no unlock is open to the cert, only for the machine's newest
   cert whose blob was sealed for that cert or the one it directly continues (the same machine's previous cert, or the
   predecessor's newest), so a blob from before a downgrade opens for nothing after it,
-  only while that machine isn't killed, and only the stores that cert names. `forward_carry` rebinds it right after a
-  successor is certified (so one that dies before pulling doesn't break the line), and after an add-store or a
-  downgrade (the dropped stores leave it at once).
+  only while that machine isn't killed, and only the stores that cert names. The call that makes a new cert rebinds it
+  and answers it beside the cert: a successor's certify (so one that dies before pulling doesn't break the line), an
+  add-store's or a downgrade's answer (the dropped stores leave it at once).
 - **The carry key** is 32 random bytes the core makes when it starts, in memory only: sealed to the running core
   and nothing else — no backup, no setup step, no new trust path. Nothing else (the router, the Storage Box, a
   machine, another session, another core) can open or forge a blob.
@@ -415,7 +414,8 @@ Deyao handing a feature a shell, and the session's own allow list is the session
 **The input log** (the record, beside the voucher): every input delivered after a machine started carries the core's
 attestation over (machine, input hash, kind, origin) and the machine refuses one without it. The core appends each,
 and every cert it issues, to a hash chain of core-signed entries; the router persists them to its volume
-(`input-log.jsonl`, `GET /api/input-log`) and starts a new core's chain from the last persisted head. The core only
+(`input-log.jsonl`, `GET /api/input-log`) from the answers that carry them; a new core's chain starts again at seq 0
+(the router's file shows where one core's ends). The core keeps only the head and the length; it only
 hashes, signs and appends.
 
 ## iPhone approval screen

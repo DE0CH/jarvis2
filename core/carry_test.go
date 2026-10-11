@@ -27,7 +27,7 @@ func startWithUnlocks(t *testing.T, c *Core, p *phone, stores ...string) (Signed
 	for _, n := range stores {
 		unlockFor(t, c, p, n, challengeNonce(ch))
 	}
-	a, err := c.ApproveByPhone(&ch, p.sign(ch.Payload))
+	a, err := c.ApproveByPhone(&ch, p.sign(ch.Payload), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -155,7 +155,7 @@ func TestAResumeCarriesTheSecretsWithNoStoreUnlocked(t *testing.T) {
 		t.Fatal(a)
 	}
 	ad, _ := c.ApproveByDeadMachine(&ch)
-	cert2, id2 := start(t, c, ad)
+	cert2, id2 := startCarry(t, c, ad, out.Carry) // the router hands certify the line's blob
 	if len(c.unlocked) != 0 {
 		t.Fatal("a store is unlocked")
 	}
@@ -164,12 +164,11 @@ func TestAResumeCarriesTheSecretsWithNoStoreUnlocked(t *testing.T) {
 	if v["A"] != "1" || v["G"] != "secret" {
 		t.Fatalf("got %v", v)
 	}
-	// forward: rebound to the successor at once (the router does it right after certify)
-	fw := pl(t)(c.ForwardCarry(out.Carry, &cert2))
-	if fw["machine"] != id2 || len(fw["stores"].([]any)) != 2 {
-		t.Fatalf("forward: %v", fw)
+	// certify answered it rebound to the successor at once, beside the cert
+	if cp, err := c.openCarry(cert2.Carry); err != nil || cp.Machine != id2 || len(cp.Stores) != 2 {
+		t.Fatalf("rebound carry: %+v %v", cp, err)
 	}
-	pull(t, c, cert2, fw["carry"].(string))
+	pull(t, c, cert2, cert2.Carry)
 	// the dead predecessor's own cert gets nothing from it
 	_, err := c.PullSecrets(&cert, out.Carry)
 	locked(t, err, "default")
@@ -180,7 +179,7 @@ func TestAResumeCarriesTheSecretsWithNoStoreUnlocked(t *testing.T) {
 	cert3, _ := start(t, c, a3)
 	_, err = c.PullSecrets(&cert3, out.Carry)
 	locked(t, err, "default")
-	pull(t, c, cert3, fw["carry"].(string))
+	pull(t, c, cert3, cert2.Carry)
 }
 
 func TestAResumedMachineThatNeverPulledKeepsTheChain(t *testing.T) {
@@ -190,13 +189,12 @@ func TestAResumedMachineThatNeverPulledKeepsTheChain(t *testing.T) {
 	pl(t)(c.KillWithSnapshot(id, nil))
 	ch, _ := c.Succession(SuccessionInput{Predecessor: &cert, Image: f.machineImage(c, &cert), Stores: []string{"default"}})
 	a, _ := c.ApproveByDeadMachine(&ch)
-	cert2, id2 := start(t, c, a)
-	fw := pl(t)(c.ForwardCarry(out.Carry, &cert2)) // the router, right after certify
-	pl(t)(c.KillWithSnapshot(id2, nil))            // it died before it pulled
+	cert2, id2 := startCarry(t, c, a, out.Carry) // rebound beside the cert
+	pl(t)(c.KillWithSnapshot(id2, nil))          // it died before it pulled
 	ch3, _ := c.Succession(SuccessionInput{Predecessor: &cert2, Image: f.machineImage(c, &cert2), Stores: []string{"default"}})
 	a3, _ := c.ApproveByDeadMachine(&ch3)
 	cert3, id3 := start(t, c, a3)
-	if v := values(t, f.machines[id3].enc, pull(t, c, cert3, fw["carry"].(string))); v["A"] != "1" {
+	if v := values(t, f.machines[id3].enc, pull(t, c, cert3, cert2.Carry)); v["A"] != "1" {
 		t.Fatalf("got %v", v)
 	}
 }
@@ -221,8 +219,8 @@ func TestOnlyThisCoreOpensACarryBlob(t *testing.T) {
 	if _, err := c.openCarry(b64.EncodeToString(gcmSeal(k, forged, []byte(carryAAD)))); err == nil {
 		t.Fatal("a forged blob opened")
 	}
-	if _, err := c.ForwardCarry("", &cert); err == nil {
-		t.Fatal("forwarded nothing")
+	if cert.Carry != "" {
+		t.Fatal("a carry beside a cert certified with none")
 	}
 }
 
@@ -237,19 +235,15 @@ func TestADowngradeDropsItsStoresFromTheCarry(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cert2, err := c.ApproveByOldKey(&ch, (&phone{sig: ecdsaFromECDH(m.sig)}).sign(ch.Payload))
+	cert2, err := c.ApproveByOldKey(&ch, (&phone{sig: ecdsaFromECDH(m.sig)}).sign(ch.Payload), out.Carry)
 	if err != nil {
 		t.Fatal(err)
 	}
-	fw := pl(t)(c.ForwardCarry(out.Carry, &cert2))
-	if s := fw["stores"].([]any); len(s) != 1 || s[0] != "default" {
-		t.Fatalf("the downgrade's carry kept %v", s)
+	cp, _ := c.openCarry(cert2.Carry)
+	if _, ok := cp.Stores["gmail"]; ok || len(cp.Stores) != 1 {
+		t.Fatalf("the downgrade's carry kept %v", cp.Stores)
 	}
-	cp, _ := c.openCarry(fw["carry"].(string))
-	if _, ok := cp.Stores["gmail"]; ok {
-		t.Fatal("gmail is still in the blob")
-	}
-	v := values(t, nEnc, pull(t, c, cert2, fw["carry"].(string)))
+	v := values(t, nEnc, pull(t, c, cert2, cert2.Carry))
 	if v["A"] != "1" || v["G"] != "" {
 		t.Fatalf("got %v", v)
 	}
@@ -264,11 +258,15 @@ func TestAnAddedStoreIsUnlockedForItsChallengeOnly(t *testing.T) {
 		t.Fatal(err)
 	}
 	unlockFor(t, c, p, "gmail", challengeNonce(ch))
-	cert2, err := c.ApproveByPhone(&ch, p.sign(ch.Payload))
+	cert2, err := c.ApproveByPhone(&ch, p.sign(ch.Payload), out.Carry)
 	if err != nil {
 		t.Fatal(err)
 	}
-	v := values(t, f.machines[id].enc, pull(t, c, cert2, out.Carry))
+	// the machine's carry, rebound beside its new cert: its stores so far (the added one comes from its unlock)
+	if cp, err := c.openCarry(cert2.Carry); err != nil || len(cp.Stores) != 1 || cp.Stores["default"] == nil {
+		t.Fatalf("rebound carry %+v %v", cp, err)
+	}
+	v := values(t, f.machines[id].enc, pull(t, c, cert2, cert2.Carry))
 	if v["A"] != "1" || v["G"] != "secret" {
 		t.Fatalf("got %v", v)
 	}
@@ -284,7 +282,7 @@ func TestDestroyEndsTheCarry(t *testing.T) {
 	pl(t)(c.KillWithSnapshot(id, nil))
 	ch, _ := c.Succession(SuccessionInput{Predecessor: &cert, Image: NullImage})
 	a, _ := c.ApproveByDeadMachine(&ch)
-	pl(t)(c.Certify(&a, nil))
+	pl(t)(c.Certify(&a, nil, ""))
 	// the line is burnt: no successor can be certified, and the dead machine's own cert gets nothing
 	ch2, _ := c.Succession(SuccessionInput{Predecessor: &cert, Image: f.machineImage(c, &cert), Stores: []string{"default"}})
 	if _, err := c.ApproveByDeadMachine(&ch2); err == nil {
@@ -292,7 +290,4 @@ func TestDestroyEndsTheCarry(t *testing.T) {
 	}
 	_, err := c.PullSecrets(&cert, out.Carry)
 	locked(t, err, "default")
-	if _, err := c.ForwardCarry(out.Carry, &cert); err == nil {
-		t.Fatal("forwarded to a killed machine")
-	}
 }

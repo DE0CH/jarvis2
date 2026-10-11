@@ -11,9 +11,9 @@ package main
 // - The carry blob: every pull that goes through also answers the values it sealed, per store, under the core's
 //   carry key (AES-GCM, made when the core starts, never leaving it), bound to that machine. The router keeps it
 //   with the machine's snapshot. A later pull of the same machine (add-store, downgrade) or of its certified
-//   successor (a resume) reads its stores from it when no unlock is open to it; forward_carry rebinds it to the
-//   successor as soon as that is certified, restricted to the successor's stores, so a successor that never pulls
-//   doesn't break the chain. Nobody but this core can open or forge one: not the router, the Storage Box, a machine
+//   successor (a resume) reads its stores from it when no unlock is open to it; certify (and an add-store's or a
+//   downgrade's answer) takes the line's blob and answers it rebound to the new cert, restricted to that cert's
+//   stores, so a successor that never pulls doesn't break the chain. Nobody but this core can open or forge one: not the router, the Storage Box, a machine
 //   or another core.
 // - A new core (restart, Recover) has a new carry key: an earlier core's blobs don't open. Its paused lines can't
 //   continue on it anyway (their certs are another core's, the killed/used sets are gone), so nothing is lost
@@ -161,32 +161,4 @@ func (c *Core) openCarryFor(blob string, cert *Cert) map[string]map[string]strin
 		}
 	}
 	return out
-}
-
-// ForwardCarry: the line's carry blob rebound to the machine a cert names — its certified successor, or the
-// same machine with a new cert (add-store, downgrade) — keeping only the stores that cert names, so a downgrade's
-// dropped stores leave the blob at once. Open (normally the router, right after certify): the answer is sealed
-// under the core's own key and opens only for that machine's certs.
-func (c *Core) ForwardCarry(blob string, certDoc *SignedDoc) (SignedDoc, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	var cert Cert
-	if err := c.verifyOwn(certDoc, &cert); err != nil || cert.Kind != "succession-cert" || cert.Machine == nil {
-		return SignedDoc{}, fail(400, "not a succession cert this core signed")
-	}
-	carried := c.openCarryFor(blob, &cert)
-	if carried == nil {
-		return SignedDoc{}, fail(409, "not a carry blob of this core for %s or its predecessor", cert.Machine.ID)
-	}
-	next, err := c.sealCarry(&cert, carried)
-	if err != nil {
-		return SignedDoc{}, err
-	}
-	names := make([]string, 0, len(carried))
-	for n := range carried {
-		names = append(names, n)
-	}
-	sort.Strings(names)
-	c.logf("carry forwarded to %s (%v)", cert.Machine.ID, names)
-	return c.sign(map[string]any{"kind": "carry", "machine": cert.Machine.ID, "stores": names, "carry": next})
 }

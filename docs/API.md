@@ -322,8 +322,10 @@ off.
 
 `GET /api/input-log?last=N` (Access): the last N (≤ 2000, default 200) core-signed entries, each
 `{kind: "input", seq, prev, at, machine, input, origin, sha256}` with `prev` = sha256 of the previous entry's payload.
-The router appends the core's entries to `DATA_DIR/input-log.jsonl` every minute and after each attestation; a new
-core's chain starts from the last persisted entry (`chain_from`).
+The router appends each entry to `DATA_DIR/input-log.jsonl` as it arrives: attest's answer is the entry, and each
+cert's entry comes beside the cert (`entry`, with the rebound `carry`, next to `payload`/`sig`). A new core's chain
+starts again at seq 0. The core before R2 (the running one until its release) kept its entries for reading instead
+(`POST /input-log`, `chain_from`): the router reads those while that core runs.
 
 ## Wakeups and crons (`router/schedule.go`)
 

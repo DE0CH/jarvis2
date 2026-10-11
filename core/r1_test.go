@@ -11,7 +11,7 @@ import (
 )
 
 // downgrade in place: the new cert, the machine's old signing key answering the challenge
-func downgradeTo(t *testing.T, c *Core, f *fakeFly, cert SignedDoc, id string, keep ...string) (SignedDoc, SignedDoc, string, *ecdh.PrivateKey) {
+func downgradeTo(t *testing.T, c *Core, f *fakeFly, cert SignedDoc, id, carry string, keep ...string) (SignedDoc, SignedDoc, string, *ecdh.PrivateKey) {
 	t.Helper()
 	nEnc, _ := ecdh.P256().GenerateKey(rand.Reader)
 	nSig, _ := ecdh.P256().GenerateKey(rand.Reader)
@@ -20,7 +20,7 @@ func downgradeTo(t *testing.T, c *Core, f *fakeFly, cert SignedDoc, id string, k
 		t.Fatal(err)
 	}
 	sig := (&phone{sig: ecdsaFromECDH(f.machines[id].sig)}).sign(ch.Payload)
-	cert2, err := c.ApproveByOldKey(&ch, sig)
+	cert2, err := c.ApproveByOldKey(&ch, sig, carry)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -33,15 +33,15 @@ func TestADowngradeCantBeUndoneWithAnOlderCertOrBlob(t *testing.T) {
 	c, f, p := setup(t)
 	cert1, id := startWithUnlocks(t, c, p, "default", "gmail")
 	x1 := pull(t, c, cert1, "") // the blob with gmail in it
-	cert2, ch, sig, _ := downgradeTo(t, c, f, cert1, id, "default")
-	x2 := pl(t)(c.ForwardCarry(x1.Carry, &cert2))["carry"].(string)
+	cert2, ch, sig, _ := downgradeTo(t, c, f, cert1, id, x1.Carry, "default")
+	x2 := cert2.Carry
 
 	// the older cert pulls nothing any more
 	if _, err := c.PullSecrets(&cert1, x1.Carry); err == nil {
 		t.Fatal("a superseded cert pulled")
 	}
 	// the downgrade challenge answered again gets nothing (and doesn't put the old keys back)
-	if _, err := c.ApproveByOldKey(&ch, sig); err == nil {
+	if _, err := c.ApproveByOldKey(&ch, sig, ""); err == nil {
 		t.Fatal("a downgrade was answered twice")
 	}
 	pl(t)(c.KillWithSnapshot(id, nil))
@@ -58,12 +58,12 @@ func TestADowngradeCantBeUndoneWithAnOlderCertOrBlob(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cert3, id3 := start(t, c, a)
+	cert3, id3 := startCarry(t, c, a, x1.Carry)
 	if _, err := c.PullSecrets(&cert3, x1.Carry); err == nil {
 		t.Fatal("the blob from before the downgrade opened for the successor")
 	}
-	if _, err := c.ForwardCarry(x1.Carry, &cert3); err == nil {
-		t.Fatal("the blob from before the downgrade was forwarded")
+	if cert3.Carry != "" {
+		t.Fatal("the blob from before the downgrade was rebound beside the successor's cert")
 	}
 	v := values(t, f.machines[id3].enc, pull(t, c, cert3, x2))
 	if v["A"] != "1" || v["G"] != "" {
@@ -81,12 +81,12 @@ func TestAnAddStoreApprovalCantBeReplayedAfterADowngrade(t *testing.T) {
 		t.Fatal(err)
 	}
 	phoneSig := p.sign(ch.Payload)
-	cert2, err := c.ApproveByPhone(&ch, phoneSig)
+	cert2, err := c.ApproveByPhone(&ch, phoneSig, "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	downgradeTo(t, c, f, cert2, id, "default") // the session drops gmail again
-	if _, err := c.ApproveByPhone(&ch, phoneSig); err == nil {
+	downgradeTo(t, c, f, cert2, id, "", "default") // the session drops gmail again
+	if _, err := c.ApproveByPhone(&ch, phoneSig, ""); err == nil {
 		t.Fatal("the add-store approval was answered again after the downgrade")
 	}
 }

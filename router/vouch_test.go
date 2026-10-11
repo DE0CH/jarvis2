@@ -65,10 +65,10 @@ func v2Rig(t *testing.T) (*rig, *v2Core) {
 	cs := httptest.NewServer(vc)
 	t.Cleanup(cs.Close)
 	rg.r.core = &CoreClient{base: cs.URL, http: http.DefaultClient}
-	vouchProbe.Lock()
-	vouchProbe.at = time.Time{}
-	vouchProbe.Unlock()
-	t.Cleanup(func() { vouchProbe.Lock(); vouchProbe.at = time.Time{}; vouchProbe.Unlock() })
+	keptLogProbe.Lock()
+	keptLogProbe.at = time.Time{}
+	keptLogProbe.Unlock()
+	t.Cleanup(func() { keptLogProbe.Lock(); keptLogProbe.at = time.Time{}; keptLogProbe.Unlock() })
 	return rg, vc
 }
 
@@ -179,10 +179,7 @@ func TestDeliveriesToAVouchingMachine(t *testing.T) {
 		s := d.Sessions["s1"]
 		s.State, s.MachineID, s.Cert = "started", "m1", v2Cert(rg, "m1", `{"v":1}`)
 	})
-	// the router's own free text, or a wakeup made outside the session: nothing vouches for them
-	if err := r.Deliver("s1", "jarvis", "do something else"); !errors.Is(err, errNotVouched) {
-		t.Fatalf("free text: %v", err)
-	}
+	// a wakeup made outside the session: nothing vouches for it (the router has no free-text delivery at all)
 	r.st.Do(func(d *persisted) {
 		sched(d, "s1").Wakeups["w"] = &Wakeup{Name: "w", At: 1, Prompt: "x", ArmedAt: 7}
 	})

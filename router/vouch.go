@@ -72,47 +72,6 @@ type OnceInputs struct {
 	Rollback string `json:"rollback,omitempty"`
 }
 
-// ---- does the core vouch? -----------------------------------------------------------------------------------
-
-var vouchProbe struct {
-	sync.Mutex
-	at  time.Time
-	yes bool
-}
-
-// coreVouches: the running core has the input log (a Vouch 2 core). Re-checked every minute: a core restart is a
-// new core, possibly another version.
-func (r *Router) coreVouches() bool {
-	vouchProbe.Lock()
-	defer vouchProbe.Unlock()
-	if time.Since(vouchProbe.at) < time.Minute {
-		return vouchProbe.yes
-	}
-	st, b, err := r.core.Raw("POST", "/input-log", []byte(`{"from":1099511627776}`))
-	if err != nil {
-		return vouchProbe.yes // unreachable: keep the last answer
-	}
-	var out struct {
-		Entries []Doc `json:"entries"`
-		Head    *Doc  `json:"head"`
-	}
-	vouchProbe.yes = st == 200 && json.Unmarshal(b, &out) == nil && out.Head != nil && out.Head.Payload != "" && out.Entries != nil
-	vouchProbe.at = time.Now()
-	return vouchProbe.yes
-}
-
-// certVouch: the cert's Vouch (0 = from a core that doesn't vouch)
-func certVouch(c *Doc) int {
-	if c == nil {
-		return 0
-	}
-	var x struct {
-		Vouch int `json:"vouch"`
-	}
-	c.Decode(&x)
-	return x.Vouch
-}
-
 // certOptions: the cert's Config and Once
 func certOptions(c *Doc) (config, once string) {
 	if c == nil {
@@ -212,9 +171,6 @@ func lineConfig(s *Session) string {
 // resumeOnce: a resume's one-time inputs — the pending resume prompt and the rollback asked for this predecessor —
 // when the core vouches (they then need the phone; the old paths deliver neither); "" = none
 func (r *Router) resumeOnce(s *Session) string {
-	if !r.coreVouches() {
-		return ""
-	}
 	var o OnceInputs
 	r.st.Do(func(d *persisted) {
 		if sc := d.Schedules[s.ID]; sc != nil {
@@ -349,17 +305,6 @@ func attested(d Delivery) ([]byte, string, error) {
 	return nil, "", fmt.Errorf("unknown delivery %s", d.Kind)
 }
 
-// vouchedDeliveries: deliveries go this way (the session's machine and the core both vouch)
-func (r *Router) vouchedDeliveries(sid string) bool {
-	var c *Doc
-	r.st.Do(func(d *persisted) {
-		if s := d.Sessions[sid]; s != nil {
-			c = s.Cert
-		}
-	})
-	return certVouch(c) >= 2 && r.coreVouches()
-}
-
 var errNotVouched = errors.New("this wasn't asked for by the session itself (no session-signed request), and nothing else vouches for it: not delivered")
 
 // deliverVouched: resume the session when it is paused, wait for it, then hand the machine the delivery with the
@@ -404,7 +349,7 @@ func (r *Router) deliverVouched(sid string, d Delivery) error {
 		if err != nil {
 			return err
 		}
-		r.persistInputLog()
+		r.logInputs(a) // the attestation is itself the log entry
 		d.ID, d.Attest = randID(), a
 		res := make(chan DeliveryResult, 1)
 		deliveries.Lock()
@@ -433,21 +378,69 @@ func (r *Router) deliverVouched(sid string, d Delivery) error {
 }
 
 // ---- the input log, persisted --------------------------------------------------------------------------------
+//
+// Every entry is core-signed and names the hash of the one before. A core from R2 on keeps none: each entry arrives in
+// the answer that made it (attest's answer; beside each cert), and the router appends it to DATA_DIR/input-log.jsonl.
+// A new core's chain begins again at seq 0 with no previous hash (the router's file shows where). The core before R2
+// kept its entries for reading (POST /input-log): with it the router reads them instead, as before.
 
 var inputLog struct {
 	sync.Mutex
-	next    int  // the next seq to fetch from the core
-	chained bool // this core's log was started from the persisted head (or there was none)
+	next    int  // the core before R2: the next seq to fetch
+	chained bool // the core before R2: its log was started from the persisted head (or there was none)
+}
+
+var keptLogProbe struct {
+	sync.Mutex
+	at  time.Time
+	yes bool
+}
+
+// coreKeepsInputLog: the running core is one from before R2 (it answers POST /input-log). Re-checked every minute:
+// a core restart is a new core, possibly another version.
+func (r *Router) coreKeepsInputLog() bool {
+	keptLogProbe.Lock()
+	defer keptLogProbe.Unlock()
+	if time.Since(keptLogProbe.at) < time.Minute {
+		return keptLogProbe.yes
+	}
+	st, _, err := r.core.Raw("POST", "/input-log", []byte(`{"from":1099511627776}`))
+	if err != nil {
+		return keptLogProbe.yes // unreachable: keep the last answer
+	}
+	keptLogProbe.yes, keptLogProbe.at = st == 200, time.Now()
+	return keptLogProbe.yes
 }
 
 func (r *Router) inputLogPath() string { return filepath.Join(r.cfg.DataDir, "input-log.jsonl") }
 
-// persistInputLog: the core's new entries, appended to DATA_DIR/input-log.jsonl (each a core-signed document; each
-// names the hash of the one before). A new core first continues from the last persisted entry (chain_from).
-func (r *Router) persistInputLog() {
-	if !r.coreVouches() {
+// logInputs: entries from the core's answers, appended (nil ones skipped). With a core that keeps its own log, that
+// log is read instead.
+func (r *Router) logInputs(entries ...*Doc) {
+	if r.coreKeepsInputLog() {
+		r.persistInputLog()
 		return
 	}
+	inputLog.Lock()
+	defer inputLog.Unlock()
+	f, err := os.OpenFile(r.inputLogPath(), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		log.Printf("[input-log] %v", err)
+		return
+	}
+	defer f.Close()
+	for _, e := range entries {
+		if e == nil || e.Payload == "" {
+			continue
+		}
+		b, _ := json.Marshal(e)
+		f.Write(append(b, '\n'))
+	}
+}
+
+// persistInputLog: the core before R2 — its new entries, read from it (POST /input-log); a new core of that kind
+// first continues from the last persisted entry (chain_from)
+func (r *Router) persistInputLog() {
 	inputLog.Lock()
 	defer inputLog.Unlock()
 	var out struct {
@@ -525,12 +518,15 @@ func lastLine(p string) string {
 	return lines[len(lines)-1]
 }
 
-// inputLogTick: every minute (certs are logged by the core itself, without a router call)
+// inputLogTick: every minute, for the core before R2 (it logs certs by itself, without a router call)
 func (r *Router) inputLogTick() {
+	if !r.coreKeepsInputLog() {
+		return
+	}
 	inputLog.Lock()
 	first := !inputLog.chained
 	inputLog.Unlock()
-	if first && r.coreVouches() {
+	if first {
 		inputLog.Lock()
 		r.persistInputLogLocked(0)
 		inputLog.Unlock()

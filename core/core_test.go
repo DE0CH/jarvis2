@@ -244,7 +244,7 @@ func approve(t *testing.T, c *Core, p *phone, in SuccessionInput) SignedDoc {
 	if err != nil {
 		t.Fatal(err)
 	}
-	a, err := c.ApproveByPhone(&ch, p.sign(ch.Payload))
+	a, err := c.ApproveByPhone(&ch, p.sign(ch.Payload), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -252,17 +252,20 @@ func approve(t *testing.T, c *Core, p *phone, in SuccessionInput) SignedDoc {
 }
 
 // tryStart: what the router does with an approval — start a machine on the approved image, then certify it
-func tryStart(c *Core, a SignedDoc) (SignedDoc, error) {
+func tryStart(c *Core, a SignedDoc) (SignedDoc, error) { return tryStartCarry(c, a, "") }
+
+// tryStartCarry: the same, certifying with the line's carry blob (answered rebound beside the cert)
+func tryStartCarry(c *Core, a SignedDoc, carry string) (SignedDoc, error) {
 	var ap Approval
 	json.Unmarshal([]byte(a.Payload), &ap)
 	if ap.Request.Image == NullImage {
-		return c.Certify(&a, nil)
+		return c.Certify(&a, nil, "")
 	}
 	st, err := startMachine(c, ap.Request.Image)
 	if err != nil {
 		return SignedDoc{}, err
 	}
-	return c.Certify(&a, &st)
+	return c.Certify(&a, &st, carry)
 }
 
 // startMachine: what the router does to start one — create, then init (the fake is up at once)
@@ -278,7 +281,12 @@ func startMachine(c *Core, image string) (SignedDoc, error) {
 
 func start(t *testing.T, c *Core, a SignedDoc) (SignedDoc, string) {
 	t.Helper()
-	cert, err := tryStart(c, a)
+	return startCarry(t, c, a, "")
+}
+
+func startCarry(t *testing.T, c *Core, a SignedDoc, carry string) (SignedDoc, string) {
+	t.Helper()
+	cert, err := tryStartCarry(c, a, carry)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -534,14 +542,14 @@ func TestLockWipesWhenTheLastIDGoes(t *testing.T) {
 func TestPhoneSignatureMustCoverExactlyTheChallenge(t *testing.T) {
 	c, _, p := setup(t)
 	ch, _ := c.Succession(SuccessionInput{Image: img, Stores: []string{"default"}})
-	if _, err := c.ApproveByPhone(&ch, p.sign("something else")); err == nil {
+	if _, err := c.ApproveByPhone(&ch, p.sign("something else"), ""); err == nil {
 		t.Fatal("accepted a signature over something else")
 	}
 	altered := SignedDoc{Payload: strings.Replace(ch.Payload, "default", "gmail", 1), Sig: ch.Sig}
-	if _, err := c.ApproveByPhone(&altered, p.sign(altered.Payload)); err == nil {
+	if _, err := c.ApproveByPhone(&altered, p.sign(altered.Payload), ""); err == nil {
 		t.Fatal("accepted an altered challenge")
 	}
-	if _, err := c.ApproveByPhone(&ch, newPhone().sign(ch.Payload)); err == nil {
+	if _, err := c.ApproveByPhone(&ch, newPhone().sign(ch.Payload), ""); err == nil {
 		t.Fatal("accepted another phone")
 	}
 	if _, err := c.ApproveByDeadMachine(&ch); err == nil {
@@ -579,7 +587,7 @@ func TestAnApprovalMakesOneMachine(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := c.Certify(&a, &other); err == nil {
+	if _, err := c.Certify(&a, &other, ""); err == nil {
 		t.Fatal("certified a machine running another image")
 	}
 	mine, err := startMachine(c, img)
@@ -589,16 +597,16 @@ func TestAnApprovalMakesOneMachine(t *testing.T) {
 	if _, err := c.Init(machineOf(mine)); err == nil {
 		t.Fatal("initialised a machine twice")
 	}
-	pl(t)(c.Certify(&a, &mine))
+	pl(t)(c.Certify(&a, &mine, ""))
 	if _, err := tryStart(c, a); err == nil {
 		t.Fatal("one approval made two machines")
 	}
 	b := approve(t, c, p, SuccessionInput{Image: img, Stores: []string{"gmail"}})
-	if _, err := c.Certify(&b, &mine); err == nil {
+	if _, err := c.Certify(&b, &mine, ""); err == nil {
 		t.Fatal("one machine got two lines")
 	}
 	forgedStart := SignedDoc{Payload: other.Payload, Sig: mine.Sig}
-	if _, err := c.Certify(&b, &forgedStart); err == nil {
+	if _, err := c.Certify(&b, &forgedStart, ""); err == nil {
 		t.Fatal("certified a started document the core didn't sign")
 	}
 	forged := SignedDoc{Payload: a.Payload, Sig: newPhone().sign(a.Payload)}
@@ -634,7 +642,7 @@ func TestResumeByDeadMachineExactlyOnce(t *testing.T) {
 	if _, err := c.ApproveByDeadMachine(&ch2); err == nil {
 		t.Fatal("forked: a used predecessor got a second approval")
 	}
-	ad2, _ := c.ApproveByPhone(&ch2, p.sign(ch2.Payload))
+	ad2, _ := c.ApproveByPhone(&ch2, p.sign(ch2.Payload), "")
 	if _, err := tryStart(c, ad2); err == nil {
 		t.Fatal("forked: a used predecessor got a second machine")
 	}
@@ -735,13 +743,13 @@ func TestAddAStoreToARunningSession(t *testing.T) {
 	if _, err := c.ApproveByDeadMachine(&chd); err == nil {
 		t.Fatal("approve_by_dead_machine added a store")
 	}
-	c2, err := c.ApproveByPhone(&chd, p.sign(chd.Payload))
+	c2, err := c.ApproveByPhone(&chd, p.sign(chd.Payload), "")
 	cert2 := pl(t)(c2, err)
 	if cert2["kind"] != "succession-cert" || cert2["machine"].(map[string]any)["id"] != id {
 		t.Fatalf("got %v", cert2)
 	}
 	// once: the same challenge and signature answered again gets nothing (the cert it continues is superseded)
-	if _, err := c.ApproveByPhone(&chd, p.sign(chd.Payload)); err == nil {
+	if _, err := c.ApproveByPhone(&chd, p.sign(chd.Payload), ""); err == nil {
 		t.Fatal("an add-store approval was answered twice")
 	}
 	unlock(t, c, p, "default")
@@ -757,7 +765,7 @@ func TestAddAStoreToARunningSession(t *testing.T) {
 		{Predecessor: &cert, Machine: id, Stores: set, Options: Options{Harness: "opencode"}},
 	} {
 		if ch, err := c.Succession(bad); err == nil {
-			if _, err := c.ApproveByPhone(&ch, p.sign(ch.Payload)); err == nil {
+			if _, err := c.ApproveByPhone(&ch, p.sign(ch.Payload), ""); err == nil {
 				t.Fatalf("accepted %v", bad.Stores)
 			}
 		}
@@ -845,13 +853,13 @@ func TestDowngradeInPlace(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := c.ApproveByOldKey(&ch, newPhone().sign(ch.Payload)); err == nil {
+	if _, err := c.ApproveByOldKey(&ch, newPhone().sign(ch.Payload), ""); err == nil {
 		t.Fatal("a downgrade to someone else's keys was accepted")
 	}
 	if _, err := c.ApproveByDeadMachine(&ch); err == nil {
 		t.Fatal("approve_by_dead_machine approved a downgrade")
 	}
-	cert2, err := c.ApproveByOldKey(&ch, oldSigner.sign(ch.Payload))
+	cert2, err := c.ApproveByOldKey(&ch, oldSigner.sign(ch.Payload), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -874,10 +882,10 @@ func TestDowngradeInPlace(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := c.ApproveByOldKey(&ch2, oldSigner.sign(ch2.Payload)); err == nil {
+	if _, err := c.ApproveByOldKey(&ch2, oldSigner.sign(ch2.Payload), ""); err == nil {
 		t.Fatal("the old key signed for a cert that names the new one")
 	}
-	if _, err := c.ApproveByOldKey(&ch2, (&phone{sig: ecdsaFromECDH(nSig)}).sign(ch2.Payload)); err != nil {
+	if _, err := c.ApproveByOldKey(&ch2, (&phone{sig: ecdsaFromECDH(nSig)}).sign(ch2.Payload), ""); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -936,7 +944,7 @@ func TestRaisingToBypassOnResumeNeedsThePhone(t *testing.T) {
 	if _, err := c.ApproveByDeadMachine(&ch); err == nil {
 		t.Fatal("a dead machine approved raising the mode to bypass")
 	}
-	a := pl(t)(c.ApproveByPhone(&ch, p.sign(ch.Payload)))
+	a := pl(t)(c.ApproveByPhone(&ch, p.sign(ch.Payload), ""))
 	if a["kind"] != "approval" {
 		t.Fatalf("the phone's approval: %v", a)
 	}
