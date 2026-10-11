@@ -81,9 +81,6 @@ func TestAStartsUnlockIsForThatSessionAndLocksAgainOnceItPulled(t *testing.T) {
 		t.Fatal("an unlock for one session opened the store to another")
 	}
 	st := pl(t)(c.Stores("n"))
-	if st["scopedUnlocks"] != true {
-		t.Fatal("the store list doesn't say the core takes unlocks for one session")
-	}
 	for _, r := range st["stores"].([]any) {
 		if r.(map[string]any)["unlocked"] == true {
 			t.Fatalf("an unlock for one session shows as open to all: %v", r)

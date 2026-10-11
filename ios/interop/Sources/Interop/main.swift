@@ -294,7 +294,7 @@ check(aTs == 200 && rT != nil && !throwsErr { try Checks.answerFor(rT!, answer: 
 // add a store (the machine exists)
 let ch2 = challenge(["predecessor": docJSON(cert1), "machine": m1.id, "stores": ["claude-login", "default", "gmail"], "options": ["harness": "claude", "permissionMode": "bypass"]])
 let r2 = try! Checks.review(challenge: ch2, coreKey: coreKey)
-check(r2.kind == .addStore && r2.addedStore == "gmail" && r2.sensitive == ["gmail"], "add-store challenge: one more store, marked sensitive")
+check(r2.kind == .addStore && r2.addedStore == "gmail" && list().first { $0.name == "gmail" }?.sensitive == true, "add-store challenge: one more store, marked sensitive in the core's store list")
 let (a2s, a2) = approve(ch2)
 check(a2s == 200 && !throwsErr { try Checks.answerFor(r2, answer: a2!, coreKey: coreKey) }, "adding a store answers with the machine's new succession cert")
 check(throwsErr { try Checks.answerFor(r2, answer: a1!, coreKey: coreKey) }, "another answer is refused")

@@ -818,9 +818,15 @@ func TestSensitivityOnlyGrows(t *testing.T) {
 	if _, err := c.CreateStore("notes"); err == nil {
 		t.Fatal("downgraded by re-creating")
 	}
-	ch := pl(t)(routerSuccession(c, SuccessionInput{Image: img, Stores: []string{"default", "gmail", "notes"}}))
-	if fmt.Sprint(ch["request"].(map[string]any)["sensitive"]) != "[gmail notes]" {
-		t.Fatalf("got %v", ch["request"])
+	// the phone reads sensitivity from the signed store list (the challenge names the stores only)
+	marked := []string{}
+	for _, r := range pl(t)(c.Stores("n"))["stores"].([]any) {
+		if r.(map[string]any)["sensitive"] == true {
+			marked = append(marked, r.(map[string]any)["name"].(string))
+		}
+	}
+	if fmt.Sprint(marked) != "[fresh gmail notes]" {
+		t.Fatalf("sensitive %v", marked)
 	}
 	if _, err := c.WriteStore(writeStore(t, c, p, FlyStore, map[string]string{"FLY_API_TOKEN": "evil"})); err == nil {
 		t.Fatal("wrote the Fly store")

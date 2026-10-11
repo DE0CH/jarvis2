@@ -101,7 +101,6 @@ type Request struct {
 	Machine     *StartedMachine `json:"machine,omitempty"`
 	Image       string          `json:"image,omitempty"` // the image the new machine runs
 	Stores      []string        `json:"stores"`
-	Sensitive   []string        `json:"sensitive"` // the core's marks, for the phone's warning
 	Options     Options         `json:"options"`
 	AddedStore  string          `json:"addedStore,omitempty"` // set when the machine succeeds itself with one more store
 	Downgrade   bool            `json:"downgrade,omitempty"`  // the machine succeeds itself with a subset of its stores and new keys
@@ -566,8 +565,7 @@ func (c *Core) WriteStore(b StoreBlob) (SignedDoc, error) {
 }
 
 // Stores: the signed list (names, sensitivity, empty, unlocked) — the phone learns sensitivity from the core.
-// unlocked = open for every session (a standing unlock); an unlock for one session doesn't count. scopedUnlocks
-// tells the app this core takes unlocks for one session (unlock_begin's "for").
+// unlocked = open for every session (a standing unlock); an unlock for one session doesn't count.
 func (c *Core) Stores(nonce string) (SignedDoc, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -584,7 +582,7 @@ func (c *Core) Stores(nonce string) (SignedDoc, error) {
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	// writers: every unlock_begin names who wrote the blob (the phone refuses one without a valid writer)
-	return c.sign(map[string]any{"kind": "stores", "nonce": nonce, "stores": out, "scopedUnlocks": true, "writers": true})
+	return c.sign(map[string]any{"kind": "stores", "nonce": nonce, "stores": out, "writers": true})
 }
 
 // ---- machines (the Fly API is used only here: start, kill) -----------------------------------------
@@ -809,7 +807,7 @@ func (c *Core) Succession(in SuccessionInput) (SignedDoc, error) {
 		b, _ := json.Marshal(req)
 		return c.sign(map[string]any{"kind": "challenge", "nonce": c.mac("challenge", string(b)), "request": req})
 	}
-	req.Stores, req.Sensitive = []string{}, []string{}
+	req.Stores = []string{}
 	for _, n := range in.Stores {
 		if b, ok := c.stores[n]; !ok {
 			return SignedDoc{}, fail(400, "unknown store %s", n)
@@ -821,10 +819,7 @@ func (c *Core) Succession(in SuccessionInput) (SignedDoc, error) {
 			// its token is opened only by deploy_key_finish, for one phone-approved call (DESIGN "Deploy keys")
 			return SignedDoc{}, fail(403, "%s never goes to a session", DeployKeyTokenStore)
 		}
-		req.Stores = append(req.Stores, n)
-		if !c.notSensitive[n] {
-			req.Sensitive = append(req.Sensitive, n)
-		}
+		req.Stores = append(req.Stores, n) // the phone reads each one's sensitivity from the signed store list
 	}
 	if in.Machine != "" {
 		// a running machine succeeds itself from one of its certs: one more store (answered by the phone), or
