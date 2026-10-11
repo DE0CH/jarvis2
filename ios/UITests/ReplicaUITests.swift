@@ -172,7 +172,10 @@ final class ReplicaUITests: JarvisUITestCase {
     try must(arrives(row, 120, "the session's row"))
     let sid = String(row.identifier.dropFirst("srow-".count))
     note("session", sid)
-    row.tap()
+    // the New session page slides away first; a tap during that is lost (replica run 38182890226), so tap again as a
+    // person would until the session's page is up
+    XCTAssertTrue(gone(el("secure-create"), 60), "the New session page closes")
+    for _ in 1...3 where !el("more-\(sid)").exists { if row.isHittable { row.tap() }; _ = el("more-\(sid)").waitForExistence(timeout: 10) }
     try must(wait(el("term-\(sid)"), 600, "the session is running on Fly (Terminal offered) within 10 minutes"))
     sleep(2); shot("session-running")
 
