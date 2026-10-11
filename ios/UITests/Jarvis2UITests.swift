@@ -34,7 +34,7 @@ final class Jarvis2UITests: JarvisUITestCase {
   }
 
   func openRepos() {
-    tab("Settings")
+    tabRoot("Settings")
     if wait(el("open-repos"), 15, "Settings → Repos") { el("open-repos").tap() }
   }
   func addRepo(_ repo: String) -> Bool {
@@ -80,7 +80,7 @@ final class Jarvis2UITests: JarvisUITestCase {
     shot("sessions-empty")
 
     // ---- stores: the core's signed list; create one, unlock default (Face ID: a software key here)
-    tab("Settings")
+    tabRoot("Settings")
     guard wait(el("open-stores"), 15, "Settings → Stores") else { return }
     el("open-stores").tap()
     wait(el("unlock-default"), 30, "the stores page")
@@ -372,7 +372,7 @@ final class Jarvis2UITests: JarvisUITestCase {
     shot("task-schedules")
 
     // ---- Reset on a set-up core: only with its kit; a new, empty core, a new kit, the stores empty
-    tab("Settings")
+    tabRoot("Settings")
     if (scrolledTo(el("open-setup")) || true), wait(el("open-setup"), 15, "Reset or recover") {
       el("open-setup").tap()
       if wait(el("setup-state-mine"), 30, "setup page: set up on this iPhone") {
@@ -390,7 +390,7 @@ final class Jarvis2UITests: JarvisUITestCase {
             if wait(el("setup-done"), 60, "reset done") {
               shot("reset-done")
               el("secure-back").tap()
-              tab("Settings")
+              tabRoot("Settings")
               if wait(el("open-stores"), 15, "stores") {
                 el("open-stores").tap()
                 sleep(3)

@@ -79,6 +79,12 @@ class JarvisUITestCase: XCTestCase {
     let b = app.tabBars.buttons[name]
     if b.waitForExistence(timeout: 10) { b.tap() } else { XCTFail("[\(tag)] no tab \(name)"); note("tree-tab-\(name)", app.debugDescription) }
   }
+  /// a tab at its first screen: select it, then tap it again (iOS pops a selected tab's stack to its root)
+  func tabRoot(_ name: String) {
+    tab(name)
+    let b = app.tabBars.buttons[name]
+    if b.exists { b.tap(); usleep(600_000) }
+  }
   /// back one screen in the current navigation stack
   func back() {
     let b = app.navigationBars.buttons.element(boundBy: 0)

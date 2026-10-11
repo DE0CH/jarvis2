@@ -74,7 +74,7 @@ final class ReplicaUITests: JarvisUITestCase {
     }
     return ok
   }
-  func openStores() { tab("Settings"); if wait(el("open-stores"), 30, "Settings → Stores") { el("open-stores").tap() } }
+  func openStores() { tabRoot("Settings"); if wait(el("open-stores"), 30, "Settings → Stores") { el("open-stores").tap() } }
 
   // ---- the Inbox: a request filed elsewhere shows on the tab's badge; Review opens its page with the three fields ----
   func inboxReview(_ what: String) -> Bool {
@@ -175,7 +175,7 @@ final class ReplicaUITests: JarvisUITestCase {
     sleep(2); shot("session-running")
 
     // ---- machines: the session's machine listed as its session's ----
-    tab("Settings")
+    tabRoot("Settings")
     if wait(el("open-machines"), 30, "Machines") {
       el("open-machines").tap()
       wait(prefixed("machine-session-"), 60, "the Machines page lists the session's machine")
@@ -267,7 +267,7 @@ final class ReplicaUITests: JarvisUITestCase {
     let repo = env["REPLICA_REPO"] ?? ""
     let repoName = String(repo.split(separator: "/").last ?? "")
     if !repo.isEmpty {
-      tab("Settings")
+      tabRoot("Settings")
       if wait(el("open-repos"), 30, "Repos") {
         el("open-repos").tap()
         if wait(el("repo-add"), 30, "Add repo") {
@@ -352,7 +352,7 @@ final class ReplicaUITests: JarvisUITestCase {
     }
 
     // ---- Recover with the kit: Settings → Reset or recover → Recover (restart) → every store back ----
-    tab("Settings")
+    tabRoot("Settings")
     if (scrolledTo(el("open-setup")) || true), wait(el("open-setup"), 30, "Reset or recover in Settings") {
       el("open-setup").tap()
       try must(wait(el("setup-choose-recover"), 60, "the setup page (set up: mine)"))
