@@ -413,3 +413,39 @@ entry points only ("if I decide to break it later then it's fine").
     Recover, the store's own `GITHUB_DEPLOY_REPO_*` value. begin and finish refuse another repo with 409 "store
     github-x belongs to owner/name"; the owner (any case) re-adds and removes as before. An add that loses a race to
     a colliding add while GitHub is called takes its new key back off GitHub.
+92. **R1 audit fixes outside the app** (2026-10-11, decided while Deyao was away; ~/artifacts/away/audit/r1rest.json).
+    Each finding re-checked on main, fixed at the cause, with a test that attempts the forbidden thing:
+    - *A machine's newest cert* (core, HELD): the core keeps, per certified machine, its newest cert nonce (it replaces
+      the `certified` set, so no new structure). Succession, approve_by_dead_machine, certify, pull and forward_carry
+      take only the newest; an add-store or downgrade answer needs the challenge to continue the newest and then
+      supersedes it, so a saved challenge answered again gets nothing. Carry blobs name their cert; one opens only for
+      that cert or the cert that directly continues it (`Cert.PredCert`). Smallest state that makes "dropped stores
+      leave" true: without it any older cert of a killed machine resumes.
+    - *Sensitivity and the writer* (core HELD + setup.py live): create/write refused on an empty core, the claim sets
+      the non-sensitive set to exactly the bundle's, an empty store goes into no session; the writer (setup.py) keeps
+      its own list of not-sensitive stores (`NOT_SENSITIVE`, a visible commit) and marks any other store sensitive before
+      writing when the core says otherwise. Not a writer-signed create_store: that needs the core to know the writer key.
+    - *Who the core belongs to* (setup.py + router live; app sends it): pins in the bucket (`pins.json`, setup-signed)
+      plus the app's long-lived device key countersigning its claim (named inside the master-signed statement, so the
+      router can't swap its own in). The production master was pinned on first use (`pin-master`, 2026-10-11): that core
+      holds every store from the backups, which only the kit opens.
+    - *Writer of a store blob* (core HELD + setup.py live; app checks): `unlock_begin`/`deploy_key_begin` carry the
+      writer (setup key signature over name, E, data sha256, or "core"); the phone refuses a missing/bad one once the
+      core's store list says `writers: true`. The core can't check it (it holds no writer key) and doesn't need to.
+      The machine also writes only env-name keys into `~/.secrets`.
+    - *github-deploy-keys* (core HELD + router live): never in a succession, never unlocked, never created not sensitive.
+    - *Downgrade* (machine live): the old key signs only a challenge keeping exactly the asked stores.
+    - *Snapshot rollback* (machine live, no core state): the machine signs one snapshot in its life, after stopping the
+      session (SIGSTOP of every process it may signal), and repeats that one. Chosen over a core sequence number (new
+      core state per machine) — the router asks for a snapshot only to pause or destroy.
+    - *Wakeup/cron replay* (machine live): a delivered record per signed request in the snapshot.
+    - *GitHub* (live): ruleset on main (admins + deploy keys only); environment `release` (main only) with ASC_*, the CI
+      image key and the pin job's deploy key; images.yml pins only commits on main and pins router/session/core by
+      digest; the phone's image check is CI's signature (`keys/ci.pub`), not a Sigstore bundle (no Sigstore verifier in
+      the shell; the key's secrecy rests on GitHub's environment rules, a provider contract). Probed: a branch workflow's
+      push to main is refused (GH013) and its job can't enter `release`.
+    - *Metadata* (live for cloudflared; next box for the rest): edge NetworkPolicy; a raw-table drop in cloud-init. No
+      NetworkPolicy for flux-system/kube-system: a mistake there would cut the box's only change path (git), so the
+      host-level drop on the next box covers them.
+    - *The core's tag* stays mutable until the core's next release (pinning its digest now would restart it).
+

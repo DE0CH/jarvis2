@@ -69,8 +69,9 @@ changes nobody can see — no single compromised component is enough.
   on anyone's request and reads its public keys from the output of the image's init command through Fly, so
   their trust chains to Fly. A started machine without a cert gets nothing.
 - **Succession cert** — (predecessor → machine, store names, options): the machine's permission document.
-  The core keeps no record of which cert is a machine's latest; an older cert still pulls, sealed to the keys
-  it names.
+  The core keeps each certified machine's **newest** cert nonce: a cert an add-store or a downgrade replaced is
+  superseded and pulls, continues and succeeds to nothing (R1 audit, 2026-10-11: an older cert must not undo a
+  downgrade).
 - **Null machine / null image** — a new line is a succession **from** null (never consumed). A succession to
   the **null image** (a predecessor, no stores, no options) **burns** the predecessor: certify takes no
   machine, only marks it used (a **burn cert**), so it can never be continued.
@@ -89,9 +90,9 @@ machines, and run exactly one command inside a machine, `/usr/local/bin/jarvis2-
 | `claim(statement, masterSig, bundle)` | Once per core, on an empty core: Reset and Recover. The statement names a master public key, this core and the phone's keys, and that master key signs it; the core keeps both keys for its life. The bundle (sealed to the core) carries the stores — none for a Reset; for a Recover every store from the backups, each wrapped to `P + K` at once (no plaintext kept), the store named `core`, whose Fly token the core keeps for its whole life (never a session's store), and the names of the stores that are not sensitive. Who may claim is the router's business (Deyao's app only). |
 | `wipe(statement, masterSig)` | The current master key's signature over a statement naming this core: the core answers and exits; Kubernetes starts a new, empty core. Nothing else empties a set-up core except a restart from git. |
 | `set_fly_token(sealed)` | The Fly token, sealed to the core (the setup session, after a Reset). Open: the core calls Fly only for its own app, fixed in its code, so a wrong token can only fail. |
-| `create_store(name)` | Once per name: an empty, non-sensitive store. Open. |
+| `create_store(name)` | Once per name, on a set-up core: an empty, non-sensitive store. Open; the writer checks the core's word against its own list and marks a store sensitive before writing it (an empty store goes into no session). Never `github-deploy-keys`. |
 | `mark_sensitive(name)` | The one-way upgrade: the name leaves the non-sensitive set. Open. |
-| `write_store(contents)` | New contents for a store, already wrapped to `P + K` by the writer. Open (the router guards it). |
+| `write_store(contents)` | New contents for a store, already wrapped to `P + K` by the writer, with the writer's signature (the setup key) over its name, `E` and data hash. Open, on a set-up core; the core passes the signature on in `unlock_begin`, and the phone checks it before its share. |
 | `stores(nonce)` | The signed list: each store, sensitive or not, empty, unlocked. |
 | `succession(predecessor or null, stores, options, image)` | A signed challenge, before any machine exists; it lists which stores are sensitive. `options` = harness, permission mode, the session's settings (`config`) and one machine's one-time inputs (`once`): below, "Inputs to a machine". |
 | `approve_by_phone(challenge, sig)` | The phone is the highest privilege: any challenge it signs is approved. |
@@ -112,7 +113,8 @@ A succession from null is approved only by the phone: every new line starts with
 
 **State, in memory only:** its own key pairs, the carry key, the master and phone public keys (from the claim), the Fly token,
 the stores, the non-sensitive set, the unlocked stores' plaintext (each unlock standing or for one cert), the pending unlocks and deploy-key requests, and append-only sets — **killed**
-(Fly-confirmed), **used** (predecessors continued or burnt), **spent** approvals, **certified** machines. What
+(Fly-confirmed), **used** (predecessors continued or burnt), **spent** approvals, and per certified machine the nonce of
+its **newest** cert. What
 it **trusts** about others (the phone's and the master's public keys, the box key's signature) needs no
 secrecy; what it uses to **prove itself** (its private keys, the Fly token) never leaves it.
 
@@ -170,6 +172,23 @@ Flux from the public repo. A box git can't fix is replaced, then set up again as
 the router over Fly's private network (the box is a WireGuard peer of the org), not through Cloudflare, so no
 credential on a machine opens anything on the edge.
 
+- **The metadata address** (169.254.169.254, which keeps serving the user-data with the box key): NetworkPolicies keep
+  the core, the router and cloudflared from it, and a box built from 2026-10-11 on drops every pod's packets to it in
+  the raw table at each boot (`jarvis2-no-metadata.service`), whatever a namespace's policy says.
+- **GitHub (layer 1, R1 audit 2026-10-11):** a ruleset on `main` lets only repo admins (Deyao's token) and deploy keys
+  update it (no deletion, no force push); a workflow's GITHUB_TOKEN can't. The environment `release` (refs/heads/main
+  only) holds the App Store Connect key, the CI image key and the images pin job's deploy key, so a branch with a
+  rewritten workflow gets none of them. k8s pins the router, the session image and (from its next release) the core by
+  digest, so a tag pushed again from anywhere changes nothing that runs.
+
+**The setup session trusts only Deyao's core** (R1 audit, 2026-10-11: claim is first-come, so a router or box that
+claims an emptied core first would otherwise receive every store `fill-stores` writes, and every backup sealed to its
+master). `infra/setup.py` writes, backs up and sends nothing until the core's master key is the one pinned in the bucket
+(`pins.json`, signed by the setup key), or the core's claim names the pinned **device key** — the app's long-lived
+Secure Enclave key, kept across Reset and Recover — inside the master-signed statement and the router kept that
+device's signature over the statement (`deviceKey`/`deviceSig` on POST /api/core/claim). A claim under the pinned master
+pins the device key it names; a claim countersigned by the pinned device key moves the master pin (a Reset).
+
 ## The path between iPhone and core
 
 The network path is ordinary for everything (the router, the tunnel) — no hardened channel. Integrity
@@ -199,8 +218,10 @@ Each store's key is encrypted to the **combined public key** `P + K`: `P = p·G`
 key, `K = k·G` the core's. Writing a store picks a fresh one-off `e` and stores `E = e·G`; the shared secret is
 `e·(P + K)`. It's Diffie–Hellman with the recipient split in two: `p·E + k·E = (p + k)·E = e·(P + K)`.
 
-1. `unlock_begin(store)` → core returns (store, `E`, one-off `T`), signed.
-2. iPhone checks the signature, shows "Unlock <store>?", and on Face ID the Enclave computes its share `p·E`.
+1. `unlock_begin(store)` → core returns (store, `E`, one-off `T`, the blob's **writer**: the setup key's signature over
+   name, `E` and the data's sha256, or "core" for a blob the core wrapped itself), signed.
+2. iPhone checks the signature and the writer (`keys/setup.pub` from GitHub; refused without one when the core's store
+   list says `writers`), shows "Unlock <store>?", and on Face ID the Enclave computes its share `p·E`.
    The phone encrypts the share to `T`, so the router relaying it never sees it.
 3. `unlock_finish` → core decrypts the share, deletes the one-off key, adds `k·E`, decrypts the store.
 
@@ -241,7 +262,9 @@ by the core, approved by the phone; the box alone can never make one, and no AI 
 - **New session:** the router adds the harness's stores (policy) → `succession(null, …)` ← iPhone approval →
   `start(image)` → `certify(approval, machine)` → succession cert. (The router may start the machine while
   Deyao is still deciding, and destroy it on a reject.)
-- **Pause:** the machine signs its snapshot (artefacts + transcript) with its signing key and uploads it →
+- **Pause:** the machine stops every process of the session (SIGSTOP), signs its snapshot (artefacts + transcript)
+  with its signing key and uploads it; it signs only this one in its life and answers any later snapshot command with
+  the same one, so the router holds no earlier signed state to roll a successor back to →
   `kill(machine, snapshot hash + its signature)`: the successor's cert names that snapshot and no other. Its carried secrets (sealed by the core at its last pull) are already next to the snapshot. Skipped/failed
   snapshot = nothing to resume; no secret moves.
 - **Resume, nothing changed (also unattended, e.g. scheduled):** `succession(old, …)` ← approve_by_dead_machine
@@ -277,8 +300,10 @@ unattended resumes (a wakeup, a cron, a task run with nobody there) he chose: **
   until locked; it is the only kind the store list calls unlocked.
 - **The carry blob.** Every pull that goes through also answers the values it sealed, per store, under the core's
   **carry key** (AES-256-GCM), bound to that machine. The router keeps it next to the machine's snapshot
-  (`snapshots/<machine>.carry` on its volume) and sends it with the machine's next pull. The core reads a store from
-  it only when no unlock is open to the cert, only for a cert of that same machine or of its certified successor,
+  (`snapshots/<machine>.carry` on its volume) and sends it with the machine's next pull. The blob names the cert it was
+  sealed for; the core reads a store from it only when no unlock is open to the cert, only for the machine's newest
+  cert whose blob was sealed for that cert or the one it directly continues (the same machine's previous cert, or the
+  predecessor's newest), so a blob from before a downgrade opens for nothing after it,
   only while that machine isn't killed, and only the stores that cert names. `forward_carry` rebinds it right after a
   successor is certified (so one that dies before pulling doesn't break the line), and after an add-store or a
   downgrade (the dropped stores leave it at once).
@@ -374,9 +399,9 @@ Deyao handing a feature a shell, and the session's own allow list is the session
 | The predecessor's state (transcripts, workspace, artifacts, `~/artifacts/on-start`, `.claude` settings and hooks, the allow list, the line keys) | (b) the one snapshot the cert names, signed by the predecessor |
 | An archived snapshot (restore) | (a) its sha256 in the config, plus the old cert (core-signed) and its machine's signature |
 | Repo contents (CLAUDE.md, hooks, skills) | (d) GitHub, for exactly the repos the cert names (with the held core: the repos of the deploy-key stores in the cert) |
-| Secrets | the cert's stores, sealed to the machine by the core |
+| Secrets | the cert's stores, sealed to the machine by the core; written to `~/.secrets` only under env-name keys |
 | The Claude login | (d) Jarvis 1's `/api/credentials` over the `claude` store's Access-confined token: taken by the machine at boot, kept in step every 30 s (`machine/claudelogin.go`); no router write, no grant |
-| Wakeups, crons | (c) the session's own signed request + the core's attestation |
+| Wakeups, crons | (c) the session's own signed request + the core's attestation; the line records what it delivered (in the snapshot): a wakeup once, a cron once per run and at most every half period |
 | The watchdog's nudge, "continue" after a re-login | the image: texts built into it; the router picks when, never what (numbers only) |
 | An added store | (a) the new cert, phone-approved |
 | The OpenClaw runtime | (d) the GitHub release, pinned by sha256 in the image |
@@ -401,7 +426,9 @@ signed; deliveries the old way (a command under a grant). The guard starts with 
 
 Show only what Deyao understands; what he clicks is exactly the challenge string. The phone translates each
 challenge field and refuses anything it can't: store names; "Claude" / "opencode"; the image as "latest CI
-build" / "CI build from <date>" (verified via a GitHub-signed build attestation, never trusting the box);
+build" / "CI build from <date>" (verified with CI's signature over the image, `keys/ci.pub` from GitHub: the key
+exists only in the GitHub environment `release`, which admits refs/heads/main only; the router passes it on as the
+approval's `imageSig` and can only withhold it);
 machine ids and public keys are signed but not shown.
 
 ## iOS app structure: a trusted shell with two modes

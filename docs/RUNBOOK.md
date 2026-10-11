@@ -6,8 +6,17 @@ through git, and a box git can't fix is replaced.
 
 ## Deploying
 
-`git push` to main. The `images` workflow builds the core, router and session images, then pins their tags in
-`k8s/apps/`; Flux applies within a minute. The core's tag moves only when `core/` changed (a core restart is a
+`git push` to main. The `images` workflow builds the core, router and session images, then pins them by digest in
+`k8s/apps/` (and signs the session image for the phone, `SESSION_IMAGE_SIG`); Flux applies within a minute. Its pin job
+runs only for a commit on main, in the GitHub environment `release`, and pushes with its own deploy key
+(`jarvis2-ci-pin`): main's ruleset lets only repo admins and deploy keys update main, so no workflow's GITHUB_TOKEN can.
+
+GitHub settings (R1 audit, 2026-10-11; `gh api`): ruleset "main: only admins and deploy keys update it" (deletion,
+non_fast_forward, update; bypass: the admin role and deploy keys); environment `release` (deployment branches: main only)
+with secrets ASC_KEY_ID / ASC_ISSUER_ID / ASC_PRIVATE_KEY (ios.yml's TestFlight job), CI_IMAGE_KEY (the private half of
+`keys/ci.pub`) and PIN_DEPLOY_KEY. A workflow that must push to main gets its own deploy key in `release`, never
+`contents: write` on GITHUB_TOKEN. Rotating the CI key: a new P-256 key into CI_IMAGE_KEY and its public half (base64
+X9.63) into `keys/ci.pub` in one go, then run `images` so the router gets a fresh signature. The core's tag moves only when `core/` changed (a core restart is a
 new, empty core: see "Setting the core up"), and never while the core Deployment in `k8s/apps/core.yaml` carries the
 annotation `jarvis2/core-pin: hold`: a core change that waits for Deyao's go (he then Recovers). To roll it out once
 he says so, delete the annotation, push, then `gh workflow run images -R DE0CH/jarvis2` (a k8s/ push alone doesn't
@@ -21,7 +30,9 @@ get their own peer's address from `infra/e2e.sh` / `infra/rehearsal-box.sh`).
   keys against it.
 - `box-age.pub` — the box's age key (SOPS recipient of the router's secrets), also from `infra/create.sh`.
 - `setup.pub` — the setup key (private half JARVIS2_SETUP_KEY); also `SETUP_KEY` in `k8s/apps/router.yaml`. It
-  signs every `/setup` call and every store backup; the app checks the backups against it.
+  signs every `/setup` call, every store backup and every store blob (the writer signature the phone checks).
+- `ci.pub` — CI's image key (private half: secret CI_IMAGE_KEY of the environment `release`): the phone shows a session
+  image as a CI build only with its signature.
 
 There is no master key in git: Deyao makes it in the app (Reset), and the core learns it from his claim.
 
@@ -37,6 +48,15 @@ Reset or recover by itself, or Settings → Reset or recover…):
 
 `infra/setup.py identity` says whether the core is empty or set up (and with which master public key).
 
+**The setup session's pins** (`pins.json` in the backup bucket, signed by the setup key): the master key the stores
+belong to and the app's device key. `setup.py` writes, backs up or sends nothing to a core whose master isn't pinned,
+unless its claim names the pinned device key and the app's countersignature is at the router (Deyao's Reset: the pin
+moves by itself). A Recover keeps the master; a claim under the pinned master re-pins the device key it names. If
+setup.py says REFUSED, the core was claimed by something other than his app: empty it from git ("Emptying the core
+without its kit") and let him set it up again. `infra/setup.py pin-master` pins the current core's master by hand; use
+it only when the core is known to be his (it holds the stores of a Recover, which only his kit opens) and nothing is
+pinned yet (a new bucket, a rehearsal box).
+
 ### Store key names
 
 The app, sessions (`jarvis2 stores`) and `infra/setup.py stores` list every store's key names (API.md `GET
@@ -47,7 +67,8 @@ layout file; needs only `JARVIS2_SETUP_*`). A new key in a store: add it to the 
 
 ### After a Reset (the setup session)
 
-`infra/fill-stores.sh` — once the core is set up: creates the non-sensitive stores, writes every store to the core
+`infra/fill-stores.sh` — once the core is set up (and trusted: the pins above): creates the non-sensitive stores
+(only those in `NOT_SENSITIVE` in `infra/setup.py`; a write marks any other store sensitive first if someone created it), writes every store to the core
 and its backup (sealed to the new master key, read from the core's signed state), minting or rotating every token
 whose value lived only in the old stores and backups, sends the core its Fly token (`backup-core` with a fresh
 `infra/fly-token.sh`), and deletes the local copies. The stores and their keys: Deyao's own stores by kind, `default` (not sensitive), `identity`, `infra`,
