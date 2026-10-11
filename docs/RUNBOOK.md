@@ -312,6 +312,7 @@ box name at a time (a lock); the rehearsal and the replica use different names a
 
 ## Looking at things
 
-- The core's signed log, through the app or `POST /api/core/log` (behind Deyao's login).
+- What the core did: it keeps no log of its own (R2: as small and stateless as it can be); every change it makes is a
+  signed answer the router keeps (certs, the input log in the router's `input-log.jsonl`).
 - A session machine's log: `FLY_API_TOKEN=$JARVIS2_FLY_TOKEN flyctl logs -a jarvis2-sessions --machine <id> --no-tail`
 - The box itself: no way in by design; GitHub (Flux status is visible only through what the services answer).

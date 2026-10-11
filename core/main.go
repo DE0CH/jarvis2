@@ -201,7 +201,6 @@ func Handler(c *Core) http.Handler {
 	})
 	// carry.go: the line's carried secrets rebound to a cert's machine (its successor, or itself with a new cert)
 	h("POST /carry/forward", func(r *http.Request, b body) (any, error) { return c.ForwardCarry(str(b, "carry"), doc(b, "cert")) })
-	h("POST /log", func(r *http.Request, b body) (any, error) { return c.Log(str(b, "nonce")) })
 	return mux
 }
 

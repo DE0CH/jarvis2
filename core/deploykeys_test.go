@@ -1,9 +1,11 @@
 package main
 
 import (
+	"bytes"
 	"crypto/ecdh"
 	"crypto/ed25519"
 	"encoding/json"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -104,6 +106,9 @@ func storeValues(t *testing.T, c *Core, p *phone, name string) map[string]string
 }
 
 func TestDeployKeyAddMakesAKeyAStoreAndAGitHubKey(t *testing.T) {
+	var logs bytes.Buffer
+	log.SetOutput(&logs)
+	defer log.SetOutput(os.Stderr)
 	c, g, p := deployKeyCore(t)
 	m, err := deployKey(t, c, p, "add", "DE0CH/china-train", false)
 	if err != nil {
@@ -130,7 +135,7 @@ func TestDeployKeyAddMakesAKeyAStoreAndAGitHubKey(t *testing.T) {
 	if err != nil || !strings.HasPrefix(string(pem), "-----BEGIN OPENSSH PRIVATE KEY-----\n") {
 		t.Fatal("the store doesn't hold an OpenSSH private key")
 	}
-	if strings.Contains(strings.Join(c.log, "\n"), g.token) {
+	if strings.Contains(logs.String(), g.token) {
 		t.Fatal("the token reached the log")
 	}
 	// the private half is the public key GitHub got (an independent implementation: ssh-keygen)

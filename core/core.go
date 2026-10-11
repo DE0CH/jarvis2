@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"sort"
 	"sync"
 	"time"
@@ -216,7 +217,6 @@ type Core struct {
 
 	fly    Fly
 	github GitHub // deploy keys only, with the token the phone unlocks for that one call
-	log    []string
 	now    func() time.Time
 }
 
@@ -248,9 +248,8 @@ func NewCore(fly Fly) (*Core, error) {
 		fly: fly, github: newGitHub(), now: time.Now}, nil
 }
 
-func (c *Core) logf(f string, a ...any) {
-	c.log = append(c.log, c.now().UTC().Format(time.RFC3339)+" "+fmt.Sprintf(f, a...))
-}
+// logf: diagnostics to stdout only (the core keeps no log: every state change reaches the router as a signed answer)
+func (c *Core) logf(f string, a ...any) { log.Printf(f, a...) }
 
 func (c *Core) sign(v any) (SignedDoc, error) {
 	b, err := json.Marshal(v)
@@ -1156,12 +1155,6 @@ func (c *Core) PullSecrets(certDoc *SignedDoc, carry string) (SignedDoc, error) 
 	released := c.releaseFor(cert.Nonce)
 	c.logf("secrets pulled by %s (%v; carried %v; locked again %v)", cert.Machine.ID, cert.Stores, fromCarry, released)
 	return c.sign(map[string]any{"kind": "secrets", "machine": cert.Machine.ID, "sealed": sealed, "carry": next})
-}
-
-func (c *Core) Log(nonce string) (SignedDoc, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.sign(map[string]any{"kind": "log", "nonce": nonce, "entries": c.log})
 }
 
 // ---- helpers ------------------------------------------------------------------------------------

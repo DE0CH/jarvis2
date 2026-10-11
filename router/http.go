@@ -415,7 +415,7 @@ func (r *Router) buildHandlers() {
 
 	// ---- the core, relayed unchanged ------------------------------------------------------------------
 	app("GET /api/core/key", func(w http.ResponseWriter, req *http.Request) { r.relay(w, "GET", "/key", nil) })
-	for _, p := range []string{"stores", "stores/create", "stores/mark-sensitive", "stores/write", "unlock/begin", "unlock/finish", "lock", "unlocked", "log"} {
+	for _, p := range []string{"stores", "stores/create", "stores/mark-sensitive", "stores/write", "unlock/begin", "unlock/finish", "lock", "unlocked"} {
 		path := "/" + p
 		app("POST /api/core"+path, func(w http.ResponseWriter, req *http.Request) {
 			b, _ := io.ReadAll(io.LimitReader(req.Body, 1<<20))
