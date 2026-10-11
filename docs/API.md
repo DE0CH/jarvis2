@@ -235,8 +235,7 @@ Unlocks for one session (DESIGN "Carried secrets"): `unlock/begin {store, for}` 
 (New session's Start, an approval of a new line, an add-store) or of the session's cert (Unlock…) → the begin doc
 carries `for`; only the cert with that nonce reads the store, its first pull that goes through locks it again, and an
 unused one lapses after 30 min. No `for` = a standing unlock (the Stores page), open to every session until locked. The
-signed `stores` list says `scopedUnlocks: true` (a core that predates it: absent, every unlock standing) and its
-`unlocked` means standing only; `unlocked` rows carry `for` ("" = standing). `for` that isn't a 64-hex nonce: 400.
+signed `stores` list's `unlocked` means standing only; `unlocked` rows carry `for` ("" = standing). `for` that isn't a 64-hex nonce: 400.
 
 Unlock, phone side: verify `unlock/begin`'s doc (kind `unlock-begin`, fields `pending, store, e, t, for`); Face
 ID → Enclave key agreement of the phone's agreement key with `e` → the 32-byte x-coordinate; seal it to `t`:
