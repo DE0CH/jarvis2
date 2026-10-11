@@ -14,6 +14,8 @@ package main
 // Usage needs the Claude login, which lives in Jarvis 1: forwarded with the services token.
 
 import (
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -118,9 +120,24 @@ type keyAnswer struct {
 	Repo        string `json:"repo"`
 	Sensitive   bool   `json:"sensitive"`
 	Fingerprint string `json:"fingerprint"`
+	PublicKey   string `json:"publicKey"` // the core from R2 answers the key, not its fingerprint
+}
+
+// sshFingerprint: "SHA256:<base64>" of an "ssh-ed25519 <base64 wire>" line ("" when it isn't one)
+func sshFingerprint(pub string) string {
+	_, b, ok := strings.Cut(pub, " ")
+	w, err := base64.StdEncoding.DecodeString(b)
+	if !ok || err != nil || len(w) == 0 {
+		return ""
+	}
+	sum := sha256.Sum256(w)
+	return "SHA256:" + base64.RawStdEncoding.EncodeToString(sum[:])
 }
 
 func (r *Router) applyKeyAnswer(a keyAnswer) error {
+	if a.Fingerprint == "" {
+		a.Fingerprint = sshFingerprint(a.PublicKey)
+	}
 	repo := parseGitHubRepo(a.Repo)
 	if repo == "" {
 		return fmt.Errorf("the core's answer names no GitHub repo")
@@ -162,14 +179,26 @@ func (r *Router) registerDeployKeys(app appRoute) {
 			Action    string `json:"action"`
 			Repo      string `json:"repo"`
 			Sensitive bool   `json:"sensitive"`
+			// the app's key pair (R2): its store name and key title, the public key, the private half's store blob
+			Store     string          `json:"store,omitempty"`
+			Title     string          `json:"title,omitempty"`
+			PublicKey string          `json:"publicKey,omitempty"`
+			Blob      json.RawMessage `json:"blob,omitempty"`
 		}
-		json.NewDecoder(io.LimitReader(req.Body, 1<<16)).Decode(&in)
+		json.NewDecoder(io.LimitReader(req.Body, 1<<20)).Decode(&in)
 		repo := parseGitHubRepo(in.Repo)
 		if repo == "" || (in.Action != "add" && in.Action != "remove") {
 			writeJSON(w, 400, map[string]string{"error": "a GitHub repo (owner/name or its URL) and action add or remove"})
 			return
 		}
-		b, _ := json.Marshal(map[string]any{"action": in.Action, "repo": repo, "sensitive": in.Sensitive})
+		body := map[string]any{"action": in.Action, "repo": repo, "sensitive": in.Sensitive}
+		if in.Store != "" {
+			body["store"], body["title"], body["publicKey"] = in.Store, in.Title, in.PublicKey
+			if len(in.Blob) > 0 {
+				body["blob"] = in.Blob
+			}
+		}
+		b, _ := json.Marshal(body)
 		r.relayDeployKey(w, "/deploy-keys/begin", b, false)
 	})
 	app("POST /api/repos/key/finish", func(w http.ResponseWriter, req *http.Request) {
@@ -191,6 +220,15 @@ func (r *Router) relayDeployKey(w http.ResponseWriter, path string, body []byte,
 	if status == 404 && json.Unmarshal(b, &d) != nil {
 		writeJSON(w, 501, map[string]string{"error": "the running core predates deploy keys: it makes them once it has been restarted with the new core image (then Recover)"})
 		return
+	}
+	if status == 502 && json.Unmarshal(b, &d) == nil {
+		// the core says only what GitHub said; a 403/404 means the token can't manage this repo's deploy keys
+		var e struct{ Error string }
+		if d.Decode(&e) == nil && (strings.HasPrefix(e.Error, "github: HTTP 403") || strings.HasPrefix(e.Error, "github: HTTP 404")) {
+			writeJSON(w, 502, map[string]string{"error": "the GitHub token in github-deploy-keys can't manage this repo's deploy keys (" + e.Error +
+				"): it needs a fine-grained token with Repository permission \"Administration: read and write\" (all repositories)"})
+			return
+		}
 	}
 	if finish && status == 200 && json.Unmarshal(b, &d) == nil {
 		var a keyAnswer

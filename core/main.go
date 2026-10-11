@@ -103,6 +103,7 @@ func Handler(c *Core) http.Handler {
 		}
 		return c.Claim(str(b, "statement"), str(b, "masterSig"), s)
 	})
+	h("POST /store-key", func(r *http.Request, b body) (any, error) { return c.StoreKey(str(b, "phone")) })
 	h("POST /wipe", func(r *http.Request, b body) (any, error) { return c.Wipe(str(b, "statement"), str(b, "masterSig")) })
 	h("POST /fly-token", func(r *http.Request, b body) (any, error) {
 		s, err := sealed(b, "sealed")
@@ -178,9 +179,12 @@ func Handler(c *Core) http.Handler {
 
 	// ---- deploy keys (deploykeys.go): the phone signs the begin document and shares the token store ----
 	h("POST /deploy-keys/begin", func(r *http.Request, b body) (any, error) {
-		var sensitive bool
-		json.Unmarshal(b["sensitive"], &sensitive)
-		return c.DeployKeyBegin(str(b, "action"), str(b, "repo"), sensitive)
+		var in DeployKeyRequest
+		raw, _ := json.Marshal(b)
+		if json.Unmarshal(raw, &in) != nil {
+			return nil, fail(400, "bad deploy-key request")
+		}
+		return c.DeployKeyBegin(in)
 	})
 	h("POST /deploy-keys/finish", func(r *http.Request, b body) (any, error) {
 		var s Sealed

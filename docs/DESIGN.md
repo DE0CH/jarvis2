@@ -106,7 +106,8 @@ machines, and run exactly one command inside a machine, `/usr/local/bin/jarvis2-
 | `unlock_begin(name, for)` / `unlock_finish(pending, phone share)` | The split-key unlock. `for` = the nonce of the one challenge or cert it is for (a Start, an add-store, a waiting session): only that cert reads it and its pull locks it again (below, "Carried secrets"); no `for` = a standing unlock, open until locked. |
 | `lock(unlock id)` / `list_unlocked(nonce)` | Release; the signed list of open unlocks (each with what it is for). |
 | `pull_secrets(cert, carry)` | The cert's stores sealed to that machine's encryption key — so no other proof is needed — each from an unlock open to that cert, else from the line's carried secrets; answers the next carry blob for that machine. |
-| `deploy_key_begin(action, repo, sensitive)` / `deploy_key_finish(pending, phone sig, phone share)` | A repo's deploy key, added or removed (below, "Deploy keys"): the signed request, then the phone's signature over it and its share of `github-deploy-keys`; the core uses that store's GitHub token for this one call and writes or deletes the store `github-<repo>`. |
+| `deploy_key_begin(action, repo, sensitive, store, title, publicKey, blob)` / `deploy_key_finish(pending, phone sig, phone share)` | A repo's deploy key, added or removed (below, "Deploy keys"): the signed request (naming the app's public key and its store blob's hash), then the phone's signature over it and its share of `github-deploy-keys`; the core uses that store's GitHub token for this one call to add exactly that public key, and stores exactly that blob or deletes the store. |
+| `store_key(phone)` | Open: the signed store key P + K for that phone key, which the app wraps store data keys to (it can't add points). |
 
 A succession from null is approved only by the phone: every new line starts with Deyao's click.
 

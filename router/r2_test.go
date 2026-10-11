@@ -4,6 +4,8 @@ package main
 // carry rebound — is kept by the router; the core keeps no log for reading and has no /carry/forward.
 
 import (
+	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -69,5 +71,36 @@ func TestTheRouterFillsInSuccessionDefaults(t *testing.T) {
 	rg.r.succession(rg.cert, "", []string{"default"}, "claude", "bypass", "img", "", "")
 	if b := vc.last("/succession"); b["salt"] != nil || b["options"].(map[string]any)["permissionMode"] != "bypass" {
 		t.Fatalf("a successor: %v", b)
+	}
+}
+
+// R2: the app's key pair passes through to the core; GitHub's refusal gets the token hint here, not in the core; the
+// list's fingerprint comes from the public key the core answers
+func TestDeployKeyRelayForTheAppsKeyPair(t *testing.T) {
+	ck := newTestKey()
+	var got map[string]any
+	core := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		json.NewDecoder(req.Body).Decode(&got)
+		switch req.URL.Path {
+		case "/deploy-keys/begin":
+			writeJSON(w, 200, ck.doc(map[string]any{"kind": "deploy-key-begin"}))
+		case "/deploy-keys/finish":
+			writeJSON(w, 502, ck.doc(map[string]any{"kind": "error", "error": "github: HTTP 403: Resource not accessible"}))
+		}
+	}))
+	defer core.Close()
+	r := newTestRouter(t)
+	r.cfg.NoAccess = true
+	r.core = &CoreClient{base: core.URL, http: http.DefaultClient}
+	appDo(t, r, "POST", "/api/repos/key/begin", `{"action":"add","repo":"DE0CH/x","store":"github-x","title":"jarvis2 github-x","publicKey":"ssh-ed25519 AAAA","blob":{"name":"github-x","data":"d"}}`)
+	if got["store"] != "github-x" || got["publicKey"] != "ssh-ed25519 AAAA" || got["blob"].(map[string]any)["data"] != "d" {
+		t.Fatalf("relayed %v", got)
+	}
+	code, out := appDo(t, r, "POST", "/api/repos/key/finish", `{}`)
+	if code != 502 || !strings.Contains(fmt.Sprint(out["error"]), "Administration: read and write") {
+		t.Fatalf("%d %v", code, out)
+	}
+	if fp := sshFingerprint("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGjzWkhLdE9cqrkvb+MrbIBFxyF6Q9lXVddCSv5+R8gN"); !strings.HasPrefix(fp, "SHA256:") || len(fp) != 50 {
+		t.Fatalf("fingerprint %q", fp)
 	}
 }

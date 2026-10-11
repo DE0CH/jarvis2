@@ -245,6 +245,12 @@ func WrapToCombined(phoneAgreementRaw string, coreAgreementPub []byte, dataKey [
 	if err != nil {
 		return WrappedKey{}, err
 	}
+	return WrapToPoint(combined, dataKey)
+}
+
+// WrapToPoint: the data key wrapped to a store key C = P + K (what a writer without point addition gets from the
+// core's signed store_key): a one-off e, HKDF(x(e·C), "jarvis2/store-data-key"), AES-GCM
+func WrapToPoint(combined, dataKey []byte) (WrappedKey, error) {
 	e, err := ecdh.P256().GenerateKey(rand.Reader)
 	if err != nil {
 		return WrappedKey{}, err

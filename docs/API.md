@@ -264,8 +264,20 @@ base64(combined)}` → `unlock/finish {pending, share}`.
   base64(OpenSSH private key file)}` (`<SLUG>` = `OWNER_NAME`, upper case, other characters `_`) wrapped to P + K →
   `{"kind":"deploy-key-added", pending, repo, store, sensitive, title, fingerprint /* SHA256:… */, keyId}`; or —
   remove — deletes the store → `{"kind":"deploy-key-removed", pending, repo, store, deleted}`. 403 for a wrong
-  signature or share; 502 when GitHub refuses (a 403/404 names the permission the token needs: Repository
-  "Administration: read and write").
+  signature or share; 502 `github: HTTP <status>: <GitHub's words>` when GitHub refuses (the router's
+  `/api/repos/key/finish` turns a 403/404 into what the token needs: Repository "Administration: read and write").
+- **The app's key pair (R2):** begin may also carry `store`, `title` and, for an add, `publicKey` ("ssh-ed25519
+  <base64 wire>") and `blob` (the store `{GITHUB_DEPLOY_REPO_<SLUG>, GITHUB_DEPLOY_KEY_<SLUG>}` as above, wrapped by the
+  app to the store key from `POST store-key`). The begin document then also names `publicKey`, `blobE` and
+  `blobSha256` (sha256 hex of the blob's `data`), so the phone's signature covers them; finish adds exactly that public
+  key and stores exactly that blob (writer `core`), and answers `publicKey` instead of `fingerprint`. Without `store`
+  the core still names the store and makes the pair itself (the app before R2; removed once the app has moved).
+- `POST store-key {phone}` → the core's signed `{"kind":"store-key", phone, storeKey}`: `storeKey` = P + K (X9.63
+  base64) for that phone agreement key P. Open, also on an empty core: what the app wraps a data key to (one-off e,
+  HKDF-SHA256 of x(e·storeKey) with info `"jarvis2/store-data-key"`, AES-256-GCM nonce‖ciphertext), since CryptoKit
+  can't add points. A Recover's bundle may be `{"format":"blobs", "stores":"blobs", blobs: [StoreBlob], notSensitive,
+  owners: {store: "owner/name"}, flyToken}`: the stores already wrapped by the app, so the core never sees their
+  plaintext (`"stores":"blobs"` makes a core before R2 refuse it with 400 "bad bundle").
 
 ## Setup (`/setup/*`)
 

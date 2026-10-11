@@ -344,10 +344,21 @@ const FlyStore = "core"
 
 // the claim bundle: every store, and the names of the stores that are NOT sensitive — every other store comes
 // back sensitive, since nothing can downgrade one later (the master key signed the bundle's hash). A Reset's
-// bundle is empty.
+// bundle is empty. Two forms: the app's (R2, Format "blobs"): each store already wrapped by the app to the store key
+// (store_key), the deploy-key stores' repos (Owners) and the core's Fly token; the core never sees a store's
+// plaintext. Its "stores" is the string "blobs", so a core before R2 refuses it (and this core refuses the older
+// form's array there… only once the app has moved: until then it still takes the older form, plaintext stores).
 type claimBundle struct {
 	Stores       []storeData `json:"stores"`
 	NotSensitive []string    `json:"notSensitive"`
+}
+
+type claimBlobs struct {
+	Format       string            `json:"format"` // "blobs"
+	Blobs        []StoreBlob       `json:"blobs"`
+	NotSensitive []string          `json:"notSensitive"`
+	Owners       map[string]string `json:"owners"` // a deploy-key store → its repo
+	FlyToken     string            `json:"flyToken"`
 }
 
 type storeData struct {
@@ -397,13 +408,29 @@ func (c *Core) Claim(statement, masterSig string, bundle Sealed) (SignedDoc, err
 	if hex.EncodeToString(sum[:]) != st.BundleSha256 {
 		return SignedDoc{}, fail(403, "the bundle isn't the one the master key signed")
 	}
-	var b claimBundle
-	if json.Unmarshal(plain, &b) != nil {
-		return SignedDoc{}, fail(400, "bad bundle")
-	}
 	stores := map[string]*StoreBlob{}
 	owners := map[string]string{}
 	token := ""
+	var b claimBundle
+	var nb claimBlobs
+	if json.Unmarshal(plain, &nb) == nil && nb.Format == "blobs" {
+		for i := range nb.Blobs {
+			x := nb.Blobs[i]
+			if _, seen := stores[x.Name]; !storeName(x.Name) || x.Name == FlyStore || seen || x.Wrapped.E == "" || x.Wrapped.Wrapped == "" || x.Data == "" {
+				return SignedDoc{}, fail(400, "bad or repeated store %q in the bundle", x.Name)
+			}
+			x.WriterSig, x.Writer = "", "core" // the master key signed the bundle
+			stores[x.Name] = &x
+		}
+		for st, repo := range nb.Owners {
+			if _, ok := stores[st]; ok && repoRE.MatchString(repo) {
+				owners[st] = repo
+			}
+		}
+		b.NotSensitive, token = nb.NotSensitive, nb.FlyToken
+	} else if json.Unmarshal(plain, &b) != nil {
+		return SignedDoc{}, fail(400, "bad bundle")
+	}
 	for _, sd := range b.Stores {
 		if sd.Name == FlyStore {
 			token = sd.Values["FLY_API_TOKEN"]
@@ -487,6 +514,21 @@ func (c *Core) SetFlyToken(sealed Sealed) (SignedDoc, error) {
 	c.fly.Configure(v.Token)
 	c.logf("Fly token set")
 	return c.sign(map[string]any{"kind": "fly-token-set"})
+}
+
+// StoreKey: the store key C = P + K for the phone agreement key P (open, public points only), signed: what the
+// app wraps a store's data key to (a Recover's blobs, a deploy key's store) without adding points itself (CryptoKit
+// has no point addition). The unwrap side is unchanged: the phone's share of P plus the core's of K.
+func (c *Core) StoreKey(phone string) (SignedDoc, error) {
+	pb, err := b64.DecodeString(phone)
+	if err != nil || len(pb) != 65 {
+		return SignedDoc{}, fail(400, "phone: a P-256 public key (X9.63, base64)")
+	}
+	sum, err := AddPoints(pb, c.agreement.PublicKey().Bytes())
+	if err != nil {
+		return SignedDoc{}, fail(400, "phone: %v", err)
+	}
+	return c.sign(map[string]any{"kind": "store-key", "phone": phone, "storeKey": b64.EncodeToString(sum)})
 }
 
 // ---- stores ----------------------------------------------------------------------------------------

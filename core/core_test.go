@@ -187,7 +187,7 @@ func newCore(t *testing.T) (*Core, *fakeFly, *phone) {
 // claimFor: what the iPhone sends to set up an empty core — a statement naming the master key, the core and
 // the phone, signed by that master key, and the bundle sealed to the core (Recover: the stores from the
 // backups, the Fly store among them; Reset: no stores at all)
-func claimFor(c *Core, master, p *phone, rb claimBundle) (string, string, Sealed) {
+func claimFor(c *Core, master, p *phone, rb any) (string, string, Sealed) {
 	plain, _ := json.Marshal(rb)
 	sum := sha256.Sum256(plain)
 	var st claimStatement
@@ -1084,5 +1084,39 @@ func TestSuccessionTakesExactValuesOnly(t *testing.T) {
 	r := ch["request"].(map[string]any)
 	if r["salt"] != good.Salt || r["options"].(map[string]any)["permissionMode"] != "auto" {
 		t.Fatalf("got %v", r)
+	}
+}
+
+// R2: a Recover whose stores the app wrapped itself (to the store key): the core never sees their plaintext
+func TestARecoverOfAppWrappedStores(t *testing.T) {
+	c, f, master := newCore(t)
+	p := newPhone()
+	sk := pl(t)(c.StoreKey(p.agreementKey())) // open on an empty core: the app asks before it claims
+	C, _ := b64.DecodeString(sk["storeKey"].(string))
+	wrapped := func(name string, vals map[string]string) StoreBlob {
+		dk := make([]byte, 32)
+		rand.Read(dk)
+		w, _ := WrapToPoint(C, dk)
+		plain, _ := json.Marshal(vals)
+		return StoreBlob{Name: name, Wrapped: w, Data: b64.EncodeToString(gcmSeal(dk, plain, []byte(name))), WriterSig: "ignored"}
+	}
+	nb := map[string]any{"format": "blobs", "stores": "blobs", "notSensitive": []string{"default"}, "flyToken": "fly-secret",
+		"owners": map[string]string{"github-x": "DE0CH/x", "default": "evil/../x"},
+		"blobs":  []StoreBlob{wrapped("default", testValues["default"]), wrapped("gmail", testValues["gmail"]), wrapped("github-x", map[string]string{"K": "v"})}}
+	bad := map[string]any{"format": "blobs", "stores": "blobs", "blobs": []StoreBlob{wrapped(FlyStore, map[string]string{"FLY_API_TOKEN": "x"})}}
+	s, sig, b := claimFor(c, master, p, bad)
+	if _, err := c.Claim(s, sig, b); err == nil {
+		t.Fatal("took the Fly store as a blob")
+	}
+	s, sig, b = claimFor(c, master, p, nb)
+	pl(t)(c.Claim(s, sig, b))
+	if f.token != "fly-secret" || c.repoOwner["github-x"] != "DE0CH/x" || len(c.repoOwner) != 1 {
+		t.Fatalf("token %q owners %v", f.token, c.repoOwner)
+	}
+	if !c.notSensitive["default"] || c.notSensitive["gmail"] || c.stores["gmail"].Writer != "core" || c.stores["gmail"].WriterSig != "" {
+		t.Fatal("sensitivity or writer not as the master key signed them")
+	}
+	if v := storeValues(t, c, p, "gmail"); v["G"] != testValues["gmail"]["G"] {
+		t.Fatalf("got %v", v)
 	}
 }

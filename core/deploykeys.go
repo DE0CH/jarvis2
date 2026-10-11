@@ -101,20 +101,28 @@ type pendingDeployKey struct {
 	action    string // "add" | "remove"
 	repo      string
 	store     string
+	title     string
+	publicKey string     // the app's key pair (R2): the public half GitHub gets…
+	blob      *StoreBlob // …and the private half's store, wrapped by the app to the store key
 	sensitive bool
 	token     StoreBlob // the token store as it was at begin (its E is what the phone answers)
 	t         *ecdh.PrivateKey
 }
 
 type deployKeyBegin struct {
-	Kind       string `json:"kind"` // "deploy-key-begin"
-	Pending    string `json:"pending"`
-	Action     string `json:"action"`
-	Repo       string `json:"repo"`
-	Store      string `json:"store"`
-	Sensitive  bool   `json:"sensitive"`
-	Replaces   bool   `json:"replaces"` // add: the store exists and its contents are replaced
-	Title      string `json:"title"`    // the deploy key's title on GitHub
+	Kind      string `json:"kind"` // "deploy-key-begin"
+	Pending   string `json:"pending"`
+	Action    string `json:"action"`
+	Repo      string `json:"repo"`
+	Store     string `json:"store"`
+	Sensitive bool   `json:"sensitive"`
+	Replaces  bool   `json:"replaces"` // add: the store exists and its contents are replaced
+	Title     string `json:"title"`    // the deploy key's title on GitHub
+	// the app's key pair (R2): the public key GitHub gets, and the store blob holding the private half (its E and the
+	// sha256 of its data), so the phone's signature covers exactly what the core adds and stores
+	PublicKey  string `json:"publicKey,omitempty"`
+	BlobE      string `json:"blobE,omitempty"`
+	BlobSha256 string `json:"blobSha256,omitempty"`
 	TokenStore string `json:"tokenStore"`
 	// TokenWriter / TokenDataSha256: who wrote the token store's blob, as in unlock_begin (the phone checks it)
 	TokenWriter     map[string]string `json:"tokenWriter"`
@@ -123,8 +131,32 @@ type deployKeyBegin struct {
 	T               string            `json:"t"`
 }
 
+// DeployKeyRequest: deploy_key_begin's input. With Store set (the app's form, R2) the app names the store and the
+// key's title, and for an add brings the key pair: PublicKey ("ssh-ed25519 <base64>") and Blob, the private half's
+// store wrapped to the store key (store_key). Without it (the app before R2) the core names them and makes the pair.
+type DeployKeyRequest struct {
+	Action    string     `json:"action"`
+	Repo      string     `json:"repo"`
+	Sensitive bool       `json:"sensitive"`
+	Store     string     `json:"store"`
+	Title     string     `json:"title"`
+	PublicKey string     `json:"publicKey"`
+	Blob      *StoreBlob `json:"blob"`
+}
+
+var titleRE = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9 ._/:@-]{0,99}$`)
+
+// sshEd25519 checks "ssh-ed25519 <base64 wire>" (RFC 8709: string "ssh-ed25519", string 32-byte key)
+func sshEd25519(pub string) bool {
+	alg, b, ok := strings.Cut(pub, " ")
+	w, err := b64.DecodeString(b)
+	return ok && alg == "ssh-ed25519" && err == nil && len(w) == 51 &&
+		string(w[:15]) == string(sshString([]byte("ssh-ed25519"))) && binary.BigEndian.Uint32(w[15:19]) == 32
+}
+
 // DeployKeyBegin: a pending add or remove for one repo, signed, with the token store's E and a one-off T
-func (c *Core) DeployKeyBegin(action, repo string, sensitive bool) (SignedDoc, error) {
+func (c *Core) DeployKeyBegin(in DeployKeyRequest) (SignedDoc, error) {
+	action, repo, sensitive := in.Action, in.Repo, in.Sensitive
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.phoneSigning == "" {
@@ -136,7 +168,18 @@ func (c *Core) DeployKeyBegin(action, repo string, sensitive bool) (SignedDoc, e
 	if !repoRE.MatchString(repo) || strings.Contains(repo, "..") || strings.HasSuffix(repo, "/.") {
 		return SignedDoc{}, fail(400, "repo: owner/name")
 	}
-	store := RepoStore(repo)
+	store, title := RepoStore(repo), ""
+	if in.Store != "" { // the app's form
+		store, title = in.Store, in.Title
+		if !titleRE.MatchString(title) {
+			return SignedDoc{}, fail(400, "title: a short line")
+		}
+		if action == "add" && (!sshEd25519(in.PublicKey) || in.Blob == nil || in.Blob.Name != store || in.Blob.Wrapped.E == "" || in.Blob.Wrapped.Wrapped == "" || in.Blob.Data == "") {
+			return SignedDoc{}, fail(400, "an add brings the key pair: publicKey (ssh-ed25519) and the store blob for %s", store)
+		}
+	} else {
+		title = "jarvis2 " + store
+	}
 	if !storeName(store) || store == DeployKeyTokenStore || store == FlyStore {
 		return SignedDoc{}, fail(400, "repo %s would use the store name %s, which isn't allowed", repo, store)
 	}
@@ -160,8 +203,15 @@ func (c *Core) DeployKeyBegin(action, repo string, sensitive bool) (SignedDoc, e
 	}
 	id := randID()
 	b := deployKeyBegin{Kind: "deploy-key-begin", Pending: id, Action: action, Repo: repo, Store: store, Sensitive: sensitive,
-		Replaces: action == "add" && exists && old != nil, Title: "jarvis2 " + store, TokenStore: DeployKeyTokenStore,
+		Replaces: action == "add" && exists && old != nil, Title: title, TokenStore: DeployKeyTokenStore,
 		E: blob.Wrapped.E, T: b64.EncodeToString(t.PublicKey().Bytes()), TokenWriter: writerOf(blob), TokenDataSha256: sha256Hex(blob.Data)}
+	var kb *StoreBlob
+	if action == "add" && in.Blob != nil && in.Store != "" {
+		x := *in.Blob
+		x.WriterSig, x.Writer = "", "core" // stored only after GitHub took the phone-signed key: the core vouches
+		kb = &x
+		b.PublicKey, b.BlobE, b.BlobSha256 = in.PublicKey, x.Wrapped.E, sha256Hex(x.Data)
+	}
 	d, err := c.sign(b)
 	if err != nil {
 		return SignedDoc{}, err
@@ -169,7 +219,8 @@ func (c *Core) DeployKeyBegin(action, repo string, sensitive bool) (SignedDoc, e
 	if c.pendingKeys == nil {
 		c.pendingKeys = map[string]pendingDeployKey{}
 	}
-	c.pendingKeys[id] = pendingDeployKey{payload: d.Payload, action: action, repo: repo, store: store, sensitive: sensitive, token: *blob, t: t}
+	c.pendingKeys[id] = pendingDeployKey{payload: d.Payload, action: action, repo: repo, store: store, title: title,
+		publicKey: b.PublicKey, blob: kb, sensitive: sensitive, token: *blob, t: t}
 	return d, nil
 }
 
@@ -181,7 +232,7 @@ func (c *Core) DeployKeyFinish(pending string, share Sealed, sig string) (Signed
 		return SignedDoc{}, err
 	}
 	// GitHub is called without the core's lock (it may take seconds); the token lives in this frame only
-	title := "jarvis2 " + p.store
+	title := p.title
 	keys, err := c.github.ListDeployKeys(token, p.repo)
 	if err != nil {
 		return SignedDoc{}, c.githubFailure(p, err)
@@ -206,18 +257,23 @@ func (c *Core) DeployKeyFinish(pending string, share Sealed, sig string) (Signed
 		c.logf("deploy key: %s removed (%d key(s) deleted on GitHub), store %s deleted", p.repo, removed, p.store)
 		return c.sign(map[string]any{"kind": "deploy-key-removed", "pending": pending, "repo": p.repo, "store": p.store, "deleted": removed})
 	}
-	pub, priv, err := ed25519.GenerateKey(rand.Reader)
-	if err != nil {
-		return SignedDoc{}, err
+	pubLine, values := p.publicKey, map[string]string(nil)
+	var wire []byte
+	if p.blob == nil { // the app before R2: the core makes the pair
+		pub, priv, err := ed25519.GenerateKey(rand.Reader)
+		if err != nil {
+			return SignedDoc{}, err
+		}
+		wire = sshPublicWire(pub)
+		pubLine = "ssh-ed25519 " + b64.EncodeToString(wire)
+		values = map[string]string{
+			DeployRepoPrefix + EnvSlug(p.repo): p.repo,
+			DeployKeyPrefix + EnvSlug(p.repo):  b64.EncodeToString(OpenSSHPrivateKey(priv, title)),
+		}
 	}
-	wire := sshPublicWire(pub)
-	k, err := c.github.AddDeployKey(token, p.repo, title, "ssh-ed25519 "+b64.EncodeToString(wire))
+	k, err := c.github.AddDeployKey(token, p.repo, title, pubLine)
 	if err != nil {
 		return SignedDoc{}, c.githubFailure(p, err)
-	}
-	values := map[string]string{
-		DeployRepoPrefix + EnvSlug(p.repo): p.repo,
-		DeployKeyPrefix + EnvSlug(p.repo):  b64.EncodeToString(OpenSSHPrivateKey(priv, title)),
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -230,9 +286,11 @@ func (c *Core) DeployKeyFinish(pending string, share Sealed, sig string) (Signed
 		return SignedDoc{}, err
 	}
 	token = ""
-	blob, err := c.wrap(p.store, values, c.phoneAgreement)
-	if err != nil {
-		return SignedDoc{}, err
+	blob := p.blob
+	if blob == nil {
+		if blob, err = c.wrap(p.store, values, c.phoneAgreement); err != nil {
+			return SignedDoc{}, err
+		}
 	}
 	_, existed := c.stores[p.store]
 	c.stores[p.store] = blob
@@ -243,11 +301,14 @@ func (c *Core) DeployKeyFinish(pending string, share Sealed, sig string) (Signed
 	} else if !existed {
 		c.notSensitive[p.store] = true
 	}
-	sum := sha256.Sum256(wire)
-	fp := "SHA256:" + base64.RawStdEncoding.EncodeToString(sum[:])
-	c.logf("deploy key: %s added (%s, GitHub key %d, %d earlier deleted), store %s (sensitive=%v)", p.repo, fp, k.ID, removed, p.store, !c.notSensitive[p.store])
-	return c.sign(map[string]any{"kind": "deploy-key-added", "pending": pending, "repo": p.repo, "store": p.store,
-		"sensitive": !c.notSensitive[p.store], "title": title, "fingerprint": fp, "keyId": k.ID})
+	c.logf("deploy key: %s added (GitHub key %d, %d earlier deleted), store %s (sensitive=%v)", p.repo, k.ID, removed, p.store, !c.notSensitive[p.store])
+	ans := map[string]any{"kind": "deploy-key-added", "pending": pending, "repo": p.repo, "store": p.store,
+		"sensitive": !c.notSensitive[p.store], "title": title, "publicKey": pubLine, "keyId": k.ID}
+	if wire != nil { // the app before R2 shows it
+		sum := sha256.Sum256(wire)
+		ans["fingerprint"] = "SHA256:" + base64.RawStdEncoding.EncodeToString(sum[:])
+	}
+	return c.sign(ans)
 }
 
 // openDeployKeyToken: the pending's checks (the phone signed exactly the begin document) and the token store
@@ -289,16 +350,16 @@ func (c *Core) openDeployKeyToken(pending string, share Sealed, sig string) (pen
 	return p, tok, nil
 }
 
-// githubFailure: GitHub refused or couldn't be reached. A 403/404 means the token can't manage this repo's
-// deploy keys: the message says which permission it needs.
+// githubFailure: GitHub refused or couldn't be reached: "github: HTTP <status>: <GitHub's words>" (the router adds
+// what a 403/404 means for the token)
 func (c *Core) githubFailure(p pendingDeployKey, err error) error {
 	c.mu.Lock()
 	c.logf("deploy key: %s %s failed: %v", p.action, p.repo, err)
 	c.mu.Unlock()
-	if ge, ok := err.(*GitHubError); ok && (ge.Status == 403 || ge.Status == 404) {
-		return fail(502, "the GitHub token in %s can't manage deploy keys on %s (%s): it needs a fine-grained token with Repository permission \"Administration: read and write\" on that repo (all repositories)", DeployKeyTokenStore, p.repo, ge.Msg)
+	if ge, ok := err.(*GitHubError); ok {
+		return fail(502, "github: HTTP %d: %s", ge.Status, ge.Msg)
 	}
-	return fail(502, "%v", err)
+	return fail(502, "github: %v", err)
 }
 
 // ---- SSH key formats -----------------------------------------------------------------------------------
