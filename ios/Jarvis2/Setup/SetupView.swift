@@ -292,7 +292,10 @@ struct SetupView: View {
       busy = "Setting up…"
       PhoneKeys.shared.renew()
       let phone = try PhoneKeys.shared.publicKeys()
-      _ = try await RouterClient.shared.claim(try await withDevice(try CoreSetup.claim(core: c, phone: phone, master: m, bundle: try CoreSetup.bundle([]), device: try PhoneKeys.shared.devicePublic())), core: c)
+      // a core with a store key takes only the app's blobs form (R2); an earlier core, the older empty bundle
+      let sk = try await RouterClient.shared.storeKey(coreKey: c.signingKey)
+      let bundle = try sk.map { try CoreSetup.blobsBundle([], storeKey: $0) } ?? CoreSetup.bundle([])
+      _ = try await RouterClient.shared.claim(try await withDevice(try CoreSetup.claim(core: c, phone: phone, master: m, bundle: bundle, device: try PhoneKeys.shared.devicePublic())), core: c)
       finish(c, master: m.publicKey, text: "Jarvis 2 is reset. Its stores start empty.")
     } catch { busy = nil; failure = plain(error, "Setting up didn't work. Your kit is still the one shown; try again.") }
   }
