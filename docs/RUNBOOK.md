@@ -218,6 +218,9 @@ logs land in `~/artifacts/replica/<time>/`. Teardown also removes the keys branc
 `DE0CH/jarvis2-replica-<time>` and its 7-day PAT. `infra/phone-replica.sh teardown` after a crash. One run per
 box name at a time (a lock); the rehearsal and the replica use different names and can run together.
 
+- **The gate:** the `app` workflow's TestFlight job ships only when a `replica` run passed on a commit with the same
+  `app/` (it checks the last 30 successful replica runs). After an app change: `infra/phone-replica.sh`, then run
+  the `app` workflow with `only=testflight`. `replica_gate=skip` ships without it (say why in the commit or the run).
 - **The core it runs:** while `k8s/apps/core.yaml` carries `jarvis2/core-pin: hold` (a core change waiting for
   Deyao's go), the replica runs the core main builds — the one the shipped app expects — not the pinned one;
   `REPLICA_PINNED_CORE=1` runs the pinned core (what production has today: e.g. Settings → Repos says "the running

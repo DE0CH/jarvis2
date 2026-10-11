@@ -12,6 +12,11 @@ on:
         type: choice
         options: [all, testflight]
         default: all
+      replica_gate:
+        description: "the phone replica gate (a passing replica run on this app); skip only to ship without it"
+        type: choice
+        options: [require, skip]
+        default: require
 concurrency:
   group: app-${{ github.ref }}-${{ github.event_name }}
   cancel-in-progress: false
@@ -162,6 +167,20 @@ jobs:
       ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
     steps:
       - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - name: The phone replica gate (infra/phone-replica.sh passed on this very app)
+        if: inputs.replica_gate != 'skip'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # a successful replica.yml run whose commit has the same app/ as this one: the build shipped is the build tapped
+          for sha in $(gh run list -R "$GITHUB_REPOSITORY" -w replica.yml -s success -L 30 --json headSha -q '.[].headSha'); do
+            if git cat-file -e "$sha^{commit}" 2>/dev/null && git diff --quiet "$sha" "$GITHUB_SHA" -- app/; then
+              echo "the replica passed on $sha (same app/)"; exit 0
+            fi
+          done
+          echo "::error::no passing phone replica for this app: run infra/phone-replica.sh, then this workflow with only=testflight"
+          exit 1
       - uses: actions/setup-node@v4
         with: { node-version: 22 }
       - name: Install + JS bundle
