@@ -215,7 +215,19 @@ a session stuck at boot (its store locked right after Create) destroyed within 9
 kit (restart and recover) and every store back with its sensitivity, and a relaunch. A step fails on a missing
 element within its time, a near-blank screenshot, or a session not running in time. The run's video, screenshots and
 logs land in `~/artifacts/replica/<time>/`. Teardown also removes the keys branch `rehearsal-keys-<time>`, the repo
-`DE0CH/jarvis2-replica-<time>` and its 7-day PAT. `infra/phone-replica.sh teardown` after a crash.
+`DE0CH/jarvis2-replica-<time>` and its 7-day PAT. `infra/phone-replica.sh teardown` after a crash. One run per
+box name at a time (a lock); the rehearsal and the replica use different names and can run together.
+
+- **The core it runs:** while `k8s/apps/core.yaml` carries `jarvis2/core-pin: hold` (a core change waiting for
+  Deyao's go), the replica runs the core main builds — the one the shipped app expects — not the pinned one;
+  `REPLICA_PINNED_CORE=1` runs the pinned core (what production has today: e.g. Settings → Repos says "the running
+  core predates deploy keys").
+- **The simulator:** iPhone 17 (Deyao's iPhone18,3) with the newest runtime the runner image has; on macos-26 that
+  is iOS 26.5 with Xcode 26.6 (his phone runs iOS 27.0, which needs Xcode 27; the workflow tries to download it and
+  records what it used in `device.txt`).
+- **What only the replica differs in:** `JARVIS_BASE` and `JARVIS_KEYS_REF` in the Release build; Face ID on the
+  simulator is LAContext in front of the software key (no Secure Enclave there); the Access login admits the bot's
+  mailbox, not Deyao's.
 
 ## Looking at things
 
