@@ -297,10 +297,20 @@ off.
 | `POST /m/downgrade` | Body `{stores, newEncryptionKey, newSigningKey}` → `{challenge}`, which the machine signs with its OLD key. |
 | `POST /m/downgrade/finish` | Body `{challenge, signature}` → core `approve/by-old-key` → `{cert}`; from now on the router knows the machine by its new key. |
 | `GET /m/tunnel-proof` | `{proof, id}`: hex HMAC-SHA256(`JARVIS2_TUNNEL_KEY`, `"jarvis2-tunnel:" + <this machine's session id>`), which the cf-tunnel Worker checks when the `jarvis2-tunnel` token registers that id. The machine puts it in `TUNNEL_AGENT_SECRET` at boot (never in the Fly config). 404 without the key; 403 for a machine with no running session. |
+| `GET /m/config` | The values a machine takes from the router alone, each refused by the machine unless it matches its format (DESIGN "Inputs to a machine"): `{sessionId, discordChannel, liveSyncSeconds, taskRun, taskTrigger, tunnelProof}`. Everything else comes from the cert. |
+| `GET /m/restore-cert` | `{cert}`: the old line's cert a restoring new line checks (its machine must be the one the cert's config names). 404 without a restore. |
+| `POST /m/delivery-result` | `{id, ok, error?}`: the machine's answer to a delivery. Deliveries arrive in `GET /m/commands` as `{deliveries: [{id, kind: wakeup\|cron\|nudge\|continue, request?, run?, minutes?, jobs?, attest}]}`: a wakeup/cron is the session's own signed request, `attest` the core's input-log entry for it. |
 | `GET /m/attachments` | `{files: [{name, size, isImage}]}`: the first-prompt attachments bound to this machine's session (404 none). `GET /m/attachments/:name` the bytes; `DELETE /m/attachments` drops the router's copy once fetched. |
 | `POST /m/task-result` | A task line's machine (harness `task:<template>`, below) after its run: `{run, exitCode, timedOut, error, startedAt, finishedAt, log /* tail ≤ 256 KB */, output /* ≤ 64 KB */}`, store values already redacted by the machine. `run: ""` = a boot with no run (the line's first machine). The router records the run and pauses the line. 403 for a machine that isn't a running task line. |
 | `POST /m/status` | Body `{raw, appTitle}`: `raw` = the output of Jarvis 1's registry command (`machine/status.go`), sent by the agent when it changes and at least every 60 s; parsed by the router (`router/registry.go`). `appTitle` = the Claude app's title of the session's Remote Control entry, which the machine reads (at most once a minute) from `api.anthropic.com/v1/code/sessions/cse_<bridge>` with the session's own Claude login (`machine/apptitle.go`); "" keeps the last one. It becomes the session's `serverTitle`, and a resume without a label passes it on as `SESSION_RESUME_TITLE` (Jarvis 1's supervisor names a fresh Remote Control entry with it). |
 | `POST /m/live-transcript` | Header `X-Name: <uuid>.jsonl`, body = the whole transcript (≤ 256 MB). The machine sends each conversation under `~/.claude/projects` that changed, every `JARVIS2_LIVE_SYNC_SECONDS` (default 300; router env `LIVE_SYNC_SECONDS` sets it), skipping Jarvis's delivery relays (`machine/livesync.go`). The router PUTs it to `claude-records/.live/<session id>/<name>` with its own Storage Box credentials — Jarvis 1's layout, so its transcript search indexes running Jarvis 2 sessions — and records `liveSync` on the session; with no Storage Box (or `RECORDS_OFF=1`) it answers `{ok, stored: false}`. The folder goes when the session is destroyed. 403 for a machine with no running session. |
+
+## The input log (`router/vouch.go`, `core/audit.go`)
+
+`GET /api/input-log?last=N` (Access): the last N (≤ 2000, default 200) core-signed entries, each
+`{kind: "input", seq, prev, at, machine, input, origin, sha256}` with `prev` = sha256 of the previous entry's payload.
+The router appends the core's entries to `DATA_DIR/input-log.jsonl` every minute and after each attestation; a new
+core's chain starts from the last persisted entry (`chain_from`).
 
 ## Wakeups and crons (`router/schedule.go`)
 
