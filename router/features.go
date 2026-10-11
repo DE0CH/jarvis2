@@ -3,7 +3,8 @@ package main
 // Features outside the lifecycle (Jarvis 1 parity, docs/PARITY.md). Each lives in its own file, registers its
 // routes in registerFeatures and its background loop in startFeatures, and reads its own settings from the
 // environment (secrets come from k8s/secrets/router.enc.yaml via envFrom). They act on sessions only through
-// the router's own flows and through grants (grants.go); none talks to the core directly.
+// the router's own flows and through grants (grants.go); none talks to the core directly, except machines.go's Destroy
+// of a machine with no session (the core's kill, as a pause makes it).
 
 import (
 	"encoding/json"
@@ -31,6 +32,7 @@ func (r *Router) registerFeatures(app appRoute, m machineRoute, public publicRou
 	r.registerTasks(app, m)          // tasks.go: task instances (one-shot session lines), runs, schedules
 	r.registerInbox(app, m, public)  // inbox.go: requests waiting for the phone (the app's Inbox)
 	r.registerVouch(app, m)          // vouch.go: /m/config, /m/restore-cert, deliveries, the input log
+	r.registerMachines(app)          // machines.go: every Fly machine of the app; Destroy for one with no session
 }
 
 // startFeatures: called once from main after the router is built

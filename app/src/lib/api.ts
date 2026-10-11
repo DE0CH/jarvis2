@@ -91,6 +91,9 @@ export type Grant = { id: string; session: string; holder: string; kind: "grant"
 export type Budget = { month: string; spentUsd: number; capUsd: number; warnUsd: number; warned: boolean; capped: boolean; cappedAt?: string | null; ratePerHour: number; perMonth: number; running: number; volumes: number; sampledAt?: string | null };
 export type FlyOther = { kind: string; app: string; id: string; name?: string; state?: string; region?: string; created?: string; detail?: string };
 export type FlyView = { apps: number; machines: number; volumes: number; other: FlyOther[]; error?: string | null; checkedAt?: string | null };
+// every Fly machine in jarvis2-sessions (api/machines, router/machines.go): its session or none ("" ), and
+// test = its JARVIS2_URL is a test router's; noDestroy = why Destroy isn't offered ("" = it is)
+export type Machine = { id: string; name: string; state: string; region: string; size: string; guest: string; image: string; created: string; updated: string; sessionId: string; current: boolean; routerUrl: string; test: boolean; noDestroy: string };
 export type SignedDoc = { payload: string; sig: string };
 export type ApprovalKind = "new-session" | "resume-upgrade" | "add-store";
 export type Approval = {

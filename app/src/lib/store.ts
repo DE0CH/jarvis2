@@ -3,10 +3,10 @@
 // actions show as PENDING labels on their buttons.
 import { useSyncExternalStore } from "react";
 import { AppState, Platform } from "react-native";
-import { api, coreStores, loadPolicy, RUN_ACTIVE, type Choice, type CoreStore, type Policy, type Rec, type State, type TasksOverview } from "./api";
+import { api, coreStores, loadPolicy, RUN_ACTIVE, type Choice, type CoreStore, type Policy, type Rec, type State, type TasksOverview, type Machine } from "./api";
 
-export type Tab = "sessions" | "inbox" | "search" | "stores" | "records" | "tasks" | "schedules" | "settings";
-export const TABS: [Tab, string][] = [["sessions", "Sessions"], ["inbox", "Inbox"], ["search", "Search"], ["stores", "Stores"], ["records", "Previous"], ["tasks", "Tasks"], ["schedules", "Schedules"], ["settings", "Settings"]];
+export type Tab = "sessions" | "inbox" | "search" | "stores" | "records" | "tasks" | "schedules" | "machines" | "settings";
+export const TABS: [Tab, string][] = [["sessions", "Sessions"], ["inbox", "Inbox"], ["search", "Search"], ["stores", "Stores"], ["records", "Previous"], ["tasks", "Tasks"], ["schedules", "Schedules"], ["machines", "Machines"], ["settings", "Settings"]];
 // tasks + their schedules (api/tasks): loaded while the Tasks or Schedules tab (or a task page) is open
 export type TasksState = { loading: boolean; loaded: boolean; data: TasksOverview; err: string | null };
 // what holds a session right now (api/state `busy`), as a button label
@@ -20,14 +20,14 @@ export type Toast = { id: number; text: string; kind: "info" | "ok" | "error" };
 export type AskInput = { heading: string; label: string; placeholder?: string; note?: string; max?: number; match?: string };
 export type Confirm = { title: string; detail?: string; action: string; danger?: boolean; input?: AskInput; resolve: (ok: boolean, text: string) => void };
 type Store = {
-  state: State; tab: Tab; pending: Map<string, string>; records: Loaded<Rec>; stores: Loaded<CoreStore>;
+  state: State; tab: Tab; pending: Map<string, string>; records: Loaded<Rec>; stores: Loaded<CoreStore>; machines: Loaded<Machine>;
   toasts: Toast[]; confirm: (Confirm & { id: number }) | null; sizes: Choice[]; models: Choice[]; refreshing: boolean; policy: Policy;
   tasks: TasksState;
 };
 const empty = <T,>(): Loaded<T> => ({ loading: false, loaded: false, items: [], err: null });
 const S: Store = {
   state: { sessions: [], approvals: [], core: { up: false } },
-  tab: "sessions", pending: new Map(), records: empty(), stores: empty(),
+  tab: "sessions", pending: new Map(), records: empty(), stores: empty(), machines: empty(),
   sizes: [], models: [], refreshing: false, toasts: [], confirm: null, policy: {},
   tasks: { loading: false, loaded: false, data: { templates: [], instances: [], schedules: [] }, err: null },
 };
@@ -39,7 +39,7 @@ export function useStore<T>(sel: (s: Store) => T): T {
 }
 export const getStore = () => snap;
 
-export function setTab(t: Tab) { S.tab = t; emit(); if (t === "records" || t === "search") loadRecords(); if (t === "stores" || t === "settings") loadStores(); if (t === "tasks" || t === "schedules") { loadTasks(); loadStores(); } }
+export function setTab(t: Tab) { S.tab = t; emit(); if (t === "records" || t === "search") loadRecords(); if (t === "stores" || t === "settings") loadStores(); if (t === "tasks" || t === "schedules") { loadTasks(); loadStores(); } if (t === "machines") loadMachines(); }
 /** the Inbox badge: what waits for the phone */
 export const useInboxCount = () => useStore((s) => (s.state.inbox || []).length);
 export function pend(key: string, label: string | null) { label ? S.pending.set(key, label) : S.pending.delete(key); S.pending = new Map(S.pending); emit(); }
@@ -120,7 +120,7 @@ const pollState = coalesce(async () => {
   if (S.state.sessions.some((m) => ["starting", "approval", "initialising", "pausing", "resuming", "destroying"].includes(m.state))) fastUntil = Math.max(fastUntil, Date.now() + 4000);
 });
 export function refresh(manual = false): Promise<void> {
-  if (manual) { S.refreshing = true; emit(); if (S.tab === "records") loadRecords(); if (S.tab === "stores" || S.tab === "settings") loadStores(); if (S.tab === "tasks" || S.tab === "schedules") loadTasks(); }
+  if (manual) { S.refreshing = true; emit(); if (S.tab === "records") loadRecords(); if (S.tab === "stores" || S.tab === "settings") loadStores(); if (S.tab === "tasks" || S.tab === "schedules") loadTasks(); if (S.tab === "machines") loadMachines(); }
   return pollState();
 }
 export function settle(maxMs = 90000) { fastUntil = Math.max(fastUntil, Date.now() + maxMs); }
@@ -130,6 +130,8 @@ export function start() {
   if (started) return; started = true;
   setInterval(async () => {
     if (Date.now() < fastUntil || Date.now() - lastPoll >= 15000) { lastPoll = Date.now(); await refresh(false); }
+    // machines: every 15 s while their tab is open
+    if (S.tab === "machines" && Date.now() - machinesAt >= 15000) loadMachines();
     // tasks: every 15 s while their tab is open, every 2 s while a run is queued/starting/running
     if ((S.tab === "tasks" || S.tab === "schedules") && (Date.now() - tasksAt >= 15000 || S.tasks.data.instances.some((i) => i.activeRun || (i.lastRun && RUN_ACTIVE(i.lastRun.phase))))) loadTasks();
   }, 2000);
@@ -146,6 +148,14 @@ export const loadRecords = coalesce(async () => {
   try { const j = await api<{ records: Rec[] }>("GET", "api/records"); S.records = { ...S.records, items: j.records || [], err: null, loaded: true }; }
   catch (e: any) { S.records = { ...S.records, err: e.message }; }
   S.records = { ...S.records, loading: false }; emit();
+});
+let machinesAt = 0;
+export const loadMachines = coalesce(async () => {
+  machinesAt = Date.now();
+  S.machines = { ...S.machines, loading: true }; emit();
+  try { const j = await api<{ machines: Machine[] }>("GET", "api/machines"); S.machines = { ...S.machines, items: j.machines || [], err: null, loaded: true }; }
+  catch (e: any) { S.machines = { ...S.machines, err: e.message }; }
+  S.machines = { ...S.machines, loading: false }; emit();
 });
 export const loadStores = coalesce(async () => {
   S.stores = { ...S.stores, loading: true }; emit();

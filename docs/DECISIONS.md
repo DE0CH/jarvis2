@@ -385,3 +385,7 @@ entry points only ("if I decide to break it later then it's fine").
 87. **A pause right after a start waits up to 90 s for the machine to finish booting** when it already has its
     secrets (it is seconds from booted): its successor's cert names only the snapshot this machine signs, so a kill
     mid-boot would leave the line with no state at all. A machine still waiting on a locked store isn't waited for.
+88. **Orphan machines are destroyed through the core's existing kill** (Machines tab, 2026-10-11): the kill already takes
+    any machine of the app, so no core change or restart; the router offers it only for a machine it never started, with
+    no session mapping or cert, at least 15 minutes old. No separate destroy token for the router (one more credential
+    that could destroy session machines). A machine is "test" when its JARVIS2_URL host isn't `jarvis2-box._peer.internal`.
