@@ -13,7 +13,7 @@ it is**: nothing here touches Jarvis 1's box, cluster, repo paths, session image
 | Router | The Jarvis 2 backend (API for the app and the web page); outside the core; untrusted |
 | Sessions | Fly Machines in a **new Fly organisation** (`jarvis2-370`), so Jarvis 1's budget scan never sees them |
 | Public address | `jarvis2.deyaochen.com`, a Cloudflare Tunnel (cloudflared on the box) behind its own Cloudflare Access app: Deyao's login; `/setup` admits only the setup session's service token. Session machines never come through Cloudflare: they reach the router over Fly's private network (the box is a WireGuard peer of the org), because Jarvis 1's Access apps admit any service token of the account |
-| iPhone app | "Jarvis 2" (`dev.de0ch.jarvis2`, its own TestFlight app): a Swift shell + the React Native UI in an ExtensionKit extension (lessons/73) |
+| iPhone app | "Jarvis 2" (`dev.de0ch.jarvis2`, its own TestFlight app): one native SwiftUI app for iPhone and iPad (`ios/`, Apple frameworks only) |
 | CI | GitHub Actions (this repo is public, so macOS runners are free): images to GHCR, the app to TestFlight |
 
 ## Setting up (Deyao, 2026-10-10)
@@ -39,7 +39,7 @@ every store back from the backups). docs/DESIGN.md "Setting a core up".
 - Router: `router/` (docs/API.md), deployed.
 - Session image: `session-image/` + `machine/`, built by CI.
 - End-to-end test on real Fly with a software phone: passed (every flow).
-- App: `app/` — see app/DECISIONS.md.
+- iOS app: `ios/`; web page: `app/` — see app/DECISIONS.md.
 - Decisions to review: docs/DECISIONS.md.
 
 ## Later (Deyao, 2026-10-09)

@@ -17,7 +17,7 @@ Deyao chose — never, by bug or attack, a machine of a different privilege leve
 | The Hetzner box as a whole (k3s, Flux, permissions, Jarvis, manifests) | **Not trusted** (much customisation = room for bugs) |
 | Our own code (memory-safety and logic bugs) | **Not trusted** |
 | Our use/configuration of providers and libraries (wrong endpoint, over-broad token, wrong parameters) | **Not trusted**; verified by tests that attempt the forbidden action and expect it to fail |
-| All other open-source code (sops, Expo, React Native, npm/pods trees, …) | **Not trusted**; the core never depends on it |
+| All other open-source code (sops, Expo and the web page's npm tree, …) | **Not trusted**; the core and the iOS app never depend on it |
 
 Consequences for our code: no single point (one bug must not expose a secret), memory-safe languages, as
 little hand-written crypto as possible (tested against independent implementations), fail closed, small
@@ -135,7 +135,7 @@ plus a signed marker for every store made sensitive.
 ## Setting a core up: Reset and Recover (on the iPhone)
 
 Two paths, nothing else, and neither needs Claude or waits on anything Claude does (Deyao, 2026-10-10). Both
-live on one secure page of the shell ("Reset or recover"), which first checks the core itself: the box key
+live on one page of the iOS app ("Reset or recover"), which first checks the core itself: the box key
 (`keys/box.pub`, fetched from GitHub, never from the router) signed its keys, and the core signed its state. The
 page says only what Deyao acts on; errors are one plain sentence with the details folded away.
 
@@ -242,7 +242,7 @@ by the core, approved by the phone; the box alone can never make one, and no AI 
 - **Add:** the app asks for the repo; `deploy_key_begin` answers, signed, exactly what will happen: the repo, the
   store's name, whether it is sensitive (asked for, or always for `DE0CH/jarvis2`, whose push reaches the core; a
   store that is sensitive stays so), whether it replaces an existing store, the key's title on GitHub (`jarvis2
-  <store>`), and the token store's `E` with a one-off `T`, as an unlock. The shell's secure page shows it; under one
+  <store>`), and the token store's `E` with a one-off `T`, as an unlock. The app's review page shows it; under one
   Face ID the phone signs that document and computes its share of the token store, sealed to `T`.
   `deploy_key_finish` checks the signature against the phone key from the claim, opens the token store with the
   share for this call only (it never joins the unlocked set; the plaintext goes when the call returns), deletes
@@ -339,10 +339,10 @@ from the credential the call carried — the machine key (a session), the setup 
 exact call it made. The router's own approvals (new session, resume on the latest image, add a store) are listed in
 the same Inbox with their caller and call recorded when they were made.
 
-Opening one shows the shell's secure page for it (the same review stop the app's own buttons use) with three
+Opening one shows the app's review page for it (the same review stop the app's own buttons use) with three
 read-only fields on top, in **decreasing trust and increasing level of explanation**:
 
-1. **What you sign (exact)** — fully trusted. Rendered by the shell from the very content the phone signs (the core's
+1. **What you sign (exact)** — fully trusted. Rendered by the app from the very content the phone signs (the core's
    signed begin document, the core-signed challenge, the session's core-signed cert and the checked grant), never
    from router prose (`Shell/SignedAction.swift`): the lowest level, what happens mechanically. Drawn strongest; the
    one that matters.
@@ -431,51 +431,38 @@ exists only in the GitHub environment `release`, which admits refs/heads/main on
 approval's `imageSig` and can only withhold it);
 machine ids and public keys are signed but not shown.
 
-## iOS app structure: a trusted shell with two modes
+## iOS app structure: one native app (Deyao, 2026-10-11)
 
-There is no separate confirmation page: the **New session sheet itself** is hardened, so its text and taps
-can't be hijacked. That needs a process boundary, because the untrusted stack (React Native, Hermes, pods)
-can rewrite anything in its own process.
+The iPhone and iPad app is one native SwiftUI app (`ios/`), built from Apple's frameworks and our own Swift only: no
+React Native, no third-party packages, no extension process. The whole app is therefore trusted code, and a page where
+Deyao signs is an ordinary sheet of it; no process boundary is needed to keep its text and taps honest. What makes a
+signature safe stays the same:
 
-- **The app's main process is a small native Swift shell (the "compositor").** It owns the window, the Secure
-  Enclave keys (Keychain group only it can read) and the secure sheets (New session, unlock, approvals). Apple
-  frameworks + the core only.
-- **Everything else in Jarvis (React Native, the terminal, all dependencies) runs in a bundled ExtensionKit
-  extension, in its own process** (iOS 26+), displayed by the shell through `EXHostViewController`.
-- **Normal mode:** the shell shows the extension's view full-screen; the app looks and feels as before.
-- **Secure mode:** the shell removes the extension's view and shows its own page. The extension can only draw
-  inside the area the shell gives it — none — so it can't overlay or redirect taps. The page shows only
-  trusted data (core-signed store list, built-in harness choices, the image as "latest CI build" via GitHub's
-  build attestation); on Start, the shell checks the returned challenge contains exactly those choices, then
-  signs under one Face ID. (Face ID shows no custom text, so the page, not the system prompt, is what must be
-  trustworthy.)
-- **Where choices are made (Deyao, 2026-10-10):** a secure page where Deyao *chooses* keeps its choices, so the
-  flow is one page: **New session is one page in the shell** (prompt, title, stores, harness, repos, permission
-  mode, model and the other options), and its **Start** signs the session and, under the same Face ID, unlocks
-  every store the session gets that is locked (harness stores included), for that session only (the core locks
-  them again once its machine has pulled), so no session waits at boot on a locked store. An approval of a new line
-  made elsewhere (the web page, a restore, a task) and an add-store do the same under their one Face ID. When the request comes from the non-secure side with no choosing step (a button in the terminal page's
-  banner, the Grants page's own chooser, a card's "Unlock…"), the secure page is a **review stop**: it shows in
-  plain words exactly what will be signed (checked field for field against the router's draft or the core's signed
-  documents), with **Allow** (Face ID) and **Deny**, and nothing on it can be changed.
-- **The switch looks native:** entering pushes the shell's page over a still picture of the app (the extension's
-  view goes once the picture is on screen); Back pops it over that picture and the re-added extension replaces it
-  once React Native has drawn again; a finished action lets React Native show the result under the page first,
-  then pops over the live app. The extension is back in the window only after the shell has decided to leave, under
-  the page, taking no taps until the page is gone.
-- **Web:** the web page only creates a pending request; approval happens in the app's secure mode.
+- **What is signed is rendered from the signed content.** Every review page (New session, an approval, a grant, an
+  unlock, a repo key, and the Inbox's "What you sign (exact)") draws its text from the core's signed documents, checked
+  against the core key pinned at Reset/Recover, or, for a grant, from the session's core-signed cert. The session a page
+  acts on is named from signed content too: an approval from its predecessor's cert, a grant or unlock from the
+  session's cert (title and first prompt from a core that vouches, its line, machine and sensitivity); the router's
+  label shows only as unverified. The app remembers each session id's line and refuses a cert naming another.
+- **Face ID for every signature**: the phone's two Secure Enclave keys are bound to the faces enrolled now
+  (`.biometryCurrentSet`) and made fresh at every Reset/Recover; a long-lived device key (Face ID or passcode) countersigns
+  claims and wipes, so the setup session can tell this iPhone's claims from the router's.
+- **Nothing the router says decides what is signed**: the stores a harness brings are pinned in the app from git
+  (`policy/stores.json`); Start refuses a store that wasn't picked and isn't the harness's, and a sensitive one it didn't
+  pick. The image must carry CI's signature (`keys/ci.pub`).
+- **New session is one page** (Deyao, 2026-10-10): prompt, title, stores, harness, repos, permission mode, model and the
+  other options; its **Start** signs the session and, under the same Face ID, unlocks every store the session gets that is
+  locked, for that session only. An approval made elsewhere (the web page, a restore, a task) and an add-store do the same
+  under their one Face ID. A request from elsewhere (a session, the web page, Claude's setup session) waits in the Inbox
+  and opens the same review page, with **Allow** (Face ID) and **Deny**.
+- **The terminal is a web page**: the router serves it (`/term/{id}`) and the app shows it in a `WKWebView` with its
+  Access login; WebKit runs it in its own process. The machine still runs its commands only under a grant, which the
+  page asks the app for.
+- **Web:** the web page (`app/`) only files requests; approval happens in the app.
 - **A session waiting on a locked store says so:** the router notes the core's 423 on the machine's secrets pull
-  (`lockedStore`); the card and the terminal page show "Waiting for store X to be unlocked" with Unlock…, a review
-  stop that unlocks exactly the locked stores of the session's core-signed cert, for that cert only. The machine
-  retries every 2 s.
-
-Test build (2026-10-05, simulator; DE0CH/ios-shell-spike, lessons/73): React Native runs inside the extension
-in its own process (taps, typing, a WebView, XPC both ways, background/resume); secure mode removes the
-extension's view and only the shell exits it; the extension and its React Native state survive secure mode;
-the switch is seamless (shell-owned snapshot, sheet animated in and out, no flash); the pairing sign-in sheet
-(ASWebAuthenticationSession) works from the extension. Keyboard avoidance must come from the shell resizing
-the extension's area (React Native sees height 0). Still to measure on a real iPhone: the extension's memory
-limit and start-up time.
+  (`lockedStore`); the session's page and the terminal show "Waiting for store X to be unlocked" with Unlock…, a review
+  that unlocks exactly the locked stores of the session's core-signed cert, for that cert only. The machine retries every
+  2 s.
 
 ## Guarantees
 
@@ -516,7 +503,7 @@ any of the line's stores is sensitive, and the **line id** (the line's first mac
   grant open another line's machine. Request ids are single-use and at most 2 minutes old.
 - Re-pairing the phone: running machines trust the old phone key until their line's next cert.
 - **Asking for one** (Deyao, 2026-10-10): the app's Grants page (feature; 1–10 minutes or a standing rule until a
-  date) or a one-tap button where a feature was turned away builds the whole request; the shell's grant page only
+  date) or a one-tap button where a feature was turned away builds the whole request; the app's grant review only
   reviews it (Allow with Face ID, or Deny).
 
 ## Open
