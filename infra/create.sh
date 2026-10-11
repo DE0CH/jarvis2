@@ -65,15 +65,17 @@ def call(m,p,b=None):
     except urllib.error.HTTPError as e: raise SystemExit(f"{m} {p}: {e.code} {e.read().decode()[:300]}")
 kname=f"jarvis2-throwaway-{int(time.time())}"
 key=call("POST","/ssh_keys",{"name":kname,"public_key":open(pub).read().strip()})["ssh_key"]["id"]
-fwname=os.environ["FIREWALL"]
-fws=[f for f in call("GET","/firewalls")["firewalls"] if f["name"]==fwname]
-if fws:
-    fw=fws[0]["id"]; call("POST",f"/firewalls/{fw}/actions/set_rules",{"rules":[]})
-else:
-    fw=call("POST","/firewalls",{"name":fwname,"rules":[]})["firewall"]["id"]   # no inbound at all
-s=call("POST","/servers",{"name":name,"server_type":stype,"image":"ubuntu-24.04","location":loc,"ssh_keys":[key],
-  "firewalls":[{"firewall":fw}],"labels":json.loads(os.environ["LABELS"]),"user_data":open(ud).read()})["server"]
-call("DELETE",f"/ssh_keys/{key}")
+try:   # the throwaway key goes whatever happens (a refused create used to leave it behind)
+    fwname=os.environ["FIREWALL"]
+    fws=[f for f in call("GET","/firewalls")["firewalls"] if f["name"]==fwname]
+    if fws:
+        fw=fws[0]["id"]; call("POST",f"/firewalls/{fw}/actions/set_rules",{"rules":[]})
+    else:
+        fw=call("POST","/firewalls",{"name":fwname,"rules":[]})["firewall"]["id"]   # no inbound at all
+    s=call("POST","/servers",{"name":name,"server_type":stype,"image":"ubuntu-24.04","location":loc,"ssh_keys":[key],
+      "firewalls":[{"firewall":fw}],"labels":json.loads(os.environ["LABELS"]),"user_data":open(ud).read()})["server"]
+finally:
+    call("DELETE",f"/ssh_keys/{key}")
 print("server",s["id"],s["public_net"]["ipv4"]["ip"])
 PY
 echo "$KOUT/box.pub and box-age.pub are the new box's keys (production: re-run infra/router-secrets.py, which encrypts to the new age key, then commit and push)"
