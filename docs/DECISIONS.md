@@ -446,3 +446,30 @@ entry points only ("if I decide to break it later then it's fine").
       host-level drop on the next box covers them.
     - *The core's tag* stays mutable until the core's next release (pinning its digest now would restart it).
 
+93. **R2: the core as small and as stateless as it can be** (2026-10-11, decided while Deyao was away;
+    ~/artifacts/away/audit/r2.json, 18 findings). R1 stays: every refusal R1 needs is still the core's, tested in
+    core/r1_test.go and the rest.
+    - *Fly*: the core makes single calls (create; init = one look at the state and one jarvis2-init; kill = one destroy
+      and one look); the router waits, retries and kills a machine that never comes up. The core keeps the image a
+      created machine was asked for and each live machine's current signing key; everything else is in its signed
+      `started` document, which certify takes. Sizes outside small/medium/large are refused, not defaulted.
+    - *Logs*: no free-text log; the input log leaves in the answers (attest's; beside each cert) and the router keeps it.
+      The core keeps head and length. A new core starts its chain at seq 0 instead of `chain_from` (the router's file
+      shows the seam; the router's word either way).
+    - *One route per fact*: no `/key` (use `/identity`), no `/core-cert` (the router keeps the claim it relayed), no
+      `/carry/forward` (certify and the add-store/downgrade answers rebind the carry beside the cert). One map for
+      killed machines and their snapshots.
+    - *No defaults or compatibility markers in the core*: succession refuses a missing harness, a mode outside auto/bypass,
+      unsorted stores, and a new line without the caller's salt (the router fills them in); no `scopedUnlocks`, no
+      `vouch: 2`, no `request.sensitive` (the app reads sensitivity from the signed store list), no StartRequest.Env.
+      The machine's pre-vouch path (legacy.go) is gone: every core in use vouches.
+    - *Keys the app makes*: the app makes a deploy key's pair and wraps its store, and brings a Recover's stores already
+      wrapped, so the core never sees those plaintexts. CryptoKit can't add points, so the core gives the store key P + K
+      signed (`store_key`). The core's older forms (it makes the pair; plaintext Recover bundle) stay until the app has
+      moved, then go. GitHub's refusal is the core's status and words; the router adds the hint.
+    - *Kept*: the scoped-unlock TTL sweep (finding 8: moving the check into openFor alone would keep lapsed plaintext in
+      memory longer, the opposite of stateless); the three-size table (refusing unknown sizes, no default) rather than a
+      guest spec from the router with a bound; the always-sensitive DE0CH/jarvis2 check until the app's own check ships.
+    - *Router compatibility*: while the running (held) core is the one from before R2, the router still reads its
+      `/input-log`, its `/core-cert`, its `/carry/forward`, and its waiting `/start` and `/kill`. These fallbacks go
+      when that core is released.
