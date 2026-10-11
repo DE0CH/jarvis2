@@ -299,7 +299,7 @@ final class ReplicaUITests: XCTestCase {
       XCTAssertTrue(el("request-explanation").label.contains("replica-the-session"), "the session's reason is shown")
       inboxDeny("session")
     }
-    XCTAssertEqual(relay("inbox-session:\(sid):scheduler"), "ok", "the session filed another")
+    XCTAssertEqual(relay("inbox-session:\(sid):archive"), "ok", "the session filed another")
     if inboxReview("session-allow") { inboxAllowed("session", button: "secure-grant-allow") }
     el("tab-sessions").tap()
 
