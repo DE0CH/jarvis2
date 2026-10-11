@@ -488,6 +488,7 @@ func (r *Router) buildHandlers() {
 		d, err := r.core.Call("/pull-secrets", map[string]any{"cert": cert, "carry": r.carryForPull(machine, cert)})
 		if err == nil {
 			r.pulled(machine, cert, d)
+			markPulled(machine) // vouch.go: a pause waits briefly for such a machine's boot to finish
 		}
 		release()
 		r.noteSecretsPull(machine, err) // the app says which locked store the machine waits on, and offers to unlock it

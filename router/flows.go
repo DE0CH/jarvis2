@@ -637,13 +637,21 @@ func (r *Router) send(machine, cmd string) {
 // (no status report from it) isn't asked at all: it has nothing to snapshot, and an older image may never answer
 // (e.g. stuck pulling the secrets of a locked store).
 func (r *Router) lastSnapshot(id, machine string) {
-	booted := false
-	r.st.Do(func(d *persisted) {
-		if x := d.Sessions[id]; x != nil {
-			booted = x.Booted == machine
-		}
-	})
-	if !booted {
+	booted := func() (b bool) {
+		r.st.Do(func(d *persisted) {
+			if x := d.Sessions[id]; x != nil {
+				b = x.Booted == machine
+			}
+		})
+		return
+	}
+	// a machine that has its secrets is seconds from booted (repos, then its first report): wait for it, or a pause
+	// right after a start would leave its successor with no state at all (its cert names the snapshot this machine
+	// signs, and only that one: vouch.go)
+	for deadline := time.Now().Add(bootGrace); !booted() && hasPulled(machine) && time.Now().Before(deadline); {
+		time.Sleep(time.Second)
+	}
+	if !booted() {
 		log.Printf("session %s: %s never got past boot; nothing to snapshot", id, machine)
 		return
 	}

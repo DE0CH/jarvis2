@@ -605,3 +605,12 @@ func (r *Router) inputLogLoop() {
 		time.Sleep(time.Minute)
 	}
 }
+
+// ---- a pause right after a start --------------------------------------------------------------------------------
+
+var bootGrace = 90 * time.Second
+
+var pulledMachines sync.Map // machine → its secrets pull went through (it is about to finish booting)
+
+func markPulled(machine string)     { pulledMachines.Store(machine, true) }
+func hasPulled(machine string) bool { _, ok := pulledMachines.Load(machine); return ok }
