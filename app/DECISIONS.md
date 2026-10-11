@@ -5,7 +5,10 @@ Carried over from the mock (DE0CH/jarvis2-mock DECISIONS.md) unless marked new.
 1. **New session is ONE page in the shell** (Deyao, 2026-10-10: "new session page should just be one page").
    **+ New session** opens it directly: Session / One-shot, the prompt, the title, the **secret stores**, the
    **harness**, repos (picking one picks its deploy-key store when that isn't sensitive), permission mode, model
-   (the harness's), auto-pause, API proxy and machine size, laid out like Jarvis 1's page (`SecureNewSession`). The
+   (the harness's), auto-pause, API proxy and machine size, laid out like Jarvis 1's page (`SecureNewSession`).
+   **DE0CH/claude-env comes pre-selected** with its store `github-claude-env` when it is on the repo list (Deyao,
+   2026-10-11: "claude env should be selected by default"); a tap de-selects it, and nothing is pre-selected when it
+   isn't on the list (the walkthrough checks both). The
    page opens filled: the shell fetches the core's store list and the router's lists (models, sizes, repos, harness
    stores) at launch and after every secure page. **Start** asks the router for the session, waits for the core's
    challenge (it comes before any machine exists, so in about a second), checks it carries exactly the stores picked
@@ -248,8 +251,8 @@ Carried over from the mock (DE0CH/jarvis2-mock DECISIONS.md) unless marked new.
     - **Create**: the page left to the leading edge while the picture under it moved right, the button flipped
       back to "Opening…", then React Native slid its form off again (a double motion, with a frame of the old
       screen). A finished action now tells React Native first, with the extension re-added under the page;
-      React Native answers once it has drawn the result (`secureSettled`, new on `HostService`; the shell gives
-      up waiting after 2 s), and the page pops over the live app. Every exit is a pop to the right.
+      React Native answers once it has drawn the result (`secureSettled`, new on `HostService`), and the page
+      pops over the live app (item 44: what the shell waits for). Every exit is a pop to the right.
     - **Entering** showed ~70 ms of blank screen (the full-size picture decoded on its first draw) and the push
       then jumped to its end: the picture is decoded beforehand (`preparingForDisplay`) and the extension's view
       goes 50 ms later, once the picture is on screen.
@@ -271,6 +274,31 @@ Carried over from the mock (DE0CH/jarvis2-mock DECISIONS.md) unless marked new.
     them all under one Face ID, Deny leaves). The machine retries the pull every 2 s (was 4 s, logged every
     minute), so it carries on within seconds. One Start already unlocks the stores a new session gets (item 1);
     the walkthrough checks the harness store `claude-login`, locked before, is open after Start.
+
+44. **Back never ends on a blank screen** (Deyao, TestFlight build 77: "Tapping back from secure still sometimes get
+    me the blank screen"). Causes found (`UITests/BackStress.swift`, run by transitions.yml and the replica):
+    - **iOS ends the extension's process while its view is away** (a secure page up, or the app in the background:
+      an extension with no view on screen is first in line under memory pressure). Back re-added the view, React
+      Native started cold (bundle, sign-in state, the first `api/state`), and the shell took its picture away after a
+      fixed 2 s: a blank screen until React Native drew, seconds on a phone. And nothing noticed an extension that
+      ended while the app itself was on screen: blank until the app was killed.
+    - The reveal trusted a JavaScript `requestAnimationFrame`, not the new scene's window having drawn; a late
+      `secureSettled` from an earlier exit could end a later wait; a Back in the page's first 50 ms left the
+      extension's view removed for good; a picture taken of an extension that hadn't drawn yet popped over blank.
+    Fix (`Shell` in `Jarvis2App.swift`, `HostLink` in the extension): the extension answers `whenDrawn` (new on
+    `ExtensionService`) once React Native said it has real content (`markAppReady` → `appReady`) AND its root view
+    is in an on-screen scene's window, three frames on; the picture (or the page) stays until that answer for the
+    current mount. The shell checks the extension is alive while it waits (`hello` answers from the XPC queue even
+    while React Native starts; none in 2 s = gone or hung) and relaunches it in place (a new EXHostViewController,
+    `Shell.mount`) on a dead or broken connection (invalidation, interruption, a deactivation with an error, no
+    answer after the app comes back), covering the app with its last picture meanwhile; at most 4 relaunches a
+    minute, and a last-resort 20 s cap (logged) for an extension that answers but never draws. `secureSettled` must
+    name its exit; every scheduled step carries the transition it belongs to; pictures are taken only of a drawn
+    extension (otherwise Back keeps the page up until the app has drawn). After a relaunch the app starts at its
+    first screen (React Native's navigation state died with the process).
+    **New: the edge swipe** on a secure page (16 pt at the leading edge): the page follows the finger over the
+    picture and leaves as Back does past half way or on a flick; not while the page is busy or Back goes to another
+    step (Reset or recover's sub-steps), and not without a picture under it.
 
 ## Unfinished / known gaps
 

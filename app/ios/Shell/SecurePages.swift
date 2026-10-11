@@ -52,6 +52,18 @@ struct SecureFrame<Content: View>: View {
       }
     }
     .background(Radix.background.ignoresSafeArea())
+    // the native edge swipe back: the page follows the finger over the picture of the app and leaves as Back
+    // does when let go past half way (or flicked); not while the page is busy or Back goes to another step
+    .overlay(alignment: .leading) {
+      if onBack == nil && busy == nil && shell.canSwipeBack {
+        Color.clear.frame(width: 16).frame(maxHeight: .infinity).contentShape(Rectangle())
+          .gesture(DragGesture(minimumDistance: 6, coordinateSpace: .global)
+            .onChanged { g in shell.swipeChanged(max(0, g.translation.width)) }
+            .onEnded { g in shell.swipeEnded(max(0, g.translation.width), predicted: g.predictedEndTranslation.width) })
+          .ignoresSafeArea()
+          .accessibilityHidden(true)
+      }
+    }
     // one layer: a shadow the shell puts on the whole page (the push motion) must not land on every text run
     .compositingGroup()
   }
@@ -109,6 +121,9 @@ struct SecureNewSession: View {
   @State private var model = ""
   @State private var size = "medium"
   @State private var repos: Set<String> = []
+  /// DE0CH/claude-env is picked once, when the page first has both the repo list and the stores (Deyao, 2026-10-11:
+  /// "claude env should be selected by default"); a tap on any repo first, or de-selecting it, is left alone
+  @State private var repoDefaulted = false
   @State private var autoPause = true
   @State private var apiProxy = false
   @State private var loaded = false
@@ -212,11 +227,19 @@ struct SecureNewSession: View {
     .task { await load() }
     .onChange(of: harness) { pickModel() }
     .onChange(of: lists.models) { pickModel() }
+    .onChange(of: lists.repos) { defaultRepo() }
   }
 
+  static let defaultRepoName = "DE0CH/claude-env"
+  private func defaultRepo() {
+    guard !repoDefaulted, !stores.isEmpty, !lists.repos.isEmpty else { return }
+    repoDefaulted = true
+    if let r = lists.repos.first(where: { $0.repo.caseInsensitiveCompare(Self.defaultRepoName) == .orderedSame }), !repos.contains(r.name) { toggleRepo(r) }
+  }
   private func toggle(_ n: String) { if picked.contains(n) { picked.remove(n) } else { picked.insert(n) } }
   /// picking a repo picks its deploy-key store too when that is offered (a sensitive one stays a tap of its own)
   private func toggleRepo(_ r: RouterClient.RepoDTO) {
+    repoDefaulted = true
     if repos.contains(r.name) { repos.remove(r.name); return }
     repos.insert(r.name)
     if let s = offered.first(where: { $0.name == r.store }), !s.sensitive { picked.insert(s.name) }
@@ -227,6 +250,7 @@ struct SecureNewSession: View {
     stores = list
     if first && picked.isEmpty, offered.contains(where: { $0.name == "default" && !$0.sensitive }) { picked = ["default"] }
     picked = picked.intersection(offered.map(\.name))
+    defaultRepo()
   }
   private func load() async {
     pickModel()

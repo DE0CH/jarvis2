@@ -23,4 +23,9 @@ import Foundation
   func hello(_ reply: @escaping (String) -> Void)
   /// the shell left secure mode: {"requestId": …, "kind": …, "result": "done" | "back", "id": …}
   func secureFinished(_ result: String)
+  /// replies once React Native has drawn real content (the app said so: markAppReady) and its view is in this
+  /// scene's window with a frame committed — at once when that is already so. The shell keeps its picture of the
+  /// app (or its page) over the extension until then: after a re-add, and after iOS ended and relaunched the
+  /// process (React Native starting cold).
+  func whenDrawn(_ reply: @escaping (String) -> Void)
 }

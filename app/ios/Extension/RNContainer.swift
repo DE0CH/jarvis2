@@ -22,8 +22,11 @@ enum RN {
 }
 
 struct RNContainer: UIViewRepresentable {
+  /// the newest scene's host view: React Native's root view lives in it (HostLink.whenDrawn looks there)
+  static weak var current: UIView?
   func makeUIView(context: Context) -> UIView {
     let host = UIView()
+    RNContainer.current = host
     let v = RN.rootView
     v.removeFromSuperview()
     v.frame = host.bounds

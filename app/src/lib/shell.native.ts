@@ -4,7 +4,7 @@
 // UI how the page ended.
 import { NativeEventEmitter, NativeModules } from "react-native";
 
-type Bridge = { requestSecureMode(options: string): void; secureSettled(requestId: string): void; session(): Promise<string>; signIn(): Promise<string> };
+type Bridge = { requestSecureMode(options: string): void; secureSettled(requestId: string): void; appReady?(): void; session(): Promise<string>; signIn(): Promise<string> };
 const bridge = NativeModules.ShellBridge as undefined | Bridge;
 const events = bridge ? new NativeEventEmitter(NativeModules.ShellBridge) : null;
 export const hasShell = !!bridge;
@@ -18,7 +18,9 @@ const waiting = new Map<string, (r: SecureResult) => void>();
 // recover at first launch, while the bundle is still starting.
 let ready = false;
 const readyWaiters: (() => void)[] = [];
-export function markAppReady() { if (ready) return; ready = true; readyWaiters.splice(0).forEach((f) => f()); }
+// the shell keeps its picture of the app over the extension until this is said (and the view is in a window):
+// after a Back, and after iOS ended and relaunched the extension (Shell.waitReady)
+export function markAppReady() { if (ready) return; ready = true; bridge?.appReady?.(); readyWaiters.splice(0).forEach((f) => f()); }
 const whenReady = (f: () => void) => { if (ready) f(); else readyWaiters.push(f); };
 // One listener for the app's whole life (also for a page the shell opened by itself, e.g. Reset or recover at
 // launch). The shell holds its page over the app until this UI has handled the result and drawn it (a form

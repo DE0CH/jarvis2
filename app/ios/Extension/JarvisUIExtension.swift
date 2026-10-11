@@ -4,6 +4,7 @@
 import ExtensionFoundation
 import ExtensionKit
 import SwiftUI
+import UIKit
 
 struct JarvisUIConfiguration<E: JarvisUIExtensionProtocol>: AppExtensionConfiguration {
   let appExtension: E
@@ -65,8 +66,38 @@ final class HostLink: NSObject {
     for (m, a, r) in q { call(m, a, r) }
   }
 
+  /// React Native has drawn real content (markAppReady); for this process's life
+  private var appReady = false
+  private var drawnWaiters: [(String) -> Void] = []
+  private var drawnTimer: Timer?
+  private var drawnTicks = 0
+
+  /// the shell's whenDrawn: answered once the app is ready and its root view sits in a window, two frames on
+  func whenDrawn(_ reply: @escaping (String) -> Void) {
+    drawnWaiters.append(reply)
+    guard drawnTimer == nil else { return }
+    drawnTicks = 0
+    drawnTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 60, repeats: true) { [weak self] _ in self?.checkDrawn() }
+    checkDrawn()
+  }
+  private func checkDrawn() {
+    let v = RNContainer.current?.subviews.first
+    // in a window of a scene that is on screen (not an old scene of a removed host view on its way out)
+    let st = v?.window?.windowScene?.activationState
+    let inWindow = (st == .foregroundActive || st == .foregroundInactive) && (v?.bounds.width ?? 0) > 0
+    guard appReady && inWindow else { drawnTicks = 0; return }
+    drawnTicks += 1
+    if drawnTicks == 1 { CATransaction.flush() }
+    guard drawnTicks >= 3 else { return }
+    drawnTimer?.invalidate(); drawnTimer = nil
+    let w = drawnWaiters; drawnWaiters = []
+    NSLog("[ext] drawn: answering %d", w.count)
+    for r in w { r("drawn") }
+  }
+
   /// calls wait for the shell's first message (XPC is lazy: the connection exists only once it arrives)
   func call(_ method: String, _ arg: String, _ reply: Reply? = nil) {
+    if method == "ready" { appReady = true; checkDrawn(); return }
     guard let c = connection else { pending.append((method, arg, reply)); return }
     let proxy = c.remoteObjectProxyWithErrorHandler { e in
       NSLog("[ext] xpc error %@", String(describing: e))
@@ -87,6 +118,9 @@ final class HostLink: NSObject {
 
 final class ExtensionServiceImpl: NSObject, ExtensionService {
   func hello(_ reply: @escaping (String) -> Void) { reply("extension pid \(getpid())") }
+  func whenDrawn(_ reply: @escaping (String) -> Void) {
+    DispatchQueue.main.async { HostLink.shared.whenDrawn(reply) }
+  }
   func secureFinished(_ result: String) {
     DispatchQueue.main.async { NotificationCenter.default.post(name: Notification.Name("JarvisShellEvent"), object: nil, userInfo: ["name": "secureFinished", "body": result]) }
   }

@@ -76,6 +76,30 @@ final class Jarvis2UITests: XCTestCase {
     return !e.exists
   }
 
+  /// + New session: DE0CH/claude-env and its store github-claude-env come pre-selected when the repo is on the list
+  /// (nothing when it isn't), and a tap de-selects it; then Back
+  func checkNewSessionRepoDefault(expect: Bool) {
+    el("tab-sessions").tap()
+    guard wait(el("newBtn"), 20, "the list (repo default)") else { return }
+    el("newBtn").tap()
+    guard arrives(el("secure-create"), 20, "the New session page (repo default)") else { return }
+    sleep(2)
+    let repo = el("ns-repo-claude-env"), store = el("secure-store-github-claude-env")
+    if expect {
+      XCTAssertTrue(repo.waitForExistence(timeout: 10) && repo.isSelected, "[\(tag)] claude-env pre-selected on New session")
+      XCTAssertTrue(store.exists && store.isSelected, "[\(tag)] github-claude-env pre-selected with it")
+      shot("new-session-claude-env-default")
+      repo.tap(); sleep(1)
+      XCTAssertFalse(repo.isSelected, "[\(tag)] claude-env can be de-selected")
+    } else {
+      XCTAssertFalse(repo.exists && repo.isSelected, "[\(tag)] no claude-env, nothing pre-selected")
+      let anyRepo = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH 'ns-repo-' AND selected == true")).count
+      XCTAssertEqual(anyRepo, 0, "[\(tag)] no repo pre-selected without claude-env")
+    }
+    el("secure-back").tap()
+    arrives(el("newBtn"), 20, "the list after the repo-default check")
+  }
+
   func testWalkthrough() {
     continueAfterFailure = true
     tag = env["JARVIS2_APPEARANCE"] ?? "run"
@@ -382,6 +406,19 @@ final class Jarvis2UITests: XCTestCase {
         }
         XCTAssertFalse(el("secure-error").exists, "[\(tag)] add-repo error: \(el("secure-error").exists ? el("secure-error").label : "")")
       }
+      // New session pre-selects DE0CH/claude-env (and its store) only when it is on the list (Deyao, 2026-10-11)
+      checkNewSessionRepoDefault(expect: false)
+      el("tab-settings").tap(); sleep(1); app.swipeUp(); sleep(1)
+      if wait(repoField, 15, "the repos card (claude-env)") {
+        repoField.tap(); slowType(repoField, "DE0CH/claude-env\n")
+        if wait(el("secure-repo-go"), 30, "the secure add-repo page for claude-env") {
+          sleep(1); el("secure-repo-go").tap()
+          wait(el("repo-key-claude-env"), 60, "claude-env listed with its deploy key")
+        }
+      }
+      checkNewSessionRepoDefault(expect: true)
+      el("tab-settings").tap(); sleep(1); app.swipeUp(); sleep(1)
+      _ = wait(repoField, 15, "the repos card again")
       repoField.tap(); slowType(repoField, "DE0CH/jarvis2\n")
       if wait(el("secure-repo-go"), 30, "the secure add-repo page for jarvis2") {
         wait(el("store-line-github-jarvis2"), 15, "…naming github-jarvis2")

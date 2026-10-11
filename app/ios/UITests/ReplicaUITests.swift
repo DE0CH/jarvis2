@@ -126,7 +126,13 @@ final class ReplicaUITests: XCTestCase {
     el("newBtn").tap()
     if el("ns-start").waitForExistence(timeout: 5) && !el("secure-create").exists { shot("new-session-form"); el("ns-start").tap() }
     let ok = wait(el("secure-create"), 60, "the New session page")
-    if ok { sleep(1); shot("new-session") }
+    if ok {
+      sleep(1); shot("new-session")
+      // DE0CH/claude-env is pre-selected only when it is on the repo list; the replica's box has no claude-env
+      let picked = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH 'ns-repo-' AND selected == true")).count
+      if !el("ns-repo-claude-env").exists { XCTAssertEqual(picked, 0, "no repo pre-selected without claude-env on the list") }
+      else { XCTAssertTrue(el("ns-repo-claude-env").isSelected, "claude-env pre-selected") }
+    }
     return ok
   }
 
@@ -180,6 +186,25 @@ final class ReplicaUITests: XCTestCase {
     XCTAssertTrue(gone(el("lock-rh-plain"), 30), "rh-plain locked again")
     shot("stores-locked")
     el("secure-back").tap()
+
+    // ---- Back under stress (BackStress): every secure page reachable here, Back and the edge swipe in loops, during
+    // the entry, double, after the background, a memory warning, the extension killed (jetsam) or slow; the app
+    // itself with its extension killed. A blank screen over 1.5 s or an app that doesn't come back fails ----
+    do {
+      let s = BackStress(test: self, app: app, tag: "replica-stress")
+      let sessions = { self.el("tab-sessions").tap(); _ = self.el("newBtn").waitForExistence(timeout: 60) }
+      sessions()
+      s.killWhileShown(el("newBtn"))
+      sessions()
+      s.run(.init(name: "newsession", open: { self.el("newBtn").tap() }, arrived: el("secure-create"), target: el("newBtn"), reset: sessions), loops: 2)
+      let stores = { _ = self.el("tab-stores").waitForExistence(timeout: 60); self.el("tab-stores").tap(); _ = self.el("stores-manage").waitForExistence(timeout: 60) }
+      stores()
+      s.run(.init(name: "stores", open: { self.el("stores-manage").tap() }, arrived: el("unlock-rh-plain"), target: el("stores-manage"), reset: stores), loops: 2)
+      let settings = { _ = self.el("tab-settings").waitForExistence(timeout: 60); self.el("tab-settings").tap(); _ = self.el("open-setup").waitForExistence(timeout: 60) }
+      settings()
+      s.run(.init(name: "setup", open: { self.el("open-setup").tap() }, arrived: el("setup-choose-recover"), target: el("open-setup"), reset: settings), loops: 2)
+      shot("after-back-stress")
+    }
 
     // ---- new session: one page, its stores (and the harness's) unlocked with Face ID, running on Fly ----
     el("tab-sessions").tap()

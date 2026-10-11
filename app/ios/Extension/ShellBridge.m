@@ -75,6 +75,12 @@ RCT_EXPORT_METHOD(secureSettled:(NSString *)requestId)
   shellCall(@"settled", requestId ?: @"", nil);
 }
 
+// React Native has drawn real content (markAppReady): the shell's whenDrawn waits for it (and for a window)
+RCT_EXPORT_METHOD(appReady)
+{
+  shellCall(@"ready", @"", nil);
+}
+
 RCT_EXPORT_METHOD(requestSecureMode:(NSString *)options)
 {
   dispatch_async(dispatch_get_main_queue(), ^{
