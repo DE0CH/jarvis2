@@ -154,16 +154,20 @@ while :; do
       if [ "$n" = 1 ]; then touch "$W/key-seen"; answer ok; else answer "keys=$n"; fi ;;
     repo-check) left=$(gh api "repos/DE0CH/$TREPO/keys" -q 'length' 2>/dev/null || echo "?")
       if [ -e "$W/key-seen" ] && [ "$left" = 0 ]; then answer ok; else answer "seen=$([ -e "$W/key-seen" ] && echo yes || echo no) left=$left"; fi ;;
-    inbox-setup-add) python3 "$ROOT/infra/setup.py" request add-repo "DE0CH/$TREPO" --why "replica: Claude asks for the test repo" > "$LOGS/inbox.log" 2>&1 && answer ok || answer "request failed: $(tail -1 "$LOGS/inbox.log")" ;;
-    inbox-setup-remove) python3 "$ROOT/infra/setup.py" request remove-repo "DE0CH/$TREPO" --why "replica: Claude asks to remove it (deny this)" > "$LOGS/inbox.log" 2>&1 && answer ok || answer "request failed: $(tail -1 "$LOGS/inbox.log")" ;;
+    inbox-setup-add) : > "$LOGS/inbox.log"; python3 "$ROOT/infra/setup.py" request add-repo "DE0CH/$TREPO" --why "replica: Claude asks for the test repo" > "$LOGS/inbox.log" 2>&1 && answer ok || answer "request failed: $(tail -1 "$LOGS/inbox.log")" ;;
+    inbox-setup-remove) : > "$LOGS/inbox.log"; python3 "$ROOT/infra/setup.py" request remove-repo "DE0CH/$TREPO" --why "replica: Claude asks to remove it (deny this)" > "$LOGS/inbox.log" 2>&1 && answer ok || answer "request failed: $(tail -1 "$LOGS/inbox.log")" ;;
     inbox-session:*) # jarvis2-request inside the session's own machine (flyctl exec as the org): the router names the session
-      IFS=: read -r _ sid holder <<<"$msg"
-      m=$(FLY_API_TOKEN="$JARVIS2_FLY_TOKEN" flyctl machines list -a jarvis2-sessions --json 2>/dev/null | python3 -c "
+      IFS=: read -r _ sid holder <<<"$msg"; : > "$LOGS/inbox.log"; m=""
+      for _ in $(seq 1 18); do   # up to 90 s: the list can lag a machine that was just replaced
+        m=$(FLY_API_TOKEN="$JARVIS2_FLY_TOKEN" flyctl machines list -a jarvis2-sessions --json 2>>"$LOGS/inbox.log" | python3 -c "
 import json, sys
-for x in json.load(sys.stdin):
-    if (x.get('config', {}).get('env') or {}).get('JARVIS2_SESSION_ID') == sys.argv[1] and x.get('state') == 'started': print(x['id']); break" "$sid")
+ms = [x for x in json.load(sys.stdin) if (x.get('config', {}).get('env') or {}).get('JARVIS2_SESSION_ID') == sys.argv[1] and x.get('state') not in ('destroyed', 'destroying')]
+ms.sort(key=lambda x: (x.get('state') != 'started', x.get('created_at', '')), reverse=False)
+print(ms[0]['id'] if ms else '')" "$sid" 2>>"$LOGS/inbox.log")
+        [ -n "$m" ] && break; sleep 5
+      done
       if [ -n "$m" ] && FLY_API_TOKEN="$JARVIS2_FLY_TOKEN" flyctl machine exec "$m" -a jarvis2-sessions \
-           "/usr/local/bin/jarvis2-request grant $holder --minutes 5 --why replica-the-session-asks-for-$holder" > "$LOGS/inbox.log" 2>&1; then answer ok
+           "/usr/local/bin/jarvis2-request grant $holder --minutes 5 --why replica-the-session-asks-for-$holder" >> "$LOGS/inbox.log" 2>&1; then answer ok
       else answer "session request failed (machine ${m:-none}): $(tail -2 "$LOGS/inbox.log" 2>/dev/null)"; fi ;;
     done) record_core; answer ok; break ;;
     *) answer "unknown: $msg" ;;
