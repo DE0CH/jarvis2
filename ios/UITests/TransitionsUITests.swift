@@ -33,7 +33,11 @@ final class TransitionsUITests: JarvisUITestCase {
       el("newBtn").tap()
       guard arrives(el("secure-create"), 15, "New session (\(how))") else { break }
       shot("new-session-\(how)")
-      if how == "cancel" { el("secure-back").tap() } else { app.navigationBars["New session"].firstMatch.swipeDown(velocity: .fast) }
+      if how == "cancel" { el("secure-back").tap() } else {
+        // a person's drag down from the sheet's top edge
+        let w = app.windows.firstMatch
+        w.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.09)).press(forDuration: 0.05, thenDragTo: w.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.98)), withVelocity: .fast, thenHoldForDuration: 0)
+      }
       arrives(el("newBtn"), 10, "the list after New session (\(how))")
       XCTAssertTrue(gone(el("secure-create"), 5), "[\(tag)] the sheet left (\(how))")
     }
