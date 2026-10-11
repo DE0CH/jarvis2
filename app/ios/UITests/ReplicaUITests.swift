@@ -254,6 +254,13 @@ final class ReplicaUITests: XCTestCase {
     let sid = String(prefixed("term-").identifier.dropFirst(5))
     note("session", sid)
 
+    // ---- machines: the Machines tab lists the session's machine as its session's (Fly, live) ----
+    el("tab-machines").tap()
+    wait(prefixed("machine-session-"), 60, "the Machines tab lists the session's machine")
+    sleep(1); shot("machines")
+    el("tab-sessions").tap()
+    _ = wait(el("term-" + sid), 30, "back on the sessions tab")
+
     // ---- a kill and relaunch mid-flow: the session list comes back, no setup page, still signed in ----
     relaunch()
     signInIfAsked(10)

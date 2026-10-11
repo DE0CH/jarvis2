@@ -45,15 +45,15 @@ export function Machines() {
         {ms.items.map((m) => {
           const s = m.sessionId ? (sessions || []).find((x) => x.id === m.sessionId) : null;
           return (
-            <Card key={m.id} dim={pending.has("machine:" + m.id)} data={{ machine: m.id, orphan: m.sessionId ? "0" : "1" }}>
+            <Card key={m.id} id={"machine-" + m.id} dim={pending.has("machine:" + m.id)} data={{ machine: m.id, orphan: m.sessionId ? "0" : "1" }}>
               <Flex justify="space-between" align="flex-start" gap={2} mb={1}>
                 <Heading size={3} style={{ flex: 1 }}>{m.id}</Heading>
                 {m.test && <Pill kind="info">test</Pill>}
                 <Pill kind={stateKind(m.state)}>{m.state || "unknown"}</Pill>
               </Flex>
               {m.sessionId
-                ? <P size={2} mb={1} onPress={() => setTab("sessions")} data={{ sessionLink: m.sessionId }}><P size={2} color="gray">{m.current ? "Session: " : "Earlier machine of: "}</P><P size={2} color="blue">{(s ? sessionTitle(s) : m.sessionId) + " ›"}</P></P>
-                : <P size={2} mb={1} color="amber" weight="medium">No session</P>}
+                ? <P size={2} mb={1} onPress={() => setTab("sessions")} id={"machine-session-" + m.id} data={{ sessionLink: m.sessionId }}><P size={2} color="gray">{m.current ? "Session: " : "Earlier machine of: "}</P><P size={2} color="blue">{(s ? sessionTitle(s) : m.sessionId) + " ›"}</P></P>
+                : <P size={2} mb={1} color="amber" weight="medium" id={"machine-orphan-" + m.id}>No session</P>}
               {!!m.name && <Muted>{m.name}</Muted>}
               <Muted>{[REGION[m.region] ? `${REGION[m.region]} (${m.region})` : m.region, [m.size, m.guest].filter(Boolean).join(" · ")].filter(Boolean).join(" · ")}</Muted>
               <Muted>{m.created ? "Created " + ago(m.created) + " · " + new Date(m.created).toISOString().replace("T", " ").slice(0, 16) + " UTC" : "Created: unknown"}</Muted>

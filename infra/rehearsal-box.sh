@@ -11,7 +11,8 @@
 #              ALLOWED_EMAIL = that email
 # Both: MACHINE_URL → the peer NAME, BACKUP_BUCKET → a bucket of its own, RECORDS_OFF=1 and Discord off (no Storage
 # Box or Discord keys on a test box), no k8s/secrets Kustomization (encrypted to production's age key); the router's
-# backup read key is the admin S3 key, in user-data only (a narrowed one is Console-only). All of it rides in the box's
+# backup read key is the admin S3 key, in user-data only (a narrowed one is Console-only), and its FLY_READ_TOKEN a
+# fresh read-only narrowing of JARVIS2_FLY_TOKEN (infra/fly-read-token.sh), as production's. All of it rides in the box's
 # user-data (cloud-init's SYNC_YAML/EXTRA_MANIFEST), none in git.
 # Env: HCLOUD_TOKEN (project runners), JARVIS2_FLY_TOKEN, JARVIS2_SETUP_KEY, CF_JARVIS2_INFRA_TOKEN, CLOUDFLARE_API,
 #      HETZNER_S3_*. Optional: REHEARSAL_NAME (default jarvis2-rehearsal), REHEARSAL_REF (the commit Flux applies;
@@ -193,14 +194,18 @@ EOF
 EOF
     echo "the core: $REHEARSAL_CORE_IMAGE (not the pinned one)"
   fi
-  (umask 077; python3 - > "$W/extra.yaml" <<'PY'
+  # the router's read-only Fly token (budget cap, Also on Fly, the Machines tab), as production's router has it
+  "$ROOT/infra/fly-read-token.sh" "$W/fly-read" >/dev/null
+  (umask 077; FLY_READ_FILE="$W/fly-read" python3 - > "$W/extra.yaml" <<'PY'
 import json, os
 print(json.dumps({"apiVersion": "v1", "kind": "Secret", "type": "Opaque",
                   "metadata": {"name": "router-secrets-backup", "namespace": "jarvis2-router"},
                   "stringData": {"BACKUP_READ_ACCESS_KEY": os.environ["HETZNER_S3_ACCESS_KEY"],
-                                 "BACKUP_READ_SECRET_KEY": os.environ["HETZNER_S3_SECRET_KEY"]}}))
+                                 "BACKUP_READ_SECRET_KEY": os.environ["HETZNER_S3_SECRET_KEY"],
+                                 "FLY_READ_TOKEN": open(os.environ["FLY_READ_FILE"]).read().strip()}}))
 PY
   )
+  rm -f "$W/fly-read"
   mkdir -p "$W/keys"; cp "$ROOT/keys/setup.pub" "$W/keys/setup.pub"
   # what setup.py and create.sh's wait need, pointed at the test box
   export JARVIS2_URL="https://$HOST" JARVIS2_BACKUP_BUCKET="$BUCKET" JARVIS2_KEYS_DIR="$W/keys"
