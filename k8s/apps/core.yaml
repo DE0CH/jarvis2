@@ -6,7 +6,7 @@ kind: Deployment
 # While the annotation jarvis2/core-pin is "hold", CI builds the core image but doesn't pin it here, so
 # a core/ change doesn't restart the running core (a restart = a new, empty core that only Deyao can set up again:
 # Recover). Remove it (a commit) when Deyao says the new core may go live, then run the images workflow, which pins it.
-metadata: { name: core, namespace: jarvis2-core, annotations: { jarvis2/core-pin: hold } }
+metadata: { name: core, namespace: jarvis2-core }
 spec:
   replicas: 1
   strategy: { type: Recreate }
@@ -20,7 +20,7 @@ spec:
       enableServiceLinks: false
       containers:
         - name: core
-          image: ghcr.io/de0ch/jarvis2-core:sha-41c8fe74592e
+          image: ghcr.io/de0ch/jarvis2-core:sha-94a1491eca07
           ports: [{ containerPort: 8090 }]
           env:
             # no master key here: a new core starts empty and takes one from Deyao's app (Reset or Recover)
