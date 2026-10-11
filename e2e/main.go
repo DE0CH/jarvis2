@@ -140,17 +140,26 @@ func main() {
 		log.Fatalf("not an empty core: %+v", state)
 	}
 
-	step("Recover: the master key sets the core up, naming the core and the phone; every store comes in")
+	step("Recover: the master key sets the core up, naming the core and the phone; every store comes in, wrapped by the app")
+	phoneAgreement := b64.EncodeToString(ak.PublicKey().Bytes())
+	var skd Doc
+	must2(call(router, "POST", "/api/core/store-key", map[string]string{"phone": phoneAgreement}, &skd))
+	var skey struct{ Kind, Phone, StoreKey string }
+	verify(skd, &skey)
+	if skey.Kind != "store-key" || skey.Phone != phoneAgreement {
+		log.Fatalf("not this phone's store key: %+v", skey)
+	}
 	secret := hex.EncodeToString(randBytes(8))
 	bundle, _ := json.Marshal(map[string]any{
-		"stores": []map[string]any{
-			{"name": "core", "values": map[string]string{"FLY_API_TOKEN": os.Getenv("E2E_FLY_TOKEN")}},
-			{"name": "e2e", "values": map[string]string{"E2E_SECRET": secret}},
-			{"name": "e2e-extra", "values": map[string]string{"E2E_EXTRA": "extra-" + secret}},
+		"format": "blobs", "stores": "blobs",
+		"flyToken": os.Getenv("E2E_FLY_TOKEN"),
+		"blobs": []map[string]any{
+			wrapStore(skey.StoreKey, "e2e", map[string]string{"E2E_SECRET": secret}),
+			wrapStore(skey.StoreKey, "e2e-extra", map[string]string{"E2E_EXTRA": "extra-" + secret}),
 			// the Claude login store: a stand-in for Jarvis 1's credentials endpoint (a fake pair, public), named
 			// in the store itself; the test router never reaches Jarvis 1
-			{"name": "claude", "values": map[string]string{"JARVIS1_CREDENTIALS_ID": "e2e-id", "JARVIS1_CREDENTIALS_SECRET": "e2e-secret",
-				"JARVIS1_CREDENTIALS_URL": fakeJarvis1}},
+			wrapStore(skey.StoreKey, "claude", map[string]string{"JARVIS1_CREDENTIALS_ID": "e2e-id", "JARVIS1_CREDENTIALS_SECRET": "e2e-secret",
+				"JARVIS1_CREDENTIALS_URL": fakeJarvis1}),
 		},
 		"notSensitive": []string{"e2e", "claude"},
 	})
@@ -158,7 +167,7 @@ func main() {
 	mpub, _ := master.PublicKey.ECDH()
 	stmt, _ := json.Marshal(map[string]any{"kind": "claim", "master": b64.EncodeToString(mpub.Bytes()),
 		"core":         map[string]string{"signingKey": id0.SigningKey, "agreementKey": id0.AgreementKey},
-		"phone":        map[string]string{"signingKey": p.signingKey(), "agreementKey": b64.EncodeToString(ak.PublicKey().Bytes())},
+		"phone":        map[string]string{"signingKey": p.signingKey(), "agreementKey": phoneAgreement},
 		"bundleSha256": hex.EncodeToString(sum[:])})
 	h := sha256.Sum256(stmt)
 	msig, _ := ecdsa.SignASN1(rand.Reader, master, h[:])
@@ -530,6 +539,32 @@ func sealTo(recipient string, plain []byte, info string) map[string]string {
 	g, _ := cipher.NewGCM(blk)
 	nonce := randBytes(g.NonceSize())
 	return map[string]string{"e": b64.EncodeToString(e.PublicKey().Bytes()), "data": b64.EncodeToString(append(nonce, g.Seal(nil, nonce, plain, nil)...))}
+}
+
+// wrapStore: a store as the app wraps it (CoreCrypto.wrapStore) to the core's store key C = P + K: a fresh data key
+// seals the values (AES-GCM, the store's name as AAD); the data key is sealed under HKDF(x(e·C),
+// "jarvis2/store-data-key") with a one-off e
+func wrapStore(storeKey, name string, values map[string]string) map[string]any {
+	cb, _ := b64.DecodeString(storeKey)
+	C, err := ecdh.P256().NewPublicKey(cb)
+	if err != nil {
+		log.Fatal(err)
+	}
+	e, _ := ecdh.P256().GenerateKey(rand.Reader)
+	x, _ := e.ECDH(C)
+	kek, _ := hkdf.Key(sha256.New, x, nil, "jarvis2/store-data-key", 32)
+	dk := randBytes(32)
+	plain, _ := json.Marshal(values)
+	return map[string]any{"name": name, "wrapped": map[string]string{"e": b64.EncodeToString(e.PublicKey().Bytes()), "wrapped": b64.EncodeToString(gcm(kek, dk, nil))},
+		"data": b64.EncodeToString(gcm(dk, plain, []byte(name)))}
+}
+
+// gcm: AES-256-GCM, nonce || ciphertext || tag
+func gcm(key, plain, aad []byte) []byte {
+	blk, _ := aes.NewCipher(key)
+	g, _ := cipher.NewGCM(blk)
+	nonce := randBytes(g.NonceSize())
+	return append(nonce, g.Seal(nil, nonce, plain, aad)...)
 }
 
 func randBytes(n int) []byte {
