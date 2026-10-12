@@ -94,6 +94,13 @@ class JarvisUITestCase: XCTestCase {
     tab(name)
     let b = app.tabBars.buttons[name]
     if b.exists { b.tap(); usleep(600_000) }
+    // a second tap on the tab pops to its root on iOS, but not always while the switch is still animating
+    // (replica run 38188675401): back out of whatever is still open
+    for _ in 0..<4 {
+      let back = app.navigationBars.buttons["BackButton"].firstMatch
+      guard back.waitForExistence(timeout: 1) else { break }
+      back.tap(); usleep(600_000)
+    }
   }
   /// the Sessions tab at its list: switching tabs keeps each tab's place (as on iOS), so a session page left open there is
   /// backed out of
