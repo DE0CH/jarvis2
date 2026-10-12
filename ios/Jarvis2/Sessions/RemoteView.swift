@@ -35,8 +35,7 @@ struct RemoteView: View {
           }
           Button("Copy link", systemImage: "doc.on.doc") { model.copy(web, "Link") }.accessibilityIdentifier("rm-copy-web")
         } header: { Text("Web UI") } footer: {
-          Text(openclaw ? "The session's OpenClaw Control UI, behind the same Cloudflare login. The link carries the gateway token: don't share it. The OpenClaw app lists this session by itself once the app is paired."
-               : "The session's own Paseo page, behind the same Cloudflare login. One session's web UI per browser at a time: opening another session's moves it over.")
+          Text("Carries the session's key: don't share it.")
         }
         if let pair = info["pairUrl"].text {
           let appUrl = pair.contains("#offer=") ? "paseo:///" + String(pair[pair.range(of: "#offer=")!.lowerBound...]) : pair
@@ -51,7 +50,7 @@ struct RemoteView: View {
                 .accessibilityLabel("Pairing QR code").accessibilityIdentifier("rm-qr")
             }
           } header: { Text("Paseo app") } footer: {
-            Text("Opens the Paseo app with this session's pairing offer. The link is the key to the session: don't share it. From another device, scan the code with the camera.")
+            Text("Carries the session's key: don't share it.")
           }
         }
       }

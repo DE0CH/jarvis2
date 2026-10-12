@@ -24,21 +24,18 @@ struct SchedulesView: View {
   var body: some View {
     Form {
       Section {
-        Text("At the time, the prompt arrives in the session as a message; a paused session is resumed first. The session has to allow the scheduler (it does when it arms one itself), or the phone does with a standing rule.")
-          .font(.subheadline).foregroundStyle(.secondary)
         Button("Standing rule for the scheduler…", systemImage: "calendar.badge.clock") { model.requestGrant(sessionId, title, holder: "scheduler", rule: true) }
           .accessibilityIdentifier("sch-rule")
+      } footer: {
+        Text("The prompt arrives as a message; a paused session resumes first.")
       }
       Section("Armed") {
         if let error { ErrorRow(text: error) }
         else if let wakeups, let crons {
-          if wakeups.isEmpty && crons.isEmpty { Text("Nothing armed.").foregroundStyle(.secondary).accessibilityIdentifier("sch-none") }
+          if wakeups.isEmpty && crons.isEmpty { Text("Nothing armed").foregroundStyle(.secondary).accessibilityIdentifier("sch-none") }
           ForEach(wakeups) { w in
             HStack {
-              VStack(alignment: .leading) {
-                Text("Wakes\(w.name == "default" ? "" : " “\(w.name)”") \(w.at.map(Fmt.when) ?? "")").font(.headline)
-                Text("“\(w.prompt)”").font(.subheadline).foregroundStyle(.secondary)
-              }
+              ScheduleRow(symbol: "alarm", when: w.at.map(Fmt.when) ?? "", name: w.name == "default" ? nil : w.name, prompt: w.prompt)
               Spacer()
               PendingButton(key: "sch:wakeup:" + w.name, title: "Cancel", role: .destructive) { await cancel("wakeup", w.name) }
                 .buttonStyle(.borderless).accessibilityIdentifier("sch-cancel-w-\(w.name)")
@@ -46,12 +43,8 @@ struct SchedulesView: View {
           }
           ForEach(crons) { c in
             HStack {
-              VStack(alignment: .leading) {
-                Text("“\(c.name)” \(Fmt.every(c.everySeconds))").font(.headline)
-                Text("next \(c.nextAt.map(Fmt.when) ?? "")\(c.tz.map { $0 == "UTC" ? "" : " · \($0)" } ?? "")\(c.runs > 0 ? " · \(Fmt.plural(c.runs, "run"))" : "")")
-                  .font(.footnote).foregroundStyle(.secondary)
-                Text("“\(c.prompt)”").font(.subheadline).foregroundStyle(.secondary)
-              }
+              ScheduleRow(symbol: "repeat", when: Fmt.every(c.everySeconds), name: c.name, prompt: c.prompt, next: c.nextAt.map(Fmt.when),
+                          tags: [c.tz.flatMap { $0 == "UTC" ? nil : $0 }, c.runs > 0 ? Fmt.plural(c.runs, "run") : nil].compactMap { $0 })
               Spacer()
               PendingButton(key: "sch:cron:" + c.name, title: "Cancel", role: .destructive) { await cancel("cron", c.name) }
                 .buttonStyle(.borderless).accessibilityIdentifier("sch-cancel-c-\(c.name)")

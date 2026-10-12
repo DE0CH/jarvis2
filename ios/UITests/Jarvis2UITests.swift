@@ -336,7 +336,9 @@ final class Jarvis2UITests: JarvisUITestCase {
 
     // ---- repos: add DE0CH/china-train (the CI core's fake GitHub takes the key), Jarvis 2's own comes up sensitive, remove
     if addRepo("DE0CH/china-train") {
-      wait(el("store-line-github-china-train"), 15, "…naming the repo's store")
+      wait(el("signed-store"), 15, "…naming the repo's store")
+      XCTAssertTrue(said(el("signed-store")).contains("github-china-train") && said(el("signed-repo")).contains("DE0CH/china-train"), "[\(tag)] what you sign names the repo and its store: \(said(el("signed-store")))")
+      XCTAssertTrue(said(el("signed-sensitive")).contains("No"), "[\(tag)] signed as not sensitive: \(said(el("signed-sensitive")))")
       XCTAssertFalse(isOn(el("secure-repo-sensitive")), "[\(tag)] a repo's store isn't sensitive by default")
       shot("repo-add")
       el("secure-repo-go").tap()
@@ -352,8 +354,9 @@ final class Jarvis2UITests: JarvisUITestCase {
     }
     checkNewSessionRepoDefault(expect: true)
     if addRepo("DE0CH/jarvis2") {
-      wait(el("store-line-github-jarvis2"), 15, "…naming github-jarvis2")
+      wait(el("signed-store"), 15, "…naming github-jarvis2")
       sleep(1)
+      XCTAssertTrue(said(el("signed-store")).contains("github-jarvis2") && said(el("signed-sensitive")).contains("Yes"), "[\(tag)] signed as sensitive: \(said(el("signed-store"))) / \(said(el("signed-sensitive")))")
       XCTAssertTrue(isOn(el("secure-repo-sensitive")), "[\(tag)] Jarvis 2's own repo comes up sensitive (the core's word)")
       shot("repo-sensitive")
       el("secure-back").tap()

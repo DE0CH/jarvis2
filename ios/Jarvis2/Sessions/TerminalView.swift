@@ -43,7 +43,7 @@ struct TerminalView: View {
       .safeAreaInset(edge: .top) {
         if let m = model.session(sessionId), let lock = m.lockedStore {
           HStack {
-            Label("Waiting for store \(lock) to be unlocked.", systemImage: "lock").font(.footnote)
+            Label { Text(lock).monospaced() } icon: { Image(systemName: "lock") }.font(.footnote).accessibilityLabel("Locked store")
             Spacer()
             Button("Unlock…") { model.present(.unlock(session: m.id, label: m.title)) }.buttonStyle(.borderedProminent).controlSize(.small)
           }

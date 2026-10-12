@@ -17,20 +17,17 @@ struct GrantsView: View {
 
   var body: some View {
     Form {
-      Section {
-        Text("Features of the router run commands in a session only while the phone allows it: a grant for up to 10 minutes, or a standing rule until a date (not for a session with a sensitive store). The session may also allow a feature itself.")
-          .font(.subheadline).foregroundStyle(.secondary)
-      }
       if let h = model.session(sessionId)?.needsGrant {
-        Section("\(Holder.title(h)) was turned away") {
-          Button("Allow \(Holder.title(h).lowercased()) for 10 minutes") { make(h, rule: false) }.accessibilityIdentifier("grant-quick")
+        Section {
+          LabeledContent("Feature", value: Holder.title(h))
+          Button("Allow for 10 minutes") { make(h, rule: false) }.accessibilityIdentifier("grant-quick")
           Button("Make a standing rule") { make(h, rule: true) }.accessibilityIdentifier("grant-rule")
-        }
+        } header: { Label("Turned away", systemImage: "hand.raised") }
       }
       Section("In force") {
         if let error { ErrorRow(text: error) }
         else if let grants {
-          if grants.isEmpty { Text("No grants or standing rules.").foregroundStyle(.secondary).accessibilityIdentifier("grants-none") }
+          if grants.isEmpty { Text("None").foregroundStyle(.secondary).accessibilityIdentifier("grants-none") }
           ForEach(grants) { g in
             HStack {
               VStack(alignment: .leading, spacing: 2) {
@@ -38,7 +35,7 @@ struct GrantsView: View {
                   Label(Holder.title(g.holder), systemImage: Holder.all.first { $0.id == g.holder }?.symbol ?? "checkmark.shield").font(.headline)
                   StatusPill(text: g.isRule ? "standing rule" : "grant", color: g.isRule ? .blue : .green)
                 }
-                if let e = g.ends { Text("ends \(Fmt.when(e))").font(.footnote).foregroundStyle(.secondary) }
+                if let e = g.ends { LabeledContent("Ends", value: Fmt.when(e)).font(.footnote).foregroundStyle(.secondary) }
               }
               .accessibilityElement(children: .combine)
               .accessibilityIdentifier("grant-row-\(g.holder)")
@@ -68,7 +65,7 @@ struct GrantsView: View {
         }
         Button("Review and allow…", systemImage: "faceid", action: review).accessibilityIdentifier("grant-review")
       } header: { Text("New") } footer: {
-        Text("The next screen shows exactly what will be signed: Allow with Face ID, or Deny. A standing rule is for things that happen while you are away (wakeups, auto-pause).")
+        Text("A grant lasts up to 10 minutes; a standing rule until a date.")
       }
     }
     .navigationTitle("Grants")

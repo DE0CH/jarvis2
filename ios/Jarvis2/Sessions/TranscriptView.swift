@@ -5,7 +5,9 @@ import SwiftUI
 struct TranscriptView: View {
   @Environment(\.dismiss) private var dismiss
   let title: String
-  let note: String
+  /// when it stopped: "Paused" / "Destroyed", and how long ago
+  let noteLabel: String
+  let noteValue: String
   let path: String
   var actionTitle: String?
   var onAction: (() -> Void)?
@@ -15,10 +17,10 @@ struct TranscriptView: View {
   var body: some View {
     ScrollViewReader { proxy in
       List {
-        Section { Text("\(note) · the last messages of the conversation").font(.subheadline).foregroundStyle(.secondary) }
+        Section { LabeledContent(noteLabel, value: noteValue).font(.subheadline) } footer: { Text("The last messages of the conversation") }
         if let error { ErrorRow(text: error, id: "pt-error") }
         if let messages {
-          if messages.isEmpty { Text("No messages in the last part of the transcript.").foregroundStyle(.secondary) }
+          if messages.isEmpty { Text("No recent messages").foregroundStyle(.secondary) }
           ForEach(messages) { m in
             VStack(alignment: .leading, spacing: 4) {
               HStack {

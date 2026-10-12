@@ -24,7 +24,7 @@ struct PreviousView: View {
     .refreshable { await model.loadRecords() }
     .task { await model.loadRecords() }
     .navigationDestination(item: $transcriptOf) { r in
-      TranscriptView(title: r.title, note: "Destroyed \(r.destroyedAt.map(Fmt.ago) ?? "")", path: "api/records/\(r.id)/tail",
+      TranscriptView(title: r.title, noteLabel: "Destroyed", noteValue: r.destroyedAt.map(Fmt.ago) ?? "", path: "api/records/\(r.id)/tail",
                      actionTitle: r.restorable ? "Restore" : nil, onAction: { Task { await model.restore(r) } })
     }
   }

@@ -53,7 +53,11 @@ private struct SessionList: View {
       if !model.inbox.isEmpty {
         Section {
           Button { model.tab = .inbox } label: {
-            Label(model.inbox.count == 1 ? "1 request waiting in the Inbox" : "\(model.inbox.count) requests waiting in the Inbox", systemImage: "tray.full")
+            LabeledContent {
+              Text(model.inbox.count, format: .number)
+            } label: {
+              Label("Waiting in the Inbox", systemImage: "tray.full")
+            }
           }
           .accessibilityElement(children: .combine).accessibilityIdentifier("inbox-note")
         }
@@ -95,16 +99,21 @@ private struct Banners: View {
       Section {
         if let e = model.loadError { ErrorRow(text: "Can't reach the router: \(e)", id: "banner-router") }
         if model.loaded && !model.coreUp {
-          Label("The core is not answering: sessions can't be created, resumed or approved until it is back.", systemImage: "exclamationmark.triangle").foregroundStyle(.orange)
+          Label("Core not answering", systemImage: "exclamationmark.triangle").foregroundStyle(.orange)
         }
         if !dead.isEmpty {
-          ErrorRow(text: "Claude's login failed in \(dead.count == 1 ? "“\(dead[0].title)”" : "\(dead.count) sessions"). The router writes Jarvis 1's credentials into a session whose login expired; if this stays, re-login in Jarvis 1's Settings.", id: "banner-creds")
+          LabeledContent {
+            Text(dead.map(\.title).joined(separator: "\n")).multilineTextAlignment(.trailing)
+          } label: {
+            Label("Claude login failed", systemImage: "exclamationmark.triangle.fill")
+          }
+          .foregroundStyle(.red).font(.subheadline)
+          .accessibilityElement(children: .combine).accessibilityIdentifier("banner-creds")
         }
         if b["capped"].bool == true {
-          ErrorRow(text: "Fly spend reached the \(Fmt.usd(b["capUsd"].double ?? 0)) cap for \(b["month"].string ?? "this month") (\(Fmt.usd(b["spentUsd"].double ?? 0))): the router paused every running session.", id: "banner-budget")
+          BudgetBanner(title: "Fly cap reached · sessions paused", spent: b["spentUsd"].double ?? 0, cap: b["capUsd"].double ?? 0, color: .red)
         } else if b["warned"].bool == true {
-          Label("Fly spend this month: \(Fmt.usd(b["spentUsd"].double ?? 0)) of the \(Fmt.usd(b["capUsd"].double ?? 0)) cap. At the cap every running session is paused.", systemImage: "dollarsign.circle").foregroundStyle(.orange)
-            .accessibilityElement(children: .combine).accessibilityIdentifier("banner-budget")
+          BudgetBanner(title: "Fly spend near the cap", spent: b["spentUsd"].double ?? 0, cap: b["capUsd"].double ?? 0, color: .orange)
         }
         if let e = model.fly["error"].text, e != "FLY_READ_TOKEN not set" { ErrorRow(text: "Fly: \(e)") }
       }
@@ -127,9 +136,9 @@ struct SessionRow: View {
       }
       Text(line1).font(.subheadline).foregroundStyle(.secondary).lineLimit(2)
       if let lock = m.lockedStore {
-        Label("Waiting for store \(lock) to be unlocked", systemImage: "lock").font(.footnote).foregroundStyle(.orange)
+        HStack(spacing: 6) { StatusPill(text: "Locked store", color: .orange); Text(lock).font(.footnote.monospaced()) }
       } else if let g = m.needsGrant {
-        Label("Turned away \(Holder.title(g).lowercased())", systemImage: "hand.raised").font(.footnote).foregroundStyle(.orange)
+        HStack(spacing: 6) { StatusPill(text: "Turned away", color: .orange); Text(Holder.title(g)).font(.footnote) }
       }
     }
     .padding(.vertical, 2)
@@ -195,8 +204,8 @@ struct SessionMenu: View {
   }
 }
 
-/// Everything on the Fly app that is not one of the sessions above (view only), and a summary line that SAYS when
-/// nothing else is there
+/// The Fly app's counts (machines, volumes, how many are outside the sessions: 0 says nothing else is there) and
+/// everything that is not one of the sessions above (view only)
 private struct FlyAccountSection: View {
   @Environment(AppModel.self) private var model
   var body: some View {
@@ -204,6 +213,12 @@ private struct FlyAccountSection: View {
     if !fly.isNull {
       let other = fly["other"].array
       Section {
+        if let e = fly["error"].text { ErrorRow(text: e, id: "fly-error") }
+        else {
+          LabeledContent("Machines", value: "\(fly["machines"].int ?? 0)").accessibilityIdentifier("fly-summary")
+          LabeledContent("Volumes", value: "\(fly["volumes"].int ?? 0)")
+          LabeledContent("Outside the sessions", value: "\(other.count)")
+        }
         ForEach(Array(other.enumerated()), id: \.offset) { _, o in
           VStack(alignment: .leading, spacing: 2) {
             HStack {
@@ -211,17 +226,30 @@ private struct FlyAccountSection: View {
               Spacer()
               StatusPill(text: o["state"].text ?? o["kind"].string ?? "", color: o["state"].string == "started" || o["kind"].string == "volume" ? .orange : .secondary)
             }
-            Text([o["kind"].string ?? "", "app " + (o["app"].string ?? ""), o["detail"].text, o["region"].text.map { Fmt.region[$0] ?? $0 }].compactMap { $0 }.joined(separator: " · "))
+            Text([o["kind"].string ?? "", o["app"].string, o["detail"].text, o["region"].text.map { Fmt.region[$0] ?? $0 }].compactMap { $0 }.joined(separator: " · "))
               .font(.footnote).foregroundStyle(.secondary)
           }
         }
       } header: {
-        if !other.isEmpty { Text("Also on Fly") }
-      } footer: {
-        Text(fly["error"].text.map { "Could not check the Fly app: \($0)" }
-             ?? "Fly: \(Fmt.plural(fly["machines"].int ?? 0, "machine")) · \(Fmt.plural(fly["volumes"].int ?? 0, "volume")) — \(other.isEmpty ? "nothing outside the sessions" : "\(Fmt.plural(other.count, "item")) outside the sessions").")
-          .accessibilityIdentifier("fly-summary")
+        Text("Fly")
       }
     }
+  }
+}
+
+/// the Fly spend against the cap: a title and the two amounts
+private struct BudgetBanner: View {
+  let title: String
+  let spent: Double
+  let cap: Double
+  let color: Color
+  var body: some View {
+    VStack(alignment: .leading, spacing: 4) {
+      Label(title, systemImage: "dollarsign.circle").foregroundStyle(color)
+      LabeledContent("Spent", value: Fmt.usd(spent))
+      LabeledContent("Cap", value: Fmt.usd(cap))
+    }
+    .accessibilityElement(children: .combine)
+    .accessibilityIdentifier("banner-budget")
   }
 }
