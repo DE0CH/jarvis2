@@ -68,6 +68,7 @@ struct TaskDetailView: View {
                   .font(.footnote).foregroundStyle(.secondary)
                   if let w = r.waiting { LabeledContent("Waiting", value: w).font(.footnote).foregroundStyle(.secondary) }
                 }
+                .accessibilityElement(children: .combine)  // one row element, so its identifier names it
               }
               .accessibilityIdentifier("td-run-\(r.name)")
             }
