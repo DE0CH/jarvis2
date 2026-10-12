@@ -320,7 +320,8 @@ final class ReplicaUITests: JarvisUITestCase {
       if wait(el("secure-store-rh-secret"), 30, "rh-secret offered") { el("secure-store-rh-secret").tap() }
       faceIDMatches(90)
       el("secure-create").tap()
-      _ = arrives(el("newBtn"), 120, "back on the list")
+      XCTAssertTrue(gone(el("secure-create"), 120), "the New session page closes")  // the list shows behind it already
+      _ = arrives(el("newBtn"), 30, "back on the list")
       openStores()
       if wait(el("lock-rh-secret"), 30, "rh-secret unlocked by the new session") { el("lock-rh-secret").tap(); _ = gone(el("lock-rh-secret"), 30) }
       back()
