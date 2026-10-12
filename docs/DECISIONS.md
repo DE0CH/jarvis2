@@ -520,3 +520,18 @@ reaches the machine and the input guard is untouched. Every session pushes, sens
 holds each session's conversation (live sync, snapshot tails), so the pane adds little it couldn't see. The push runs
 every 2 s only when the pane changed; the router keeps the latest one in memory. Change: make the push a signed New
 session setting (`Checks.configKeys`) if a session should keep its screen from the router.
+
+## Memory alert and Upgrade, 2026-10-12
+
+98. **Jarvis 1's memory-starvation watch and one-tap Upgrade, ported** (Deyao, 2026-10-12, after the YYC AI megathread
+    session went "Can't reach your computer"; he picked "alert + Upgrade"). The machine reports its RAM itself
+    (`POST /m/memory`, every 10 s) because the router has no exec of its own; a machine that stops reporting while short
+    is counted as starving, as Jarvis 1 counted one that stopped answering its exec. The watch lives in the router's
+    memory only (a restart starts it afresh). The Upgrade goes small → medium → large; there is no xlarge because the
+    core's sizes would change, and a core change waits for Deyao (the core holds stores).
+99. **`free` is a router command the machine obeys without a voucher.** It is not an input to the agent: it only stops
+    processes, which the router can already do more bluntly by pausing or destroying the machine, and the snapshot that
+    follows is still the machine's own, signed. The harness (the machine's main process) is SIGSTOPped, not killed, so
+    the Fly machine stays up for the snapshot. The list of what was stopped is written inside the snapshot, and the
+    successor reads it, so the router's word never reaches the agent; the `upgraded` message itself is an image text
+    over two size words. Change: make Upgrade phone-approved if Deyao wants a Face ID on it.

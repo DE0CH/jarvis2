@@ -5,7 +5,14 @@ enum Fmt {
   static let region: [String: String] = ["arn": "Stockholm", "fra": "Frankfurt", "ams": "Amsterdam", "lhr": "London", "cdg": "Paris", "waw": "Warsaw",
     "mad": "Madrid", "iad": "Virginia", "ord": "Chicago", "sjc": "San Jose", "lax": "Los Angeles", "sin": "Singapore", "nrt": "Tokyo",
     "hkg": "Hong Kong", "syd": "Sydney"]
-  static let busyLabel: [String: String] = ["starting": "Starting…", "restarting": "Restarting…", "pausing": "Pausing…", "destroying": "Destroying…", "mode": "Switching mode…"]
+  static let busyLabel: [String: String] = ["starting": "Starting…", "restarting": "Restarting…", "pausing": "Pausing…", "destroying": "Destroying…", "mode": "Switching mode…",
+                                              "upgrading": "Upgrading…", "upgrade": "Upgrading…"]
+  /// a machine size's memory in GB (router/http.go guests)
+  static let sizeGB: [String: Int] = ["small": 2, "medium": 4, "large": 8]
+  /// "Upgrade to Large (8 GB)"
+  static func upgradeTitle(_ size: String) -> String {
+    "Upgrade to \(size.capitalized)" + (sizeGB[size].map { " (\($0) GB)" } ?? "")
+  }
 
   /// "just now" / "5 min ago" / "3 h ago" / "2 d ago"
   static func ago(_ d: Date) -> String {

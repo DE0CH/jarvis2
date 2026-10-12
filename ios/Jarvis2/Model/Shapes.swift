@@ -49,12 +49,33 @@ struct Session: Identifiable, Equatable, Hashable {
     let h = Set(policy[harness] ?? [])
     return all.filter { !h.contains($0) && $0 != StoreView.coreStore }
   }
+  /// a memory-starvation episode the router is watching (absent once it is over)
+  var memAlert: MemAlert? { j["memAlert"].object == nil ? nil : MemAlert(j: j["memAlert"]) }
+  /// the latest memory sample of a running machine
+  var memory: (availMb: Int, totalMb: Int)? {
+    guard let a = j["memory"]["availMb"].int, let t = j["memory"]["totalMb"].int, t > 0 else { return nil }
+    return (a, t)
+  }
+  /// the router's last restart / upgrade job (kind, phase, error)
+  var wakeKind: String? { j["wake"]["kind"].text }
+  var wakePhase: String? { j["wake"]["phase"].text }
+  var wakeError: String? { j["wake"]["error"].text }
   /// what the router is doing to it right now (its lifecycle lock, or a mode / restart job), seen on every device
   var serverBusy: String? {
     if let k = j["busy"]["kind"].string { return Fmt.busyLabel[k] ?? "Working…" }
     if let k = j["wake"]["kind"].string, let p = j["wake"]["phase"].string, p != "done", p != "failed" { return Fmt.busyLabel[k] ?? "Working…" }
     return nil
   }
+}
+
+/// a memory-starvation episode (router memory watch): why, the memory now, and the size Upgrade moves it to
+struct MemAlert: Equatable, Hashable {
+  let j: JSON
+  var since: Date? { j["since"].string?.isoDate }
+  var reason: String { j["reason"].text ?? "memory is short" }
+  var detail: String? { j["detail"].text }
+  /// nil = already the biggest size
+  var nextSize: String? { j["nextSize"].text }
 }
 
 struct Wakeup: Identifiable, Equatable, Hashable {

@@ -407,7 +407,7 @@ Deyao handing a feature a shell, and the session's own allow list is the session
 | Secrets | the cert's stores, sealed to the machine by the core; written to `~/.secrets` only under env-name keys |
 | The Claude login | (d) Jarvis 1's `/api/credentials` over the `claude` store's Access-confined token: taken by the machine at boot, kept in step every 30 s (`machine/claudelogin.go`); no router write, no grant |
 | Wakeups, crons | (c) the session's own signed request + the core's attestation; the line records what it delivered (in the snapshot): a wakeup once, a cron once per run and at most every half period |
-| The watchdog's nudge, "continue" after a re-login | the image: texts built into it; the router picks when, never what (numbers only) |
+| The watchdog's nudge, "continue" after a re-login, "upgraded" after an Upgrade | the image: texts built into it; the router picks when, never what (numbers, or a size: small, medium or large) |
 | An added store | (a) the new cert, phone-approved |
 | The OpenClaw runtime | (d) the GitHub release, pinned by sha256 in the image |
 | Jarvis 1's restore-snapshot (would fetch unsigned state from the Storage Box when a store holds its credentials) | disabled in the image |

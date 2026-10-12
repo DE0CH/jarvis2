@@ -23,6 +23,7 @@ type (
 // registerFeatures: called once from buildHandlers
 func (r *Router) registerFeatures(app appRoute, m machineRoute, public publicRoute) {
 	r.registerAutopilot(app, m)
+	r.registerMemory(app, m)         // memory.go
 	r.registerHarnesses(app)         // harness.go: /api/models
 	r.registerRemote(app, m, public) // remote.go: remote pages, /api/remotes, tunnel proofs
 	r.registerSessionAPI(app, m)     // sessionapi.go: wakeups, crons, /m/api

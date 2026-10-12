@@ -92,6 +92,11 @@ export type Session = {
   // the store the machine is waiting on at boot (the core answered 423 "store X is locked" to its secrets pull)
   lockedStore?: string;
   busy?: { kind: string; since?: string } | null; wake?: { kind: string; phase: string; error?: string } | null; apiProxy?: "on" | "off";
+  // a memory-starvation episode (router, mirrors Jarvis 1's lib/memory.js): why, the memory now, and the size
+  // the Upgrade button moves it to ("" = already the biggest, no Upgrade); absent outside an episode
+  memAlert?: { since: string; reason: string; detail: string; nextSize: "medium" | "large" | "" } | null;
+  // a running session's latest memory sample
+  memory?: { totalMb: number; availMb: number; at: string } | null;
 };
 export type RepoEntry = { name: string; url: string; repo: string; store: string; sensitive?: boolean; fingerprint?: string; keyAt?: string };
 export type GhRepo = { fullName: string; url: string; htmlUrl: string; description?: string; language?: string; private?: boolean; fork?: boolean; archived?: boolean; pushedAt?: string };

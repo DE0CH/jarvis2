@@ -5,7 +5,7 @@ import { useStore, setTab, getStore, pend, refresh, refreshUntil, pendUntil, set
 import { hasShell, requestSecure } from "../lib/shell";
 import { requestGrant } from "../lib/grants";
 import { canCopy, copyText } from "../lib/clipboard";
-import { BadgeList, Box, Button, Callout, Card, Flex, Heading, Lbl, Muted, P, Pill, Quote, Row, Rows } from "../ui/kit";
+import { BadgeList, Box, Button, Callout, CalloutText, Card, Flex, Heading, Lbl, Muted, P, Pill, Quote, Row, Rows } from "../ui/kit";
 import type { AskRow } from "../lib/store";
 import { BusyButton, PButton, useCoolAfterShift } from "../ui/bits";
 import { Cards } from "../ui/cards";
@@ -19,11 +19,14 @@ const MOVING: Record<string, string> = { starting: "starting…", approval: "wai
 const hasSchedule = (m: Session) => !!(m.wakeups || []).length || !!(m.crons || []).length;
 const clip = (t: string) => t.length > 90 ? t.slice(0, 90) + "…" : t;
 
+// the steps of an Upgrade job (wake.kind "upgrade"), as the busy label
+const UPGRADE_PHASE: Record<string, string> = { freeing: "Freeing memory…", snapshotting: "Snapshotting…", resuming: "Resuming…" };
 // what the router is doing to this session right now (its lifecycle lock, or a mode / restart job), as a
 // button label — seen on every device, not only the one that started it
 export function serverBusy(m: Session): string | null {
+  if (m.busy?.kind === "upgrading" && m.wake?.kind === "upgrade" && UPGRADE_PHASE[m.wake.phase]) return UPGRADE_PHASE[m.wake.phase];
   if (m.busy) return BUSY_LABEL[m.busy.kind] || "Working…";
-  if (m.wake && !["done", "failed"].includes(m.wake.phase)) return BUSY_LABEL[m.wake.kind] || "Working…";
+  if (m.wake && !["done", "failed"].includes(m.wake.phase)) return (m.wake.kind === "upgrade" && UPGRADE_PHASE[m.wake.phase]) || BUSY_LABEL[m.wake.kind] || "Working…";
   return null;
 }
 // sessions the Claude app does not see: their primary action is the Remote page
@@ -51,6 +54,27 @@ const groupOf = (m: Session): typeof GROUPS[number] => m.state === "paused" ? (h
 
 // ---- actions (never optimistic: the pending label stays until the router confirms) ----
 const pause = (id: string) => pendUntil("s:" + id, "Pausing…", () => api("POST", `api/sessions/${id}/pause`), (s) => find(s, id)?.state === "paused" || find(s, id)?.state === "failed", 120000);
+// The one-tap way out of a memory-starvation episode (Jarvis 1's Upgrade): the router stops the agent and what it
+// started, snapshots, and brings the session back on the next size up with the same conversation
+// (POST …/upgrade → 202, then busy "upgrading" + wake {kind:"upgrade"} until done / failed). No question first —
+// the notice already says what it does. Two-phase: the label stays until the router reports the job's end.
+const SIZE_GB: Record<string, number> = { medium: 4, large: 8 };
+const SIZE_NAME: Record<string, string> = { medium: "Medium", large: "Large" };
+const upgradeDone = (x: Session | undefined) => !x || x.state === "failed" || x.state === "paused"
+  || (!x.busy && x.wake?.kind === "upgrade" && ["done", "failed"].includes(x.wake.phase));
+export const upgradeSession = (id: string) => exclusive("s:" + id, async () => {
+  const next = find(getStore().state, id)?.memAlert?.nextSize;
+  if (!next) return;
+  pend("s:" + id, "Upgrading…");
+  try {
+    await api("POST", `api/sessions/${id}/upgrade`, {});
+    await refreshUntil((s) => upgradeDone(find(s, id)), 30 * 60 * 1000);
+    const x = find(getStore().state, id);
+    if (x?.wake?.kind === "upgrade" && x.wake.phase === "failed") toast("Upgrade failed: " + (x.wake.error || "no reason given"));
+    else if (x?.wake?.kind === "upgrade" && x.wake.phase === "done") { toast(`Upgraded to ${SIZE_NAME[next] || next}.`, "ok"); settle(30000); }
+  } catch (e: any) { failed(e); await refresh(false); }
+  finally { pend("s:" + id, null); }
+});
 // the optional prompt of a Resume: delivered as a message once the session is up again
 export const RESUME_PROMPT = { label: "Prompt (optional)", placeholder: "Sent once it is back", max: 4000 };
 export const resumeSession = (id: string) => exclusive("s:" + id, async () => {
@@ -202,6 +226,23 @@ function Schedules({ m }: { m: Session }) {
     </Callout>
   );
 }
+// a memory-starvation episode: what is short, and the Upgrade button (none when already on the biggest size)
+function MemAlert({ m, busy }: { m: Session; busy: string | null }) {
+  const a = m.memAlert;
+  const failedUpgrade = m.wake?.kind === "upgrade" && m.wake.phase === "failed" ? m.wake.error || "no reason given" : "";
+  if (!a && !failedUpgrade) return null;
+  return (
+    <Callout color="red" variant="surface" mt={2} data={{ memAlert: "1" }} id={"mem-alert-" + m.id}>
+      {!!a && <CalloutText color="red">{`Running out of memory: ${a.reason}.${a.detail ? " " + a.detail + (/[.!?]$/.test(a.detail) ? "" : ".") : ""}`}</CalloutText>}
+      {!!a && (a.nextSize ? <>
+        <CalloutText color="red">{`Upgrade stops Claude and everything it is running, then brings the session back on the ${SIZE_NAME[a.nextSize]} machine (${SIZE_GB[a.nextSize]} GB) with the same conversation.`}</CalloutText>
+        {!busy && m.state === "started" && <Flex mt={2}><PButton pkey={"s:" + m.id} color="red" id={"upgrade-" + m.id} onPress={() => upgradeSession(m.id)} label={`Upgrade to ${SIZE_NAME[a.nextSize]} (${SIZE_GB[a.nextSize]} GB)`} /></Flex>}
+      </> : <CalloutText color="red">It is already on the biggest size.</CalloutText>)}
+      {!!failedUpgrade && <CalloutText color="red">{"Upgrade failed: " + failedUpgrade}</CalloutText>}
+    </Callout>
+  );
+}
+const gb = (mb: number) => (mb / 1024).toFixed(1);
 // a feature the machine turned away: one tap to allow it for 10 minutes, or a standing rule
 function NeedsGrant({ m }: { m: Session }) {
   if (!m.needsGrant) return null;
@@ -280,12 +321,13 @@ export function Sessions() {
                   <Row label="Stores"><BadgeList items={own} /></Row>
                   <Row label="Harness">{HARNESS[m.harness || ""] || m.harness || "—"}</Row>
                   <Row label="Model">{modelName || "—"}</Row>
-                  <Row label="Machine">{[REGION[m.region || ""] || m.region, m.guest].filter(Boolean).join(" · ") || "—"}</Row>
+                  <Row label="Machine">{[REGION[m.region || ""] || m.region, m.guest, m.state === "started" && m.memory && m.memory.totalMb > 0 ? `${gb(m.memory.availMb)} of ${gb(m.memory.totalMb)} GB free` : ""].filter(Boolean).join(" · ") || "—"}</Row>
                   <Row label="Created">{m.created ? ago(m.created) : "—"}</Row>
                   {paused && <Row label="Paused">{m.pausedAt ? ago(m.pausedAt) : "—"}</Row>}
                   {!paused && <Row label="Auto-pause" id={"autopause-" + m.id}>{autoPause || (m.oneShot ? "One-shot" : "—")}</Row>}
                 </Rows>
                 {!!m.resumePrompt && <Quote by={paused ? "Queued for the next resume" : "Queued prompt"} lines={3}>{clip(m.resumePrompt)}</Quote>}
+                <MemAlert m={m} busy={busy || null} />
                 <NeedsGrant m={m} />
                 <LockedStore m={m} />
                 <Schedules m={m} />

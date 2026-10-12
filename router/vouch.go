@@ -257,11 +257,13 @@ func signedRequestOf(req *http.Request, machine string, body []byte) *SignedRequ
 
 type Delivery struct {
 	ID      string         `json:"id"`
-	Kind    string         `json:"kind"` // wakeup | cron | nudge | continue
+	Kind    string         `json:"kind"` // wakeup | cron | nudge | continue | upgraded
 	Request *SignedRequest `json:"request,omitempty"`
 	Run     int            `json:"run,omitempty"`
 	Minutes int            `json:"minutes,omitempty"`
 	Jobs    int            `json:"jobs,omitempty"`
+	From    string         `json:"from,omitempty"` // upgraded: the old and new size (memory.go)
+	To      string         `json:"to,omitempty"`
 	Attest  *Doc           `json:"attest"`
 }
 
@@ -301,6 +303,11 @@ func attested(d Delivery) ([]byte, string, error) {
 		return []byte("continue"), "image-text", nil
 	case "nudge":
 		return []byte(nudgeText(d.Jobs, time.Duration(d.Minutes)*time.Minute)), "image-text", nil
+	case "upgraded":
+		if sizeGB[d.From] == 0 || sizeGB[d.To] == 0 {
+			return nil, "", errors.New("upgraded: not a machine size")
+		}
+		return []byte(upgradedText(d.From, d.To)), "image-text", nil
 	}
 	return nil, "", fmt.Errorf("unknown delivery %s", d.Kind)
 }

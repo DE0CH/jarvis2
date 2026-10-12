@@ -57,6 +57,7 @@ type Liveness struct {
 	dialogCheckedAt int64 // statusUpdatedAt of the waiting episode whose pane was checked for the dialog
 	dialogReported  bool
 	screen          *pushedScreen // the pane the machine pushes itself (machine/screen.go); in memory only
+	mem             *memState     // memory.go: the starvation watch of the running machine; in memory only
 	// the stall watchdog's last nudge: when and how it ended ("" = delivered), for GET /setup/sessions
 	NudgeAt    time.Time `json:"nudgeAt,omitempty"`
 	NudgeError string    `json:"nudgeError,omitempty"`
@@ -158,6 +159,7 @@ func liveView(s *Session, v map[string]any) {
 	if !l.LastReport.IsZero() {
 		v["lastReport"] = l.LastReport
 	}
+	memView(s, v) // memory.go: memAlert, memory
 	if s.State != "started" || s.MachineID == "" || l.Reg == nil || time.Since(l.LastReport) > defaultPilot.StaleReport {
 		return
 	}
@@ -313,6 +315,9 @@ func (r *Router) autopilotTick() {
 	var acts []pilotAction
 	r.st.Do(func(d *persisted) {
 		acts = planTick(d, time.Now(), storedExp, defaultPilot, r.busy, func(id string) bool { return autoPauseVeto != nil && autoPauseVeto(d, id) })
+		for _, t := range memSilentTick(d, time.Now().UTC()) { // memory.go: a starving machine that went silent
+			acts = append(acts, pilotAction{Kind: "dm", Text: t})
+		}
 	})
 	for _, a := range acts {
 		r.runAction(a)
@@ -543,7 +548,9 @@ func attentionText(kind, name string) string {
 // 12s)"); a session only waiting on background jobs shows none
 var spinnerLine = regexp.MustCompile(`(?m)^\s*\S\s+[A-Z][\p{L}-]*…\s*\(\d`)
 
-func turnOnScreen(screen string) bool { return spinnerLine.MatchString(ansiSeq.ReplaceAllString(screen, "")) }
+func turnOnScreen(screen string) bool {
+	return spinnerLine.MatchString(ansiSeq.ReplaceAllString(screen, ""))
+}
 
 func nudgeText(bgTasks int, stalled time.Duration) string {
 	jobs := fmt.Sprintf("%d background jobs have", bgTasks)

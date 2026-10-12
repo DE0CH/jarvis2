@@ -571,9 +571,10 @@ func agent() error {
 			time.Sleep(time.Second)
 		}
 		go statusReporter(c)
+		go memoryReporter(c) // memory.go: RAM for the router's starvation watch
 		go screenReporter(c) // screen.go: the pane for the read-only terminal
-		go serveAPIProxy(c) // apiproxy.go: $JARVIS_URL for Jarvis 1's session scripts
-		go liveSync(c)      // livesync.go: the transcripts to the Storage Box (through the router) for search
+		go serveAPIProxy(c)  // apiproxy.go: $JARVIS_URL for Jarvis 1's session scripts
+		go liveSync(c)       // livesync.go: the transcripts to the Storage Box (through the router) for search
 	}()
 	for {
 		var out struct {
@@ -592,6 +593,10 @@ func agent() error {
 			go runDelivery(c, d)
 		}
 		for _, cmd := range out.Commands {
+			if cmd == "free" && booted() && !frozen.Load() { // memory.go: an Upgrade, before its snapshot
+				freeMemory()
+				continue
+			}
 			if cmd == "snapshot" {
 				if !booted() {
 					if err := noSnapshot(c); err != nil {

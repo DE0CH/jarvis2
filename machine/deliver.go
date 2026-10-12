@@ -164,11 +164,13 @@ type SignedRequest struct {
 
 type Delivery struct {
 	ID      string         `json:"id"`
-	Kind    string         `json:"kind"` // wakeup | cron | nudge | continue
+	Kind    string         `json:"kind"` // wakeup | cron | nudge | continue | upgraded
 	Request *SignedRequest `json:"request,omitempty"`
 	Run     int            `json:"run,omitempty"`     // a cron's run number (a number)
 	Minutes int            `json:"minutes,omitempty"` // nudge: idle minutes (a number)
 	Jobs    int            `json:"jobs,omitempty"`    // nudge: background jobs (a number)
+	From    string         `json:"from,omitempty"`    // upgraded: the old size (small | medium | large)
+	To      string         `json:"to,omitempty"`      // upgraded: the new size
 	Attest  *SignedDoc     `json:"attest"`
 }
 
@@ -234,6 +236,12 @@ func deliveryText(d Delivery, keys []string) (text string, attested []byte, err 
 			"Check on them now: read their output, and if a job is hung or no longer needed, stop it and continue the task another way. " +
 			"If a job is legitimately still running, make sure it will end on its own (a timeout or deadline), then end your turn — this check repeats while the state lasts. " +
 			"This is an automated message from Jarvis, not from Deyao, and not an answer to any open question."
+		return t, []byte(t), nil
+	case "upgraded":
+		t, err := upgradedText(d.From, d.To)
+		if err != nil {
+			return "", nil, err
+		}
 		return t, []byte(t), nil
 	}
 	return "", nil, fmt.Errorf("unknown delivery kind %q", d.Kind)
@@ -381,3 +389,17 @@ except Exception: ack = ""
 s.close()
 done(True, "delivered to %s (pid %s)" % (t.get("name") or "?", t.get("pid")), target=t.get("name") or "", ack=ack[:500])
 `
+
+var sizeGB = map[string]int{"small": 2, "medium": 4, "large": 8}
+
+// upgradedText: after an Upgrade (router/memory.go), the first message on the bigger machine. The router names only
+// the two sizes, each one of three words; the same text is built in router/memory.go upgradedText.
+func upgradedText(from, to string) (string, error) {
+	if sizeGB[from] == 0 || sizeGB[to] == 0 {
+		return "", errors.New("upgraded: not a machine size")
+	}
+	return fmt.Sprintf("Jarvis: this session ran out of memory and was moved from a %s (%d GB) to a %s (%d GB) machine. ", from, sizeGB[from], to, sizeGB[to]) +
+		"To free memory for the move, every process of the old machine was stopped: Claude itself, background jobs, builds, dev servers, browsers. " +
+		"Their list is in ~/artifacts/jarvis2-upgrade-freed.txt. Check which of them the task still needs, restart only those (and keep an eye on memory: run fewer heavy things at once), then carry on with the task. " +
+		"This is an automated message from Jarvis, not from Deyao, and not an answer to any open question.", nil
+}

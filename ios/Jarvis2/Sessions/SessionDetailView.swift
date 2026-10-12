@@ -74,6 +74,8 @@ private struct SessionDetailList: View {
         }
       }
 
+      if let a = m.memAlert { MemAlertSection(m: m, a: a, busy: busy) }
+
       if let h = m.needsGrant {
         Section {
           LabeledContent("Feature", value: Holder.title(h)).accessibilityIdentifier("turned-away-\(m.id)")
@@ -130,6 +132,10 @@ private struct SessionDetailList: View {
         if let r = m.region { LabeledContent("Region", value: Fmt.region[r] ?? r) }
         let machine = [m.size, m.guest].compactMap { $0 }.joined(separator: " · ")
         if !machine.isEmpty { LabeledContent("Machine", value: machine) }
+        if m.state == "started", let mem = m.memory {
+          LabeledContent("Memory", value: "\(Fmt.bytes(mem.availMb * 1_048_576)) free of \(Fmt.bytes(mem.totalMb * 1_048_576))")
+            .accessibilityIdentifier("memory-\(m.id)")
+        }
         if let c = m.created { LabeledContent("Created", value: Fmt.ago(c)) }
         if m.state == "paused", let pa = m.pausedAt { LabeledContent("Paused", value: Fmt.ago(pa)) }
         LabeledContent("Session id") { Text(m.id).font(.footnote.monospaced()).textSelection(.enabled) }
@@ -152,5 +158,40 @@ private struct SessionDetailList: View {
     if !m.autoPause { return ("Auto-pause", "Off") }
     if let ms = m.pauseInMs { return ("Auto-pause", "In \(max(1, Int((ms / 60000).rounded()))) min") }
     return ("Auto-pause", "After 1 h idle")
+  }
+}
+
+/// a memory-starvation episode: why, the memory now, and Upgrade (the next size up, same conversation)
+private struct MemAlertSection: View {
+  @Environment(AppModel.self) private var model
+  let m: Session
+  let a: MemAlert
+  let busy: String?
+
+  var body: some View {
+    Section {
+      Label("Running out of memory", systemImage: "exclamationmark.triangle.fill")
+        .foregroundStyle(.red).font(.subheadline.weight(.semibold))
+        .accessibilityIdentifier("memalert-\(m.id)")
+      LabeledContent("Why", value: a.reason)
+      if let d = a.detail { LabeledContent("Now", value: d) }
+      if let since = a.since { LabeledContent("Since", value: Fmt.ago(since)) }
+      if busy == nil, m.wakeKind == "upgrade", m.wakePhase == "failed" {
+        ErrorRow(text: "Upgrade failed" + (m.wakeError.map { ": \($0)" } ?? ""), id: "upgrade-error-\(m.id)")
+      }
+      if let next = a.nextSize {
+        if busy == nil {
+          Button(Fmt.upgradeTitle(next), systemImage: "arrow.up.circle") { Task { await model.upgrade(m.id) } }
+            .tint(.red)
+            .accessibilityIdentifier("upgrade-\(m.id)")
+        }
+      } else {
+        LabeledContent("Upgrade", value: "Already the biggest size")
+      }
+    } header: {
+      Label("Memory", systemImage: "memorychip")
+    } footer: {
+      if a.nextSize != nil { Text("Upgrade stops Claude and everything it runs, then brings the same conversation back on the bigger machine.") }
+    }
   }
 }

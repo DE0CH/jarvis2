@@ -135,6 +135,9 @@ struct SessionRow: View {
         if let busy { StatusPill(text: busy.lowercased(), color: .orange, spinning: true) } else { StatusPill(text: p.text, color: p.color, spinning: p.spin) }
       }
       Text(line1).font(.subheadline).foregroundStyle(.secondary).lineLimit(2)
+      if let a = m.memAlert {
+        HStack(spacing: 6) { StatusPill(text: "Low memory", color: .red); Text(a.reason).font(.footnote).lineLimit(1) }
+      }
       if let lock = m.lockedStore {
         HStack(spacing: 6) { StatusPill(text: "Locked store", color: .orange); Text(lock).font(.footnote.monospaced()) }
       } else if let g = m.needsGrant {
@@ -194,6 +197,9 @@ struct SessionMenu: View {
       } else {
         Button("Switch to bypass mode", systemImage: "shield.slash") { Task { await model.switchMode(m, to: "bypass") } }
       }
+    }
+    if m.state == "started", let next = m.memAlert?.nextSize {
+      Button(Fmt.upgradeTitle(next), systemImage: "arrow.up.circle") { Task { await model.upgrade(m.id) } }
     }
     if m.state == "paused" {
       Button("Resume with latest image", systemImage: "arrow.up.circle") { Task { await model.resumeLatest(m.id) } }

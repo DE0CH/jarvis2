@@ -53,6 +53,29 @@ extension AppModel {
     }
   }
 
+  /// Upgrade out of a memory-starvation episode: the router stops Claude and what it started, snapshots, and brings the
+  /// same conversation back on the next size up (POST …/upgrade). No question first: one tap, as Jarvis 1's card
+  /// (Deyao, 2026-10-10); the notice says what it does. The pending label holds until the session is up on the new
+  /// size or the job failed; after that the router's own busy label shows it on every device.
+  func upgrade(_ id: String) async {
+    guard let next = session(id)?.memAlert?.nextSize else { return }
+    await exclusive("s:" + id) {
+      pend("s:" + id, "Upgrading…")
+      defer { pend("s:" + id, nil) }
+      do {
+        try await RouterClient.shared.call("POST", "api/sessions/\(id)/upgrade", [:])
+        await refreshUntil(60) { m in
+          guard let x = m.session(id) else { return true }
+          return x.serverBusy == nil && ((x.state == "started" && x.size == next) || (x.wakeKind == "upgrade" && x.wakePhase == "failed"))
+        }
+        if let x = session(id), x.serverBusy == nil, x.wakeKind == "upgrade", x.wakePhase == "failed" {
+          failure = "Upgrade failed" + (x.wakeError.map { ": \($0)" } ?? "")
+        }
+        settle(120)
+      } catch { fail(error); await refresh() }
+    }
+  }
+
   /// what a destroy would lose (GET …/changes: uncommitted and unpushed work), in words
   /// what a destroy would lose, one line per fact: "Claude is working", "repo · 2 uncommitted · 1 unpushed"
   private func changesText(_ id: String) async -> String {
