@@ -373,6 +373,8 @@ def main():
     elif cmd == "sessions":
         for s in call("GET", "/setup/sessions")["sessions"]:
             print(s["id"], s["machineId"] or "-", s["state"], s["title"])
+            if "-v" in args:  # the autopilot's view: status, background jobs, stall clock, last nudge
+                print("   ", json.dumps({k: v for k, v in s.items() if k not in ("id", "machineId", "state", "title")}, sort_keys=True))
     elif cmd == "requests":
         for q in call("GET", "/setup/requests")["requests"]:
             c = q.get("call") or {}
