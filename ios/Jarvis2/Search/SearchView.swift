@@ -33,8 +33,7 @@ struct SearchView: View {
           ContentUnavailableView {
             Label(scope == .chats ? "Search conversations" : "Search iCloud Drive", systemImage: scope == .chats ? "text.bubble" : "icloud")
           } description: {
-            Text(scope == .chats ? "Finds what was said, what Claude did, and the task records, in any session of Jarvis 1 or 2, running or long gone. Put “quotes” around text that must appear exactly."
-                 : "Finds a file by its name, folder or content: document text, scans and photos (OCR), video frames and speech.")
+            Text(scope == .chats ? "Every session of Jarvis 1 and 2. “Quotes” match exactly." : "Names, folders and content.")
           }
           .accessibilityIdentifier("search-intro")
         } else if let r = scope == .chats ? result : files, r["total"].int == 0 || (scope == .chats ? (r["hits"].array.isEmpty && r["sessions"].array.isEmpty) : r["hits"].array.isEmpty) {
@@ -130,7 +129,8 @@ private struct ChatResults: View {
   var body: some View {
     let terms = result["terms"].strings
     Section {
-      Text("\(result["total"].int ?? 0) candidates · \((result["tookMs"].double ?? 0) / 1000, format: .number.precision(.fractionLength(1))) s").font(.footnote).foregroundStyle(.secondary)
+      LabeledContent("Candidates", value: "\(result["total"].int ?? 0)").font(.footnote)
+      LabeledContent("Took") { Text(Duration.milliseconds(Int(result["tookMs"].double ?? 0)), format: .units(allowed: [.seconds, .milliseconds], width: .abbreviated)) }.font(.footnote)
     }
     ForEach(Array(result["sessions"].array.enumerated()), id: \.offset) { _, g in
       Section {
@@ -142,7 +142,7 @@ private struct ChatResults: View {
           Text(["live": "running", "paused": "paused", "archive": "archived"][g["state"].string ?? ""] ?? "")
         }
       } footer: {
-        if (g["count"].int ?? 0) > g["hits"].array.count { Text("\(g["count"].int ?? 0) matches, best \(g["hits"].array.count) shown") }
+        if (g["count"].int ?? 0) > g["hits"].array.count { LabeledContent("Shown", value: "\(g["hits"].array.count) of \(g["count"].int ?? 0)") }
       }
     }
     if !result["hits"].array.isEmpty {
@@ -173,7 +173,7 @@ private struct FileResults: View {
   let terms: [String]
   var body: some View {
     Section {
-      Text("\(files["total"].int ?? 0) candidates").font(.footnote).foregroundStyle(.secondary)
+      LabeledContent("Candidates", value: "\(files["total"].int ?? 0)").font(.footnote)
     }
     Section {
       ForEach(Array(files["hits"].array.enumerated()), id: \.offset) { _, h in

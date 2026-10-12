@@ -17,7 +17,7 @@ struct PreviousView: View {
     .overlay {
       if !model.records.loaded && model.records.error == nil { ProgressView("Loading previous sessions…") }
       else if model.records.loaded && list.isEmpty {
-        ContentUnavailableView("No previous sessions", systemImage: "archivebox", description: Text("A session you destroy is listed here and can be restored from its archive."))
+        ContentUnavailableView("No previous sessions", systemImage: "archivebox", description: Text("Destroyed sessions show up here."))
       }
     }
     .navigationTitle("Previous")
@@ -42,16 +42,34 @@ private struct RecordRow: View {
         Text(r.title).font(.headline)
         Spacer()
         if let p = model.pending["r:" + r.id] { StatusPill(text: p, color: .orange, spinning: true) }
-        else if r.restoredCount > 0 { StatusPill(text: "restored" + (r.restoredCount > 1 ? " ×\(r.restoredCount)" : ""), color: .green) }
+        else if r.restoredCount > 0 { StatusPill(text: r.restoredCount > 1 ? "restored ×\(r.restoredCount)" : "restored", color: .green) }
         else { StatusPill(text: "destroyed") }
       }
-      Text([r.destroyedAt.map { "destroyed " + Fmt.ago($0) }, m.created.map { "created " + $0.formatted(date: .abbreviated, time: .omitted) }].compactMap { $0 }.joined(separator: " · "))
-        .font(.subheadline).foregroundStyle(.secondary)
+      HStack(spacing: 12) {
+        if let d = r.destroyedAt { Label(Fmt.ago(d), systemImage: "trash") }
+        if let c = m.created { Label(c.formatted(date: .abbreviated, time: .omitted), systemImage: "calendar") }
+      }
+      .font(.subheadline).foregroundStyle(.secondary)
       Text(details(m)).font(.footnote).foregroundStyle(.secondary)
-      Text(r.hasArchive ? "\(Fmt.plural(r.transcripts, "transcript")) · \(Fmt.plural(r.artifacts, "artifact file"))" : r.archiveError.map { "not archived: \($0)" } ?? "no archive")
+      if r.hasArchive {
+        HStack(spacing: 12) {
+          Label("\(r.transcripts)", systemImage: "text.alignleft").accessibilityLabel("Transcripts: \(r.transcripts)")
+          Label("\(r.artifacts)", systemImage: "doc").accessibilityLabel("Artifact files: \(r.artifacts)")
+          if !r.restorable { StatusPill(text: "No signed snapshot", color: .orange) }
+        }
         .font(.footnote).foregroundStyle(.secondary)
-      if r.hasArchive && !r.restorable { Text("Indexed by hand: no signed snapshot, so it can't be restored here.").font(.footnote).foregroundStyle(.orange) }
-      if let last = r.last { Text("\(last.role == "user" ? "You" : "Claude"): \(last.text)").font(.subheadline).lineLimit(3) }
+      } else {
+        HStack(spacing: 6) {
+          StatusPill(text: "Not archived", color: .orange)
+          if let e = r.archiveError { Text(e).font(.footnote).foregroundStyle(.secondary).lineLimit(2) }
+        }
+      }
+      if let last = r.last {
+        VStack(alignment: .leading, spacing: 1) {
+          Text(last.role == "user" ? "You" : "Claude").font(.caption.bold()).foregroundStyle(.secondary)
+          Text(last.text).font(.subheadline).lineLimit(3)
+        }
+      }
       HStack {
         if r.restorable { Button("Restore") { Task { await model.restore(r) } }.buttonStyle(.borderedProminent).accessibilityIdentifier("restore-\(r.id)") }
         if r.hasArchive { Button("Transcript", action: transcript).buttonStyle(.bordered).accessibilityIdentifier("rtail-\(r.id)") }
@@ -75,11 +93,11 @@ private struct RecordRow: View {
 
   private func details(_ m: Session) -> String {
     let own = m.stores(policy: model.policy)
-    var parts = [own.isEmpty ? "no stores" : "stores: " + own.joined(separator: ", "), Fmt.harness(m.harness)]
+    var parts = [own.isEmpty ? "No stores" : own.joined(separator: ", "), Fmt.harness(m.harness)]
     if let mo = m.model { parts.append(model.models.first { $0.id == mo }?.label ?? mo) }
     if let s = m.size { parts.append(s) }
     if m.permissionMode == "bypass" { parts.append("skip permissions") }
-    if r.j["live"]["oneShot"].bool == true { parts.append("was one-shot") }
+    if r.j["live"]["oneShot"].bool == true { parts.append("one-shot") }
     return parts.joined(separator: " · ")
   }
 }

@@ -19,15 +19,17 @@ struct TaskDetailView: View {
         Section {
           HStack {
             StatusPill(text: inst.pill.0, color: inst.pill.1, spinning: inst.state == "running" || inst.state == "busy")
-            Text("\(tmpl?.title ?? "\(inst.template) (template missing)") · created \(inst.createdAt?.formatted(date: .abbreviated, time: .omitted) ?? "")").font(.footnote).foregroundStyle(.secondary)
+            if tmpl == nil { StatusPill(text: "Template missing", color: .orange) }
           }
-          if inst.state == "approval" { Label("The iPhone approves this task's line once (it waits in the Inbox). Runs need no approval after that.", systemImage: "faceid").foregroundStyle(.blue) }
+          LabeledContent("Template", value: tmpl?.title ?? inst.template)
+          if let c = inst.createdAt { LabeledContent("Created", value: c.formatted(date: .abbreviated, time: .omitted)) }
+          if inst.state == "approval" { Label("Approve in the Inbox", systemImage: "faceid").foregroundStyle(.blue) }
           if let d = inst.detail, inst.state != "approval" { Text(d).font(.subheadline).foregroundStyle(.secondary) }
-          if let w = inst.activeRun?.waiting { Label("Waiting: \(w)", systemImage: "hourglass").foregroundStyle(.orange) }
-          let summary = inst.summary(tmpl)
-          if !summary.isEmpty { Text(summary).textSelection(.enabled) }
-          Text([inst.stores.isEmpty ? "no stores" : "stores: " + inst.stores.joined(separator: ", "), inst.size, inst.queued > 0 ? "\(inst.queued) queued" : nil].compactMap { $0 }.joined(separator: " · "))
-            .font(.footnote).foregroundStyle(.secondary)
+          if let w = inst.activeRun?.waiting { LabeledContent { Text(w) } label: { Label("Waiting", systemImage: "hourglass") }.foregroundStyle(.orange) }
+          ForEach(inst.summary(tmpl), id: \.label) { row in LabeledContent(row.label) { Text(row.value).textSelection(.enabled) } }
+          LabeledContent("Stores") { Text(inst.stores.isEmpty ? "None" : inst.stores.joined(separator: "\n")).font(.footnote.monospaced()).multilineTextAlignment(.trailing) }
+          if let sz = inst.size { LabeledContent("Size", value: sz) }
+          if inst.queued > 0 { LabeledContent("Queued", value: "\(inst.queued)") }
         }
         Section {
           primary(inst)
@@ -56,10 +58,15 @@ struct TaskDetailView: View {
                 VStack(alignment: .leading, spacing: 2) {
                   HStack {
                     StatusPill(text: r.pill.0, color: r.pill.1, spinning: r.active)
-                    Text((r.scheduled ? "Scheduled" : "Manual") + (r.upgrade ? " · latest image" : "")).font(.subheadline)
+                    Text(r.scheduled ? "Scheduled" : "Manual").font(.subheadline)
+                    if r.upgrade { StatusPill(text: "Latest image", color: .blue) }
                   }
-                  Text(r.when + (r.exitCode.map { r.phase != "succeeded" ? " · exit \($0)" : "" } ?? "")).font(.footnote).foregroundStyle(.secondary)
-                  if let w = r.waiting { Text("waiting: \(w)").font(.footnote).foregroundStyle(.secondary) }
+                  HStack(spacing: 12) {
+                    if let w = r.when { LabeledContent(w.label, value: w.value) }
+                    if let x = r.exitCode, r.phase != "succeeded" { LabeledContent("Exit", value: "\(x)") }
+                  }
+                  .font(.footnote).foregroundStyle(.secondary)
+                  if let w = r.waiting { LabeledContent("Waiting", value: w).font(.footnote).foregroundStyle(.secondary) }
                 }
               }
               .accessibilityIdentifier("td-run-\(r.name)")
@@ -93,11 +100,11 @@ struct TaskDetailView: View {
     } catch { self.error = errText(error) }
   }
   private func upgrade(_ inst: TaskInstance) async {
-    guard await model.confirm("Run “\(inst.name)” on the latest image?", "Resumes its line on the newest session image (how a changed template reaches a task). The iPhone approves the new image first.", action: "Run on latest image") else { return }
+    guard await model.confirm("Run “\(inst.name)” on the latest image?", "The iPhone approves the new image first.", action: "Run on latest image") else { return }
     await model.runTask(id, upgrade: true)
   }
   private func delete(_ inst: TaskInstance, schedules: Int) async {
-    guard await model.confirm("Delete “\(inst.name)”?", "Its \(schedules > 0 ? "\(Fmt.plural(schedules, "schedule")) and " : "")run history go with it, and its session line is destroyed (archived like any session). The template stays.", action: "Delete", destructive: true) else { return }
+    guard await model.confirm("Delete “\(inst.name)”?", "Its schedules and runs go too; the template stays.", action: "Delete", destructive: true) else { return }
     await model.pendTasks("task-del:" + id, "Deleting…", 60, action: { try await RouterClient.shared.call("DELETE", "api/tasks/instances/\(id)") },
                           until: { !$0.instances.contains { $0.id == id } })
     if !path.isEmpty { path.removeLast() }

@@ -245,11 +245,12 @@ struct TaskRun: Identifiable, Equatable, Hashable {
   var exitCode: Int? { j["exitCode"].int }
   var reason: String? { j["reason"].text }
   var waiting: String? { j["waiting"].text }
-  var when: String {
-    if let d = finishedAt { return "finished \(Fmt.ago(d))" }
-    if let d = ranAt { return "started \(Fmt.ago(d))" }
-    if let d = createdAt { return "queued \(Fmt.ago(d))" }
-    return ""
+  /// the latest step and when: ("Finished", "5 min ago")
+  var when: (label: String, value: String)? {
+    if let d = finishedAt { return ("Finished", Fmt.ago(d)) }
+    if let d = ranAt { return ("Started", Fmt.ago(d)) }
+    if let d = createdAt { return ("Queued", Fmt.ago(d)) }
+    return nil
   }
 }
 
@@ -270,15 +271,16 @@ struct TaskInstance: Identifiable, Equatable, Hashable {
   var queued: Int { j["queued"].int ?? 0 }
   var schedules: Int { j["schedules"].int ?? 0 }
   /// the values as one line ("Message: hi · Count: 2")
-  func summary(_ t: TaskTemplate?) -> String {
+  /// the task's parameters as (label, value) rows, in the template's field order
+  func summary(_ t: TaskTemplate?) -> [(label: String, value: String)] {
     let fields: [(String, String, String)] = t.map { $0.fields.map { ($0.name, $0.label, $0.type) } }
       ?? (params.object ?? [:]).keys.sorted().map { ($0, $0, "text") }
     return fields.compactMap { name, label, type in
       let v = params[name]
       if v.isNull || v.string == "" || (v.object == nil && v.string == nil && v.array.isEmpty) { return nil }
       let s = type == "checkbox" ? (v.bool == true ? "yes" : "no") : (v.string ?? v.strings.joined(separator: ", "))
-      return "\(label): \(s)"
-    }.joined(separator: " · ")
+      return (label, s)
+    }
   }
 }
 

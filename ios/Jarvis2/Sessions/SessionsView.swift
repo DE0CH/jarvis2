@@ -164,7 +164,7 @@ struct SessionRow: View {
   private var line1: String {
     let own = m.stores(policy: model.policy)
     let modelName = model.models.first { $0.id == m.model }?.label ?? m.model
-    var parts = [own.isEmpty ? "no stores" : "stores: " + own.joined(separator: ", "), Fmt.harness(m.harness)]
+    var parts = [own.isEmpty ? "No stores" : own.joined(separator: ", "), Fmt.harness(m.harness)]
     if let modelName { parts.append(modelName) }
     if m.permissionMode == "bypass" { parts.append("skip perms") }
     if m.oneShot { parts.append("one-shot") }

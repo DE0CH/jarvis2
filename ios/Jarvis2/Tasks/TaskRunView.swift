@@ -16,12 +16,18 @@ struct TaskRunView: View {
     List {
       if let run {
         Section {
-          HStack { StatusPill(text: run.pill.0, color: run.pill.1, spinning: run.active); Text((run.scheduled ? "Scheduled" : "Manual") + (run.upgrade ? " · on the latest image" : "")).font(.subheadline) }
-          Text([run.createdAt.map { "queued " + Fmt.ago($0) }, run.ranAt.map { "script started " + Fmt.ago($0) }, run.finishedAt.map { "finished " + Fmt.ago($0) }, run.exitCode.map { "exit code \($0)" }].compactMap { $0 }.joined(separator: " · "))
-            .font(.footnote).foregroundStyle(.secondary)
+          HStack {
+            StatusPill(text: run.pill.0, color: run.pill.1, spinning: run.active)
+            Text(run.scheduled ? "Scheduled" : "Manual").font(.subheadline)
+            if run.upgrade { StatusPill(text: "Latest image", color: .blue) }
+          }
+          if let d = run.createdAt { LabeledContent("Queued", value: Fmt.ago(d)) }
+          if let d = run.ranAt { LabeledContent("Script started", value: Fmt.ago(d)) }
+          if let d = run.finishedAt { LabeledContent("Finished", value: Fmt.ago(d)) }
+          if let x = run.exitCode { LabeledContent("Exit code", value: "\(x)") }
           Text(run.runId).font(.footnote.monospaced()).foregroundStyle(.secondary)
           if let r = run.reason { ErrorRow(text: r) }
-          if let w = run.waiting { Label("Waiting: \(w)", systemImage: "hourglass").foregroundStyle(.orange) }
+          if let w = run.waiting { LabeledContent { Text(w) } label: { Label("Waiting", systemImage: "hourglass") }.foregroundStyle(.orange) }
           if let error { ErrorRow(text: error) }
         }
         Section("Output") { MonoText(text: output.isEmpty ? (run.active ? "No output yet…" : "No output.") : output, id: "tr-output") }
@@ -54,7 +60,7 @@ struct TaskRunView: View {
     return r
   }
   private func stop() async {
-    guard await model.confirm("Stop this run?", "A queued run is dropped; a starting or running one is stopped and its line paused. It stays in the history as stopped.", action: "Stop", destructive: true) else { return }
+    guard await model.confirm("Stop this run?", "It stays in the history as stopped.", action: "Stop", destructive: true) else { return }
     stopping = true
     defer { stopping = false }
     do {

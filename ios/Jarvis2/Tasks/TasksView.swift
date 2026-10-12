@@ -13,7 +13,7 @@ struct TasksView: View {
       List {
         if let e = model.tasksError { ErrorRow(text: "Could not load tasks: \(e)") }
         Section {
-          if model.tasksLoaded && model.tasks.instances.isEmpty { Text("No tasks yet: pick a template below and fill it in. The iPhone approves each task once.").foregroundStyle(.secondary) }
+          if model.tasksLoaded && model.tasks.instances.isEmpty { Text("No tasks").foregroundStyle(.secondary) }
           ForEach(model.tasks.instances) { i in
             NavigationLink(value: TaskRoute.task(i.id)) { InstanceRow(inst: i, t: model.tasks.templates.first { $0.name == i.template }) }
               .accessibilityIdentifier("open-\(i.id)")
@@ -100,11 +100,18 @@ private struct InstanceRow: View {
         if let r { StatusPill(text: r.pill.0, color: r.pill.1, spinning: r.active) }
         if let p = model.pending["task:" + inst.id] { StatusPill(text: p, color: .orange, spinning: true) }
       }
-      Text([t?.title ?? "\(inst.template) (template missing)", inst.schedules > 0 ? Fmt.plural(inst.schedules, "schedule") : nil, inst.stores.isEmpty ? nil : "stores: " + inst.stores.joined(separator: ", ")].compactMap { $0 }.joined(separator: " · "))
-        .font(.subheadline).foregroundStyle(.secondary)
-      let summary = inst.summary(t)
-      if !summary.isEmpty { Text(summary).font(.subheadline).lineLimit(2) }
-      Text(r.map { "Last run \($0.when)\($0.scheduled ? " (scheduled)" : "")" } ?? "Never run").font(.footnote).foregroundStyle(.secondary)
+      HStack(spacing: 6) {
+        Text(t?.title ?? inst.template).font(.subheadline).foregroundStyle(.secondary)
+        if t == nil { StatusPill(text: "Template missing", color: .orange) }
+        if inst.schedules > 0 { StatusPill(text: Fmt.plural(inst.schedules, "schedule"), color: .blue) }
+      }
+      if !inst.stores.isEmpty { Text(inst.stores.joined(separator: ", ")).font(.footnote.monospaced()).foregroundStyle(.secondary) }
+      ForEach(Array(inst.summary(t).prefix(2)), id: \.label) { row in LabeledContent(row.label, value: row.value).font(.subheadline).lineLimit(1) }
+      HStack(spacing: 6) {
+        if let w = r?.when { LabeledContent(w.label, value: w.value) } else { Text("Never run") }
+        if r?.scheduled == true { StatusPill(text: "Scheduled") }
+      }
+      .font(.footnote).foregroundStyle(.secondary)
     }
   }
 }
@@ -114,9 +121,12 @@ private struct TemplateRow: View {
   var body: some View {
     VStack(alignment: .leading, spacing: 3) {
       Text(t.title).font(.headline)
-      Text([t.name, t.stores.isEmpty ? nil : "stores: " + t.stores.joined(separator: ", "), t.hasPrompt ? "Claude prompt" : nil].compactMap { $0 }.joined(separator: " · "))
-        .font(.footnote).foregroundStyle(.secondary)
-      if let e = t.error { Text("Broken task.json: \(e)").font(.footnote).foregroundStyle(.red) }
+      HStack(spacing: 6) {
+        Text(t.name).font(.footnote.monospaced()).foregroundStyle(.secondary)
+        if t.hasPrompt { StatusPill(text: "Claude prompt", color: .blue) }
+      }
+      if !t.stores.isEmpty { Text(t.stores.joined(separator: ", ")).font(.footnote.monospaced()).foregroundStyle(.secondary) }
+      if let e = t.error { LabeledContent("Broken task.json", value: e).font(.footnote).foregroundStyle(.red) }
       else if let d = t.description { Text(d).font(.subheadline) }
     }
   }

@@ -23,22 +23,26 @@ struct TaskEditView: View {
   var body: some View {
     if let t {
       Form {
-        Section { Text("From the template “\(t.title)”\(t.description.map { ": " + $0 } ?? "")").font(.subheadline).foregroundStyle(.secondary) }
+        Section {
+          LabeledContent("Template", value: t.title)
+          if let d = t.description { Text(d).font(.subheadline).foregroundStyle(.secondary) }
+        }
         Section("Name") { TextField("What this task is for", text: $name).accessibilityIdentifier("te-name") }
         ForEach(t.fields) { f in
           Section {
             field(f)
           } header: { Text(f.label + (f.required ? " *" : "")) } footer: {
             VStack(alignment: .leading) {
-              if f.optionsFrom == "stores" { Text(inst != nil ? "Stores are part of the task's approved line: changing them needs a new task." : "The picked stores join the task's line; the iPhone shows them when it approves.") }
+              if f.optionsFrom == "stores" { Text(inst != nil ? "Fixed for this task." : "Approved with the task.") }
               if let h = f.help { Text(h) }
             }
           }
         }
         Section {
+          LabeledContent("Template stores") { Text(t.stores.isEmpty ? "None" : t.stores.joined(separator: "\n")).font(.footnote.monospaced()).multilineTextAlignment(.trailing) }
           if let error { ErrorRow(text: error, id: "te-err") }
         } footer: {
-          Text("Values are not secret (they reach the machine unsigned). Secrets come from stores: the template's (\(t.stores.isEmpty ? "none" : t.stores.joined(separator: ", "))) and any picked above.")
+          Text("Values are not secret; secrets come from stores.")
         }
       }
       .navigationTitle(inst == nil ? "New task" : "Edit task")
