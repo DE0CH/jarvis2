@@ -94,10 +94,10 @@ private struct SessionDetailList: View {
       if m.hasSchedule {
         Section("Wakes by itself") {
           ForEach(m.wakeups) { w in
-            ScheduleRow(symbol: "alarm", when: w.at.map(Fmt.when) ?? "", name: w.name == "default" ? nil : w.name, prompt: w.prompt)
+            WakeRow(symbol: "alarm", when: w.at.map(Fmt.when) ?? "", name: w.name == "default" ? nil : w.name, prompt: w.prompt)
           }
           ForEach(m.crons) { c in
-            ScheduleRow(symbol: "repeat", when: Fmt.every(c.everySeconds), name: c.name, prompt: c.prompt, next: c.nextAt.map(Fmt.when))
+            WakeRow(symbol: "repeat", when: Fmt.every(c.everySeconds), name: c.name, prompt: c.prompt, next: c.nextAt.map(Fmt.when))
           }
         }
       }

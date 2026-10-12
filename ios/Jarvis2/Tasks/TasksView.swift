@@ -141,7 +141,7 @@ private struct ScheduleRow: View {
       VStack(alignment: .leading, spacing: 3) {
         Text(name).font(.headline)
         Text(s.text).font(.subheadline)
-        Text(s.enabled ? (s.nextAt.map { "Next run \(Fmt.fromNow($0))" } ?? "On") : "Off").font(.footnote).foregroundStyle(.secondary)
+        if s.enabled, let n = s.nextAt { LabeledContent("Next run", value: Fmt.fromNow(n)).font(.footnote).foregroundStyle(.secondary) }
       }
       Spacer()
       if let p = model.pending["sched:" + s.id] { HStack { ProgressView(); Text(p).font(.footnote) } }

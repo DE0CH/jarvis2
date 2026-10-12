@@ -35,7 +35,7 @@ struct SchedulesView: View {
           if wakeups.isEmpty && crons.isEmpty { Text("Nothing armed").foregroundStyle(.secondary).accessibilityIdentifier("sch-none") }
           ForEach(wakeups) { w in
             HStack {
-              ScheduleRow(symbol: "alarm", when: w.at.map(Fmt.when) ?? "", name: w.name == "default" ? nil : w.name, prompt: w.prompt)
+              WakeRow(symbol: "alarm", when: w.at.map(Fmt.when) ?? "", name: w.name == "default" ? nil : w.name, prompt: w.prompt)
               Spacer()
               PendingButton(key: "sch:wakeup:" + w.name, title: "Cancel", role: .destructive) { await cancel("wakeup", w.name) }
                 .buttonStyle(.borderless).accessibilityIdentifier("sch-cancel-w-\(w.name)")
@@ -43,7 +43,7 @@ struct SchedulesView: View {
           }
           ForEach(crons) { c in
             HStack {
-              ScheduleRow(symbol: "repeat", when: Fmt.every(c.everySeconds), name: c.name, prompt: c.prompt, next: c.nextAt.map(Fmt.when),
+              WakeRow(symbol: "repeat", when: Fmt.every(c.everySeconds), name: c.name, prompt: c.prompt, next: c.nextAt.map(Fmt.when),
                           tags: [c.tz.flatMap { $0 == "UTC" ? nil : $0 }, c.runs > 0 ? Fmt.plural(c.runs, "run") : nil].compactMap { $0 })
               Spacer()
               PendingButton(key: "sch:cron:" + c.name, title: "Cancel", role: .destructive) { await cancel("cron", c.name) }

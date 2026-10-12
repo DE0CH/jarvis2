@@ -2,7 +2,7 @@
 import SwiftUI
 
 /// a wakeup or cron: when (and how often), its name, the next run, and its prompt as written
-struct ScheduleRow: View {
+struct WakeRow: View {
   let symbol: String
   let when: String
   var name: String?
