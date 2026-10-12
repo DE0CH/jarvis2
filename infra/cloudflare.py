@@ -8,9 +8,11 @@ The apps' audiences are not secret: they are in k8s/apps/router.yaml (the script
   CLOUDFLARE_API          only to mint the setup service token (the scoped token can't)
 
   infra/cloudflare.py OUT
+  infra/cloudflare.py --news   only the news page: its Access app, the tunnel's ingress, its DNS record (CF_JARVIS2_INFRA_TOKEN)
 Access apps (created Access first, then DNS, so the hostname is never reachable ungated):
   "Jarvis 2"        jarvis2.deyaochen.com         Deyao's email only (the app + web page)
   "Jarvis 2 setup"  jarvis2.deyaochen.com/setup   service token jarvis2-setup only (the setup session)
+  "HK news stream"  hknews.deyaochen.com          Deyao's email only (k8s/apps/news.yaml, on the same tunnel)
 Session machines don't come through Cloudflare at all (Fly's private network, docs/API.md).
 
 A rehearsal box (infra/rehearse-recover.sh) gets its own of each, never production's:
@@ -32,6 +34,8 @@ ZONE = "f51ca95ee5e6c664372000f887c96a92"
 HOST = "jarvis2.deyaochen.com"
 EMAIL = "chendeyao000@gmail.com"
 ORIGIN = "http://router.jarvis2-router.svc.cluster.local:8080"
+NEWS_HOST = "hknews.deyaochen.com"
+NEWS_ORIGIN = "http://news.jarvis2-edge.svc.cluster.local:8080"
 API = "https://api.cloudflare.com/client/v4"
 
 
@@ -61,20 +65,34 @@ def access_app(name, domain, policy):
     return app["aud"]
 
 
-def tunnel_and_dns(host, name):
-    """the tunnel NAME (remotely managed, ingress host → the router), then the DNS record; returns its token"""
-    tunnels = call("GET", f"/accounts/{ACCOUNT}/cfd_tunnel?name={name}&is_deleted=false")
-    tun = tunnels[0] if tunnels else call("POST", f"/accounts/{ACCOUNT}/cfd_tunnel", {"name": name, "config_src": "cloudflare"})
-    call("PUT", f"/accounts/{ACCOUNT}/cfd_tunnel/{tun['id']}/configurations", {"config": {"ingress": [
-        {"hostname": host, "service": ORIGIN}, {"service": "http_status:404"}]}})
-    token = call("GET", f"/accounts/{ACCOUNT}/cfd_tunnel/{tun['id']}/token")
+def dns(host, tid, name):
     recs = call("GET", f"/zones/{ZONE}/dns_records?name={host}")
-    rec = {"type": "CNAME", "name": host, "content": f"{tun['id']}.cfargotunnel.com", "proxied": True, "comment": f"{name} tunnel"}
+    rec = {"type": "CNAME", "name": host, "content": f"{tid}.cfargotunnel.com", "proxied": True, "comment": f"{name} tunnel"}
     if recs:
         call("PUT", f"/zones/{ZONE}/dns_records/{recs[0]['id']}", rec)
     else:
         call("POST", f"/zones/{ZONE}/dns_records", rec)
+
+
+def tunnel_and_dns(host, name, extra=()):
+    """the tunnel NAME (remotely managed, ingress host → the router, plus EXTRA (host, origin) rules), then the DNS
+    record; returns its token"""
+    tunnels = call("GET", f"/accounts/{ACCOUNT}/cfd_tunnel?name={name}&is_deleted=false")
+    tun = tunnels[0] if tunnels else call("POST", f"/accounts/{ACCOUNT}/cfd_tunnel", {"name": name, "config_src": "cloudflare"})
+    call("PUT", f"/accounts/{ACCOUNT}/cfd_tunnel/{tun['id']}/configurations", {"config": {"ingress": [
+        {"hostname": host, "service": ORIGIN}] + [{"hostname": h, "service": o} for h, o in extra] + [
+        {"service": "http_status:404"}]}})
+    token = call("GET", f"/accounts/{ACCOUNT}/cfd_tunnel/{tun['id']}/token")
+    dns(host, tun["id"], name)
     return tun["id"], token
+
+
+def news():
+    """the news page on the production tunnel: Access app first, then the ingress rule, then DNS"""
+    access_app("HK news stream", NEWS_HOST, {"name": "Deyao", "decision": "allow", "include": [{"email": {"email": EMAIL}}]})
+    tid, _ = tunnel_and_dns(HOST, "jarvis2", [(NEWS_HOST, NEWS_ORIGIN)])
+    dns(NEWS_HOST, tid, "jarvis2")
+    print(f"ok: https://{NEWS_HOST}/ → {NEWS_ORIGIN} on tunnel {tid}, behind Access")
 
 
 def write_out(out, vals):
@@ -124,6 +142,8 @@ def rehearsal(name, out):
 
 
 def main():
+    if sys.argv[1:] == ["--news"]:
+        return news()
     if os.environ.get("REHEARSAL"):
         return rehearsal(os.environ["REHEARSAL"], sys.argv[1])
     out = sys.argv[1]
@@ -152,7 +172,9 @@ def main():
     print(f"audiences (k8s/apps/router.yaml): ACCESS_APP_AUD={aud} ACCESS_SETUP_AUD={setup_aud}")
 
     # 3. the tunnel (remotely managed) and its ingress, then DNS last
-    tid, vals["TUNNEL_TOKEN"] = tunnel_and_dns(HOST, "jarvis2")
+    access_app("HK news stream", NEWS_HOST, {"name": "Deyao", "decision": "allow", "include": [{"email": {"email": EMAIL}}]})
+    tid, vals["TUNNEL_TOKEN"] = tunnel_and_dns(HOST, "jarvis2", [(NEWS_HOST, NEWS_ORIGIN)])
+    dns(NEWS_HOST, tid, "jarvis2")
 
     write_out(out, vals)
     print(f"ok: tunnel {tid}, Access apps + setup service token ready; values in {out}")

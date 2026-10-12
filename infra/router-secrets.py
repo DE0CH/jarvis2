@@ -2,7 +2,7 @@
 """router-secrets.py — write the router's non-sensitive secrets into git, SOPS-encrypted to the box's age key
 (keys/box-age.pub); Flux decrypts them on the box (k8s/flux/sync.yaml, Kustomization jarvis2-secrets).
 
-    infra/router-secrets.py [--part backup|github|flyorgs] KEY[=SRC] …
+    infra/router-secrets.py [--part backup|github|flyorgs|news] KEY[=SRC] …
 
 SRC is `env:VAR` (default `env:KEY`) or `file:PATH`. A part is one Secret, rewritten whole each run, so name
 every key of that part (nobody can read the old values back: only the box holds the age key):
@@ -14,16 +14,19 @@ every key of that part (nobody can read the old values back: only the box holds 
                  LAST envFrom in router.yaml, so it wins over the stale GITHUB_READ_TOKEN still in the default part
   --part flyorgs k8s/secrets/router-flyorgs.enc.yaml, Secret router-secrets-flyorgs — FLY_ORG_READ_TOKENS only:
                  {"<org slug>": "<read-only org token>"} for the Machines view's other orgs (router/flyorgs.go)
+  --part news    k8s/secrets/news.enc.yaml, Secret news-secrets in jarvis2-edge — OPENROUTER_API for the
+                 hk-news-stream pod (k8s/apps/news.yaml), not the router
 Only for secrets that can't reach a code push (Deyao, 2026-10-09); the router's pod gets them as env
 (k8s/apps/router.yaml envFrom). Prints names only, never a value."""
 import hashlib, json, os, re, subprocess, sys, tempfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-PARTS = {  # part → (file, Secret name, router.yaml annotation)
-    "": ("router.enc.yaml", "router-secrets", "jarvis2/secrets-rev"),
-    "backup": ("router-backup.enc.yaml", "router-secrets-backup", "jarvis2/secrets-rev-backup"),
-    "github": ("router-github.enc.yaml", "router-secrets-github", "jarvis2/secrets-rev-github"),
-    "flyorgs": ("router-flyorgs.enc.yaml", "router-secrets-flyorgs", "jarvis2/secrets-rev-flyorgs"),
+PARTS = {  # part → (file, Secret name, annotation, namespace, manifest carrying the annotation)
+    "": ("router.enc.yaml", "router-secrets", "jarvis2/secrets-rev", "jarvis2-router", "router.yaml"),
+    "backup": ("router-backup.enc.yaml", "router-secrets-backup", "jarvis2/secrets-rev-backup", "jarvis2-router", "router.yaml"),
+    "github": ("router-github.enc.yaml", "router-secrets-github", "jarvis2/secrets-rev-github", "jarvis2-router", "router.yaml"),
+    "flyorgs": ("router-flyorgs.enc.yaml", "router-secrets-flyorgs", "jarvis2/secrets-rev-flyorgs", "jarvis2-router", "router.yaml"),
+    "news": ("news.enc.yaml", "news-secrets", "jarvis2/secrets-rev-news", "jarvis2-edge", "news.yaml"),
 }
 
 
@@ -34,7 +37,7 @@ def main():
         part, args = args[1], args[2:]
     if not args or part not in PARTS:
         sys.exit(__doc__)
-    fname, secret, annotation = PARTS[part]
+    fname, secret, annotation, namespace, manifest = PARTS[part]
     out = os.path.join(ROOT, "k8s/secrets", fname)
     data = {}
     for arg in args:
@@ -51,7 +54,7 @@ def main():
             sys.exit(f"{key}: {src} is empty")
         data[key] = v
     recipient = open(os.path.join(ROOT, "keys/box-age.pub")).read().strip()
-    doc = {"apiVersion": "v1", "kind": "Secret", "metadata": {"name": secret, "namespace": "jarvis2-router"},
+    doc = {"apiVersion": "v1", "kind": "Secret", "metadata": {"name": secret, "namespace": namespace},
            "type": "Opaque", "stringData": data}
     with tempfile.NamedTemporaryFile("w", suffix=".yaml", delete=False, dir=os.path.dirname(out)) as f:
         os.chmod(f.name, 0o600)
@@ -69,7 +72,7 @@ def main():
         s = s.replace("resources: []", "resources:")
         open(kz, "w").write(s.rstrip("\n") + "\n  - " + fname + "\n")
     rev = hashlib.sha256(enc).hexdigest()[:12]
-    rp = os.path.join(ROOT, "k8s/apps/router.yaml")
+    rp = os.path.join(ROOT, "k8s/apps", manifest)
     y = open(rp).read()  # read before opening for write: open(rp, "w") first would empty it
     if annotation + ': "' not in y:
         sys.exit(f"{rp}: no {annotation} annotation")

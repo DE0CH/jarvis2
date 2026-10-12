@@ -488,3 +488,15 @@ fill the gaps (decided while Deyao was away, ~/artifacts/away/decisions.md).
 95. **The web page takes images only** (PNG, JPEG, GIF, WebP, as they are: no conversion in the browser), from a file
     picker or pasted into the page, up to 20 per session, 25 MB each (the router's limits). It uploads them, then files
     the request; the phone approves it in the Inbox.
+
+## The hk-news-stream PoC, 2026-10-12
+
+96. **The hk-news-stream proof of concept runs on the box** (2026-10-12, Deyao asked for it on the Jarvis 2 cluster,
+    with OpenRouter for the model and nothing heavy on the box). Code and image in DE0CH/hk-news-stream (public);
+    here only `k8s/apps/news.yaml`, its Secret `k8s/secrets/news.enc.yaml` (OPENROUTER_API, `router-secrets.py --part
+    news`) and the hostname hknews.deyaochen.com on the production tunnel (`infra/cloudflare.py --news`, Access on
+    Deyao's email). It sits in `jarvis2-edge` because the bootstrap gives Flux no other namespace and a new one would
+    need a rebuild; the cloudflared policy is narrowed to cloudflared's own pod (it was every pod in the namespace),
+    and the news pod's own policy allows only cloudflared in and DNS plus public 80/443 out, so it can't reach the
+    router, the core or cloudflared's token. Its image is pinned by digest and changes only by a commit here, so the
+    other repo can't change what the box runs. Remove all four pieces together when the PoC ends.

@@ -1,0 +1,60 @@
+# hk-news-stream (DE0CH/hk-news-stream): a proof of concept of a tagged Hong Kong news stream, Deyao's only.
+# One small stdlib Python process: it reads two newspapers' section pages every 15 min, has OpenRouter tag the new
+# headlines (the model runs at OpenRouter, nothing heavy here) and serves the page at hknews.deyaochen.com through
+# cloudflared (Access: Deyao's email, infra/cloudflare.py --news). It lives in jarvis2-edge because Flux may create
+# nothing outside the three Jarvis 2 namespaces; its NetworkPolicy keeps it to DNS and the public internet, so it
+# can't reach the router, the core or cloudflared. Its one secret, OPENROUTER_API, is k8s/secrets/news.enc.yaml
+# (infra/router-secrets.py --part news). Image pinned by its linux/amd64 digest (infra/image-digest.sh).
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata: { name: news-data, namespace: jarvis2-edge }
+spec:
+  accessModes: [ReadWriteOnce]
+  resources: { requests: { storage: 1Gi } }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: news, namespace: jarvis2-edge }
+spec:
+  replicas: 1
+  strategy: { type: Recreate }
+  selector: { matchLabels: { app: news } }
+  template:
+    metadata: { labels: { app: news }, annotations: { jarvis2/secrets-rev-news: "0b8a5103d088" } }
+    spec:
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      securityContext: { fsGroup: 65532 }
+      containers:
+        - name: news
+          image: ghcr.io/de0ch/hk-news-stream:sha-0ff5125cda9b2271927bd41f3ea1e80014e055d9@sha256:275187e6edd6df5aa122adb6c8ecbd0124a964990d26f09a2f6701f6d9fd75e3
+          ports: [{ containerPort: 8080 }]
+          envFrom: [{ secretRef: { name: news-secrets } }]
+          volumeMounts: [{ name: data, mountPath: /data }]
+          readinessProbe: { httpGet: { path: /healthz, port: 8080 } }
+          resources: { requests: { cpu: 10m, memory: 32Mi }, limits: { cpu: 200m, memory: 128Mi } }
+          securityContext: { runAsNonRoot: true, runAsUser: 65532, runAsGroup: 65532, allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: { drop: [ALL] }, seccompProfile: { type: RuntimeDefault } }
+      volumes:
+        - { name: data, persistentVolumeClaim: { claimName: news-data } }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: news, namespace: jarvis2-edge }
+spec:
+  selector: { app: news }
+  ports: [{ port: 8080, targetPort: 8080 }]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: { name: news, namespace: jarvis2-edge }
+spec:
+  podSelector: { matchLabels: { app: news } }
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from: [{ podSelector: { matchLabels: { app: cloudflared } } }]
+      ports: [{ port: 8080 }]
+  egress:
+    - to: [{ namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: kube-system } }, podSelector: { matchLabels: { k8s-app: kube-dns } } }]
+      ports: [{ port: 53, protocol: UDP }, { port: 53, protocol: TCP }]
+    - to: [{ ipBlock: { cidr: 0.0.0.0/0, except: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16] } }]
+      ports: [{ port: 443, protocol: TCP }, { port: 80, protocol: TCP }]

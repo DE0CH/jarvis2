@@ -1,1 +1,1 @@
-resources: [core.yaml, router.yaml, edge.yaml]
+resources: [core.yaml, router.yaml, edge.yaml, news.yaml]
