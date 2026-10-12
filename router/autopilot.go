@@ -443,8 +443,21 @@ func planTick(d *persisted, now time.Time, storedExp int64, c pilotConfig, busy,
 			}
 		}
 
-		// stall nudge: idle with background jobs, no turn for StallNudge → a peer message, repeated every StallNudge
-		if operating || l.OneShot || c.StallNudge <= 0 || g == nil || g.Status != "idle" || g.BgTasks == 0 {
+		// stall nudge: idle with background jobs, no turn for StallNudge → a peer message, repeated every StallNudge.
+		// Claude Code (2.1.29x) keeps the status "busy" while background jobs run after the turn ended, so a
+		// "busy" session counts as waiting on its jobs when its pushed screen shows no turn running (no spinner)
+		jobsOnly := g != nil && g.BgTasks > 0 && g.Status == "idle"
+		unsure := false
+		if g != nil && g.BgTasks > 0 && g.Status == "busy" {
+			if l.screen == nil || now.Sub(l.screen.at) >= screenFresh {
+				unsure = true // no recent screen (a machine without the push, or just after a router restart): keep the clock
+			} else {
+				jobsOnly = !turnOnScreen(l.screen.snap.Screen)
+			}
+		}
+		if unsure && !operating && !l.OneShot {
+			// leave l.Stall as it is
+		} else if operating || l.OneShot || c.StallNudge <= 0 || !jobsOnly {
 			l.Stall = nil
 		} else if l.Stall == nil || l.Stall.StatusAt != g.StatusUpdatedAt {
 			l.Stall = &stallClock{At: now, StatusAt: g.StatusUpdatedAt}
@@ -526,6 +539,12 @@ func attentionText(kind, name string) string {
 }
 
 // nudgeText: Jarvis 1's lib/stall.js nudgeText
+// turnOnScreen: Claude Code's spinner line is on the pane — a turn is running ("✢ Unfurling… (22s · thought for
+// 12s)"); a session only waiting on background jobs shows none
+var spinnerLine = regexp.MustCompile(`(?m)^\s*\S\s+[A-Z][\p{L}-]*…\s*\(\d`)
+
+func turnOnScreen(screen string) bool { return spinnerLine.MatchString(ansiSeq.ReplaceAllString(screen, "")) }
+
 func nudgeText(bgTasks int, stalled time.Duration) string {
 	jobs := fmt.Sprintf("%d background jobs have", bgTasks)
 	if bgTasks == 1 {

@@ -611,3 +611,46 @@ func TestStallClockSurvivesRestart(t *testing.T) {
 		t.Fatal("15 min stalled across restarts didn't nudge")
 	}
 }
+
+// Claude Code keeps "busy" while background jobs run after the turn: the pushed screen tells a running turn apart
+func TestStallNudgeWhileBusyWithJobs(t *testing.T) {
+	c, now := defaultPilot, time.Now()
+	c.Attention = 1000 * time.Hour
+	no := func(string) bool { return false }
+	l := &Liveness{AutoPauseOff: true}
+	d := running("s1", l)
+	busy := &Registry{Status: "busy", BgTasks: 10, StatusUpdatedAt: 9}
+	idleScreen := "────── title ─\n❯ \n──────\n  ⏵⏵ bypass permissions on\n  ◯ general-purpose (+1) 8h 9m · ↓ 391k tokens\n"
+	turnScreen := "\x1b[33m✢\x1b[0m Unfurling… (22s · thought for 12s)\n  ⎿  Tip\n❯ \n"
+	if !turnOnScreen(turnScreen) || turnOnScreen(idleScreen) || turnOnScreen("✻ Worked for 3m 2s\n❯ \n") {
+		t.Fatal("turnOnScreen")
+	}
+	at := func(m int) time.Time { return now.Add(time.Duration(m) * time.Minute) }
+	push := func(m int, sc string) { l.screen = &pushedScreen{snap: TermSnap{Screen: sc}, at: at(m)} }
+	push(0, idleScreen)
+	report(l, now, busy)
+	planTick(d, now, 0, c, no, no)
+	push(15, idleScreen)
+	report(l, at(15), busy)
+	if !strings.Contains(kinds(planTick(d, at(15), 0, c, no, no)), "nudge") {
+		t.Fatal("busy with jobs and no turn on screen for 15 min: no nudge")
+	}
+	// a turn running restarts the clock
+	push(20, turnScreen)
+	report(l, at(20), busy)
+	planTick(d, at(20), 0, c, no, no)
+	if l.Stall != nil {
+		t.Fatal("a running turn kept the clock")
+	}
+	// no fresh screen (a router restart): the clock is kept, nothing decided
+	push(21, idleScreen)
+	report(l, at(21), busy)
+	planTick(d, at(21), 0, c, no, no)
+	kept := l.Stall
+	l.screen = nil
+	report(l, at(22), busy)
+	planTick(d, at(22), 0, c, no, no)
+	if l.Stall != kept || kept == nil {
+		t.Fatal("no screen dropped the clock")
+	}
+}
