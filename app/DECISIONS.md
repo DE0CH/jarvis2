@@ -209,6 +209,11 @@ fixes, 34–40 carried over from the old app and still true, 41–43 the web pag
     app are amber badges; image counts are a badge. Toasts that dropped a name or value into a sentence are fixed
     strings now. Long explanations became one fixed line or went.
 
+56. **Machines, Previous, Stores**: machine, volume, app and org facts are rows (Session, Name, Region, Size, Created,
+    Router, Image, Attached to, Used by, Machines…); the page head is Orgs (badges), Machines and "Stand out" (a count
+    pill); a previous session's archive is Transcripts / Artifact files rows, "not restorable" a pill; a store's state
+    is all pills. A previous session's last message is a Quote labelled whose it was.
+
 ## Unfinished / known gaps
 
 - Free text (prompt, title) reaches the machine signed only with a core that vouches (the held core doesn't).

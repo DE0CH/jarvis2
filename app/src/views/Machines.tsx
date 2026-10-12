@@ -7,15 +7,15 @@
 // to nothing shows why in amber, and the count heads the page.
 import { api, ago, REGION, sessionTitle, type Machine, type FlyAppView, type FlyOrgView, type FlyVolumeView } from "../lib/api";
 import { useStore, getStore, ask, exclusive, pend, failed, setTab, loadMachines, toast } from "../lib/store";
-import { Callout, Card, Flex, Heading, Lbl, Muted, P, Pill, Spinner } from "../ui/kit";
+import { BadgeList, Callout, Card, Flex, Heading, Lbl, Muted, P, Pill, Row, Rows, Spinner } from "../ui/kit";
 import { PButton } from "../ui/bits";
 import { Cards } from "../ui/cards";
 
 const shortImage = (img: string) => img.replace(/^ghcr\.io\/de0ch\//, "").replace(/@sha256:([0-9a-f]{12})[0-9a-f]+$/, "@sha256:$1…");
 const stateKind = (s: string) => (s === "started" ? "ok" : s === "starting" || s === "created" || s === "replacing" ? "wait" : s === "failed" ? "bad" : "dim");
 const routerHost = (u: string) => { try { return new URL(u).hostname; } catch { return u; } };
-const plural = (n: number, w: string) => `${n} ${w}${n === 1 ? "" : "s"}`;
-const createdText = (c: string) => (c ? "Created " + ago(c) + " · " + new Date(c).toISOString().replace("T", " ").slice(0, 16) + " UTC" : "Created: unknown");
+const createdText = (c: string) => (c ? ago(c) + " · " + new Date(c).toISOString().replace("T", " ").slice(0, 16) + " UTC" : "Unknown");
+const regionText = (r: string) => (REGION[r] ? `${REGION[r]} (${r})` : r);
 
 // reload until the list satisfies pred: two-phase, the card goes only when Fly no longer lists it
 async function settleMachines(pred: (l: Machine[]) => boolean, maxMs = 30000) {
@@ -25,8 +25,9 @@ async function settleMachines(pred: (l: Machine[]) => boolean, maxMs = 30000) {
 
 function destroyOrphan(m: Machine) {
   return exclusive("machine:" + m.id, async () => {
-    const ok = await ask({ title: `Destroy machine ${m.id}?`, danger: true, action: "Destroy machine",
-      detail: `${m.name || m.id} belongs to no session${m.test ? " (it points at a test router)" : ""}. The core destroys it on Fly with its disk; nothing of it is archived. It can't be undone.` });
+    const ok = await ask({ title: "Destroy machine?", danger: true, action: "Destroy machine",
+      rows: [{ label: "Machine", value: m.id }, ...(m.name ? [{ label: "Name", value: m.name }] : []), { label: "Session", value: "None" }, ...(m.test ? [{ label: "Router", value: "Test" }] : [])],
+      detail: "Its disk goes too; nothing is archived." });
     if (!ok) return;
     pend("machine:" + m.id, "Destroying…");
     try {
@@ -49,17 +50,21 @@ function MachineCard({ org, a, m }: { org: string; a: FlyAppView; m: Machine }) 
         <Pill kind={stateKind(m.state)}>{m.state || "unknown"}</Pill>
       </Flex>
       {!!m.attention && <P size={2} mb={1} color="amber" weight="medium" id={"machine-attention-" + m.id}>{m.attention}</P>}
-      {a.own && (m.sessionId
-        ? <P size={2} mb={1} onPress={() => setTab("sessions")} id={"machine-session-" + m.id} data={{ sessionLink: m.sessionId }}><P size={2} color="gray">{m.current ? "Session: " : "Earlier machine of: "}</P><P size={2} color="blue">{(s ? sessionTitle(s) : m.sessionId) + " ›"}</P></P>
-        : null)}
-      {!a.own && !!m.otherSession && <Muted>{"Jarvis 1 session " + m.otherSession}</Muted>}
-      {!!m.name && <Muted>{m.name}</Muted>}
-      <Muted>{[REGION[m.region] ? `${REGION[m.region]} (${m.region})` : m.region, [m.size, m.guest].filter(Boolean).join(" · ")].filter(Boolean).join(" · ")}</Muted>
-      <Muted>{createdText(m.created)}</Muted>
-      {a.own && <Muted>{m.routerUrl ? "Router: " + routerHost(m.routerUrl) + (m.test ? " (a test router)" : "") : "Router: none set"}</Muted>}
-      <P size={1} color="gray" mono mt={1} selectable>{shortImage(m.image) || "no image"}</P>
+      <Rows>
+        {a.own && (m.sessionId
+          ? <Row label={m.current ? "Session" : "Earlier machine of"}><P size={2} color="blue" onPress={() => setTab("sessions")} id={"machine-session-" + m.id} data={{ sessionLink: m.sessionId }}>{(s ? sessionTitle(s) : m.sessionId) + " ›"}</P></Row>
+          : <Row label="Session" id={"machine-nosession-" + m.id}>None</Row>)}
+        {!a.own && !!m.otherSession && <Row label="Jarvis 1 session">{m.otherSession}</Row>}
+        {!!m.name && <Row label="Name">{m.name}</Row>}
+        {!!m.region && <Row label="Region">{regionText(m.region)}</Row>}
+        {!!(m.size || m.guest) && <Row label="Size">{[m.size, m.guest].filter(Boolean).join(" · ")}</Row>}
+        <Row label="Created">{createdText(m.created)}</Row>
+        {a.own && <Row label="Router">{m.routerUrl ? routerHost(m.routerUrl) : "None set"}</Row>}
+        <Row label="Image" mono selectable>{shortImage(m.image) || "None"}</Row>
+        {a.own && !m.sessionId && !!m.noDestroy && <Row label="No destroy" id={"machine-nodestroy-" + m.id}>{m.noDestroy}</Row>}
+      </Rows>
       {a.own && !m.sessionId && (m.noDestroy
-        ? <Muted mt={2}>{"Destroy isn't offered: " + m.noDestroy + "."}</Muted>
+        ? null
         : <Flex gap={2} pt={3} style={{ marginTop: "auto" }}>
             <PButton pkey={"machine:" + m.id} color="red" variant="soft" onPress={() => destroyOrphan(m)} label="Destroy" />
           </Flex>)}
@@ -75,8 +80,13 @@ function VolumeCard({ org, a, v }: { org: string; a: FlyAppView; v: FlyVolumeVie
         <Pill kind="dim">volume</Pill>
       </Flex>
       {!!v.attention && <P size={2} mb={1} color="amber" weight="medium">{v.attention}</P>}
-      <Muted>{[v.name, `${v.sizeGb} GB`, REGION[v.region] ? `${REGION[v.region]} (${v.region})` : v.region, v.attachedTo ? "attached to " + v.attachedTo : ""].filter(Boolean).join(" · ")}</Muted>
-      <Muted>{createdText(v.created)}</Muted>
+      <Rows>
+        {!!v.name && <Row label="Name">{v.name}</Row>}
+        <Row label="Size">{`${v.sizeGb} GB`}</Row>
+        {!!v.region && <Row label="Region">{regionText(v.region)}</Row>}
+        <Row label="Attached to">{v.attachedTo || "Nothing"}</Row>
+        <Row label="Created">{createdText(v.created)}</Row>
+      </Rows>
     </Card>
   );
 }
@@ -90,7 +100,11 @@ function AppSection({ org, a }: { org: string; a: FlyAppView }) {
         {a.own ? <Pill kind="info">this Jarvis</Pill> : <Pill kind="dim">read-only</Pill>}
         {!!a.status && <Muted>{a.status}</Muted>}
       </Flex>
-      <Muted>{[a.label || "Not an app any Jarvis runs sessions in", plural(n, "machine") + (a.volumes.length ? ", " + plural(a.volumes.length, "volume") : "")].join(" · ")}</Muted>
+      <Rows mt={1}>
+        <Row label="Used by">{a.label || "No Jarvis"}</Row>
+        <Row label="Machines">{String(n)}</Row>
+        {a.volumes.length > 0 && <Row label="Volumes">{String(a.volumes.length)}</Row>}
+      </Rows>
       {!!a.error && <P size={2} color="red" mt={1}>{"Could not list this app: " + a.error}</P>}
       {(n > 0 || a.volumes.length > 0) && (
         <Cards mt={8}>
@@ -107,7 +121,11 @@ function OrgSection({ o }: { o: FlyOrgView }) {
   return (
     <Flex dir="column" mt={6} data={{ flyOrg: o.org }}>
       <Lbl mt={0}>{"Org " + o.org}</Lbl>
-      <Muted>{`${plural(o.apps.length, "app")}, ${plural(machines, "machine")}${o.via && o.via !== "fly" ? " · via " + o.via : ""}`}</Muted>
+      <Rows>
+        <Row label="Apps">{String(o.apps.length)}</Row>
+        <Row label="Machines">{String(machines)}</Row>
+        {!!o.via && o.via !== "fly" && <Row label="Read via">{o.via}</Row>}
+      </Rows>
       {!!o.error && <P size={2} color="red">{"Could not list this org: " + o.error}</P>}
       {!o.error && !o.apps.length && <Muted mt={1}>No apps in this org.</Muted>}
       {o.apps.map((a) => <AppSection key={a.app} org={o.org} a={a} />)}
@@ -121,10 +139,12 @@ export function Machines() {
   const total = fo.orgs.reduce((t, o) => t + o.apps.reduce((u, a) => u + a.machines.length, 0), 0);
   return (
     <>
-      <Muted>Every Fly machine in {plural(fo.orgs.length, "org")} ({fo.orgs.map((o) => o.org).join(", ")}): {plural(total, "machine")}. Only a machine of jarvis2-sessions with no session can be destroyed here. A paused session has no machine.</Muted>
-      {fo.attention > 0
-        ? <Callout color="amber" mt={3} id="machines-attention" data={{ machinesAttention: String(fo.attention) }}>{`${fo.attention} ${fo.attention === 1 ? "thing stands" : "things stand"} out below (stopped, failed or unexplained).`}</Callout>
-        : <Callout color="green" mt={3} id="machines-attention" data={{ machinesAttention: "0" }}>Nothing stands out.</Callout>}
+      <Rows id="machines-summary">
+        <Row label="Orgs"><BadgeList items={fo.orgs.map((o) => o.org)} /></Row>
+        <Row label="Machines" id="machines-total">{String(total)}</Row>
+        <Row label="Stand out" id="machines-attention" data={{ machinesAttention: String(fo.attention) }}>{fo.attention > 0 ? <Pill kind="wait">{String(fo.attention)}</Pill> : <Pill kind="ok">none</Pill>}</Row>
+      </Rows>
+      <Muted mt={2}>Destroy: jarvis2-sessions machines with no session only.</Muted>
       {!!fo.configError && <P size={2} color="red" mt={2}>{fo.configError}</P>}
       {!!ms.err && <P size={2} color="red" mt={2}>{"Could not refresh: " + ms.err}</P>}
       {fo.orgs.map((o) => <OrgSection key={o.org} o={o} />)}

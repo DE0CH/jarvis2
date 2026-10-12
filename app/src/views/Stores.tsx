@@ -16,19 +16,18 @@ export function Stores() {
   return (
     <>
       <Flex align="center" gap={2} mb={3}>
-        <Muted style={{ flex: 1 }}>{hasShell ? "Unlock and lock stores on the secure page (Face ID)." : "Unlocking and locking happen in the Jarvis 2 app on the iPhone."}</Muted>
+        <Muted style={{ flex: 1 }}>{hasShell ? "Unlock and lock with Face ID." : "Unlock and lock in the iPhone app."}</Muted>
         {hasShell && <Button id="stores-manage" onPress={manage}>Unlock / lock…</Button>}
       </Flex>
       {!r.loaded ? (r.err ? <P size={2} color="red">{r.err}</P> : <Flex gap={2} align="center"><Spinner /><Muted>Loading stores…</Muted></Flex>)
-        : !r.items.length ? <P size={3} color="gray" align="center" mt={8} mb={8}>The core holds no stores yet.</P>
+        : !r.items.length ? <P size={3} color="gray" align="center" mt={8} mb={8}>No stores.</P>
         : <Cards>
           {r.items.filter((s) => s.name !== CORE_STORE).map((s) => (
             <Card key={s.name} data={{ store: s.name }}>
               <Flex justify="space-between" align="flex-start" gap={2} mb={1}>
                 <Heading size={3} style={{ flex: 1 }}>{s.name}</Heading>
-                <Flex gap={1}>{s.sensitive && <Pill kind="bad">sensitive</Pill>}{s.unlocked ? <Pill kind="ok">unlocked</Pill> : <Pill kind="dim">locked</Pill>}</Flex>
+                <Flex gap={1} wrap justify="flex-end">{s.sensitive && <Pill kind="bad">sensitive</Pill>}{s.unlocked ? <Pill kind="ok">unlocked</Pill> : <Pill kind="dim">locked</Pill>}{s.empty && <Pill kind="dim">empty</Pill>}{harness.has(s.name) && <Pill kind="info">harness</Pill>}</Flex>
               </Flex>
-              <Muted>{[s.empty ? "empty" : "", harness.has(s.name) ? "brought by its harness" : ""].filter(Boolean).join(" · ") || "holds values"}</Muted>
             </Card>
           ))}
         </Cards>}

@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { useStore, toast } from "../lib/store";
 import { canCopy, copyText } from "../lib/clipboard";
 import { useTheme } from "../theme";
-import { Button, P, Spinner, type BtnVariant } from "./kit";
+import { Button, P, Quote, Spinner, type BtnVariant } from "./kit";
 import type { ColorName } from "../theme";
 
 // A button tied to a pending-action key: shows the in-flight label (disabled, spinner) while the
@@ -55,5 +55,5 @@ export function CopyButton({ value, what, id, size = 1, label = "Copy" }: { valu
 
 // what a conversation ended on (a paused or previous session's card), clamped to three lines
 export function LastMessage({ last }: { last: { role: "user" | "assistant"; text: string } }) {
-  return <P size={2} mt={2} lines={3} data={{ last: "1" }}><P size={2} color="gray">{last.role === "user" ? "You: " : "Claude: "}</P>{last.text}</P>;
+  return <Quote by={last.role === "user" ? "Last message (you)" : "Last message (Claude)"} lines={3}>{last.text}</Quote>;
 }
