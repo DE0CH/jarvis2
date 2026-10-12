@@ -143,7 +143,7 @@ final class Jarvis2UITests: JarvisUITestCase {
     XCTAssertTrue(el("secure-store-default").exists, "[\(tag)] default offered")
     XCTAssertFalse(el("secure-store-core").exists, "[\(tag)] the core store is not offered")
     XCTAssertFalse(el("secure-store-claude-login").exists, "[\(tag)] the harness's own store is not offered as a pick")
-    XCTAssertTrue(el("ns-harness-store-claude-login").exists, "[\(tag)] …but listed as what the harness brings")
+    XCTAssertTrue(scrolledTo(el("ns-harness-store-claude-login")), "[\(tag)] …but listed as what the harness brings")
     XCTAssertTrue(scrolledTo(el("secure-mode-bypass")), "[\(tag)] the page picks the permission mode")
     let unlocks = el("ns-unlocks")
     XCTAssertTrue(scrolledTo(unlocks) && said(unlocks).contains("claude-login"), "[\(tag)] Start says it unlocks the locked harness store")
@@ -152,7 +152,7 @@ final class Jarvis2UITests: JarvisUITestCase {
     let image = attachImage()
     if el("secure-store-gmail").waitForExistence(timeout: 3) {
       el("secure-store-gmail").tap(); sleep(1)
-      XCTAssertTrue(el("secure-sensitive-warning").exists, "[\(tag)] sensitive warning")
+      XCTAssertTrue(scrolledTo(el("secure-sensitive-warning"), max: 3), "[\(tag)] sensitive warning")
       shot("new-session-sensitive")
       el("secure-store-gmail").tap()
     }

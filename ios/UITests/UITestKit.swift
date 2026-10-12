@@ -192,18 +192,17 @@ class JarvisUITestCase: XCTestCase {
       add.tap()
       sleep(3)
       shot("photos-picker", checkBlank: false)
-      // the picker runs out of process; its grid is reachable through the app's tree
-      let photo = [app.scrollViews.otherElements.images.firstMatch,
-                   app.images.matching(NSPredicate(format: "label BEGINSWITH 'Photo'")).firstMatch,
-                   app.collectionViews.cells.firstMatch].first { $0.waitForExistence(timeout: 10) }
-      if let photo {
+      // the picker runs out of process; its grid is reachable through the app's tree: photos are Images
+      // "PXGGridLayout-Info" labelled "Photo, <date>", newest first (the one simctl addmedia added)
+      let photo = app.images.matching(identifier: "PXGGridLayout-Info").firstMatch
+      if photo.waitForExistence(timeout: 20) {
         photo.tap()
-        sleep(1)
-        let addBtn = app.buttons.matching(NSPredicate(format: "label == 'Add' OR identifier == 'Add'")).firstMatch
-        if addBtn.waitForExistence(timeout: 5) { addBtn.tap() }
+        // with more than one allowed, the picker's confirm button (identifier "Add", label "Done") ends the pick
+        let done = app.buttons.matching(identifier: "Add").firstMatch
+        if done.waitForExistence(timeout: 10) { done.tap() } else { note("tree-photos-no-add", app.debugDescription) }
       } else {
         note("tree-photos-picker", app.debugDescription)
-        let cancel = app.buttons["Cancel"].firstMatch
+        let cancel = app.buttons.matching(identifier: "Cancel").firstMatch
         if cancel.exists { cancel.tap() }
       }
     }
