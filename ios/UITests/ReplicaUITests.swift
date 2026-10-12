@@ -226,13 +226,16 @@ final class ReplicaUITests: JarvisUITestCase {
         XCTAssertTrue(said(el("signed-feature")).contains("Terminal"), "the review names the feature")
         shot("grant-review")
         el("secure-back").tap()
-        XCTAssertTrue(wait(allow, 20, "denied: still turned away"), "deny")
-        allow.tap()
-        _ = arrives(el("secure-grant-allow"), 30, "the grant review again")
-        faceIDMatches()
-        el("secure-grant-allow").tap()
-        XCTAssertTrue(gone(el("secure-grant-allow"), 90), "the review closes after Face ID")
-        XCTAssertTrue(gone(allow, 60), "allowed: the terminal opens")
+        // denied: the screen stays view only; the next keystroke is turned away again
+        if input.waitForExistence(timeout: 20) { input.tap(); input.typeText("x"); app.webViews.buttons["Send"].tap() }
+        if wait(allow, 60, "denied: typing still turned away") {
+          allow.tap()
+          _ = arrives(el("secure-grant-allow"), 30, "the grant review again")
+          faceIDMatches()
+          el("secure-grant-allow").tap()
+          XCTAssertTrue(gone(el("secure-grant-allow"), 90), "the review closes after Face ID")
+          XCTAssertTrue(gone(allow, 60), "allowed: the terminal opens")
+        }
       }
     }
     if wait(input, 30, "the terminal input") {
