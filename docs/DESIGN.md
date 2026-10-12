@@ -506,6 +506,10 @@ any of the line's stores is sensitive, and the **line id** (the line's first mac
   - the session's **own allow list** (`jarvis2-machine allow <holder> <duration>`, kept in the snapshot): the
     machine approving for itself.
 - A session holding a **sensitive** store accepts only a fresh phone grant.
+- **Viewing the terminal needs no grant** (Deyao, 2026-10-12): the machine pushes its own capture of the harness's
+  pane to the router (`/m/screen`, every 2 s when it changed, 30 s heartbeat), as it pushes its status. Nothing goes
+  into the machine for it. Typing, resizing and the Escape on a stale prompt stay behind the `terminal` / `status`
+  grants; the "switch model?" dialog check reads the pushed pane.
 - Grants name the line, which the machine reads from its core-signed cert, so the router can't make one line's
   grant open another line's machine. Request ids are single-use and at most 2 minutes old.
 - Re-pairing the phone: running machines trust the old phone key until their line's next cert.

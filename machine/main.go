@@ -571,6 +571,7 @@ func agent() error {
 			time.Sleep(time.Second)
 		}
 		go statusReporter(c)
+		go screenReporter(c) // screen.go: the pane for the read-only terminal
 		go serveAPIProxy(c) // apiproxy.go: $JARVIS_URL for Jarvis 1's session scripts
 		go liveSync(c)      // livesync.go: the transcripts to the Storage Box (through the router) for search
 	}()

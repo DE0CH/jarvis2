@@ -512,3 +512,11 @@ fill the gaps (decided while Deyao was away, ~/artifacts/away/decisions.md).
     only when the bytes hash to the signed value. Photos and camera shots go as JPEG (quality 0.85, longest side at most
     4096 px; HEIC never leaves the phone); PNG, JPEG, GIF and WebP from Files or the clipboard go as they are; any other
     image type is made a JPEG (app/DECISIONS.md 47-49).
+
+## Read-only terminal without a grant, 2026-10-12
+
+Deyao asked for a read-only terminal that needs no grant. The machine pushes its pane (as it pushes status), so no input
+reaches the machine and the input guard is untouched. Every session pushes, sensitive ones included: the router already
+holds each session's conversation (live sync, snapshot tails), so the pane adds little it couldn't see. The push runs
+every 2 s only when the pane changed; the router keeps the latest one in memory. Change: make the push a signed New
+session setting (`Checks.configKeys`) if a session should keep its screen from the router.

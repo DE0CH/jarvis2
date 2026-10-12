@@ -56,6 +56,7 @@ type Liveness struct {
 	oneShotFiring   bool
 	dialogCheckedAt int64 // statusUpdatedAt of the waiting episode whose pane was checked for the dialog
 	dialogReported  bool
+	screen          *pushedScreen // the pane the machine pushes itself (machine/screen.go); in memory only
 }
 
 type waitEpisode struct {
@@ -206,6 +207,22 @@ func (r *Router) registerAutopilot(app appRoute, m machineRoute) {
 			if appTitle != "" {
 				s.AppTitle = appTitle // kept while paused, as Jarvis 1's paused record keeps the title the app showed
 			}
+		})
+		writeJSON(w, 200, map[string]bool{"ok": true})
+	})
+	// the read-only terminal: the machine's own capture of its pane (machine/screen.go), kept in memory
+	m("POST /m/screen", func(w http.ResponseWriter, req *http.Request, machine string, body []byte) {
+		var in TermSnap
+		json.Unmarshal(body, &in)
+		r.st.Do(func(d *persisted) {
+			s := d.Sessions[d.Machines[machine]]
+			if s == nil || s.MachineID != machine {
+				return
+			}
+			if s.Live == nil {
+				s.Live = &Liveness{}
+			}
+			s.Live.screen = &pushedScreen{snap: in, at: time.Now()}
 		})
 		writeJSON(w, 200, map[string]bool{"ok": true})
 	})
@@ -369,6 +386,7 @@ func planTick(d *persisted, now time.Time, storedExp int64, c pilotConfig, busy,
 		l := s.Live
 		if s.State != "started" || s.MachineID == "" {
 			l.IdleSince, l.waiting, l.settled, l.stall, l.dialogCheckedAt, l.dialogReported = time.Time{}, nil, nil, nil, 0, false
+			l.screen = nil
 			if s.MachineID == "" {
 				l.Reg = nil // paused: the next machine reports afresh
 			}
@@ -603,8 +621,17 @@ func (r *Router) runAction(a pilotAction) {
 		}()
 	case "dialog":
 		go func() {
-			res, err := r.execAs(a.Session, "status", "tmux capture-pane -p -t claude", 20*time.Second)
-			if err != nil || !promptOnScreen(res.Stdout) {
+			// the machine's own pushed pane first (no grant); a machine without the screen push needs the status grant
+			snap, ok := r.pushedScreen(a.Session)
+			screen := snap.Screen
+			if !ok {
+				res, err := r.execAs(a.Session, "status", "tmux capture-pane -p -t claude", 20*time.Second)
+				if err != nil {
+					return
+				}
+				screen = res.Stdout
+			}
+			if !promptOnScreen(screen) {
 				return
 			}
 			r.st.Do(func(d *persisted) {

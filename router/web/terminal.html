@@ -168,13 +168,19 @@
   }
 
   // ---- errors: a grant the phone hasn't given, an expired login, anything else as it came ----
-  let reloaded = false;
-  function show(text, grant) {
+  let reloaded = false, bannerFrom = "";
+  // from: "view" (the picture failed; the next good picture clears it) or "input" (typing was refused; it stays
+  // until a grant arrives, so a working read-only picture doesn't hide it)
+  function show(text, grant, from) {
     bannerText.textContent = text;
     allowBtn.hidden = !grant;
+    bannerFrom = from || "view";
     banner.classList.add("on");
   }
-  function clearBanner() { banner.classList.remove("on"); allowBtn.hidden = true; }
+  function clearBanner(from) {
+    if (from && bannerFrom && from !== bannerFrom) return;
+    banner.classList.remove("on"); allowBtn.hidden = true; bannerFrom = "";
+  }
   function signin() {
     const n = native();
     if (n) { n.postMessage({ action: "signin" }); show("Signing in again…", false); return; }
@@ -208,10 +214,10 @@
     if (!res.ok) return Object.assign({ ok: false }, await reason(res));
     try { return { ok: true, data: await res.json() }; } catch (e) { return { ok: false, kind: "auth" }; }
   }
-  function failed(r) {
+  function failed(r, from) {
     if (r.kind === "auth") signin();
-    else if (r.kind === "grant") show("This session's terminal needs a grant.", true);
-    else show(r.msg, false);
+    else if (r.kind === "grant") show(from === "input" ? "Typing needs a grant." : "This session's terminal needs a grant.", true, from);
+    else show(r.msg, false, from);
   }
 
   // the app opens its own Face ID review; a browser files a request in the phone's Inbox instead
@@ -238,15 +244,16 @@
     polling = false;
     if (r.ok) {
       sessionStorage.removeItem("jarvis2-term-reloaded");
-      clearBanner();
+      clearBanner("view");
       const f = r.data || {};
       const [x, y, w, h, vis] = String(f.cursor || "").split(",").map((v) => parseInt(v, 10));
-      statusEl.textContent = w ? "live · " + w + "×" + h : "live";
+      // a pushed picture (f.at) is view only until a grant lets typing through
+      statusEl.textContent = (f.at && !typing ? "view only" : "live") + (w ? " · " + w + "×" + h : "");
       const key = (f.screen || "") + "|" + (f.cursor || "");
       if (key !== lastKey) { lastKey = key; draw(parseScreen(String(f.screen || ""), vis ? [x, y] : null)); }
     } else {
       statusEl.textContent = "no picture";
-      failed(r);
+      failed(r, "view");
     }
     if (again) { again = false; return tick(); }
     // a login being repaired by the app waits for its jarvis2Refresh; everything else polls on
@@ -254,6 +261,7 @@
   }
   // the app calls this after a grant was signed or a sign-in finished
   window.jarvis2Refresh = () => { clearBanner(); fitted = ""; fit(); tick(); };
+  let typing = false; // the last input or resize went through (a grant is in force)
 
   // ---- input strictly in order, one request at a time; text typed meanwhile joins the next ----
   const queue = [];
@@ -267,7 +275,7 @@
       while (queue.length) {
         const b = queue.shift();
         const r = await call("POST", "terminal", b);
-        if (!r.ok) failed(r);
+        if (!r.ok) { typing = false; failed(r, "input"); } else { typing = true; clearBanner("input"); }
       }
     } finally { sending = false; }
     setTimeout(tick, 150);
@@ -318,7 +326,8 @@
     if (k === fitted) return;
     fitted = k;
     clearTimeout(fitTimer);
-    fitTimer = setTimeout(async () => { const r = await call("POST", "terminal", { cols, rows }); if (!r.ok) failed(r); }, 400);
+    // fitting the window is input too: without a grant the picture keeps the window's own size, quietly
+    fitTimer = setTimeout(async () => { const r = await call("POST", "terminal", { cols, rows }); if (r.ok) typing = true; else if (r.kind !== "grant") failed(r, "view"); else fitted = ""; }, 400);
   }
   viewport();
   if (window.visualViewport) { visualViewport.addEventListener("resize", () => { viewport(); fit(); }); visualViewport.addEventListener("scroll", viewport); }

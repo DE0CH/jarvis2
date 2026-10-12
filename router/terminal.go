@@ -17,9 +17,36 @@ const snapCmd = `tmux capture-pane -p -e -t claude; printf '\n__CUR__%s\n' "$(tm
 type TermSnap struct {
 	Screen string `json:"screen"`
 	Cursor string `json:"cursor"` // x,y,width,height,visible
+	At     string `json:"at,omitempty"` // when the machine pushed it (a pushed screen; empty = read just now by the holder)
 }
 
+// pushedScreen: a machine's screen push counts while its heartbeat (30 s) can still be on time
+const screenFresh = 45 * time.Second
+
+type pushedScreen struct {
+	snap TermSnap
+	at   time.Time
+}
+
+// pushedScreen: the latest pane the session's machine pushed itself (machine/screen.go), if it is fresh
+func (r *Router) pushedScreen(session string) (TermSnap, bool) {
+	var out TermSnap
+	ok := false
+	r.st.Do(func(d *persisted) {
+		if s := d.Sessions[session]; s != nil && s.Live != nil && s.Live.screen != nil && s.MachineID != "" && time.Since(s.Live.screen.at) < screenFresh {
+			out, ok = s.Live.screen.snap, true
+			out.At = s.Live.screen.at.UTC().Format(time.RFC3339)
+		}
+	})
+	return out, ok
+}
+
+// TermSnapshot: the pane. Viewing needs no grant (Deyao, 2026-10-12): the machine pushes its own capture; only a
+// machine on an image from before the push is read through the terminal holder (a grant).
 func (r *Router) TermSnapshot(session string) (TermSnap, error) {
+	if snap, ok := r.pushedScreen(session); ok {
+		return snap, nil
+	}
 	res, err := r.Exec(session, "terminal", snapCmd, 15*time.Second)
 	if err != nil {
 		return TermSnap{}, err
