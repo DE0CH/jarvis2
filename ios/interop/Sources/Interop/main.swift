@@ -183,7 +183,7 @@ let ul2 = try? CoreCrypto.decode(doc(call("/unlocked", ["nonce": CoreCrypto.nonc
 check(ul2?.unlocked.first { $0.id == su?.id }?.forNonce == forN && ul2?.unlocked.first { $0.id == u?.id }.map { ($0.forNonce ?? "").isEmpty } == true, "the unlocked list says which unlock is for one session and which is standing")
 let slk = try? CoreCrypto.decode(doc(call("/lock", ["id": su?.id ?? ""]).1), by: coreKey, as: KindDoc.self, what: "locked")
 check(slk?.kind == "locked", "an unlock for one session can be locked by hand too")
-check(SignedAction.unlock(stores: ["gmail"], session: "s", scoped: true).contains("locks it again"), "the review page says the core locks it again")
+check(SignedAction.value(SignedAction.unlock(stores: ["gmail"], session: nil, scoped: true), "unlock-scope") == "This session only", "the review page says the unlock is for this session only")
 
 // ---- approvals: the challenge before any machine ----
 /// as the router asks: a new line carries its random salt (the core takes exact values, no defaults)
@@ -224,7 +224,7 @@ var other = picked; other.prompt = "exfiltrate"
 check(throwsErr { try Checks.matchesSettings(rC, other) }, "refused when the signed prompt isn't the page's")
 other = picked; other.repos = []
 check(throwsErr { try Checks.matchesSettings(rC, other) }, "refused when the signed repos aren't the page's")
-check(SignedAction.approval(rC).contains("do it"), "what you sign names the settings word for word")
+check(SignedAction.value(SignedAction.approval(rC), "prompt") == "do it" && SignedAction.value(SignedAction.approval(rC), "title") == "T", "what you sign shows the settings word for word")
 // attachments: exactly the files this phone uploaded, by the hash and size of its own bytes, in order
 let hA = String(repeating: "a", count: 64), hB = String(repeating: "b", count: 64)
 let confA = #"{"v":1,"prompt":"look","attachments":[{"name":"photo.jpg","sha256":"\#(hA)","size":3},{"name":"b.png","sha256":"\#(hB)","size":5}]}"#
@@ -381,8 +381,9 @@ let (bns, bnd) = call("/deploy-keys/begin", bnBody)
 check(bns == 200 && throwsErr { _ = try Checks.deployKeyBegin(doc(bnd), coreKey: coreKey, action: "add", repo: "DE0CH/jarvis2", sensitive: false, sent: bnSent) }, "…and the app refuses a begin for it that isn't sensitive")
 check(bjs == 200 && throwsErr { _ = try Checks.deployKeyBegin(doc(bjd), coreKey: coreKey, action: "remove", repo: "DE0CH/jarvis2", sensitive: false) }, "the page refuses a begin for another action")
 // the Inbox review's "What you sign (exact)" is rendered from this signed document
-let bjText = bj.map(SignedAction.deployKey) ?? ""
-check(bjText.contains("DE0CH/jarvis2") && bjText.contains("store github-jarvis2 (sensitive)") && bjText.contains("store github-deploy-keys for this one call"), "the signed action renders from the core's begin document: \(bjText)")
+let bjFacts = bj.map(SignedAction.deployKey) ?? []
+check(SignedAction.value(bjFacts, "repo") == "DE0CH/jarvis2" && SignedAction.value(bjFacts, "store") == "github-jarvis2" && SignedAction.value(bjFacts, "sensitive") == "Yes"
+      && SignedAction.value(bjFacts, "token-store") == "github-deploy-keys", "the signed action renders from the core's begin document: \(bjFacts.map { "\($0.id)=\($0.value)" })")
 check(bjs == 200 && throwsErr { _ = try Checks.deployKeyBegin(doc(bjd), coreKey: coreKey, action: "add", repo: "DE0CH/claude-env", sensitive: false) }, "…or another repo")
 check(deployKey("add", "DE0CH/x", signer: P256.Signing.PrivateKey()).0 == 403, "a signature by another key is refused")
 let (nas, _, nad) = deployKey("add", "DE0CH/no-admin")

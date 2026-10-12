@@ -91,13 +91,12 @@ final class ReplicaUITests: JarvisUITestCase {
     sleep(1); shot("inbox-" + what)
     prefixed("request-review-").tap()
     let ok = arrives(el("request-call"), 30, "the review page (\(what))")
-    let signed = el("request-signed")
-    let t = Date().addingTimeInterval(30)
-    while Date() < t && signed.label.hasPrefix("Reading") { usleep(500_000) }
+    let signed = el("signed-kind")
+    _ = signed.waitForExistence(timeout: 30)
     sleep(1); shot("inbox-review-" + what)
-    for id in ["request-signed", "request-call", "request-explanation"] where el(id).exists { note("\(what)-\(id)", el(id).label) }
+    for id in ["signed-kind", "signed-action", "signed-repo", "signed-store", "signed-feature", "signed-session", "request-caller", "request-call", "request-explanation"] where el(id).exists { note("\(what)-\(id)", said(el(id))) }
     XCTAssertFalse(el("request-mismatch").exists, "[\(what)] the request matches the page")
-    XCTAssertTrue(signed.label.hasPrefix("Core:") || signed.label.hasPrefix("Phone grant"), "[\(what)] what is signed, rendered from the signed content: \(signed.label)")
+    XCTAssertTrue(said(signed).contains("Core request") || said(signed).contains("Phone grant"), "[\(what)] what is signed, rendered from the signed content: \(said(signed))")
     return ok
   }
   func inboxDeny(_ what: String) {
@@ -216,7 +215,7 @@ final class ReplicaUITests: JarvisUITestCase {
       shot("terminal-needs-grant")
       allow.tap()
       if arrives(el("secure-grant-allow"), 30, "the grant review") {
-        XCTAssertTrue(el("grant-meaning").label.contains("Terminal"), "the review names the feature")
+        XCTAssertTrue(said(el("signed-feature")).contains("Terminal"), "the review names the feature")
         shot("grant-review")
         el("secure-back").tap()
         XCTAssertTrue(wait(allow, 20, "denied: still turned away"), "deny")
@@ -245,8 +244,8 @@ final class ReplicaUITests: JarvisUITestCase {
     // ---- the Inbox, from a session: deny one grant request, allow another with Face ID ----
     XCTAssertEqual(relay("inbox-session:\(sid):status"), "ok", "the session filed a grant request")
     if inboxReview("session-deny") {
-      XCTAssertTrue(el("request-call").label.contains("session"), "the caller is the session: \(el("request-call").label)")
-      XCTAssertTrue(el("request-explanation").label.contains("replica-the-session"), "the session's reason is shown")
+      XCTAssertTrue(said(el("request-caller")).contains("session"), "the caller is the session: \(said(el("request-caller")))")
+      XCTAssertTrue(said(el("request-explanation")).contains("replica-the-session"), "the session's reason is shown")
       inboxDeny("session")
     }
     XCTAssertEqual(relay("inbox-session:\(sid):archive"), "ok", "the session filed another")
@@ -300,7 +299,7 @@ final class ReplicaUITests: JarvisUITestCase {
                 XCTAssertEqual(relay("repo-added"), "ok", "GitHub shows the repo's deploy key")
                 XCTAssertEqual(relay("inbox-setup-remove"), "ok", "the setup session filed a remove request")
                 if inboxReview("setup-deny") {
-                  XCTAssertTrue(el("request-call").label.contains("Claude"), "the caller is the setup session")
+                  XCTAssertTrue(said(el("request-caller")).contains("Claude"), "the caller is the setup session: \(said(el("request-caller")))")
                   inboxDeny("setup")
                 }
                 tab("Settings")
@@ -320,7 +319,7 @@ final class ReplicaUITests: JarvisUITestCase {
       XCTAssertEqual(relay("repo-check"), "ok", "GitHub shows the deploy key added and removed")
       XCTAssertEqual(relay("inbox-setup-add"), "ok", "the setup session filed an add request")
       if inboxReview("setup-allow") {
-        XCTAssertTrue(el("request-signed").label.contains(repo), "what is signed names the repo")
+        XCTAssertTrue(said(el("signed-repo")).contains(repo) && el("signed-store").exists, "what is signed names the repo and its store: \(said(el("signed-repo")))")
         inboxAllowed("setup", button: "secure-repo-go")
         XCTAssertEqual(relay("repo-added"), "ok", "GitHub shows the deploy key made from the Inbox")
       }

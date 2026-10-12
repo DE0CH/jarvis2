@@ -65,9 +65,9 @@ final class Jarvis2UITests: JarvisUITestCase {
     let row = el("signed-attachment-web.png")
     XCTAssertTrue(scrolledTo(row), "[\(tag)] the signed image is listed")
     let until = Date().addingTimeInterval(20)
-    while row.exists && !row.label.contains("hash matches") && Date() < until { usleep(500_000) }
-    note("signed-attachment", row.label)
-    XCTAssertTrue(row.label.contains("hash matches"), "[\(tag)] the router's copy is the signed file: \(row.label)")
+    while row.exists && !said(row).contains("Hash matches") && Date() < until { usleep(500_000) }
+    note("signed-attachment", said(row))
+    XCTAssertTrue(said(row).contains("Hash matches"), "[\(tag)] the router's copy is the signed file: \(said(row))")
     XCTAssertTrue(row.label.contains("web.png"), "[\(tag)] named from the signed config")
     shot("approval-image")
     if scrolledTo(el("secure-reject")) { el("secure-reject").tap() }
@@ -146,7 +146,7 @@ final class Jarvis2UITests: JarvisUITestCase {
     XCTAssertTrue(el("ns-harness-store-claude-login").exists, "[\(tag)] …but listed as what the harness brings")
     XCTAssertTrue(scrolledTo(el("secure-mode-bypass")), "[\(tag)] the page picks the permission mode")
     let unlocks = el("ns-unlocks")
-    XCTAssertTrue(scrolledTo(unlocks) && unlocks.label.contains("claude-login"), "[\(tag)] Start says it unlocks the locked harness store")
+    XCTAssertTrue(scrolledTo(unlocks) && said(unlocks).contains("claude-login"), "[\(tag)] Start says it unlocks the locked harness store")
     for _ in 0..<6 { app.swipeDown() }
     el("ns-title").tap(); el("ns-title").typeText("ci session")
     let image = attachImage()
@@ -185,11 +185,12 @@ final class Jarvis2UITests: JarvisUITestCase {
       pick("grant-holder", "Terminal")
       pick("grant-len", "10 min")
       el("grant-review").tap()
-      if arrives(el("grant-meaning"), 15, "the grant review") {
+      if arrives(el("signed-feature"), 15, "the grant review") {
         sleep(1)
-        note("grant-meaning", el("grant-meaning").label)
-        XCTAssertTrue(el("grant-meaning").label.contains("Terminal") && el("grant-meaning").label.contains("10 minutes"), "[\(tag)] the review says what is asked: \(el("grant-meaning").label)")
-        XCTAssertTrue(el("grant-meaning").label.contains("ci session"), "[\(tag)] the session is named from its signed cert: \(el("grant-meaning").label)")
+        for id in ["signed-kind", "signed-feature", "signed-session", "signed-duration", "signed-until"] { note(id, said(el(id))) }
+        XCTAssertTrue(said(el("signed-kind")).contains("Phone grant"), "[\(tag)] a phone grant: \(said(el("signed-kind")))")
+        XCTAssertTrue(said(el("signed-feature")).contains("Terminal") && said(el("signed-duration")).contains("10 minutes"), "[\(tag)] the review says what is asked: \(said(el("signed-feature"))) / \(said(el("signed-duration")))")
+        XCTAssertTrue(said(el("signed-session")).contains("ci session"), "[\(tag)] the session is named from its signed cert: \(said(el("signed-session")))")
         XCTAssertTrue(el("secure-back").label.contains("Deny"), "[\(tag)] Allow or Deny")
         shot("grant-review")
         el("secure-grant-allow").tap()
@@ -199,7 +200,7 @@ final class Jarvis2UITests: JarvisUITestCase {
       pick("grant-holder", "Status")
       pick("grant-len", "2 min")
       el("grant-review").tap()
-      if arrives(el("grant-meaning"), 15, "the grant review (deny)") {
+      if arrives(el("signed-feature"), 15, "the grant review (deny)") {
         el("secure-back").tap()
         arrives(el("grant-review"), 10, "the grants page after Deny")
         XCTAssertFalse(el("grant-forget-status").exists, "[\(tag)] Deny signed nothing")
@@ -208,9 +209,9 @@ final class Jarvis2UITests: JarvisUITestCase {
       pick("grant-len", "Standing rule")
       pick("grant-days", "30 days")
       el("grant-review").tap()
-      if arrives(el("grant-meaning"), 15, "the grant review (rule)") {
+      if arrives(el("signed-feature"), 15, "the grant review (rule)") {
         sleep(1)
-        XCTAssertTrue(el("grant-meaning").label.contains("Scheduler") && el("grant-meaning").label.contains("until"), "[\(tag)] the rule's review: \(el("grant-meaning").label)")
+        XCTAssertTrue(said(el("signed-feature")).contains("Scheduler") && el("signed-until").exists && !el("signed-duration").exists, "[\(tag)] the rule's review: \(said(el("signed-feature"))) / \(said(el("signed-until")))")
         shot("grant-review-rule")
         el("secure-grant-allow").tap()
         wait(el("grant-forget-scheduler"), 60, "standing rule listed")
@@ -271,7 +272,7 @@ final class Jarvis2UITests: JarvisUITestCase {
     if arrives(el("secure-approve"), 90, "the resume-prompt approval") {
       sleep(1)
       shot("approval-resume-prompt")
-      XCTAssertTrue(el("signed-once-prompt").exists && el("signed-once-prompt").label.contains("carry on"), "[\(tag)] the approval shows the signed resume prompt")
+      XCTAssertTrue(el("signed-once-prompt").exists && said(el("signed-once-prompt")).contains("carry on"), "[\(tag)] the approval shows the signed resume prompt")
       XCTAssertTrue(el("secure-session").exists && el("secure-session").label.contains("ci session"), "[\(tag)] the session is named from the signed predecessor: \(el("secure-session").label)")
       el("secure-approve").tap()
     }

@@ -39,6 +39,8 @@ class JarvisUITestCase: XCTestCase {
   // ---- elements ----
   func el(_ id: String) -> XCUIElement { app.descendants(matching: .any).matching(identifier: id).firstMatch }
   func prefixed(_ p: String) -> XCUIElement { app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH %@", p)).firstMatch }
+  /// what a row says: its label and its value (a LabeledContent row may expose its value separately)
+  func said(_ e: XCUIElement) -> String { e.label + " " + ((e.value as? String) ?? "") }
   func labelled(_ text: String) -> XCUIElement { app.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS %@", text)).firstMatch }
   @discardableResult func wait(_ e: XCUIElement, _ s: TimeInterval, _ what: String) -> Bool {
     let ok = e.waitForExistence(timeout: s)

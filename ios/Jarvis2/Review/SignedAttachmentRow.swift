@@ -22,7 +22,10 @@ struct SignedAttachmentRow: View {
       VStack(alignment: .leading, spacing: 2) {
         Text(ref.name).lineLimit(1).truncationMode(.middle)
         Text("\(Int64(ref.size).formatted(.byteCount(style: .file))) · sha256 \(ref.sha256.prefix(12))…").font(.footnote.monospaced()).foregroundStyle(.secondary)
-        Text(words).font(.footnote).foregroundStyle(state == .differs ? .orange : .secondary)
+        HStack(spacing: 6) {
+          StatusPill(text: badge.text, color: badge.color, spinning: state == .reading)
+          if case .unavailable(let why) = state { Text(why).font(.footnote).foregroundStyle(.secondary).lineLimit(2) }
+        }
       }
     }
     .accessibilityElement(children: .combine)
@@ -30,12 +33,13 @@ struct SignedAttachmentRow: View {
     .task(id: ref.sha256) { await check() }
   }
 
-  private var words: String {
+  /// the router's copy against the signed hash, as a badge
+  private var badge: (text: String, color: Color) {
     switch state {
-    case .reading: "Checking the router's copy…"
-    case .matches: "The router's copy is this file (its hash matches)."
-    case .differs: "The router's copy doesn't match what you sign: the machine will refuse it."
-    case .unavailable(let why): "Not shown (\(why)); the machine takes it only if it matches."
+    case .reading: ("Checking", .secondary)
+    case .matches: ("Hash matches", .green)
+    case .differs: ("Hash differs", .orange)
+    case .unavailable: ("Not checked", .secondary)
     }
   }
 

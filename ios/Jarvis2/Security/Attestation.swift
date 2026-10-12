@@ -16,10 +16,11 @@ enum ImageAttestation: Equatable {
     return .attested
   }
 
-  var words: String {
+  /// a short badge for the approval page
+  var badge: String {
     switch self {
-    case .attested: "CI build (signed by CI's key, keys/ci.pub)"
-    case .noKeyYet: "not attested yet (git has no keys/ci.pub)"
+    case .attested: "CI signed"
+    case .noKeyYet: "Not attested"
     }
   }
 }

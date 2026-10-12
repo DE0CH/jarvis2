@@ -35,7 +35,7 @@ struct AttachmentsSection: View {
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("ns-attachment-\(img.name)")
       }
-      if adding > 0 { HStack { ProgressView(); Text("Preparing \(adding == 1 ? "an image" : "\(adding) images")…").foregroundStyle(.secondary) } }
+      if adding > 0 { HStack { ProgressView(); Text("Preparing…").foregroundStyle(.secondary) } }
       if let problem { Text(problem).font(.footnote).foregroundStyle(.orange).accessibilityIdentifier("ns-attach-problem") }
       if room > 0 && !disabled {
         PhotosPicker(selection: $photoItems, maxSelectionCount: room, matching: .images) {
@@ -50,7 +50,7 @@ struct AttachmentsSection: View {
           .accessibilityIdentifier("ns-attach-paste")
       }
     } header: { Text("Images") } footer: {
-      Text("Sent with the first prompt. Start signs each image's hash with the session; its machine takes only these bytes.")
+      Text("Sent with the first prompt. Start signs each image's hash.")
     }
     .onChange(of: photoItems) { _, items in
       guard !items.isEmpty else { return }

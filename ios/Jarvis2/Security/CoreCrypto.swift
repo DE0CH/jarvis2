@@ -464,13 +464,6 @@ struct LineIdentity: Equatable {
     sensitive = c.sensitive == true
     stores = c.stores ?? []
   }
-  /// one line naming it: “label” (line …, machine …), or the line alone for an untitled session
-  var words: String {
-    let name = label.map { "“\($0)”" } ?? "an untitled session"
-    var ids = "line \(line)"
-    if let machine, machine != line { ids += ", machine \(machine)" }
-    return "\(name) (\(ids))"
-  }
 }
 
 extension Checks {

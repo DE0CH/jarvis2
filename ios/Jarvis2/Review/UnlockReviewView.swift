@@ -16,28 +16,25 @@ struct UnlockReviewView: View {
   @State private var ident: LineIdentity?
   @State private var certNonce: String?
   @State private var scoped = false
-  @State private var signed: String?
+  @State private var signed: [SignedFact]?
   @State private var loadError: String?
   @State private var busy: String?
   @State private var failure: String?
-
-  private var words: String { ident?.words ?? "the session" }
 
   var body: some View {
     Form {
       if let inbox { RequestReviewSection(inboxId: inbox, signed: signed, request: request) }
       if let loadError { Section { ErrorRow(text: loadError, id: "secure-error") } }
       else if let locked {
-        Section("What you allow") {
-          Text(locked.isEmpty ? "Every store of \(words) is open already."
-               : "Unlock \(locked.joined(separator: ", ")) so \(words) can finish starting. " + (scoped ? "Only this session reads \(locked.count == 1 ? "it" : "them"), and the core locks \(locked.count == 1 ? "it" : "them") again once its machine has its secrets." : "Unlocked stores stay open until you lock them on the Stores page."))
-            .font(.body.weight(.medium)).accessibilityIdentifier("unlock-meaning")
-        }
+        if inbox == nil { SignedFactsSection(facts: signed) }
         Section("Session (as signed)") {
           if let ident { IdentityRows(ident: ident) }
-          if !label.isEmpty && label != ident?.label { Text("Asked for as “\(label)” (unverified)").font(.footnote).foregroundStyle(.secondary) }
+          if !label.isEmpty && label != ident?.label {
+            LabeledContent { Text(label) } label: { HStack { Text("Asked for as"); StatusPill(text: "Unverified", color: .orange) } }
+              .accessibilityElement(children: .combine)
+          }
         }
-        Section("The session's stores (from the core's cert)") { StoreLines(stores: certStores) }
+        Section("Stores (signed cert)") { StoreLines(stores: certStores) }
         Section {
           if let failure { ErrorRow(text: failure, id: "secure-error") }
           SigningFooter()
@@ -69,7 +66,7 @@ struct UnlockReviewView: View {
       certStores = (c.stores ?? []).filter { $0 != StoreView.coreStore }
       let l = certStores.filter { n in doc.stores.contains { $0.name == n && !$0.unlocked && !$0.empty } }
       locked = l
-      signed = SignedAction.unlock(stores: l, session: id.label ?? id.words, scoped: scoped)
+      signed = SignedAction.unlock(stores: l, session: id, scoped: scoped)
     } catch { loadError = errText(error) }
   }
   private func allow() async {

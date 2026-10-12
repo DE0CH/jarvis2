@@ -80,8 +80,7 @@ struct NewSessionView: View {
         .accessibilityIdentifier("ns-prompt")
       TextField("Title (optional)", text: $label).accessibilityIdentifier("ns-title")
     } footer: {
-      Text(oneShot ? "Claude runs the prompt, then the session is archived and destroyed. If Claude asks you something, the session waits until you answer."
-           : "The first prompt is typed into the session once it is up.")
+      Text(oneShot ? "Runs the prompt, then archives and destroys the session." : "Typed into the session once it is up.")
     }
   }
 
@@ -101,8 +100,12 @@ struct NewSessionView: View {
         }
       }
       if !pickedSensitive.isEmpty {
-        Label("This session will hold sensitive secrets: \(pickedSensitive.joined(separator: ", ")). Only pick them for a session you'll treat with care.", systemImage: "exclamationmark.triangle.fill")
-          .foregroundStyle(.orange)
+        LabeledContent {
+          Text(pickedSensitive.joined(separator: "\n")).multilineTextAlignment(.trailing)
+        } label: {
+          Label("Sensitive", systemImage: "exclamationmark.triangle.fill")
+        }
+        .foregroundStyle(.orange)
           .accessibilityElement(children: .combine).accessibilityIdentifier("secure-sensitive-warning")
       }
     } header: { Text("Secret stores") }
@@ -124,7 +127,7 @@ struct NewSessionView: View {
           .accessibilityIdentifier("ns-harness-store-\(n)")
         }
       } header: { Text("The harness brings") } footer: {
-        Text("Added by the router for this harness. Start refuses any store you didn't pick that isn't on this list.")
+        Text("Added by the router for this harness.")
       }
     }
   }
@@ -178,17 +181,21 @@ struct NewSessionView: View {
       }
       Toggle("API proxy", isOn: $apiProxy).accessibilityIdentifier("ns-apiproxy")
     } header: { Text("Options") } footer: {
-      Text((oneShot ? "" : "Auto-pause pauses the machine after 1 h with nothing running; Resume brings it back with the conversation and files. ")
-           + "The API proxy logs every request to and response from the Anthropic API into ~/artifacts/api-log.")
+      Text("API proxy: every Anthropic API call logged to ~/artifacts/api-log.")
     }
   }
 
   @ViewBuilder private var startSection: some View {
     Section {
       if loaded && !toUnlock.isEmpty {
-        Text(scoped ? "Start also unlocks \(toUnlock.joined(separator: ", ")) (locked now) for this session only, with the same Face ID. The core locks \(toUnlock.count == 1 ? "it" : "them") again once the machine has its secrets; a paused session carries its secrets to its next machine."
-             : "Start also unlocks \(toUnlock.joined(separator: ", ")) (locked now), with the same Face ID.")
-          .accessibilityIdentifier("ns-unlocks")
+        LabeledContent {
+          Text(toUnlock.joined(separator: "\n")).multilineTextAlignment(.trailing)
+        } label: {
+          Label("Also unlocks", systemImage: "lock.open")
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("ns-unlocks")
+        LabeledContent("Open to", value: scoped ? "This session only" : "Every session")
       }
       if let failure { ErrorRow(text: failure, id: "secure-error") }
       SigningFooter()

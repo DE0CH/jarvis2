@@ -17,7 +17,7 @@ struct RepoKeyView: View {
   @State private var doc: SignedDoc?
   @State private var sensitive = false
   @State private var forced = false
-  @State private var signed: String?
+  @State private var signed: [SignedFact]?
   @State private var busy: String?
   @State private var failure: String?
 
@@ -26,38 +26,22 @@ struct RepoKeyView: View {
   var body: some View {
     Form {
       if let inbox { RequestReviewSection(inboxId: inbox, signed: signed, request: request) }
-      Section("Repo") { Text(repo).font(.headline).accessibilityIdentifier("secure-repo-name") }
-      if let b {
-        Section("What happens") {
-          if action == "add" {
-            Text("The core makes a new SSH key and adds it to \(b.repo) on GitHub as a deploy key that can read and push (titled “\(b.title)”). It keeps the private half in the store \(b.store). Sessions that include \(b.store) can clone, pull and push this repo, and no other.")
-            if b.replaces {
-              Label("\(b.store) exists: its contents are replaced by the new key, and the earlier key “\(b.title)” is deleted on GitHub.", systemImage: "exclamationmark.triangle.fill")
-                .foregroundStyle(.orange).accessibilityElement(children: .combine).accessibilityIdentifier("secure-repo-replaces")
-            }
-          } else {
-            Text("The core deletes the deploy key “\(b.title)” on GitHub and the store \(b.store). Sessions that hold the store lose access to the repo.")
-          }
-        }
+      if inbox == nil, b != nil || failure == nil { SignedFactsSection(facts: signed) }
+      if let b, action == "add" {
         Section {
-          StoreLines(stores: [b.store], sensitive: b.sensitive ? [b.store] : [])
-          if action == "add" {
-            Toggle("Sensitive store", isOn: Binding(get: { b.sensitive }, set: { v in if !forced && busy == nil { Task { await begin(sensitive: v) } } }))
-              .disabled(forced || busy != nil)
-              .accessibilityIdentifier("secure-repo-sensitive")
+          if b.replaces {
+            Label("Replaces the earlier key", systemImage: "exclamationmark.triangle.fill")
+              .foregroundStyle(.orange).accessibilityElement(children: .combine).accessibilityIdentifier("secure-repo-replaces")
           }
-        } header: { Text("Store") } footer: {
-          if action == "add" {
-            Text(forced ? "Always: a push to this repo can change Jarvis 2 itself, or the store is sensitive already (which never goes back)."
-                 : "One way: a sensitive store can't be made not sensitive later.")
-          }
+          Toggle("Sensitive store", isOn: Binding(get: { b.sensitive }, set: { v in if !forced && busy == nil { Task { await begin(sensitive: v) } } }))
+            .disabled(forced || busy != nil)
+            .accessibilityIdentifier("secure-repo-sensitive")
+        } footer: {
+          Text(forced ? "Always on for this repo." : "One way: it can't be turned off later.")
         }
-      } else if failure == nil {
-        Section { ProgressView() }
       }
       Section {
         if let failure { ErrorRow(text: failure, id: "secure-error") }
-        if let b { Text("Face ID lets the core use the GitHub token in \(b.tokenStore) for this one request; no other store is opened.").font(.footnote).foregroundStyle(.secondary) }
         SigningFooter()
       }
     }
@@ -100,7 +84,7 @@ struct RepoKeyView: View {
       let r = try await offMain { try PhoneKeys.shared.signAndShare(payload, e: e, reason: reason) }
       _ = try await RouterClient.shared.deployKeyFinish(b, signature: r.signature, share: r.share)
       busy = nil
-      model.say(action == "add" ? "\(repo): deploy key added." : "\(repo): deploy key and store removed.")
+      model.say(action == "add" ? "Deploy key added" : "Deploy key and store removed")
       model.secureCompleted(true)
     } catch {
       busy = nil

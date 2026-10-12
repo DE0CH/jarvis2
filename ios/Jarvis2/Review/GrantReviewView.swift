@@ -1,6 +1,6 @@
 // The grant review (docs/DESIGN.md "Grants"): a router feature may run commands in one session for up to 10 minutes (a
-// grant) or until a date (a standing rule). What was asked for is shown in plain words, built from the session's
-// core-signed cert (its line, stores, whether it is sensitive, the phone it trusts); the router's draft is checked
+// grant) or until a date (a standing rule). What was asked for is shown as labelled rows (SignedAction.grant), the
+// session in them from its core-signed cert (its line, stores, whether it is sensitive, the phone it trusts); the router's draft is checked
 // field for field against exactly that (Checks.reviewGrant) before the Secure Enclave key signs it under one Face ID.
 // Nothing on the page can be changed: Allow or Deny.
 import SwiftUI
@@ -15,7 +15,7 @@ struct GrantReviewView: View {
   /// the session as its core-signed cert names it (audit findings 3, 4: never the router's or the request's label)
   @State private var ident: LineIdentity?
   @State private var holderKeys: [String: String] = [:]
-  @State private var signed: String?
+  @State private var signed: [SignedFact]?
   @State private var loadError: String?
   @State private var busy: String?
   @State private var failure: String?
@@ -28,19 +28,12 @@ struct GrantReviewView: View {
     let asked = ask.until ?? .now.addingTimeInterval(Double(GrantAsk.ruleDays) * 86400)
     return min(max(asked, .now.addingTimeInterval(3600)), .now.addingTimeInterval(366 * 86400))
   }
+  /// why nothing can be signed: a short fixed label
   private var refusal: String? {
-    if holder.isEmpty { return "The request names no feature this page knows." }
-    if isRule && cert?.sensitive == true { return "This session holds a sensitive store: it accepts only a grant from this phone, minutes at a time, no standing rule." }
-    if cert != nil && holderKeys[holder] == nil { return "The router lists no key for this feature." }
+    if holder.isEmpty { return "Unknown feature" }
+    if isRule && cert?.sensitive == true { return "Sensitive session: no standing rule" }
+    if cert != nil && holderKeys[holder] == nil { return "No key listed for this feature" }
     return nil
-  }
-  private var endText: String {
-    isRule ? "until \(until.formatted(date: .abbreviated, time: .shortened))"
-      : "for \(minutes) minute\(minutes == 1 ? "" : "s") (until \(Date.now.addingTimeInterval(Double(minutes * 60)).formatted(date: .omitted, time: .shortened)))"
-  }
-  private var sessionWords: String { ident?.words ?? ask.session }
-  private var meaning: String {
-    "\(Holder.title(holder)) may run commands as the session's user in \(sessionWords) \(endText). \(Holder.sub(holder))."
   }
 
   var body: some View {
@@ -48,22 +41,25 @@ struct GrantReviewView: View {
       if let inbox { RequestReviewSection(inboxId: inbox, signed: signed, request: request) }
       if let loadError { Section { ErrorRow(text: loadError, id: "secure-error") } }
       else if let cert {
-        Section("What you allow") {
-          Text(meaning).font(.body.weight(.medium)).accessibilityIdentifier("grant-meaning")
-          if let refusal { Label(refusal, systemImage: "hand.raised").foregroundStyle(.orange).accessibilityElement(children: .combine).accessibilityIdentifier("grant-refused") }
+        if inbox == nil { SignedFactsSection(facts: signed) }
+        if let refusal {
+          Section {
+            Label(refusal, systemImage: "hand.raised").foregroundStyle(.orange).accessibilityElement(children: .combine).accessibilityIdentifier("grant-refused")
+          } header: { Text("Can't be signed") }
         }
         Section("Session (as signed)") {
           if let ident { IdentityRows(ident: ident) }
-          if !ask.label.isEmpty && ask.label != ident?.label { Text("Asked for as “\(ask.label)” (unverified)").font(.footnote).foregroundStyle(.secondary) }
+          if !ask.label.isEmpty && ask.label != ident?.label {
+            LabeledContent { Text(ask.label) } label: { HStack { Text("Asked for as"); StatusPill(text: "Unverified", color: .orange) } }
+              .accessibilityElement(children: .combine)
+          }
         }
-        Section("Its stores (from the core's cert)") {
+        Section("Stores (signed cert)") {
           StoreLines(stores: (cert.stores ?? []).filter { $0 != StoreView.coreStore })
         }
         Section {
           if let failure { ErrorRow(text: failure, id: "secure-error") }
           SigningFooter()
-        } footer: {
-          Text("The session's machine checks the signature against the phone named in its cert. Forgetting it later stops the router using it.")
         }
       } else { Section { ProgressView() } }
     }
@@ -88,7 +84,8 @@ struct GrantReviewView: View {
       holderKeys = try await RouterClient.shared.holders()
       ident = id
       cert = c
-      signed = refusal.map { "Nothing can be signed: \($0)" } ?? SignedAction.grant(meaning: meaning, line: c.line, of: id)
+      signed = SignedAction.grant(feature: Holder.title(holder), allows: Holder.sub(holder), minutes: isRule ? nil : minutes,
+                                  until: isRule ? until : .now.addingTimeInterval(Double(minutes * 60)), line: c.line, of: id)
     } catch { loadError = errText(error) }
   }
 
@@ -108,7 +105,7 @@ struct GrantReviewView: View {
       // what is signed is exactly what this page shows: the draft checked field for field against it
       _ = try Checks.reviewGrant(text: text, cert: cert, phoneKey: phone, holderKey: hk, kind: ask.kind, minutes: minutes, until: end)
       busy = "Signing…"
-      let reason = "Allow \(Holder.title(holder)) in \(ident?.label.map { "“\($0)”" } ?? "line \(cert.line)") \(endText)"
+      let reason = "Allow \(Holder.title(holder))"
       let sig = try await offMain { try PhoneKeys.shared.sign(text, reason: reason) }
       busy = "Saving…"
       let g = try await RouterClient.shared.addGrant(ask.session, payload: text, sig: sig)

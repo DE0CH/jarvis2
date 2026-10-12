@@ -21,7 +21,7 @@ struct ApprovalView: View {
   @State private var scoped = false
   /// sensitive stores: the core's signed store list's marks joined with the challenge's (a newer core drops the latter)
   @State private var sens: [String] = []
-  @State private var signed: String?
+  @State private var signed: [SignedFact]?
   @State private var loadError: String?
   @State private var busy: String?
   @State private var failure: String?
@@ -42,20 +42,25 @@ struct ApprovalView: View {
       else if let r, let a {
         Section {
           if let ident { IdentityRows(ident: ident) }
-          else if r.kind == .newSession { Text(Self.signedLabel(r) ?? "A new, untitled session").font(.headline).accessibilityIdentifier("secure-session") }
-          if let l = a.label, !l.isEmpty { Text("Listed by the router as “\(l)” (unverified)").font(.footnote).foregroundStyle(.secondary) }
-          switch r.kind {
-          case .addStore: Text("The running machine asks for one more store; it keeps its keys.").foregroundStyle(.secondary)
-          case .resumeUpgrade: Text("The paused session continues on a new machine running the image and in the permission mode below, with the same stores and harness. Nothing happens until you approve; Reject leaves it paused.").foregroundStyle(.secondary)
-          case .newSession:
-            if let rs = a.options?["restore"], !rs.isEmpty {
-              Text(r.config?["restore"] != nil ? "Restores the archived session \(rs): the snapshot below is part of what you sign." : "Restores the archived session \(rs) (this core doesn't sign which snapshot: the machine restores none).")
-                .foregroundStyle(.secondary).accessibilityIdentifier("secure-restore")
-            } else {
-              Text("Requested outside this app (the web page, a task or another device): check it is yours.").foregroundStyle(.secondary)
-            }
-          case .other: Text("A request this page has no special view for: what you sign is below.").foregroundStyle(.secondary)
+          else if r.kind == .newSession { Text(Self.signedLabel(r) ?? "Untitled").font(.headline).accessibilityIdentifier("secure-session") }
+          if let l = a.label, !l.isEmpty {
+            LabeledContent { Text(l) } label: { HStack { Text("Router's label"); StatusPill(text: "Unverified", color: .orange) } }
+              .accessibilityElement(children: .combine)
           }
+          LabeledContent("Action", value: Self.actionName(r.kind)).accessibilityIdentifier("secure-action")
+          if r.kind == .newSession {
+            if let rs = a.options?["restore"], !rs.isEmpty {
+              LabeledContent("Restores") { Text(rs).font(.footnote.monospaced()) }
+                .accessibilityElement(children: .combine).accessibilityIdentifier("secure-restore")
+              if r.config?["restore"] == nil {
+                Label("Snapshot not signed", systemImage: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+              }
+            } else {
+              Label("Requested outside this app", systemImage: "arrow.down.app").foregroundStyle(.secondary)
+            }
+          }
+          if r.kind == .resumeUpgrade { LabeledContent("Stores and harness", value: "Unchanged") }
+          if r.kind == .addStore { LabeledContent("Keeps its keys", value: "Yes") }
         } header: { Text("Session (as signed)") }
         if r.kind == .addStore {
           Section("Add this store") { StoreLines(stores: [r.addedStore ?? ""], sensitive: sens) }
@@ -67,28 +72,41 @@ struct ApprovalView: View {
         let warn = r.kind == .addStore ? sens.filter { $0 == r.addedStore } : r.stores.filter { sens.contains($0) }
         Section {
           if !warn.isEmpty {
-            Label("This session will hold sensitive secrets: \(warn.joined(separator: ", ")).", systemImage: "exclamationmark.triangle.fill")
-              .foregroundStyle(.orange).accessibilityElement(children: .combine).accessibilityIdentifier("secure-sensitive-warning")
+            LabeledContent {
+              Text(warn.joined(separator: "\n")).multilineTextAlignment(.trailing)
+            } label: {
+              Label("Sensitive", systemImage: "exclamationmark.triangle.fill")
+            }
+            .foregroundStyle(.orange).accessibilityElement(children: .combine).accessibilityIdentifier("secure-sensitive-warning")
           }
           LabeledContent("Harness", value: Harness.name(r.harness))
           if r.kind != .addStore {
-            if r.permissionMode == "bypass" {
-              Label("Permission mode: bypass (no permission prompts at all)", systemImage: "exclamationmark.shield").foregroundStyle(.orange).accessibilityElement(children: .combine).accessibilityIdentifier("secure-mode")
-            } else {
-              Text("Permission mode: auto").accessibilityIdentifier("secure-mode")
+            LabeledContent {
+              Text(r.permissionMode)
+            } label: {
+              if r.permissionMode == "bypass" { Label("Permission mode", systemImage: "exclamationmark.shield") } else { Text("Permission mode") }
             }
+            .foregroundStyle(r.permissionMode == "bypass" ? AnyShapeStyle(.orange) : AnyShapeStyle(.primary))
+            .accessibilityElement(children: .combine).accessibilityIdentifier("secure-mode")
           }
           LabeledContent("Session image") { Text(r.image).font(.footnote.monospaced()).textSelection(.enabled) }
           if let attest {
-            Label(attest.words, systemImage: attest == .attested ? "checkmark.seal" : "questionmark.diamond")
-              .font(.footnote).foregroundStyle(attest == .attested ? .green : .orange).accessibilityElement(children: .combine).accessibilityIdentifier("secure-image-attest")
+            LabeledContent("Image build") {
+              StatusPill(text: attest.badge, color: attest == .attested ? .green : .orange)
+            }
+            .accessibilityElement(children: .combine).accessibilityIdentifier("secure-image-attest")
           }
           if r.kind == .other { LabeledContent("The challenge", value: r.challenge.request.kind) }
         }
         Section {
           if !toUnlock.isEmpty {
-            Text("Approve also unlocks \(toUnlock.joined(separator: ", ")) (locked now) for this session only, with the same Face ID; the core locks \(toUnlock.count == 1 ? "it" : "them") again once the machine has its secrets.")
-              .accessibilityIdentifier("secure-unlocks")
+            LabeledContent {
+              Text(toUnlock.joined(separator: "\n")).multilineTextAlignment(.trailing)
+            } label: {
+              Label("Also unlocks", systemImage: "lock.open")
+            }
+            .accessibilityElement(children: .combine).accessibilityIdentifier("secure-unlocks")
+            LabeledContent("Open to", value: "This session only")
           }
           Button("Reject", role: .destructive) { Task { await reject() } }.disabled(busy != nil).accessibilityIdentifier("secure-reject")
           if let failure { ErrorRow(text: failure, id: "secure-error") }
@@ -110,6 +128,14 @@ struct ApprovalView: View {
     .task { await load() }
   }
 
+  static func actionName(_ k: Checks.Kind) -> String {
+    switch k {
+    case .newSession: "New session"
+    case .resumeUpgrade: "Continue on a new machine"
+    case .addStore: "Add a store"
+    case .other: "Sign a challenge"
+    }
+  }
   static func signedLabel(_ r: Checks.Reviewed) -> String? { (r.config?["label"] as? String).flatMap { $0.isEmpty ? nil : $0 } }
 
   private func load() async {
@@ -179,28 +205,36 @@ struct SignedSettingsSection: View {
               .accessibilityElement(children: .combine).accessibilityIdentifier("signed-prompt")
           }
           if let atts = Checks.attachments(c), !atts.isEmpty {
-            Text("Images sent with the first prompt (the machine takes each only if its bytes have this hash)").font(.footnote).foregroundStyle(.secondary)
+            Text("Images").font(.footnote).foregroundStyle(.secondary)
               .accessibilityIdentifier("signed-attachments")
             ForEach(atts, id: \.name) { SignedAttachmentRow(session: session, ref: $0) }
           }
           if let rs = c["restore"] as? [String: Any] {
-            LabeledContent("Restores", value: "the archived snapshot of machine \((rs["machine"] as? String) ?? "?") (sha256 \(((rs["sha256"] as? String) ?? "").prefix(12))…)")
-              .accessibilityIdentifier("signed-restore")
+            LabeledContent("Restores machine") { Text((rs["machine"] as? String) ?? "?").font(.footnote.monospaced()) }
+              .accessibilityElement(children: .combine).accessibilityIdentifier("signed-restore")
+            LabeledContent("Snapshot sha256") { Text(String(((rs["sha256"] as? String) ?? "").prefix(12)) + "…").font(.footnote.monospaced()) }
           }
           if let repos = c["repos"] as? [String], !repos.isEmpty { LabeledContent("Repos", value: repos.joined(separator: "\n")).accessibilityIdentifier("signed-repos") }
           if !s("model").isEmpty { LabeledContent("Model", value: s("model")) }
-          if (c["oneShot"] as? Bool) == true { Text("One-shot: it runs its prompt, then is archived and destroyed.") }
-          if (c["apiProxy"] as? Bool) == true { Text("API proxy: every API request and response is logged into ~/artifacts/api-log.") }
-          if let t = c["task"] as? [String: Any] { LabeledContent("Task", value: "\((t["name"] as? String) ?? "") · \(Checks.compact(t["params"]))") }
-          if r.config == nil { Text("This core doesn't carry settings in the cert: no prompt, title, model or repos beyond the stores' own.").foregroundStyle(.secondary) }
+          if (c["oneShot"] as? Bool) == true { LabeledContent("One-shot", value: "Yes").accessibilityIdentifier("signed-one-shot") }
+          if (c["apiProxy"] as? Bool) == true { LabeledContent("API proxy log", value: "Yes").accessibilityIdentifier("signed-api-proxy") }
+          if let t = c["task"] as? [String: Any] {
+            LabeledContent("Task", value: (t["name"] as? String) ?? "").accessibilityIdentifier("signed-task")
+            LabeledContent("Task parameters") { Text(Checks.compact(t["params"])).font(.footnote.monospaced()) }
+          }
+          if r.config == nil { LabeledContent("Settings in the cert", value: "None").foregroundStyle(.secondary) }
         }
         if let p = o["prompt"] as? String, !p.isEmpty {
-          VStack(alignment: .leading) { Text("Prompt typed into the resumed conversation").font(.footnote).foregroundStyle(.secondary); Text(p).textSelection(.enabled) }
+          VStack(alignment: .leading) { Text("Resume prompt").font(.footnote).foregroundStyle(.secondary); Text(p).textSelection(.enabled) }
             .accessibilityElement(children: .combine).accessibilityIdentifier("signed-once-prompt")
         }
         if let m = o["rollback"] as? String, !m.isEmpty {
-          Label("Rolls the conversation back: every transcript line from the first containing “\(m)” is dropped.", systemImage: "arrow.uturn.backward")
-            .foregroundStyle(.orange).accessibilityElement(children: .combine).accessibilityIdentifier("signed-once-rollback")
+          LabeledContent {
+            Text(m)
+          } label: {
+            Label("Roll back from", systemImage: "arrow.uturn.backward")
+          }
+          .foregroundStyle(.orange).accessibilityElement(children: .combine).accessibilityIdentifier("signed-once-rollback")
         }
       }
     }
@@ -212,16 +246,16 @@ struct SignedSettingsSection: View {
 struct IdentityRows: View {
   let ident: LineIdentity
   var body: some View {
-    Text(ident.label.map { "“\($0)”" } ?? "An untitled session").font(.headline).accessibilityIdentifier("secure-session")
+    Text(ident.label ?? "Untitled").font(.headline).accessibilityIdentifier("secure-session")
     if let p = ident.prompt { LabeledContent("First prompt", value: Fmt.clip(p, 140)) }
     LabeledContent("Line") { Text(ident.line).font(.footnote.monospaced()).textSelection(.enabled) }
     if let m = ident.machine, m != ident.line { LabeledContent("Machine") { Text(m).font(.footnote.monospaced()) } }
-    if let at = ident.issuedAt?.isoDate { LabeledContent("Its cert", value: "issued \(Fmt.ago(at))") }
+    if let at = ident.issuedAt?.isoDate { LabeledContent("Cert issued", value: Fmt.ago(at)) }
     if ident.sensitive {
-      Label("This session holds a sensitive store.", systemImage: "exclamationmark.octagon.fill").foregroundStyle(.red).accessibilityElement(children: .combine).accessibilityIdentifier("secure-session-sensitive")
+      Label("Holds a sensitive store", systemImage: "exclamationmark.octagon.fill").foregroundStyle(.red).accessibilityElement(children: .combine).accessibilityIdentifier("secure-session-sensitive")
     }
     if ident.label == nil {
-      Label("This core doesn't sign the session's title: check the line and the stores before you approve.", systemImage: "questionmark.circle").font(.footnote).foregroundStyle(.orange)
+      Label("Title not signed", systemImage: "questionmark.circle").font(.footnote).foregroundStyle(.orange)
     }
   }
 }
