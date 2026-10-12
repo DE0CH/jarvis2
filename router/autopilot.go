@@ -463,6 +463,13 @@ func planTick(d *persisted, now time.Time, storedExp int64, c pilotConfig, busy,
 		// a prompt unanswered for WaitingCancel → Escape (once per waiting episode)
 		if g == nil || g.Status != "waiting" || operating {
 			l.waiting = nil
+			// "status" is only wanted while a prompt waits (the dialog check, the Escape): once the session has
+			// moved on, a refusal from that episode is moot, so the card stops offering a grant for it (2026-10-12:
+			// a short question left "The machine turned away status" on a session that was running fine)
+			if g != nil && l.NeedsGrant == "status" {
+				l.NeedsGrant = ""
+				delete(l.grantRetry, "status")
+			}
 		} else if l.waiting == nil || l.waiting.statusAt != g.StatusUpdatedAt {
 			l.waiting = &waitEpisode{at: now, statusAt: g.StatusUpdatedAt}
 		} else if !l.waiting.cancelled && now.Sub(l.waiting.at) >= c.WaitingCancel && l.mayExec("status", now) {

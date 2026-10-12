@@ -559,3 +559,30 @@ func TestAutoPauseClockSurvivesRestart(t *testing.T) {
 		t.Fatal("paused right after an unseen turn")
 	}
 }
+
+// a "status" refusal from a waiting episode stops showing once the session is no longer waiting
+func TestStatusRefusalClearsAfterWaiting(t *testing.T) {
+	c, now := defaultPilot, time.Now()
+	c.Attention = 1000 * time.Hour
+	l := &Liveness{AutoPauseOff: true}
+	d := running("s1", l)
+	no := func(string) bool { return false }
+	report(l, now, &Registry{Status: "waiting", StatusUpdatedAt: 3})
+	planTick(d, now, 0, c, no, no)
+	l.NeedsGrant, l.grantRetry = "status", map[string]time.Time{"status": now.Add(time.Hour)}
+	planTick(d, now, 0, c, no, no)
+	if l.NeedsGrant != "status" {
+		t.Fatal("cleared while still waiting")
+	}
+	report(l, now, &Registry{Status: "busy", StatusUpdatedAt: 4})
+	planTick(d, now, 0, c, no, no)
+	if l.NeedsGrant != "" || !l.mayExec("status", now) {
+		t.Fatalf("still offered: %q", l.NeedsGrant)
+	}
+	// another holder's refusal stays
+	l.NeedsGrant = "login"
+	planTick(d, now, 0, c, no, no)
+	if l.NeedsGrant != "login" {
+		t.Fatal("cleared another holder's refusal")
+	}
+}
