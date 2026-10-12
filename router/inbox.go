@@ -615,8 +615,8 @@ func (r *Router) registerInbox(app appRoute, m machineRoute, public publicRoute)
 					if g := l.Reg; g != nil {
 						v["status"], v["bgTasks"], v["statusUpdatedAt"] = g.Status, g.BgTasks, g.StatusUpdatedAt
 					}
-					if l.stall != nil {
-						v["stallSince"] = l.stall.at
+					if l.Stall != nil {
+						v["stallSince"] = l.Stall.At
 					}
 					v["busy"] = r.busy(s.ID)
 				}

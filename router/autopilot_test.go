@@ -586,3 +586,28 @@ func TestStatusRefusalClearsAfterWaiting(t *testing.T) {
 		t.Fatal("cleared another holder's refusal")
 	}
 }
+
+// the stall watchdog's 15 minutes survive router restarts (frequent deploys used to restart them, so no nudge came)
+func TestStallClockSurvivesRestart(t *testing.T) {
+	c, now := defaultPilot, time.Now()
+	c.Attention = 1000 * time.Hour
+	no := func(string) bool { return false }
+	l := &Liveness{AutoPauseOff: true}
+	d := running("s1", l)
+	stuck := &Registry{Status: "idle", BgTasks: 1, StatusUpdatedAt: 5}
+	report(l, now, stuck)
+	planTick(d, now, 0, c, no, no)
+	for at := now.Add(5 * time.Minute); at.Before(now.Add(c.StallNudge)); at = at.Add(5 * time.Minute) {
+		l = &Liveness{AutoPauseOff: true, Stall: l.Stall} // a restart: only the persisted fields survive
+		d = running("s1", l)
+		report(l, at, stuck)
+		if strings.Contains(kinds(planTick(d, at, 0, c, no, no)), "nudge") {
+			t.Fatal("nudged early")
+		}
+	}
+	at := now.Add(c.StallNudge)
+	report(l, at, stuck)
+	if !strings.Contains(kinds(planTick(d, at, 0, c, no, no)), "nudge") {
+		t.Fatal("15 min stalled across restarts didn't nudge")
+	}
+}

@@ -48,7 +48,7 @@ type Liveness struct {
 
 	waiting         *waitEpisode
 	settled         *settledEpisode
-	stall           *stallClock
+	Stall           *stallClock `json:"stall,omitempty"`
 	loginRepaired   *repairMark
 	loginBusy       bool
 	credsBehind     time.Time            // a self-login session (store `claude`): since when its pair has been behind Jarvis 1's
@@ -74,9 +74,11 @@ type settledEpisode struct {
 	notified bool
 }
 
+// stallClock: kept across a router restart (like the auto-pause clock), so frequent deploys don't keep restarting
+// the 15 minutes and the nudge never comes (Deyao, 2026-10-12: "the 15 minute background nudge is also gone")
 type stallClock struct {
-	at       time.Time
-	statusAt int64
+	At       time.Time `json:"at"`
+	StatusAt int64     `json:"statusAt"`
 }
 
 type repairMark struct {
@@ -388,7 +390,7 @@ func planTick(d *persisted, now time.Time, storedExp int64, c pilotConfig, busy,
 		}
 		l := s.Live
 		if s.State != "started" || s.MachineID == "" {
-			l.IdleSince, l.waiting, l.settled, l.stall, l.dialogCheckedAt, l.dialogReported = time.Time{}, nil, nil, nil, 0, false
+			l.IdleSince, l.waiting, l.settled, l.Stall, l.dialogCheckedAt, l.dialogReported = time.Time{}, nil, nil, nil, 0, false
 			l.screen = nil
 			if s.MachineID == "" {
 				l.Reg = nil // paused: the next machine reports afresh
@@ -443,11 +445,11 @@ func planTick(d *persisted, now time.Time, storedExp int64, c pilotConfig, busy,
 
 		// stall nudge: idle with background jobs, no turn for StallNudge → a peer message, repeated every StallNudge
 		if operating || l.OneShot || c.StallNudge <= 0 || g == nil || g.Status != "idle" || g.BgTasks == 0 {
-			l.stall = nil
-		} else if l.stall == nil || l.stall.statusAt != g.StatusUpdatedAt {
-			l.stall = &stallClock{at: now, statusAt: g.StatusUpdatedAt}
-		} else if stalled := now.Sub(l.stall.at); stalled >= c.StallNudge {
-			l.stall.at = now
+			l.Stall = nil
+		} else if l.Stall == nil || l.Stall.StatusAt != g.StatusUpdatedAt {
+			l.Stall = &stallClock{At: now, StatusAt: g.StatusUpdatedAt}
+		} else if stalled := now.Sub(l.Stall.At); stalled >= c.StallNudge {
+			l.Stall.At = now
 			add(pilotAction{Kind: "nudge", Session: id, Text: nudgeText(g.BgTasks, stalled), Jobs: g.BgTasks, Minutes: int(stalled.Round(time.Minute) / time.Minute)})
 		}
 
