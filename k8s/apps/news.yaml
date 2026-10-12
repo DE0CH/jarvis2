@@ -27,7 +27,7 @@ spec:
       securityContext: { fsGroup: 65532 }
       containers:
         - name: news
-          image: ghcr.io/de0ch/hk-news-stream:sha-0ff5125cda9b2271927bd41f3ea1e80014e055d9@sha256:275187e6edd6df5aa122adb6c8ecbd0124a964990d26f09a2f6701f6d9fd75e3
+          image: ghcr.io/de0ch/hk-news-stream:sha-9411b48a563609d068ee7977802568682c48c57e@sha256:1f7fdcc5a078a8302e4b4efb646ae95c9e79ce984f67a78c140d11beabd36ff9
           ports: [{ containerPort: 8080 }]
           envFrom: [{ secretRef: { name: news-secrets } }]
           volumeMounts: [{ name: data, mountPath: /data }]
