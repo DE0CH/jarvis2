@@ -11,9 +11,13 @@ this session as the caller, from the machine's key) and the reason given here, a
   jarvis2-request add-store STORE --why TEXT
                                     one more store for this running session (its machine keeps its keys); once
                                     approved (within 1 h) it is pulled into ~/.secrets by a background waiter
+  jarvis2-request new-session --label TEXT --prompt-file FILE [--stores a,b] [--repos URL,URL] [--model M]
+                  [--size small|medium|large] [--harness claude] [--request-id ID] --why TEXT
+                                    propose a NEW session: it appears in the Inbox like the app's New session and starts
+                                    only when Deyao approves it with Face ID (no attachments; at most 3 waiting)
   jarvis2-request list              this session's requests still waiting
 
-A session may ask only for itself (grant, unlock, add-store) and for a repo to be added; --why is required (plain
+A session may ask only for itself (grant, unlock, add-store), for a repo to be added, and propose new sessions; --why is required (plain
 text, at most 600 characters, 8 lines). Nothing happens until Deyao allows it; a request waits at most 7 days.
 Goes through the machine's local proxy ($JARVIS_URL, machine/apiproxy.go), which signs it with the machine key.
 """
@@ -56,6 +60,22 @@ def main():
             print(q["id"], q["kind"], json.dumps(q.get("params") or {}, sort_keys=True), "waiting since", q["created"])
         return
     why = opt(args, "--why")
+    new_session = {}
+    if args[0] == "new-session":
+        label, pf = opt(args, "--label"), opt(args, "--prompt-file")
+        if not label or not pf:
+            raise SystemExit("new-session needs --label and --prompt-file")
+        with open(pf) as f:
+            new_session = {"label": label, "prompt": f.read()}
+        for flag, key in (("--model", "model"), ("--size", "size"), ("--harness", "harness"), ("--request-id", "requestId")):
+            v = opt(args, flag)
+            if v:
+                new_session[key] = v
+        stores, repos = opt(args, "--stores"), opt(args, "--repos")
+        if stores:
+            new_session["stores"] = [s for s in stores.split(",") if s]
+        if repos:
+            new_session["repos"] = ",".join(r for r in repos.split(",") if r)
     minutes, days = opt(args, "--minutes"), opt(args, "--days")
     sensitive = "--sensitive" in args
     args = [a for a in args if a != "--sensitive"]
@@ -76,6 +96,8 @@ def main():
         out = call("POST", "/api/requests/grant", body)
     elif kind == "unlock" and not rest:
         out = call("POST", "/api/requests/unlock", {"explanation": why})
+    elif kind == "new-session" and not rest and new_session:
+        out = call("POST", "/api/sessions", dict(new_session, explanation=why))
     elif kind == "add-store" and len(rest) == 1:
         out = call("POST", "/api/requests/add-store", {"store": rest[0], "explanation": why})
         # the approval only lands in the cert: a detached waiter pulls the store's secrets once it does (no second

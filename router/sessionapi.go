@@ -46,6 +46,9 @@ var appJarvis1Routes = []string{
 	"GET /api/icloud/search", "GET /api/icloud/file", "GET /api/icloud/status", "POST /api/icloud/relist",
 }
 
+// maxProposedSessions: new sessions one session may have waiting for Deyao's approval at a time
+const maxProposedSessions = 3
+
 var jarvis1Client = &http.Client{Timeout: 5 * time.Minute}
 
 // auto-pause (autopilot.go) leaves a session running when a wakeup or cron fires within 10 minutes
@@ -134,6 +137,62 @@ func (r *Router) registerSessionAPI(app appRoute, m machineRoute) {
 			return
 		}
 		writeJSON(w, 202, map[string]any{"started": true, "phase": "destroying"})
+	})
+	// a session proposes a new session (Deyao, 2026-10-12: "launch a new session through jarvis 2"): the same line as
+	// the app's New session, so nothing starts until Deyao approves the core's succession from null with Face ID; the
+	// approval names the proposing session and carries its reason. No attachments (uploads are the app's).
+	own("POST /m/api/sessions", func(w http.ResponseWriter, req *http.Request, sid string, b []byte) {
+		var in struct {
+			NewSession
+			Explanation string `json:"explanation"`
+		}
+		if err := json.Unmarshal(b, &in); err != nil {
+			writeJSON(w, 400, map[string]string{"error": "bad JSON: " + err.Error()})
+			return
+		}
+		expl, err := cleanExplanation(in.Explanation, true)
+		if err != nil {
+			writeJSON(w, 400, map[string]string{"error": err.Error()})
+			return
+		}
+		if in.Attachments != nil {
+			writeJSON(w, 400, map[string]string{"error": "a session can't attach files to a new session: put them where the new session can fetch them"})
+			return
+		}
+		if strings.TrimSpace(in.Prompt) == "" {
+			writeJSON(w, 400, map[string]string{"error": "prompt is required"})
+			return
+		}
+		waiting := 0
+		r.st.Do(func(d *persisted) {
+			for _, a := range d.Approvals {
+				if a.Kind == "new-session" && a.Origin != nil && a.Origin.Caller.Kind == "session" && a.Origin.Caller.Session == sid {
+					waiting++
+				}
+			}
+		})
+		if waiting >= maxProposedSessions {
+			writeJSON(w, 429, map[string]string{"error": fmt.Sprintf("%d proposed sessions already wait for Deyao", waiting)})
+			return
+		}
+		if in.RequestID == "" {
+			in.RequestID = randID()
+		}
+		in.RequestID = sid + ":" + in.RequestID // a session's ids never meet the app's or another session's
+		args := map[string]any{"label": in.Label, "harness": in.Harness, "stores": in.Stores, "model": in.Model, "permissionMode": in.PermissionMode,
+			"size": in.Size, "prompt": fmt.Sprintf("(%d characters)", len([]rune(in.Prompt)))}
+		if in.Repos != "" {
+			args["repos"] = in.Repos
+		}
+		ns := in.NewSession
+		ns.Origin = &Origin{Caller: Caller{Kind: "session", Session: sid}, Call: APICall{Method: "POST", Path: "/api/sessions", Args: args}}
+		ns.Explanation = expl
+		id, err := r.CreateSession(ns)
+		if err != nil {
+			scheduleErr(w, err)
+			return
+		}
+		writeJSON(w, 200, map[string]any{"id": id, "requestId": strings.TrimPrefix(ns.RequestID, sid+":"), "approval": true})
 	})
 	// watches run a script on Jarvis with the session's store secrets; Jarvis 2 doesn't (docs/PARITY.md)
 	own("/m/api/sessions/{id}/watches", notInJarvis2("conditional wakeups (watches) aren't in Jarvis 2"))

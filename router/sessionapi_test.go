@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -178,5 +179,62 @@ func TestSessionAPIEnv(t *testing.T) {
 	sessionAPIEnv(e, "opencode")
 	if _, ok := e["CF_ACCESS_CLIENT_ID"]; ok {
 		t.Fatal("no CF placeholders for opencode")
+	}
+}
+
+func TestMachineProposesNewSession(t *testing.T) {
+	rg, _ := newOpsRig(t)
+	r := rg.r
+	addSession(r, "sA", "started", "mA", false)
+	m := newTestMachine(r, "mA")
+	h := r.MachineHandler()
+	if code, _ := m.do(t, h, "POST", "/m/api/sessions", `{"label":"x","prompt":"do it","harness":"claude"}`); code != 400 {
+		t.Fatal("a proposal without a reason was accepted")
+	}
+	if code, _ := m.do(t, h, "POST", "/m/api/sessions", `{"label":"x","prompt":"do it","explanation":"why","attachments":{"uploadId":"u","files":[]}}`); code != 400 {
+		t.Fatal("a proposal with attachments was accepted")
+	}
+	body := `{"requestId":"r1","label":"YYC parity","prompt":"build it","harness":"claude","stores":["default"],"explanation":"Deyao asked for a new session"}`
+	code, out := m.do(t, h, "POST", "/m/api/sessions", body)
+	if code != 200 || out["id"] == nil || out["requestId"] != "r1" {
+		t.Fatalf("%d %v", code, out)
+	}
+	id := out["id"].(string)
+	if code, out := m.do(t, h, "POST", "/m/api/sessions", body); code != 200 || out["id"] != id {
+		t.Fatalf("a repeat made another session: %d %v", code, out)
+	}
+	waitFor(t, "approval", func() bool {
+		var ok bool
+		r.st.Do(func(d *persisted) {
+			for _, a := range d.Approvals {
+				ok = ok || (a.Kind == "new-session" && a.Session == id && a.Explanation == "Deyao asked for a new session" &&
+					a.Origin != nil && a.Origin.Caller == (Caller{Kind: "session", Session: "sA"}))
+			}
+		})
+		return ok
+	})
+	var s Session
+	r.st.Do(func(d *persisted) { s = *d.Sessions[id] })
+	if s.State != "approval" || s.Prompt != "build it" {
+		t.Fatalf("%+v", s)
+	}
+	for i := 2; i <= 3; i++ {
+		if code, out := m.do(t, h, "POST", "/m/api/sessions", fmt.Sprintf(`{"requestId":"r%d","prompt":"p","explanation":"e"}`, i)); code != 200 {
+			t.Fatalf("%d %v", code, out)
+		}
+	}
+	waitFor(t, "three approvals", func() bool {
+		n := 0
+		r.st.Do(func(d *persisted) {
+			for _, a := range d.Approvals {
+				if a.Kind == "new-session" {
+					n++
+				}
+			}
+		})
+		return n == 3
+	})
+	if code, _ := m.do(t, h, "POST", "/m/api/sessions", `{"requestId":"r4","prompt":"p","explanation":"e"}`); code != 429 {
+		t.Fatal("a fourth waiting proposal was accepted")
 	}
 }

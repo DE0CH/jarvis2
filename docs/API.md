@@ -164,6 +164,7 @@ kind of caller; the router records the caller from the credential (never from th
 | `POST …/grant` | `{session, holder, minutes /* 1–10, default 10 */}` or `{session, holder, days /* 1–365: a standing rule */}` | a session only for itself (it may leave `session` out) |
 | `POST …/unlock` | `{session}`: the locked stores that session waits on | a session only for itself |
 | `POST /m/api/requests/add-store` | `{store}` → the router's `add-store` approval (as `POST /m/add-store`) | a session, for itself |
+| `POST /m/api/sessions` | `POST /api/sessions`'s body without `attachments`, plus `explanation` (required) → `{id, requestId, approval: true}`: a session PROPOSES a new session (`jarvis2-request new-session`). The same line and `new-session` approval as the app's New session (a succession from null, so it starts only on Deyao's Face ID); the approval's caller is the proposing session and it carries the explanation. `requestId` is scoped to the proposing session; at most 3 proposals wait per session (429). | a session |
 
 `explanation`: the caller's reason, required from a session and the setup session (plain text; control and format
 characters dropped; ≤ 600 characters, ≤ 8 lines; 400 otherwise). Answer `{id, duplicate, expires}`: the same kind and

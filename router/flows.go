@@ -93,6 +93,7 @@ type NewSession struct {
 	APIProxy       bool           `json:"apiProxy"`    // SESSION_API_PROXY (sessionops.go)
 	Attachments    *AttachmentsIn `json:"attachments"` // first-prompt attachments (uploads.go)
 	Origin         *Origin        `json:"-"`           // inbox.go: who asked, from the credential (the handler sets it)
+	Explanation    string         `json:"-"`           // a session's proposal: its reason, shown with the approval (sessionapi.go)
 	Task           *TaskConfig    `json:"-"`           // tasks.go: a task line's instance and parameters (into the cert's config)
 }
 
@@ -338,7 +339,7 @@ func (r *Router) CreateSession(in NewSession) (string, error) {
 	opsOptions(s, opts)
 	go func() {
 		r.addApproval(&Approval{Kind: "new-session", Session: s.ID, Label: s.Label, Challenge: ch,
-			Options: opts, Origin: in.Origin})
+			Options: opts, Origin: in.Origin, Explanation: in.Explanation})
 	}()
 	return s.ID, nil
 }
