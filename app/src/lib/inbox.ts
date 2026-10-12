@@ -13,30 +13,51 @@ export function repoStore(repo: string): string {
   return "github-" + slug.replace(/[^a-z0-9]/g, "-").replace(/^-+|-+$/g, "");
 }
 
-/** the list's title: the core action (or the phone grant) the entry leads to */
-export function inboxAction(it: InboxItem, approvals: Approval[] = [], policy: Policy = {}): string {
-  const p = it.params, who = it.sessionName ? `“${it.sessionName}”` : it.session || "?";
+/** the list's title: a fixed name for the core action (or the phone grant) the entry leads to */
+export function inboxTitle(it: InboxItem): string {
+  switch (it.kind) {
+    case "repo-key": return it.params.action === "remove" ? "Remove deploy key" : "Make deploy key";
+    case "grant": return it.params.days ? "Standing rule" : "Grant";
+    case "unlock": return "Unlock stores";
+    case "add-store": return "Add store";
+    case "resume-upgrade": return "Resume on latest image";
+  }
+  return it.options?.restore ? "Restore session" : "New session";
+}
+
+/** what the entry is about, as labelled rows (display only: the review page renders its own from what it signs) */
+export function inboxRows(it: InboxItem, approvals: Approval[] = [], policy: Policy = {}): { label: string; value: string; key: string }[] {
+  const p = it.params, rows: { label: string; value: string; key: string }[] = [];
+  const add = (key: string, label: string, value?: string | number) => { if (value !== undefined && value !== "") rows.push({ key, label, value: String(value) }); };
+  const session = it.sessionName || it.session;
   switch (it.kind) {
     case "repo-key":
-      return p.action === "remove" ? `Delete the deploy key and store ${repoStore(p.repo || "")} of ${p.repo}`
-        : `Make a deploy key for ${p.repo} (read + push), kept in store ${repoStore(p.repo || "")}${p.sensitive ? " (sensitive)" : ""}`;
+      add("repo", "Repo", p.repo);
+      add("store", "Store", repoStore(p.repo || ""));
+      if (p.action !== "remove") add("access", "Access", "Read + push");
+      if (p.sensitive) add("sensitive", "Sensitive", "Yes");
+      return rows;
     case "grant":
-      return p.days ? `Standing rule: ${holderTitle(p.holder || "")} in ${who} for ${p.days} days`
-        : `Allow ${holderTitle(p.holder || "")} in ${who} for ${p.minutes || 10} minutes`;
+      add("session", "Session", session);
+      add("feature", "Feature", holderTitle(p.holder || ""));
+      add("for", "For", p.days ? `${p.days} d` : `${p.minutes || 10} min`);
+      return rows;
     case "unlock":
-      return `Unlock the stores ${who} is waiting on`;
+      add("session", "Session", session);
+      return rows;
   }
   const a = approvals.find((x) => x.id === it.id);
   const r = a ? challengeRequest(a, policy) : null;
-  if (it.kind === "add-store") return `Add store ${r?.addedStore || it.options?.store || "?"} to ${who}`;
-  const what = r ? ` · stores ${r.stores.join(", ") || "none"} · ${r.permissionMode} mode` : "";
-  if (it.kind === "resume-upgrade") return `Resume ${who} on the latest image${what}`;
-  return (it.options?.restore ? `Restore ${it.options.restore}` : `New session ${who}`) + what;
+  if (it.options?.restore) add("restore", "From", it.options.restore);
+  add("session", "Session", session);
+  if (it.kind === "add-store") add("store", "Store", r?.addedStore || it.options?.store);
+  else if (r) { add("stores", "Stores", r.stores.join(", ") || "None"); add("mode", "Mode", r.permissionMode); }
+  return rows;
 }
 
 /** the call as one line: POST /api/requests/repo/add {"repo":"DE0CH/claude-env"} */
 export function inboxCall(it: InboxItem): string {
-  if (!it.call?.path) return "(no API call recorded)";
+  if (!it.call?.path) return "None recorded";
   const args = it.call.args && Object.keys(it.call.args).length ? " " + JSON.stringify(Object.fromEntries(Object.entries(it.call.args).sort(([a], [b]) => a.localeCompare(b)))) : "";
   return `${it.call.method} ${it.call.path}${args}`;
 }

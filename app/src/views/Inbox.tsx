@@ -3,15 +3,13 @@
 // the latest image, add a store). Each card: the action as its title (what will be signed, in short), who called
 // which endpoint, and the caller's own reason (their words, unverified). Review opens the shell's secure page,
 // which renders what is signed from the signed content itself; Deny drops it. The web page lists them and can deny.
-import { View } from "react-native";
 import { ago, when, type InboxItem } from "../lib/api";
-import { denyRequest, inboxAction, inboxCall } from "../lib/inbox";
+import { denyRequest, inboxCall, inboxRows, inboxTitle } from "../lib/inbox";
 import { useStore, refresh, settle, pendUntil } from "../lib/store";
 import { hasShell, requestSecure } from "../lib/shell";
-import { Box, Button, Card, Flex, Heading, Lbl, Muted, P, Pill, Text } from "../ui/kit";
+import { Box, Button, Card, Flex, Heading, Lbl, Muted, Pill, P, Quote, Row, Rows } from "../ui/kit";
 import { PButton } from "../ui/bits";
 import { Cards } from "../ui/cards";
-import { useTheme } from "../theme";
 
 const KIND: Record<string, string> = { "repo-key": "Repo key", grant: "Grant", unlock: "Unlock", "new-session": "New session", "resume-upgrade": "Resume", "add-store": "Add a store" };
 
@@ -21,25 +19,25 @@ export function reviewRequest(it: InboxItem) {
 }
 
 function RequestCard({ it }: { it: InboxItem }) {
-  const t = useTheme();
   const approvals = useStore((s) => s.state.approvals), policy = useStore((s) => s.policy);
   const deny = () => pendUntil("q:" + it.id, "Denying…", () => denyRequest(it), (s) => !(s.inbox || []).some((x) => x.id === it.id), 30000);
   return (
     <Card data={{ request: it.id, requestKind: it.kind }}>
       <Flex justify="space-between" align="flex-start" gap={2} mb={1}>
-        <Heading size={3} style={{ flex: 1 }} id={"request-title-" + it.id}>{inboxAction(it, approvals, policy)}</Heading>
+        <Heading size={3} style={{ flex: 1 }} id={"request-title-" + it.id}>{inboxTitle(it)}</Heading>
         <Pill kind="info">{KIND[it.kind] || it.kind}</Pill>
       </Flex>
-      <Muted id={"request-from-" + it.id}>{"From " + it.callerText + " · " + ago(it.created)}</Muted>
-      <Text size={1} mono style={{ color: t.gray.a[11], marginTop: 2 }} lines={2}>{inboxCall(it)}</Text>
-      {!!it.explanation && <View style={{ borderLeftWidth: 2, borderLeftColor: t.c.amber.a[6], paddingLeft: 8, marginTop: 8 }}>
-        <Text size={1} style={{ color: t.c.amber.a[11] }}>{"Reason given (unverified)"}</Text>
-        <P size={2} color="gray" lines={2} style={{ fontStyle: "italic" }} id={"request-reason-" + it.id}>{it.explanation}</P>
-      </View>}
-      {!!it.expires && <Muted mt={1}>{"Goes away " + when(it.expires) + " if not answered"}</Muted>}
-      <Flex gap={2} pt={3}>
+      <Rows id={"request-rows-" + it.id}>
+        {inboxRows(it, approvals, policy).map((r) => <Row key={r.key} label={r.label} id={"request-" + r.key + "-" + it.id}>{r.value}</Row>)}
+        <Row label="From" id={"request-from-" + it.id}>{it.callerText}</Row>
+        <Row label="Asked">{ago(it.created)}</Row>
+        {!!it.expires && <Row label="Expires" id={"request-expires-" + it.id}>{when(it.expires)}</Row>}
+        <Row label="Call" mono lines={2}>{inboxCall(it)}</Row>
+      </Rows>
+      {!!it.explanation && <Quote by={"Reason (from " + it.callerText + ", unverified)"} color="amber" lines={4} id={"request-reason-" + it.id}>{it.explanation}</Quote>}
+      <Flex gap={2} pt={3} align="center">
         {hasShell ? <Button id={"request-review-" + it.id} onPress={() => reviewRequest(it)}>Review</Button>
-          : <Muted style={{ flex: 1 }}>Approve it in the Jarvis 2 app on the iPhone.</Muted>}
+          : <Muted style={{ flex: 1 }}>Approve in the iPhone app.</Muted>}
         <PButton pkey={"q:" + it.id} variant="soft" color="gray" onPress={deny} label="Deny" id={"request-deny-" + it.id} />
       </Flex>
     </Card>
@@ -51,8 +49,7 @@ export function Inbox() {
   if (!items.length) return <P size={3} color="gray" align="center" mt={8} mb={8} id="inbox-empty">Nothing waiting for you.</P>;
   return (
     <Box data={{ group: "Inbox" }}>
-      <P size={2} color="gray" mb={2}>{"Asked for by sessions, the web page or Claude. Review shows exactly what you would sign; nothing happens until you allow it with Face ID."}</P>
-      <Lbl>{items.length === 1 ? "1 request" : `${items.length} requests`}</Lbl>
+      <Flex gap={2} align="center" mt={2}><Lbl mt={0}>Requests</Lbl><Pill kind="info">{String(items.length)}</Pill></Flex>
       <Cards>{items.map((it) => <RequestCard key={it.id} it={it} />)}</Cards>
     </Box>
   );
@@ -62,5 +59,5 @@ export function Inbox() {
 export function InboxNote({ onOpen }: { onOpen: () => void }) {
   const n = (useStore((s) => s.state.inbox) || []).length;
   if (!n) return null;
-  return <Flex mb={3}><Button id="inbox-note" variant="soft" onPress={onOpen}>{n === 1 ? "1 request waiting in the Inbox →" : `${n} requests waiting in the Inbox →`}</Button></Flex>;
+  return <Flex mb={3}><Button id="inbox-note" variant="soft" onPress={onOpen}><P size={2} weight="medium" color="blue">Inbox</P><Pill kind="info">{String(n)}</Pill><P size={2} color="blue">→</P></Button></Flex>;
 }

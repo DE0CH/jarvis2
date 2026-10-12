@@ -197,6 +197,12 @@ fixes, 34–40 carried over from the old app and still true, 41–43 the web pag
     Does rows and two buttons (Allow 10 min, Standing rule); a locked store is "Waiting for unlock" with a Store row.
     The explanatory sentences under each card (what Resume does, auto-pause in words) are gone.
 
+53. **Inbox cards** have a fixed title per kind (Grant, Standing rule, Make deploy key, Unlock stores, New session…)
+    and rows for what the entry is about (Session, Feature, For, Repo, Store, Stores, Mode) and where it came from
+    (From, Asked, Expires, Call). The caller's reason is a Quote labelled "Reason (from <caller>, unverified)".
+54. **Grants page**: the session is a row; a turned-away feature and each grant in force are rows (Feature, Does,
+    Ends); the long explanation at the top is gone.
+
 ## Unfinished / known gaps
 
 - Free text (prompt, title) reaches the machine signed only with a core that vouches (the held core doesn't).
