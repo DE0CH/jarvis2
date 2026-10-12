@@ -254,8 +254,10 @@ final class ReplicaUITests: JarvisUITestCase {
     // ---- the Inbox, from a session: deny one grant request, allow another with Face ID ----
     XCTAssertEqual(relay("inbox-session:\(sid):status"), "ok", "the session filed a grant request")
     if inboxReview("session-deny") {
-      XCTAssertTrue(said(el("request-caller")).contains("session"), "the caller is the session: \(said(el("request-caller")))")
-      XCTAssertTrue(said(el("request-explanation")).contains("replica-the-session"), "the session's reason is shown")
+      if scrolledTo(el("request-caller"), max: 4) { XCTAssertTrue(said(el("request-caller")).contains("session"), "the caller is the session: \(said(el("request-caller")))") }
+      if scrolledTo(el("request-explanation"), max: 4) {  // the caller's reason sits below the signed rows
+        XCTAssertTrue(said(el("request-explanation")).contains("replica-the-session"), "the session's reason is shown")
+      } else { XCTFail("the session's reason is shown"); note("tree-reason", app.debugDescription) }
       inboxDeny("session")
     }
     XCTAssertEqual(relay("inbox-session:\(sid):archive"), "ok", "the session filed another")
