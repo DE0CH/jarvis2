@@ -7,7 +7,7 @@ import { api, fromNow, usd, type Usage, type UsageLimit } from "../lib/api";
 import { useStore, failed, pend } from "../lib/store";
 import { PButton } from "../ui/bits";
 import { hasShell, requestSecure } from "../lib/shell";
-import { Box, Button, Card, Flex, Heading, Muted, P, Progress, Text } from "../ui/kit";
+import { Badge, Box, Button, Card, Flex, Heading, Muted, P, Pill, Progress, Row, Rows } from "../ui/kit";
 import { Cards } from "../ui/cards";
 import { ReposCard } from "./Repos";
 
@@ -52,14 +52,26 @@ function UsageCard() {
                   <P size={2} color={color} weight="bold">{used}% used</P>
                 </Flex>
                 <Progress value={used} color={color} mt={1} />
-                <Muted mt={1}>{100 - used}% left{l.resetsAt ? " · resets " + fromNow(l.resetsAt) : ""}</Muted>
+                <Rows mt={1}>
+                  <Row label="Left">{`${100 - used}%`}</Row>
+                  {!!l.resetsAt && <Row label="Resets">{fromNow(l.resetsAt)}</Row>}
+                </Rows>
               </Box>
             );
           })}
-          {u.extraUsage && <Muted mt={3}>Extra usage: {u.extraUsage.enabled
-            ? `${money(u.extraUsage.usedCredits, u.extraUsage.currency, u.extraUsage.decimalPlaces)} of ${money(u.extraUsage.monthlyLimit, u.extraUsage.currency, u.extraUsage.decimalPlaces)} this month${u.extraUsage.spendLimitReached ? " · spend limit reached" : ""}`
-            : `off${u.extraUsage.disabledReason ? " (" + u.extraUsage.disabledReason.replace(/_/g, " ") + ")" : ""}`}</Muted>}
-          <Muted mt={2}>Fetched {fromNow(u.fetchedAt)}{u.stale ? <> · <Text color="red">showing the last good reading — refresh failed: {u.error}</Text></> : ""}{err && !u.stale ? <> · <Text color="red">{err}</Text></> : ""}</Muted>
+          <Rows mt={3} id="usage-rows">
+            {u.extraUsage && (u.extraUsage.enabled ? <>
+              <Row label="Extra usage">{u.extraUsage.spendLimitReached ? <Badge color="red">limit reached</Badge> : <Badge color="green">on</Badge>}</Row>
+              <Row label="Used this month">{money(u.extraUsage.usedCredits, u.extraUsage.currency, u.extraUsage.decimalPlaces)}</Row>
+              <Row label="Monthly limit">{money(u.extraUsage.monthlyLimit, u.extraUsage.currency, u.extraUsage.decimalPlaces)}</Row>
+            </> : <>
+              <Row label="Extra usage"><Badge>off</Badge></Row>
+              {!!u.extraUsage.disabledReason && <Row label="Why off">{u.extraUsage.disabledReason.replace(/_/g, " ")}</Row>}
+            </>)}
+            <Row label="Fetched">{u.stale ? <><P size={2}>{fromNow(u.fetchedAt)}</P><Badge color="amber">last good reading</Badge></> : fromNow(u.fetchedAt)}</Row>
+            {u.stale && !!u.error && <Row label="Refresh failed" color="red">{u.error}</Row>}
+            {!!err && !u.stale && <Row label="Error" color="red">{err}</Row>}
+          </Rows>
         </>}
       <Flex mt={3}><PButton pkey="usage" variant="soft" color="gray" onPress={() => load(true)} label="Refresh" id="usage-refresh" /></Flex>
     </Card>
@@ -72,17 +84,30 @@ function FlyCard() {
   return (
     <Card data={{ settings: "fly" }}>
       <Heading size={3} mb={1}>Fly spend</Heading>
-      {!b ? <Muted>{fly?.error ? "No reading: " + fly.error : "No reading yet (the router samples the Fly app every few minutes)."}</Muted>
+      {!b ? <Rows><Row label="Reading" color={fly?.error ? "red" : undefined}>{fly?.error || "None yet"}</Row></Rows>
         : <>
           <Flex justify="space-between" align="baseline" gap={2} mt={1}>
-            <P size={2} weight="medium" style={{ flex: 1 }} id="budget-spent">{`${usd(b.spentUsd)} of ${usd(b.capUsd)} · ${b.month}`}</P>
+            <P size={2} weight="medium" style={{ flex: 1 }} id="budget-spent">{usd(b.spentUsd)}</P>
             <P size={2} weight="bold" color={b.capped ? "red" : b.warned ? "amber" : "green"}>{pct}%</P>
           </Flex>
           <Progress value={pct} color={b.capped ? "red" : b.warned ? "amber" : "green"} mt={1} />
-          <Muted mt={2}>{`Now ${usd(b.ratePerHour)}/h (${usd(b.perMonth)} a month at this rate) · ${b.running} running machine${b.running === 1 ? "" : "s"} · ${b.volumes} volume${b.volumes === 1 ? "" : "s"}`}</Muted>
-          <Muted mt={1}>{`A DM at ${usd(b.warnUsd)}; at ${usd(b.capUsd)} the router pauses every running session.${b.capped && b.cappedAt ? " Capped " + new Date(b.cappedAt).toLocaleString() + "." : ""}${b.sampledAt ? " Sampled " + new Date(b.sampledAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) + "." : ""}`}</Muted>
+          <Rows mt={2} id="budget-rows">
+            <Row label="Month">{b.month}</Row>
+            <Row label="Cap" id="budget-cap">{usd(b.capUsd)}</Row>
+            <Row label="DM at">{usd(b.warnUsd)}</Row>
+            <Row label="Rate">{usd(b.ratePerHour) + " / h"}</Row>
+            <Row label="At this rate">{usd(b.perMonth) + " / month"}</Row>
+            <Row label="Running">{String(b.running)}</Row>
+            <Row label="Volumes">{String(b.volumes)}</Row>
+            {b.capped && !!b.cappedAt && <Row label="Capped" color="red">{new Date(b.cappedAt).toLocaleString()}</Row>}
+            {!!b.sampledAt && <Row label="Sampled">{new Date(b.sampledAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</Row>}
+          </Rows>
         </>}
-      <Muted mt={2}>{`Fly app ${app || "jarvis2-sessions"} (org jarvis2-370). An estimate from the machines' sizes and running time, not Fly's invoice.`}</Muted>
+      <Rows mt={2}>
+        <Row label="Fly app">{app || "jarvis2-sessions"}</Row>
+        <Row label="Org">jarvis2-370</Row>
+      </Rows>
+      <Muted mt={2}>At the cap, every running session is paused. An estimate, not Fly's invoice.</Muted>
     </Card>
   );
 }
@@ -93,7 +118,7 @@ export function Settings() {
     <Cards>
       <Card data={{ settings: "claude" }}>
         <Heading size={3} mb={1}>Claude account</Heading>
-        <Muted>Jarvis 2 sessions use Jarvis 1's Claude login: the router fetches its credential pair and writes it into a session whose login expired. Re-login and the token live in Jarvis 1's Settings; the quota below is read through it.</Muted>
+        <Muted>Jarvis 1's login; re-login there.</Muted>
         <Flex mt={3}><Button variant="soft" id="open-jarvis1" onPress={() => open("https://jarvis.deyaochen.com/")}>Jarvis 1 ↗</Button></Flex>
       </Card>
       <UsageCard />
@@ -101,9 +126,8 @@ export function Settings() {
       <FlyCard />
       <Card data={{ settings: "setup" }}>
         <Heading size={3} mb={1}>Jarvis 2</Heading>
-        <Muted>{core.up ? "Running." : "Not answering."}</Muted>
+        <Rows><Row label="Core" id="core-status">{core.up ? <Pill kind="ok">running</Pill> : <Pill kind="bad">not answering</Pill>}</Row></Rows>
         {hasShell && <>
-          <Muted mt={2}>Start fresh with a new recovery kit, or bring everything back with yours.</Muted>
           <Flex mt={3}><Button id="open-setup" variant="soft" onPress={() => requestSecure("setup", {})}>Reset or recover…</Button></Flex>
         </>}
       </Card>

@@ -9,7 +9,7 @@ import { api, ago, type GhRepo, type RepoEntry } from "../lib/api";
 import { useStore, pend, refresh, settle, loadStores, toast } from "../lib/store";
 import { hasShell, requestSecure } from "../lib/shell";
 import { useTheme, radius } from "../theme";
-import { Badge, Card, Flex, Heading, Lbl, Muted, P, Spinner, Text, TextField, ids } from "../ui/kit";
+import { Badge, Card, Flex, Heading, Lbl, Muted, P, Row, Rows, Spinner, Text, TextField, ids } from "../ui/kit";
 import { PButton } from "../ui/bits";
 import { isWeb } from "../ui/overlays";
 
@@ -72,8 +72,8 @@ function Picker({ onPick, disabled }: { onPick: (r: GhRepo) => void; disabled: b
                     </Flex>
                     <P size={1} color="gray" lines={1}>{r.description || ""}{r.description ? " · " : ""}{r.language ? r.language + " · " : ""}pushed {r.pushedAt ? ago(r.pushedAt) : "?"}</P>
                   </Pressable>); })}
-                {m.length > 40 && <Note>{m.length - 40} more — keep typing to narrow down</Note>}
-                {!m.length ? <Note>{all.length ? "No match." : "No repos visible to the router's GitHub token."} {retry("refresh list")}</Note> : <Note>{all.length} repos · {retry("refresh list")}</Note>}
+                {m.length > 40 && <Note>More match: keep typing.</Note>}
+                {!m.length ? <Note>{all.length ? "No match." : "No repos visible."} {retry("refresh list")}</Note> : <Note>Listed: {all.length} · {retry("refresh list")}</Note>}
               </>}
           </ScrollView>
         </View>
@@ -88,7 +88,7 @@ function openKeyPage(action: "add" | "remove", repo: string, key: string, after?
   requestSecure("repo-key", { action, repo, sensitive: false }, (r) => {
     pend(key, null);
     if (r.result !== "done") return;
-    toast(action === "add" ? `${repo}: deploy key added.` : `${repo}: deploy key and store removed.`, "ok");
+    toast(action === "add" ? "Deploy key added." : "Deploy key and store removed.", "ok");
     refresh(false); loadStores(); settle(30000); after?.();
   });
 }
@@ -104,7 +104,10 @@ function RepoRow({ x }: { x: RepoEntry }) {
       <Flex justify="space-between" align="flex-start" gap={2}>
         <View style={{ flex: 1 }}>
           <Flex gap={1} align="center" wrap><Heading size={3}>{x.repo}</Heading>{sensitive && <Badge color="red">Sensitive</Badge>}{missing && <Badge color="amber">No key</Badge>}</Flex>
-          <Muted id={"repo-key-" + x.name}>{missing ? `The store ${x.store} isn't in the core: make the key again.` : `Deploy key in ${x.store}${x.fingerprint ? " · " + x.fingerprint : ""}`}</Muted>
+          <Rows mt={1} id={"repo-key-" + x.name}>
+            <Row label="Store" color={missing ? "amber" : undefined}>{x.store}</Row>
+            {!missing && !!x.fingerprint && <Row label="Key" mono selectable>{x.fingerprint}</Row>}
+          </Rows>
         </View>
         {<Flex gap={2}>
           {missing && <PButton pkey={"repo:" + x.repo} size={1} onPress={() => openKeyPage("add", x.repo, "repo:" + x.repo)} label="Make key" id={"repo-makekey-" + x.name} />}
@@ -130,7 +133,7 @@ export function ReposCard() {
   return (
     <Card data={{ settings: "repos" }} id="repos">
       <Heading size={3} mb={1}>Repos</Heading>
-      <Muted>Each repo has its own deploy key on GitHub (read and push, that repo only), kept in its store github-&lt;repo&gt;. A session that includes the store clones, pulls and pushes the repo over SSH.</Muted>
+      <Muted>One deploy key per repo (read + push), in store github-&lt;repo&gt;.</Muted>
       {repos.length ? repos.map((x) => <RepoRow key={x.repo} x={x} />) : <P size={2} color="gray" mt={3} id="repos-none">No repos yet.</P>}
       {<>
         <Lbl>Add repo — pick one of yours</Lbl>
@@ -138,8 +141,7 @@ export function ReposCard() {
         <Lbl>Or type it</Lbl>
         <TextField id="repo-url" keyboardType="url" autoComplete="off" autoCapitalize="none" autoCorrect={false} placeholder="owner/name or https://github.com/owner/name" value={text} disabled={busy} onChangeText={setText} onSubmitEditing={add} />
         <Flex mt={3}><PButton pkey="repo:add" onPress={add} label="Add repo" id="repo-add-go" /></Flex>
-        <Muted mt={2}>{hasShell ? "Adding asks for Face ID: the core uses the GitHub token in the store github-deploy-keys for that one request."
-          : "Adding or removing a repo needs Face ID: this sends the request to the Inbox in the Jarvis 2 app on the iPhone."}</Muted>
+        <Muted mt={2}>{hasShell ? "Asks for Face ID." : "Goes to the iPhone app's Inbox."}</Muted>
       </>}
     </Card>
   );

@@ -8,7 +8,7 @@ import { Image, Platform, Pressable, View } from "react-native";
 import { api, newId, uploadFile, CORE_STORE, harnessStoreSet } from "../lib/api";
 import { useStore, loadStores, refresh, settle, toast, failed } from "../lib/store";
 
-import { Button, CheckboxCards, Flex, Lbl, Muted, RadioCards, Segmented, Spinner, Text, TextArea, TextField } from "../ui/kit";
+import { BadgeList, Button, CheckboxCards, Flex, Lbl, Muted, Pill, RadioCards, Row, Rows, Segmented, Spinner, Text, TextArea, TextField } from "../ui/kit";
 import { BtnLabel } from "../ui/bits";
 import { Page, useDone } from "../ui/page";
 
@@ -54,7 +54,7 @@ function Attachments({ items, add, remove, disabled }: { items: Picked[]; add: (
       </Flex>
       <Flex gap={2} align="center" mt={items.length ? 2 : 0}>
         <Button id="ns-attach" variant="soft" disabled={disabled || items.length >= MAX_FILES} onPress={pick}>Add images</Button>
-        <Muted>{items.length ? `${items.length} image${items.length === 1 ? "" : "s"}` : "or paste one into the page"}</Muted>
+        {items.length ? <Pill kind="info">{String(items.length)}</Pill> : <Muted>Paste works too.</Muted>}
       </Flex>
     </>
   );
@@ -97,9 +97,9 @@ export function NewSession() {
   const addImages = (files: File[]) => setImages((cur) => {
     const out = [...cur], taken = new Set(cur.map((i) => i.name));
     for (const f of files) {
-      if (!IMAGE_TYPES[f.type]) { toast(`${f.name || "That file"} isn't a PNG, JPEG, GIF or WebP image.`, "error"); continue; }
-      if (f.size > MAX_BYTES) { toast(`${f.name} is larger than 25 MB.`, "error"); continue; }
-      if (out.length >= MAX_FILES) { toast(`At most ${MAX_FILES} images.`, "error"); break; }
+      if (!IMAGE_TYPES[f.type]) { toast("Skipped: not a PNG, JPEG, GIF or WebP image.", "error"); continue; }
+      if (f.size > MAX_BYTES) { toast("Skipped: larger than 25 MB.", "error"); continue; }
+      if (out.length >= MAX_FILES) { toast("At most 20 images.", "error"); break; }
       // a pasted image is "image.png": each gets its own name (the router keeps one file per name)
       const ext = IMAGE_TYPES[f.type];
       let base = safeName(f.name && f.name !== "image." + ext ? f.name : `pasted.${ext}`), name = base, n = 2;
@@ -138,7 +138,7 @@ export function NewSession() {
       const attachments = await upload();
       setBusy("Starting…");
       await api("POST", "api/sessions", attachments ? { ...body, attachments } : body);
-      toast("Requested. Approve it in the Jarvis 2 app on the iPhone once the machine is up.", "ok"); refresh(false); settle(120000); done();
+      toast("Requested. Approve in the iPhone app.", "ok"); refresh(false); settle(120000); done();
     } catch (e) { failed(e); setBusy(null); }
   }
   return (
@@ -149,8 +149,8 @@ export function NewSession() {
       <TextArea id="ns-prompt" rows={4} autoCapitalize="sentences" placeholder={oneShot ? "The one job for this session. Claude runs it, then the session is archived and destroyed." : "Typed into the session as its first message once it is up."} value={prompt} onChangeText={setPrompt} />
       {Platform.OS === "web" && <><Lbl>Images</Lbl>
         <Attachments items={images} add={addImages} remove={removeImage} disabled={!!busy} />
-        <Muted mt={1}>Sent with the first prompt. The phone signs each image's hash; the machine takes only those bytes.</Muted></>}
-      {oneShot && <Muted mt={1}>Needs a prompt. If Claude asks you something, the session waits (“needs you”) until you answer, then finishes.</Muted>}
+        <Muted mt={1}>Sent with the first prompt; the phone signs each image's hash.</Muted></>}
+      {oneShot && <Muted mt={1}>Needs a prompt.</Muted>}
       <Lbl>Session title (optional)</Lbl>
       <TextField id="ns-title" autoComplete="off" autoCorrect={false} autoCapitalize="sentences" placeholder="e.g. refactor billing module" value={label} onChangeText={setLabel} />
       <Lbl>Secret stores</Lbl>
@@ -169,10 +169,10 @@ export function NewSession() {
       </>
       <Lbl>Repos</Lbl>
       {repoList.length ? <CheckboxCards id="ns-repo" value={repos} onChange={setRepos} options={repoList.map((r) => ({ value: r.name, title: r.repo, sub: r.store }))} />
-        : <Muted>No repos yet — add some in Settings → Repos.</Muted>}
-      {!!repoList.length && !repos.length && <Muted mt={1}>No repo selected — the session starts with an empty workspace.</Muted>}
-      {repoList.some((r) => repos.includes(r.name) && !plain.some((s) => s.name === r.store)) && <Muted mt={1} id="ns-repo-sensitive">
-        {`Pick ${repoList.filter((r) => repos.includes(r.name) && !plain.some((s) => s.name === r.store)).map((r) => r.store).join(", ")} on the app's secure screen to push: a sensitive store (or one without a key) isn't pre-selected.`}</Muted>}
+        : <Muted>No repos (Settings → Repos).</Muted>}
+      {!!repoList.length && !repos.length && <Muted mt={1}>No repo: an empty workspace.</Muted>}
+      {repoList.some((r) => repos.includes(r.name) && !plain.some((s) => s.name === r.store)) && <Rows mt={2} id="ns-repo-sensitive">
+        <Row label="Pick in the app"><BadgeList color="amber" items={repoList.filter((r) => repos.includes(r.name) && !plain.some((s) => s.name === r.store)).map((r) => r.store)} /></Row></Rows>}
       <Lbl>Permission mode</Lbl>
       <RadioCards id="ns-perm" value={perm} onChange={setPerm} options={[
         { value: "auto", title: "Auto", sub: "Auto-approve safe actions; the permission classifier gates the rest." },
@@ -181,9 +181,9 @@ export function NewSession() {
       {models.length > 0 && <><Lbl>Model</Lbl>
         <RadioCards id="ns-model" value={model} onChange={setModel} options={models.map((m) => ({ value: m.id, title: m.label || m.id, sub: m.id }))} /></>}
       {!oneShot && <><Lbl>Idle</Lbl>
-        <CheckboxCards id="ns-autopause" value={autoPause} onChange={setAutoPause} options={[{ value: "on", title: "Auto-pause when idle", sub: "Pauses the machine after 1 h with nothing running. Resume brings it back — the conversation and your files are kept." }]} /></>}
+        <CheckboxCards id="ns-autopause" value={autoPause} onChange={setAutoPause} options={[{ value: "on", title: "Auto-pause when idle", sub: "After 1 h with nothing running" }]} /></>}
       <Lbl>API proxy</Lbl>
-      <CheckboxCards id="ns-apiproxy" value={apiProxy} onChange={setApiProxy} options={[{ value: "on", title: "API proxy", sub: "Logs every request to and response from the Anthropic API into ~/artifacts/api-log, archived with the session." }]} />
+      <CheckboxCards id="ns-apiproxy" value={apiProxy} onChange={setApiProxy} options={[{ value: "on", title: "API proxy", sub: "Logs Anthropic API traffic to ~/artifacts/api-log" }]} />
       {SIZES.length > 0 && <><Lbl>Machine size</Lbl>
         <RadioCards id="ns-size" value={size} onChange={setSize} options={SIZES.map((s) => ({ value: s.id, title: s.id[0].toUpperCase() + s.id.slice(1), sub: s.label }))} /></>}
     </Page>

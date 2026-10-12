@@ -203,6 +203,12 @@ fixes, 34–40 carried over from the old app and still true, 41–43 the web pag
 54. **Grants page**: the session is a row; a turned-away feature and each grant in force are rows (Feature, Does,
     Ends); the long explanation at the top is gone.
 
+55. **New session, Schedules, Settings, Repos**: the session a page is about is a Session row; wakeups and crons are
+    cards titled by name with At / Repeats / Next / Time zone / Runs / Until rows and the prompt as a Quote; usage, Fly
+    spend and a repo's key are rows (Left, Resets, Cap, Rate, Running, Store, Key…); stores that must be picked in the
+    app are amber badges; image counts are a badge. Toasts that dropped a name or value into a sentence are fixed
+    strings now. Long explanations became one fixed line or went.
+
 ## Unfinished / known gaps
 
 - Free text (prompt, title) reaches the machine signed only with a core that vouches (the held core doesn't).

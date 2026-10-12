@@ -6,7 +6,7 @@ import { useEffect, useState } from "react";
 import { api, cronEvery, sessionTitle, when, type Cron, type Wakeup } from "../lib/api";
 import { useStore, ask, exclusive, failed, pend, refresh, toast } from "../lib/store";
 import { requestGrant } from "../lib/grants";
-import { Button, Card, Flex, Heading, Lbl, Muted, P, RadioCards, Segmented, Spinner, TextArea, TextField } from "../ui/kit";
+import { Button, Card, Flex, Heading, Lbl, Muted, P, Pill, Quote, RadioCards, Row, Rows, Segmented, Spinner, TextArea, TextField } from "../ui/kit";
 import { BtnLabel, PButton } from "../ui/bits";
 import { Cards } from "../ui/cards";
 import { Page } from "../ui/page";
@@ -60,7 +60,7 @@ export function SchedulesPage({ spec }: { spec: SchedulesSpec }) {
     setBusy(null);
   }
   const cancel = (what: "wakeup" | "cron", n: string) => exclusive(`sch:${what}:${n}`, async () => {
-    if (!(await ask({ title: `Cancel the ${what}${n === "default" ? "" : " “" + n + "”"}?`, action: "Cancel " + what, danger: true }))) return;
+    if (!(await ask({ title: what === "wakeup" ? "Cancel wakeup?" : "Cancel cron?", rows: [{ label: "Name", value: n }], action: what === "wakeup" ? "Cancel wakeup" : "Cancel cron", danger: true }))) return;
     pend(`sch:${what}:${n}`, "Cancelling…");
     try { await api("DELETE", what === "wakeup" ? `api/sessions/${sid}/wakeups/${encodeURIComponent(n)}` : `api/sessions/${sid}/crons/${encodeURIComponent(n)}`); await load(); await refresh(false); }
     catch (e: any) { failed(e); }
@@ -70,8 +70,8 @@ export function SchedulesPage({ spec }: { spec: SchedulesSpec }) {
   return (
     <Page title="Schedules" id="schedules-page" onSubmit={busy ? undefined : add}
       right={<Button id="sch-save" disabled={!!busy} onPress={add}>{busy ? <><Spinner /><BtnLabel>{busy}</BtnLabel></> : "Arm"}</Button>}>
-      <Muted mt={2}>{title}</Muted>
-      <Muted mt={2}>At the time, the prompt arrives in the session as a message; a paused session is resumed first. The session has to allow the scheduler (it does when it arms one itself), or the phone does with a standing rule.</Muted>
+      <Rows mt={2}><Row label="Session" id="sch-session">{title}</Row></Rows>
+      <Muted mt={2}>Needs the scheduler allowed: by the session, or a standing rule.</Muted>
       {m && <Flex mt={2}><Button size={1} variant="soft" color="gray" id="sch-rule" onPress={() => requestGrant(sid, title, { holder: "scheduler", kind: "rule" })}>Standing rule for the scheduler…</Button></Flex>}
       <Lbl>Armed</Lbl>
       {err ? <P size={2} color="red">{err}</P>
@@ -80,15 +80,22 @@ export function SchedulesPage({ spec }: { spec: SchedulesSpec }) {
         : <Cards>
           {ws.map((w) => (
             <Card key={"w:" + w.name} data={{ wakeup: w.name }}>
-              <Heading size={3} mb={1}>{"Wakes" + (w.name === "default" ? "" : " “" + w.name + "”") + " " + when(w.at)}</Heading>
-              <Muted>“{w.prompt}”</Muted>
+              <Flex justify="space-between" align="flex-start" gap={2} mb={1}><Heading size={3} style={{ flex: 1 }}>{w.name}</Heading><Pill kind="info">once</Pill></Flex>
+              <Rows><Row label="At" id={"sch-at-" + w.name}>{when(w.at)}</Row></Rows>
+              <Quote by="Prompt">{w.prompt}</Quote>
               <Flex mt={3}><PButton pkey={"sch:wakeup:" + w.name} variant="soft" color="red" onPress={() => cancel("wakeup", w.name)} label="Cancel" id={"sch-cancel-w-" + w.name} /></Flex>
             </Card>))}
           {cs.map((c) => (
             <Card key={"c:" + c.name} data={{ cron: c.name }}>
-              <Heading size={3} mb={1}>{`“${c.name}” ${cronEvery(c.everySeconds)}`}</Heading>
-              <Muted>{`next ${when(c.nextAt)}${c.tz && c.tz !== "UTC" ? " · " + c.tz : ""}${c.runs ? ` · ${c.runs} run${c.runs === 1 ? "" : "s"}` : ""}${c.untilIso ? " · until " + new Date(c.untilIso).toLocaleDateString() : ""}`}</Muted>
-              <Muted>“{c.prompt}”</Muted>
+              <Flex justify="space-between" align="flex-start" gap={2} mb={1}><Heading size={3} style={{ flex: 1 }}>{c.name}</Heading><Pill kind="info">repeating</Pill></Flex>
+              <Rows>
+                <Row label="Repeats">{cronEvery(c.everySeconds)}</Row>
+                <Row label="Next" id={"sch-next-" + c.name}>{when(c.nextAt)}</Row>
+                {!!c.tz && c.tz !== "UTC" && <Row label="Time zone">{c.tz}</Row>}
+                {!!c.runs && <Row label="Runs">{String(c.runs)}</Row>}
+                {!!c.untilIso && <Row label="Until">{new Date(c.untilIso).toLocaleDateString()}</Row>}
+              </Rows>
+              <Quote by="Prompt">{c.prompt}</Quote>
               <Flex mt={3}><PButton pkey={"sch:cron:" + c.name} variant="soft" color="red" onPress={() => cancel("cron", c.name)} label="Cancel" id={"sch-cancel-c-" + c.name} /></Flex>
             </Card>))}
         </Cards>}
@@ -103,7 +110,8 @@ export function SchedulesPage({ spec }: { spec: SchedulesSpec }) {
       </> : <>
         <Lbl>Repeat</Lbl>
         <RadioCards id="sch-every" value={every} onChange={setEvery} options={EVERY.map(([v, l]) => ({ value: v, title: l }))} />
-        {every === "daily" ? <><Lbl>At (24-hour, {deviceZone})</Lbl><TextField id="sch-time" keyboardType="numbers-and-punctuation" value={time} onChangeText={setTime} style={{ maxWidth: 140 }} /></>
+        {every === "daily" ? <><Lbl>At (24-hour)</Lbl><TextField id="sch-time" keyboardType="numbers-and-punctuation" value={time} onChangeText={setTime} style={{ maxWidth: 140 }} />
+          <Rows mt={2}><Row label="Time zone" id="sch-zone">{deviceZone}</Row></Rows></>
           : <><Lbl>Every (hours)</Lbl><TextField id="sch-hours" keyboardType="numeric" value={hours} onChangeText={setHours} style={{ maxWidth: 140 }} /></>}
       </>}
       <Lbl>Name (optional)</Lbl>
