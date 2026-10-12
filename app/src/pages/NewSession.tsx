@@ -1,13 +1,65 @@
 // New session on the WEB page: the form only files a pending request (POST api/sessions) with non-sensitive
 // stores; the approval happens in the app. In the app New session is one page in the shell (lib/sessions.ts,
 // Shell/SecurePages.swift SecureNewSession), where everything is chosen and Start signs it.
+// Images (docs/DECISIONS.md 94-95): picked or pasted here, uploaded to the router (api/uploads) before the request; the
+// signed config names each one's sha256 + size, and the machine takes only those bytes.
 import { useEffect, useRef, useState } from "react";
-import { api, newId, CORE_STORE, harnessStoreSet } from "../lib/api";
+import { Image, Platform, Pressable, View } from "react-native";
+import { api, newId, uploadFile, CORE_STORE, harnessStoreSet } from "../lib/api";
 import { useStore, loadStores, refresh, settle, toast, failed } from "../lib/store";
 
-import { Button, CheckboxCards, Flex, Lbl, Muted, RadioCards, Segmented, Spinner, TextArea, TextField } from "../ui/kit";
+import { Button, CheckboxCards, Flex, Lbl, Muted, RadioCards, Segmented, Spinner, Text, TextArea, TextField } from "../ui/kit";
 import { BtnLabel } from "../ui/bits";
 import { Page, useDone } from "../ui/page";
+
+// what the router's safeName makes of a file name (router/uploads.go): a basename, whitespace → "_"
+const safeName = (raw: string) => {
+  const s = (raw.split(/[\\/]/).pop() || "").replace(/[\x00-\x1f]/g, "").replace(/\s+/g, "_").trim().slice(0, 200);
+  return !s || s === "." || s === ".." ? "file" : s;
+};
+export const IMAGE_TYPES: Record<string, string> = { "image/png": "png", "image/jpeg": "jpg", "image/gif": "gif", "image/webp": "webp" };
+const MAX_FILES = 20, MAX_BYTES = 25 << 20;
+type Picked = { key: string; name: string; file: Blob; preview: string; size: number; uploaded?: string };
+
+function Attachments({ items, add, remove, disabled }: { items: Picked[]; add: (files: File[]) => void; remove: (key: string) => void; disabled: boolean }) {
+  // a paste anywhere on the page adds its images (not while typing text: a plain-text paste has no files)
+  useEffect(() => {
+    if (Platform.OS !== "web") return;
+    const onPaste = (e: ClipboardEvent) => {
+      const files = Array.from(e.clipboardData?.files || []).filter((f) => IMAGE_TYPES[f.type]);
+      if (files.length) { e.preventDefault(); add(files); }
+    };
+    document.addEventListener("paste", onPaste);
+    return () => document.removeEventListener("paste", onPaste);
+  }, [add]);
+  function pick() {
+    const input = document.createElement("input");
+    input.type = "file"; input.multiple = true; input.accept = Object.keys(IMAGE_TYPES).join(",");
+    input.onchange = () => add(Array.from(input.files || []));
+    input.click();
+  }
+  return (
+    <>
+      <Flex gap={2} wrap align="center">
+        {items.map((it) => (
+          <View key={it.key} style={{ width: 96 }} testID={"ns-attachment-" + it.name}>
+            <Image source={{ uri: it.preview }} style={{ width: 96, height: 96, borderRadius: 6 }} resizeMode="cover" accessibilityLabel={it.name} />
+            <Text size={1} lines={1}>{it.name}</Text>
+            <Text size={1} color="gray">{fmtSize(it.size)}</Text>
+            {!disabled && <Pressable onPress={() => remove(it.key)} accessibilityRole="button" accessibilityLabel={"Remove " + it.name} testID={"ns-attachment-remove-" + it.name}
+              style={{ position: "absolute", top: 4, right: 4, backgroundColor: "rgba(0,0,0,0.6)", borderRadius: 10, width: 20, height: 20, alignItems: "center", justifyContent: "center" }}>
+              <Text size={1} style={{ color: "white" }}>×</Text></Pressable>}
+          </View>
+        ))}
+      </Flex>
+      <Flex gap={2} align="center" mt={items.length ? 2 : 0}>
+        <Button id="ns-attach" variant="soft" disabled={disabled || items.length >= MAX_FILES} onPress={pick}>Add images</Button>
+        <Muted>{items.length ? `${items.length} image${items.length === 1 ? "" : "s"}` : "or paste one into the page"}</Muted>
+      </Flex>
+    </>
+  );
+}
+const fmtSize = (n: number) => (n < 1024 ? `${n} B` : n < 1 << 20 ? `${(n / 1024).toFixed(0)} KB` : `${(n / (1 << 20)).toFixed(1)} MB`);
 
 export function NewSession() {
   const SIZES = useStore((s) => s.sizes), MODELS = useStore((s) => s.models), stores = useStore((s) => s.stores);
@@ -40,20 +92,54 @@ export function NewSession() {
     if (r) setRepos((cur) => (cur.includes(r.name) ? cur : [...cur, r.name]));
   }, [repoList.length]);
   const [busy, setBusy] = useState<string | null>(null);
+  const [images, setImages] = useState<Picked[]>([]);
+  useEffect(() => () => images.forEach((i) => URL.revokeObjectURL(i.preview)), []); // eslint-disable-line react-hooks/exhaustive-deps
+  const addImages = (files: File[]) => setImages((cur) => {
+    const out = [...cur], taken = new Set(cur.map((i) => i.name));
+    for (const f of files) {
+      if (!IMAGE_TYPES[f.type]) { toast(`${f.name || "That file"} isn't a PNG, JPEG, GIF or WebP image.`, "error"); continue; }
+      if (f.size > MAX_BYTES) { toast(`${f.name} is larger than 25 MB.`, "error"); continue; }
+      if (out.length >= MAX_FILES) { toast(`At most ${MAX_FILES} images.`, "error"); break; }
+      // a pasted image is "image.png": each gets its own name (the router keeps one file per name)
+      const ext = IMAGE_TYPES[f.type];
+      let base = safeName(f.name && f.name !== "image." + ext ? f.name : `pasted.${ext}`), name = base, n = 2;
+      if (!/\.(png|jpe?g|gif|webp)$/i.test(name)) name = base = `${base}.${ext}`;
+      while (taken.has(name)) name = base.replace(/(\.[^.]*)?$/, (e) => `-${n++}${e}`);
+      taken.add(name);
+      out.push({ key: newId(), name, file: f, preview: URL.createObjectURL(f), size: f.size });
+    }
+    return out;
+  });
+  const removeImage = (key: string) => setImages((cur) => cur.filter((i) => { if (i.key === key) URL.revokeObjectURL(i.preview); return i.key !== key; }));
   const done = useDone();
   // one create per form: the router answers a repeat of this id with the first create
   const requestId = useRef(newId());
   const canStart = !busy && (picked.length > 0) && !(oneShot && !prompt.trim());
-  function start() {
+  async function upload(): Promise<{ uploadId: string; files: { name: string }[] } | undefined> {
+    if (!images.length) return undefined;
+    const uploadId = requestId.current, names: string[] = [];
+    for (const [i, it] of images.entries()) {
+      if (!it.uploaded) {
+        setBusy(`Uploading ${i + 1}/${images.length}…`);
+        const u = await uploadFile(uploadId, it.name, it.file);
+        it.uploaded = u.name;
+      }
+      names.push(it.uploaded!);
+    }
+    return { uploadId, files: names.map((name) => ({ name })) };
+  }
+  async function start() {
     if (!canStart) return;
     const chosen = repoList.filter((r) => repos.includes(r.name));
     const withRepos = [...new Set([...picked, ...chosen.map((r) => r.store).filter((n) => plain.some((s) => s.name === n))])];
     const body = { requestId: requestId.current, label: label.trim(), prompt: prompt.trim(), model, permissionMode: perm, size, harness, stores: withRepos, oneShot, autoPause: !oneShot && autoPause.includes("on"),
       repos: chosen.map((r) => r.url).join(","), apiProxy: apiProxy.includes("on") };
-    setBusy("Starting…");
-    api("POST", "api/sessions", body)
-      .then(() => { toast("Requested. Approve it in the Jarvis 2 app on the iPhone once the machine is up.", "ok"); refresh(false); settle(120000); done(); })
-      .catch((e) => { failed(e); setBusy(null); });
+    try {
+      const attachments = await upload();
+      setBusy("Starting…");
+      await api("POST", "api/sessions", attachments ? { ...body, attachments } : body);
+      toast("Requested. Approve it in the Jarvis 2 app on the iPhone once the machine is up.", "ok"); refresh(false); settle(120000); done();
+    } catch (e) { failed(e); setBusy(null); }
   }
   return (
     <Page title="New session" onSubmit={canStart ? start : undefined}
@@ -61,6 +147,9 @@ export function NewSession() {
       <Segmented id="ns-mode" value={mode} onChange={setMode} items={[["session", "Session"], ["oneshot", "One-shot"]]} />
       <Lbl>{oneShot ? "Prompt" : "First prompt (optional)"}</Lbl>
       <TextArea id="ns-prompt" rows={4} autoCapitalize="sentences" placeholder={oneShot ? "The one job for this session. Claude runs it, then the session is archived and destroyed." : "Typed into the session as its first message once it is up."} value={prompt} onChangeText={setPrompt} />
+      {Platform.OS === "web" && <><Lbl>Images</Lbl>
+        <Attachments items={images} add={addImages} remove={removeImage} disabled={!!busy} />
+        <Muted mt={1}>Sent with the first prompt. The phone signs each image's hash; the machine takes only those bytes.</Muted></>}
       {oneShot && <Muted mt={1}>Needs a prompt. If Claude asks you something, the session waits (“needs you”) until you answer, then finishes.</Muted>}
       <Lbl>Session title (optional)</Lbl>
       <TextField id="ns-title" autoComplete="off" autoCorrect={false} autoCapitalize="sentences" placeholder="e.g. refactor billing module" value={label} onChangeText={setLabel} />

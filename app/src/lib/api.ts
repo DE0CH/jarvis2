@@ -53,6 +53,25 @@ export async function api<T = any>(method: string, path: string, body?: unknown)
   catch { throw new Error(`the router answered ${method} ${path} with something that isn't JSON: ${reasonOf(text) || "(empty body)"}`); }
 }
 
+// one file of a New session form's attachments (POST api/uploads, raw bytes): the router answers the name it made safe
+export type Uploaded = { name: string; size: number; isImage: boolean };
+export async function uploadFile(uploadId: string, name: string, body: Blob): Promise<Uploaded> {
+  const path = "api/uploads";
+  let r: Response;
+  for (;;) {
+    try {
+      r = await fetch(url(path), {
+        ...fetchInit, method: "POST", body,
+        headers: { ...(await authHeaders()), "Content-Type": "application/octet-stream", "x-upload-id": uploadId, "x-upload-name": encodeURIComponent(name) },
+      });
+    } catch (e) { throw networkError("POST", path, e); }
+    if ((await checkRefused(r)) === "ok") break;
+  }
+  const text = await r.text().catch(() => "");
+  if (!r.ok) throw httpError("POST", path, r.status, text);
+  return JSON.parse(text) as Uploaded;
+}
+
 // ---- the router's shapes (docs/API.md) ----
 export type SessionState = "starting" | "approval" | "initialising" | "started" | "pausing" | "paused" | "resuming" | "destroying" | "failed";
 export type Wakeup = { name: string; at: number; atIso?: string; prompt: string };
