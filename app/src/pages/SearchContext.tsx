@@ -9,7 +9,7 @@ import { useStore, setTab } from "../lib/store";
 import { resumeSession } from "../views/Sessions";
 import { restore } from "../views/Records";
 import { Marked } from "../views/Search";
-import { Box, Button, Card, Flex, Muted, P, Spinner } from "../ui/kit";
+import { Box, Button, Card, Flex, P, Pill, Row, Rows, Spinner } from "../ui/kit";
 import { Page, closePage } from "../ui/page";
 
 export type ContextSpec = { hit: SearchHit; terms: string[] };
@@ -66,7 +66,11 @@ export function SearchContext({ spec }: { spec: ContextSpec }) {
   return (
     <Page title={hit.title} scrollRef={scroll} id="context-page"
       right={action ? <Button id="sc-action" onPress={() => { closePage(); action.run(); }}>{action.label}</Button> : undefined}>
-      <Muted mt={2}>{[hit.date, hit.dir ? hit.dir.replace(/^claude-records\//, "") : hit.state === "live" ? "running session" : "paused session"].filter(Boolean).join(" · ")}</Muted>
+      <Rows mt={2} id="sc-rows">
+        {!!hit.date && <Row label="Date">{hit.date}</Row>}
+        {hit.dir ? <Row label="Archive" mono selectable>{hit.dir.replace(/^claude-records\//, "")}</Row>
+          : <Row label="Session">{hit.state === "live" ? <Pill kind="ok">running</Pill> : <Pill kind="wait">paused</Pill>}</Row>}
+      </Rows>
       {err ? <P size={2} color="red" mt={3}>{err}</P>
         : !ctx ? <Flex justify="center" gap={2} align="center" mt={6}><Spinner /><P size={3} color="gray">Reading…</P></Flex>
         : <View style={{ gap: 12, marginTop: 12 }} onLayout={(e) => { listY.current = e.nativeEvent.layout.y + 8; }}>

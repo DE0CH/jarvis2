@@ -52,8 +52,8 @@ export function Remote({ spec }: { spec: RemoteSpec }) {
               <CopyButton size={2} id="rm-copy-web" value={info.webUrl} what="Link" label="Copy link" />
             </Flex>
             {info.harness === "openclaw"
-              ? <Muted mt={1}>The session’s OpenClaw Control UI, behind the same Cloudflare login as this page. The link carries the gateway token — don’t share it. The OpenClaw app lists this session by itself once the app is paired.</Muted>
-              : <Muted mt={1}>The session’s own Paseo page, behind the same Cloudflare login as this page. One session’s web UI per browser at a time — opening another session’s moves it over.</Muted>}
+              ? <Muted mt={1}>The link carries the gateway token: don't share it.</Muted>
+              : <Muted mt={1}>One session's web UI per browser at a time.</Muted>}
             {!!info.pairUrl && <>
               <Lbl>Paseo app</Lbl>
               <Flex gap={2} wrap>
@@ -61,7 +61,8 @@ export function Remote({ spec }: { spec: RemoteSpec }) {
                 <CopyButton size={2} id="rm-copy-pair" value={info.pairUrl} what="Pairing link" label="Copy pairing link" />
               </Flex>
               <P size={1} mono color="gray" selectable mt={2}>{info.pairUrl}</P>
-              <Muted mt={1}>Opens the Paseo app with this session’s pairing offer (or paste the link under “Paste pairing link” in the app). The link is the key to the session — don’t share it. From another device, scan with the camera:</Muted>
+              <Muted mt={1}>The link is the key to the session: don't share it.</Muted>
+              {!!qr && <Lbl>Scan from another device</Lbl>}
               {!!qr && <View nativeID="rm-qr" style={{ marginTop: 8, width: "100%", maxWidth: 320, aspectRatio: 1, backgroundColor: "#fff", borderRadius: 8, overflow: "hidden" }}><SvgXml xml={qr} width="100%" height="100%" /></View>}
             </>}
           </>}

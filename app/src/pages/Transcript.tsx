@@ -5,10 +5,10 @@
 import { useEffect, useRef, useState } from "react";
 import { View } from "react-native";
 import { api, type TailMessage } from "../lib/api";
-import { Button, Card, Flex, Muted, P, Spinner, Text } from "../ui/kit";
+import { Button, Card, Flex, P, Row, Rows, Spinner, Text } from "../ui/kit";
 import { Page, closePage } from "../ui/page";
 
-export type TranscriptSpec = { title: string; note: string; path: string; action?: { label: string; run: () => void } };
+export type TranscriptSpec = { title: string; note: [string, string]; path: string; action?: { label: string; run: () => void } };
 
 export function Transcript({ spec }: { spec: TranscriptSpec }) {
   const [msgs, setMsgs] = useState<TailMessage[] | null>(null), [err, setErr] = useState("");
@@ -22,10 +22,10 @@ export function Transcript({ spec }: { spec: TranscriptSpec }) {
   return (
     <Page title={spec.title} scrollRef={scroll} onContentSizeChange={toEnd} id="transcript"
       right={spec.action ? <Button id="pt-action" onPress={() => { closePage(); spec.action!.run(); }}>{spec.action.label}</Button> : undefined}>
-      <Muted mt={2}>{spec.note} · the last messages of the conversation</Muted>
+      <Rows mt={2} id="pt-rows"><Row label={spec.note[0]}>{spec.note[1]}</Row><Row label="Shows">Last messages</Row></Rows>
       {err ? <P size={2} color="red" mt={3} id="pt-error">{err}</P>
         : !msgs ? <Flex justify="center" gap={2} align="center" mt={6}><Spinner /><P size={3} color="gray">Reading the transcript…</P></Flex>
-        : !msgs.length ? <P size={3} color="gray" align="center" mt={6}>No messages in the last part of the transcript.</P>
+        : !msgs.length ? <P size={3} color="gray" align="center" mt={6}>No recent messages.</P>
         : <View nativeID="pt-msgs" style={{ gap: 12, marginTop: 12 }}>
             {msgs.map((m, i) => (
               <View key={i} {...({ dataSet: { role: m.role } } as any)}>

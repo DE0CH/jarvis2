@@ -297,7 +297,7 @@ export function Sessions() {
                         : (m.state === "started" || m.state === "initialising") && <Button id={"term-" + m.id} onPress={() => openPage("terminal", { id: m.id, title: sessionTitle(m) })}>Terminal</Button>}
                       {(m.state === "started" || m.state === "initialising") && <PButton pkey={"s:" + m.id} id={"pause-" + m.id} variant="soft" onPress={() => pause(m.id)} label="Pause" />}
                       {paused && <PButton pkey={"s:" + m.id} id={"resume-" + m.id} color="green" onPress={() => resumeSession(m.id)} label="Resume" />}
-                      {paused && <Button variant="soft" color="gray" id={"tail-" + m.id} onPress={() => openPage("transcript", { title: sessionTitle(m), note: "Paused " + (m.pausedAt ? ago(m.pausedAt) : ""), path: `api/sessions/${m.id}/tail`, action: { label: "Resume", run: () => resumeSession(m.id) } })}>Transcript</Button>}
+                      {paused && <Button variant="soft" color="gray" id={"tail-" + m.id} onPress={() => openPage("transcript", { title: sessionTitle(m), note: ["Paused", m.pausedAt ? ago(m.pausedAt) : "—"], path: `api/sessions/${m.id}/tail`, action: { label: "Resume", run: () => resumeSession(m.id) } })}>Transcript</Button>}
                       <MoreButton m={m} cool={cool} />
                     </>}
                 </Flex>

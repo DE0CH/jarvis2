@@ -7,7 +7,7 @@ import { useRef, useState } from "react";
 import { Pressable, View } from "react-native";
 import { api, type IcloudHit, type IcloudResult, type SearchHit, type SearchResult } from "../lib/api";
 import { useTheme } from "../theme";
-import { Button, Card, Flex, Heading, Muted, P, Pill, Segmented, Spinner, Switch, Text, TextField, ids } from "../ui/kit";
+import { Badge, Button, Card, Flex, Heading, Muted, P, Pill, Row, Rows, Segmented, Spinner, Switch, Text, TextField, ids } from "../ui/kit";
 import { Cards } from "../ui/cards";
 import { openMenu } from "../ui/overlays";
 import { openPage } from "../ui/page";
@@ -119,10 +119,14 @@ export function Search() {
       </Flex>}
       {!!err && <P size={2} color="red" mb={3} id="search-error">{err}</P>}
       {!shown && !err && <P size={3} color="gray" align="center" mt={8} mb={8} id="search-intro">{form.mode === "chats"
-        ? "Finds what was said, what Claude did, and the task records — in any session of Jarvis 1 or 2, running or long gone.\nPut “quotes” around text that must appear exactly."
-        : "Finds a file in iCloud Drive by its name, folder or content — document text, scans and photos (OCR), video frames and speech.\nPut “quotes” around text that must appear exactly."}</P>}
-      {empty && <P size={3} color="gray" align="center" mt={6} mb={6}>Nothing found for “{shown!.query}”.</P>}
-      {shown && !empty && <Muted>{shown.total} candidates · {(shown.tookMs / 1000).toFixed(1)} s{shown.notes?.length ? ` · ${shown.notes.join("; ")}` : ""}</Muted>}
+        ? "Every session of Jarvis 1 and 2.\n“Quotes” match exactly."
+        : "iCloud Drive: names, folders and content.\n“Quotes” match exactly."}</P>}
+      {empty && <P size={3} color="gray" align="center" mt={6} mb={6} id="search-empty">Nothing found.</P>}
+      {shown && !empty && <Rows id="search-stats">
+        <Row label="Candidates">{String(shown.total)}</Row>
+        <Row label="Took">{(shown.tookMs / 1000).toFixed(1) + " s"}</Row>
+        {!!shown.notes?.length && <Row label="Notes">{shown.notes.join("; ")}</Row>}
+      </Rows>}
       {form.mode === "chats" ? <Cards mt={12}>
         {(result?.sessions || []).map((g) => (
           <Card key={g.sid || g.dir || g.hits[0].id}>
@@ -130,7 +134,7 @@ export function Search() {
               <Heading size={3} style={{ flex: 1 }}>{g.title}</Heading>
               <Pill kind={STATE_PILL[g.state][0]}>{STATE_PILL[g.state][1]}</Pill>
             </Flex>
-            <Muted>{g.date}{g.count > g.hits.length ? ` · ${g.count} matches, best ${g.hits.length} shown` : ""}</Muted>
+            <Flex gap={2} align="center" wrap><Muted>{g.date}</Muted>{g.count > g.hits.length && <Badge>{`${g.hits.length} of ${g.count}`}</Badge>}</Flex>
             <View style={{ gap: 12, marginTop: 12 }}>{g.hits.map((h) => <Hit key={h.id} h={h} terms={terms} onOpen={open} bare />)}</View>
           </Card>
         ))}

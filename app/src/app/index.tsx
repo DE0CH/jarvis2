@@ -7,7 +7,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useStore, setTab, refresh, TABS, useInboxCount, type Tab } from "../lib/store";
 import { sessionTitle, usd } from "../lib/api";
 import { useTheme } from "../theme";
-import { Button, Callout, Heading, IconButton, Spinner, Tabs } from "../ui/kit";
+import { BadgeList, Button, Callout, Heading, IconButton, P, Row, Rows, Spinner, Tabs } from "../ui/kit";
 import { TopBar, openPage } from "../ui/page";
 import { openNewSession } from "../lib/sessions";
 import { useWide } from "../ui/overlays";
@@ -27,10 +27,17 @@ function Banners() {
   return (
     <View nativeID="banners">
       {!!st.loadError && <Callout color="red" mb={3}>{"Can't reach the router: " + st.loadError}</Callout>}
-      {st.loaded && !st.core.up && <Callout color="amber" mb={3}>The core is not answering — sessions can't be created, resumed or approved until it is back.</Callout>}
-      {dead.length > 0 && <Callout color="red" mb={3} id="banner-creds">{`Claude's login failed in ${dead.length === 1 ? "“" + sessionTitle(dead[0]) + "”" : dead.length + " sessions"}. The router writes Jarvis 1's credentials into a session whose login expired; if this stays, re-login in Jarvis 1's Settings.`}</Callout>}
-      {b?.capped ? <Callout color="red" mb={3} id="banner-budget">{`Fly spend reached the ${usd(b.capUsd)} cap for ${b.month} (${usd(b.spentUsd)}): the router paused every running session.`}</Callout>
-        : b?.warned ? <Callout color="amber" mb={3} id="banner-budget">{`Fly spend this month: ${usd(b.spentUsd)} of the ${usd(b.capUsd)} cap. At the cap every running session is paused.`}</Callout> : null}
+      {st.loaded && !st.core.up && <Callout color="amber" mb={3} id="banner-core">Core not answering: no create, resume or approve.</Callout>}
+      {dead.length > 0 && <Callout color="red" mb={3} id="banner-creds">
+        <P size={2} weight="bold" color="red">Claude login failed</P>
+        <Rows><Row label="Sessions"><BadgeList color="red" items={dead.map(sessionTitle)} /></Row></Rows>
+        <P size={1} color="red">If this stays, re-login in Jarvis 1.</P>
+      </Callout>}
+      {b?.capped || b?.warned ? <Callout color={b.capped ? "red" : "amber"} mb={3} id="banner-budget">
+        <P size={2} weight="bold" color={b.capped ? "red" : "amber"}>{b.capped ? "Fly spend cap reached" : "Fly spend warning"}</P>
+        <Rows><Row label="Spent">{usd(b.spentUsd)}</Row><Row label="Cap">{usd(b.capUsd)}</Row><Row label="Month">{b.month}</Row></Rows>
+        <P size={1} color={b.capped ? "red" : "amber"}>{b.capped ? "Every running session was paused." : "At the cap, every running session is paused."}</P>
+      </Callout> : null}
       {!!st.fly?.error && st.fly.error !== "FLY_READ_TOKEN not set" && <Callout color="red" mb={3}>{"Fly: " + st.fly.error}</Callout>}
     </View>
   );

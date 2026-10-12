@@ -219,6 +219,12 @@ fixes, 34–40 carried over from the old app and still true, 41–43 the web pag
     rows (or an "off" pill); a run's trigger, latest image and exit code are badges, its times rows (Queued, Script
     started, Finished, Exit code, Run). A template's own description (written in task.json) shows as written.
 
+58. **Banners, Search, Transcript, Remote, iCloud file**: a failed Claude login is "Claude login failed" with the
+    sessions as badges; the Fly spend banner is a title with Spent / Cap / Month rows; search stats are Candidates /
+    Took / Notes rows and an empty search says "Nothing found."; a transcript page heads with Paused or Destroyed and
+    Shows rows; a search hit's and an iCloud file's facts are rows. Error text from the router keeps its short
+    "Could not …:" prefix.
+
 ## Unfinished / known gaps
 
 - Free text (prompt, title) reaches the machine signed only with a core that vouches (the held core doesn't).

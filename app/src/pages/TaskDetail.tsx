@@ -37,7 +37,7 @@ export function TaskDetail({ spec }: { spec: TaskSpec }) {
   const del = async () => {
     if (!(await ask({ title: "Delete task?", rows: [
       { label: "Task", value: inst.name },
-      ...(schedules.length ? [{ label: "Schedules", value: "Deleted (" + schedules.length + ")" }] : []),
+      ...(schedules.length ? [{ label: "Schedules deleted", value: String(schedules.length) }] : []),
       { label: "Run history", value: "Deleted" },
       { label: "Session line", value: "Archived, destroyed" },
       { label: "Template", value: "Kept" },

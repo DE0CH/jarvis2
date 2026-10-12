@@ -94,7 +94,7 @@ export function Records() {
               {a?.last && <LastMessage last={a.last} />}
               <Flex gap={2} pt={3} wrap style={{ marginTop: "auto" }}>
                 {a && signed && <PButton pkey={"r:" + m.id} id={"restore-" + m.id} onPress={() => restore(m)} label="Restore" />}
-                {a && <Button variant="soft" color="gray" id={"rtail-" + m.id} disabled={busy} onPress={() => openPage("transcript", { title: recTitle(m), note: "Destroyed " + ago(m.destroyedAt), path: `api/records/${m.id}/tail`, action: signed ? { label: "Restore", run: () => restore(m) } : undefined })}>Transcript</Button>}
+                {a && <Button variant="soft" color="gray" id={"rtail-" + m.id} disabled={busy} onPress={() => openPage("transcript", { title: recTitle(m), note: ["Destroyed", m.destroyedAt ? ago(m.destroyedAt) : "—"], path: `api/records/${m.id}/tail`, action: signed ? { label: "Restore", run: () => restore(m) } : undefined })}>Transcript</Button>}
                 <Button variant="soft" color="gray" id={"rremove-" + m.id} disabled={busy} onPress={() => remove(m, false)}>Remove</Button>
                 {a && <Button variant="soft" color="red" id={"rpurge-" + m.id} disabled={busy} onPress={() => remove(m, true)}>Delete</Button>}
               </Flex>

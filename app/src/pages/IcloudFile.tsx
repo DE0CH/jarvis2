@@ -5,7 +5,7 @@ import { useEffect, useState } from "react";
 import { api, type IcloudFile as File } from "../lib/api";
 import { Marked, bytes } from "../views/Search";
 import { CopyButton } from "../ui/bits";
-import { Box, Card, Flex, Lbl, Muted, P, Spinner } from "../ui/kit";
+import { Box, Card, Flex, Lbl, Muted, P, Row, Rows, Spinner } from "../ui/kit";
 import { Page } from "../ui/page";
 
 export type IcloudFileSpec = { path: string; terms: string[] };
@@ -27,7 +27,13 @@ export function IcloudFile({ spec }: { spec: IcloudFileSpec }) {
       {err ? <P size={2} color="red" mt={3}>{err}</P>
         : !f ? <Flex justify="center" gap={2} align="center" mt={6}><Spinner /><P size={3} color="gray">Reading…</P></Flex>
         : <>
-            <Muted mt={1}>{[f.kind, f.size != null ? bytes(f.size) : "", f.mtime ? "modified " + f.mtime.slice(0, 10) : "", f.state && f.state !== "done" ? f.state : "", f.note].filter(Boolean).join(" · ")}</Muted>
+            <Rows mt={2} id="if-rows">
+              {!!f.kind && <Row label="Kind">{f.kind}</Row>}
+              {f.size != null && <Row label="Size">{bytes(f.size)}</Row>}
+              {!!f.mtime && <Row label="Modified">{f.mtime.slice(0, 10)}</Row>}
+              {!!f.state && f.state !== "done" && <Row label="Index state">{f.state}</Row>}
+              {!!f.note && <Row label="Note">{f.note}</Row>}
+            </Rows>
             {!!f.error && <P size={2} color="red" mt={1}>{f.error}</P>}
             <Lbl>What the index read</Lbl>
             {!(f.chunks || []).length ? <Muted>Nothing yet.</Muted>
