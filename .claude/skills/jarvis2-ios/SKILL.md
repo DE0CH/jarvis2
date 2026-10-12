@@ -45,6 +45,14 @@ ci/                  standins.sh (keys, S3 stand-in, core + router), standin.py,
 - Store unlocks verify the blob's writer (`Checks.writer`, required when the signed store list says `writers: true`).
 - New settings for a session = `Checks.configKeys` + `SignedSettingsSection` + `SessionConfig` in router/ and machine/.
 
+## UI copy (Deyao, 2026-10-12)
+
+- **No prose pieced together by code.** Show facts as UI: `LabeledContent` rows, lists, badges, buttons, short
+  section titles. Never a sentence built from fields ("The machine turned away status (…)", "You allow X to Y until
+  Z"). "What you sign (exact)" is a section of labelled rows rendered from the signed content, not a paragraph.
+- **Prose only from an LLM** (a caller's reason, a session's title or summary), shown as that author's text.
+- Standard platform controls and the HIG over custom layouts. The same rule holds for the web page (`app/`).
+
 ## Build and test without a Mac
 
 - There is no Swift-for-iOS compiler on Linux: push and let **`ios.yml` → compile** (macos-26, Release and JARVIS_CI

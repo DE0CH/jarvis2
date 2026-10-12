@@ -456,6 +456,12 @@ signature safe stays the same:
   locked, for that session only. An approval made elsewhere (the web page, a restore, a task) and an add-store do the same
   under their one Face ID. A request from elsewhere (a session, the web page, Claude's setup session) waits in the Inbox
   and opens the same review page, with **Allow** (Face ID) and **Deny**.
+- **No prose assembled by code** (Deyao, 2026-10-12): the app and the web page show facts as UI, not sentences pieced
+  together from fields. A review page is labelled rows and lists (Action, Repo, Store, Session, Until; a store list, a
+  Sensitive badge), a status is a short label or badge, an action is a button; no "What is being signed: you allow X to
+  Y until Z" paragraphs and no template strings with a field dropped in. Fixed strings stay short (a section title, a
+  one-line hint, a button). Prose appears only when an LLM wrote it (a caller's reason, a session's title or summary),
+  shown as that author's text. Follow Apple's HIG / standard platform controls (Form, LabeledContent, List, badges).
 - **The terminal is a web page**: the router serves it (`/term/{id}`) and the app shows it in a `WKWebView` with its
   Access login; WebKit runs it in its own process. The machine still runs its commands only under a grant, which the
   page asks the app for.
