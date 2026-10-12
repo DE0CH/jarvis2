@@ -207,11 +207,19 @@ final class ReplicaUITests: JarvisUITestCase {
     shot("after-relaunch")
     el("srow-\(sid)").tap()
 
-    // ---- terminal: turned away → the grant review → Deny, then Allow with Face ID → a command runs ----
+    // ---- terminal: the screen shows view only with no grant; typing is turned away → the grant review → Deny, then
+    // Allow with Face ID → a command runs ----
     try must(wait(el("term-\(sid)"), 30, "Terminal"))
     el("term-\(sid)").tap()
+    let input = app.webViews.textFields["Terminal input"].firstMatch
+    let viewOnly = app.descendants(matching: .any).matching(NSPredicate(format: "label BEGINSWITH 'view only'")).firstMatch
+    if wait(viewOnly, 90, "the session's screen, view only, before any grant") { shot("terminal-view-only") }
     let allow = app.webViews.buttons["Allow terminal for 10 minutes"]
-    if wait(allow, 60, "the terminal asks for a grant") {
+    if wait(input, 30, "the terminal input") {
+      input.tap(); input.typeText("x")
+      app.webViews.buttons["Send"].tap()
+    }
+    if wait(allow, 60, "typing asks for a grant") {
       shot("terminal-needs-grant")
       allow.tap()
       if arrives(el("secure-grant-allow"), 30, "the grant review") {
@@ -227,7 +235,6 @@ final class ReplicaUITests: JarvisUITestCase {
         XCTAssertTrue(gone(allow, 60), "allowed: the terminal opens")
       }
     }
-    let input = app.webViews.textFields["Terminal input"].firstMatch
     if wait(input, 30, "the terminal input") {
       let marker = "replica\(Int.random(in: 1000...9999))"
       input.tap()
