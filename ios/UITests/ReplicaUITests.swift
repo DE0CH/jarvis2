@@ -100,6 +100,7 @@ final class ReplicaUITests: JarvisUITestCase {
     return ok
   }
   func inboxDeny(_ what: String) {
+    guard scrolledTo(el("request-deny"), max: 6) else { XCTFail("[\(what)] no Deny on the review page"); note("tree-deny-\(what)", app.debugDescription); return }
     el("request-deny").tap()
     XCTAssertTrue(gone(el("request-call"), 30), "[\(what)] Deny leaves the page")
     XCTAssertTrue(gone(prefixed("request-review-"), 60), "[\(what)] denied: off the Inbox")
