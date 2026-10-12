@@ -185,6 +185,18 @@ fixes, 34–40 carried over from the old app and still true, 41–43 the web pag
     no separate "What you sign" for images: its own thumbnails are the bytes it hashed, and the check in 48 binds them.
 50. **The web page**: images only, from a file picker or pasted into the page, as they are (docs/DECISIONS.md 95).
 
+## No prose assembled by code on the web page (2026-10-12; decided while Deyao was away)
+
+51. **Three kit pieces carry the rule** (`app/src/ui/kit.tsx`): `Rows`/`Row` (a label on the left, the value on the
+    right, wrapping; each row has `data-row=<label>`), `BadgeList` (a short list such as stores as badges, "None" when
+    empty) and `Quote` (text a person or an LLM wrote, a prompt or a caller's reason, under a small label naming whose
+    it is). Dialogs (`ask`) take `rows` the same way; their titles are fixed ("Destroy session?") and the session or
+    item they are about is a row.
+52. **Session cards** show Stores, Harness, Model, Machine, Created, Paused and Auto-pause as rows; the state, skip
+    perms, one-shot and a failed Claude login are pills. The turned-away feature is "Feature turned away" with Feature /
+    Does rows and two buttons (Allow 10 min, Standing rule); a locked store is "Waiting for unlock" with a Store row.
+    The explanatory sentences under each card (what Resume does, auto-pause in words) are gone.
+
 ## Unfinished / known gaps
 
 - Free text (prompt, title) reaches the machine signed only with a core that vouches (the held core doesn't).

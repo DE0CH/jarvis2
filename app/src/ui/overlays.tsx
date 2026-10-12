@@ -10,7 +10,7 @@ import { KeyboardAvoidingView } from "react-native-keyboard-controller";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useStore, answer, dismissToast } from "../lib/store";
 import { useTheme, radius } from "../theme";
-import { Button, Flex, Heading, P, Text, TextArea, TextField, CalloutText, ids } from "./kit";
+import { Button, Flex, Heading, P, Row, Rows, Text, TextArea, TextField, CalloutText, ids } from "./kit";
 
 export const isWeb = Platform.OS === "web";
 // a real mouse (decides small things: focusing a field on open, "Click" vs "Tap")
@@ -137,6 +137,7 @@ function ConfirmHost() {
           style={{ width: "100%", maxWidth: 460, maxHeight: "100%", backgroundColor: t.panel, borderWidth: 1, borderColor: t.gray.a[6], borderRadius: radius[5] }}>
           <ScrollView contentContainerStyle={{ padding: 24 }} keyboardShouldPersistTaps="handled">
             <Heading size={4} mb={2}>{c.title}</Heading>
+            {c.rows?.length ? <Rows mb={2} id="ask-rows">{c.rows.map((r, i) => <Row key={i} label={r.label} id={r.id}>{r.value}</Row>)}</Rows> : null}
             {c.detail ? <P size={2} color="gray">{c.detail}</P> : null}
             {c.input && <>
               <Text size={2} weight="medium" mt={4} mb={1} style={{ color: t.gray[12] }}>{c.input.label}</Text>

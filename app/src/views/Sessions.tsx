@@ -5,12 +5,13 @@ import { useStore, setTab, getStore, pend, refresh, refreshUntil, pendUntil, set
 import { hasShell, requestSecure } from "../lib/shell";
 import { requestGrant } from "../lib/grants";
 import { canCopy, copyText } from "../lib/clipboard";
-import { Box, Button, Callout, CalloutText, Card, Flex, Heading, Lbl, Muted, P, Pill, Text } from "../ui/kit";
+import { BadgeList, Box, Button, Callout, Card, Flex, Heading, Lbl, Muted, P, Pill, Quote, Row, Rows } from "../ui/kit";
+import type { AskRow } from "../lib/store";
 import { BusyButton, PButton, useCoolAfterShift } from "../ui/bits";
 import { Cards } from "../ui/cards";
 import { InboxNote } from "./Inbox";
 import { openPage } from "../ui/page";
-import { openMenu, mouse, type MenuItem } from "../ui/overlays";
+import { openMenu, type MenuItem } from "../ui/overlays";
 
 const find = (s: State, id: string) => s.sessions.find((x) => x.id === id);
 const MOVING: Record<string, string> = { starting: "starting…", approval: "waiting for approval", initialising: "initialising…", pausing: "pausing…", resuming: "resuming…", destroying: "destroying…" };
@@ -50,10 +51,10 @@ const groupOf = (m: Session): typeof GROUPS[number] => m.state === "paused" ? (h
 // ---- actions (never optimistic: the pending label stays until the router confirms) ----
 const pause = (id: string) => pendUntil("s:" + id, "Pausing…", () => api("POST", `api/sessions/${id}/pause`), (s) => find(s, id)?.state === "paused" || find(s, id)?.state === "failed", 120000);
 // the optional prompt of a Resume: delivered as a message once the session is up again
-export const RESUME_PROMPT = { label: "Prompt (optional)", placeholder: "What Claude should do once it is back — typed in when it starts; the iPhone approves it. Leave blank to just bring it back.", max: 4000 };
+export const RESUME_PROMPT = { label: "Prompt (optional)", placeholder: "Sent once it is back", max: 4000 };
 export const resumeSession = (id: string) => exclusive("s:" + id, async () => {
   const m = find(getStore().state, id);
-  const prompt = await askText({ title: `Resume “${m ? sessionTitle(m) : id}”?`, detail: "Continues the same conversation on a new machine with the same image, with the files as they were when it was paused.", action: "Resume", input: { heading: "Resume", ...RESUME_PROMPT } });
+  const prompt = await askText({ title: "Resume session?", rows: [{ label: "Session", value: m ? sessionTitle(m) : id }], detail: "Same conversation and files, on a new machine.", action: "Resume", input: { heading: "Resume", ...RESUME_PROMPT } });
   if (prompt === null) return;
   pend("s:" + id, "Resuming…");
   try {
@@ -75,7 +76,7 @@ export function review(a: Approval) {
 // resume on the newest image: the router asks for an approval first
 const upgrade = (id: string) => exclusive("s:" + id, async () => {
   const m = find(getStore().state, id);
-  const ok = await ask({ title: `Resume “${m ? sessionTitle(m) : id}” with the latest image?`, detail: "Starts the newest session image. The old machine is burned (it can never be resumed as it was), and the iPhone approves the new one.", action: "Resume with latest image" });
+  const ok = await ask({ title: "Resume with the latest image?", rows: [{ label: "Session", value: m ? sessionTitle(m) : id }, { label: "Old machine", value: "Burned" }, { label: "Approval", value: "On the iPhone" }], action: "Resume with latest image" });
   if (!ok) return;
   pend("s:" + id, "Resuming…");
   try {
@@ -90,28 +91,27 @@ const upgrade = (id: string) => exclusive("s:" + id, async () => {
 // Destroy: first what would be lost (GET …/changes: uncommitted / unpushed work), then the destroy itself —
 // the router pauses a running session (its final snapshot), archives it to the Storage Box and burns the line.
 // A failed archive leaves it paused with "archive: …"; then the question is whether to destroy anyway.
-async function changesText(id: string): Promise<string> {
-  let msg = "";
+async function changesRows(id: string): Promise<AskRow[]> {
   try {
     const c = await api<any>("GET", `api/sessions/${id}/changes`);
-    if (c.checked) {
-      const dirty = (c.repos || []).filter((r: any) => r.uncommitted > 0 || r.unpushed > 0 || r.unpushed === -1);
-      if (c.status === "busy") msg += "Claude is still working in this session.\n\n";
-      if (dirty.length) {
-        msg += "Unsaved work will be lost:\n" + dirty.map((r: any) => "• " + r.name + ": "
-          + (r.uncommitted > 0 ? r.uncommitted + " uncommitted file(s)" : "")
-          + (r.uncommitted > 0 && (r.unpushed > 0 || r.unpushed === -1) ? ", " : "")
-          + (r.unpushed > 0 ? r.unpushed + " unpushed commit(s)" : r.unpushed === -1 ? "branch has no upstream (nothing pushed)" : "")).join("\n") + "\n";
-      } else if (c.status !== "busy") msg += "No uncommitted or unpushed changes found" + (c.paused ? " (as of when it was paused)" : "") + ".\n";
-    } else msg += "Could not check for unsaved changes (" + (c.reason || "unknown") + ").\n";
-  } catch (e: any) { msg += "Could not check for unsaved changes (" + e.message + ").\n"; }
-  return msg;
+    if (!c.checked) return [{ label: "Unsaved work", value: "Not checked", id: "changes-unchecked" }, ...(c.reason ? [{ label: "Reason", value: String(c.reason) }] : [])];
+    const rows: AskRow[] = [];
+    if (c.status === "busy") rows.push({ label: "Claude", value: "Working", id: "changes-busy" });
+    const dirty = (c.repos || []).filter((r: any) => r.uncommitted > 0 || r.unpushed > 0 || r.unpushed === -1);
+    for (const r of dirty) {
+      if (r.uncommitted > 0) rows.push({ label: "Uncommitted", value: `${r.name}: ${r.uncommitted}` });
+      if (r.unpushed > 0) rows.push({ label: "Unpushed", value: `${r.name}: ${r.unpushed}` });
+      if (r.unpushed === -1) rows.push({ label: "No upstream", value: r.name });
+    }
+    if (!dirty.length) rows.push({ label: "Unsaved work", value: c.paused ? "None (at pause)" : "None", id: "changes-none" });
+    return rows;
+  } catch (e: any) { return [{ label: "Unsaved work", value: "Not checked", id: "changes-unchecked" }, { label: "Error", value: e.message }]; }
 }
 export const destroySession = (id: string) => exclusive("s:" + id, async () => {
   pend("s:" + id, "Checking…");
   const m = find(getStore().state, id);
-  const msg = (await changesText(id)) + "\nThe transcripts and ~/artifacts are archived to the Storage Box first; then the machine is burned and the session can never be resumed. It moves to Previous. Your repos on GitHub are not affected.";
-  const ok = await ask({ title: `Destroy “${m ? sessionTitle(m) : id}”?`, detail: msg, action: "Destroy session", danger: true });
+  const rows = [{ label: "Session", value: m ? sessionTitle(m) : id }, ...(await changesRows(id)), { label: "Archived first", value: "Transcripts, ~/artifacts" }];
+  const ok = await ask({ title: "Destroy session?", rows, detail: "It can't be resumed afterwards.", action: "Destroy session", danger: true });
   pend("s:" + id, null);
   if (!ok) return;
   pend("s:" + id, "Destroying…");
@@ -120,7 +120,7 @@ export const destroySession = (id: string) => exclusive("s:" + id, async () => {
     await refreshUntil((s) => { const x = find(s, id); return !x || (x.state !== "destroying" && !!x.error?.startsWith("archive:")); }, 15 * 60 * 1000);
     const x = find(getStore().state, id);
     if (x && x.error?.startsWith("archive:")) {
-      if (await ask({ title: "Archiving to the Storage Box failed", detail: x.error + "\n\nDestroy anyway? The transcript and artifacts will be lost.", action: "Destroy anyway", danger: true })) {
+      if (await ask({ title: "Archiving failed", rows: [{ label: "Error", value: x.error }, { label: "If destroyed", value: "Transcript and artifacts lost" }], action: "Destroy anyway", danger: true })) {
         await api("POST", `api/sessions/${id}/destroy?force=1`);
         await refreshUntil((s) => !find(s, id), 10 * 60 * 1000);
       }
@@ -133,14 +133,17 @@ export const destroySession = (id: string) => exclusive("s:" + id, async () => {
 // once it is signed. Paused: kept for the next resume, which the iPhone approves.
 export const switchMode = (m: Session, mode: "auto" | "bypass") => exclusive("s:" + m.id, async () => {
   const title = sessionTitle(m);
-  if (!(await ask({ title: `Switch “${title}” to ${mode === "bypass" ? "bypass" : "auto"}?`, detail: mode === "bypass"
-    ? "No permission prompts at all (--dangerously-skip-permissions). " + (m.state === "paused" ? "The iPhone approves it at the next resume." : "Claude relaunches in the new mode; the iPhone allows it with a fresh grant.")
-    : "Auto-approves safe actions; the permission classifier gates the rest." + (m.state === "paused" ? " Applies at the next resume." : ""), action: "Switch", danger: mode === "bypass" }))) return;
+  if (!(await ask({ title: "Switch permission mode?", rows: [
+    { label: "Session", value: title },
+    { label: "Mode", value: mode === "bypass" ? "Bypass (no prompts)" : "Auto (classifier)" },
+    { label: "Applies", value: m.state === "paused" ? "At the next resume" : "Now (Claude relaunches)" },
+    ...(mode === "bypass" ? [{ label: "Approval", value: "On the iPhone" }] : []),
+  ], action: "Switch", danger: mode === "bypass" }))) return;
   const run = async (): Promise<void> => {
     pend("s:" + m.id, "Switching mode…");
     try {
       const j = await api<any>("POST", `api/sessions/${m.id}/permission-mode`, { mode });
-      if (j.nextStart) { toast(`Switches to ${mode} at the next resume${mode === "bypass" ? " (the iPhone approves it then)" : ""}.`, "ok"); await refresh(false); return; }
+      if (j.nextStart) { toast("Applies at the next resume.", "ok"); await refresh(false); return; }
       await refreshUntil((s) => { const x = find(s, m.id); return !!x && x.permissionMode === mode && !serverBusy(x); }, 120000);
     } catch (e: any) {
       if (e.status === 403 && e.body?.needsGrant && hasShell) {
@@ -187,8 +190,14 @@ function Schedules({ m }: { m: Session }) {
   if (!hasSchedule(m)) return null;
   return (
     <Callout color="blue" variant="surface" mt={2} data={{ schedules: "1" }}>
-      {(m.wakeups || []).map((w) => <CalloutText key={"w" + w.name} color="blue"><Text weight="medium">{`Wakes${w.name === "default" ? "" : " “" + w.name + "”"} ${when(w.at)}`}</Text> — “{clip(w.prompt)}”</CalloutText>)}
-      {(m.crons || []).map((c) => <CalloutText key={"c" + c.name} color="blue"><Text weight="medium">{`Repeats ${cronEvery(c.everySeconds)}, next ${when(c.nextAt)}`}</Text> — “{clip(c.prompt)}”</CalloutText>)}
+      {(m.wakeups || []).map((w) => <Box key={"w" + w.name}>
+        <Rows><Row label="Wakeup">{w.name}</Row><Row label="At">{when(w.at)}</Row></Rows>
+        <Quote by="Prompt" color="blue" lines={2}>{clip(w.prompt)}</Quote>
+      </Box>)}
+      {(m.crons || []).map((c) => <Box key={"c" + c.name}>
+        <Rows><Row label="Cron">{c.name}</Row><Row label="Repeats">{cronEvery(c.everySeconds)}</Row><Row label="Next">{when(c.nextAt)}</Row></Rows>
+        <Quote by="Prompt" color="blue" lines={2}>{clip(c.prompt)}</Quote>
+      </Box>)}
     </Callout>
   );
 }
@@ -198,11 +207,15 @@ function NeedsGrant({ m }: { m: Session }) {
   const h = m.needsGrant, title = sessionTitle(m);
   return (
     <Callout color="amber" mt={2} data={{ needsGrant: h }}>
-      <CalloutText color="amber">{`The machine turned away ${holderTitle(h).toLowerCase()} (${HOLDERS[h]?.sub || "a router feature"}).`}</CalloutText>
-      {<Flex gap={2} mt={2} wrap>
-        <Button size={1} id={"grant-" + m.id} onPress={() => requestGrant(m.id, title, { holder: h, kind: "grant", minutes: 10 })}>{`Allow ${holderTitle(h).toLowerCase()} for 10 minutes`}</Button>
-        <Button size={1} variant="soft" id={"rule-" + m.id} onPress={() => requestGrant(m.id, title, { holder: h, kind: "rule" })}>Make a standing rule</Button>
-      </Flex>}
+      <P size={2} weight="bold" color="amber">Feature turned away</P>
+      <Rows id={"needs-grant-" + m.id}>
+        <Row label="Feature" id={"needs-grant-feature-" + m.id}>{holderTitle(h)}</Row>
+        {!!HOLDERS[h]?.sub && <Row label="Does">{HOLDERS[h].sub}</Row>}
+      </Rows>
+      <Flex gap={2} mt={2} wrap>
+        <Button size={1} id={"grant-" + m.id} onPress={() => requestGrant(m.id, title, { holder: h, kind: "grant", minutes: 10 })}>Allow 10 min</Button>
+        <Button size={1} variant="soft" id={"rule-" + m.id} onPress={() => requestGrant(m.id, title, { holder: h, kind: "rule" })}>Standing rule</Button>
+      </Flex>
     </Callout>
   );
 }
@@ -213,7 +226,8 @@ export function LockedStore({ m, compact }: { m: Session; compact?: boolean }) {
   const open = () => requestSecure("unlock", { sessionId: m.id, label: title }, (r) => { if (r.result === "done") { refresh(false); settle(30000); } });
   return (
     <Callout color="amber" mt={compact ? 0 : 2} data={{ lockedStore: m.lockedStore }}>
-      <CalloutText color="amber">{`Waiting for store ${m.lockedStore} to be unlocked.`}</CalloutText>
+      <P size={2} weight="bold" color="amber">Waiting for unlock</P>
+      <Rows><Row label="Store" id={"locked-store-" + m.id}>{m.lockedStore}</Row></Rows>
       <Flex gap={2} mt={2} wrap><Button size={1} id={"unlock-" + m.id} onPress={open}>{hasShell ? "Unlock…" : "Ask the iPhone to unlock"}</Button></Flex>
     </Callout>
   );
@@ -231,7 +245,7 @@ export function Sessions() {
   // task lines show in the Tasks tab
   const list = [...sessions].filter((m) => !isTaskLine(m)).sort((a, b) => String(b.created || "").localeCompare(String(a.created || "")) || a.id.localeCompare(b.id));
   const cool = useCoolAfterShift(list.map((m) => m.id).join("|"));
-  if (!list.length && !approvals.length) return <><InboxNote onOpen={() => setTab("inbox")} /><P size={3} color="gray" align="center" mt={8} mb={8}>{"No sessions.\n" + (mouse() ? "Click" : "Tap") + " “New session”."}</P><FlyAccountSection /></>;
+  if (!list.length && !approvals.length) return <><InboxNote onOpen={() => setTab("inbox")} /><P size={3} color="gray" align="center" mt={8} mb={8} id="sessions-empty">No sessions.</P><FlyAccountSection /></>;
   return (
     <>
       {/* what waits for the phone is in the Inbox tab (views/Inbox.tsx); one line here points there */}
@@ -246,27 +260,30 @@ export function Sessions() {
             const paused = m.state === "paused";
             const own = storesOf(m, policy);
             const modelName = models.find((x) => x.id === m.model)?.label || m.model;
-            const line1 = [own.length ? "stores: " + own.join(", ") : "no stores", HARNESS[m.harness || ""] || m.harness, modelName].filter(Boolean).join(" · ");
-            // auto-pause status line: off / counting down / generic; paused sessions explain Resume
-            const apInfo = paused ? (hasSchedule(m) ? "Paused — the router resumes it on schedule; Resume brings it back now." : "Paused — Resume continues the same conversation.")
-              : m.oneShot ? (m.state === "started" ? "One-shot — archived and destroyed by itself once its prompt is done." : "")
-              : m.state === "started" ? (m.autoPause === "off" ? "Auto-pause off — stays running while idle."
-                : m.pauseInMs != null ? `Pauses in ${Math.max(1, Math.round(m.pauseInMs / 60000))} min if still idle.` : "Auto-pauses after 1 h idle.") : "";
+            // auto-pause: off / counting down / the default (a running, non-one-shot session only)
+            const autoPause = m.oneShot || m.state !== "started" ? "" : m.autoPause === "off" ? "Off"
+              : m.pauseInMs != null ? `In ${Math.max(1, Math.round(m.pauseInMs / 60000))} min` : "After 1 h idle";
             return (
               <Card key={m.id} dim={!!busy} data={{ session: m.id }} style={{ flex: 1 }}>
                 <Flex justify="space-between" align="flex-start" gap={2} mb={1}>
                   <Heading size={3} style={{ flex: 1 }}>{sessionTitle(m)}</Heading>
                   <Flex gap={1} wrap justify="flex-end" style={{ flexShrink: 0, maxWidth: "55%" }}><SessionPill m={m} />{!paused && hasSchedule(m) && <Pill kind="info">scheduled</Pill>}</Flex>
                 </Flex>
-                <Flex gap={1} wrap align="center">
-                  <Muted>{line1}</Muted>
+                {(m.permissionMode === "bypass" || m.oneShot || m.authFailed) && <Flex gap={1} wrap align="center" mb={1}>
                   {m.permissionMode === "bypass" ? <Pill kind="bad">skip perms</Pill> : null}
                   {m.oneShot && <Pill kind="dim">one-shot</Pill>}
-                </Flex>
-                <Muted>{[REGION[m.region || ""] || m.region || "", m.guest || "", m.created ? "created " + ago(m.created) : "", m.pausedAt && paused ? "paused " + ago(m.pausedAt) : ""].filter(Boolean).join(" · ")}</Muted>
-                {!!apInfo && <Muted mt={1}>{apInfo}</Muted>}
-                {m.authFailed && <P size={2} color="red" mt={1}>Claude's login failed in this session — the router writes fresh credentials from Jarvis 1 when it can.</P>}
-                {!!m.resumePrompt && <Muted mt={1}>{(paused ? "Prompt queued for the next resume" : "Prompt queued — delivered once it is up") + " — “" + clip(m.resumePrompt) + "”"}</Muted>}
+                  {m.authFailed && <Pill kind="bad">login failed</Pill>}
+                </Flex>}
+                <Rows id={"session-rows-" + m.id}>
+                  <Row label="Stores"><BadgeList items={own} /></Row>
+                  {!!(HARNESS[m.harness || ""] || m.harness) && <Row label="Harness">{HARNESS[m.harness || ""] || m.harness}</Row>}
+                  {!!modelName && <Row label="Model">{modelName}</Row>}
+                  {!!(m.region || m.guest) && <Row label="Machine">{[REGION[m.region || ""] || m.region, m.guest].filter(Boolean).join(" · ")}</Row>}
+                  {!!m.created && <Row label="Created">{ago(m.created)}</Row>}
+                  {paused && !!m.pausedAt && <Row label="Paused">{ago(m.pausedAt)}</Row>}
+                  {!!autoPause && <Row label="Auto-pause" id={"autopause-" + m.id}>{autoPause}</Row>}
+                </Rows>
+                {!!m.resumePrompt && <Quote by={paused ? "Queued for the next resume" : "Queued prompt"} lines={3}>{clip(m.resumePrompt)}</Quote>}
                 <NeedsGrant m={m} />
                 <LockedStore m={m} />
                 <Schedules m={m} />
@@ -296,7 +313,6 @@ export function Sessions() {
 
 // Everything on the Fly app that is not one of the sessions above — view only. The summary line is always
 // there, so "nothing else is running" is something the page SAYS, not an absence.
-const plural = (n: number, w: string) => `${n} ${w}${n === 1 ? "" : "s"}`;
 export function FlyAccountSection() {
   const fly = useStore((s) => s.state.fly);
   if (!fly) return null;
@@ -306,22 +322,32 @@ export function FlyAccountSection() {
       {other.length > 0 && (
         <>
           <Heading size={3} mb={1}>Also on Fly</Heading>
-          <Muted>Not sessions, but in the sessions' Fly app{other.some((o) => o.kind !== "app") ? " — and billed" : ""}.</Muted>
+          <Muted>Not sessions; in the sessions' Fly app.</Muted>
           <Cards mt={12}>
             {other.map((o) => (
               <Card key={o.kind + ":" + o.app + ":" + o.id} data={{ flyOther: o.kind }}>
                 <Flex justify="space-between" align="flex-start" gap={2} mb={1}><Heading size={3} style={{ flex: 1 }}>{o.name || o.id}</Heading><Pill kind={o.state === "started" || o.kind === "volume" ? "wait" : "dim"}>{o.state || o.kind}</Pill></Flex>
-                <Muted>{o.kind + " · app " + o.app + (o.name ? " · " + o.id : "")}</Muted>
-                <Muted>{[o.detail, REGION[o.region || ""] || o.region, o.created ? "created " + ago(o.created) : ""].filter(Boolean).join(" · ")}</Muted>
+                <Rows>
+                  <Row label="Kind">{o.kind}</Row>
+                  <Row label="App">{o.app}</Row>
+                  {!!o.name && <Row label="Id" mono>{o.id}</Row>}
+                  {!!o.detail && <Row label="Detail">{o.detail}</Row>}
+                  {!!o.region && <Row label="Region">{REGION[o.region] || o.region}</Row>}
+                  {!!o.created && <Row label="Created">{ago(o.created)}</Row>}
+                </Rows>
               </Card>
             ))}
           </Cards>
         </>
       )}
-      <P size={1} color="gray" align="center" mt={4} id="fly-summary">
-        {fly.error ? `Could not check the Fly app: ${fly.error}`
-          : `Fly: ${plural(fly.machines, "machine")} · ${plural(fly.volumes, "volume")} — ${other.length ? plural(other.length, "item") + " outside the sessions" : "nothing outside the sessions"}.`}
-      </P>
+      <Lbl>Fly app</Lbl>
+      <Rows id="fly-summary">
+        {fly.error ? <Row label="Not checked" color="red">{fly.error}</Row> : <>
+          <Row label="Machines" id="fly-summary-machines">{String(fly.machines)}</Row>
+          <Row label="Volumes" id="fly-summary-volumes">{String(fly.volumes)}</Row>
+          <Row label="Not sessions" id="fly-summary-other">{String(other.length)}</Row>
+        </>}
+      </Rows>
     </Box>
   );
 }

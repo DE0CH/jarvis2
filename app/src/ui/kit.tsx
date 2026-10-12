@@ -301,3 +301,38 @@ export function Pill({ kind, children, spin }: { kind: "ok" | "dim" | "wait" | "
   const color = ({ ok: "green", dim: "gray", wait: "amber", bad: "red", info: "blue" } as const)[kind];
   return <Badge color={color} upper spin={spin}>{children}</Badge>;
 }
+
+// ---- facts as UI (Deyao, 2026-10-12: no prose pieced together by code) ------------------------
+// A fact is a labelled row (label left, value right; the value wraps), a list of them is Rows, a
+// status is a Badge/Pill. Text an LLM (or a person) wrote is a Quote labelled with its author.
+export function Rows({ children, mt, mb, id, data }: { children: ReactNode; mt?: Sp; mb?: Sp; id?: string; data?: Record<string, string> }) {
+  return <View {...ids(id, data)} style={{ marginTop: sp(mt), marginBottom: sp(mb), gap: 2 }}>{children}</View>;
+}
+export function Row({ label, children, id, mono: m, color, lines, selectable }: { label: string; children?: ReactNode; id?: string; mono?: boolean; color?: ColorName; lines?: number; selectable?: boolean }) {
+  const t = useTheme();
+  const plain = typeof children === "string" || typeof children === "number";
+  return (
+    <View {...ids(id, { row: label })} style={{ flexDirection: "row", alignItems: "flex-start", gap: 12, minHeight: 20 }}>
+      <RNText style={{ width: 104, flexShrink: 0, color: t.gray.a[11], fontSize: 13, lineHeight: 20 }}>{label}</RNText>
+      {plain
+        ? <RNText numberOfLines={lines} selectable={selectable} style={{ flex: 1, minWidth: 0, color: color ? t.c[color].a[11] : t.gray[12], fontSize: m ? 12.5 : 14, lineHeight: 20, fontFamily: m ? mono : undefined }}>{children}</RNText>
+        : <View style={{ flex: 1, minWidth: 0, flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: 4 }}>{children}</View>}
+    </View>
+  );
+}
+/** a short list as badges (stores, fields); `none` when empty */
+export function BadgeList({ items, none = "None", color = "gray" }: { items: string[]; none?: string; color?: ColorName }) {
+  const t = useTheme();
+  if (!items.length) return <RNText style={{ color: t.gray.a[11], fontSize: 14, lineHeight: 20 }}>{none}</RNText>;
+  return <>{items.map((x) => <Badge key={x} color={color}>{x}</Badge>)}</>;
+}
+/** prose someone else wrote (an LLM's reason, a prompt), shown as theirs: a labelled, quoted block */
+export function Quote({ by, children, id, lines, mt = 2, color = "gray" }: { by: string; children: ReactNode; id?: string; lines?: number; mt?: Sp; color?: ColorName }) {
+  const t = useTheme();
+  return (
+    <View style={{ borderLeftWidth: 2, borderLeftColor: t.c[color].a[6], paddingLeft: 8, marginTop: sp(mt) }}>
+      <RNText style={{ color: t.c[color].a[11], fontSize: 12, lineHeight: 16 }}>{by}</RNText>
+      <RNText {...ids(id)} numberOfLines={lines} selectable style={{ color: t.gray[12], fontSize: 14, lineHeight: 20 }}>{children}</RNText>
+    </View>
+  );
+}

@@ -18,7 +18,9 @@ export type Toast = { id: number; text: string; kind: "info" | "ok" | "error" };
 // `input`: a text box inside the same dialog; `match`: it must hold exactly this text before the
 // action is enabled (a type-the-name guard for an irreversible action)
 export type AskInput = { heading: string; label: string; placeholder?: string; note?: string; max?: number; match?: string };
-export type Confirm = { title: string; detail?: string; action: string; danger?: boolean; input?: AskInput; resolve: (ok: boolean, text: string) => void };
+/** a dialog: a fixed title and hint, the facts it is about as rows (label, value) */
+export type AskRow = { label: string; value: string; id?: string };
+export type Confirm = { title: string; detail?: string; rows?: AskRow[]; action: string; danger?: boolean; input?: AskInput; resolve: (ok: boolean, text: string) => void };
 type Store = {
   state: State; tab: Tab; pending: Map<string, string>; records: Loaded<Rec>; stores: Loaded<CoreStore>; machines: Loaded<Machine>; flyOrgs: { orgs: FlyOrgView[]; attention: number; configError: string };
   toasts: Toast[]; confirm: (Confirm & { id: number }) | null; sizes: Choice[]; models: Choice[]; refreshing: boolean; policy: Policy;
