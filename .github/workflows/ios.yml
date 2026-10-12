@@ -133,9 +133,9 @@ jobs:
                 -resultBundlePath ../result-$a.xcresult 2>&1 | tee ../test-$a.log | grep -E "error:|Test Case|\*\* " || true)
               kill -INT $rec; wait $rec || true
               grep -q "TEST EXECUTE SUCCEEDED\|\*\* TEST SUCCEEDED" test-$a.log && break
-              # retried once, from scratch, only for the simulator's own faults: the app timed out launching, or it
+              # retried once, from scratch, only for the simulator's own faults: a launch timeout, XCTest timing out reading the app, or it
               # crashed inside Apple's accessibility code alone (ios/ci/apple-crash.py)
-              if grep -q "Failed to launch" test-$a.log; then echo "launch timed out ($a): once more"
+              if grep -q "Failed to launch\|Timed out while evaluating UI query" test-$a.log; then echo "simulator timed out ($a): once more"
               elif python3 ios/ci/apple-crash.py "$RUNNER_TEMP/try-start"; then echo "the simulator crashed the app in Apple's code ($a): once more"
               else break; fi
               cp test-$a.log out/test-$a-try$try.log
