@@ -14,8 +14,8 @@ every key of that part (nobody can read the old values back: only the box holds 
                  LAST envFrom in router.yaml, so it wins over the stale GITHUB_READ_TOKEN still in the default part
   --part flyorgs k8s/secrets/router-flyorgs.enc.yaml, Secret router-secrets-flyorgs — FLY_ORG_READ_TOKENS only:
                  {"<org slug>": "<read-only org token>"} for the Machines view's other orgs (router/flyorgs.go)
-  --part news    k8s/secrets/news.enc.yaml, Secret news-secrets in jarvis2-edge — OPENROUTER_API for the
-                 hk-news-stream pod (k8s/apps/news.yaml), not the router
+  --part news    k8s/secrets/news.enc.yaml, Secret news-secrets in jarvis2-edge — OPENROUTER_API and HKEJ_PROXY
+                 for the hk-news-stream pod (k8s/apps/news.yaml), not the router
 Only for secrets that can't reach a code push (Deyao, 2026-10-09); the router's pod gets them as env
 (k8s/apps/router.yaml envFrom). Prints names only, never a value."""
 import hashlib, json, os, re, subprocess, sys, tempfile

@@ -3,7 +3,8 @@
 # headlines (the model runs at OpenRouter, nothing heavy here) and serves the page at hknews.deyaochen.com through
 # cloudflared (Access: Deyao's email, infra/cloudflare.py --news). It lives in jarvis2-edge because Flux may create
 # nothing outside the three Jarvis 2 namespaces; its NetworkPolicy keeps it to DNS and the public internet, so it
-# can't reach the router, the core or cloudflared. Its one secret, OPENROUTER_API, is k8s/secrets/news.enc.yaml
+# can't reach the router, the core or cloudflared. Its secrets, OPENROUTER_API and HKEJ_PROXY (an Evomi HK datacenter
+# proxy: 信報 answers the box's IP with 403), are k8s/secrets/news.enc.yaml
 # (infra/router-secrets.py --part news). Image pinned by its linux/amd64 digest (infra/image-digest.sh).
 apiVersion: v1
 kind: PersistentVolumeClaim
@@ -20,14 +21,14 @@ spec:
   strategy: { type: Recreate }
   selector: { matchLabels: { app: news } }
   template:
-    metadata: { labels: { app: news }, annotations: { jarvis2/secrets-rev-news: "0b8a5103d088" } }
+    metadata: { labels: { app: news }, annotations: { jarvis2/secrets-rev-news: "e7a41ff516dc" } }
     spec:
       automountServiceAccountToken: false
       enableServiceLinks: false
       securityContext: { fsGroup: 65532 }
       containers:
         - name: news
-          image: ghcr.io/de0ch/hk-news-stream:sha-9411b48a563609d068ee7977802568682c48c57e@sha256:1f7fdcc5a078a8302e4b4efb646ae95c9e79ce984f67a78c140d11beabd36ff9
+          image: ghcr.io/de0ch/hk-news-stream:sha-a32b3dae4eae1c523481f0d64f77fae9c5b8f486@sha256:6e332bf276eb4a090b38b4983c019720b655885b64cb44d58697b197f80f5682
           ports: [{ containerPort: 8080 }]
           envFrom: [{ secretRef: { name: news-secrets } }]
           volumeMounts: [{ name: data, mountPath: /data }]
@@ -57,4 +58,4 @@ spec:
     - to: [{ namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: kube-system } }, podSelector: { matchLabels: { k8s-app: kube-dns } } }]
       ports: [{ port: 53, protocol: UDP }, { port: 53, protocol: TCP }]
     - to: [{ ipBlock: { cidr: 0.0.0.0/0, except: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16] } }]
-      ports: [{ port: 443, protocol: TCP }, { port: 80, protocol: TCP }]
+      ports: [{ port: 443, protocol: TCP }, { port: 80, protocol: TCP }, { port: 2000, protocol: TCP }]  # 2000: Evomi's HTTP proxy
