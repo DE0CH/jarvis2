@@ -31,6 +31,14 @@ export function NewSession() {
   // picks its store when that is not sensitive (a sensitive one, e.g. github-jarvis2, only on the secure page)
   const repoList = useStore((s) => s.state.repos) || [];
   const [repos, setRepos] = useState<string[]>([]), [apiProxy, setApiProxy] = useState<string[]>([]);
+  // DE0CH/claude-env comes pre-selected once the repo list is in (Deyao, 2026-10-12), as in the iPhone app
+  const repoDefaulted = useRef(false);
+  useEffect(() => {
+    if (repoDefaulted.current || !repoList.length) return;
+    repoDefaulted.current = true;
+    const r = repoList.find((x) => x.repo.toLowerCase() === "de0ch/claude-env");
+    if (r) setRepos((cur) => (cur.includes(r.name) ? cur : [...cur, r.name]));
+  }, [repoList.length]);
   const [busy, setBusy] = useState<string | null>(null);
   const done = useDone();
   // one create per form: the router answers a repeat of this id with the first create
