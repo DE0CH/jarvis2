@@ -25,12 +25,12 @@ spec:
       securityContext: { fsGroup: 65532 }
       containers:
         - name: router
-          image: ghcr.io/de0ch/jarvis2-router:sha-b0b735589756@sha256:c1ffc0ff9f7b2a68b2e4206c4e377cc306641e99d9f4ce6ecb994a29c4972fa0
+          image: ghcr.io/de0ch/jarvis2-router:sha-77d4a296fd79@sha256:e9bdc95b1022cdc1fe99599839641cb2b785a337b09bac49f47c37b3aee2a1bc
           ports: [{ containerPort: 8080 }]
           env:
-            - { name: SESSION_IMAGE, value: "ghcr.io/de0ch/jarvis2-session:sha-b0b735589756@sha256:94c70ef808e5529a14224a198e158836bd3bbf14b456915d2ba1bed94ad91079" }
+            - { name: SESSION_IMAGE, value: "ghcr.io/de0ch/jarvis2-session:sha-77d4a296fd79@sha256:91f80a552d870afbd6eaff693859ee9b31bd91d8d502bf214d8a87a232794a03" }
             # the CI key's signature over "jarvis2-session-image <SESSION_IMAGE>" (images.yml, keys/ci.pub): the phone checks it
-            - { name: SESSION_IMAGE_SIG, value: "MEYCIQCoXEti6TJq5Pi4bTC1LIFD+McbtgWCG+Rm1WWOC+MohgIhAM3K/57gx6r1ujfpeJwkelSrv5OqKIPP0buuBf6U3Mt/" }
+            - { name: SESSION_IMAGE_SIG, value: "MEUCIEYLt1Q6s6lnkm/+thBf0R+bi4+DnLN5oRsuTotfGpA5AiEAgHFruOhDaUL2Gepb1hENsA7YYa1NR5a4n2Vurm57gX8=" }
             - { name: FLY_REGION, value: lhr }
             # the box's WireGuard peer in Fly org jarvis2-370 (fly wireguard create jarvis2-370 lhr jarvis2-box)
             - { name: MACHINE_URL, value: "http://jarvis2-box._peer.internal:8081" }
