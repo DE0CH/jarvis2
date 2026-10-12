@@ -19,7 +19,9 @@ Jarvis2/Model        AppModel (state, polling, pending labels, exclusive, ask/co
 Jarvis2/Network      RouterClient: sign-in + every router/core call; core answers verified against the pinned key
 Jarvis2/Security     CoreCrypto / CoreSetup / SignedAction (pure, ALSO compiled into interop/), PhoneKeys, KeySource,
                      LinePins + PinnedPolicy, StoreUnlock, Attestation
-Jarvis2/Review       the Face ID sheets: NewSession, Approval, GrantReview, UnlockReview, RepoKey, RequestReviewSection
+Jarvis2/Review       the Face ID sheets: NewSession (+ AttachmentsSection, PickedImage/ImagePrep, CameraPicker), Approval
+                     (+ SignedAttachmentRow: a signed image checked against the router's copy), GrantReview, UnlockReview,
+                     RepoKey, RequestReviewSection
 Jarvis2/<feature>    Sessions (split view, detail, terminal WebView, grants, schedules, remote, transcript), Inbox,
                      Previous, Search, Stores, Tasks, Settings (usage, Fly, repos, machines), Setup (Reset or recover)
 UITests/             UITestKit (helpers, blank checks), Jarvis2UITests (walkthrough), TransitionsUITests, ReplicaUITests

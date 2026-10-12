@@ -48,6 +48,34 @@ final class Jarvis2UITests: JarvisUITestCase {
     return arrives(el("secure-repo-go"), 30, "the add-repo review for \(repo)")
   }
 
+  /// a new session filed as the web page files it, with an image: its approval (Inbox) shows the image from the signed
+  /// config, the router's copy read back and checked against the signed hash; then Reject
+  static let testPNG = Data(base64Encoded: "iVBORw0KGgoAAAANSUhEUgAAADAAAAAgCAIAAADbtmxLAAAAQ0lEQVR42u3WsQkAMAgEQEdypIzsSFnAlJLCgy8fvEqNPNWmMttM9wMICGgd6NfgVx8ICGgfyKYGAgLyDzkdQEDLQRcnYbBqPxrSZwAAAABJRU5ErkJggg==")!
+  func webSessionWithImage() {
+    let (up, _) = routerRaw("POST", "api/uploads", body: Self.testPNG, headers: ["x-upload-id": "ci-web-\(tag)", "x-upload-name": "web.png"])
+    XCTAssertEqual(up, 200, "[\(tag)] the web page's upload")
+    let req: [String: Any] = ["requestId": "ci-web-\(tag)", "label": "web image", "prompt": "what is in this image?", "stores": ["default"], "harness": "claude",
+                              "permissionMode": "auto", "attachments": ["uploadId": "ci-web-\(tag)", "files": [["name": "web.png"]]]]
+    let (made, out) = routerRaw("POST", "api/sessions", body: try? JSONSerialization.data(withJSONObject: req), headers: ["Content-Type": "application/json"])
+    XCTAssertEqual(made, 200, "[\(tag)] the web page's session request: \(String(decoding: out, as: UTF8.self))")
+    tabRoot("Inbox")
+    guard wait(prefixed("request-review-"), 60, "the web session's approval in the Inbox") else { return }
+    prefixed("request-review-").tap()
+    guard arrives(el("secure-approve"), 30, "the approval page") else { return }
+    let row = el("signed-attachment-web.png")
+    XCTAssertTrue(scrolledTo(row), "[\(tag)] the signed image is listed")
+    let until = Date().addingTimeInterval(20)
+    while row.exists && !row.label.contains("hash matches") && Date() < until { usleep(500_000) }
+    note("signed-attachment", row.label)
+    XCTAssertTrue(row.label.contains("hash matches"), "[\(tag)] the router's copy is the signed file: \(row.label)")
+    XCTAssertTrue(row.label.contains("web.png"), "[\(tag)] named from the signed config")
+    shot("approval-image")
+    if scrolledTo(el("secure-reject")) { el("secure-reject").tap() }
+    XCTAssertTrue(gone(el("secure-approve"), 30), "[\(tag)] Reject closes the approval")
+    tab("Sessions")
+    XCTAssertTrue(gone(prefixed("srow-"), 30), "[\(tag)] the rejected session is gone from the list")
+  }
+
   func testWalkthrough() {
     continueAfterFailure = true
     tag = env["JARVIS2_APPEARANCE"] ?? "run"
@@ -98,7 +126,11 @@ final class Jarvis2UITests: JarvisUITestCase {
     shot("stores-unlocked")
     back()
 
-    // ---- New session: one page; Start signs and opens the locked harness store under one Face ID
+    // ---- an image on a session made outside the app: the approval checks the router's copy against the signed hash
+    webSessionWithImage()
+
+    // ---- New session: one page; Start signs and opens the locked harness store under one Face ID (and an image from
+    // Photos: Start uploads it and checks the signed config names its sha256 + size)
     XCTAssertEqual(coreStores().first { ($0["name"] as? String) == "claude-login" }?["unlocked"] as? Bool, false, "[\(tag)] the harness store starts locked")
     tab("Sessions")
     guard wait(el("newBtn"), 10, "list again") else { return }
@@ -117,6 +149,7 @@ final class Jarvis2UITests: JarvisUITestCase {
     XCTAssertTrue(scrolledTo(unlocks) && unlocks.label.contains("claude-login"), "[\(tag)] Start says it unlocks the locked harness store")
     for _ in 0..<6 { app.swipeDown() }
     el("ns-title").tap(); el("ns-title").typeText("ci session")
+    let image = attachImage()
     if el("secure-store-gmail").waitForExistence(timeout: 3) {
       el("secure-store-gmail").tap(); sleep(1)
       XCTAssertTrue(el("secure-sensitive-warning").exists, "[\(tag)] sensitive warning")
@@ -134,6 +167,10 @@ final class Jarvis2UITests: JarvisUITestCase {
                   "[\(tag)] one Start opened the locked harness store")
     let sid = String(row.identifier.dropFirst("srow-".count))
     note("session", sid)
+    if let image {
+      let (st, bytes) = routerRaw("GET", "api/sessions/\(sid)/attachments/\(image)")
+      XCTAssertTrue(st == 200 && bytes.count > 0, "[\(tag)] the image went up with the session (HTTP \(st), \(bytes.count) bytes)")
+    }
     sleep(2)
     shot("session-created")
     row.tap()

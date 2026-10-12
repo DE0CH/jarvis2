@@ -14,6 +14,8 @@
 #   repo-check  …and none left after the app removed it
 #   inbox-setup-add / inbox-setup-remove   infra/setup.py request add-repo / remove-repo for the throwaway repo
 #   inbox-session:<sid>:<holder>           jarvis2-request grant <holder> run inside that session's machine (flyctl exec)
+#   session-file:<sid>:<name>              the image attached on New session is on that session's machine (flyctl exec:
+#                                          the machine's hash-checked copy, or the harness's ~/uploads copy)
 #   done        the end
 # What the test box needs that production keeps elsewhere: its keys/box.pub on a branch rehearsal-keys-<time> (the
 # Release build reads keys from that git ref: JarvisKeysRef, KeySource.swift), a throwaway private repo
@@ -167,6 +169,16 @@ while :; do
       if [ -n "$m" ] && FLY_API_TOKEN="$JARVIS2_FLY_TOKEN" flyctl machine exec "$m" -a jarvis2-sessions \
            "/usr/local/bin/jarvis2-request grant $holder --minutes 5 --why replica-the-session-asks-for-$holder" >> "$LOGS/inbox.log" 2>&1; then answer ok
       else answer "session request failed (machine ${m:-none}): $(tail -2 "$LOGS/inbox.log" 2>/dev/null)"; fi ;;
+    session-file:*) # the machine keeps an attachment only when its bytes match the cert (and the core attested it)
+      IFS=: read -r _ sid name <<<"$msg"; : > "$LOGS/inbox.log"; m=""; found=""
+      if [[ ! "$name" =~ ^[A-Za-z0-9._-]+$ ]]; then answer "bad name"; continue; fi
+      for _ in $(seq 1 18); do
+        m=$(python3 "$ROOT/infra/setup.py" sessions 2>>"$LOGS/inbox.log" | awk -v s="$sid" '$1 == s && $2 != "-" {print $2}')
+        [ -n "$m" ] && found=$(FLY_API_TOKEN="$JARVIS2_FLY_TOKEN" flyctl machine exec "$m" -a jarvis2-sessions \
+          "find /root /home -maxdepth 3 -type f -name $name -size +0c" 2>>"$LOGS/inbox.log" | tr -d "\r" | grep -E "/(\.jarvis2-uploads|uploads)/$name\$" || true)
+        [ -n "$found" ] && break; sleep 10
+      done
+      if [ -n "$found" ]; then answer "ok $(echo $found)"; else answer "not on the machine (${m:-none}): $(tail -2 "$LOGS/inbox.log" 2>/dev/null)"; fi ;;
     done) record_core; answer ok; break ;;
     *) answer "unknown: $msg" ;;
   esac

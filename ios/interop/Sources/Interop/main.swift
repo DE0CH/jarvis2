@@ -225,6 +225,22 @@ check(throwsErr { try Checks.matchesSettings(rC, other) }, "refused when the sig
 other = picked; other.repos = []
 check(throwsErr { try Checks.matchesSettings(rC, other) }, "refused when the signed repos aren't the page's")
 check(SignedAction.approval(rC).contains("do it"), "what you sign names the settings word for word")
+// attachments: exactly the files this phone uploaded, by the hash and size of its own bytes, in order
+let hA = String(repeating: "a", count: 64), hB = String(repeating: "b", count: 64)
+let confA = #"{"v":1,"prompt":"look","attachments":[{"name":"photo.jpg","sha256":"\#(hA)","size":3},{"name":"b.png","sha256":"\#(hB)","size":5}]}"#
+let rA = try! Checks.review(challenge: challenge(["predecessor": NSNull(), "stores": ["default"], "options": ["harness": "claude", "permissionMode": "auto", "config": confA], "image": img]), coreKey: coreKey)
+var pickedA = Checks.Settings(label: "", prompt: "look", model: "", repos: [], oneShot: false, apiProxy: false,
+                              attachments: [.init(name: "photo.jpg", sha256: hA, size: 3), .init(name: "b.png", sha256: hB, size: 5)])
+check(!throwsErr { try Checks.matchesSettings(rA, pickedA) }, "the signed attachments are the ones this phone uploaded")
+check(Checks.attachments(rA.config ?? [:]) == pickedA.attachments, "the approval page reads the signed attachments")
+pickedA.attachments[0].sha256 = hB
+check(throwsErr { try Checks.matchesSettings(rA, pickedA) }, "refused when a signed hash isn't of this phone's bytes")
+pickedA.attachments = [pickedA.attachments[1]]
+check(throwsErr { try Checks.matchesSettings(rA, pickedA) }, "refused when the router added an attachment")
+check(throwsErr { try Checks.matchesSettings(rC, Checks.Settings(label: "T", prompt: "do it", model: "", repos: ["https://github.com/DE0CH/claude-env.git"], oneShot: true, apiProxy: false, attachments: [.init(name: "x.png", sha256: hA, size: 1)])) },
+      "refused when the router dropped the attachments")
+let chBadA = challenge(["predecessor": NSNull(), "stores": ["default"], "options": ["harness": "claude", "permissionMode": "auto", "config": #"{"v":1,"attachments":[{"name":"x.png","sha256":"\#(hA)","size":1,"path":"/etc"}]}"#], "image": img])
+check(throwsErr { _ = try Checks.review(challenge: chBadA, coreKey: coreKey) }, "an attachment with a field the app can't show is refused")
 let chX = challenge(["predecessor": NSNull(), "stores": ["default"], "options": ["harness": "claude", "permissionMode": "auto", "config": #"{"v":1,"evil":"x"}"#], "image": img])
 check(throwsErr { _ = try Checks.review(challenge: chX, coreKey: coreKey) }, "a setting the app can't show is refused")
 

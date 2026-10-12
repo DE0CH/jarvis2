@@ -4,7 +4,8 @@ import XCTest
 /// simulator matching Deyao's iPhone, against a real throwaway box (its own Cloudflare tunnel + Access login, core,
 /// router, backups) and real Fly sessions, every flow tapped as a person would. Face ID is enrolled on the simulator and
 /// each match or failure is sent by the runner (ios/ci/replica-host.py on 127.0.0.1:18300), which also relays to the
-/// setup session (the Access login code from the bot's mailbox; "reset done" → the stores are written). A step fails on
+/// setup session (the Access login code from the bot's mailbox; "reset done" → the stores are written; "session-file" →
+/// the image attached on New session is on the session's machine). A step fails on
 /// a blank screen, a stuck state (a session not running within its time) or a broken transition.
 final class ReplicaUITests: JarvisUITestCase {
   let safari = XCUIApplication(bundleIdentifier: "com.apple.SafariViewService")
@@ -165,6 +166,9 @@ final class ReplicaUITests: JarvisUITestCase {
     try must(openNewSession())
     if wait(el("secure-store-rh-plain"), 30, "rh-plain offered") { el("secure-store-rh-plain").tap() }
     XCTAssertFalse(el("secure-store-claude").exists, "the harness's own store isn't offered as a pick")
+    // an image from Photos (replica.yml added one): Start uploads it and signs its sha256 + size with the session
+    for _ in 0..<3 { app.swipeDown() }
+    let image = attachImage()
     shot("new-session-picked")
     faceIDMatches(90)
     el("secure-create").tap()
@@ -178,6 +182,13 @@ final class ReplicaUITests: JarvisUITestCase {
     for _ in 1...3 where !el("more-\(sid)").exists { if row.isHittable { row.tap() }; _ = el("more-\(sid)").waitForExistence(timeout: 10) }
     try must(wait(el("term-\(sid)"), 600, "the session is running on Fly (Terminal offered) within 10 minutes"))
     sleep(2); shot("session-running")
+    // the machine took the image only if its bytes hash to what the phone signed (and the core attested it): the setup
+    // session looks for it on the machine
+    if let image {
+      let seen = relay("session-file:\(sid):\(image)")
+      note("session-file", seen)
+      XCTAssertTrue(seen.hasPrefix("ok"), "the session's machine has the image it was started with: \(seen)")
+    }
 
     // ---- machines: the session's machine listed as its session's ----
     tabRoot("Settings")

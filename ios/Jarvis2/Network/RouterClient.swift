@@ -75,12 +75,16 @@ final class RouterClient: NSObject, ASWebAuthenticationPresentationContextProvid
     // a path with a query ("api/search?q=…") is resolved as a relative reference, so the query stays a query
     URL(string: path, relativeTo: base)?.absoluteURL ?? base.appending(path: path)
   }
-  func raw(_ method: String, _ path: String, _ body: [String: Any]? = nil, timeout: TimeInterval = 60) async throws -> (Int, Data) {
+  /// `upload`: raw bytes as the body instead of JSON, with `headers`
+  func raw(_ method: String, _ path: String, _ body: [String: Any]? = nil, upload: Data? = nil, headers: [String: String] = [:],
+           timeout: TimeInterval = 60) async throws -> (Int, Data) {
     for attempt in 0..<2 {
       var r = URLRequest(url: url(path))
       r.httpMethod = method
       r.timeoutInterval = timeout
       if let body { r.httpBody = try JSONSerialization.data(withJSONObject: body); r.setValue("application/json", forHTTPHeaderField: "Content-Type") }
+      if let upload { r.httpBody = upload; r.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type") }
+      for (k, v) in headers { r.setValue(v, forHTTPHeaderField: k) }
       if !token.isEmpty { r.setValue(token, forHTTPHeaderField: "cf-access-token") }
       r.httpShouldHandleCookies = false
       let (data, resp) = try await URLSession.shared.data(for: r)
@@ -107,6 +111,27 @@ final class RouterClient: NSObject, ASWebAuthenticationPresentationContextProvid
     return JSON.parse(data)
   }
   func get(_ path: String) async throws -> JSON { try await call("GET", path) }
+
+  // ---- first-prompt attachments (router/uploads.go) ----
+  /// the router's record of one uploaded file: the name it made safe, the size it stored
+  struct Uploaded: Decodable { let name: String; let size: Int; let isImage: Bool }
+  /// RFC 3986 unreserved characters (ASCII only: a header value and a URL path segment)
+  static func escaped(_ s: String) -> String {
+    s.addingPercentEncoding(withAllowedCharacters: CharacterSet(charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~")) ?? s
+  }
+  /// one file of New session's attachments, staged on the router under `id` (the form's upload id)
+  func upload(id: String, name: String, data: Data) async throws -> Uploaded {
+    let (status, out) = try await raw("POST", "api/uploads", upload: data, headers: ["x-upload-id": id, "x-upload-name": Self.escaped(name)], timeout: 300)
+    guard (200..<300).contains(status) else { throw Self.failure("POST", "api/uploads", status, out) }
+    return try JSONDecoder().decode(Uploaded.self, from: out)
+  }
+  /// a staged file of a session not started yet (the approval page hashes it against the signed config)
+  func attachment(session: String, name: String) async throws -> Data {
+    let path = "api/sessions/\(Self.escaped(session))/attachments/\(Self.escaped(name))"
+    let (status, out) = try await raw("GET", path, timeout: 120)
+    guard (200..<300).contains(status) else { throw Self.failure("GET", path, status, out) }
+    return out
+  }
 
   static func failure(_ method: String, _ path: String, _ status: Int, _ data: Data) -> RouterError {
     let hint: [Int: String] = [400: "bad request", 401: "not authorised", 403: "forbidden", 404: "not found", 409: "conflict", 413: "request too large",

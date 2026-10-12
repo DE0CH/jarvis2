@@ -3,6 +3,8 @@
 // the core's challenge carries exactly the stores picked here (plus the harness's own), the harness, the permission
 // mode and (with a core that vouches) these settings, then under ONE Face ID signs it AND unlocks every store the
 // session gets that is locked, for that session only, so it never waits at boot on a locked store.
+// Images (AttachmentsSection) go up to the router before the request; Start then checks the signed config names exactly
+// these files, by the sha256 and size of the bytes hashed here (docs/DECISIONS.md 94, 95, 97).
 // DE0CH/claude-env comes pre-selected with its store when it is on the repo list (Deyao, 2026-10-11); sensitive stores
 // are never pre-selected, and picking one shows a warning.
 import SwiftUI
@@ -28,6 +30,7 @@ struct NewSessionView: View {
   @State private var loadError: String?
   @State private var busy: String?
   @State private var failure: String?
+  @State private var images: [PickedImage] = []
 
   static let defaultRepo = "DE0CH/claude-env"
   private var hidden: Set<String> { model.harnessHidden }
@@ -43,6 +46,7 @@ struct NewSessionView: View {
   var body: some View {
     Form {
       promptSection
+      AttachmentsSection(images: $images, disabled: busy != nil)
       storesSection
       harnessStoresSection
       harnessSection
@@ -236,9 +240,12 @@ struct NewSessionView: View {
       let key = try CoreTrust.key()
       busy = "Requesting…"
       let chosen = model.repos.filter { repos.contains($0.name) }
-      let body: [String: Any] = ["requestId": rid, "stores": want, "harness": harness, "permissionMode": perm, "label": title,
+      let attached = try await upload(rid)
+      var body: [String: Any] = ["requestId": rid, "stores": want, "harness": harness, "permissionMode": perm, "label": title,
                                  "prompt": trimmedPrompt, "model": modelId, "size": size, "oneShot": oneShot,
                                  "autoPause": !oneShot && autoPause, "repos": chosen.map(\.url).joined(separator: ","), "apiProxy": apiProxy]
+      if !attached.isEmpty { body["attachments"] = ["uploadId": rid, "files": attached.map { ["name": $0.name] }] }
+      busy = "Requesting…"
       try await RouterClient.shared.call("POST", "api/sessions", body)
       // the core's challenge comes before any machine exists
       var found: RouterClient.ApprovalDTO?
@@ -262,7 +269,8 @@ struct NewSessionView: View {
       _ = try Checks.onlyHarnessExtras(r, picked: want, pinnedHarness: PinnedPolicy.stores(harness, router: model.policy),
                                        sensitive: signedList.stores.filter(\.sensitive).map(\.name))
       // …and, with a core that vouches, exactly these settings: the cert carries them to the machine (DESIGN "Inputs")
-      try Checks.matchesSettings(r, .init(label: title, prompt: trimmedPrompt, model: modelId, repos: chosen.map(\.url), oneShot: oneShot, apiProxy: apiProxy))
+      try Checks.matchesSettings(r, .init(label: title, prompt: trimmedPrompt, model: modelId, repos: chosen.map(\.url), oneShot: oneShot, apiProxy: apiProxy,
+                                              attachments: attached))
       // the stores the challenge carries that are locked now (fresh from the core): opened under the same Face ID
       let now = try await RouterClient.shared.stores()
       let locked = r.stores.filter { n in now.contains { $0.name == n && !$0.unlocked && !$0.empty } }
@@ -279,6 +287,21 @@ struct NewSessionView: View {
       busy = nil
       failure = errText(error)
     }
+  }
+}
+
+extension NewSessionView {
+  /// each image up to the router under this Start's own upload id (a retry is a new request: it uploads them again);
+  /// what will be signed: the name the router gave it, and the sha256 and size of the bytes this phone holds
+  fileprivate func upload(_ uploadId: String) async throws -> [Checks.Attachment] {
+    var out: [Checks.Attachment] = []
+    for (i, img) in images.enumerated() {
+      busy = "Uploading \(i + 1) of \(images.count)…"
+      let u = try await RouterClient.shared.upload(id: uploadId, name: img.name, data: img.data)
+      guard u.size == img.size else { throw RouterError(message: "The router stored \(u.size) bytes of \(img.name), not \(img.size).") }
+      out.append(.init(name: u.name, sha256: img.sha256, size: img.size))
+    }
+    return out
   }
 }
 

@@ -90,6 +90,8 @@ jobs:
         run: |
           mkdir -p out
           nohup xcrun simctl spawn "$SIM_UDID" log stream --style compact --level debug --predicate 'process == "Jarvis2"' > out/sim.log 2>&1 &
+      - name: A test photo in the simulator's library (the walkthrough attaches it on New session)
+        run: python3 ios/ci/test-photo.py "$RUNNER_TEMP/ci-photo.png" && xcrun simctl addmedia "$SIM_UDID" "$RUNNER_TEMP/ci-photo.png"
       - name: Build for testing (the app talks to the router, the key server and the S3 stand-in on the runner)
         working-directory: ios
         run: |

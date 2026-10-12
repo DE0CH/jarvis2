@@ -36,6 +36,8 @@ jobs:
           xcrun simctl spawn "$SIM_UDID" notifyutil -p com.apple.BiometricKit.enrollmentChanged
           nohup xcrun simctl spawn "$SIM_UDID" log stream --style compact --level debug \
             --predicate 'process == "Jarvis2"' > out/sim.log 2>&1 &
+      - name: A test photo in the simulator's library (the replica attaches it on New session)
+        run: python3 ios/ci/test-photo.py "$RUNNER_TEMP/ci-photo.png" && xcrun simctl addmedia "$SIM_UDID" "$RUNNER_TEMP/ci-photo.png"
       - name: Build for testing (Release; the box's router and keys ref only)
         working-directory: ios
         env:

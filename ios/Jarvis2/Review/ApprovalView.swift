@@ -63,7 +63,7 @@ struct ApprovalView: View {
         } else {
           Section("Secret stores") { StoreLines(stores: r.stores, sensitive: sens, harness: harnessStores) }
         }
-        SignedSettingsSection(r: r)
+        SignedSettingsSection(r: r, session: a.session)
         let warn = r.kind == .addStore ? sens.filter { $0 == r.addedStore } : r.stores.filter { sens.contains($0) }
         Section {
           if !warn.isEmpty {
@@ -165,6 +165,8 @@ struct ApprovalView: View {
 /// the signed settings and one-time inputs of a challenge (core Options.Config / Once), as signed: what the machine takes
 struct SignedSettingsSection: View {
   let r: Checks.Reviewed
+  /// the session the approval is for: its staged attachments are read back and checked against the signed hashes
+  var session: String? = nil
   var body: some View {
     let c = r.config ?? [:], o = r.once ?? [:]
     let s = { (k: String) -> String in (c[k] as? String) ?? "" }
@@ -176,9 +178,10 @@ struct SignedSettingsSection: View {
             VStack(alignment: .leading) { Text("First prompt").font(.footnote).foregroundStyle(.secondary); Text(s("prompt")).textSelection(.enabled) }
               .accessibilityElement(children: .combine).accessibilityIdentifier("signed-prompt")
           }
-          if let atts = c["attachments"] as? [[String: Any]], !atts.isEmpty {
-            LabeledContent("Attachments (checked by hash)", value: atts.map { "\(($0["name"] as? String) ?? "?") (\((($0["sha256"] as? String) ?? "").prefix(12))…)" }.joined(separator: "\n"))
+          if let atts = Checks.attachments(c), !atts.isEmpty {
+            Text("Images sent with the first prompt (the machine takes each only if its bytes have this hash)").font(.footnote).foregroundStyle(.secondary)
               .accessibilityIdentifier("signed-attachments")
+            ForEach(atts, id: \.name) { SignedAttachmentRow(session: session, ref: $0) }
           }
           if let rs = c["restore"] as? [String: Any] {
             LabeledContent("Restores", value: "the archived snapshot of machine \((rs["machine"] as? String) ?? "?") (sha256 \(((rs["sha256"] as? String) ?? "").prefix(12))…)")

@@ -500,3 +500,13 @@ fill the gaps (decided while Deyao was away, ~/artifacts/away/decisions.md).
     and the news pod's own policy allows only cloudflared in and DNS plus public 80/443 out, so it can't reach the
     router, the core or cloudflared's token. Its image is pinned by digest and changes only by a commit here, so the
     other repo can't change what the box runs. Remove all four pieces together when the PoC ends.
+
+## Image attachments in the app, 2026-10-12
+
+97. **The phone hashes the bytes, not only the names** (replaces 78's "binds what the phone approved, not what Deyao
+    uploaded"): the app's New session uploads each image, hashes it itself and Start refuses unless the signed config's
+    `attachments` are exactly those files (the router's safe name, sha256, size, in order). The approval page (a session
+    made on the web) reads each staged file back (`GET /api/sessions/:id/attachments/:name`) and shows its thumbnail
+    only when the bytes hash to the signed value. Photos and camera shots go as JPEG (quality 0.85, longest side at most
+    4096 px; HEIC never leaves the phone); PNG, JPEG, GIF and WebP from Files or the clipboard go as they are; any other
+    image type is made a JPEG (app/DECISIONS.md 47-49).

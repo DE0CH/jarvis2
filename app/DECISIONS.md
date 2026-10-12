@@ -168,9 +168,26 @@ fixes, 34–40 carried over from the old app and still true, 41–43 the web pag
     timed out", 3 tries): a busy iOS 27 simulator failed the replica's Reset that way. A real phone's Secure Enclave
     prompt is untouched.
 
+## Images on New session (2026-10-12; decided while Deyao was away)
+
+47. **Four ways to add an image on the app's New session**: Photos (PhotosPicker, no library permission asked), the
+    camera (UIImagePickerController wrapped for SwiftUI; shown only where a camera exists), Files (images only) and the
+    clipboard (PasteButton, so iOS asks no paste permission). Each row shows the thumbnail, name and size, with Remove.
+    Photos and camera shots go as JPEG (0.85, longest side 4096 px); PNG, JPEG, GIF and WebP from Files or the clipboard
+    go as they are (docs/DECISIONS.md 97).
+48. **Start uploads, then checks the signature covers these bytes**: each image goes to `api/uploads` under that Start's
+    request id (a retry is a new request and uploads again), then the request names them; the signed config must list
+    exactly these files, by the name the router answered and the sha256 and size of the bytes the phone holds, or Start
+    refuses before Face ID.
+49. **The approval page checks the router's copy**: for a session made elsewhere (the web page), each signed attachment
+    shows name, size and hash from the signed config, and a thumbnail only when the bytes read back from the router hash
+    to the signed value; otherwise it says the copy doesn't match (the machine would refuse it). New session itself has
+    no separate "What you sign" for images: its own thumbnails are the bytes it hashed, and the check in 48 binds them.
+50. **The web page**: images only, from a file picker or pasted into the page, as they are (docs/DECISIONS.md 95).
+
 ## Unfinished / known gaps
 
 - Free text (prompt, title) reaches the machine signed only with a core that vouches (the held core doesn't).
-- Content stores, devices and lease pills, first-prompt attachments (a file picker) are not in either app yet.
+- Content stores, devices and lease pills are not in either app yet; attachments are images only (no other files).
 - After a reinstall that loses the Keychain, the phone's keys and device key are new: an already-recovered core refuses a
   second claim; restart the core (a new, empty core) and Recover.

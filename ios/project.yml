@@ -45,6 +45,7 @@ targets:
         INFOPLIST_KEY_UILaunchScreen_Generation: YES
         INFOPLIST_KEY_UIApplicationSceneManifest_Generation: YES
         INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents: YES
+        INFOPLIST_KEY_NSCameraUsageDescription: "The camera takes a photo to send with a new session's first prompt."
         INFOPLIST_KEY_NSFaceIDUsageDescription: "Face ID approves what Jarvis 2 asks you to sign and unlocks secret stores."
         INFOPLIST_KEY_ITSAppUsesNonExemptEncryption: NO
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon

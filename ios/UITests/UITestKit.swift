@@ -168,6 +168,58 @@ class JarvisUITestCase: XCTestCase {
   func coreStores() -> [[String: Any]] { corePayload("api/core/stores", "stores") }
   func coreUnlocked() -> [[String: Any]] { corePayload("api/core/unlocked", "unlocked") }
 
+  /// any call to the router on the runner: status and body
+  func routerRaw(_ method: String, _ path: String, body: Data? = nil, headers: [String: String] = [:]) -> (Int, Data) {
+    var r = URLRequest(url: URL(string: "http://127.0.0.1:18080/" + path)!)
+    r.httpMethod = method; r.httpBody = body
+    for (k, v) in headers { r.setValue(v, forHTTPHeaderField: k) }
+    nonisolated(unsafe) var out: (Int, Data) = (0, Data())
+    let done = DispatchSemaphore(value: 0)
+    URLSession.shared.dataTask(with: r) { d, resp, _ in out = ((resp as? HTTPURLResponse)?.statusCode ?? 0, d ?? Data()); done.signal() }.resume()
+    _ = done.wait(timeout: .now() + 30)
+    return out
+  }
+
+  /// New session: one image added from Photos (ios.yml / replica.yml put a test image in the library with
+  /// `simctl addmedia`), the picker driven as a person would; the clipboard's PasteButton when the picker shows no photo.
+  /// The attachment's name on the page, nil when none arrived.
+  @discardableResult func attachImage() -> String? {
+    let row = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH 'ns-attachment-' AND NOT (identifier BEGINSWITH 'ns-attachment-remove-')")).firstMatch
+    let add = el("ns-attach-photos")
+    if wait(add, 10, "Add from Photos") {
+      add.tap()
+      sleep(3)
+      shot("photos-picker", checkBlank: false)
+      // the picker runs out of process; its grid is reachable through the app's tree
+      let photo = [app.scrollViews.otherElements.images.firstMatch,
+                   app.images.matching(NSPredicate(format: "label BEGINSWITH 'Photo'")).firstMatch,
+                   app.collectionViews.cells.firstMatch].first { $0.waitForExistence(timeout: 10) }
+      if let photo {
+        photo.tap()
+        sleep(1)
+        let addBtn = app.buttons.matching(NSPredicate(format: "label == 'Add' OR identifier == 'Add'")).firstMatch
+        if addBtn.waitForExistence(timeout: 5) { addBtn.tap() }
+      } else {
+        note("tree-photos-picker", app.debugDescription)
+        let cancel = app.buttons["Cancel"].firstMatch
+        if cancel.exists { cancel.tap() }
+      }
+    }
+    if !row.waitForExistence(timeout: 30) {
+      // the clipboard: a test image, then the page's Paste button (no paste prompt for PasteButton)
+      UIPasteboard.general.image = UIGraphicsImageRenderer(size: CGSize(width: 64, height: 48)).image { c in
+        UIColor.systemRed.setFill(); c.fill(CGRect(x: 0, y: 0, width: 64, height: 48))
+        UIColor.systemBlue.setFill(); c.fill(CGRect(x: 16, y: 12, width: 32, height: 24))
+      }
+      let paste = el("ns-attach-paste")
+      if wait(paste, 10, "the Paste button") { paste.tap() }
+    }
+    guard wait(row, 30, "an image attached on New session") else { return nil }
+    sleep(1)
+    shot("new-session-image")
+    return String(row.identifier.dropFirst("ns-attachment-".count))
+  }
+
   /// Reset or recover at first launch: Recover with the kit (the core is empty)
   func recoverAtLaunch(_ kit: String) -> Bool {
     guard wait(el("setup-state-empty"), 90, "setup page: the core is empty") else { return false }
