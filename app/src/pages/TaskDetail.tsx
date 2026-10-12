@@ -2,15 +2,15 @@
 // (newest first, the last 20 kept) — tap a run for its output and log.
 import { useEffect, useState } from "react";
 import { Pressable, View } from "react-native";
-import { api, ago, fromNow, RUN_ACTIVE, type TaskRun } from "../lib/api";
+import { api, ago, RUN_ACTIVE, type TaskRun } from "../lib/api";
 import { useStore, ask, loadTasks, pendTasks } from "../lib/store";
 import { runInstance } from "../lib/tasks";
 import { useTheme } from "../theme";
-import { Button, Callout, Card, Flex, Lbl, Muted, P, Spinner } from "../ui/kit";
+import { Badge, BadgeList, Button, Callout, Card, Flex, Lbl, Muted, P, Row, Rows, Spinner } from "../ui/kit";
 import { PButton } from "../ui/bits";
 import { Page, closePage, openPage } from "../ui/page";
-import { RunPill, StatePill, runWhen, paramSummary, InstanceAction } from "../views/Tasks";
-import { scheduleText } from "../views/TaskSchedules";
+import { RunPill, StatePill, runWhen, paramRows, InstanceAction } from "../views/Tasks";
+import { ScheduleRows } from "../views/TaskSchedules";
 
 export type TaskSpec = { id: string };
 export function TaskDetail({ spec }: { spec: TaskSpec }) {
@@ -35,23 +35,35 @@ export function TaskDetail({ spec }: { spec: TaskSpec }) {
   useEffect(() => { loadTasks(); const tm = setInterval(() => loadTasks(), 5000); return () => clearInterval(tm); }, [id]);
   if (!inst) return <Page title="Task"><Muted mt={3}>This task no longer exists.</Muted></Page>;
   const del = async () => {
-    if (!(await ask({ title: `Delete “${inst.name}”?`, detail: `Its ${schedules.length ? schedules.length + " schedule(s) and " : ""}run history go with it, and its session line is destroyed (archived like any session). The template stays.`, action: "Delete", danger: true }))) return;
+    if (!(await ask({ title: "Delete task?", rows: [
+      { label: "Task", value: inst.name },
+      ...(schedules.length ? [{ label: "Schedules", value: "Deleted (" + schedules.length + ")" }] : []),
+      { label: "Run history", value: "Deleted" },
+      { label: "Session line", value: "Archived, destroyed" },
+      { label: "Template", value: "Kept" },
+    ], action: "Delete", danger: true }))) return;
     await pendTasks("task-del:" + id, "Deleting…", () => api("DELETE", "api/tasks/instances/" + id), (d) => !d.instances.some((i) => i.id === id), 60000);
     closePage();
   };
   const upgrade = async () => {
-    if (!(await ask({ title: `Run “${inst.name}” on the latest image?`, detail: "Resumes its line on the newest session image (how a changed template reaches a task). The iPhone approves the new image first.", action: "Run on latest image" }))) return;
+    if (!(await ask({ title: "Run on the latest image?", rows: [{ label: "Task", value: inst.name }, { label: "Approval", value: "On the iPhone" }], action: "Run on latest image" }))) return;
     await runInstance(id, true);
   };
   const ready = inst.state === "ready" || inst.state === "running" || inst.state === "busy";
   return (
     <Page title={inst.name} id="task-page" right={<InstanceAction inst={inst} id="td-run" />}>
-      <Flex gap={2} align="center" mt={2} wrap><StatePill inst={inst} /><Muted>{tmpl ? tmpl.title : `${inst.template} (template missing)`} · created {new Date(inst.createdAt).toLocaleDateString()}</Muted></Flex>
-      {inst.state === "approval" && <Callout color="blue" mt={3}>The iPhone approves this task's line once (it waits in the Inbox). Runs need no approval after that.</Callout>}
-      {!!inst.detail && inst.state !== "approval" && <Muted mt={1}>{inst.detail}</Muted>}
-      {!!inst.activeRun?.waiting && <Callout color="amber" mt={3}>{"Waiting: " + inst.activeRun.waiting}</Callout>}
-      {!!paramSummary(inst, tmpl) && <Card mt={3} size={1} variant="surface"><P size={2} selectable>{paramSummary(inst, tmpl)}</P></Card>}
-      <Muted mt={2}>{[inst.stores?.length ? "stores: " + inst.stores.join(", ") : "no stores", inst.size, inst.queued ? `${inst.queued} queued` : ""].filter(Boolean).join(" · ")}</Muted>
+      <Flex gap={2} align="center" mt={2} wrap><StatePill inst={inst} /></Flex>
+      {inst.state === "approval" && <Callout color="blue" mt={3}>Approve once in the iPhone app's Inbox.</Callout>}
+      {!!inst.activeRun?.waiting && <Callout color="amber" mt={3}><Rows><Row label="Waiting" id="td-waiting">{inst.activeRun.waiting}</Row></Rows></Callout>}
+      <Rows mt={3} id="td-rows">
+        <Row label="Template">{tmpl ? tmpl.title : <><P size={2}>{inst.template}</P><Badge color="red">missing</Badge></>}</Row>
+        <Row label="Created">{new Date(inst.createdAt).toLocaleDateString()}</Row>
+        <Row label="Stores"><BadgeList items={inst.stores || []} /></Row>
+        {!!inst.size && <Row label="Size">{inst.size}</Row>}
+        {!!inst.queued && <Row label="Queued">{String(inst.queued)}</Row>}
+        {!!inst.detail && inst.state !== "approval" && <Row label="Detail">{inst.detail}</Row>}
+      </Rows>
+      {paramRows(inst, tmpl).length > 0 && <Card mt={3} size={1} variant="surface"><Rows id="td-params">{paramRows(inst, tmpl).map(([l, v]) => <Row key={l} label={l} selectable>{v}</Row>)}</Rows></Card>}
       <Flex gap={2} mt={3} wrap>
         <Button variant="soft" disabled={!tmpl} onPress={() => openPage("task-edit", { id })} id="td-edit">Edit</Button>
         <Button variant="soft" onPress={() => openPage("task-schedule", { instance: id })} id="td-schedule">Schedule daily…</Button>
@@ -62,8 +74,7 @@ export function TaskDetail({ spec }: { spec: TaskSpec }) {
         <Lbl>Schedules</Lbl>
         {schedules.map((s) => (
           <Pressable key={s.id} onPress={() => openPage("task-schedule", { id: s.id })} style={{ paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: t.gray.a[4] }}>
-            <P size={2}>{scheduleText(s)}</P>
-            <Muted>{s.enabled && s.nextAt ? "next " + fromNow(new Date(s.nextAt)) : "off"}</Muted>
+            <ScheduleRows s={s} />
           </Pressable>))}
       </>}
       <Lbl>Runs</Lbl>
@@ -75,10 +86,12 @@ export function TaskDetail({ spec }: { spec: TaskSpec }) {
             style={({ hovered }: any) => ({ paddingVertical: 10, paddingHorizontal: 4, borderBottomWidth: 1, borderBottomColor: t.gray.a[4], backgroundColor: hovered ? t.gray.a[2] : "transparent" })}>
             <Flex gap={2} align="center" wrap>
               <RunPill run={r} />
-              <P size={2}>{r.trigger === "schedule" ? "Scheduled" : "Manual"}{r.upgrade ? " · latest image" : ""}</P>
-              <Muted>{runWhen(r) || (r.createdAt ? ago(r.createdAt) : "")}{r.exitCode != null && r.phase !== "succeeded" ? ` · exit ${r.exitCode}` : ""}</Muted>
+              <Badge>{r.trigger === "schedule" ? "scheduled" : "manual"}</Badge>
+              {r.upgrade && <Badge color="blue">latest image</Badge>}
+              {r.exitCode != null && r.phase !== "succeeded" && <Badge color="red">{"exit " + r.exitCode}</Badge>}
+              <Muted>{runWhen(r)?.[1] || (r.createdAt ? ago(r.createdAt) : "")}</Muted>
             </Flex>
-            {!!r.waiting && <Muted>{"waiting: " + r.waiting}</Muted>}
+            {!!r.waiting && <Rows mt={1}><Row label="Waiting">{r.waiting}</Row></Rows>}
           </Pressable>))}</View>}
     </Page>
   );

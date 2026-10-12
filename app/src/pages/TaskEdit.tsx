@@ -7,7 +7,7 @@ import { View } from "react-native";
 import { api, CORE_STORE, harnessStoreSet, type TaskField, type TaskOption } from "../lib/api";
 import { useStore, loadTasks, loadStores, toast } from "../lib/store";
 import { openApprovalFor } from "../lib/tasks";
-import { Button, CheckboxCards, Lbl, Muted, P, RadioCards, Spinner, Switch, TextArea, TextField } from "../ui/kit";
+import { BadgeList, Button, CheckboxCards, Lbl, Muted, P, RadioCards, Row, Rows, Spinner, Switch, TextArea, TextField } from "../ui/kit";
 import { BtnLabel, useBusy } from "../ui/bits";
 import { Page, closePage, openPage } from "../ui/page";
 
@@ -42,7 +42,8 @@ export function TaskEdit({ spec }: { spec: TaskEditSpec }) {
   const [vals, setVals] = useState<Record<string, any>>(() => Object.fromEntries((t?.fields || []).map((f) => [f.name, initial(f, inst?.params[f.name])])));
   const [busy, run, guard] = useBusy();
   const [err, setErr] = useState("");
-  if (!t) return <Page title="Task"><P size={2} color="red" mt={3}>{spec.id && !inst ? "This task no longer exists." : `Template “${inst?.template || spec.template}” is not in tasks/.`}</P></Page>;
+  if (!t) return <Page title="Task">{spec.id && !inst ? <P size={2} color="red" mt={3}>This task no longer exists.</P>
+    : <><P size={2} color="red" mt={3}>Template not in tasks/.</P><Rows mt={2}><Row label="Template" mono>{inst?.template || spec.template || ""}</Row></Rows></>}</Page>;
   // options: the template's own, or the core's stores / the sizes / the models
   const optionsOf = (f: TaskField): TaskOption[] =>
     f.optionsFrom === "stores" ? stores.items.filter((s) => s.name !== CORE_STORE && !hidden.has(s.name)).map((s) => ({ value: s.name, label: s.name, sub: [s.sensitive ? "sensitive" : "", s.empty ? "empty" : "", s.unlocked ? "" : "locked"].filter(Boolean).join(" · ") || undefined }))
@@ -60,25 +61,27 @@ export function TaskEdit({ spec }: { spec: TaskEditSpec }) {
         const r = await api<{ id: string; session: string | null }>(inst ? "PUT" : "POST", inst ? "api/tasks/instances/" + inst.id : "api/tasks/instances", inst ? { name: name.trim(), params } : { template: t.name, name: name.trim(), params });
         await loadTasks();
         closePage();
-        if (!inst) { toast(`Made “${name.trim()}” — the iPhone approves it once.`, "ok"); openPage("task", { id: r.id }); openApprovalFor(r.session, "new-session"); }
+        if (!inst) { toast("Task made. Approve it in the iPhone app.", "ok"); openPage("task", { id: r.id }); openApprovalFor(r.session, "new-session"); }
       } catch (e: any) { setErr(e.message); }
     });
   });
   return (
     <Page title={inst ? "Edit task" : "New task"} onSubmit={busy ? undefined : save} id="task-edit"
       right={<Button id="te-save" disabled={!!busy} onPress={save}>{busy ? <><Spinner /><BtnLabel>{busy}</BtnLabel></> : inst ? "Save" : "Make task"}</Button>}>
-      <Muted mt={2}>From the template “{t.title}”{t.description ? ` — ${t.description}` : ""}</Muted>
+      <Rows mt={2}><Row label="Template" id="te-template">{t.title}</Row></Rows>
+      {!!t.description && <Muted mt={1}>{t.description}</Muted>}
       <Lbl>Name</Lbl>
       <TextField id="te-name" autoComplete="off" defaultValue={name} onChangeText={setName} placeholder="What this task is for" />
       {t.fields.map((f) => (
         <View key={f.name}>
           <Lbl>{f.label + (f.required ? " *" : "")}</Lbl>
           <FieldInput f={f} value={vals[f.name]} opts={optionsOf(f)} onChange={(v) => setVals((x) => ({ ...x, [f.name]: v }))} />
-          {storeField(f) && <Muted mt={1}>{inst ? "Stores are part of the task's approved line: changing them needs a new task." : "The picked stores join the task's line; the iPhone shows them when it approves."}</Muted>}
+          {storeField(f) && <Muted mt={1}>{inst ? "Fixed once approved: a change needs a new task." : "Shown on the iPhone when it approves."}</Muted>}
           {!!f.help && <Muted mt={1}>{f.help}</Muted>}
         </View>
       ))}
-      <Muted mt={4}>{`Values are not secret (they reach the machine unsigned). Secrets come from stores: the template's (${(t.stores || []).join(", ") || "none"}) and any picked above.`}</Muted>
+      <Rows mt={4}><Row label="Template stores"><BadgeList items={t.stores || []} /></Row></Rows>
+      <Muted mt={2}>Values are not secret; secrets come from stores.</Muted>
       {!!err && <P size={2} color="red" mt={3} id="te-err">{err}</P>}
     </Page>
   );

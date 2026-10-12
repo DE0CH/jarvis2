@@ -214,6 +214,11 @@ fixes, 34–40 carried over from the old app and still true, 41–43 the web pag
     pill); a previous session's archive is Transcripts / Artifact files rows, "not restorable" a pill; a store's state
     is all pills. A previous session's last message is a Quote labelled whose it was.
 
+57. **Tasks**: a task's template, schedules, stores, filled-in values (one row per field), last run and detail are
+    rows; a template's name, stores and fields are rows and badges; a daily schedule is Daily at / Time zone / Next
+    rows (or an "off" pill); a run's trigger, latest image and exit code are badges, its times rows (Queued, Script
+    started, Finished, Exit code, Run). A template's own description (written in task.json) shows as written.
+
 ## Unfinished / known gaps
 
 - Free text (prompt, title) reaches the machine signed only with a core that vouches (the held core doesn't).

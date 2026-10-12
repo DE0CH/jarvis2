@@ -5,7 +5,7 @@ import { View } from "react-native";
 import { api, ago, RUN_ACTIVE, type TaskRun as Run } from "../lib/api";
 import { ask, loadTasks } from "../lib/store";
 import { useTheme, radius } from "../theme";
-import { Button, Callout, Flex, Lbl, Muted, P, Spinner, Text, mono } from "../ui/kit";
+import { Badge, Button, Callout, Flex, Lbl, Muted, P, Row, Rows, Spinner, Text, mono } from "../ui/kit";
 import { Page } from "../ui/page";
 import { RunPill } from "../views/Tasks";
 
@@ -30,7 +30,7 @@ export function TaskRunPage({ spec }: { spec: TaskRunSpec }) {
     return () => { live = false; clearTimeout(timer); };
   }, [name]);
   const stop = async () => {
-    if (!(await ask({ title: "Stop this run?", detail: "A queued run is dropped; a starting or running one is stopped and its line paused. It stays in the history as stopped.", action: "Stop", danger: true }))) return;
+    if (!(await ask({ title: "Stop this run?", detail: "Its line is paused; the run stays in the history.", action: "Stop", danger: true }))) return;
     setStopping(true);
     try { await api("POST", `api/tasks/runs/${encodeURIComponent(name)}/stop`); for (let i = 0; i < 15; i++) { const r = await get(); if (!RUN_ACTIVE(r.phase)) break; await new Promise((x) => setTimeout(x, 1000)); } }
     catch (e: any) { setErr(e.message); }
@@ -41,12 +41,18 @@ export function TaskRunPage({ spec }: { spec: TaskRunSpec }) {
       {!run ? (err ? <P size={2} color="red" mt={3}>{err}</P> : <Flex gap={2} align="center" mt={4}><Spinner /><Muted>Loading the run…</Muted></Flex>) : <>
         <Flex gap={2} align="center" mt={2} wrap>
           <RunPill run={run} />
-          <Muted>{(run.trigger === "schedule" ? "Scheduled" : "Manual") + (run.upgrade ? " · on the latest image" : "")}</Muted>
+          <Badge>{run.trigger === "schedule" ? "scheduled" : "manual"}</Badge>
+          {run.upgrade && <Badge color="blue">latest image</Badge>}
         </Flex>
-        <Muted mt={1}>{[run.createdAt ? "queued " + ago(run.createdAt) : "", run.ranAt ? "script started " + ago(run.ranAt) : "", run.finishedAt ? "finished " + ago(run.finishedAt) : "", run.exitCode != null ? "exit code " + run.exitCode : ""].filter(Boolean).join(" · ")}</Muted>
-        <Muted>{run.id}</Muted>
+        <Rows mt={2} id="tr-rows">
+          {!!run.createdAt && <Row label="Queued">{ago(run.createdAt)}</Row>}
+          {!!run.ranAt && <Row label="Script started">{ago(run.ranAt)}</Row>}
+          {!!run.finishedAt && <Row label="Finished">{ago(run.finishedAt)}</Row>}
+          {run.exitCode != null && <Row label="Exit code" id="tr-exit">{String(run.exitCode)}</Row>}
+          <Row label="Run" mono selectable>{run.id}</Row>
+        </Rows>
         {!!run.reason && <Callout color="red" mt={3}>{run.reason}</Callout>}
-        {!!run.waiting && <Callout color="amber" mt={3}>{"Waiting: " + run.waiting}</Callout>}
+        {!!run.waiting && <Callout color="amber" mt={3}><Rows><Row label="Waiting">{run.waiting}</Row></Rows></Callout>}
         {!!err && <P size={2} color="red" mt={2}>{err}</P>}
         <Lbl>Output</Lbl>
         {out ? <Mono text={out} id="tr-output" /> : <Muted>{RUN_ACTIVE(run.phase) ? "No output yet…" : "No output."}</Muted>}

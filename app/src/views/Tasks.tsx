@@ -5,7 +5,7 @@ import { Pressable, View } from "react-native";
 import { ago, RUN_ACTIVE, type TaskInstance, type TaskRun, type TaskTemplate } from "../lib/api";
 import { useStore } from "../lib/store";
 import { runInstance, reapprove } from "../lib/tasks";
-import { Button, Callout, Card, Flex, Heading, Lbl, Muted, P, Pill, Spinner } from "../ui/kit";
+import { Badge, BadgeList, Button, Callout, Card, Flex, Heading, Lbl, Muted, P, Pill, Row, Rows, Spinner } from "../ui/kit";
 import { PButton } from "../ui/bits";
 import { Cards } from "../ui/cards";
 import { openPage } from "../ui/page";
@@ -22,11 +22,12 @@ const STATE: Record<string, ["ok" | "dim" | "wait" | "bad" | "info", string]> = 
   approval: ["info", "needs approval"], ready: ["ok", "ready"], running: ["info", "running"], busy: ["wait", "busy"], failed: ["bad", "failed"], gone: ["bad", "no line"],
 };
 export const StatePill = ({ inst }: { inst: TaskInstance }) => { const [k, l] = STATE[inst.state] || ["dim", inst.state]; return <Pill kind={k} spin={inst.state === "running" || inst.state === "busy"}>{l}</Pill>; };
-export const runWhen = (r: TaskRun) => (r.finishedAt ? "finished " + ago(r.finishedAt) : r.ranAt ? "started " + ago(r.ranAt) : r.createdAt ? "queued " + ago(r.createdAt) : "");
-export function paramSummary(inst: TaskInstance, t?: TaskTemplate) {
+/** when a run last moved, as a label and a value: Finished / Started / Queued */
+export const runWhen = (r: TaskRun): [string, string] | null => (r.finishedAt ? ["Finished", ago(r.finishedAt)] : r.ranAt ? ["Started", ago(r.ranAt)] : r.createdAt ? ["Queued", ago(r.createdAt)] : null);
+/** a task's filled-in values as rows (label, value), empty ones left out */
+export function paramRows(inst: TaskInstance, t?: TaskTemplate): [string, string][] {
   return (t ? t.fields : Object.keys(inst.params).map((name) => ({ name, label: name, type: "text" })))
-    .map((f) => { const v = inst.params[f.name]; return v === "" || v == null || (Array.isArray(v) && !v.length) ? null : `${f.label}: ${f.type === "checkbox" ? (v ? "yes" : "no") : Array.isArray(v) ? v.join(", ") : String(v)}`; })
-    .filter(Boolean).join(" · ");
+    .flatMap((f): [string, string][] => { const v = inst.params[f.name]; return v === "" || v == null || (Array.isArray(v) && !v.length) ? [] : [[f.label, f.type === "checkbox" ? (v ? "Yes" : "No") : Array.isArray(v) ? v.join(", ") : String(v)]]; });
 }
 /** the primary action for an instance, by its state */
 export function InstanceAction({ inst, id }: { inst: TaskInstance; id?: string }) {
@@ -45,9 +46,14 @@ function InstanceCard({ inst, t }: { inst: TaskInstance; t?: TaskTemplate }) {
           <Heading size={3} style={{ flexShrink: 1 }}>{inst.name}</Heading>
           <StatePill inst={inst} />{r && <RunPill run={r} />}
         </Flex>
-        <Muted>{t ? t.title : `${inst.template} (template missing)`}{inst.schedules ? ` · ${inst.schedules} schedule${inst.schedules > 1 ? "s" : ""}` : ""}{inst.stores?.length ? " · stores: " + inst.stores.join(", ") : ""}</Muted>
-        {!!paramSummary(inst, t) && <P size={2} mt={1} lines={2}>{paramSummary(inst, t)}</P>}
-        <P size={1} color="gray" mt={1}>{r ? `Last run ${runWhen(r)}${r.trigger === "schedule" ? " (scheduled)" : ""}` : "Never run"}{inst.detail && inst.state !== "approval" ? " · " + inst.detail : ""}</P>
+        <Rows mt={1} id={"task-rows-" + inst.id}>
+          <Row label="Template">{t ? t.title : <><P size={2}>{inst.template}</P><Badge color="red">missing</Badge></>}</Row>
+          {!!inst.schedules && <Row label="Schedules">{String(inst.schedules)}</Row>}
+          {!!inst.stores?.length && <Row label="Stores"><BadgeList items={inst.stores} /></Row>}
+          {paramRows(inst, t).map(([l, v]) => <Row key={"p:" + l} label={l} lines={2}>{v}</Row>)}
+          <Row label="Last run">{r ? <><P size={2}>{runWhen(r)?.[1] || ""}</P>{r.trigger === "schedule" && <Badge>scheduled</Badge>}</> : "Never"}</Row>
+          {!!inst.detail && inst.state !== "approval" && <Row label="Detail">{inst.detail}</Row>}
+        </Rows>
       </Pressable>
       <Flex gap={2} style={{ marginTop: "auto", paddingTop: 12 }}>
         <InstanceAction inst={inst} id={"run-" + inst.id} />
@@ -61,11 +67,15 @@ function TemplateCard({ t }: { t: TaskTemplate }) {
   return (
     <Card variant="surface" data={{ template: t.name }}>
       <Heading size={3}>{t.title}</Heading>
-      <Muted>{t.name}{t.stores && t.stores.length ? ` · stores: ${t.stores.join(", ")}` : ""}{t.prompt ? " · Claude prompt" : ""}</Muted>
+      <Rows mt={1}>
+        <Row label="Name" mono>{t.name}</Row>
+        {!!t.stores?.length && <Row label="Stores"><BadgeList items={t.stores} /></Row>}
+        {!!t.prompt && <Row label="Claude prompt"><Badge color="blue">yes</Badge></Row>}
+      </Rows>
       {t.error ? <P size={2} color="red" mt={1}>Broken task.json: {t.error}</P>
         : <>
           {!!t.description && <P size={2} mt={1}>{t.description}</P>}
-          {!!t.fields.length && <P size={1} color="gray" mt={1}>Fields: {t.fields.map((f) => f.label + (f.required ? " *" : "")).join(", ")}</P>}
+          {!!t.fields.length && <Rows mt={1}><Row label="Fields"><BadgeList items={t.fields.map((f) => f.label + (f.required ? " *" : ""))} /></Row></Rows>}
         </>}
       <Flex gap={2} style={{ marginTop: "auto", paddingTop: 12 }}>
         <Button variant="soft" disabled={!!t.error} onPress={() => openPage("task-edit", { template: t.name })} id={"new-" + t.name}>New task</Button>
@@ -85,10 +95,10 @@ export function Tasks() {
       {!!ts.err && <Callout color="red" mb={3}>{"Could not refresh: " + ts.err}</Callout>}
       <Lbl mt={0}>Tasks</Lbl>
       {instances.length ? <Cards>{instances.map((i) => <InstanceCard key={i.id} inst={i} t={tmpl(i.template)} />)}</Cards>
-        : <Muted>No tasks yet — pick a template below and fill it in. The iPhone approves each task once.</Muted>}
+        : <Muted>No tasks yet.</Muted>}
       <Lbl mt={6}>Templates</Lbl>
       {templates.length ? <Cards>{templates.map((t) => <TemplateCard key={t.name} t={t} />)}</Cards>
-        : <Muted>No templates in tasks/ yet. Ask Claude to write one.</Muted>}
+        : <Muted>No templates in tasks/.</Muted>}
     </View>
   );
 }

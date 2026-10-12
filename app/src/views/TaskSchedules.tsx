@@ -3,21 +3,31 @@
 import { Pressable, View } from "react-native";
 import { api, fromNow, type TaskSchedule, type TasksOverview } from "../lib/api";
 import { useStore, ask, pendTasks } from "../lib/store";
-import { Button, Callout, Card, Flex, Heading, Muted, P, Spinner, Switch } from "../ui/kit";
+import { Button, Callout, Card, Flex, Heading, Muted, P, Pill, Row, Rows, Spinner, Switch } from "../ui/kit";
 import { PButton } from "../ui/bits";
 import { Cards } from "../ui/cards";
 import { openPage } from "../ui/page";
 import { RunPill } from "./Tasks";
 
-export const scheduleText = (s: TaskSchedule) => `Daily at ${s.time} · ${s.tz.replace(/_/g, " ")}`;
-const nextText = (s: TaskSchedule) => (s.enabled && s.nextAt ? `Next run ${fromNow(new Date(s.nextAt))} (${new Date(s.nextAt).toLocaleString([], { weekday: "short", hour: "2-digit", minute: "2-digit" })} your time)` : "Off");
+/** a daily schedule as rows: Daily at, Time zone, Next (or an Off pill) */
+export function ScheduleRows({ s, id }: { s: TaskSchedule; id?: string }) {
+  return (
+    <Rows mt={1} id={id}>
+      <Row label="Daily at">{s.time}</Row>
+      <Row label="Time zone">{s.tz.replace(/_/g, " ")}</Row>
+      <Row label="Next">{s.enabled && s.nextAt
+        ? `${fromNow(new Date(s.nextAt))} · ${new Date(s.nextAt).toLocaleString([], { weekday: "short", hour: "2-digit", minute: "2-digit" })}`
+        : <Pill kind="dim">off</Pill>}</Row>
+    </Rows>
+  );
+}
 
 export function setScheduleEnabled(s: TaskSchedule, on: boolean) {
   return pendTasks("sched:" + s.id, on ? "Turning on…" : "Turning off…", () => api("PUT", "api/tasks/schedules/" + s.id, { enabled: on }),
     (d: TasksOverview) => d.schedules.some((x) => x.id === s.id && x.enabled === on));
 }
 export async function deleteSchedule(s: TaskSchedule, name: string) {
-  if (!(await ask({ title: `Delete the schedule of “${name}”?`, detail: "The task and its runs stay.", action: "Delete", danger: true }))) return false;
+  if (!(await ask({ title: "Delete schedule?", rows: [{ label: "Task", value: name }, { label: "Daily at", value: s.time }], detail: "The task and its runs stay.", action: "Delete", danger: true }))) return false;
   await pendTasks("sched:" + s.id, "Deleting…", () => api("DELETE", "api/tasks/schedules/" + s.id), (d) => !d.schedules.some((x) => x.id === s.id));
   return true;
 }
@@ -38,8 +48,7 @@ export function TaskSchedules() {
           <Card key={s.id} data={{ schedule: s.id }} dim={!!p}>
             <Pressable accessibilityRole="button" onPress={() => openPage("task-schedule", { id: s.id })}>
               <Flex gap={2} align="center" wrap><Heading size={3} style={{ flexShrink: 1 }}>{name}</Heading>{inst?.lastRun && <RunPill run={inst.lastRun} />}</Flex>
-              <P size={2} mt={1}>{scheduleText(s)}</P>
-              <Muted>{nextText(s)}</Muted>
+              <ScheduleRows s={s} id={"schedule-rows-" + s.id} />
             </Pressable>
             <Flex gap={3} align="center" style={{ marginTop: "auto", paddingTop: 12 }}>
               {p ? <Flex gap={2} align="center"><Spinner /><Muted>{p}</Muted></Flex> : <Switch id={"sw-" + s.id} on={s.enabled} onChange={(v) => setScheduleEnabled(s, v)} label={s.enabled ? "On" : "Off"} />}
@@ -52,7 +61,7 @@ export function TaskSchedules() {
         : <View style={{ alignItems: "center", marginTop: 32, gap: 12 }}>
           <P size={3} color="gray" align="center">No schedules yet.</P>
           {instances.length ? <PButton pkey="sched:new" label="+ New schedule" onPress={() => openPage("task-schedule", {})} id="sched-empty-new" />
-            : <Muted>Make a task in the Tasks tab first.</Muted>}
+            : <Muted>No tasks yet.</Muted>}
         </View>}
     </View>
   );
