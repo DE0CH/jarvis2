@@ -74,36 +74,37 @@ struct SetupView: View {
       }
     case .choose:
       Section {
-        Text(headline).font(.headline).accessibilityIdentifier("setup-state-\(statusName)")
+        LabeledContent("Jarvis 2") { StatusPill(text: statusText, color: unpinned || status == .foreign ? .orange : status == .mine ? .green : .secondary) }
+          .accessibilityElement(children: .combine).accessibilityIdentifier("setup-state-\(statusName)")
       }
       Section {
         Button { pick(reset: true) } label: {
-          Label { VStack(alignment: .leading) { Text("Reset").foregroundStyle(Color.primary); Text("Start fresh with a new recovery kit. Everything starts empty.").font(.footnote).foregroundStyle(Color.secondary) } }
+          Label { VStack(alignment: .leading) { Text("Reset").foregroundStyle(Color.primary); Text("New recovery kit, everything empty").font(.footnote).foregroundStyle(Color.secondary) } }
             icon: { Image(systemName: "sparkles") }
         }
         .accessibilityIdentifier("setup-choose-reset")
         Button { pick(reset: false) } label: {
-          Label { VStack(alignment: .leading) { Text("Recover").foregroundStyle(Color.primary); Text("Bring everything back with the recovery kit in your password manager.").font(.footnote).foregroundStyle(Color.secondary) } }
+          Label { VStack(alignment: .leading) { Text("Recover").foregroundStyle(Color.primary); Text("With your recovery kit").font(.footnote).foregroundStyle(Color.secondary) } }
             icon: { Image(systemName: "arrow.counterclockwise") }
         }
         .accessibilityIdentifier("setup-choose-recover")
       } footer: {
-        if status != .empty { Text("Both need the recovery kit Jarvis 2 is set up with now, and end what is running on it.") }
+        if status != .empty { Text("Both need the current recovery kit and end the running sessions.") }
       }
     case .recover:
       kitField(header: "Recovery kit")
     case .confirmRestart:
       Section {
-        Label("Jarvis 2 is running with this kit. Recovering restarts it, and the sessions running on it end.", systemImage: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+        Label("Restarts Jarvis 2 · running sessions end", systemImage: "exclamationmark.triangle.fill").foregroundStyle(.orange)
         Button(busy ?? "Restart and recover", role: .destructive) { Task { await recover(restart: true) } }
           .disabled(busy != nil).accessibilityElement(children: .combine).accessibilityIdentifier("setup-restart-confirm")
         Button("Cancel") { forget(); step = .choose }.disabled(busy != nil).accessibilityIdentifier("setup-restart-cancel")
       }
     case .resetAuth:
       Section {
-        Label("Resetting ends Jarvis 2 as it is now: its stores and the sessions running on it.", systemImage: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+        Label("Deletes every store · running sessions end", systemImage: "exclamationmark.triangle.fill").foregroundStyle(.orange)
       }
-      kitField(header: "The recovery kit it is set up with")
+      kitField(header: "Current recovery kit")
     case .newKit:
       if let k = newKey {
         let kit = RecoveryKit(master: k).string
@@ -115,7 +116,7 @@ struct SetupView: View {
           Button(busy ?? "I've saved it") { Task { await claimNew() } }
             .disabled(busy != nil).bold().accessibilityIdentifier("setup-kit-saved")
         } header: { Text("Your new recovery kit") } footer: {
-          Text("Save it in your password manager. It is the only way to recover Jarvis 2.")
+          Text("Save it in your password manager: the only way to recover Jarvis 2.")
         }
       }
     case .done:
@@ -158,13 +159,13 @@ struct SetupView: View {
   private var statusName: String {
     switch status { case .empty: "empty"; case .mine: "mine"; case .otherPhone: "other-phone"; case .foreign: "foreign" }
   }
-  private var headline: String {
-    if unpinned { return "Jarvis 2 says it is set up on this iPhone, but it isn't the core this iPhone set up. Recover with your kit to trust it again." }
+  private var statusText: String {
+    if unpinned { return "Not the core this iPhone set up" }
     return switch status {
-    case .empty: "Jarvis 2 is empty. Choose one:"
-    case .mine: "Jarvis 2 is set up on this iPhone."
-    case .otherPhone: "Jarvis 2 is set up with your recovery kit, for another iPhone."
-    case .foreign: "Jarvis 2 is set up with a different recovery kit."
+    case .empty: "Empty"
+    case .mine: "Set up on this iPhone"
+    case .otherPhone: "Set up for another iPhone"
+    case .foreign: "Set up with another kit"
     }
   }
 
@@ -266,7 +267,7 @@ struct SetupView: View {
       if !claimed {
         _ = try await RouterClient.shared.claim(try await withDevice(try CoreSetup.claim(core: c, phone: phone, master: m, bundle: try CoreSetup.bundle(stores), device: device)), core: c)
       }
-      finish(c, master: m.publicKey, text: "Jarvis 2 is recovered.")
+      finish(c, master: m.publicKey, text: "Recovered")
     } catch {
       busy = nil
       if step == .confirmRestart { step = .recover }
@@ -296,7 +297,7 @@ struct SetupView: View {
       let sk = try await RouterClient.shared.storeKey(coreKey: c.signingKey)
       let bundle = try sk.map { try CoreSetup.blobsBundle([], storeKey: $0) } ?? CoreSetup.bundle([])
       _ = try await RouterClient.shared.claim(try await withDevice(try CoreSetup.claim(core: c, phone: phone, master: m, bundle: bundle, device: try PhoneKeys.shared.devicePublic())), core: c)
-      finish(c, master: m.publicKey, text: "Jarvis 2 is reset. Its stores start empty.")
+      finish(c, master: m.publicKey, text: "Reset")
     } catch { busy = nil; failure = plain(error, "Setting up didn't work. Your kit is still the one shown; try again.") }
   }
   /// this install's device key countersigns the statement (claim or wipe): the setup session trusts a new master only

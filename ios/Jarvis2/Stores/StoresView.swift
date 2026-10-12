@@ -18,16 +18,22 @@ struct StoresView: View {
           StoreRow(s: s, keys: keyNames[s.name], harness: model.harnessHidden.contains(s.name), mark: { markAsk = s.name })
         }
       } header: { Text("Stores") } footer: {
-        Text("Unlocked = open to every session until you lock it. A session's Start unlocks what it needs for that session only, and the core locks it again once the machine has its secrets; a paused session carries its secrets to its next machine.")
+        Text("Unlocked: open to every session until locked.")
       }
       Section {
-        if model.stores.loaded && model.openUnlocks.isEmpty { Text("None: every store is locked.").foregroundStyle(.secondary).accessibilityIdentifier("unlocks-none") }
+        if model.stores.loaded && model.openUnlocks.isEmpty { Text("None").foregroundStyle(.secondary).accessibilityIdentifier("unlocks-none") }
         ForEach(model.openUnlocks) { u in
           HStack {
-            VStack(alignment: .leading) {
-              Text(u.store).font(.headline)
-              Text("since \(u.since.isoDate.map { $0.formatted(date: .abbreviated, time: .shortened) } ?? u.since) · \((u.forNonce ?? "").isEmpty ? "every session" : "one session") · \(u.id.prefix(8))")
-                .font(.footnote).foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 3) {
+              HStack(spacing: 6) {
+                Text(u.store).font(.headline)
+                StatusPill(text: (u.forNonce ?? "").isEmpty ? "Every session" : "One session", color: (u.forNonce ?? "").isEmpty ? .orange : .blue)
+              }
+              HStack(spacing: 12) {
+                Label(u.since.isoDate.map { $0.formatted(date: .abbreviated, time: .shortened) } ?? u.since, systemImage: "clock")
+                Text(u.id.prefix(8)).monospaced()
+              }
+              .font(.footnote).foregroundStyle(.secondary)
             }
             Spacer()
             PendingButton(key: "store:" + u.store, title: "Lock", role: .destructive) { await lock(u) }
@@ -35,7 +41,7 @@ struct StoresView: View {
           }
         }
       } header: { Text("Open unlocks") } footer: {
-        Text("Every unlock the core holds open, signed by the core with this page's nonce. A store's secrets leave the core's memory when its last unlock is locked.")
+        Text("From the core's signed list.")
       }
     }
     .overlay { if !model.stores.loaded && model.stores.error == nil { ProgressView("Loading stores…") } }
@@ -50,7 +56,7 @@ struct StoresView: View {
       Button("Create") { Task { await create() } }.accessibilityIdentifier("store-create")
       Button("Cancel", role: .cancel) {}
     } message: {
-      Text("An empty store that is NOT sensitive (you can mark it later, never back). The setup session writes its values.")
+      Text("Empty and not sensitive.")
     }
     .confirmationDialog("Mark \(markAsk ?? "") sensitive?", isPresented: Binding(get: { markAsk != nil }, set: { if !$0 { markAsk = nil } }), titleVisibility: .visible) {
       Button("Mark sensitive", role: .destructive) { if let n = markAsk { Task { await mark(n) } } }.accessibilityIdentifier("mark-confirm")
@@ -99,8 +105,15 @@ private struct StoreRow: View {
           if s.sensitive { StatusPill(text: "Sensitive", color: .red).accessibilityIdentifier("sensitive-\(s.name)") }
           StatusPill(text: s.unlocked ? "Unlocked" : "Locked", color: s.unlocked ? .blue : .secondary)
         }
-        Text([s.empty ? "empty, written by the setup session" : nil, harness ? "brought by its harness" : nil, keys.map { $0.isEmpty ? "no keys" : $0.joined(separator: ", ") }].compactMap { $0 }.joined(separator: " · "))
-          .font(.footnote).foregroundStyle(.secondary).lineLimit(3)
+        if s.empty || harness {
+          HStack(spacing: 6) {
+            if s.empty { StatusPill(text: "Empty") }
+            if harness { StatusPill(text: "Harness", color: .blue) }
+          }
+        }
+        if let keys, !keys.isEmpty {
+          Text(keys.joined(separator: ", ")).font(.footnote.monospaced()).foregroundStyle(.secondary).lineLimit(3)
+        }
       }
       Spacer()
       if let p = model.pending["store:" + s.name] {

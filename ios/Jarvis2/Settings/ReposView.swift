@@ -11,10 +11,10 @@ struct ReposView: View {
   var body: some View {
     List {
       Section {
-        if model.repos.isEmpty { Text("No repos yet.").foregroundStyle(.secondary).accessibilityIdentifier("repos-none") }
+        if model.repos.isEmpty { Text("No repos").foregroundStyle(.secondary).accessibilityIdentifier("repos-none") }
         ForEach(model.repos) { x in RepoRow(x: x) }
       } footer: {
-        Text("A session that includes a repo's store clones, pulls and pushes the repo over SSH.")
+        Text("A session with a repo's store can clone, pull and push it.")
       }
     }
     .navigationTitle("Repos")
@@ -42,9 +42,13 @@ private struct RepoRow: View {
           if sensitive { StatusPill(text: "Sensitive", color: .red) }
           if missing { StatusPill(text: "No key", color: .orange) }
         }
-        Text(missing ? "The store \(x.store) isn't in the core: make the key again." : "Deploy key in \(x.store)\(x.fingerprint.map { " · " + $0 } ?? "")")
-          .font(.footnote).foregroundStyle(.secondary)
-          .accessibilityIdentifier("repo-key-\(x.name)")
+        VStack(alignment: .leading, spacing: 1) {
+          LabeledContent(missing ? "Store missing" : "Key store") { Text(x.store).monospaced() }
+          if !missing, let f = x.fingerprint { Text(f).monospaced().lineLimit(1).truncationMode(.middle) }
+        }
+        .font(.footnote).foregroundStyle(.secondary)
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("repo-key-\(x.name)")
       }
       Spacer()
       if missing {
@@ -92,7 +96,7 @@ struct AddRepoView: View {
           .accessibilityIdentifier("repo-url")
         Button("Add", systemImage: "faceid", action: addTyped).disabled(typed.isEmpty).accessibilityIdentifier("repo-add-go")
       } header: { Text("Type it") } footer: {
-        Text("Adding asks for Face ID: the core uses the GitHub token in the store github-deploy-keys for that one request.")
+        Text("Adding asks for Face ID.")
       }
       Section {
         if let error { ErrorRow(text: error); Button("Try again") { Task { await load(fresh: true) } } }
@@ -108,13 +112,18 @@ struct AddRepoView: View {
                 if r.archived { StatusPill(text: "archived") }
                 if isAdded { StatusPill(text: "added", color: .green) }
               }
-              Text([r.description, r.language, r.pushedAt.map { "pushed " + Fmt.ago($0) }].compactMap { $0 }.joined(separator: " · ")).font(.footnote).foregroundStyle(Color.secondary).lineLimit(1)
+              if let d = r.description { Text(d).font(.footnote).foregroundStyle(Color.secondary).lineLimit(1) }
+              HStack(spacing: 12) {
+                if let l = r.language { Text(l) }
+                if let p = r.pushedAt { Label(Fmt.ago(p), systemImage: "arrow.up.circle") }
+              }
+              .font(.footnote).foregroundStyle(Color.secondary)
             }
           }
           .disabled(isAdded)
           .accessibilityIdentifier("repo-item-\(r.fullName)")
         }
-        if let repos, repos.isEmpty == false, shown.isEmpty { Text("No match.").foregroundStyle(.secondary) }
+        if let repos, repos.isEmpty == false, shown.isEmpty { Text("No match").foregroundStyle(.secondary) }
       } header: { Text("Your GitHub repos") }
     }
     .searchable(text: $query, prompt: "Search your GitHub repos")
