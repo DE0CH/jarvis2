@@ -338,11 +338,11 @@ Anything that needs the phone's Face ID and is asked for somewhere other than th
 web page or the setup session (Claude) — waits in the app's **Inbox** tab (a badge counts it; no push, no Discord).
 A caller calls an **intent endpoint** on the router (`…/requests/repo/add`, `repo/remove`, `grant`, `unlock`; a
 session also `add-store`) with the intent's arguments and its own explanation. The router keeps the request
-(persisted, deduplicated by kind + arguments, gone after 7 days, at most 20 per caller) with **who called**, worked out
+(persisted, deduplicated by kind + arguments, gone after 10 minutes, at most 20 per caller) with **who called**, worked out
 from the credential the call carried — the machine key (a session), the setup key (Claude), Deyao's Access login
 (the web page, or the app when its device token is sent) — never from what the caller says about itself, and the
 exact call it made. The router's own approvals (new session, resume on the latest image, add a store) are listed in
-the same Inbox with their caller and call recorded when they were made.
+the same Inbox with their caller and call recorded when they were made, and also go after 10 minutes (rejected like a Deny).
 
 Opening one shows the app's review page for it (the same review stop the app's own buttons use) with three
 read-only fields on top, in **decreasing trust and increasing level of explanation**:

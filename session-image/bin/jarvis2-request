@@ -18,7 +18,7 @@ this session as the caller, from the machine's key) and the reason given here, a
   jarvis2-request list              this session's requests still waiting
 
 A session may ask only for itself (grant, unlock, add-store), for a repo to be added, and propose new sessions; --why is required (plain
-text, at most 600 characters, 8 lines). Nothing happens until Deyao allows it; a request waits at most 7 days.
+text, at most 600 characters, 8 lines). Nothing happens until Deyao allows it; a request goes after 10 minutes.
 Goes through the machine's local proxy ($JARVIS_URL, machine/apiproxy.go), which signs it with the machine key.
 """
 import json, os, subprocess, sys, urllib.error, urllib.request

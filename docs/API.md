@@ -169,7 +169,7 @@ kind of caller; the router records the caller from the credential (never from th
 `explanation`: the caller's reason, required from a session and the setup session (plain text; control and format
 characters dropped; ≤ 600 characters, ≤ 8 lines; 400 otherwise). Answer `{id, duplicate, expires}`: the same kind and
 arguments already pending answer that request (`duplicate: true`); 400 for bad arguments, 403 for what this caller may
-not ask; at most 20 pending per caller. A request goes after 7 days, when its session is destroyed, when it is done
+not ask; at most 20 pending per caller. A request goes after 10 minutes, when its session is destroyed, when it is done
 (a repo request when the core's deploy-key answer for that repo comes back by any path; a grant request when a grant
 for that feature is stored), or on Deny.
 

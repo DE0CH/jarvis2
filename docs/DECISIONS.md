@@ -282,7 +282,8 @@ shouldnt unlock the whole infra [store] for that one task."
     have no push access to any repo: the old per-repo PATs (`jarvis2-sessions-*-push`) are deleted and their store
     backups removed (delete markers; the versions stay in the versioned bucket).
 67. **Requests (the Inbox), Claude's choices** (Deyao, 2026-10-11 asked for the Inbox and the three fields; the rest is
-    Claude's): a request waits **7 days** (Deyao may be away for days; then it goes without a trace), at most **20
+    Claude's): a request, and an approval shown in the Inbox, goes after **10 minutes** (Deyao, 2026-10-12; an expired
+    approval is rejected like a Deny, and the caller asks again), at most **20
     pending per caller** (a looping session can't flood the Inbox), and the same kind + arguments pending already
     answer that request instead of a second one (the first reason is kept). **A session may ask only for itself**
     (a grant, an unlock, a store) **and for a repo to be added** — harmless: the key goes into a new store of its own,

@@ -43,6 +43,7 @@ func (r *Router) startFeatures() {
 	go r.archiveLoop()  // archive.go: restore files tidied
 	go r.budgetLoop()   // budget.go: the Fly budget cap
 	go r.uploadsLoop()  // uploads.go: stale attachments
+	go r.inboxLoop()    // inbox.go: requests and approvals go after 10 min
 	go r.tasksLoop()    // tasks.go: daily schedules, runs, pausing finished task lines
 	go r.inputLogLoop() // vouch.go: the core's input log onto the volume
 	go r.resumeInterrupted()

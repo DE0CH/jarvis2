@@ -73,11 +73,11 @@ S="python3 infra/setup.py"
 $S identity | grep -q '^set up' || { echo "the core is empty: Reset in the app first"; exit 1; }
 # not sensitive: created first (a store the core never created is sensitive); a store that exists is kept
 have="$($S stores | cut -d' ' -f1)"
-for n in default openrouter claude tunnel; do
+for n in default openrouter claude tunnel shopping; do
   grep -qx "$n" <<<"$have" || $S create "$n"
 done
 # Deyao's own stores, by kind, from the layout file (key names only; private, in claude-env): each line is
-# "<store> KEY…", values from this session's env. Only `default` is created (not sensitive); the rest are sensitive.
+# "<store> KEY…", values from this session's env. Only `default` and `shopping` are created (not sensitive); the rest are sensitive.
 LAYOUT="${STORES_LAYOUT:-$HOME/workspace/claude-env/.claude/skills/jarvis2/stores.txt}"
 grep -v '^#' "$LAYOUT" | while read -r store keys; do
   [ -n "$store" ] || continue

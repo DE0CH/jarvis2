@@ -243,3 +243,33 @@ func TestSetupSessionsAndRequests(t *testing.T) {
 		t.Fatalf("%+v", it)
 	}
 }
+
+func TestInboxItemsGoAfterTenMinutes(t *testing.T) {
+	r := newTestRouter(t)
+	addSession(r, "sA", "paused", "", false)
+	addSession(r, "sN", "pending", "", false)
+	r.addApproval(&Approval{Kind: "add-store", Session: "sA"})
+	r.addApproval(&Approval{Kind: "new-session", Session: "sN"})
+	q, _, err := r.FileRequest("unlock", RequestParams{Session: "sA"}, "need it", Origin{Caller: Caller{Kind: "session", Session: "sA"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := q.Expires.Sub(q.Created); got != 10*time.Minute {
+		t.Fatalf("request lives %s", got)
+	}
+	if len(r.Inbox()) != 3 {
+		t.Fatalf("%+v", r.Inbox())
+	}
+	// eleven minutes on: every item is gone; the new session's approval went like a Deny (no session left)
+	later := time.Now().UTC().Add(11 * time.Minute)
+	r.expireApprovals(later)
+	r.st.Do(func(d *persisted) {
+		pruneRequests(d, later)
+		if len(d.Approvals) != 0 || len(d.Inbox) != 0 || d.Sessions["sN"] != nil || d.Sessions["sA"] == nil {
+			t.Fatalf("approvals %d inbox %d sN %v", len(d.Approvals), len(d.Inbox), d.Sessions["sN"])
+		}
+	})
+	if _, _, err := r.Respond("nope", "sig"); err == nil || !strings.Contains(err.Error(), "expired") {
+		t.Fatal(err)
+	}
+}

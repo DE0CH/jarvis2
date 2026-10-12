@@ -371,9 +371,10 @@ func (r *Router) withHarnessStores(chosen, harness []string) ([]string, error) {
 
 func (r *Router) Respond(id, signature string) (*Doc, string, error) {
 	var a *Approval
+	r.expireApprovals(time.Now().UTC()) // an approval answered after inboxTTL is gone: the phone's answer comes too late
 	r.st.Do(func(d *persisted) { a = d.Approvals[id] })
 	if a == nil {
-		return nil, "", fmt.Errorf("no such approval")
+		return nil, "", fmt.Errorf("no such approval (answered, denied or expired)")
 	}
 	in := map[string]any{"challenge": a.Challenge, "signature": signature}
 	if a.Kind == "add-store" {

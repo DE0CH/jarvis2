@@ -16,6 +16,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"sort"
 	"strings"
@@ -25,9 +26,9 @@ import (
 )
 
 const (
-	requestTTL        = 7 * 24 * time.Hour // Deyao may be away for days; then it goes
-	requestPerCaller  = 20                 // pending requests one caller may have
-	explanationMax    = 600                // characters
+	inboxTTL          = 10 * time.Minute // Deyao, 2026-10-12: anything in the Inbox (request or approval) goes after 10 min
+	requestPerCaller  = 20               // pending requests one caller may have
+	explanationMax    = 600              // characters
 	explanationLines  = 8
 	originRemember    = 10 * time.Minute // a caller noted before its approval is made (flows run in goroutines)
 	requestKindRepo   = "repo-key"
@@ -215,7 +216,7 @@ func (r *Router) FileRequest(kind string, p RequestParams, explanation string, o
 		return nil, false, &badRequest{err.Error()}
 	}
 	now := time.Now().UTC()
-	q := &InboxRequest{ID: "q" + randID(), Kind: kind, Params: p, Origin: o, Explanation: explanation, Created: now, Expires: now.Add(requestTTL), Key: requestKey(kind, p)}
+	q := &InboxRequest{ID: "q" + randID(), Kind: kind, Params: p, Origin: o, Explanation: explanation, Created: now, Expires: now.Add(inboxTTL), Key: requestKey(kind, p)}
 	var dup *InboxRequest
 	r.st.Do(func(d *persisted) {
 		pruneRequests(d, now)
@@ -373,6 +374,7 @@ type InboxItem struct {
 func (r *Router) Inbox() []InboxItem {
 	out := []InboxItem{}
 	now := time.Now().UTC()
+	r.expireApprovals(now)
 	r.st.Do(func(d *persisted) {
 		pruneRequests(d, now)
 		for _, q := range d.Inbox {
@@ -438,6 +440,33 @@ func approvalItem(d *persisted, a *Approval) InboxItem {
 	}
 	it.Open = map[string]any{"kind": "approval", "options": map[string]any{"approvalId": a.ID, "inboxId": a.ID}}
 	return it
+}
+
+// expireApprovals: an approval older than inboxTTL is rejected, exactly as Deny would (a new session disappears, a
+// resume stays paused, an add-store is dropped); the caller asks again if it still needs it.
+func (r *Router) expireApprovals(now time.Time) {
+	var old []string
+	r.st.Do(func(d *persisted) {
+		for id, a := range d.Approvals {
+			if !now.Before(a.Created.Add(inboxTTL)) {
+				old = append(old, id)
+			}
+		}
+	})
+	for _, id := range old {
+		if err := r.Reject(id); err == nil {
+			log.Printf("inbox: approval %s expired after %s", id, inboxTTL)
+		}
+	}
+}
+
+func (r *Router) inboxLoop() {
+	for {
+		time.Sleep(time.Minute)
+		now := time.Now().UTC()
+		r.expireApprovals(now)
+		r.st.Do(func(d *persisted) { pruneRequests(d, now) })
+	}
 }
 
 // Deny: drop a request; for an approval, reject it (a new session disappears, a resume stays paused)

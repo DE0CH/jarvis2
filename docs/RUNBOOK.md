@@ -131,7 +131,7 @@ Claude never adds a repo or allows anything itself: it files a request and Deyao
   `jarvis2-machine await-store STORE`, which pulls the store into `~/.secrets` once the approval lands in the cert
   (log `~/.jarvis2-await-STORE.log`); before it did, an approved store stayed unpulled (2026-10-12).
 
-The reason is required, plain text, ≤ 600 characters. A request waits at most 7 days.
+The reason is required, plain text, ≤ 600 characters. A request (and an approval in the Inbox) goes after 10 minutes (Deyao, 2026-10-12): ask again if it lapsed.
 
 ### Emptying the core without its kit
 
