@@ -62,7 +62,7 @@ struct Harness: Identifiable, Equatable {
   ]
   /// what an approval page says for a signed harness (a task line names its template)
   static func name(_ h: String) -> String {
-    if h.hasPrefix("task:") { return "Task script “\(h.dropFirst(5))” (runs the template, no agent)" }
+    if h.hasPrefix("task:") { return "Task script · \(h.dropFirst(5))" }
     return all.first { $0.id == h }?.title ?? h
   }
 }

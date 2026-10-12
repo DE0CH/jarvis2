@@ -15,7 +15,7 @@ extension AppModel {
   func resume(_ id: String) async {
     await exclusive("s:" + id) {
       let t = session(id)?.title ?? id
-      guard let prompt = await ask("Resume “\(t)”?", "Continues the same conversation on a new machine with the same image, with the files as they were when it was paused. A prompt (optional) is typed in once it is back; the iPhone approves it.",
+      guard let prompt = await ask("Resume “\(t)”?", "Same conversation and files on a new machine.",
                                    action: "Resume", input: ("Prompt (optional)", nil)) else { return }
       pend("s:" + id, "Resuming…")
       defer { pend("s:" + id, nil) }
@@ -38,7 +38,7 @@ extension AppModel {
   func resumeLatest(_ id: String) async {
     await exclusive("s:" + id) {
       let t = session(id)?.title ?? id
-      guard await confirm("Resume “\(t)” with the latest image?", "Starts the newest session image. The old machine is burned (it can never be resumed as it was), and the iPhone approves the new one.", action: "Resume with latest image") else { return }
+      guard await confirm("Resume “\(t)” with the latest image?", "The old machine can never come back as it was.", action: "Resume with latest image") else { return }
       pend("s:" + id, "Resuming…")
       defer { pend("s:" + id, nil) }
       do {
@@ -48,34 +48,32 @@ extension AppModel {
           found = m.approvals.first { $0.kind == "resume-upgrade" && $0.session == id }
           return found != nil || m.session(id)?.state == "failed"
         }
-        if let a = found { present(.approval(id: a.id)) } else { say("No approval yet: it will show in the Inbox.") }
+        if let a = found { present(.approval(id: a.id)) } else { say("Approve it in the Inbox") }
       } catch { fail(error) }
     }
   }
 
   /// what a destroy would lose (GET …/changes: uncommitted and unpushed work), in words
+  /// what a destroy would lose, one line per fact: "Claude is working", "repo · 2 uncommitted · 1 unpushed"
   private func changesText(_ id: String) async -> String {
-    var msg = ""
+    var lines: [String] = []
     do {
       let c = try await RouterClient.shared.get("api/sessions/\(id)/changes")
       if c["checked"].bool == true {
         let dirty = c["repos"].array.filter { ($0["uncommitted"].int ?? 0) > 0 || ($0["unpushed"].int ?? 0) != 0 }
-        if c["status"].string == "busy" { msg += "Claude is still working in this session.\n\n" }
-        if !dirty.isEmpty {
-          msg += "Unsaved work will be lost:\n" + dirty.map { r in
-            var parts: [String] = []
-            if let u = r["uncommitted"].int, u > 0 { parts.append("\(u) uncommitted file(s)") }
-            if let p = r["unpushed"].int, p > 0 { parts.append("\(p) unpushed commit(s)") } else if r["unpushed"].int == -1 { parts.append("branch has no upstream (nothing pushed)") }
-            return "• \(r["name"].string ?? "?"): " + parts.joined(separator: ", ")
-          }.joined(separator: "\n") + "\n"
-        } else if c["status"].string != "busy" {
-          msg += "No uncommitted or unpushed changes found\(c["paused"].bool == true ? " (as of when it was paused)" : "").\n"
+        if c["status"].string == "busy" { lines.append("Claude is working") }
+        for r in dirty {
+          var parts = [r["name"].string ?? "?"]
+          if let u = r["uncommitted"].int, u > 0 { parts.append("\(u) uncommitted") }
+          if let p = r["unpushed"].int, p > 0 { parts.append("\(p) unpushed") } else if r["unpushed"].int == -1 { parts.append("no upstream") }
+          lines.append(parts.joined(separator: " · "))
         }
+        if dirty.isEmpty && c["status"].string != "busy" { lines.append(c["paused"].bool == true ? "No unsaved changes (when paused)" : "No unsaved changes") }
       } else {
-        msg += "Could not check for unsaved changes (\(c["reason"].string ?? "unknown")).\n"
+        lines.append("Changes not checked: " + (c["reason"].string ?? "unknown"))
       }
-    } catch { msg += "Could not check for unsaved changes (\(errText(error))).\n" }
-    return msg
+    } catch { lines.append("Changes not checked: " + errText(error)) }
+    return lines.joined(separator: "\n")
   }
 
   /// Destroy: what would be lost first, then the router pauses (final snapshot), archives and burns the line; a
@@ -84,7 +82,7 @@ extension AppModel {
     await exclusive("s:" + id) {
       pend("s:" + id, "Checking…")
       let t = session(id)?.title ?? id
-      let msg = await changesText(id) + "\nThe transcripts and ~/artifacts are archived to the Storage Box first; then the machine is burned and the session can never be resumed. It moves to Previous. Your repos on GitHub are not affected."
+      let msg = await changesText(id) + "\n\nArchived first, then gone for good."
       pend("s:" + id, nil)
       guard await confirm("Destroy “\(t)”?", msg, action: "Destroy session", destructive: true) else { return }
       pend("s:" + id, "Destroying…")
@@ -96,7 +94,7 @@ extension AppModel {
           return x.state != "destroying" && (x.error?.hasPrefix("archive:") ?? false)
         }
         if let x = session(id), let e = x.error, e.hasPrefix("archive:") {
-          if await confirm("Archiving to the Storage Box failed", e + "\n\nDestroy anyway? The transcript and artifacts will be lost.", action: "Destroy anyway", destructive: true) {
+          if await confirm("Archiving to the Storage Box failed", e, action: "Destroy anyway", destructive: true) {
             try await RouterClient.shared.call("POST", "api/sessions/\(id)/destroy?force=1")
             await refreshUntil(10 * 60) { $0.session(id) == nil }
           }
@@ -111,8 +109,8 @@ extension AppModel {
   func switchMode(_ m: Session, to mode: String) async {
     let bypass = mode == "bypass"
     let detail = bypass
-      ? "No permission prompts at all (--dangerously-skip-permissions). " + (m.state == "paused" ? "The iPhone approves it at the next resume." : "Claude relaunches in the new mode; the iPhone allows it with a fresh grant.")
-      : "Auto-approves safe actions; the permission classifier gates the rest." + (m.state == "paused" ? " Applies at the next resume." : "")
+      ? "No permission prompts at all."
+      : "The permission classifier gates risky actions."
     guard await confirm("Switch “\(m.title)” to \(mode)?", detail, action: "Switch", destructive: bypass) else { return }
     await runModeSwitch(m, mode)
   }
@@ -122,7 +120,7 @@ extension AppModel {
       defer { pend("s:" + m.id, nil) }
       do {
         let j = try await RouterClient.shared.call("POST", "api/sessions/\(m.id)/permission-mode", ["mode": mode])
-        if j["nextStart"].bool == true { say("Switches to \(mode) at the next resume."); await refresh(); return }
+        if j["nextStart"].bool == true { say("Applies at the next resume"); await refresh(); return }
         await refreshUntil(120) { $0.session(m.id).map { $0.permissionMode == mode && $0.serverBusy == nil } ?? true }
       } catch let e as RouterError where e.status == 403 && e.body["needsGrant"].text != nil {
         let h = e.body["needsGrant"].text ?? "terminal"
@@ -145,7 +143,7 @@ extension AppModel {
 
   func copy(_ text: String, _ what: String) {
     UIPasteboard.general.string = text
-    say("\(what) copied")
+    say("Copied")
   }
 
   /// the grant review for this session (a feature, 10 minutes or a standing rule); `done` once it closes
@@ -153,7 +151,7 @@ extension AppModel {
     let g = GrantAsk(session: session, label: label, holder: holder, kind: rule ? "rule" : "grant", minutes: min(10, max(1, minutes)),
                      until: rule ? (until ?? .now.addingTimeInterval(Double(GrantAsk.ruleDays) * 86400)) : nil)
     present(.grant(g)) { [weak self] ok in
-      if ok { self?.say("Signed: the grant is saved.") }
+      if ok { self?.say("Grant saved") }
       done?(ok)
     }
   }
@@ -162,8 +160,7 @@ extension AppModel {
   /// a new line whose first machine restores the archived snapshot; the iPhone approves it like a new session
   func restore(_ r: Rec) async {
     await exclusive("r:" + r.id) {
-      let again = r.restoredCount > 0 ? " It was already restored \(r.lastRestored.map(Fmt.ago) ?? "before"): this starts another copy." : ""
-      guard await confirm("Restore “\(r.title)”?", "Starts a new session with the same stores, harness, model and size, whose first machine restores the archived snapshot (files and conversation). The iPhone approves it like a new session.\(again)", action: "Restore") else { return }
+      guard await confirm("Restore “\(r.title)”?", r.restoredCount > 0 ? "Restored before: this starts another copy." : "A new session from the archived snapshot.", action: "Restore") else { return }
       pend("r:" + r.id, "Restoring…")
       defer { pend("r:" + r.id, nil) }
       do {
@@ -174,7 +171,7 @@ extension AppModel {
           found = m.approvals.first { $0.session == sid }
           return found != nil || m.sessions.contains { $0.id == sid && $0.state != "approval" }
         }
-        if let a = found { tab = .sessions; present(.approval(id: a.id)) } else { say("Restore requested: approve it in the Inbox.") }
+        if let a = found { tab = .sessions; present(.approval(id: a.id)) } else { say("Approve it in the Inbox") }
         settle(120)
       } catch { fail(error) }
       await loadRecords()
@@ -185,17 +182,17 @@ extension AppModel {
   func removeRecord(_ r: Rec, purge: Bool) async {
     await exclusive("r:" + r.id) {
       if purge {
-        let msg = "Deletes its archive on the Storage Box (transcripts, artifacts, the signed snapshot and the Discord export) and takes it off this list. It can't be restored afterwards. Type the session's title to confirm."
+        let msg = "Its archive goes too. Type the title to confirm."
         guard await ask("Delete “\(r.title)” permanently?", msg, action: "Delete permanently", destructive: true, input: (r.title, r.title)) != nil else { return }
       } else {
-        guard await confirm("Remove “\(r.title)” from the list?", "Its archive stays on the Storage Box; only the list entry goes.", action: "Remove", destructive: true) else { return }
+        guard await confirm("Remove “\(r.title)” from the list?", "Its archive stays.", action: "Remove", destructive: true) else { return }
       }
       pend("r:" + r.id, purge ? "Deleting…" : "Removing…")
       defer { pend("r:" + r.id, nil) }
       do {
         let id = r.id.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? r.id
         try await RouterClient.shared.call("DELETE", "api/records/\(id)\(purge ? "?purge=1" : "")")
-        say("\(purge ? "Deleted" : "Removed") “\(r.title)”.")
+        say(purge ? "Deleted" : "Removed")
       } catch { fail(error) }
       await loadRecords()
     }
@@ -216,7 +213,7 @@ extension AppModel {
       found = m.approvals.first { $0.session == session && (kind == nil || $0.kind == kind) }
       return found != nil
     }
-    if let a = found { present(.approval(id: a.id)) } else { say("No approval yet: it will show in the Inbox.") }
+    if let a = found { present(.approval(id: a.id)) } else { say("Approve it in the Inbox") }
   }
   /// reload tasks until `pred` holds (two-phase)
   func pendTasks(_ key: String, _ label: String, _ seconds: Double = 20, action: () async throws -> Void, until pred: (TasksOverview) -> Bool) async {
