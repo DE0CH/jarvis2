@@ -323,7 +323,7 @@ struct CheckRow<Content: View>: View {
       HStack {
         content()
         Spacer()
-        Image(systemName: "checkmark").foregroundStyle(.tint).opacity(on ? 1 : 0)
+        Image(systemName: "checkmark").foregroundStyle(.tint).opacity(on ? 1 : 0).accessibilityHidden(true)  // the row carries .isSelected
       }
       .contentShape(.rect)
     }

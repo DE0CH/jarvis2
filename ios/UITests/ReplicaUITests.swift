@@ -164,6 +164,7 @@ final class ReplicaUITests: JarvisUITestCase {
 
     // ---- new session: one page, its stores (and the harness's) unlocked with Face ID, running on Fly ----
     try must(openNewSession())
+    scrolledTo(el("secure-store-rh-plain"), max: 4)
     if wait(el("secure-store-rh-plain"), 30, "rh-plain offered") { el("secure-store-rh-plain").tap() }
     XCTAssertFalse(el("secure-store-claude").exists, "the harness's own store isn't offered as a pick")
     // an image from Photos (replica.yml added one): Start uploads it and signs its sha256 + size with the session
@@ -340,6 +341,7 @@ final class ReplicaUITests: JarvisUITestCase {
 
     // ---- a session stuck at boot (its store locked again right after Start) is destroyed at once ----
     if openNewSession() {
+      scrolledTo(el("secure-store-rh-secret"), max: 4)  // below the Images section
       if wait(el("secure-store-rh-secret"), 30, "rh-secret offered") { el("secure-store-rh-secret").tap() }
       faceIDMatches(90)
       el("secure-create").tap()
