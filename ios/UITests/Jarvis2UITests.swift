@@ -389,7 +389,10 @@ final class Jarvis2UITests: JarvisUITestCase {
           shot("task-page")
           if el("td-run").waitForExistence(timeout: 60) {
             el("td-run").tap()
-            if wait(prefixed("td-run-"), 30, "a run listed") {
+            // the runs are listed below the task's rows: scroll down to them while the run is queued
+            let firstRun = prefixed("td-run-"), until = Date().addingTimeInterval(45)
+            while !firstRun.exists && Date() < until { scrolledTo(firstRun, max: 2); if !firstRun.exists { sleep(2) } }
+            if wait(firstRun, 5, "a run listed") {
               prefixed("td-run-").tap()
               if wait(el("tr-stop"), 20, "run page") {
                 shot("task-run")
