@@ -62,7 +62,7 @@ final class ReplicaUITests: JarvisUITestCase {
   }
 
   func openNewSession() -> Bool {
-    tab("Sessions")
+    sessionsList()
     guard wait(el("newBtn"), 30, "sessions") else { return false }
     el("newBtn").tap()
     let ok = arrives(el("secure-create"), 60, "the New session page")
@@ -192,7 +192,7 @@ final class ReplicaUITests: JarvisUITestCase {
     relaunch()
     signInIfAsked(10)
     XCTAssertFalse(el("setup-state-empty").waitForExistence(timeout: 10), "no Reset or recover after a relaunch")
-    tab("Sessions")
+    sessionsList()
     try must(wait(el("srow-\(sid)"), 90, "the running session after a relaunch"))
     shot("after-relaunch")
     el("srow-\(sid)").tap()
@@ -242,7 +242,7 @@ final class ReplicaUITests: JarvisUITestCase {
     if inboxReview("session-allow") { inboxAllowed("session", button: "secure-grant-allow") }
 
     // ---- grants: a 5-minute scheduler grant, then forget it ----
-    tab("Sessions")
+    sessionsList()
     if wait(el("srow-\(sid)"), 30, "the session") { el("srow-\(sid)").tap() }
     if wait(el("grants-\(sid)"), 30, "Grants") {
       el("grants-\(sid)").tap()
@@ -324,7 +324,7 @@ final class ReplicaUITests: JarvisUITestCase {
       openStores()
       if wait(el("lock-rh-secret"), 30, "rh-secret unlocked by the new session") { el("lock-rh-secret").tap(); _ = gone(el("lock-rh-secret"), 30) }
       back()
-      tab("Sessions")
+      sessionsList()
       sleep(150)
       shot("stuck-session")
       let others = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH 'srow-' AND identifier != %@", "srow-" + sid))
@@ -346,7 +346,7 @@ final class ReplicaUITests: JarvisUITestCase {
     }
 
     // ---- destroy the running session ----
-    tab("Sessions")
+    sessionsList()
     if wait(el("srow-\(sid)"), 30, "the running session") {
       el("srow-\(sid)").tap()
       if (scrolledTo(el("destroy-\(sid)")) || true), wait(el("destroy-\(sid)"), 20, "Destroy") {

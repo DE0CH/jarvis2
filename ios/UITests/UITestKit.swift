@@ -95,6 +95,15 @@ class JarvisUITestCase: XCTestCase {
     let b = app.tabBars.buttons[name]
     if b.exists { b.tap(); usleep(600_000) }
   }
+  /// the Sessions tab at its list: switching tabs keeps each tab's place (as on iOS), so a session page left open there is
+  /// backed out of
+  func sessionsList() {
+    tab("Sessions")
+    for _ in 0..<4 where !el("newBtn").waitForExistence(timeout: 2) {
+      let b = app.navigationBars.buttons["BackButton"].firstMatch
+      if b.exists { b.tap() } else { back() }
+    }
+  }
   /// back one screen in the current navigation stack
   func back() {
     let b = app.navigationBars.buttons.element(boundBy: 0)
