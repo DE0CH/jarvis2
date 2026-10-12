@@ -338,7 +338,7 @@ func prepare() error {
 		os.Remove(filepath.Join(home, ".claude", ".first-prompt-sent")) // the supervisor types the approved resume prompt
 	}
 	if firstMachine && len(v.Config.Attachments) > 0 {
-		env = append(env, fetchAttachments(c, v.Config.Attachments)...) // attachments.go: hash-checked against the cert
+		env = append(env, fetchAttachments(c, coreKey, v.Config.Attachments)...) // attachments.go: hash-checked against the cert
 	}
 	log.Printf("starting the harness")
 	return syscall.Exec(jarvis1, []string{jarvis1}, env)

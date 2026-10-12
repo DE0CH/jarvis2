@@ -473,3 +473,18 @@ entry points only ("if I decide to break it later then it's fine").
     - *Router compatibility*: while the running (held) core is the one from before R2, the router still reads its
       `/input-log`, its `/core-cert`, its `/carry/forward`, and its waiting `/start` and `/kill`. These fallbacks go
       when that core is released.
+
+## Image attachments on New session, 2026-10-12
+
+Deyao asked for images attached with the first prompt on New session (app and web), reaching the machine as vouched
+inputs under the input guard. The router's uploads and the config's `attachments` (77, 78) already existed; these
+fill the gaps (decided while Deyao was away, ~/artifacts/away/decisions.md).
+
+94. **Each attachment is in the input log**: the machine's listing (`GET /m/attachments`) carries the core's attestation
+    of each file as it is on the volume (`/attest` machine, input `attachment`, origin `cert`; every core in use has
+    `/attest`), and the machine takes a file only when its bytes hash to the cert's sha256 + size AND the attestation
+    names that hash, this machine and `attachment` (machine/attachments.go). One file failing refuses them all and the
+    session starts without them (as before). A swapped file is attested under its own hash, so the swap shows in the log.
+95. **The web page takes images only** (PNG, JPEG, GIF, WebP, as they are: no conversion in the browser), from a file
+    picker or pasted into the page, up to 20 per session, 25 MB each (the router's limits). It uploads them, then files
+    the request; the phone approves it in the Inbox.

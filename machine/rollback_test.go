@@ -3,10 +3,12 @@ package main
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -76,13 +78,21 @@ func TestApplyRollback(t *testing.T) {
 func TestFetchAttachments(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	key := newKey()
+	key, core := newKey(), newKey()
 	files := map[string]string{"photo 1.png": "PNG", "notes%.txt": "text"}
-	deleted := false
+	attest := map[string]*SignedDoc{}
+	for n, b := range files {
+		attest[n] = attestFor(core, "m1", "attachment", []byte(b))
+	}
+	deleted, listed := false, 0
+	var mu sync.Mutex
 	srv := fakeRouter(t, key, func(w http.ResponseWriter, req *http.Request, body []byte) {
+		mu.Lock()
+		defer mu.Unlock()
 		switch {
 		case req.Method == "GET" && req.URL.Path == "/m/attachments":
-			w.Write([]byte(`{"files":[{"name":"photo 1.png","isImage":true},{"name":"notes%.txt"}]}`))
+			listed++
+			json.NewEncoder(w).Encode(map[string]any{"files": []map[string]any{{"name": "photo 1.png", "isImage": true}, {"name": "notes%.txt"}}, "attest": attest})
 		case req.Method == "GET" && strings.HasPrefix(req.URL.Path, "/m/attachments/"):
 			b, ok := files[strings.TrimPrefix(req.URL.Path, "/m/attachments/")]
 			if !ok {
@@ -104,26 +114,50 @@ func TestFetchAttachments(t *testing.T) {
 	for n, b := range files {
 		refs = append(refs, AttachmentRef{Name: n, Sha256: hexSum(b), Size: int64(len(b))})
 	}
-	// a file other than the cert names: refused, nothing kept
+	refused := func(why string, r []AttachmentRef) {
+		t.Helper()
+		if env := fetchAttachments(c, core.pub(), r); env != nil {
+			t.Fatalf("%s: taken: %v", why, env)
+		}
+		if _, err := os.Stat(filepath.Join(home, attachStaging)); err == nil {
+			t.Fatalf("%s: a refused attachment was left on disk", why)
+		}
+		if deleted {
+			t.Fatalf("%s: the router's copy was dropped for a refused set", why)
+		}
+	}
+	// the router swapped a file: its bytes aren't the ones the cert names
 	bad := append([]AttachmentRef{}, refs...)
 	bad[0].Sha256 = hexSum("other bytes")
-	if env := fetchAttachments(c, bad); env != nil {
-		t.Fatalf("an attachment the cert doesn't name was taken: %v", env)
+	refused("a swapped file", bad)
+	bad = append([]AttachmentRef{}, refs...)
+	bad[1].Size++
+	refused("another size", bad)
+	// no attestation, an attestation for another machine, kind, input, or not by the core: not in the input log
+	mu.Lock()
+	saved := attest["notes%.txt"]
+	for _, a := range []*SignedDoc{nil, attestFor(core, "m2", "attachment", []byte("text")), attestFor(core, "m1", "wakeup", []byte("text")),
+		attestFor(core, "m1", "attachment", []byte("PNG")), attestFor(newKey(), "m1", "attachment", []byte("text"))} {
+		attest["notes%.txt"] = a
+		mu.Unlock()
+		refused("an attachment without the core's attestation", refs)
+		mu.Lock()
 	}
-	if _, err := os.Stat(filepath.Join(home, attachStaging)); err == nil {
-		t.Fatal("a refused attachment was left on disk")
-	}
-	env := fetchAttachments(c, refs)
+	attest["notes%.txt"] = saved
+	mu.Unlock()
+
+	env := fetchAttachments(c, core.pub(), refs)
 	for n, want := range files {
 		if b, err := os.ReadFile(filepath.Join(home, attachStaging, n)); err != nil || string(b) != want {
 			t.Fatalf("%s: %q %v", n, b, err)
 		}
 	}
-	if !deleted {
-		t.Fatal("the router's copy wasn't dropped")
+	if !deleted || listed == 0 {
+		t.Fatalf("the router's copy wasn't dropped (%v) or the listing wasn't read (%d)", deleted, listed)
 	}
 	joined := strings.Join(env, "\n")
-	if !strings.Contains(joined, "SESSION_ATTACH_DAV_BASE=file://"+home+"\n") || !strings.Contains(joined, "SESSION_ATTACH_DIR="+attachStaging) {
+	if !strings.Contains(joined, "SESSION_ATTACH_DAV_BASE=file://"+home+"\n") || !strings.Contains(joined, "SESSION_ATTACH_DIR="+attachStaging) ||
+		!strings.Contains(joined, `{"name":"photo 1.png","isImage":true}`) {
 		t.Fatalf("env %v", env)
 	}
 	for _, bad := range []string{"", ".", "..", "a/b", `a\b`} {

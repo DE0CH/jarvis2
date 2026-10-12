@@ -395,7 +395,7 @@ Deyao handing a feature a shell, and the session's own allow list is the session
 | The image | (a) the approval names `ghcr.io/de0ch/jarvis2-session` pinned by its linux/amd64 digest; certify refuses a machine whose Fly-reported digest differs. A resume runs the predecessor's digest. |
 | The entry point | the image (Fly config has no init/cmd, no files, mounts or services; only the core's token can create or change machines) |
 | The env | none needed: the core sets only `JARVIS2_CORE_KEY` and `JARVIS2_URL` (from its own deployment); the machine also throws away anything else at boot (keeps the image's own ENV, recorded at build, and Fly's `FLY_*`) |
-| Title, first prompt, model, repos, one-shot, API proxy, attachments (by sha256), a restore (machine + snapshot sha256), task parameters | (a) `Options.Config`, fixed for the line; the first prompt and attachments only for its first machine |
+| Title, first prompt, model, repos, one-shot, API proxy, attachments (by sha256), a restore (machine + snapshot sha256), task parameters | (a) `Options.Config`, fixed for the line; the first prompt and attachments only for its first machine; each attachment also carries the core's attestation (input log) and is taken only when its bytes match |
 | A resume's prompt, a rollback | (a) `Options.Once`: only the phone approves one; never carried over |
 | The predecessor's state (transcripts, workspace, artifacts, `~/artifacts/on-start`, `.claude` settings and hooks, the allow list, the line keys) | (b) the one snapshot the cert names, signed by the predecessor |
 | An archived snapshot (restore) | (a) its sha256 in the config, plus the old cert (core-signed) and its machine's signature |

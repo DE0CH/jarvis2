@@ -264,3 +264,105 @@ func TestResumeWithPromptAlwaysReachesThePhone(t *testing.T) {
 		}
 	})
 }
+
+// An image attached on New session: its sha256 and size go into the signed config, the app can read the staged bytes
+// back for the approval page, and the machine's listing carries the core's attestation of each file as it is now (the
+// input log): a file swapped after the phone signed is attested under its own hash, which the machine refuses
+// (machine/rollback_test.go TestFetchAttachments).
+func TestAnAttachmentIsSignedByHashAndAttestedIntoTheInputLog(t *testing.T) {
+	rg, vc := v2Rig(t)
+	r := rg.r
+	r.cfg.NoAccess = true
+	// a core after R2: no /input-log, so the router keeps the entries itself
+	cs := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		if req.URL.Path == "/input-log" {
+			writeJSON(w, 404, map[string]string{"error": "no such route"})
+			return
+		}
+		vc.ServeHTTP(w, req)
+	}))
+	t.Cleanup(cs.Close)
+	r.core = &CoreClient{base: cs.URL, http: http.DefaultClient}
+
+	photo := "\x89PNG the photo"
+	if code, out := appDo(t, r, "POST", "/api/uploads", photo, "x-upload-id", "upA", "x-upload-name", "IMG 1.png"); code != 200 {
+		t.Fatalf("%d %v", code, out)
+	}
+	code, out := appDo(t, r, "POST", "/api/sessions", `{"requestId":"rA","label":"look","prompt":"what is this?","harness":"claude",
+		"attachments":{"uploadId":"upA","files":[{"name":"IMG 1.png"}]}}`)
+	if code != 200 {
+		t.Fatalf("%d %v", code, out)
+	}
+	sid := out["id"].(string)
+	waitFor(t, "succession", func() bool { return vc.last("/succession") != nil })
+	var c SessionConfig
+	json.Unmarshal([]byte(vc.last("/succession")["options"].(map[string]any)["config"].(string)), &c)
+	sum := sha256.Sum256([]byte(photo))
+	want := hex.EncodeToString(sum[:])
+	if len(c.Attachments) != 1 || c.Attachments[0] != (AttachmentRef{Name: "IMG_1.png", Sha256: want, Size: int64(len(photo))}) || c.Prompt != "what is this?" {
+		t.Fatalf("signed config %+v", c)
+	}
+
+	// the app reads the staged bytes back (the approval page hashes them against the signed config)
+	h := r.Handler()
+	get := func(target string) *httptest.ResponseRecorder {
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, httptest.NewRequest("GET", target, nil))
+		return w
+	}
+	if w := get("/api/sessions/" + sid + "/attachments/IMG_1.png"); w.Code != 200 || w.Body.String() != photo {
+		t.Fatalf("app read: %d %q", w.Code, w.Body.String())
+	}
+	if w := get("/api/sessions/" + sid + "/attachments/other.png"); w.Code != 404 {
+		t.Fatalf("another name: %d", w.Code)
+	}
+	if w := get("/api/sessions/s1/attachments/IMG_1.png"); w.Code != 404 {
+		t.Fatalf("another session: %d", w.Code)
+	}
+
+	// the session's machine lists them with the core's attestation; the attestation is in the router's input log
+	r.st.Do(func(d *persisted) {
+		d.Sessions[sid].MachineID, d.Sessions[sid].State = "mA", "initialising"
+		d.Machines["mA"] = sid
+	})
+	mx := newTestMachine(r, "mA")
+	mh := r.MachineHandler()
+	listing := func() map[string]any {
+		t.Helper()
+		code, out := mx.do(t, mh, "GET", "/m/attachments", "")
+		if code != 200 {
+			t.Fatalf("%d %v", code, out)
+		}
+		return out
+	}
+	attested := func(out map[string]any) map[string]any {
+		t.Helper()
+		a, _ := out["attest"].(map[string]any)["IMG_1.png"].(map[string]any)
+		var e map[string]any
+		if a == nil || json.Unmarshal([]byte(a["payload"].(string)), &e) != nil {
+			t.Fatalf("no attestation in %v", out)
+		}
+		return e
+	}
+	e := attested(listing())
+	if e["machine"] != "mA" || e["input"] != "attachment" || e["sha256"] != want {
+		t.Fatalf("attestation %v", e)
+	}
+	if at := vc.last("/attest"); at["origin"] != "cert" || at["sha256"] != want {
+		t.Fatalf("attest asked %v", at)
+	}
+	b, _ := os.ReadFile(r.inputLogPath())
+	if !strings.Contains(string(b), `\"input\":\"attachment\"`) || !strings.Contains(string(b), want) {
+		t.Fatalf("input log %q", b)
+	}
+
+	// swapped on the volume after the phone signed: attested under the new bytes' hash, never the signed one
+	var dir string
+	r.st.Do(func(d *persisted) { dir = r.uploadDir(d.Sessions[sid].Ops.Upload) })
+	if err := os.WriteFile(dir+"/IMG_1.png", []byte("another picture"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if e := attested(listing()); e["sha256"] == want {
+		t.Fatal("a swapped file was attested under the signed hash")
+	}
+}
