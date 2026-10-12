@@ -401,12 +401,9 @@ func (r *Router) buildHandlers() {
 			return
 		}
 		r.noteOrigin(req.PathValue("id"), Origin{Caller: appCaller(req), Call: APICall{Method: "POST", Path: req.URL.Path, Args: map[string]any{"upgrade": in.Upgrade}}})
-		if err := r.Resume(req.PathValue("id"), in.Upgrade); err != nil {
+		if err := r.resumeWithPrompt(req.PathValue("id"), in.Upgrade, prompt); err != nil {
 			writeErr(w, err)
 			return
-		}
-		if prompt != "" {
-			r.SetResumePrompt(req.PathValue("id"), prompt)
 		}
 		writeJSON(w, 200, map[string]bool{"ok": true})
 	})

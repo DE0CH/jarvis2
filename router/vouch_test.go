@@ -228,3 +228,39 @@ func TestMachineConfigIsOnlyFormatExceptions(t *testing.T) {
 		}
 	}
 }
+
+// the app's resume with a prompt: the prompt is queued before the resume starts, so the resume's goroutine always
+// carries it to the phone (queued after, it could start without it and the prompt reached the machine unsigned)
+func TestResumeWithPromptAlwaysReachesThePhone(t *testing.T) {
+	rg, vc := v2Rig(t)
+	rg.r.st.Do(func(d *persisted) { d.Sessions["s1"].Cert = v2Cert(rg, "m1", `{"v":1}`) })
+	if err := rg.r.resumeWithPrompt("s1", false, "carry on"); err != nil {
+		t.Fatal(err)
+	}
+	var a *Approval
+	waitFor(t, "approval", func() bool {
+		rg.r.st.Do(func(d *persisted) {
+			for _, x := range d.Approvals {
+				if x.Session == "s1" {
+					a = x
+				}
+			}
+		})
+		return a != nil
+	})
+	var once OnceInputs
+	json.Unmarshal([]byte(vc.last("/succession")["options"].(map[string]any)["once"].(string)), &once)
+	if a.Kind != "resume-upgrade" || once.Prompt != "carry on" {
+		t.Fatalf("approval %+v once %+v", a, once)
+	}
+	// a refused resume (the session isn't paused now) leaves the earlier queued prompt as it was
+	rg.r.SetResumePrompt("s1", "earlier")
+	if err := rg.r.resumeWithPrompt("s1", false, "later"); err == nil {
+		t.Fatal("resumed a session that isn't paused")
+	}
+	rg.r.st.Do(func(d *persisted) {
+		if p := d.Schedules["s1"].ResumePrompt; p != "earlier" {
+			t.Fatalf("queued prompt %q", p)
+		}
+	})
+}

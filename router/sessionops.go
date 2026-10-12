@@ -547,12 +547,9 @@ func (r *Router) Restart(id string, in RestartRequest) (map[string]any, error) {
 			return
 		}
 		r.ops.phase(j, "resuming", nil)
-		if err := r.Resume(id, false); err != nil {
+		if err := r.resumeWithPrompt(id, false, prompt); err != nil {
 			fail(err)
 			return
-		}
-		if prompt != "" {
-			r.SetResumePrompt(id, prompt)
 		}
 		r.ops.phase(j, "done", nil)
 	}()

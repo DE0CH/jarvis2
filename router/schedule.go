@@ -487,6 +487,27 @@ func (r *Router) CancelCron(sid, name string) error {
 	return err
 }
 
+// resumeWithPrompt: the prompt is queued BEFORE the resume starts, so the resume sees it (a vouching core carries it
+// in the successor's cert, which the phone approves); queued after, the resume's goroutine could miss it and the
+// prompt would reach the machine unsigned. A refused resume puts the earlier queued prompt back.
+func (r *Router) resumeWithPrompt(sid string, upgrade bool, prompt string) error {
+	if prompt == "" {
+		return r.Resume(sid, upgrade)
+	}
+	var before string
+	r.st.Do(func(d *persisted) {
+		if sc := d.Schedules[sid]; sc != nil {
+			before = sc.ResumePrompt
+		}
+	})
+	r.SetResumePrompt(sid, prompt)
+	if err := r.Resume(sid, upgrade); err != nil {
+		r.SetResumePrompt(sid, before)
+		return err
+	}
+	return nil
+}
+
 // SetResumePrompt: delivered once the session is started again (resumePromptTick)
 func (r *Router) SetResumePrompt(sid, prompt string) {
 	r.st.Do(func(d *persisted) {
