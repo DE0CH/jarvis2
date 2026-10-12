@@ -59,10 +59,18 @@ jobs:
           sleep 1
           nohup xcrun simctl io "$SIM_UDID" recordVideo --codec=h264 --force out/replica.mp4 > out/video.log 2>&1 &
           VP=$!
-          (cd ios && TEST_RUNNER_REPLICA_EMAIL="$EMAIL" TEST_RUNNER_REPLICA_REPO="$REPO" \
-            xcodebuild test-without-building -project Jarvis2.xcodeproj -scheme Jarvis2 -configuration Release \
-            -only-testing:Jarvis2UITests/ReplicaUITests/testReplica -destination "id=$SIM_UDID" -derivedDataPath ../dd \
-            -resultBundlePath ../replica.xcresult 2>&1 | tee ../test.log | grep -E "error:|Test Case|\*\* " || true)
+          for try in 1 2; do
+            rm -rf replica.xcresult
+            (cd ios && TEST_RUNNER_REPLICA_EMAIL="$EMAIL" TEST_RUNNER_REPLICA_REPO="$REPO" \
+              xcodebuild test-without-building -project Jarvis2.xcodeproj -scheme Jarvis2 -configuration Release \
+              -only-testing:Jarvis2UITests/ReplicaUITests/testReplica -destination "id=$SIM_UDID" -derivedDataPath ../dd \
+              -resultBundlePath ../replica.xcresult 2>&1 | tee ../test.log | grep -E "error:|Test Case|\*\* " || true)
+            # the simulator failing to launch the app before the first step (nothing has reached the box yet) is
+            # retried once; anything later is the run's result
+            grep -q "Failed to launch" test.log && ! grep -q "/relay" out/host.log || break
+            echo "the simulator didn't launch the app: once more"; cp test.log out/test-try$try.log
+            xcrun simctl terminate "$SIM_UDID" dev.de0ch.jarvis2 || true; sleep 10
+          done
           kill -INT $VP; sleep 5
           grep -q "TEST EXECUTE SUCCEEDED\|\*\* TEST SUCCEEDED" test.log
       - name: Export results
