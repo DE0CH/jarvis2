@@ -104,7 +104,7 @@ func main() {
 	log.SetFlags(0)
 	log.SetPrefix("[jarvis2] ")
 	if len(os.Args) < 2 {
-		log.Fatal("usage: jarvis2-machine boot | init | stores [--json] | add-store <name> | downgrade [<store>…] | allow [<holder> <duration> | --remove <holder>]")
+		log.Fatal("usage: jarvis2-machine boot | init | stores [--json] | add-store <name> | await-store <name> | downgrade [<store>…] | allow [<holder> <duration> | --remove <holder>]")
 	}
 	var err error
 	switch os.Args[1] {
@@ -117,6 +117,11 @@ func main() {
 			log.Fatal("usage: jarvis2-machine add-store <name>")
 		}
 		err = addStore(os.Args[2])
+	case "await-store": // after `jarvis2-request add-store`: no second ask, only the wait and the pull
+		if len(os.Args) != 3 {
+			log.Fatal("usage: jarvis2-machine await-store <name>")
+		}
+		err = awaitStore(os.Args[2])
 	case "stores":
 		err = storesCmd(os.Args[2:]) // stores.go
 	case "downgrade":
@@ -703,6 +708,20 @@ func uploadSnapshot(c *client) error {
 // ---- add a store ----------------------------------------------------------------------------------
 
 func addStore(name string) error {
+	c, err := newClient()
+	if err != nil {
+		return err
+	}
+	if err := c.json("POST", "/m/add-store", map[string]string{"store": name}, nil); err != nil {
+		return err
+	}
+	fmt.Fprintf(os.Stderr, "asked Deyao to add %s to this session (approval in the Jarvis 2 app)\n", name)
+	return awaitStore(name)
+}
+
+// awaitStore: wait (up to 1 h) for a cert of this machine that holds the store, then pull the secrets. Also what
+// `jarvis2-request add-store` runs after its request, which asks by itself (with a reason) and so must not ask again.
+func awaitStore(name string) error {
 	coreKey, err := readTrim(coreKeyPath)
 	if err != nil {
 		return err
@@ -711,10 +730,7 @@ func addStore(name string) error {
 	if err != nil {
 		return err
 	}
-	if err := c.json("POST", "/m/add-store", map[string]string{"store": name}, nil); err != nil {
-		return err
-	}
-	fmt.Fprintf(os.Stderr, "asked Deyao to add %s to this session (approval in the Jarvis 2 app); waiting up to 1 h\n", name)
+	fmt.Fprintf(os.Stderr, "waiting up to 1 h for %s (Deyao's approval in the Jarvis 2 app)\n", name)
 	me := c.me
 	keys, _ := ownKeys()
 	deadline := time.Now().Add(time.Hour)
