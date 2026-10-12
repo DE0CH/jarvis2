@@ -57,6 +57,9 @@ type Liveness struct {
 	dialogCheckedAt int64 // statusUpdatedAt of the waiting episode whose pane was checked for the dialog
 	dialogReported  bool
 	screen          *pushedScreen // the pane the machine pushes itself (machine/screen.go); in memory only
+	// the stall watchdog's last nudge: when and how it ended ("" = delivered), for GET /setup/sessions
+	NudgeAt    time.Time `json:"nudgeAt,omitempty"`
+	NudgeError string    `json:"nudgeError,omitempty"`
 }
 
 type waitEpisode struct {
@@ -643,7 +646,16 @@ func (r *Router) runAction(a pilotAction) {
 		}()
 	case "nudge":
 		go func() {
-			if err := r.DeliverCanned(a.Session, Delivery{Kind: "nudge", Jobs: a.Jobs, Minutes: a.Minutes}, a.Text); err != nil {
+			err := r.DeliverCanned(a.Session, Delivery{Kind: "nudge", Jobs: a.Jobs, Minutes: a.Minutes}, a.Text)
+			r.st.Do(func(d *persisted) {
+				if s := d.Sessions[a.Session]; s != nil && s.Live != nil {
+					s.Live.NudgeAt, s.Live.NudgeError = time.Now().UTC(), ""
+					if err != nil {
+						s.Live.NudgeError = err.Error()
+					}
+				}
+			})
+			if err != nil {
 				r.noteRefusal(a.Session, "scheduler", err)
 				log.Printf("[stall] nudge for %s failed (retried next interval): %v", a.Session, err)
 				return

@@ -608,7 +608,19 @@ func (r *Router) registerInbox(app appRoute, m machineRoute, public publicRoute)
 		out := []map[string]any{}
 		r.st.Do(func(d *persisted) {
 			for _, s := range d.Sessions {
-				out = append(out, map[string]any{"id": s.ID, "machineId": s.MachineID, "state": s.State, "title": sessionTitle(*s)})
+				v := map[string]any{"id": s.ID, "machineId": s.MachineID, "state": s.State, "title": sessionTitle(*s)}
+				// the autopilot's view (no secrets): what the machine last reported and the stall watchdog's clock
+				if l := s.Live; l != nil {
+					v["lastReport"], v["nudgeAt"], v["nudgeError"], v["needsGrant"] = l.LastReport, l.NudgeAt, l.NudgeError, l.NeedsGrant
+					if g := l.Reg; g != nil {
+						v["status"], v["bgTasks"], v["statusUpdatedAt"] = g.Status, g.BgTasks, g.StatusUpdatedAt
+					}
+					if l.stall != nil {
+						v["stallSince"] = l.stall.at
+					}
+					v["busy"] = r.busy(s.ID)
+				}
+				out = append(out, v)
 			}
 		})
 		writeJSON(w, 200, map[string]any{"sessions": out})
