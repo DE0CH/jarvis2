@@ -11,6 +11,7 @@ import {
   type StyleProp, type TextInputProps, type TextStyle, type ViewStyle,
 } from "react-native";
 import { RNText, TextInput } from "./rntext";
+import { Aligned } from "./align";
 import { useTheme, space, radius, fontSize, lineHeight, headingLineHeight, letterSpacing, fonts, type ColorName, type Size } from "../theme";
 
 type Sp = 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9;
@@ -311,13 +312,14 @@ export function Rows({ children, mt, mb, id, data }: { children: ReactNode; mt?:
 export function Row({ label, children, id, mono: m, color, lines, selectable, data }: { label: string; children?: ReactNode; id?: string; mono?: boolean; color?: ColorName; lines?: number; selectable?: boolean; data?: Record<string, string> }) {
   const t = useTheme();
   const plain = typeof children === "string" || typeof children === "number";
+  // in a grid of cards, the same row lines up across the cards of one grid row (align.tsx)
   return (
-    <View {...ids(id, { row: label, ...data })} style={{ flexDirection: "row", alignItems: "flex-start", gap: 12, minHeight: 20 }}>
+    <Aligned part={"row:" + label}><View {...ids(id, { row: label, ...data })} style={{ flexDirection: "row", alignItems: "flex-start", gap: 12, minHeight: 20 }}>
       <RNText style={{ width: 104, flexShrink: 0, color: t.gray.a[11], fontSize: 13, lineHeight: 20 }}>{label}</RNText>
       {plain
         ? <RNText numberOfLines={lines} selectable={selectable} style={{ flex: 1, minWidth: 0, color: color ? t.c[color].a[11] : t.gray[12], fontSize: m ? 12.5 : 14, lineHeight: 20, fontFamily: m ? mono : undefined }}>{children}</RNText>
         : <View style={{ flex: 1, minWidth: 0, flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: 4 }}>{children}</View>}
-    </View>
+    </View></Aligned>
   );
 }
 /** a short list as badges (stores, fields); `none` when empty */

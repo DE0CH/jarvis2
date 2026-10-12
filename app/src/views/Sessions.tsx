@@ -9,6 +9,7 @@ import { BadgeList, Box, Button, Callout, Card, Flex, Heading, Lbl, Muted, P, Pi
 import type { AskRow } from "../lib/store";
 import { BusyButton, PButton, useCoolAfterShift } from "../ui/bits";
 import { Cards } from "../ui/cards";
+import { Aligned } from "../ui/align";
 import { InboxNote } from "./Inbox";
 import { openPage } from "../ui/page";
 import { openMenu, type MenuItem } from "../ui/overlays";
@@ -265,23 +266,24 @@ export function Sessions() {
               : m.pauseInMs != null ? `In ${Math.max(1, Math.round(m.pauseInMs / 60000))} min` : "After 1 h idle";
             return (
               <Card key={m.id} dim={!!busy} data={{ session: m.id }} style={{ flex: 1 }}>
-                <Flex justify="space-between" align="flex-start" gap={2} mb={1}>
+                {/* every card has the same parts and rows ("—" when empty), so they line up across a grid row (ui/align.tsx) */}
+                <Aligned part="head"><Flex justify="space-between" align="flex-start" gap={2} mb={1}>
                   <Heading size={3} style={{ flex: 1 }}>{sessionTitle(m)}</Heading>
                   <Flex gap={1} wrap justify="flex-end" style={{ flexShrink: 0, maxWidth: "55%" }}><SessionPill m={m} />{!paused && hasSchedule(m) && <Pill kind="info">scheduled</Pill>}</Flex>
-                </Flex>
-                {(m.permissionMode === "bypass" || m.oneShot || m.authFailed) && <Flex gap={1} wrap align="center" mb={1}>
+                </Flex></Aligned>
+                <Aligned part="badges">{(m.permissionMode === "bypass" || m.oneShot || m.authFailed) && <Flex gap={1} wrap align="center" mb={1}>
                   {m.permissionMode === "bypass" ? <Pill kind="bad">skip perms</Pill> : null}
                   {m.oneShot && <Pill kind="dim">one-shot</Pill>}
                   {m.authFailed && <Pill kind="bad">login failed</Pill>}
-                </Flex>}
+                </Flex>}</Aligned>
                 <Rows id={"session-rows-" + m.id}>
                   <Row label="Stores"><BadgeList items={own} /></Row>
-                  {!!(HARNESS[m.harness || ""] || m.harness) && <Row label="Harness">{HARNESS[m.harness || ""] || m.harness}</Row>}
-                  {!!modelName && <Row label="Model">{modelName}</Row>}
-                  {!!(m.region || m.guest) && <Row label="Machine">{[REGION[m.region || ""] || m.region, m.guest].filter(Boolean).join(" · ")}</Row>}
-                  {!!m.created && <Row label="Created">{ago(m.created)}</Row>}
-                  {paused && !!m.pausedAt && <Row label="Paused">{ago(m.pausedAt)}</Row>}
-                  {!!autoPause && <Row label="Auto-pause" id={"autopause-" + m.id}>{autoPause}</Row>}
+                  <Row label="Harness">{HARNESS[m.harness || ""] || m.harness || "—"}</Row>
+                  <Row label="Model">{modelName || "—"}</Row>
+                  <Row label="Machine">{[REGION[m.region || ""] || m.region, m.guest].filter(Boolean).join(" · ") || "—"}</Row>
+                  <Row label="Created">{m.created ? ago(m.created) : "—"}</Row>
+                  {paused && <Row label="Paused">{m.pausedAt ? ago(m.pausedAt) : "—"}</Row>}
+                  {!paused && <Row label="Auto-pause" id={"autopause-" + m.id}>{autoPause || (m.oneShot ? "One-shot" : "—")}</Row>}
                 </Rows>
                 {!!m.resumePrompt && <Quote by={paused ? "Queued for the next resume" : "Queued prompt"} lines={3}>{clip(m.resumePrompt)}</Quote>}
                 <NeedsGrant m={m} />
