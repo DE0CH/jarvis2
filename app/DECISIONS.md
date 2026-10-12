@@ -225,6 +225,28 @@ fixes, 34–40 carried over from the old app and still true, 41–43 the web pag
     Shows rows; a search hit's and an iCloud file's facts are rows. Error text from the router keeps its short
     "Could not …:" prefix.
 
+## No prose assembled by code in the iPhone app (2026-10-12; decided while Deyao was away)
+
+59. **"What you sign (exact)" is a list of facts** (`SignedAction` returns `[SignedFact]`: id, label, value, style),
+    rendered as `LabeledContent` rows by `SignedFactsSection`, each with the accessibility id `signed-<id>`
+    (`signed-kind` "Core request" / "Phone grant", `signed-action`, `signed-repo`, `signed-store`, `signed-sensitive`,
+    `signed-feature`, `signed-session`, `signed-line`, `signed-duration`, `signed-until`, `signed-stores`,
+    `signed-unlocks`, `signed-unlock-scope`, `signed-prompt`, …). Every value still comes from the core-signed content
+    (begin document, challenge, cert) or the checked grant, never router text. The interop test checks the facts by id.
+60. **Review pages opened in the app (not from the Inbox) show the same section** in place of the old "What you allow"
+    / "What happens" paragraphs (grant, unlock, repo key); the approval page keeps its own rows (session, stores,
+    settings) with the prose turned into rows and badges ("Router's label" + Unverified, Action, Also unlocks + Open to,
+    Image build badge, Roll back from).
+61. **The Inbox request block**: Caller as a row (`request-caller`), the call line, a mismatch as a red row naming the
+    differing option, and the caller's reason under "Reason (unverified)" as its own text with "Written by the caller."
+    Inbox rows: a fixed title per kind, then the repo / feature / session / length as values and who / when / expires
+    as icon labels.
+62. **Session page**: a turned-away feature is a "Turned away" section with Feature and Allows rows and the two buttons
+    ("Allow for 10 minutes", "Make a standing rule"); a locked store is a Store row with Unlock; auto-pause is one row;
+    wakeups and crons are `WakeRow`s (when, name, next, prompt as written). Banners, Fly counts, usage and spend are rows.
+63. **Dialogs** keep the HIG title ("Destroy “X”?") with a short fixed message; a destroy lists what it would lose one
+    line per repo ("repo · 2 uncommitted · 1 unpushed"). Toasts are short fixed words ("Grant saved", "Copied").
+
 ## Unfinished / known gaps
 
 - Free text (prompt, title) reaches the machine signed only with a core that vouches (the held core doesn't).
