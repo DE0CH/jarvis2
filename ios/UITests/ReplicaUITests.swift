@@ -73,7 +73,7 @@ final class ReplicaUITests: JarvisUITestCase {
       let picked = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH 'ns-repo-' AND selected == true")).count
       if !el("ns-repo-claude-env").exists { XCTAssertEqual(picked, 0, "no repo pre-selected without claude-env on the list") }
       else { XCTAssertTrue(el("ns-repo-claude-env").isSelected, "claude-env pre-selected") }
-      for _ in 0..<6 { app.swipeDown() }
+      scrolledUpTo(el("ns-prompt"))
     }
     return ok
   }

@@ -147,7 +147,7 @@ final class Jarvis2UITests: JarvisUITestCase {
     XCTAssertTrue(scrolledTo(el("secure-mode-bypass")), "[\(tag)] the page picks the permission mode")
     let unlocks = el("ns-unlocks")
     XCTAssertTrue(scrolledTo(unlocks) && said(unlocks).contains("claude-login"), "[\(tag)] Start says it unlocks the locked harness store")
-    for _ in 0..<6 { app.swipeDown() }
+    scrolledUpTo(el("ns-title"))
     el("ns-title").tap(); el("ns-title").typeText("ci session")
     let image = attachImage()
     if el("secure-store-gmail").waitForExistence(timeout: 3) {

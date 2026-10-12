@@ -150,6 +150,13 @@ class JarvisUITestCase: XCTestCase {
     while !e.exists && n < max { app.swipeUp(); n += 1 }
     return e.exists
   }
+  /// scroll back up until `e` shows; stops as soon as it does, since one more swipe down at the top of a sheet
+  /// pulls the sheet away
+  @discardableResult func scrolledUpTo(_ e: XCUIElement, max: Int = 6) -> Bool {
+    var n = 0
+    while !e.exists && n < max { app.swipeDown(velocity: .slow); n += 1 }
+    return e.exists
+  }
   func isOn(_ e: XCUIElement) -> Bool { (e.value as? String) == "1" || e.isSelected }
 
   // ---- the router on the runner (the test reads payloads; the app checks signatures) ----
