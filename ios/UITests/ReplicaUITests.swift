@@ -323,7 +323,25 @@ final class ReplicaUITests: JarvisUITestCase {
       XCTAssertTrue(gone(el("secure-create"), 120), "the New session page closes")  // the list shows behind it already
       _ = arrives(el("newBtn"), 30, "back on the list")
       openStores()
-      if wait(el("lock-rh-secret"), 30, "rh-secret unlocked by the new session") { el("lock-rh-secret").tap(); _ = gone(el("lock-rh-secret"), 30) }
+      // the unlock is for this one session and ends once its machine has pulled the store (carried secrets): when the
+      // machine was faster than this page, rh-secret is Locked already and the session runs — nothing to strand
+      if !el("lock-rh-secret").waitForExistence(timeout: 20) {
+        XCTAssertTrue(el("unlock-rh-secret").exists, "rh-secret locked again once the new session's machine pulled it")
+        shot("stores-relocked-after-pull")
+        back()
+        sessionsList()
+        let second = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH 'srow-' AND identifier != %@", "srow-" + sid)).firstMatch
+        if wait(second, 30, "the second session") {
+          let sid2 = String(second.identifier.dropFirst("srow-".count))
+          second.tap()
+          if (scrolledTo(el("destroy-\(sid2)")) || true), wait(el("destroy-\(sid2)"), 20, "Destroy (second)") {
+            el("destroy-\(sid2)").tap()
+            answer("Destroy session", timeout: 60)
+            XCTAssertTrue(gone(el("srow-\(sid2)"), 900), "the second session is destroyed")
+          }
+        }
+      } else {
+      el("lock-rh-secret").tap(); _ = gone(el("lock-rh-secret"), 30)
       back()
       sessionsList()
       sleep(150)
@@ -344,6 +362,7 @@ final class ReplicaUITests: JarvisUITestCase {
           shot("stuck-destroyed")
         }
       } else { XCTFail("no second session to destroy") }
+      }
     }
 
     // ---- destroy the running session ----
