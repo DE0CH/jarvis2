@@ -22,7 +22,7 @@ final class ReplicaUITests: JarvisUITestCase {
     _ = sem.wait(timeout: .now() + timeout + 5)
     return out
   }
-  func faceIDMatches(_ seconds: Int = 40) { host("faceid/match?for=\(seconds)") }
+  func faceIDMatches(_ seconds: Int = 90) { host("faceid/match?for=\(seconds)") }
   func faceIDFails() { host("faceid/nomatch") }
   func relay(_ msg: String) -> String { host("relay?msg=\(msg)", timeout: 600) }
 
@@ -130,9 +130,9 @@ final class ReplicaUITests: JarvisUITestCase {
     background()
     XCTAssertTrue(el("setup-kit").exists, "the kit page survives backgrounding")
     el("setup-kit-copy").tap()
-    faceIDMatches(60)   // the device key countersigns the claim
+    faceIDMatches(240)   // the device key countersigns the claim (the iOS 27 simulator can take 3 tries to show the sheet)
     el("setup-kit-saved").tap()
-    try must(wait(el("setup-done"), 120, "reset done"))
+    try must(wait(el("setup-done"), 240, "reset done"))
     shot("setup-reset-done")
     el("secure-back").tap()
     XCTAssertEqual(relay("reset-done"), "filled", "the setup session wrote the stores")
