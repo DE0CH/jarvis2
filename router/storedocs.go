@@ -68,8 +68,11 @@ type StoreRow struct {
 	Unlocked  bool     `json:"unlocked"`
 	About     string   `json:"about"`
 	Version   string   `json:"version,omitempty"`
-	Keys      []KeyRow `json:"keys"`     // null: not known (a core from before keys.go with no recorded names)
-	KeysFrom  string   `json:"keysFrom"` // core | recorded | "" (not known)
+	// Keys: the key names (null: not known — a core from before keys.go with no recorded names), the shape every
+	// session image reads; KeyInfo: the same keys with what each is for and who wrote it
+	Keys     []string `json:"keys"`
+	KeyInfo  []KeyRow `json:"keyInfo"`
+	KeysFrom string   `json:"keysFrom"` // core | recorded | "" (not known)
 }
 
 // StoreDoc: what a store and its keys are for
@@ -237,23 +240,23 @@ func (r *Router) StoreList() ([]StoreRow, *Doc, error) {
 		var names []string
 		switch {
 		case s.Keys != nil:
-			row.KeysFrom, row.Keys = "core", []KeyRow{}
+			row.KeysFrom, row.Keys, row.KeyInfo = "core", []string{}, []KeyRow{}
 			for _, k := range *s.Keys {
 				kr := KeyRow{Name: k.Name, Explanation: doc.Keys[k.Name], At: k.At, Writer: k.Writer}
 				if w := kr.Writer; w != nil && w.Line != "" {
 					w.Session, w.SessionLabel = lines[w.Line][0], lines[w.Line][1]
 				}
-				row.Keys = append(row.Keys, kr)
+				row.Keys, row.KeyInfo = append(row.Keys, k.Name), append(row.KeyInfo, kr)
 			}
 		case s.Empty:
-			row.KeysFrom, row.Keys = "core", []KeyRow{}
+			row.KeysFrom, row.Keys, row.KeyInfo = "core", []string{}, []KeyRow{}
 		case repoKeys[s.Name] != nil:
 			names, row.KeysFrom = repoKeys[s.Name], "recorded"
 		case recorded[s.Name] != nil:
 			names, row.KeysFrom = recorded[s.Name], "recorded"
 		}
 		for _, k := range names {
-			row.Keys = append(row.Keys, KeyRow{Name: k, Explanation: doc.Keys[k]})
+			row.Keys, row.KeyInfo = append(row.Keys, k), append(row.KeyInfo, KeyRow{Name: k, Explanation: doc.Keys[k]})
 		}
 		rows = append(rows, row)
 	}

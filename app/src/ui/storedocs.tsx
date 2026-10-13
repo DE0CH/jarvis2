@@ -69,7 +69,7 @@ function KeyName({ name }: { name: string }) {
 export function StoreDocs({ store, edit }: { store: CoreStore; edit?: boolean }) {
   const t = useTheme();
   const save = async (docs: { about?: string; keys?: Record<string, string> }) => { await putStoreDocs(store.name, docs); loadStores(); };
-  const keys = store.keys;
+  const keys = store.keys == null ? null : store.keyInfo ?? store.keys.map((name): StoreKey => ({ name, explanation: "" }));
   const sid = "store-" + store.name;
   return (
     <View style={{ gap: 8 }}>

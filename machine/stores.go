@@ -29,16 +29,21 @@ type storeRow struct {
 	Empty     bool     `json:"empty"`
 	Unlocked  bool     `json:"unlocked"`
 	About     string   `json:"about,omitempty"`
-	Keys      []keyRow `json:"keys"`
+	Keys      []string `json:"keys"`    // names (null: not known)
+	KeyInfo   []keyRow `json:"keyInfo"` // the same keys with what each is for
 	KeysFrom  string   `json:"keysFrom"`
 }
 
-func (s storeRow) keyNames() string {
-	n := []string{}
-	for _, k := range s.Keys {
-		n = append(n, k.Name)
-	}
-	return strings.Join(n, " ")
+func (s storeRow) keyNames() string { return strings.Join(s.Keys, " ") }
+
+// coreRow: a row of the core's signed list (its keys name who wrote them; a core from before keys.go has none)
+type coreRow struct {
+	Name      string `json:"name"`
+	Sensitive bool   `json:"sensitive"`
+	Empty     bool   `json:"empty"`
+	Keys      *[]struct {
+		Name string `json:"name"`
+	} `json:"keys"`
 }
 
 func storesCmd(args []string) error {
@@ -61,13 +66,13 @@ func storesCmd(args []string) error {
 	// the store list and sensitivity: only as the core signed them
 	if coreKey, err := readTrim(coreKeyPath); err == nil && out.Signed != nil {
 		var list struct {
-			Kind   string     `json:"kind"`
-			Stores []storeRow `json:"stores"`
+			Kind   string    `json:"kind"`
+			Stores []coreRow `json:"stores"`
 		}
 		if err := verifyDoc(coreKey, out.Signed, &list); err != nil || list.Kind != "stores" {
 			return fmt.Errorf("the store list isn't signed by the core")
 		}
-		signed := map[string]storeRow{}
+		signed := map[string]coreRow{}
 		for _, s := range list.Stores {
 			signed[s.Name] = s
 		}
@@ -79,8 +84,14 @@ func storesCmd(args []string) error {
 			if !ok || c.Sensitive != s.Sensitive || c.Empty != s.Empty {
 				return fmt.Errorf("store %s differs from the core's list", s.Name)
 			}
-			if c.Keys != nil && s.KeysFrom == "core" && c.keyNames() != s.keyNames() { // the core names the keys
-				return fmt.Errorf("store %s's keys differ from the core's list", s.Name)
+			if c.Keys != nil && s.KeysFrom == "core" { // the core names the keys
+				names := []string{}
+				for _, k := range *c.Keys {
+					names = append(names, k.Name)
+				}
+				if strings.Join(names, " ") != s.keyNames() {
+					return fmt.Errorf("store %s's keys differ from the core's list", s.Name)
+				}
 			}
 		}
 	}
@@ -131,7 +142,7 @@ func storesCmd(args []string) error {
 		if s.About != "" {
 			fmt.Printf("  %s\n", s.About)
 		}
-		for _, k := range s.Keys {
+		for _, k := range s.KeyInfo {
 			what := k.Explanation
 			if what == "" {
 				what = "(no explanation yet)"

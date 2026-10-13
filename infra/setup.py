@@ -374,12 +374,12 @@ def main():
     elif cmd == "stores":
         for s in call("GET", "/setup/stores/keys")["stores"]:
             flags = ["sensitive" if s["sensitive"] else "not-sensitive"] + (["empty"] if s["empty"] else []) + (["unlocked"] if s["unlocked"] else [])
-            keys = " ".join(k["name"] for k in s["keys"]) if s["keys"] is not None else "(key names not recorded)"
+            keys = " ".join(s["keys"]) if s["keys"] is not None else "(key names not recorded)"
             print(f"{s['name']} [{', '.join(flags)}]: {keys}")
             if "--keys" in args:
                 if s.get("about"):
                     print("  " + s["about"])
-                for k in s["keys"] or []:
+                for k in s.get("keyInfo") or []:
                     w = k.get("writer") or {}
                     by = f" [written by session {w.get('sessionLabel')} {w.get('session')}]" if w.get("by") == "machine" else ""
                     print(f"  {k['name']}: {k.get('explanation') or '(no explanation yet)'}{by}")

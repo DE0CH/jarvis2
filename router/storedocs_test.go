@@ -109,9 +109,9 @@ func byName(rows []any) map[string]map[string]any {
 
 func keyNames(row map[string]any) []string {
 	out := []string{}
-	ks, _ := row["keys"].([]any)
+	ks, _ := row["keys"].([]any) // names: the shape every session image reads
 	for _, k := range ks {
-		out = append(out, k.(map[string]any)["name"].(string))
+		out = append(out, k.(string))
 	}
 	return out
 }
@@ -143,7 +143,10 @@ func TestStoresListKeysWritersAndExplanations(t *testing.T) {
 		}
 		s := byName(out["stores"].([]any))
 		d := s["default"]
-		ks := d["keys"].([]any)
+		if strings.Join(keyNames(d), ",") != "EXA_API,OPENROUTER_API" {
+			t.Fatalf("default's names: %v", d["keys"])
+		}
+		ks := d["keyInfo"].([]any)
 		exa := ks[0].(map[string]any)
 		w := exa["writer"].(map[string]any)
 		if d["about"] != "everyday keys" || d["keysFrom"] != "core" || exa["explanation"] != "Exa web search (the exa skill)" ||
