@@ -178,3 +178,30 @@ func TestProxyTakesAContentFileOnlyAttested(t *testing.T) {
 		t.Fatalf("another session: %d", resp.StatusCode)
 	}
 }
+
+// jarvis2-request batch: the batch reaches the router as /m/api/requests/batch, signed, body unchanged (the router
+// names the session from the machine key)
+func TestProxyForwardsABatch(t *testing.T) {
+	t.Setenv("JARVIS2_SESSION_ID", "s1")
+	key := newKey()
+	var path, body string
+	srv := fakeRouter(t, key, func(w http.ResponseWriter, req *http.Request, b []byte) {
+		path, body = req.URL.Path, string(b)
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"id":"b1","items":[]}`))
+	})
+	defer srv.Close()
+	c := &client{base: srv.URL, me: "m1", sig: key.k, http: srv.Client()}
+	p := httptest.NewServer(apiProxyHandler(c))
+	defer p.Close()
+	in := `{"summary":"two grants","items":[{"intent":"grant","holder":"scheduler","minutes":5},{"intent":"grant","holder":"remote"}]}`
+	resp, err := http.Post(p.URL+"/api/requests/batch", "application/json", strings.NewReader(in))
+	if err != nil || resp.StatusCode != 200 {
+		t.Fatalf("%v %v", err, resp)
+	}
+	var out map[string]any
+	json.NewDecoder(resp.Body).Decode(&out)
+	if path != "/m/api/requests/batch" || body != in || out["id"] != "b1" {
+		t.Fatalf("forwarded %s %q %v", path, body, out)
+	}
+}
