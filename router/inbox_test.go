@@ -179,9 +179,9 @@ func TestCleanExplanation(t *testing.T) {
 func TestEveryIntentOpensAPage(t *testing.T) {
 	r := newTestRouter(t)
 	addSession(r, "sA", "started", "mA", false)
-	pages := map[string]bool{"repo-key": true, "grant": true, "unlock": true, "approval": true}
+	pages := map[string]bool{"repo-key": true, "grant": true, "unlock": true, "approval": true, "restore": true}
 	for intent, mk := range intents {
-		kind, p := mk(requestIn{Repo: "DE0CH/x", Session: "sA", Holder: "terminal"})
+		kind, p := mk(requestIn{Repo: "DE0CH/x", Session: "sA", Holder: "terminal", Store: "default", Seq: 3})
 		q, _, err := r.FileRequest(kind, p, "why", Origin{Caller: Caller{Kind: "setup"}, Call: APICall{Method: "POST", Path: "/setup/requests/" + intent}})
 		if err != nil {
 			t.Fatalf("%s: %v", intent, err)

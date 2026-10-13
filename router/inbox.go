@@ -72,11 +72,14 @@ type RequestParams struct {
 	Path        string `json:"path,omitempty"` // with its query
 	Body        string `json:"body,omitempty"`
 	ContentType string `json:"contentType,omitempty"`
+	// restore (storerestore.go): the store and the version to put back
+	Store string `json:"store,omitempty"`
+	Seq   int    `json:"seq,omitempty"`
 }
 
 type InboxRequest struct {
 	ID          string        `json:"id"`
-	Kind        string        `json:"kind"` // repo-key | grant | unlock | api-call
+	Kind        string        `json:"kind"` // repo-key | grant | unlock | api-call | restore
 	Params      RequestParams `json:"params"`
 	Origin      Origin        `json:"origin"`
 	Explanation string        `json:"explanation"`
@@ -95,6 +98,8 @@ func callerMay(c Caller, kind string, p RequestParams) error {
 		return nil
 	}
 	switch kind {
+	case requestKindRestore:
+		return errors.New("a session may not ask for a store to be restored (the web page, the app or the setup session may)")
 	case requestKindRepo:
 		if p.Action != "add" {
 			return errors.New("a session may ask for a repo to be added, not removed")
@@ -210,6 +215,14 @@ func (r *Router) normalizeRequest(kind string, p RequestParams) (RequestParams, 
 			out.Minutes = p.Minutes
 		}
 		return out, nil
+	case requestKindRestore:
+		if !storeNameOK(p.Store) || p.Store == flyStore {
+			return p, fmt.Errorf("no store %q", p.Store)
+		}
+		if p.Seq < 1 {
+			return p, errors.New("seq: the version to put back (infra/setup.py versions STORE, or the Stores page)")
+		}
+		return RequestParams{Store: p.Store, Seq: p.Seq}, nil
 	case requestKindCall: // checked by fileCall (apicalls.go)
 		return RequestParams{Method: p.Method, Path: p.Path, Body: p.Body, ContentType: p.ContentType}, nil
 	}
@@ -463,6 +476,8 @@ func requestItem(d *persisted, q *InboxRequest, now time.Time) InboxItem {
 	case requestKindUnlock:
 		it.SessionName = inboxSessionName(d, q.Params.Session)
 		opts["sessionId"], opts["label"] = q.Params.Session, it.SessionName
+	case requestKindRestore:
+		opts["store"], opts["seq"] = q.Params.Store, q.Params.Seq
 	case requestKindCall: // approved in the Inbox itself (POST /api/requests/{id}/approve), no shell page
 		it.Session, it.SessionName = q.Origin.Caller.Session, inboxSessionName(d, q.Origin.Caller.Session)
 	}
@@ -547,6 +562,7 @@ type requestIn struct {
 	Minutes     int    `json:"minutes"`
 	Days        int    `json:"days"`
 	Store       string `json:"store"`
+	Seq         int    `json:"seq"`
 	Explanation string `json:"explanation"`
 }
 
@@ -563,6 +579,9 @@ var intents = map[string]func(in requestIn) (string, RequestParams){
 	},
 	"unlock": func(in requestIn) (string, RequestParams) {
 		return requestKindUnlock, RequestParams{Session: in.Session}
+	},
+	"restore": func(in requestIn) (string, RequestParams) {
+		return requestKindRestore, RequestParams{Store: in.Store, Seq: in.Seq}
 	},
 }
 
@@ -583,6 +602,8 @@ func callArgs(kind string, p RequestParams) map[string]any {
 			a["minutes"] = p.Minutes
 		}
 		return a
+	case requestKindRestore:
+		return map[string]any{"store": p.Store, "seq": p.Seq}
 	}
 	return map[string]any{"session": p.Session}
 }

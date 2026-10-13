@@ -299,6 +299,9 @@ func (r *Router) checkBatchItem(c Caller, raw json.RawMessage) (*batchItem, erro
 		if err := callerMay(c, kind, np); err != nil {
 			return nil, &forbidden{err.Error()}
 		}
+		if kind == requestKindRestore {
+			return nil, &badRequest{"a restore is reviewed on its own page, not in a batch"}
+		}
 		it.kind, it.p, it.args = kind, np, callArgs(kind, np)
 		it.args["intent"] = in.Intent
 		return it, nil

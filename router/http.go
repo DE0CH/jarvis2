@@ -99,6 +99,7 @@ func (r *Router) buildHandlers() {
 	}
 	r.registerFeatures(app, m, mux.Handle)
 	r.registerStoreDocs(app, m, mux) // storedocs.go: every store's keys, what they are for, and writing one key
+	r.registerRestore(app, mux)      // storerestore.go: a store's versions and putting one back (phone-signed)
 	r.registerActions(m)             // actions.go: each session's actions, on its machine key
 	// the router's own health, for an operator with no way into the box: secret NAMES present, image, core up
 	mux.Handle("GET /setup/status", r.requireSetup(func(w http.ResponseWriter, req *http.Request) {
@@ -148,7 +149,6 @@ func (r *Router) buildHandlers() {
 	setup("GET /setup/identity", "GET", "/identity")
 	setup("POST /setup/stores", "POST", "/stores")
 	setup("POST /setup/stores/create", "POST", "/stores/create")
-	setup("POST /setup/stores/write", "POST", "/stores/write") // a core from before keys.go (until the held core is live)
 	setup("POST /setup/stores/mark-sensitive", "POST", "/stores/mark-sensitive")
 	// the core's Fly token, sealed to the core (after a Reset; a Recover brings it from the backups)
 	setup("POST /setup/fly-token", "POST", "/fly-token")
@@ -569,7 +569,7 @@ func (r *Router) buildHandlers() {
 		d, err := r.core.Call("/pull-secrets", map[string]any{"cert": cert, "carry": r.carryForPull(machine, cert)})
 		if err == nil {
 			r.pulled(machine, cert, d)
-			markPulled(machine) // vouch.go: a pause waits briefly for such a machine's boot to finish
+			markPulled(machine)               // vouch.go: a pause waits briefly for such a machine's boot to finish
 			go r.refreshAfterPull(machine, d) // storedocs.go: stores behind a write → the phone is asked to refresh them
 		}
 		release()

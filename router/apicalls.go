@@ -294,6 +294,8 @@ var callRules = map[string]callRule{
 	"POST /api/core/stores":                     callBody,
 	"POST /api/core/stores/create":              callBody,
 	"POST /api/core/stores/mark-sensitive":      callBody,
+	"POST /api/core/stores/restore/begin":       callNo, // half of a restore the phone finishes with its signature and shares
+	"POST /api/core/stores/versions":            callBody,
 	"POST /api/core/unlock/begin":               callNo, // half of an unlock the phone finishes with its sealed share
 	"POST /api/core/unlock/finish":              callNo, // needs the phone's sealed share
 	"POST /api/core/unlocked":                   callBody,
@@ -339,6 +341,7 @@ var callRules = map[string]callRule{
 	"POST /api/requests/grant":                  callNo, // the Inbox
 	"POST /api/requests/repo/add":               callNo, // the Inbox
 	"POST /api/requests/repo/remove":            callNo, // the Inbox
+	"POST /api/requests/restore":                callNo, // the Inbox
 	"POST /api/requests/unlock":                 callNo, // the Inbox
 	"DELETE /api/requests/{id}":                 callNo, // the Inbox
 	"GET /api/requests/{id}":                    callNo, // the Inbox
@@ -386,6 +389,7 @@ var callRules = map[string]callRule{
 	"GET /api/state":                            callBody,
 	"GET /api/stores":                           callBody,
 	"PUT /api/stores/{store}/docs":              callBody, // explanations: no secret, no trust decision
+	"POST /api/stores/restore/finish":           callNo,   // needs the phone's signature and sealed shares
 	"GET /api/tasks":                            callBody,
 	"POST /api/tasks/instances":                 callBody,
 	"DELETE /api/tasks/instances/{id}":          callBody,
