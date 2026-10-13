@@ -104,7 +104,7 @@ func main() {
 	log.SetFlags(0)
 	log.SetPrefix("[jarvis2] ")
 	if len(os.Args) < 2 {
-		log.Fatal("usage: jarvis2-machine boot | init | stores [--json] | add-store <name> | await-store <name> | downgrade [<store>…] | allow [<holder> <duration> | --remove <holder>]")
+		log.Fatal("usage: jarvis2-machine boot | init | stores [--json] | add-store <name> | await-store <name> | downgrade <store>… | --none | allow [<holder> <duration> | --remove <holder>]")
 	}
 	var err error
 	switch os.Args[1] {
@@ -125,7 +125,10 @@ func main() {
 	case "stores":
 		err = storesCmd(os.Args[2:]) // stores.go
 	case "downgrade":
-		err = downgrade(os.Args[2:])
+		var keep []string
+		if keep, err = downgradeArgs(os.Args[2:]); err == nil {
+			err = downgrade(keep)
+		}
 	case "agent":
 		err = agent()
 	case "creds-sync":
@@ -822,6 +825,23 @@ func awaitStore(name string) error {
 		return nil
 	}
 	return errors.New("no approval within 1 h")
+}
+
+// downgradeArgs: the stores to keep. No names is refused rather than read as "keep none": a session that
+// meant to drop one store once dropped all of them that way; dropping everything takes --none.
+func downgradeArgs(args []string) ([]string, error) {
+	if len(args) == 1 && args[0] == "--none" {
+		return []string{}, nil
+	}
+	if len(args) == 0 {
+		return nil, errors.New("name every store to KEEP (e.g. downgrade default github-claude-env); --none drops them all")
+	}
+	for _, a := range args {
+		if strings.HasPrefix(a, "-") {
+			return nil, fmt.Errorf("unknown option %s (store names only, or --none alone)", a)
+		}
+	}
+	return args, nil
 }
 
 // downgrade: keep only the named stores, in place. A new key pair; the core's challenge signed with the old
