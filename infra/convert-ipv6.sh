@@ -54,7 +54,7 @@ wait_action "$(hz POST "/servers/$SID/actions/enable_rescue" "{\"type\":\"linux6
 wait_action "$(hz POST "/servers/$SID/actions/poweron" | j "d['action']['id']")"
 S=(ssh -q -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=5 -i "$K/k" "root@$V6")
 for i in $(seq 1 60); do "${S[@]}" true 2>/dev/null && break; sleep 5; done
-"${S[@]}" 'set -e; mkdir -p /mnt/r; mount "$(findfs LABEL=cloudimg-rootfs)" /mnt/r; test -x /mnt/r/usr/local/bin/k3s; echo "root mounted, k3s found"'
+"${S[@]}" 'set -e; mkdir -p /mnt/r; lsblk -o NAME,FSTYPE,LABEL,SIZE; d=$(blkid -L cloudimg-rootfs || true); [ -n "$d" ] || d=$(lsblk -lnpo NAME,FSTYPE | awk "\$2==\"ext4\"{print \$1}" | head -n 1); echo "root: $d"; mount "$d" /mnt/r; test -x /mnt/r/usr/local/bin/k3s; echo "root mounted, k3s found"'
 "${S[@]}" 'cat > /mnt/r/usr/local/sbin/jarvis2-warp-host.sh' < "$HERE/warp-host.sh"
 "${S[@]}" 'set -e; R=/mnt/r
 cat > $R/etc/systemd/system/jarvis2-warp-host.service <<"UNIT"

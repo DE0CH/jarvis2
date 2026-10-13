@@ -1033,6 +1033,9 @@ Deyao: several actions approved together with ONE Face ID; the caller groups the
      throwaway SSH key writes `warp-host.sh` and a oneshot unit (before k3s) onto the disk → reboot. The disk keeps the
      box key, age key, Secrets and Flux state, so nothing is re-minted (a rebuild would need every router-secrets part
      again, a new backup read credential and a new tunnel key, and loses paused sessions). Both reboot the box, so the
-     core starts empty either way: Deyao Recovers, as after a power failure. Rehearsed on a throwaway box built the
-     pre-change way.
+     core starts empty either way: Deyao Recovers, as after a power failure. A real pre-change box can't be rehearsed (a
+     new IPv4 is over the account's limit, which counts IPv6 primaries too), so it was simulated on a runner: a k3s
+     cluster on a non-persistent IPv4 node-ip, Flux, WARP removed → convert-ipv6.sh (rescue over IPv6, 60 s) → after
+     the reboot WARP installed by the unit, the node Ready on 10.254.254.1, every pod Running, Flux fetching GitHub,
+     a new GHCR image pulled and a pod reaching api.github.com.
 
