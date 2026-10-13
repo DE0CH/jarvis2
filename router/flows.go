@@ -42,6 +42,7 @@ type Router struct {
 }
 
 func NewRouter(cfg Config, st *State, core *CoreClient, policy Policy) *Router {
+	rememberImageSig(st, cfg)
 	return &Router{cfg: cfg, st: st, core: core, policy: policy, setupSeen: map[string]time.Time{}, commands: map[string]chan string{}, execs: map[string]chan execItem{}, results: map[string]chan ExecResult{}, snapped: map[string]chan struct{}{}}
 }
 
@@ -277,10 +278,29 @@ func (r *Router) addApproval(a *Approval) {
 			Image string `json:"image"`
 		} `json:"request"`
 	}
-	if a.Challenge != nil && a.Challenge.Decode(&ch) == nil && ch.Request.Image != "" && ch.Request.Image == r.cfg.SessionImage {
-		a.ImageSig = r.cfg.SessionImageSig
+	img := ""
+	if a.Challenge != nil && a.Challenge.Decode(&ch) == nil {
+		img = ch.Request.Image
 	}
-	r.st.Do(func(d *persisted) { d.Approvals[a.ID] = a })
+	r.st.Do(func(d *persisted) {
+		// a resume without an upgrade names the session's own, older image: its signature was kept when it was current
+		if img != "" && img == r.cfg.SessionImage {
+			a.ImageSig = r.cfg.SessionImageSig
+		} else if img != "" {
+			a.ImageSig = d.ImageSigs[img]
+		}
+		d.Approvals[a.ID] = a
+	})
+}
+
+// rememberImageSig keeps CI's signature for the session image this router was started with, so an approval that
+// names it after a newer image is pinned (a resume on the session's own image) still carries it. The phone checks
+// the signature itself (keys/ci.pub); the router can only pass it on or withhold it.
+func rememberImageSig(st *State, cfg Config) {
+	if st == nil || cfg.SessionImage == "" || cfg.SessionImageSig == "" {
+		return
+	}
+	st.Do(func(d *persisted) { d.ImageSigs[cfg.SessionImage] = cfg.SessionImageSig })
 }
 
 // ---- new session ------------------------------------------------------------------------------------

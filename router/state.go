@@ -97,6 +97,7 @@ type persisted struct {
 	Tasks     *TaskState               `json:"tasks,omitempty"`     // tasks.go: task instances (session lines), runs, daily schedules
 	Inbox     map[string]*InboxRequest `json:"inbox,omitempty"`     // inbox.go: requests waiting for the phone
 	CoreKey   string                   `json:"coreKey,omitempty"`   // corechange.go: the signing key of the core the sessions' lines belong to
+	ImageSigs map[string]string        `json:"imageSigs,omitempty"` // session image → CI's signature, for every image this router was given (SESSION_IMAGE/_SIG)
 }
 
 type State struct {
@@ -125,6 +126,9 @@ func LoadState(dir string) (*State, error) {
 	}
 	if d.Approvals == nil {
 		d.Approvals = map[string]*Approval{}
+	}
+	if d.ImageSigs == nil {
+		d.ImageSigs = map[string]string{}
 	}
 	if d.Started == nil {
 		d.Started = map[string]*Started{}

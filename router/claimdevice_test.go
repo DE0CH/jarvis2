@@ -17,8 +17,8 @@ func TestTheClaimsDeviceSignatureIsKeptForTheSetupSession(t *testing.T) {
 	}
 }
 
-// R1 audit: an approval for the current CI build carries CI's signature; one for any other image carries none
-func TestOnlyTheCIBuildCarriesItsSignature(t *testing.T) {
+// R1 audit: an approval for a CI build this router was given carries CI's signature; one for any other image carries none
+func TestOnlyCIBuildsCarryTheirSignature(t *testing.T) {
 	st, err := LoadState(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -31,6 +31,18 @@ func TestOnlyTheCIBuildCarriesItsSignature(t *testing.T) {
 	r.addApproval(b)
 	if a.ImageSig != "c2ln" || b.ImageSig != "" {
 		t.Fatalf("got %q and %q", a.ImageSig, b.ImageSig)
+	}
+	// a newer image is pinned (the router restarts with it): a resume on the old image still carries the old signature
+	NewRouter(Config{SessionImage: "ghcr.io/de0ch/jarvis2-session:sha-1@sha256:aa", SessionImageSig: "c2ln"}, st, nil, Policy{})
+	r2 := NewRouter(Config{SessionImage: "ghcr.io/de0ch/jarvis2-session:sha-2@sha256:cc", SessionImageSig: "bmV3"}, st, nil, Policy{})
+	c := &Approval{Challenge: ch("ghcr.io/de0ch/jarvis2-session:sha-1@sha256:aa"), Origin: &Origin{}}
+	r2.addApproval(c)
+	d := &Approval{Challenge: ch("ghcr.io/de0ch/jarvis2-session:sha-2@sha256:cc"), Origin: &Origin{}}
+	r2.addApproval(d)
+	e := &Approval{Challenge: ch("ghcr.io/de0ch/jarvis2-session:x@sha256:bb"), Origin: &Origin{}}
+	r2.addApproval(e)
+	if c.ImageSig != "c2ln" || d.ImageSig != "bmV3" || e.ImageSig != "" {
+		t.Fatalf("got %q, %q and %q", c.ImageSig, d.ImageSig, e.ImageSig)
 	}
 }
 
