@@ -168,7 +168,15 @@ func (r *Router) startMachine(image, size string, onCreated ...func(id string)) 
 	if size == "" {
 		size = "medium"
 	}
-	d, err := r.core.Call("/start", map[string]any{"image": image, "region": r.cfg.Region, "size": size})
+	in := map[string]any{"image": image, "region": r.cfg.Region, "size": size}
+	d, err := r.core.Call("/start", in)
+	// Fly's org machine limit (lessons/58): nothing was created and the approval is still unused, so wait for a
+	// machine to go (sessions pause by themselves) instead of failing a start Deyao already approved
+	for waited := time.Duration(0); err != nil && flyMachineLimit(err) && waited < machineLimitWait; waited += machineLimitStep {
+		log.Printf("start: the Fly org is at its machine limit; trying again in %s", machineLimitStep)
+		time.Sleep(machineLimitStep)
+		d, err = r.core.Call("/start", in)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -197,6 +205,13 @@ func (r *Router) startMachine(image, size string, onCreated ...func(id string)) 
 		}
 		time.Sleep(initStep)
 	}
+}
+
+// machineLimitWait / machineLimitStep: how long a start waits out Fly's org machine limit, and how often it tries
+var machineLimitWait, machineLimitStep = 3 * time.Hour, time.Minute
+
+func flyMachineLimit(err error) bool {
+	return strings.Contains(strings.ToLower(err.Error()), "machine limit")
 }
 
 // killUntilDestroyed: the core's kill (one Fly destroy) again until Fly reports the machine destroyed (409 before).

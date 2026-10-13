@@ -841,3 +841,8 @@ iCloud index and leases (decided while Deyao was away; the safe, reversible defa
 139. **The apps' server URL changes at retirement, not now.** Both forks name jarvis.deyaochen.com in one constant; moving
      them now would cut Deyao's apps off Jarvis 1's sessions while he still uses it. At the freeze: change the constant,
      ship each through its TestFlight workflow, pair each app once (RUNBOOK "Paired apps").
+132. **A start waits out Fly's org machine limit** (up to 3 hours, a try a minute; `router/flows.go` startMachine):
+     the limit counts every machine object (lessons/58: 20 in Jarvis 1's org), and the import starts 16 lines at once
+     next to the running ones. A refused create made nothing and the phone's approval isn't spent until certify, so
+     the router keeps it and tries again as sessions pause, instead of failing a line Deyao already approved (which
+     would cost him another Face ID). The session shows `starting` meanwhile. Change: ask Fly to raise the org's limit.

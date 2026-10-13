@@ -16,6 +16,7 @@ type splitCore struct {
 	old              bool
 	initWait, killWt int
 	initFail         bool
+	limit            int // /start answers Fly's machine-limit refusal this many times first
 	mu               sync.Mutex
 	calls            []string
 	bodies           map[string]map[string]any
@@ -31,6 +32,11 @@ func (c *splitCore) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	started := map[string]any{"kind": "started", "machine": map[string]string{"id": "m7", "requested": "img", "image": "img"}}
 	switch req.URL.Path {
 	case "/start":
+		if c.limit > 0 {
+			c.limit--
+			writeJSON(w, 502, c.key.doc(map[string]string{"kind": "error", "error": "fly create: 422 Your organization has reached its machine limit. Please contact billing@fly.io"}))
+			return
+		}
 		if c.old {
 			writeJSON(w, 200, c.key.doc(started))
 			return
@@ -131,5 +137,24 @@ func TestStartWithACoreFromBeforeR2(t *testing.T) {
 	}
 	if _, err := r.killUntilDestroyed(map[string]any{"machine": "m7"}); err != nil || c.count("/kill") != 1 {
 		t.Fatalf("%v %v", err, c.calls)
+	}
+}
+
+func TestStartWaitsOutFlysMachineLimit(t *testing.T) {
+	c := &splitCore{key: newTestKey(), limit: 2, bodies: map[string]map[string]any{}}
+	r := splitRouter(t, c)
+	machineLimitStep = time.Millisecond
+	defer func() { machineLimitStep = time.Minute }()
+	if _, err := r.startMachine("img", ""); err != nil {
+		t.Fatal(err)
+	}
+	if c.count("/start") != 3 {
+		t.Fatalf("%v", c.calls)
+	}
+	c.limit = 1 << 30
+	machineLimitWait = 5 * time.Millisecond
+	defer func() { machineLimitWait = 3 * time.Hour }()
+	if _, err := r.startMachine("img", ""); err == nil || !flyMachineLimit(err) {
+		t.Fatalf("gave up without the limit's error: %v", err)
 	}
 }
