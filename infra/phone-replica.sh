@@ -170,14 +170,16 @@ while :; do
       if [ -n "$m" ] && FLY_API_TOKEN="$JARVIS2_FLY_TOKEN" flyctl machine exec "$m" -a jarvis2-sessions \
            "/usr/local/bin/jarvis2-request grant $holder --minutes 5 --why replica-the-session-asks-for-$holder" >> "$LOGS/inbox.log" 2>&1; then answer ok
       else answer "session request failed (machine ${m:-none}): $(tail -2 "$LOGS/inbox.log" 2>/dev/null)"; fi ;;
-    inbox-batch:*) # a batch from the session (two grants, one summary): the app allows both under one Face ID
+    inbox-batch:*) # a batch from the session (two grants, one summary): the app allows both under one Face ID. Not the
+      # scheduler: the grants step later forgets ITS scheduler grant by the row's identifier, and a second scheduler row
+      # from here kept that identifier on screen ("forgotten" failed, replica run 38350148683)
       sid=${msg#inbox-batch:}; : > "$LOGS/inbox.log"; m=""
       for _ in $(seq 1 18); do
         m=$(python3 "$ROOT/infra/setup.py" sessions 2>>"$LOGS/inbox.log" | awk -v s="$sid" '$1 == s && $2 != "-" {print $2}')
         [ -n "$m" ] && break; sleep 5
       done
       if [ -n "$m" ] && FLY_API_TOKEN="$JARVIS2_FLY_TOKEN" flyctl machine exec "$m" -a jarvis2-sessions \
-           "/usr/local/bin/jarvis2-request batch --summary replica-the-session-asks-for-two-grants --item grant,holder=scheduler,minutes=5 --item grant,holder=remote,minutes=5" >> "$LOGS/inbox.log" 2>&1 \
+           "/usr/local/bin/jarvis2-request batch --summary replica-the-session-asks-for-two-grants --item grant,holder=status,minutes=5 --item grant,holder=remote,minutes=5" >> "$LOGS/inbox.log" 2>&1 \
            && grep -q '"id": "b' "$LOGS/inbox.log"; then answer ok   # flyctl exec exits 0 whatever the command did: the router's batch id is the proof
       else answer "session batch failed (machine ${m:-none}): $(tail -2 "$LOGS/inbox.log" 2>/dev/null)"; fi ;;
     session-file:*) # the machine keeps an attachment only when its bytes match the cert (and the core attested it)
