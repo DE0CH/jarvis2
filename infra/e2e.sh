@@ -9,6 +9,7 @@
 #   E2E_CORE_REF + E2E_HELD_CORE=1: run against the core of that ref (the held one) and check only that a session gets
 #     its settings from the router as before
 #   E2E_ONLY=jarvis1-import: after the core's setup, only the Jarvis 1 import step (a fake paused session on 127.0.0.1:${PP}070)
+#   E2E_ONLY=drain: after the first session is up, only the drain: SIGTERM to the router with a pause in flight
 #   E2E_PEER (default jarvis2-e2e), E2E_PORT (default 28 → 28090/28080): another peer and ports let two runs go at once
 set -euo pipefail
 : "${JARVIS2_FLY_TOKEN:?}"
@@ -78,7 +79,7 @@ env -u LOBSTER_TOKEN -u STORAGEBOX_HOST -u STORAGEBOX_USER -u STORAGEBOX_PASSWOR
   CORE_URL=http://127.0.0.1:${PP}090 NO_ACCESS=1 RECORDS_OFF=1 LIVE_SYNC_SECONDS=20 ADDR=127.0.0.1:${PP}080 DATA_DIR="$W/data" WEB_DIR="$W/web" \
   WG_CONFIG="$W/wg.conf" MACHINE_URL="http://$PEER._peer.internal:8081" POLICY_FILE="$W/policy.json" TASKS_DIR="$ROOT/tasks" \
   SESSION_IMAGE="$E2E_SESSION_IMAGE" JARVIS1_PAUSED_URL="http://127.0.0.1:${PP}070/" \
-  "$W/router" > "$W/router.log" 2>&1 & PIDS+=($!)
+  "$W/router" > "$W/router.log" 2>&1 & PIDS+=($!); ROUTER_PID=$!
 sleep 3
-(cd "$ROOT/e2e" && E2E_ROUTER_LOG="$W/router.log" E2E_DATA_DIR="$W/data" E2E_ROUTER=http://127.0.0.1:${PP}080 E2E_CORE=http://127.0.0.1:${PP}090 E2E_MASTER_KEY_FILE="$ROOT/e2e/testdata/master-test.pem" E2E_BOX_PUB="$(cat "$W/box.pub")" \
+(cd "$ROOT/e2e" && E2E_ROUTER_PID="$ROUTER_PID" E2E_ROUTER_LOG="$W/router.log" E2E_DATA_DIR="$W/data" E2E_ROUTER=http://127.0.0.1:${PP}080 E2E_CORE=http://127.0.0.1:${PP}090 E2E_MASTER_KEY_FILE="$ROOT/e2e/testdata/master-test.pem" E2E_BOX_PUB="$(cat "$W/box.pub")" \
   E2E_JARVIS1_ADDR=127.0.0.1:${PP}070 E2E_FLY_TOKEN="$JARVIS2_FLY_TOKEN" go run .) || { echo "--- router log"; tail -40 "$W/router.log"; exit 1; }

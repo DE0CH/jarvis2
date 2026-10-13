@@ -32,7 +32,9 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -258,6 +260,11 @@ func main() {
 	}
 	expectNoUnlocks("after the Start's pull")
 	expectOnMachine(m1, "echo marker-"+secret+" > /home/claude/artifacts/e2e-marker && chown claude /home/claude/artifacts/e2e-marker && echo ok", "ok")
+
+	if os.Getenv("E2E_ONLY") == "drain" {
+		drainStep(id)
+		return
+	}
 
 	step("grants: no shell without one; a phone grant opens it; the session's own allow list too")
 	s, b = call(router, "POST", "/api/sessions/"+id+"/exec", map[string]any{"cmd": "echo hi"}, nil)
@@ -880,4 +887,54 @@ func waitTask(id, want string, d time.Duration) {
 		}
 		time.Sleep(5 * time.Second)
 	}
+}
+
+// drainStep (E2E_ONLY=drain): a router rollout while a pause is in flight. SIGTERM reaches the router right after the
+// pause began: it goes on serving reads and the machine's snapshot (over Fly's private network), refuses a new action
+// with 503 "router updating, try again shortly", lets the pause finish, then exits on its own.
+func drainStep(id string) {
+	step("drain: SIGTERM with a pause in flight → reads served, new actions 503, the pause finishes, then the router exits")
+	pid, err := strconv.Atoi(os.Getenv("E2E_ROUTER_PID"))
+	if err != nil {
+		log.Fatal("E2E_ONLY=drain needs E2E_ROUTER_PID (infra/e2e.sh sets it)")
+	}
+	proc, _ := os.FindProcess(pid)
+	s, b := call(router, "POST", "/api/sessions/"+id+"/pause", nil, nil)
+	must(s, b, "pause")
+	if err := proc.Signal(syscall.SIGTERM); err != nil {
+		log.Fatalf("SIGTERM: %v", err)
+	}
+	time.Sleep(time.Second)
+	if s, b := call(router, "GET", "/api/state", nil, nil); s != 200 {
+		log.Fatalf("GET /api/state during the drain: %d %s", s, b)
+	}
+	s, b = call(router, "POST", "/api/sessions/"+id+"/destroy", nil, nil)
+	if s != 503 || !strings.Contains(string(b), "router updating, try again shortly") {
+		log.Fatalf("a new action during the drain: %d %s", s, b)
+	}
+	// the router exits once the pause is done (it may be gone before a poll sees "paused"): its volume says how it ended
+	for i := 0; proc.Signal(syscall.Signal(0)) == nil; i++ {
+		if i > 12*60*2 {
+			log.Fatal("the router didn't exit within 12 min of the drain")
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	var st struct {
+		Sessions map[string]struct{ State, Error string }
+	}
+	sb, err := os.ReadFile(filepath.Join(os.Getenv("E2E_DATA_DIR"), "state.json"))
+	if err != nil || json.Unmarshal(sb, &st) != nil {
+		log.Fatalf("the router's state.json: %v", err)
+	}
+	if x := st.Sessions[id]; x.State != "paused" {
+		log.Fatalf("the in-flight pause ended %q (%s)", x.State, x.Error)
+	}
+	lb, _ := os.ReadFile(os.Getenv("E2E_ROUTER_LOG"))
+	if strings.Contains(string(lb), "not waiting for a snapshot") || strings.Contains(string(lb), "never got past boot") {
+		log.Fatal("the pause didn't wait for the machine's snapshot: the drain wasn't tested with one in flight")
+	}
+	if !strings.Contains(string(lb), "drained") {
+		log.Fatal("the router's log has no \"drained\"")
+	}
+	log.Printf("E2E PASSED (the drain only)")
 }
