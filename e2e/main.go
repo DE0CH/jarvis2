@@ -132,6 +132,7 @@ func main() {
 		AgreementKey string `json:"agreementKey"`
 		BoxSig       string `json:"boxSig"`
 		State        Doc    `json:"state"`
+		Bundle       string `json:"bundle"` // "keys": stores made of keys (core/keys.go); "" = a core from before
 	}
 	must2(call(router, "GET", "/api/core/identity", nil, &id0))
 	if !verifyRaw(os.Getenv("E2E_BOX_PUB"), "jarvis2-core-identity "+id0.SigningKey+" "+id0.AgreementKey, id0.BoxSig) {
@@ -154,20 +155,35 @@ func main() {
 		log.Fatalf("not this phone's store key: %+v", skey)
 	}
 	secret := hex.EncodeToString(randBytes(8))
-	bundle, _ := json.Marshal(map[string]any{
-		"format": "blobs", "stores": "blobs",
-		"flyToken": os.Getenv("E2E_FLY_TOKEN"),
-		"blobs": []map[string]any{
-			wrapStore(skey.StoreKey, "e2e", map[string]string{"E2E_SECRET": secret}),
-			wrapStore(skey.StoreKey, "e2e-extra", map[string]string{"E2E_EXTRA": "extra-" + secret}),
-			wrapStore(skey.StoreKey, "e2e-more", map[string]string{"E2E_MORE": "more-" + secret}),
-			// the Claude login store: the account the machine accepts a login for, and a stand-in for Anthropic's
-			// profile endpoint (a public file naming that account), named in the store itself; the router's pair is
-			// a fake one seeded below
-			wrapStore(skey.StoreKey, "claude", map[string]string{"CLAUDE_ACCOUNT_UUID": "e2e-account", "CLAUDE_PROFILE_URL": fakeProfile}),
-		},
-		"notSensitive": []string{"e2e", "claude"},
-	})
+	recovered := map[string]map[string]string{
+		"e2e":       {"E2E_SECRET": secret},
+		"e2e-extra": {"E2E_EXTRA": "extra-" + secret},
+		"e2e-more":  {"E2E_MORE": "more-" + secret},
+		// the Claude login store: the account the machine accepts a login for, and a stand-in for Anthropic's
+		// profile endpoint (a public file naming that account), named in the store itself; the router's pair is
+		// a fake one seeded below
+		"claude": {"CLAUDE_ACCOUNT_UUID": "e2e-account", "CLAUDE_PROFILE_URL": fakeProfile},
+	}
+	keysCore = id0.Bundle == "keys"
+	var bundle []byte
+	if keysCore { // every store's name and every key, each wrapped on its own (core claimBundle)
+		names, keys := []string{}, []map[string]any{}
+		for _, n := range []string{"claude", "e2e", "e2e-extra", "e2e-more"} {
+			names = append(names, n)
+			for k, v := range recovered[n] {
+				keys = append(keys, wrapKey(skey.StoreKey, n, k, v))
+			}
+		}
+		bundle, _ = json.Marshal(map[string]any{"format": "keys", "stores": names, "keys": keys,
+			"flyToken": os.Getenv("E2E_FLY_TOKEN"), "notSensitive": []string{"e2e", "claude"}})
+	} else { // a core from before keys.go (the held production core's run, E2E_HELD_CORE)
+		blobs := []map[string]any{}
+		for _, n := range []string{"e2e", "e2e-extra", "e2e-more", "claude"} {
+			blobs = append(blobs, wrapStore(skey.StoreKey, n, recovered[n]))
+		}
+		bundle, _ = json.Marshal(map[string]any{"format": "blobs", "stores": "blobs", "flyToken": os.Getenv("E2E_FLY_TOKEN"),
+			"blobs": blobs, "notSensitive": []string{"e2e", "claude"}})
+	}
 	sum := sha256.Sum256(bundle)
 	mpub, _ := master.PublicKey.ECDH()
 	stmt, _ := json.Marshal(map[string]any{"kind": "claim", "master": b64.EncodeToString(mpub.Bytes()),
@@ -361,8 +377,55 @@ func main() {
 		"sleep 6; grep -c E2E_EXTRA /home/claude/.secrets; grep -c E2E_MORE /home/claude/.secrets; grep -c E2E_SECRET /home/claude/.secrets", "1\n1\n1")
 	expectNoUnlocks("after the add-stores' pulls")
 
+	if keysCore {
+		step("a session writes one key into a store it doesn't hold, with no approval: backed up first (the bucket stand-in), " +
+			"the explanation listed, the phone shown which session wrote it; nobody holds the store, so no refresh is asked")
+		expectOnMachine(m1, "su - claude -c \"printf note-"+secret+" | jarvis2 put-key e2e-notes E2E_NOTE --explain 'the e2e note'\" 2>&1 | grep -c 'E2E_NOTE written in e2e-notes'", "1")
+		if _, err := os.Stat(filepath.Join(os.Getenv("E2E_S3_DIR"), "keys", "e2e-notes", "E2E_NOTE.json")); err != nil {
+			log.Fatalf("no backup of the written key in the bucket: %v", err)
+		}
+		expectOnMachine(m1, "su - claude -c 'jarvis2 stores --keys' | grep -c '^  E2E_NOTE: the e2e note \\[written by session '", "1")
+		unlock(p, "e2e-notes", "")
+		if lastUnlockWriters["e2e-notes/E2E_NOTE"] != "machine "+m1 {
+			log.Fatalf("the phone isn't shown the session's machine as the writer: %v", lastUnlockWriters)
+		}
+		lockAll()
+		if q := waitRequestFor(id, 5*time.Second); q != "" {
+			log.Fatalf("a refresh was asked for a store the session doesn't hold: %s", q)
+		}
+
+		step("a key written into a store the session holds: its copy stays as it was until the phone's refresh, which the router " +
+			"asks for at once; once allowed (an unlock for its cert) the machine pulls by itself, and the other keys are untouched")
+		expectOnMachine(m1, "su - claude -c \"printf more2-"+secret+" | jarvis2 put-key e2e-more E2E_MORE --explain 'the e2e more key'\" >/dev/null 2>&1; "+
+			"grep -c more2- /home/claude/.secrets || true", "0")
+		if q := waitRequestFor(id, 30*time.Second); q == "" {
+			log.Fatal("no refresh asked for the session that holds the written store")
+		}
+		cert := sessionCert(id)
+		for _, n := range certStores(cert) {
+			unlock(p, n, nonceOf(cert))
+		}
+		expectOnMachine(m1, "for i in $(seq 1 30); do grep -q more2- /home/claude/.secrets && break; sleep 2; done; "+
+			"grep -c more2- /home/claude/.secrets; grep -c E2E_EXTRA /home/claude/.secrets; grep -c E2E_SECRET /home/claude/.secrets", "1\n1\n1")
+		expectNoUnlocks("after the refresh's pull")
+		denyRequestsFor(id) // the harness unlocked as the app would; the request itself is done with
+
+		step("delete a key: gone from the core's list")
+		expectOnMachine(m1, "su - claude -c 'jarvis2 delete-key e2e-notes E2E_NOTE' >/dev/null 2>&1; su - claude -c 'jarvis2 stores' | grep -c '^e2e-notes \\[.*\\]: $'", "1")
+	}
+
 	step("downgrade in place: back to [e2e], new keys, the extra secret shredded")
 	expectOnMachine(m1, "su - claude -c 'jarvis2 downgrade e2e' >/dev/null 2>&1 && grep -c E2E_SECRET /home/claude/.secrets && grep -c E2E_EXTRA /home/claude/.secrets || true", "1\n0")
+
+	if keysCore {
+		step("a key written into e2e before the pause, its refresh not allowed: the resumed session's carried copy is behind, " +
+			"and the router asks the phone again after its first pull")
+		expectOnMachine(m1, "su - claude -c \"printf late-"+secret+" | jarvis2 put-key e2e E2E_LATE --explain 'written before the pause'\" >/dev/null 2>&1; echo done", "done")
+		if q := waitRequestFor(id, 30*time.Second); q == "" {
+			log.Fatal("no refresh asked after the write")
+		}
+		denyRequestsFor(id)
+	}
 
 	step("pause → paused (snapshot uploaded, machine killed)")
 	s, b = call(router, "POST", "/api/sessions/"+id+"/pause", nil, nil)
@@ -382,6 +445,18 @@ func main() {
 		"{ test -e .openclaw/gateway.pid && echo pid || echo no-pid; }", "paseo\nopenclaw\nopencode\nno-pid")
 	expectOnMachine(m2, "grep -c E2E_EXTRA /home/claude/.secrets || true", "0")
 	expectOnMachine(m2, "grep -c E2E_SECRET /home/claude/.secrets", "1")
+	if keysCore {
+		expectOnMachine(m2, "grep -c late- /home/claude/.secrets || true", "0")
+		if q := waitRequestFor(id, 60*time.Second); q == "" {
+			log.Fatal("the resumed session's copy is behind a write, and no refresh was asked")
+		}
+		cert := sessionCert(id)
+		for _, n := range certStores(cert) {
+			unlock(p, n, nonceOf(cert))
+		}
+		expectOnMachine(m2, "for i in $(seq 1 30); do grep -q late- /home/claude/.secrets && break; sleep 2; done; grep -c late- /home/claude/.secrets", "1")
+		expectNoUnlocks("after the resumed session's refresh")
+	}
 	expectNoUnlocks("after the resume")
 
 	step("a lost carry blob: the resume waits on the locked store; an unlock for the session's cert lets it go on, then locks again")
@@ -596,6 +671,25 @@ func sealTo(recipient string, plain []byte, info string) map[string]string {
 // wrapStore: a store as the app wraps it (CoreCrypto.wrapStore) to the core's store key C = P + K: a fresh data key
 // seals the values (AES-GCM, the store's name as AAD); the data key is sealed under HKDF(x(e·C),
 // "jarvis2/store-data-key") with a one-off e
+// keysCore: the core's stores are made of keys (core/keys.go)
+var keysCore bool
+
+// wrapKey: one key as the app wraps it for a Recover — the value under its own data key (AAD store\nkey), that key
+// wrapped to the store key
+func wrapKey(storeKey, store, key, value string) map[string]any {
+	cb, _ := b64.DecodeString(storeKey)
+	C, err := ecdh.P256().NewPublicKey(cb)
+	if err != nil {
+		log.Fatal(err)
+	}
+	e, _ := ecdh.P256().GenerateKey(rand.Reader)
+	x, _ := e.ECDH(C)
+	kek, _ := hkdf.Key(sha256.New, x, nil, "jarvis2/store-data-key", 32)
+	dk := randBytes(32)
+	return map[string]any{"store": store, "key": key, "wrapped": map[string]string{"e": b64.EncodeToString(e.PublicKey().Bytes()), "wrapped": b64.EncodeToString(gcm(kek, dk, nil))},
+		"data": b64.EncodeToString(gcm(dk, []byte(value), []byte(store+"\n"+key)))}
+}
+
 func wrapStore(storeKey, name string, values map[string]string) map[string]any {
 	cb, _ := b64.DecodeString(storeKey)
 	C, err := ecdh.P256().NewPublicKey(cb)
@@ -627,6 +721,9 @@ func randBytes(n int) []byte {
 
 var unlockIDs []string
 
+// lastUnlockWriters: store/key → who the core said wrote it ("machine <id>", "setup ", "core "), from the last unlock
+var lastUnlockWriters = map[string]string{}
+
 // fakeProfile: the test's stand-in for Anthropic's profile endpoint (testdata/claude-profile.json on main, through
 // jsDelivr: raw.githubusercontent.com answers 404 to a request with a bearer token, which the machine always sends)
 const fakeProfile = "https://cdn.jsdelivr.net/gh/DE0CH/jarvis2@main/e2e/testdata/claude-profile.json"
@@ -639,24 +736,42 @@ const fakePair = `{"claudeAiOauth": {"accessToken": "e2e-fake-access", "refreshT
 func unlock(p *phone, store, forNonce string) {
 	var d Doc
 	must2(call(router, "POST", "/api/core/unlock/begin", map[string]string{"store": store, "for": forNonce}, &d))
-	var ub struct{ Kind, Pending, Store, E, T, For string }
+	var ub struct {
+		Kind, Pending, Store, E, T, For string
+		Keys                            []struct {
+			Key, E string
+			Writer struct{ By, Machine string }
+		}
+	}
 	verify(d, &ub)
 	if ub.Kind != "unlock-begin" || ub.Store != store || (ub.For != forNonce && os.Getenv("E2E_HELD_CORE") != "1") {
 		log.Fatalf("unlock-begin: %+v", ub)
 	}
-	eb, _ := b64.DecodeString(ub.E)
-	E, _ := ecdh.P256().NewPublicKey(eb)
-	x, _ := p.agr.ECDH(E) // the Enclave returns x(p·E)
-	tb, _ := b64.DecodeString(ub.T)
-	T, _ := ecdh.P256().NewPublicKey(tb)
-	r, _ := ecdh.P256().GenerateKey(rand.Reader)
-	x2, _ := r.ECDH(T)
-	k, _ := hkdf.Key(sha256.New, x2, nil, "jarvis2/unlock-share", 32)
-	blk, _ := aes.NewCipher(k)
-	g, _ := cipher.NewGCM(blk)
-	nonce := randBytes(g.NonceSize())
-	share := map[string]string{"e": b64.EncodeToString(r.PublicKey().Bytes()), "data": b64.EncodeToString(append(nonce, g.Seal(nil, nonce, x, nil)...))}
-	must2(call(router, "POST", "/api/core/unlock/finish", map[string]any{"pending": ub.Pending, "share": share}, &d))
+	// the phone's share x(p·E) of one E (the Enclave returns only x), sealed to the core's one-off T
+	share := func(e string) map[string]string {
+		eb, _ := b64.DecodeString(e)
+		E, _ := ecdh.P256().NewPublicKey(eb)
+		x, _ := p.agr.ECDH(E)
+		tb, _ := b64.DecodeString(ub.T)
+		T, _ := ecdh.P256().NewPublicKey(tb)
+		r, _ := ecdh.P256().GenerateKey(rand.Reader)
+		x2, _ := r.ECDH(T)
+		k, _ := hkdf.Key(sha256.New, x2, nil, "jarvis2/unlock-share", 32)
+		blk, _ := aes.NewCipher(k)
+		g, _ := cipher.NewGCM(blk)
+		nonce := randBytes(g.NonceSize())
+		return map[string]string{"e": b64.EncodeToString(r.PublicKey().Bytes()), "data": b64.EncodeToString(append(nonce, g.Seal(nil, nonce, x, nil)...))}
+	}
+	if keysCore { // one share per key
+		shares := map[string]map[string]string{}
+		for _, k := range ub.Keys {
+			shares[k.Key] = share(k.E)
+			lastUnlockWriters[store+"/"+k.Key] = k.Writer.By + " " + k.Writer.Machine
+		}
+		must2(call(router, "POST", "/api/core/unlock/finish", map[string]any{"pending": ub.Pending, "shares": shares}, &d))
+	} else {
+		must2(call(router, "POST", "/api/core/unlock/finish", map[string]any{"pending": ub.Pending, "share": share(ub.E)}, &d))
+	}
 	var uf struct{ Kind, ID, Store string }
 	verify(d, &uf)
 	if uf.Kind != "unlocked" {
@@ -712,6 +827,54 @@ func expectNoUnlocks(when string) {
 	if ul.Nonce != "n-123" || len(ul.Unlocked) != 0 {
 		log.Fatalf("a store is still unlocked %s: %+v", when, ul)
 	}
+}
+
+// waitRequestFor: an unlock request (a refresh) for the session in the Inbox within d → its id ("" = none)
+func waitRequestFor(sid string, d time.Duration) string {
+	for deadline := time.Now().Add(d); ; time.Sleep(2 * time.Second) {
+		var out struct {
+			Requests []struct{ ID, Kind, Session string }
+		}
+		call(router, "GET", "/api/requests", nil, &out)
+		for _, q := range out.Requests {
+			if q.Kind == "unlock" && q.Session == sid {
+				return q.ID
+			}
+		}
+		if time.Now().After(deadline) {
+			return ""
+		}
+	}
+}
+
+// denyRequestsFor: Deyao denies every Inbox request for the session (a refresh he doesn't allow)
+func denyRequestsFor(sid string) {
+	var out struct {
+		Requests []struct{ ID, Kind, Session string }
+		Batches  []struct{ ID string }
+	}
+	call(router, "GET", "/api/requests", nil, &out)
+	for _, b := range out.Batches {
+		call(router, "DELETE", "/api/requests/batches/"+b.ID, nil, nil)
+	}
+	for _, q := range out.Requests {
+		if q.Session == sid {
+			call(router, "DELETE", "/api/requests/"+q.ID, nil, nil)
+		}
+	}
+}
+
+// sessionCert: the session's newest cert as the router serves it to the app (core-signed)
+func sessionCert(sid string) Doc {
+	var d Doc
+	must2(call(router, "GET", "/api/sessions/"+sid+"/cert", nil, &d))
+	return d
+}
+
+func certStores(c Doc) []string {
+	var x struct{ Stores []string }
+	verify(c, &x)
+	return x.Stores
 }
 
 type approval struct {

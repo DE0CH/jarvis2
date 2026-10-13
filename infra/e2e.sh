@@ -84,6 +84,11 @@ E2E_SESSION_IMAGE="$("$ROOT/infra/image-digest.sh" "${E2E_SESSION_IMAGE:-ghcr.io
 openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -days 2 -subj /CN=127.0.0.1 \
   -addext subjectAltName=IP:127.0.0.1 -keyout "$W/dav.key" -out "$W/dav.crt" 2>/dev/null
 cat /etc/ssl/certs/ca-certificates.crt "$W/dav.crt" > "$W/roots.pem"
+# the backup bucket: rclone's S3 server (it checks SigV4) on a local directory; the router adds key backups there
+# (router/storedocs.go) with the stand-in's key, as it does with its BACKUP_READ_* credential on Hetzner
+mkdir -p "$W/s3/jarvis2-backup-de0ch"
+S3_SECRET="$(openssl rand -hex 16)"
+rclone serve s3 --addr 127.0.0.1:${PP}074 --auth-key "e2e,$S3_SECRET" "$W/s3" > "$W/s3.log" 2>&1 & PIDS+=($!)
 cat > "$W/router-env" <<ENV
 #!/bin/sh
 exec env -i PATH="$PATH" HOME="$HOME" \\
@@ -92,6 +97,7 @@ exec env -i PATH="$PATH" HOME="$HOME" \\
   SESSION_IMAGE="$E2E_SESSION_IMAGE" JARVIS1_PAUSED_URL="http://127.0.0.1:${PP}070/" \\
   STORAGEBOX_HOST=127.0.0.1:${PP}073 STORAGEBOX_USER=e2e STORAGEBOX_PASSWORD=e2e SSL_CERT_FILE="$W/roots.pem" \\
   SEARCH_URL=http://127.0.0.1:${PP}071 WATCH_URL=http://127.0.0.1:${PP}072 \\
+  BACKUP_ENDPOINT=http://127.0.0.1:${PP}074 BACKUP_READ_ACCESS_KEY=e2e BACKUP_READ_SECRET_KEY="$S3_SECRET" \\
   "$W/router"
 ENV
 chmod 700 "$W/router-env"
@@ -132,4 +138,4 @@ sleep 3
 (cd "$ROOT/e2e" && E2E_ROUTER_PID="$ROUTER_PID" E2E_ROUTER_LOG="$W/router.log" E2E_DATA_DIR="$W/data" E2E_ROUTER=http://127.0.0.1:${PP}080 E2E_CORE=http://127.0.0.1:${PP}090 E2E_MASTER_KEY_FILE="$ROOT/e2e/testdata/master-test.pem" E2E_BOX_PUB="$(cat "$W/box.pub")" \
   E2E_JARVIS1_ADDR=127.0.0.1:${PP}070 E2E_FLY_TOKEN="$JARVIS2_FLY_TOKEN" \
   E2E_PEER="$PEER" E2E_J1_HITS="$W/j1-hits.log" E2E_SEARCH_ADDR=127.0.0.1:${PP}071 E2E_WATCH_ADDR=127.0.0.1:${PP}072 \
-  E2E_DAV_ADDR=127.0.0.1:${PP}073 E2E_DAV_CERT="$W/dav.crt" E2E_DAV_KEY="$W/dav.key" go run .) || { echo "--- router log"; tail -40 "$W/router.log"; exit 1; }
+  E2E_DAV_ADDR=127.0.0.1:${PP}073 E2E_DAV_CERT="$W/dav.crt" E2E_DAV_KEY="$W/dav.key" E2E_S3_DIR="$W/s3/jarvis2-backup-de0ch" go run .) || { echo "--- router log"; tail -40 "$W/router.log"; exit 1; }
