@@ -38,6 +38,7 @@ type pulled struct {
 	Kind, Machine string
 	Sealed        Sealed
 	Carry         string
+	Stale         []string
 }
 
 func pull(t *testing.T, c *Core, cert SignedDoc, carry string) pulled {

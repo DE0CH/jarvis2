@@ -294,7 +294,6 @@ var callRules = map[string]callRule{
 	"POST /api/core/stores":                     callBody,
 	"POST /api/core/stores/create":              callBody,
 	"POST /api/core/stores/mark-sensitive":      callBody,
-	"POST /api/core/stores/write":               callBody,
 	"POST /api/core/unlock/begin":               callNo, // half of an unlock the phone finishes with its sealed share
 	"POST /api/core/unlock/finish":              callNo, // needs the phone's sealed share
 	"POST /api/core/unlocked":                   callBody,
@@ -386,6 +385,7 @@ var callRules = map[string]callRule{
 	"GET /api/sizes":                            callBody,
 	"GET /api/state":                            callBody,
 	"GET /api/stores":                           callBody,
+	"PUT /api/stores/{store}/docs":              callBody, // explanations: no secret, no trust decision
 	"GET /api/tasks":                            callBody,
 	"POST /api/tasks/instances":                 callBody,
 	"DELETE /api/tasks/instances/{id}":          callBody,

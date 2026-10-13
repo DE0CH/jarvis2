@@ -30,7 +30,7 @@ func TestLiveDeployKeyOnGitHub(t *testing.T) {
 	}
 	c, _, p := setup(t)
 	c.github = newGitHubAPI()
-	pl(t)(c.WriteStore(writeStore(t, c, p, DeployKeyTokenStore, map[string]string{DeployKeyTokenKey: strings.TrimSpace(string(tok))})))
+	pl(t)(writeStore(t, c, p, DeployKeyTokenStore, map[string]string{DeployKeyTokenKey: strings.TrimSpace(string(tok))}))
 	m, err := deployKey(t, c, p, "add", repo, false)
 	if err != nil {
 		t.Fatal(err)

@@ -69,18 +69,18 @@ func (c *Core) standing(name string) bool {
 	return false
 }
 
-// openFor: the store's plaintext if an unlock is open to the cert with this nonce (standing, or for it)
-func (c *Core) openFor(name, nonce string) (map[string]string, bool) {
+// openFor: the store's plaintext and its version if an unlock is open to the cert with this nonce (standing, or for it)
+func (c *Core) openFor(name, nonce string) (map[string]string, string, bool) {
 	u := c.unlocked[name]
 	if u == nil {
-		return nil, false
+		return nil, "", false
 	}
 	for _, h := range u.ids {
 		if h.For == "" || h.For == nonce {
-			return u.values, true
+			return u.values, u.version, true
 		}
 	}
-	return nil, false
+	return nil, "", false
 }
 
 // releaseFor: lock every unlock that was for this nonce (its cert has pulled); the stores whose plaintext went
@@ -133,13 +133,14 @@ type carryPayload struct {
 	Kind     string                       `json:"kind"`    // "carry"
 	Machine  string                       `json:"machine"` // the machine it is bound to
 	Line     string                       `json:"line"`
-	Cert     string                       `json:"cert"`   // the nonce of the cert it was sealed for
-	Stores   map[string]map[string]string `json:"stores"` // per store: its values as that machine got them
+	Cert     string                       `json:"cert"`     // the nonce of the cert it was sealed for
+	Stores   map[string]map[string]string `json:"stores"`   // per store: its values as that machine got them
+	Versions map[string]string            `json:"versions"` // per store: the store's version those values are
 	IssuedAt string                       `json:"issuedAt"`
 }
 
-func (c *Core) sealCarry(cert *Cert, perStore map[string]map[string]string) (string, error) {
-	p := carryPayload{Kind: "carry", Machine: cert.Machine.ID, Line: cert.Line, Cert: cert.Nonce, Stores: perStore, IssuedAt: c.now().UTC().Format(time.RFC3339)}
+func (c *Core) sealCarry(cert *Cert, perStore map[string]map[string]string, versions map[string]string) (string, error) {
+	p := carryPayload{Kind: "carry", Machine: cert.Machine.ID, Line: cert.Line, Cert: cert.Nonce, Stores: perStore, Versions: versions, IssuedAt: c.now().UTC().Format(time.RFC3339)}
 	plain, err := json.Marshal(p)
 	if err != nil {
 		return "", err
@@ -168,24 +169,24 @@ func (c *Core) openCarry(blob string) (*carryPayload, error) {
 // predecessor's newest: the successor the core certified), the cert is its machine's newest and that machine isn't
 // killed, and only the stores the cert names. A blob from before a downgrade opens for nothing after it. nil
 // otherwise (callers hold c.mu).
-func (c *Core) openCarryFor(blob string, cert *Cert) map[string]map[string]string {
+func (c *Core) openCarryFor(blob string, cert *Cert) (map[string]map[string]string, map[string]string) {
 	if blob == "" || cert.Machine == nil || c.isKilled(cert.Machine.ID) || c.latest[cert.Machine.ID] != cert.Nonce {
-		return nil
+		return nil, nil
 	}
 	p, err := c.openCarry(blob)
 	if err != nil || p.Machine == "" || p.Cert == "" {
-		return nil
+		return nil, nil
 	}
 	own := p.Machine == cert.Machine.ID && (p.Cert == cert.Nonce || p.Cert == cert.PredCert)
 	pred := p.Machine == cert.PredID && p.Machine != cert.Machine.ID && p.Cert == cert.PredCert
 	if !own && !pred {
-		return nil
+		return nil, nil
 	}
-	out := map[string]map[string]string{}
+	out, versions := map[string]map[string]string{}, map[string]string{}
 	for _, n := range cert.Stores {
 		if v, ok := p.Stores[n]; ok {
-			out[n] = v
+			out[n], versions[n] = v, p.Versions[n]
 		}
 	}
-	return out
+	return out, versions
 }

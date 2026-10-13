@@ -37,39 +37,6 @@ type SignedDoc struct {
 	Carry string     `json:"carry,omitempty"`
 }
 
-// StoreBlob: a key store's contents: its values under a data key (the store's name as associated data, so a
-// blob under another name doesn't decrypt), that key wrapped to the combined key P + K. Writing one is open
-// (anyone, normally the router, which guards it): it can't reveal a secret, and the name binding means it
-// can't move one store's values under another store's name.
-type StoreBlob struct {
-	Name    string     `json:"name"`
-	Wrapped WrappedKey `json:"wrapped"` // the data key, to phone + core
-	Data    string     `json:"data"`    // AES-GCM(json values) under the data key, the name as associated data
-	// WriterSig: the writer's signature (the setup key, keys/setup.pub) over WriterText — the core can't check it
-	// (it holds no writer key) and only passes it on in unlock_begin, where the phone checks it before its share.
-	// Writer: "core" for a blob the core wrapped itself (a Recover, a deploy key); never taken from a writer.
-	WriterSig string `json:"writerSig,omitempty"`
-	Writer    string `json:"writer,omitempty"`
-}
-
-// WriterText: what a store's writer signs — the store's name, its E (which only that writer could wrap a data key
-// to) and the sha256 of its data
-func WriterText(name, e, data string) string {
-	return "jarvis2-store-blob\n" + name + "\n" + e + "\n" + sha256Hex(data)
-}
-
-// writerOf: who wrote a blob, for the phone (unlock_begin, deploy_key_begin): {"by":"core"}, {"by":"setup",
-// "sig"}, or nil (a blob with no writer signature: the phone refuses it)
-func writerOf(b *StoreBlob) map[string]string {
-	switch {
-	case b.Writer == "core":
-		return map[string]string{"by": "core"}
-	case b.WriterSig != "":
-		return map[string]string{"by": "setup", "sig": b.WriterSig}
-	}
-	return nil
-}
-
 type StartedMachine struct {
 	ID            string `json:"id"`
 	Requested     string `json:"requested"`     // the image start was asked for (what an approval names)
@@ -165,8 +132,9 @@ func (c *Core) succession(r Request, m *StartedMachine, nonce, now string) Cert 
 }
 
 type unlocked struct {
-	values map[string]string
-	ids    map[string]unlockHold
+	values  map[string]string
+	version string // the store's version these values are (storeVersion)
+	ids     map[string]unlockHold
 }
 
 // unlockHold: one open unlock of a store. For = "" is a standing unlock (open to every cert that names the store
@@ -209,8 +177,8 @@ type Core struct {
 	auditHead string // audit.go: the input log's head and length (the router keeps the entries)
 	auditSeq  int
 
-	stores       map[string]*StoreBlob // nil value = created, still empty
-	notSensitive map[string]bool       // the only sensitivity state: every store not in it is sensitive
+	stores       map[string]map[string]*KeyEntry // a store → its keys (keys.go); an empty map = created, still empty
+	notSensitive map[string]bool                 // the only sensitivity state: every store not in it is sensitive
 	pending      map[string]pendingUnlock
 	unlocked     map[string]*unlocked
 	pendingKeys  map[string]pendingDeployKey // deploy-key adds/removes waiting for the phone (deploykeys.go)
@@ -226,9 +194,11 @@ type Core struct {
 }
 
 type pendingUnlock struct {
-	store StoreBlob
-	t     *ecdh.PrivateKey
-	For   string // the challenge or cert nonce the unlock is for ("" = standing)
+	store   string
+	entries map[string]KeyEntry // the store's keys at begin: what the phone's shares open
+	version string
+	t       *ecdh.PrivateKey
+	For     string // the challenge or cert nonce the unlock is for ("" = standing)
 }
 
 func NewCore(fly Fly) (*Core, error) {
@@ -249,7 +219,7 @@ func NewCore(fly Fly) (*Core, error) {
 	return &Core{signer: s, agreement: a, nonceKey: nk, carryKey: ck,
 		approvalsUsed: map[string]bool{}, latest: map[string]string{},
 		created: map[string]string{}, signing: map[string]string{}, killed: map[string]string{}, used: map[string]bool{},
-		stores: map[string]*StoreBlob{}, notSensitive: map[string]bool{}, pending: map[string]pendingUnlock{}, unlocked: map[string]*unlocked{}, pendingKeys: map[string]pendingDeployKey{}, repoOwner: map[string]string{},
+		stores: map[string]map[string]*KeyEntry{}, notSensitive: map[string]bool{}, pending: map[string]pendingUnlock{}, unlocked: map[string]*unlocked{}, pendingKeys: map[string]pendingDeployKey{}, repoOwner: map[string]string{},
 		fly: fly, github: newGitHub(), now: time.Now}, nil
 }
 
@@ -313,7 +283,8 @@ func (c *Core) Identity() (map[string]any, error) {
 		return nil, err
 	}
 	k := c.Key()
-	return map[string]any{"signingKey": k["signingKey"], "agreementKey": k["agreementKey"], "boxSig": c.BoxSig, "state": d}, nil
+	// bundle: the claim bundle format this core takes (keys.go: stores of keys), so the app wraps a Recover for it
+	return map[string]any{"signingKey": k["signingKey"], "agreementKey": k["agreementKey"], "boxSig": c.BoxSig, "state": d, "bundle": "keys"}, nil
 }
 
 // ---- claim: an empty core takes a master key (Reset or Recover, both from the app) ------------------------
@@ -342,14 +313,15 @@ type claimStatement struct {
 // exists for a session.
 const FlyStore = "core"
 
-// the claim bundle (Format "blobs"): every store already wrapped by the app to the store key (store_key), so the
-// core never sees a store's plaintext; the names of the stores that are NOT sensitive — every other store comes
-// back sensitive, since nothing can downgrade one later (the master key signed the bundle's hash); the deploy-key
-// stores' repos (Owners); and the core's Fly token. A Reset's bundle has no blobs. The app also sends "stores":
-// "blobs", so a core from before R2 refuses the bundle rather than reading it as its older plaintext form.
-type claimBlobs struct {
-	Format       string            `json:"format"` // "blobs"
-	Blobs        []StoreBlob       `json:"blobs"`
+// the claim bundle (Format "keys"): every store's name and every key already wrapped by the app to the store key
+// (store_key), so the core never sees a store's plaintext; the names of the stores that are NOT sensitive — every
+// other store comes back sensitive, since nothing can downgrade one later (the master key signed the bundle's hash);
+// the deploy-key stores' repos (Owners); and the core's Fly token. A Reset's bundle has no stores. A core from before
+// keys.go refuses the format rather than reading it as its whole-store blobs.
+type claimBundle struct {
+	Format       string            `json:"format"` // "keys"
+	Stores       []string          `json:"stores"`
+	Keys         []KeyEntry        `json:"keys"`
 	NotSensitive []string          `json:"notSensitive"`
 	Owners       map[string]string `json:"owners"` // a deploy-key store → its repo
 	FlyToken     string            `json:"flyToken"`
@@ -396,19 +368,27 @@ func (c *Core) Claim(statement, masterSig string, bundle Sealed) (SignedDoc, err
 	if hex.EncodeToString(sum[:]) != st.BundleSha256 {
 		return SignedDoc{}, fail(403, "the bundle isn't the one the master key signed")
 	}
-	var b claimBlobs
-	if json.Unmarshal(plain, &b) != nil || b.Format != "blobs" {
+	var b claimBundle
+	if json.Unmarshal(plain, &b) != nil || b.Format != "keys" {
 		return SignedDoc{}, fail(400, "bad bundle")
 	}
-	stores := map[string]*StoreBlob{}
+	stores := map[string]map[string]*KeyEntry{}
 	owners := map[string]string{}
-	for i := range b.Blobs {
-		x := b.Blobs[i]
-		if _, seen := stores[x.Name]; !storeName(x.Name) || x.Name == FlyStore || seen || x.Wrapped.E == "" || x.Wrapped.Wrapped == "" || x.Data == "" {
-			return SignedDoc{}, fail(400, "bad or repeated store %q in the bundle", x.Name)
+	for _, n := range b.Stores {
+		if _, seen := stores[n]; !storeName(n) || n == FlyStore || seen {
+			return SignedDoc{}, fail(400, "bad or repeated store %q in the bundle", n)
 		}
-		x.WriterSig, x.Writer = "", "core" // the master key signed the bundle
-		stores[x.Name] = &x
+		stores[n] = map[string]*KeyEntry{}
+	}
+	now := c.now().UTC().Format(time.RFC3339)
+	for i := range b.Keys {
+		x := b.Keys[i]
+		keys, ok := stores[x.Store]
+		if _, seen := keys[x.Key]; !ok || seen || !validEntry(&x, x.Store) {
+			return SignedDoc{}, fail(400, "bad or repeated key %q of store %q in the bundle", x.Key, x.Store)
+		}
+		x.Writer, x.At, x.BackupSha256 = &EntryWriter{By: "core"}, now, "" // the master key signed the bundle
+		keys[x.Key] = &x
 	}
 	for st, repo := range b.Owners {
 		if _, ok := stores[st]; ok && repoRE.MatchString(repo) {
@@ -527,7 +507,7 @@ func (c *Core) CreateStore(name string) (SignedDoc, error) {
 	if _, ok := c.stores[name]; ok {
 		return SignedDoc{}, fail(409, "store %s exists", name)
 	}
-	c.stores[name], c.notSensitive[name] = nil, true
+	c.stores[name], c.notSensitive[name] = map[string]*KeyEntry{}, true
 	c.logf("store %s created (empty, not sensitive)", name)
 	return c.sign(map[string]any{"kind": "store-created", "name": name})
 }
@@ -545,42 +525,27 @@ func (c *Core) MarkSensitive(name string) (SignedDoc, error) {
 	return c.sign(map[string]any{"kind": "marked-sensitive", "name": name})
 }
 
-// WriteStore: a new blob for a store (open; the router guards it). A name the core never created is, like
-// every store not in the non-sensitive set, sensitive. Unlocked plaintext of the old blob stays until locked.
-func (c *Core) WriteStore(b StoreBlob) (SignedDoc, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.MasterKey == "" {
-		return SignedDoc{}, fail(409, "this core isn't set up yet")
-	}
-	if !storeName(b.Name) || b.Name == FlyStore || b.Wrapped.E == "" || b.Data == "" {
-		return SignedDoc{}, fail(400, "not a store blob")
-	}
-	b.Writer = "" // only the core's own blobs say "core"
-	c.stores[b.Name] = &b
-	c.logf("store %s written (sensitive=%v)", b.Name, !c.notSensitive[b.Name])
-	return c.sign(map[string]any{"kind": "store-written", "name": b.Name, "sensitive": !c.notSensitive[b.Name]})
-}
-
-// Stores: the signed list (names, sensitivity, empty, unlocked) — the phone learns sensitivity from the core.
-// unlocked = open for every session (a standing unlock); an unlock for one session doesn't count.
+// Stores: the signed list (names, sensitivity, empty, unlocked, each store's keys with who wrote them and when, its
+// version) — the phone learns sensitivity from the core, and everyone the key names. unlocked = open for every session
+// (a standing unlock); an unlock for one session doesn't count.
 func (c *Core) Stores(nonce string) (SignedDoc, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.expireScoped()
 	type row struct {
-		Name      string `json:"name"`
-		Sensitive bool   `json:"sensitive"`
-		Empty     bool   `json:"empty"`
-		Unlocked  bool   `json:"unlocked"`
+		Name      string   `json:"name"`
+		Sensitive bool     `json:"sensitive"`
+		Empty     bool     `json:"empty"`
+		Unlocked  bool     `json:"unlocked"`
+		Keys      []keyRow `json:"keys"`
+		Version   string   `json:"version"`
 	}
 	out := []row{}
-	for n, b := range c.stores {
-		out = append(out, row{n, !c.notSensitive[n], b == nil, c.standing(n)})
+	for n, keys := range c.stores {
+		out = append(out, row{n, !c.notSensitive[n], len(keys) == 0, c.standing(n), keyRows(keys), storeVersion(keys)})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
-	// writers: every unlock_begin names who wrote the blob (the phone refuses one without a valid writer)
-	return c.sign(map[string]any{"kind": "stores", "nonce": nonce, "stores": out, "writers": true})
+	return c.sign(map[string]any{"kind": "stores", "nonce": nonce, "stores": out})
 }
 
 // ---- machines (the Fly API is used only here: start, kill) -----------------------------------------
@@ -807,9 +772,9 @@ func (c *Core) Succession(in SuccessionInput) (SignedDoc, error) {
 	}
 	req.Stores = []string{}
 	for _, n := range in.Stores {
-		if b, ok := c.stores[n]; !ok {
+		if keys, ok := c.stores[n]; !ok {
 			return SignedDoc{}, fail(400, "unknown store %s", n)
-		} else if b == nil {
+		} else if len(keys) == 0 {
 			// an empty store gets its sensitivity settled by its writer first (setup.py marks it before writing)
 			return SignedDoc{}, fail(400, "store %s is empty", n)
 		}
@@ -1079,73 +1044,93 @@ func (c *Core) ApproveByOldKey(d *SignedDoc, sig, carry string) (SignedDoc, erro
 
 // ---- unlock / lock -------------------------------------------------------------------------------
 
-// UnlockBegin: a one-off key pair for this unlock; the phone computes its share from the blob's E (shown
-// here, signed, with the store's name). forNonce: "" = a standing unlock (open to every session until locked);
-// else the nonce of the one challenge or cert the unlock is for — only that cert's pull reads it, and its pull
-// locks it again (carry.go).
+// UnlockBegin: a one-off key pair for this unlock; the phone computes its share of every key from that key's E (shown
+// here, signed, with the store's name, who wrote each key and the sha256 of its data). forNonce: "" = a standing
+// unlock (open to every session until locked); else the nonce of the one challenge or cert the unlock is for — only
+// that cert's pull reads it, and its pull locks it again (carry.go). The unlock opens exactly the keys named here.
 func (c *Core) UnlockBegin(name, forNonce string) (SignedDoc, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if name == DeployKeyTokenStore {
 		return SignedDoc{}, fail(403, "%s is opened only by a deploy-key call, never unlocked", DeployKeyTokenStore)
 	}
-	blob := c.stores[name]
-	if blob == nil {
+	keys := c.stores[name]
+	if len(keys) == 0 || name == FlyStore {
 		return SignedDoc{}, fail(404, "no store %s with contents", name)
 	}
 	if forNonce != "" && !isNonce(forNonce) {
 		return SignedDoc{}, fail(400, "for: not a challenge or cert nonce")
 	}
-	s := *blob
 	t, err := ecdh.P256().GenerateKey(rand.Reader)
 	if err != nil {
 		return SignedDoc{}, err
 	}
+	type keyBegin struct {
+		Key          string       `json:"key"`
+		E            string       `json:"e"`
+		Writer       *EntryWriter `json:"writer"`
+		DataSha256   string       `json:"dataSha256"`
+		BackupSha256 string       `json:"backupSha256"`
+		At           string       `json:"at"`
+	}
+	entries := copyEntries(keys)
+	rows := []keyBegin{}
+	for _, k := range sortedKeys(entries) {
+		x := entries[k]
+		rows = append(rows, keyBegin{k, x.Wrapped.E, entryWriter(&x), sha256Hex(x.Data), x.BackupSha256, x.At})
+	}
 	id := randID()
-	c.pending[id] = pendingUnlock{store: s, t: t, For: forNonce}
-	return c.sign(map[string]any{"kind": "unlock-begin", "pending": id, "store": name, "e": s.Wrapped.E, "t": b64.EncodeToString(t.PublicKey().Bytes()), "for": forNonce,
-		"writer": writerOf(&s), "dataSha256": sha256Hex(s.Data)})
+	version := storeVersion(keys)
+	c.pending[id] = pendingUnlock{store: name, entries: entries, version: version, t: t, For: forNonce}
+	return c.sign(map[string]any{"kind": "unlock-begin", "pending": id, "store": name, "t": b64.EncodeToString(t.PublicKey().Bytes()),
+		"for": forNonce, "keys": rows, "version": version})
 }
 
 const infoShare = "jarvis2/unlock-share"
 
-func (c *Core) UnlockFinish(pending string, share Sealed) (SignedDoc, error) {
+// UnlockFinish: the phone's share of every key unlock_begin named, each sealed to T (one try: the one-off key is gone
+// either way)
+func (c *Core) UnlockFinish(pending string, shares map[string]Sealed) (SignedDoc, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	p, ok := c.pending[pending]
 	if !ok {
 		return SignedDoc{}, fail(404, "no such pending unlock")
 	}
-	delete(c.pending, pending) // one try; the one-off key is gone either way
-	x, err := OpenSealed(p.t, share, infoShare)
-	if err != nil {
-		return SignedDoc{}, fail(400, "the share isn't sealed to this unlock")
-	}
-	s := p.store
-	dk, err := UnwrapWithShares(s.Wrapped, x, c.agreement)
-	if err != nil {
-		return SignedDoc{}, fail(403, "%v", err)
-	}
-	data, _ := b64.DecodeString(s.Data)
-	plain, err := gcmOpen(dk, data, []byte(s.Name))
-	if err != nil {
-		return SignedDoc{}, fail(403, "the store doesn't decrypt (a wrong or altered blob)")
+	delete(c.pending, pending)
+	if len(shares) != len(p.entries) {
+		return SignedDoc{}, fail(400, "one share for each of the %d keys", len(p.entries))
 	}
 	vals := map[string]string{}
-	json.Unmarshal(plain, &vals)
-	u := c.unlocked[s.Name]
-	if u == nil {
-		u = &unlocked{values: vals, ids: map[string]unlockHold{}}
-		c.unlocked[s.Name] = u
+	for k, x := range p.entries {
+		sh, ok := shares[k]
+		if !ok {
+			return SignedDoc{}, fail(400, "no share for key %s", k)
+		}
+		px, err := OpenSealed(p.t, sh, infoShare)
+		if err != nil {
+			return SignedDoc{}, fail(400, "the share for %s isn't sealed to this unlock", k)
+		}
+		v, err := c.openEntry(&x, px)
+		if err != nil {
+			return SignedDoc{}, fail(403, "%v", err)
+		}
+		vals[k] = v
 	}
+	u := c.unlocked[p.store]
+	if u == nil {
+		u = &unlocked{ids: map[string]unlockHold{}}
+		c.unlocked[p.store] = u
+	}
+	u.values, u.version = vals, p.version // the newest unlock's values for every open id
 	id := randID()
 	u.ids[id] = unlockHold{since: c.now(), For: p.For}
 	if p.For == "" {
-		c.logf("store %s unlocked (%s, standing)", s.Name, id)
+		c.logf("store %s unlocked (%s, standing)", p.store, id)
 	} else {
-		c.logf("store %s unlocked (%s) for %s only", s.Name, id, p.For[:12])
+		c.logf("store %s unlocked (%s) for %s only", p.store, id, p.For[:12])
 	}
-	return c.sign(map[string]any{"kind": "unlocked", "id": id, "store": s.Name, "for": p.For})
+	return c.sign(map[string]any{"kind": "unlocked", "id": id, "store": p.store, "for": p.For, "version": p.version})
 }
 
 func (c *Core) Lock(id string) (SignedDoc, error) {
@@ -1204,21 +1189,27 @@ func (c *Core) PullSecrets(certDoc *SignedDoc, carry string) (SignedDoc, error) 
 	if c.latest[cert.Machine.ID] != cert.Nonce {
 		return SignedDoc{}, fail(409, "a superseded cert of %s: only its newest cert pulls", cert.Machine.ID)
 	}
-	carried := c.openCarryFor(carry, &cert) // nil when absent, not this line's, or not this core's
+	carried, carriedVersions := c.openCarryFor(carry, &cert) // nil when absent, not this line's, or not this core's
 	perStore := map[string]map[string]string{}
+	versions := map[string]string{}
 	merged := map[string]string{}
 	fromCarry := []string{}
+	stale := []string{}
 	for _, n := range cert.Stores {
-		vals, ok := c.openFor(n, cert.Nonce)
+		vals, version, ok := c.openFor(n, cert.Nonce)
 		if !ok {
 			if vals, ok = carried[n]; ok {
+				version = carriedVersions[n]
 				fromCarry = append(fromCarry, n)
 			}
 		}
 		if !ok {
 			return SignedDoc{}, fail(423, "store %s is locked", n)
 		}
-		perStore[n] = vals
+		if version != storeVersion(c.stores[n]) {
+			stale = append(stale, n) // a key was written since: only a new unlock (the phone) brings it
+		}
+		perStore[n], versions[n] = vals, version
 		for k, v := range vals {
 			merged[k] = v
 		}
@@ -1228,13 +1219,15 @@ func (c *Core) PullSecrets(certDoc *SignedDoc, carry string) (SignedDoc, error) 
 	if err != nil {
 		return SignedDoc{}, err
 	}
-	next, err := c.sealCarry(&cert, perStore)
+	next, err := c.sealCarry(&cert, perStore, versions)
 	if err != nil {
 		return SignedDoc{}, err
 	}
 	released := c.releaseFor(cert.Nonce)
-	c.logf("secrets pulled by %s (%v; carried %v; locked again %v)", cert.Machine.ID, cert.Stores, fromCarry, released)
-	return c.sign(map[string]any{"kind": "secrets", "machine": cert.Machine.ID, "sealed": sealed, "carry": next})
+	c.logf("secrets pulled by %s (%v; carried %v; behind %v; locked again %v)", cert.Machine.ID, cert.Stores, fromCarry, stale, released)
+	// stale: the stores whose values are behind the store (keys written since they were unlocked), for the router to
+	// ask the phone for a fresh unlock
+	return c.sign(map[string]any{"kind": "secrets", "machine": cert.Machine.ID, "sealed": sealed, "carry": next, "stale": stale})
 }
 
 // ---- helpers ------------------------------------------------------------------------------------

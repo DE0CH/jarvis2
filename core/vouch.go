@@ -106,8 +106,8 @@ func (c *Core) signCert(cert Cert, by, carry string) (SignedDoc, error) {
 		return SignedDoc{}, err
 	}
 	d.Entry = &e
-	if carried := c.openCarryFor(carry, &cert); carried != nil {
-		if d.Carry, err = c.sealCarry(&cert, carried); err != nil {
+	if carried, versions := c.openCarryFor(carry, &cert); carried != nil {
+		if d.Carry, err = c.sealCarry(&cert, carried, versions); err != nil {
 			return SignedDoc{}, err
 		}
 	}

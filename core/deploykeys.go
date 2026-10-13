@@ -19,9 +19,9 @@ import (
 	"crypto/ecdh"
 	"crypto/rand"
 	"encoding/binary"
-	"encoding/json"
 	"regexp"
 	"strings"
+	"time"
 )
 
 const (
@@ -82,10 +82,10 @@ type pendingDeployKey struct {
 	repo      string
 	store     string
 	title     string
-	publicKey string     // the app's key pair: the public half GitHub gets…
-	blob      *StoreBlob // …and the private half's store, wrapped by the app to the store key
+	publicKey string               // the app's key pair: the public half GitHub gets…
+	keys      map[string]*KeyEntry // …and the store's keys holding the private half, wrapped by the app to the store key
 	sensitive bool
-	token     StoreBlob // the token store as it was at begin (its E is what the phone answers)
+	token     KeyEntry // the token key as it was at begin (its E is what the phone answers)
 	t         *ecdh.PrivateKey
 }
 
@@ -98,22 +98,29 @@ type deployKeyBegin struct {
 	Sensitive bool   `json:"sensitive"`
 	Replaces  bool   `json:"replaces"` // add: the store exists and its contents are replaced
 	Title     string `json:"title"`    // the deploy key's title on GitHub
-	// add: the app's key pair — the public key GitHub gets, and the store blob holding the private half (its E and the
-	// sha256 of its data), so the phone's signature covers exactly what the core adds and stores
-	PublicKey  string `json:"publicKey,omitempty"`
-	BlobE      string `json:"blobE,omitempty"`
-	BlobSha256 string `json:"blobSha256,omitempty"`
-	TokenStore string `json:"tokenStore"`
-	// TokenWriter / TokenDataSha256: who wrote the token store's blob, as in unlock_begin (the phone checks it)
-	TokenWriter     map[string]string `json:"tokenWriter"`
-	TokenDataSha256 string            `json:"tokenDataSha256"`
-	E               string            `json:"e"`
-	T               string            `json:"t"`
+	// add: the app's key pair — the public key GitHub gets, and the store's keys holding the private half (each one's
+	// name, E and the sha256 of its data), so the phone's signature covers exactly what the core adds and stores
+	PublicKey  string          `json:"publicKey,omitempty"`
+	Keys       []deployKeyItem `json:"keys,omitempty"`
+	TokenStore string          `json:"tokenStore"`
+	// TokenWriter / TokenDataSha256 / TokenBackupSha256: who wrote the token key, as in unlock_begin (the phone checks it)
+	TokenWriter       *EntryWriter `json:"tokenWriter"`
+	TokenDataSha256   string       `json:"tokenDataSha256"`
+	TokenBackupSha256 string       `json:"tokenBackupSha256"`
+	TokenKey          string       `json:"tokenKey"`
+	E                 string       `json:"e"`
+	T                 string       `json:"t"`
+}
+
+type deployKeyItem struct {
+	Key        string `json:"key"`
+	E          string `json:"e"`
+	DataSha256 string `json:"dataSha256"`
 }
 
 // DeployKeyRequest: deploy_key_begin's input. The app names the store and the key's title, and for an add brings
-// the key pair: PublicKey ("ssh-ed25519 <base64>") and Blob, the private half's store wrapped to the store key
-// (store_key). Sensitivity is what the app asks for (the app itself insists on it for DE0CH/jarvis2); the core only
+// the key pair: PublicKey ("ssh-ed25519 <base64>") and Keys, the store's keys (the private half and the repo) each
+// wrapped to the store key (store_key). Sensitivity is what the app asks for (the app itself insists on it for DE0CH/jarvis2); the core only
 // keeps an existing sensitive store sensitive.
 type DeployKeyRequest struct {
 	Action    string     `json:"action"`
@@ -122,7 +129,7 @@ type DeployKeyRequest struct {
 	Store     string     `json:"store"`
 	Title     string     `json:"title"`
 	PublicKey string     `json:"publicKey"`
-	Blob      *StoreBlob `json:"blob"`
+	Keys      []KeyEntry `json:"keys"`
 }
 
 var titleRE = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9 ._/:@-]{0,99}$`)
@@ -153,14 +160,22 @@ func (c *Core) DeployKeyBegin(in DeployKeyRequest) (SignedDoc, error) {
 	if !titleRE.MatchString(title) {
 		return SignedDoc{}, fail(400, "title: a short line")
 	}
-	if action == "add" && (!sshEd25519(in.PublicKey) || in.Blob == nil || in.Blob.Name != store || in.Blob.Wrapped.E == "" || in.Blob.Wrapped.Wrapped == "" || in.Blob.Data == "") {
-		return SignedDoc{}, fail(400, "an add brings the key pair: publicKey (ssh-ed25519) and the store blob for %s", store)
+	keys := map[string]*KeyEntry{}
+	for i := range in.Keys {
+		x := in.Keys[i]
+		if _, seen := keys[x.Key]; seen || !validEntry(&x, store) {
+			return SignedDoc{}, fail(400, "bad or repeated key %q for store %s", x.Key, store)
+		}
+		keys[x.Key] = &x
+	}
+	if action == "add" && (!sshEd25519(in.PublicKey) || len(keys) == 0) {
+		return SignedDoc{}, fail(400, "an add brings the key pair: publicKey (ssh-ed25519) and the store's keys for %s", store)
 	}
 	if !storeName(store) || store == DeployKeyTokenStore || store == FlyStore {
 		return SignedDoc{}, fail(400, "store: %q isn't allowed", store)
 	}
-	blob := c.stores[DeployKeyTokenStore]
-	if blob == nil {
+	tok := c.stores[DeployKeyTokenStore][DeployKeyTokenKey]
+	if tok == nil {
 		return SignedDoc{}, fail(404, "no store %s with contents: the setup session writes its GitHub token (%s)", DeployKeyTokenStore, DeployKeyTokenKey)
 	}
 	if err := c.ownerClash(store, repo); err != nil {
@@ -178,14 +193,16 @@ func (c *Core) DeployKeyBegin(in DeployKeyRequest) (SignedDoc, error) {
 	}
 	id := randID()
 	b := deployKeyBegin{Kind: "deploy-key-begin", Pending: id, Action: action, Repo: repo, Store: store, Sensitive: sensitive,
-		Replaces: action == "add" && exists && old != nil, Title: title, TokenStore: DeployKeyTokenStore,
-		E: blob.Wrapped.E, T: b64.EncodeToString(t.PublicKey().Bytes()), TokenWriter: writerOf(blob), TokenDataSha256: sha256Hex(blob.Data)}
-	var kb *StoreBlob
+		Replaces: action == "add" && exists && len(old) != 0, Title: title, TokenStore: DeployKeyTokenStore,
+		E: tok.Wrapped.E, T: b64.EncodeToString(t.PublicKey().Bytes()), TokenWriter: entryWriter(tok), TokenDataSha256: sha256Hex(tok.Data),
+		TokenBackupSha256: tok.BackupSha256, TokenKey: DeployKeyTokenKey}
 	if action == "add" {
-		x := *in.Blob
-		x.WriterSig, x.Writer = "", "core" // stored only after GitHub took the phone-signed key: the core vouches
-		kb = &x
-		b.PublicKey, b.BlobE, b.BlobSha256 = in.PublicKey, x.Wrapped.E, sha256Hex(x.Data)
+		b.PublicKey = in.PublicKey
+		for _, k := range sortedKeys(keys) {
+			b.Keys = append(b.Keys, deployKeyItem{k, keys[k].Wrapped.E, sha256Hex(keys[k].Data)})
+		}
+	} else {
+		keys = nil
 	}
 	d, err := c.sign(b)
 	if err != nil {
@@ -195,7 +212,7 @@ func (c *Core) DeployKeyBegin(in DeployKeyRequest) (SignedDoc, error) {
 		c.pendingKeys = map[string]pendingDeployKey{}
 	}
 	c.pendingKeys[id] = pendingDeployKey{payload: d.Payload, action: action, repo: repo, store: store, title: title,
-		publicKey: b.PublicKey, blob: kb, sensitive: sensitive, token: *blob, t: t}
+		publicKey: b.PublicKey, keys: keys, sensitive: sensitive, token: *tok, t: t}
 	return d, nil
 }
 
@@ -248,7 +265,11 @@ func (c *Core) DeployKeyFinish(pending string, share Sealed, sig string) (Signed
 	}
 	token = ""
 	_, existed := c.stores[p.store]
-	c.stores[p.store] = p.blob
+	now := c.now().UTC().Format(time.RFC3339)
+	for _, x := range p.keys {
+		x.Writer, x.At, x.BackupSha256 = &EntryWriter{By: "core"}, now, "" // stored only after GitHub took the phone-signed key: the core vouches (no backup)
+	}
+	c.stores[p.store] = p.keys
 	c.repoOwner[p.store] = p.repo
 	delete(c.unlocked, p.store) // an earlier key's plaintext: that key is gone on GitHub
 	if p.sensitive {
@@ -281,18 +302,10 @@ func (c *Core) openDeployKeyToken(pending string, share Sealed, sig string) (pen
 	if err != nil {
 		return p, "", fail(400, "the share isn't sealed to this request")
 	}
-	dk, err := UnwrapWithShares(p.token.Wrapped, x, c.agreement)
+	tok, err := c.openEntry(&p.token, x)
 	if err != nil {
-		return p, "", fail(403, "%v", err)
+		return p, "", fail(403, "the token key doesn't decrypt: %v", err)
 	}
-	data, _ := b64.DecodeString(p.token.Data)
-	plain, err := gcmOpen(dk, data, []byte(p.token.Name))
-	if err != nil {
-		return p, "", fail(403, "the token store doesn't decrypt")
-	}
-	vals := map[string]string{}
-	json.Unmarshal(plain, &vals)
-	tok := vals[DeployKeyTokenKey]
 	if tok == "" {
 		return p, "", fail(400, "the store %s holds no %s", DeployKeyTokenStore, DeployKeyTokenKey)
 	}

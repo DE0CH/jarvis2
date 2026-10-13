@@ -92,12 +92,12 @@ machines, and run exactly one command inside a machine, `/usr/local/bin/jarvis2-
 | Primitive | Does |
 |---|---|
 | `identity()` | Its public keys, signed with the box key, and its own signed state: the master public key it was set up with (none while empty) and the phone's keys. |
-| `claim(statement, masterSig, bundle)` | Once per core, on an empty core: Reset and Recover. The statement names a master public key, this core and the phone's keys, and that master key signs it; the core keeps both keys for its life. The bundle (sealed to the core) carries the stores — none for a Reset; for a Recover every store from the backups, each already wrapped by the app to `P + K` (the core's signed store key), so the core never sees their plaintext; the `core` store's Fly token, which the core keeps for its whole life (never a session's store); each deploy-key store's repo; and the names of the stores that are not sensitive. Who may claim is the router's business (Deyao's app only). |
+| `claim(statement, masterSig, bundle)` | Once per core, on an empty core: Reset and Recover. The statement names a master public key, this core and the phone's keys, and that master key signs it; the core keeps both keys for its life. The bundle (sealed to the core, format `keys`) carries the stores — none for a Reset; for a Recover every store's name and every key from the backups, each key already wrapped by the app to `P + K` (the core's signed store key), so the core never sees their plaintext; the `core` store's Fly token, which the core keeps for its whole life (never a session's store); each deploy-key store's repo; and the names of the stores that are not sensitive. Who may claim is the router's business (Deyao's app only). |
 | `wipe(statement, masterSig)` | The current master key's signature over a statement naming this core: the core answers and exits; Kubernetes starts a new, empty core. Nothing else empties a set-up core except a restart from git. |
 | `set_fly_token(sealed)` | The Fly token, sealed to the core (the setup session, after a Reset). Open: the core calls Fly only for its own app, fixed in its code, so a wrong token can only fail. |
 | `create_store(name)` | Once per name, on a set-up core: an empty, non-sensitive store. Open; the writer checks the core's word against its own list and marks a store sensitive before writing it (an empty store goes into no session). Never `github-deploy-keys`. |
 | `mark_sensitive(name)` | The one-way upgrade: the name leaves the non-sensitive set. Open. |
-| `write_store(contents)` | New contents for a store, already wrapped to `P + K` by the writer, with the writer's signature (the setup key) over its name, `E` and data hash. Open, on a set-up core; the core passes the signature on in `unlock_begin`, and the phone checks it before its share. |
+| `write_key(store, key, sealed value, backupSha256, writer)` | One key written or deleted; the store's other keys are never read or touched (below, "Writing stores and their backups"). Open, on a set-up core. Writer `setup`: its signature over `WriterText` (store, key, `E`, data hash, backup hash), passed on in `unlock_begin` for the phone to check; its first key of a new name makes that store, sensitive. Writer `machine`: the machine's newest cert beside it, and the core checks the signature with the signing key in that cert (a live, certified machine only; never the deploy-key stores or a store that doesn't exist). Answers a signed receipt (`key-written`). |
 | `stores(nonce)` | The signed list: each store, sensitive or not, empty, unlocked. |
 | `succession(predecessor or null, stores, options, image, salt)` | A signed challenge, before any machine exists (the phone shows each store's sensitivity from the signed store list). Exact values only (the router fills in defaults): a harness, permission mode `auto` or `bypass`, stores sorted and each once, and for a new line the caller's random salt (a repeated salt only gets its second approval refused). `options` = harness, permission mode, the session's settings (`config`) and one machine's one-time inputs (`once`): below, "Inputs to a machine". |
 | `approve_by_phone(challenge, sig, current?)` | The phone is the highest privilege: any challenge it signs is approved, once. An add-store is always answered onto `current`, the machine's newest cert (above), and refused without it. |
@@ -108,9 +108,9 @@ machines, and run exactly one command inside a machine, `/usr/local/bin/jarvis2-
 | `certify(approval, started, carry?)` | The approval and a started machine (init's signed document) running the approved image (the digest Fly reports is the approval's) → the succession cert, naming the snapshot the predecessor signed at its kill. One machine per approval, one line per machine, one successor per predecessor (killed and not used). The null image: no machine, a burn cert. For a machine succeeding itself the approval is the new cert at once. Given the line's carry blob, certify (and an add-store's or downgrade's answer) answers it rebound to the new cert beside it, keeping only that cert's stores. |
 | `kill(machine, snapshot?)` | One Fly destroy, then Fly must report the machine destroyed → killed (409 before: the router asks again). `snapshot` = the sha256 of the machine's last snapshot and its signature over it with its current key: kept as what its successor restores. |
 | `attest(machine, input, origin, sha256)` | The input log: sign and append to a hash chain (no parsing); the answer is the entry. Certs are appended by the core itself, each cert's entry answered beside it. The core keeps only the head and the length; the router keeps the entries. |
-| `unlock_begin(name, for)` / `unlock_finish(pending, phone share)` | The split-key unlock. `for` = the nonce of the one challenge or cert it is for (a Start, an add-store, a waiting session): only that cert reads it and its pull locks it again (below, "Carried secrets"); no `for` = a standing unlock, open until locked. |
+| `unlock_begin(name, for)` / `unlock_finish(pending, phone shares)` | The split-key unlock of every key of the store (one share per key's `E`, all under one Face ID). `for` = the nonce of the one challenge or cert it is for (a Start, an add-store, a waiting session): only that cert reads it and its pull locks it again (below, "Carried secrets"); no `for` = a standing unlock, open until locked. |
 | `lock(unlock id)` / `list_unlocked(nonce)` | Release; the signed list of open unlocks (each with what it is for). |
-| `pull_secrets(cert, carry)` | The cert's stores sealed to that machine's encryption key — so no other proof is needed — each from an unlock open to that cert, else from the line's carried secrets; answers the next carry blob for that machine. |
+| `pull_secrets(cert, carry)` | The cert's stores sealed to that machine's encryption key — so no other proof is needed — each from an unlock open to that cert, else from the line's carried secrets; answers the next carry blob for that machine, and `stale`: the stores whose values are behind the store (a key written since they were unlocked). |
 | `deploy_key_begin(action, repo, sensitive, store, title, publicKey, blob)` / `deploy_key_finish(pending, phone sig, phone share)` | A repo's deploy key, added or removed (below, "Deploy keys"): the signed request (naming the app's public key and its store blob's hash), then the phone's signature over it and its share of `github-deploy-keys`; the core uses that store's GitHub token for this one call to add exactly that public key, and stores exactly that blob or deletes the store. |
 | `store_key(phone)` | Open: the signed store key P + K for that phone key, which the app wraps store data keys to (it can't add points). |
 
@@ -129,14 +129,48 @@ box's disk.
 
 ## Writing stores and their backups
 
-A store is written **outside the core** by a trusted writer (the setup session today, later the app): the
-values under a fresh data key, the key wrapped to `P + K` (the phone's and the core's public agreement keys,
-from the core's signed state, its keys checked against the box key), handed to the core's open `write_store`.
-The router decides who may write. The writer also writes the backup: the values encrypted to the **master public
-key** the core was set up with (from the same signed state) and signed by the writer,
-in Deyao's Hetzner Object Storage, bucket `jarvis2-backup-de0ch`, **versioned** (an overwrite or a delete keeps
-every old version; no true wipe is designed — if one is ever needed, Deyao deletes versions in S3 by hand),
-plus a signed marker for every store made sensitive.
+**A store is a set of keys, each sealed on its own** (Deyao, 2026-10-13: "writing one key by name is allowed, and it
+doesn't just overwrite the whole key store"). Each key's value is under its own data key, with the store's and the
+key's names as associated data (`store + "\n" + key`), and that data key is wrapped to `P + K`, the **store key**
+(the core signs it for the claimed phone: `store_key`). Anyone can seal to it; only the phone and the core together
+open a key. Writing a key (`write_key`) replaces that one key; the store's other keys are never read, sent or changed.
+
+**Who writes.** Any running session (its machine key: `jarvis2 put-key STORE KEY < value`, `jarvis2 delete-key`), with
+no approval (Deyao, 2026-10-13: "writing a key is perfectly safe (has backup, so can't overwrite, and also can't
+read)"), and the setup session (`infra/setup.py write`). The writer takes the store key and the master public key from
+the core's signed identity and store key (a machine checks them against its core key), seals the value to the store
+key and, for the backup, to the master key (`info jarvis2/backup`, the same associated data), and signs
+`WriterText = "jarvis2-store-key\n" store \n key \n E \n sha256(data) \n backupSha256` (a delete: empty `E`, data
+and backup), where `backupSha256 = sha256(backup.e + "\n" + backup.data)`. The router (`router/storedocs.go`) writes
+**the backup first**, `keys/<store>/<key>.json` in Deyao's Hetzner Object Storage bucket `jarvis2-backup-de0ch`
+(**versioned**: a new version never removes an old one, and the router's credential may only add versions under
+`keys/`), then the key into the core; no key reaches the core without its backup. The backup object holds the sealed
+value, `E`, the data hash, the backup hash, the writer (`setup` + signature, or `machine` + signature + the machine's
+core-signed cert), the core's identity (signed by the box key) and the key's explanation.
+
+**What a session can't do by writing.** It can't read a key (sealed to `P + K`), can't remove an earlier value (the
+bucket keeps every version), and can't change what any session holds without Deyao: a written key reaches a session
+only through a new unlock on the phone (below). The core refuses a machine write to `github-deploy-keys` and to a
+repo's deploy-key store (their keys come only from a phone-approved deploy-key call), and nobody writes the `core`
+store. What a session CAN do is put a value Deyao didn't choose under a key name; the phone shows who wrote each key
+(the session, from the core's word) on every unlock, so a value written by a session is never released unseen.
+
+**A written key reaches sessions only with the phone.** The core can't open the new value without the phone's share,
+so a session's copy (an unlock's values, the carried secrets) stays as it was until a new unlock. Every pull says
+which stores are behind (`stale`, from each store's version: a hash of its keys' names, `E`s and data hashes); the
+router asks the phone to refresh, as an Inbox unlock request for each running session holding the store (one batch
+when several), right after a write and after any pull that comes back behind (a resume whose carried copy predates a
+write). Once the phone's unlock for a running machine's cert goes through, the router tells that machine to pull
+again (`refresh-secrets`) and its `~/.secrets` has the store as it is now.
+
+**What each key is for** is the router's own record (`store-docs.json`, not a secret and in no trust decision): a new
+key name needs its explanation when it is written, the setup session and Deyao (app, web) can edit them, and every
+key's backup carries it. The app, the web page, `jarvis2 stores --keys` and the setup session list them with each
+key's name and writer (`GET /api/stores`).
+
+Sensitivity markers (`sensitive/<name>.json`, signed by the setup key) and older whole-store backups
+(`stores/<name>.json`, signed by the setup key, from before stores were made of keys) are in the same bucket; a
+Recover takes a store's whole-store backup and then every key backup of that store written after it.
 
 ## Setting a core up: Reset and Recover (on the iPhone)
 
@@ -151,11 +185,13 @@ page says only what Deyao acts on; errors are one plain sentence with the detail
   start empty; the setup session fills them later by normal writes (`infra/setup.py write`, which learns the
   master public key from the core's signed state) and sends the core its Fly token (`backup-core`).
 - **Recover:** Deyao pastes his kit. The app fetches the backups through the router (which holds the bucket's
-  read credential and passes the objects on as they are), checks each writer's signature (`keys/setup.pub`
-  from GitHub), decrypts them with the master key, wraps each store to `P + K` (the store key the core signs for
-  this phone: CryptoKit can't add points), and claims the empty core with the same statement and a bundle of those
-  blobs (the `core` store's Fly token on its own, the names that aren't sensitive, each deploy-key store's repo),
-  sealed to the core. The plaintext lives only on the phone, well inside a 10-minute cap; the core never sees it.
+  credential and passes the objects on as they are), checks each writer (a whole-store backup or a setup-written
+  key: `keys/setup.pub` from GitHub; a session-written key: the machine's signature with the key in its cert, the cert
+  signed by a core whose identity the box key signed), decrypts them with the master key, takes each store's
+  whole-store backup and then its key backups written after it (a deleted key leaves), wraps each key to `P + K` (the
+  store key the core signs for this phone: CryptoKit can't add points), and claims the empty core with the same
+  statement and a bundle of those keys (format `keys`: every store's name, every key, the `core` store's Fly token on
+  its own, the names that aren't sensitive, each deploy-key store's repo), sealed to the core. The plaintext lives only on the phone, well inside a 10-minute cap; the core never sees it.
 
 Either way the app pins the core's keys and its own master public key, then forgets the master private key. From
 then on it refuses a core set up with another master key, or for another phone. Stores are locked; Deyao unlocks
@@ -168,8 +204,9 @@ and sends `wipe` signed by that master key; the core exits and a new, empty one 
 
 **The router's part** is to admit a claim or a wipe only from the app's device login and to serve the backups.
 It can withhold a backup or serve an older signed version (the bucket is versioned), never read, change or forge
-one: each is sealed to the master key and signed by the setup key. The bucket's read credential is the router's
-own (a Hetzner S3 credential narrowed to reads of the backup bucket by bucket policies), set once with the box.
+one: each is sealed to the master key and signed by its writer. The bucket's credential is the router's own (a
+Hetzner S3 credential narrowed by bucket policies to reads of the backup bucket and new versions under `keys/`), set
+once with the box.
 
 ## The box
 
@@ -220,17 +257,19 @@ Which stores a harness brings is the router's business (`policy/stores.json`); t
 
 ## Unlocking a store (split key agreement)
 
-Each store's key is encrypted to the **combined public key** `P + K`: `P = p·G` is the iPhone's Secure Enclave
-key, `K = k·G` the core's. Writing a store picks a fresh one-off `e` and stores `E = e·G`; the shared secret is
+Each key's data key is encrypted to the **combined public key** `P + K`: `P = p·G` is the iPhone's Secure Enclave
+key, `K = k·G` the core's. Writing a key picks a fresh one-off `e` and stores `E = e·G`; the shared secret is
 `e·(P + K)`. It's Diffie–Hellman with the recipient split in two: `p·E + k·E = (p + k)·E = e·(P + K)`.
 
-1. `unlock_begin(store)` → core returns (store, `E`, one-off `T`, the blob's **writer**: the setup key's signature over
-   name, `E` and the data's sha256, or "core" for a blob the core vouches for: a Recover's or a deploy key's, which the
-   phone or the master key signed for), signed.
-2. iPhone checks the signature and the writer (`keys/setup.pub` from GitHub; refused without one when the core's store
-   list says `writers`), shows "Unlock <store>?", and on Face ID the Enclave computes its share `p·E`.
-   The phone encrypts the share to `T`, so the router relaying it never sees it.
-3. `unlock_finish` → core decrypts the share, deletes the one-off key, adds `k·E`, decrypts the store.
+1. `unlock_begin(store)` → core returns (store, one-off `T`, the store's version, and per key: its name, `E`, data and
+   backup hashes, when it was written and its **writer**: the setup key's signature over `WriterText`, a machine
+   (the session's machine and line, whose signature the core checked), or "core" for a key the core vouches for: a
+   Recover's or a deploy key's, which the master key or the phone signed for), signed.
+2. iPhone checks the signature and every writer (`keys/setup.pub` from GitHub), shows "Unlock <store>?" (a key a
+   session wrote is named with that session), and on Face ID the Enclave computes its share `p·E` for every key.
+   The phone encrypts each share to `T`, so the router relaying them never sees them.
+3. `unlock_finish` → core decrypts the shares, deletes the one-off key, adds `k·E` to each, decrypts every key the
+   begin named (a key written in between isn't in this unlock: the store counts as behind).
 
 Neither side ever learns the other's private key: the core gets `p·E`, never `p` (recovering `p` from it is the
 discrete-log problem). A share opens only the store written with that `E`, and every write picks a fresh `e`.

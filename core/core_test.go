@@ -125,14 +125,26 @@ func (p *phone) sign(payload string) string {
 }
 
 // the phone's share of an unlock: x(p·E), sealed to the core's one-off key T (what the shell does)
-func (p *phone) share(begin SignedDoc) (string, Sealed) {
-	var b struct{ Pending, E, T string }
+func (p *phone) share(begin SignedDoc) (string, map[string]Sealed) {
+	var b struct {
+		Pending, T string
+		Keys       []struct{ Key, E string }
+	}
 	json.Unmarshal([]byte(begin.Payload), &b)
-	eb, _ := b64.DecodeString(b.E)
+	out := map[string]Sealed{}
+	for _, k := range b.Keys {
+		out[k.Key] = p.shareOf(k.E, b.T)
+	}
+	return b.Pending, out
+}
+
+// shareOf: the phone's x(p·E), sealed to the one-off T
+func (p *phone) shareOf(e, t string) Sealed {
+	eb, _ := b64.DecodeString(e)
 	E, _ := ecdh.P256().NewPublicKey(eb)
 	x, _ := p.agr.ECDH(E) // the Enclave returns only x
-	s, _ := SealTo(b.T, x, infoShare)
-	return b.Pending, s
+	s, _ := SealTo(t, x, infoShare)
+	return s
 }
 
 // pl(t)(c.Primitive(...)): the answer's payload, failing the test on an error
@@ -157,9 +169,9 @@ var testValues = map[string]map[string]string{
 	"openrouter": {"OPENROUTER_API": "o"},
 }
 
-// writeStore: what the router's API (or the phone, in recovery) does OUTSIDE the core — the values under a
-// fresh data key, that key wrapped to the combined key P + K
-func writeStore(t *testing.T, c *Core, p *phone, name string, vals map[string]string) StoreBlob {
+// sealKey: what a writer does OUTSIDE the core — one key's value under a fresh data key, that key wrapped to the
+// combined key P + K
+func sealKey(t *testing.T, c *Core, p *phone, store, key, value string) KeyEntry {
 	t.Helper()
 	dk := make([]byte, 32)
 	rand.Read(dk)
@@ -167,8 +179,25 @@ func writeStore(t *testing.T, c *Core, p *phone, name string, vals map[string]st
 	if err != nil {
 		t.Fatal(err)
 	}
-	plain, _ := json.Marshal(vals)
-	return StoreBlob{Name: name, Wrapped: w, Data: b64.EncodeToString(gcmSeal(dk, plain, []byte(name)))}
+	return KeyEntry{Store: store, Key: key, Wrapped: w, Data: b64.EncodeToString(gcmSeal(dk, []byte(value), KeyAAD(store, key)))}
+}
+
+// setupWrite: one key written as the setup session (its signature is only passed on: the phone checks it)
+func setupWrite(c *Core, x KeyEntry) (SignedDoc, error) {
+	return c.WriteKey(WriteKeyInput{Store: x.Store, Key: x.Key, Wrapped: x.Wrapped, Data: x.Data, Writer: "setup", Sig: "c2ln"})
+}
+
+// writeStore: every key of vals written as the setup session; the last write's answer (or the first refusal)
+func writeStore(t *testing.T, c *Core, p *phone, name string, vals map[string]string) (SignedDoc, error) {
+	t.Helper()
+	var d SignedDoc
+	for _, k := range sortedKeys(vals) {
+		var err error
+		if d, err = setupWrite(c, sealKey(t, c, p, name, k, vals[k])); err != nil {
+			return d, err
+		}
+	}
+	return d, nil
 }
 
 // ---- the writer's side (the app's CoreCrypto.wrapStore, the router's store API): the core itself never wraps ----
@@ -200,19 +229,22 @@ func WrapToPoint(combined, dataKey []byte) (WrappedKey, error) {
 	return WrappedKey{E: b64.EncodeToString(e.PublicKey().Bytes()), Wrapped: b64.EncodeToString(gcmSeal(kdf(xOf(shared), infoStore), dataKey, nil))}, nil
 }
 
-// appWrap: a store as the app wraps it, to the store key the core signed for this phone (store_key)
-func appWrap(t *testing.T, c *Core, p *phone, name string, vals map[string]string) StoreBlob {
+// appWrap: a store's keys as the app wraps them, to the store key the core signed for this phone (store_key)
+func appWrap(t *testing.T, c *Core, p *phone, name string, vals map[string]string) []KeyEntry {
 	t.Helper()
 	sk := pl(t)(c.StoreKey(p.agreementKey()))
 	C, _ := b64.DecodeString(sk["storeKey"].(string))
-	dk := make([]byte, 32)
-	rand.Read(dk)
-	w, err := WrapToPoint(C, dk)
-	if err != nil {
-		t.Fatal(err)
+	out := []KeyEntry{}
+	for _, k := range sortedKeys(vals) {
+		dk := make([]byte, 32)
+		rand.Read(dk)
+		w, err := WrapToPoint(C, dk)
+		if err != nil {
+			t.Fatal(err)
+		}
+		out = append(out, KeyEntry{Store: name, Key: k, Wrapped: w, Data: b64.EncodeToString(gcmSeal(dk, []byte(vals[k]), KeyAAD(name, k)))})
 	}
-	plain, _ := json.Marshal(vals)
-	return StoreBlob{Name: name, Wrapped: w, Data: b64.EncodeToString(gcmSeal(dk, plain, []byte(name)))}
+	return out
 }
 
 const testMachineURL = "http://jarvis2-test._peer.internal:8081"
@@ -246,17 +278,18 @@ func claimFor(c *Core, master, p *phone, rb any) (string, string, Sealed) {
 }
 
 // recoverBundle: the app's Recover bundle — every test store wrapped to the store key, and the Fly token
-func recoverBundle(t *testing.T, c *Core, p *phone, flyToken string) claimBlobs {
+func recoverBundle(t *testing.T, c *Core, p *phone, flyToken string) claimBundle {
 	t.Helper()
-	rb := claimBlobs{Format: "blobs", NotSensitive: []string{"default", "claude", "openrouter"}, FlyToken: flyToken}
+	rb := claimBundle{Format: "keys", NotSensitive: []string{"default", "claude", "openrouter"}, FlyToken: flyToken}
 	for _, n := range []string{"claude", "default", "gmail", "openrouter"} {
-		rb.Blobs = append(rb.Blobs, appWrap(t, c, p, n, testValues[n]))
+		rb.Stores = append(rb.Stores, n)
+		rb.Keys = append(rb.Keys, appWrap(t, c, p, n, testValues[n])...)
 	}
 	return rb
 }
 
 // resetBundle: a Reset's bundle, no stores
-var resetBundle = claimBlobs{Format: "blobs"}
+var resetBundle = claimBundle{Format: "keys"}
 
 func setup(t *testing.T) (*Core, *fakeFly, *phone) {
 	t.Helper()
@@ -411,9 +444,24 @@ func TestRecoverOnceOnlyOnAnEmptyCore(t *testing.T) {
 	if _, ok := c.stores[FlyStore]; ok {
 		t.Fatal("the Fly store is kept as a session store")
 	}
-	l := pl(t)(c.Stores("n"))
-	if fmt.Sprint(l["stores"]) != "[map[empty:false name:claude sensitive:false unlocked:false] map[empty:false name:default sensitive:false unlocked:false] map[empty:false name:gmail sensitive:true unlocked:false] map[empty:false name:openrouter sensitive:false unlocked:false]]" {
-		t.Fatalf("got %v", l["stores"])
+	var l struct {
+		Stores []struct {
+			Name                       string
+			Sensitive, Empty, Unlocked bool
+			Keys                       []struct{ Name string }
+		}
+	}
+	json.Unmarshal([]byte(pl2(t)(c.Stores("n")).Payload), &l)
+	got := []string{}
+	for _, r := range l.Stores {
+		keys := []string{}
+		for _, k := range r.Keys {
+			keys = append(keys, k.Name)
+		}
+		got = append(got, fmt.Sprint(r.Name, r.Sensitive, r.Empty, r.Unlocked, keys))
+	}
+	if fmt.Sprint(got) != "[claudefalse false false [CLAUDE_CREDENTIALS] defaultfalse false false [A B] gmailtrue false false [G] openrouterfalse false false [OPENROUTER_API]]" {
+		t.Fatalf("got %v", got)
 	}
 }
 
@@ -561,15 +609,17 @@ func TestAWrongPhoneShareDoesntUnlock(t *testing.T) {
 	if _, err := c.UnlockFinish(id, s); err == nil {
 		t.Fatal("another phone's share unlocked the store")
 	}
-	// a blob whose name was changed outside the core doesn't decrypt
-	c2, _, p2 := setup(t)
-	blob := writeStore(t, c2, p2, "default", testValues["default"])
-	blob.Name = "gmail"
-	pl(t)(c2.WriteStore(blob))
-	b2, _ := c2.UnlockBegin("gmail", "")
-	id2, s2 := p2.share(b2)
-	if _, err := c2.UnlockFinish(id2, s2); err == nil {
-		t.Fatal("a renamed store blob unlocked")
+	// a key moved outside the core to another store, or renamed, doesn't decrypt
+	for _, to := range [][2]string{{"gmail", "A"}, {"default", "B"}} {
+		c2, _, p2 := setup(t)
+		x := sealKey(t, c2, p2, "default", "A", "1")
+		x.Store, x.Key = to[0], to[1]
+		pl(t)(setupWrite(c2, x))
+		b2, _ := c2.UnlockBegin(to[0], "")
+		id2, s2 := p2.share(b2)
+		if _, err := c2.UnlockFinish(id2, s2); err == nil {
+			t.Fatalf("a key moved to %v unlocked", to)
+		}
 	}
 	if _, err := c.UnlockFinish(id, s); err == nil {
 		t.Fatal("a pending unlock was usable twice")
@@ -856,11 +906,11 @@ func TestSensitivityOnlyGrows(t *testing.T) {
 	if _, err := c.UnlockBegin("notes", ""); err == nil {
 		t.Fatal("unlocked an empty store")
 	}
-	if w := pl(t)(c.WriteStore(writeStore(t, c, p, "notes", map[string]string{"N": "1"}))); w["sensitive"] != false {
+	if w := pl(t)(writeStore(t, c, p, "notes", map[string]string{"N": "1"})); w["sensitive"] != false {
 		t.Fatalf("got %v", w)
 	}
 	// a store the core never created is sensitive
-	if w := pl(t)(c.WriteStore(writeStore(t, c, p, "fresh", map[string]string{"F": "1"}))); w["sensitive"] != true {
+	if w := pl(t)(writeStore(t, c, p, "fresh", map[string]string{"F": "1"})); w["sensitive"] != true {
 		t.Fatalf("got %v", w)
 	}
 	// the one-way upgrade
@@ -881,7 +931,7 @@ func TestSensitivityOnlyGrows(t *testing.T) {
 	if fmt.Sprint(marked) != "[fresh gmail notes]" {
 		t.Fatalf("sensitive %v", marked)
 	}
-	if _, err := c.WriteStore(writeStore(t, c, p, FlyStore, map[string]string{"FLY_API_TOKEN": "evil"})); err == nil {
+	if _, err := writeStore(t, c, p, FlyStore, map[string]string{"FLY_API_TOKEN": "evil"}); err == nil {
 		t.Fatal("wrote the Fly store")
 	}
 	if _, err := routerSuccession(c, SuccessionInput{Image: img, Stores: []string{FlyStore}}); err == nil {
@@ -1145,29 +1195,34 @@ func TestARecoverOfAppWrappedStores(t *testing.T) {
 	c, f, master := newCore(t)
 	p := newPhone()
 	sk := pl(t)(c.StoreKey(p.agreementKey())) // open on an empty core: the app asks before it claims
-	C, _ := b64.DecodeString(sk["storeKey"].(string))
-	wrapped := func(name string, vals map[string]string) StoreBlob {
-		dk := make([]byte, 32)
-		rand.Read(dk)
-		w, _ := WrapToPoint(C, dk)
-		plain, _ := json.Marshal(vals)
-		return StoreBlob{Name: name, Wrapped: w, Data: b64.EncodeToString(gcmSeal(dk, plain, []byte(name))), WriterSig: "ignored"}
+	if sk["storeKey"] == "" {
+		t.Fatal("no store key")
 	}
-	nb := map[string]any{"format": "blobs", "stores": "blobs", "notSensitive": []string{"default"}, "flyToken": "fly-secret",
-		"owners": map[string]string{"github-x": "DE0CH/x", "default": "evil/../x"},
-		"blobs":  []StoreBlob{wrapped("default", testValues["default"]), wrapped("gmail", testValues["gmail"]), wrapped("github-x", map[string]string{"K": "v"})}}
-	bad := map[string]any{"format": "blobs", "stores": "blobs", "blobs": []StoreBlob{wrapped(FlyStore, map[string]string{"FLY_API_TOKEN": "x"})}}
-	s, sig, b := claimFor(c, master, p, bad)
-	if _, err := c.Claim(s, sig, b); err == nil {
-		t.Fatal("took the Fly store as a blob")
+	keys := append(append(appWrap(t, c, p, "default", testValues["default"]), appWrap(t, c, p, "gmail", testValues["gmail"])...),
+		appWrap(t, c, p, "github-x", map[string]string{"K": "v"})...)
+	keys[0].Writer = &EntryWriter{By: "setup", Sig: "ignored"}
+	nb := claimBundle{Format: "keys", Stores: []string{"default", "empty", "github-x", "gmail"}, Keys: keys, NotSensitive: []string{"default"},
+		FlyToken: "fly-secret", Owners: map[string]string{"github-x": "DE0CH/x", "default": "evil/../x"}}
+	for name, bad := range map[string]claimBundle{
+		"the Fly store":       {Format: "keys", Stores: []string{FlyStore}, Keys: appWrap(t, c, p, FlyStore, map[string]string{"FLY_API_TOKEN": "x"})},
+		"a key of no store":   {Format: "keys", Stores: []string{"default"}, Keys: appWrap(t, c, p, "gmail", testValues["gmail"])},
+		"the old blob format": {Format: "blobs", Stores: []string{"default"}},
+	} {
+		s, sig, b := claimFor(c, master, p, bad)
+		if _, err := c.Claim(s, sig, b); err == nil {
+			t.Fatalf("claimed with %s", name)
+		}
 	}
-	s, sig, b = claimFor(c, master, p, nb)
+	s, sig, b := claimFor(c, master, p, nb)
 	pl(t)(c.Claim(s, sig, b))
 	if f.token != "fly-secret" || c.repoOwner["github-x"] != "DE0CH/x" || len(c.repoOwner) != 1 {
 		t.Fatalf("token %q owners %v", f.token, c.repoOwner)
 	}
-	if !c.notSensitive["default"] || c.notSensitive["gmail"] || c.stores["gmail"].Writer != "core" || c.stores["gmail"].WriterSig != "" {
+	if !c.notSensitive["default"] || c.notSensitive["gmail"] || c.stores["default"]["A"].Writer.By != "core" || c.stores["default"]["A"].Writer.Sig != "" {
 		t.Fatal("sensitivity or writer not as the master key signed them")
+	}
+	if keys, ok := c.stores["empty"]; !ok || len(keys) != 0 {
+		t.Fatal("an empty store didn't come back empty")
 	}
 	if v := storeValues(t, c, p, "gmail"); v["G"] != testValues["gmail"]["G"] {
 		t.Fatalf("got %v", v)

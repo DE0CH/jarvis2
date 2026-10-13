@@ -1,9 +1,9 @@
 package main
 
-// jarvis2 stores [--json]: every store and the key NAMES it holds (never a value), from the router's GET /m/stores
-// (router/storekeys.go), so a session knows which store to ask for with `jarvis2 add-store <name>`. Sensitivity and
-// the store list are the core's signed list, checked here against the core's key; the key names are what the
-// setup session recorded (or, for a repo's store, follow from the repo).
+// jarvis2 stores [--keys | --json]: every store and the key NAMES it holds (never a value), with what each key is for,
+// from the router's GET /m/stores (router/storedocs.go), so a session knows which store to ask for with
+// `jarvis2 add-store <name>`. The store list, sensitivity and key names are the core's signed list, checked here
+// against the core's key; the explanations are the router's record (words, not a trust decision).
 
 import (
 	"encoding/json"
@@ -12,19 +12,40 @@ import (
 	"strings"
 )
 
+type keyRow struct {
+	Name        string `json:"name"`
+	Explanation string `json:"explanation,omitempty"`
+	At          string `json:"at,omitempty"`
+	Writer      *struct {
+		By           string `json:"by"`
+		Session      string `json:"session,omitempty"`
+		SessionLabel string `json:"sessionLabel,omitempty"`
+	} `json:"writer,omitempty"`
+}
+
 type storeRow struct {
 	Name      string   `json:"name"`
 	Sensitive bool     `json:"sensitive"`
 	Empty     bool     `json:"empty"`
 	Unlocked  bool     `json:"unlocked"`
-	Keys      []string `json:"keys"`
+	About     string   `json:"about,omitempty"`
+	Keys      []keyRow `json:"keys"`
 	KeysFrom  string   `json:"keysFrom"`
+}
+
+func (s storeRow) keyNames() string {
+	n := []string{}
+	for _, k := range s.Keys {
+		n = append(n, k.Name)
+	}
+	return strings.Join(n, " ")
 }
 
 func storesCmd(args []string) error {
 	asJSON := len(args) == 1 && args[0] == "--json"
-	if len(args) > 0 && !asJSON {
-		return fmt.Errorf("usage: jarvis2 stores [--json]")
+	withKeys := len(args) == 1 && args[0] == "--keys"
+	if len(args) > 0 && !asJSON && !withKeys {
+		return fmt.Errorf("usage: jarvis2 stores [--keys | --json]   (--keys: each key on its own line with what it is for)")
 	}
 	c, err := newClient()
 	if err != nil {
@@ -54,8 +75,12 @@ func storesCmd(args []string) error {
 			return fmt.Errorf("the store list differs from the core's")
 		}
 		for _, s := range out.Stores {
-			if c, ok := signed[s.Name]; !ok || c.Sensitive != s.Sensitive || c.Empty != s.Empty {
+			c, ok := signed[s.Name]
+			if !ok || c.Sensitive != s.Sensitive || c.Empty != s.Empty {
 				return fmt.Errorf("store %s differs from the core's list", s.Name)
+			}
+			if c.Keys != nil && s.KeysFrom == "core" && c.keyNames() != s.keyNames() { // the core names the keys
+				return fmt.Errorf("store %s's keys differ from the core's list", s.Name)
 			}
 		}
 	}
@@ -90,7 +115,7 @@ func storesCmd(args []string) error {
 		} else if !s.Unlocked {
 			flags = append(flags, "locked")
 		}
-		keys := strings.Join(s.Keys, " ")
+		keys := s.keyNames()
 		if s.Keys == nil {
 			keys = "(key names not recorded)"
 		}
@@ -98,7 +123,25 @@ func storesCmd(args []string) error {
 		if len(flags) > 0 {
 			fmt.Printf(" [%s]", strings.Join(flags, ", "))
 		}
-		fmt.Printf(": %s\n", keys)
+		if !withKeys {
+			fmt.Printf(": %s\n", keys)
+			continue
+		}
+		fmt.Println()
+		if s.About != "" {
+			fmt.Printf("  %s\n", s.About)
+		}
+		for _, k := range s.Keys {
+			what := k.Explanation
+			if what == "" {
+				what = "(no explanation yet)"
+			}
+			by := ""
+			if k.Writer != nil && k.Writer.By == "machine" {
+				by = " [written by session " + k.Writer.SessionLabel + " " + k.Writer.Session + "]"
+			}
+			fmt.Printf("  %s: %s%s\n", k.Name, what, by)
+		}
 	}
 	return nil
 }

@@ -10,9 +10,10 @@ import (
 	"testing"
 )
 
-// a bucket stand-in: two pages of stores/, one marker, and a check that every request is SigV4-signed
+// a bucket stand-in: two pages of stores/, one key backup, one marker, and a check that every request is SigV4-signed
 func TestBackupsServedAsTheyAreInTheBucket(t *testing.T) {
-	objs := map[string]string{"stores/a.json": `{"doc":"a","sig":"x"}`, "stores/b.json": `{"doc":"b","sig":"y"}`, "sensitive/b.json": `{"doc":"m","sig":"z"}`, "stores/README": "no"}
+	objs := map[string]string{"stores/a.json": `{"doc":"a","sig":"x"}`, "stores/b.json": `{"doc":"b","sig":"y"}`, "sensitive/b.json": `{"doc":"m","sig":"z"}`, "stores/README": "no",
+		"keys/a/K.json": `{"kind":"key-backup"}`}
 	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		if a := req.Header.Get("Authorization"); !strings.HasPrefix(a, "AWS4-HMAC-SHA256 Credential=ak/") || req.Header.Get("x-amz-date") == "" {
 			w.WriteHeader(403)
@@ -27,6 +28,8 @@ func TestBackupsServedAsTheyAreInTheBucket(t *testing.T) {
 				fmt.Fprint(w, `<ListBucketResult><Contents><Key>stores/a.json</Key></Contents><Contents><Key>stores/README</Key></Contents><IsTruncated>true</IsTruncated><NextContinuationToken>t2</NextContinuationToken></ListBucketResult>`)
 			case p == "stores/":
 				fmt.Fprint(w, `<ListBucketResult><Contents><Key>stores/b.json</Key></Contents><IsTruncated>false</IsTruncated></ListBucketResult>`)
+			case p == "keys/":
+				fmt.Fprint(w, `<ListBucketResult><Contents><Key>keys/a/K.json</Key></Contents><IsTruncated>false</IsTruncated></ListBucketResult>`)
 			default:
 				fmt.Fprint(w, `<ListBucketResult><Contents><Key>sensitive/b.json</Key></Contents><IsTruncated>false</IsTruncated></ListBucketResult>`)
 			}
@@ -67,7 +70,7 @@ func TestBackupsServedAsTheyAreInTheBucket(t *testing.T) {
 		}
 		got = append(got, ob["key"].(string))
 	}
-	if strings.Join(got, ",") != "stores/a.json,stores/b.json,sensitive/b.json" {
+	if strings.Join(got, ",") != "stores/a.json,stores/b.json,keys/a/K.json,sensitive/b.json" {
 		t.Fatalf("got %v", got)
 	}
 	t.Setenv("BACKUP_READ_ACCESS_KEY", "wrong")

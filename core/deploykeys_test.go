@@ -69,15 +69,16 @@ func deployKeyCore(t *testing.T) (*Core, *testGitHub, *phone) {
 	c, _, p := setup(t)
 	g := newTestGitHub()
 	c.github = g
-	pl(t)(c.WriteStore(writeStore(t, c, p, DeployKeyTokenStore, map[string]string{DeployKeyTokenKey: g.token})))
+	pl(t)(writeStore(t, c, p, DeployKeyTokenStore, map[string]string{DeployKeyTokenKey: g.token}))
 	return c, g, p
 }
 
 // what the shell does: check the begin document, sign it and share the token store, under one Face ID
 func (p *phone) answerDeployKey(t *testing.T, begin SignedDoc) (string, Sealed, string) {
 	t.Helper()
-	id, s := p.share(begin)
-	return id, s, p.sign(begin.Payload)
+	var b struct{ Pending, E, T string }
+	json.Unmarshal([]byte(begin.Payload), &b)
+	return b.Pending, p.shareOf(b.E, b.T), p.sign(begin.Payload)
 }
 
 // keyRequest: what the app sends to deploy_key_begin — the store and title it names, and for an add the key pair it
@@ -87,7 +88,7 @@ func keyRequest(t *testing.T, c *Core, p *phone, action, repo string, sensitive 
 	store := RepoStore(repo)
 	r := DeployKeyRequest{Action: action, Repo: repo, Sensitive: sensitive, Store: store, Title: "jarvis2 " + store}
 	if action == "add" && c.phoneSigning != "" {
-		r.PublicKey, r.Blob, _ = appKey(t, c, p, repo, store)
+		r.PublicKey, r.Keys, _ = appKey(t, c, p, repo, store)
 	}
 	return r
 }
@@ -242,13 +243,13 @@ func TestDeployKeyNeedsThePhone(t *testing.T) {
 	// the phone's signature over ANOTHER begin document (the router swapping requests)
 	b1, _ := c.DeployKeyBegin(keyRequest(t, c, p, "add", "DE0CH/x", false))
 	b2, _ := c.DeployKeyBegin(keyRequest(t, c, p, "add", "DE0CH/y", false))
-	id2, s2 := p.share(b2)
+	id2, s2, _ := p.answerDeployKey(t, b2)
 	if _, err := c.DeployKeyFinish(id2, s2, p.sign(b1.Payload)); err == nil {
 		t.Fatal("a signature over another request was accepted")
 	}
 	// another phone's share
 	b3, _ := c.DeployKeyBegin(keyRequest(t, c, p, "add", "DE0CH/x", false))
-	id3, s3 := other.share(b3)
+	id3, s3, _ := other.answerDeployKey(t, b3)
 	if _, err := c.DeployKeyFinish(id3, s3, p.sign(b3.Payload)); err == nil {
 		t.Fatal("another phone's share opened the token store")
 	}
@@ -263,7 +264,7 @@ func TestDeployKeyRefusals(t *testing.T) {
 	if _, err := c.DeployKeyBegin(keyRequest(t, c, p, "add", "DE0CH/x", false)); err == nil || !strings.Contains(err.Error(), DeployKeyTokenStore) {
 		t.Fatal("began without the token store:", err)
 	}
-	pl(t)(c.WriteStore(writeStore(t, c, p, DeployKeyTokenStore, map[string]string{"OTHER": "x"})))
+	pl(t)(writeStore(t, c, p, DeployKeyTokenStore, map[string]string{"OTHER": "x"}))
 	if _, err := deployKey(t, c, p, "add", "DE0CH/x", false); err == nil || !strings.Contains(err.Error(), DeployKeyTokenKey) {
 		t.Fatal("a token store without the token:", err)
 	}
@@ -389,10 +390,11 @@ func TestDeployKeyRecoverKeepsTheOwner(t *testing.T) {
 	c, _, master := newCore(t)
 	p := newPhone()
 	rb := recoverBundle(t, c, p, "fly-secret")
-	rb.Blobs = append(rb.Blobs,
-		appWrap(t, c, p, "github-foo-bar", map[string]string{"GITHUB_DEPLOY_REPO_DE0CH_FOO_BAR": "DE0CH/foo-bar", "GITHUB_DEPLOY_KEY_DE0CH_FOO_BAR": "x"}),
-		appWrap(t, c, p, "github-odd", map[string]string{"GITHUB_DEPLOY_REPO_DE0CH_OTHER": "DE0CH/other"}),
-		appWrap(t, c, p, DeployKeyTokenStore, map[string]string{DeployKeyTokenKey: "gh-admin-token"}))
+	rb.Stores = append(rb.Stores, "github-foo-bar", "github-odd", DeployKeyTokenStore)
+	rb.Keys = append(append(append(rb.Keys,
+		appWrap(t, c, p, "github-foo-bar", map[string]string{"GITHUB_DEPLOY_REPO_DE0CH_FOO_BAR": "DE0CH/foo-bar", "GITHUB_DEPLOY_KEY_DE0CH_FOO_BAR": "x"})...),
+		appWrap(t, c, p, "github-odd", map[string]string{"GITHUB_DEPLOY_REPO_DE0CH_OTHER": "DE0CH/other"})...),
+		appWrap(t, c, p, DeployKeyTokenStore, map[string]string{DeployKeyTokenKey: "gh-admin-token"})...)
 	rb.Owners = map[string]string{"github-foo-bar": "DE0CH/foo-bar", "github-odd": "not a repo", "github-gone": "DE0CH/gone"}
 	s, sig, b := claimFor(c, master, p, rb)
 	pl(t)(c.Claim(s, sig, b))
@@ -445,41 +447,37 @@ func TestDeployKeyClashRaceTakesTheKeyBack(t *testing.T) {
 
 // appKey: what the app does before Face ID — an ed25519 pair, the store's values (the same format as the core's), the
 // data key wrapped to the store key the core signed (store_key)
-func appKey(t *testing.T, c *Core, p *phone, repo, store string) (string, *StoreBlob, ed25519.PrivateKey) {
+func appKey(t *testing.T, c *Core, p *phone, repo, store string) (string, []KeyEntry, ed25519.PrivateKey) {
 	t.Helper()
 	sk := pl(t)(c.StoreKey(p.agreementKey()))
 	if sk["phone"] != p.agreementKey() {
 		t.Fatal("the store key names another phone")
 	}
-	C, _ := b64.DecodeString(sk["storeKey"].(string))
 	pub, priv, _ := ed25519.GenerateKey(rand.Reader)
-	dk := make([]byte, 32)
-	rand.Read(dk)
-	w, err := WrapToPoint(C, dk)
-	if err != nil {
-		t.Fatal(err)
-	}
-	vals, _ := json.Marshal(map[string]string{DeployRepoPrefix + EnvSlug(repo): repo,
+	keys := appWrap(t, c, p, store, map[string]string{DeployRepoPrefix + EnvSlug(repo): repo,
 		DeployKeyPrefix + EnvSlug(repo): b64.EncodeToString(OpenSSHPrivateKey(priv, "jarvis2 "+store))})
-	return "ssh-ed25519 " + b64.EncodeToString(sshPublicWire(pub)), &StoreBlob{Name: store, Wrapped: w, Data: b64.EncodeToString(gcmSeal(dk, vals, []byte(store)))}, priv
+	return "ssh-ed25519 " + b64.EncodeToString(sshPublicWire(pub)), keys, priv
 }
 
 func TestDeployKeyFromTheAppsKeyPair(t *testing.T) {
 	c, g, p := deployKeyCore(t)
-	pub, blob, priv := appKey(t, c, p, "DE0CH/china-train", "github-china-train")
-	req := DeployKeyRequest{Action: "add", Repo: "DE0CH/china-train", Store: "github-china-train", Title: "jarvis2 github-china-train", PublicKey: pub, Blob: blob}
+	pub, keys, priv := appKey(t, c, p, "DE0CH/china-train", "github-china-train")
+	req := DeployKeyRequest{Action: "add", Repo: "DE0CH/china-train", Store: "github-china-train", Title: "jarvis2 github-china-train", PublicKey: pub, Keys: keys}
+	moved := func(to string) []KeyEntry {
+		out := append([]KeyEntry{}, keys...)
+		for i := range out {
+			out[i].Store = to
+		}
+		return out
+	}
 	for name, bad := range map[string]func(*DeployKeyRequest){
-		"no public key":      func(r *DeployKeyRequest) { r.PublicKey = "" },
-		"not ed25519":        func(r *DeployKeyRequest) { r.PublicKey = "ssh-rsa AAAA" },
-		"no blob":            func(r *DeployKeyRequest) { r.Blob = nil },
-		"a blob for another": func(r *DeployKeyRequest) { x := *blob; x.Name = "github-other"; r.Blob = &x },
-		"the token store": func(r *DeployKeyRequest) {
-			r.Store = DeployKeyTokenStore
-			x := *blob
-			x.Name = DeployKeyTokenStore
-			r.Blob = &x
-		},
-		"a title with a line":                               func(r *DeployKeyRequest) { r.Title = "x\ny" },
+		"no public key":       func(r *DeployKeyRequest) { r.PublicKey = "" },
+		"not ed25519":         func(r *DeployKeyRequest) { r.PublicKey = "ssh-rsa AAAA" },
+		"no keys":             func(r *DeployKeyRequest) { r.Keys = nil },
+		"keys for another":    func(r *DeployKeyRequest) { r.Keys = moved("github-other") },
+		"a key twice":         func(r *DeployKeyRequest) { r.Keys = append(append([]KeyEntry{}, keys...), keys[0]) },
+		"the token store":     func(r *DeployKeyRequest) { r.Store, r.Keys = DeployKeyTokenStore, moved(DeployKeyTokenStore) },
+		"a title with a line": func(r *DeployKeyRequest) { r.Title = "x\ny" },
 		"no store or title (the core named them before R2)": func(r *DeployKeyRequest) { r.Store, r.Title = "", "" },
 	} {
 		in := req
@@ -489,7 +487,8 @@ func TestDeployKeyFromTheAppsKeyPair(t *testing.T) {
 		}
 	}
 	b := pl(t)(c.DeployKeyBegin(req))
-	if b["publicKey"] != pub || b["blobE"] != blob.Wrapped.E || b["blobSha256"] != sha256Hex(blob.Data) {
+	named, _ := b["keys"].([]any)
+	if b["publicKey"] != pub || len(named) != 2 || named[0].(map[string]any)["e"] != keys[0].Wrapped.E || named[0].(map[string]any)["dataSha256"] != sha256Hex(keys[0].Data) {
 		t.Fatalf("the begin document doesn't name the key pair: %v", b)
 	}
 	d, _ := c.DeployKeyBegin(req)
@@ -501,7 +500,7 @@ func TestDeployKeyFromTheAppsKeyPair(t *testing.T) {
 	if ks := g.keys["DE0CH/china-train"]; len(ks) != 1 || ks[0].Key != pub {
 		t.Fatalf("GitHub got %v", ks)
 	}
-	if got := c.stores["github-china-train"]; got.Data != blob.Data || got.Writer != "core" {
+	if got := c.stores["github-china-train"][keys[0].Key]; got == nil || got.Data != keys[0].Data || got.Writer.By != "core" {
 		t.Fatal("the store isn't the app's blob, vouched by the core")
 	}
 	// the phone and the core open it as any store: the private half GitHub's key belongs to

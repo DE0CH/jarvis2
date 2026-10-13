@@ -1,15 +1,18 @@
 package main
 
 // The store backups for the app's Recover (docs/DESIGN.md "Recover"). The router holds the backup bucket's
-// read credential (BACKUP_READ_ACCESS_KEY / BACKUP_READ_SECRET_KEY, router secrets — a Hetzner S3 credential
-// that bucket policies narrow to reads of jarvis2-backup-de0ch) and hands the app the locked backups as they
-// are in the bucket: each one sealed to the master key and signed by its writer (the setup key), so the
-// router can't read, change or forge one — it can only withhold a backup or serve an older signed version.
+// credential (BACKUP_READ_ACCESS_KEY / BACKUP_READ_SECRET_KEY, router secrets — a Hetzner S3 credential that bucket
+// policies narrow to reads of jarvis2-backup-de0ch and new versions of keys/: no delete, no policy, no other prefix),
+// writes each key's backup as the key is written (storedocs.go: keys/<store>/<key>.json, sealed to the master key by
+// the writer and signed by it), and hands the app the locked backups as they are in the bucket. The router can't
+// read, change or forge one (a writer's signature covers it); it can only withhold a backup or serve an older version
+// (the bucket is versioned: a new version never removes an old one).
 //
-//	GET /api/backups → {bucket, objects: [{key, body}]}: every object under stores/ and sensitive/, body = the
-//	                   object's text ({doc, sig}); 503 {error} without the credential.
+//	GET /api/backups → {bucket, objects: [{key, body}]}: every object under stores/, keys/ and sensitive/, body = the
+//	                   object's text; 503 {error} without the credential.
 
 import (
+	"bytes"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
@@ -62,6 +65,16 @@ func hmacSHA(key []byte, msg string) []byte {
 
 // get: a SigV4-signed, path-style GET of /<bucket>/<key>?<query>
 func (b *backupBucket) get(key string, query map[string]string) ([]byte, error) {
+	return b.do("GET", key, query, nil)
+}
+
+// put: a new version of one object (the bucket is versioned: every earlier version stays)
+func (b *backupBucket) put(key string, body []byte) error {
+	_, err := b.do("PUT", key, nil, body)
+	return err
+}
+
+func (b *backupBucket) do(method, key string, query map[string]string, body []byte) ([]byte, error) {
 	path := "/" + s3enc(b.bucket, false)
 	if key != "" {
 		path += "/" + s3enc(key, true)
@@ -83,10 +96,10 @@ func (b *backupBucket) get(key string, query map[string]string) ([]byte, error) 
 	u.RawQuery = q
 	t := b.now().UTC()
 	amz, day := t.Format("20060102T150405Z"), t.Format("20060102")
-	empty := sha256.Sum256(nil)
-	payload := hex.EncodeToString(empty[:])
+	sum := sha256.Sum256(body)
+	payload := hex.EncodeToString(sum[:])
 	signed := "host;x-amz-content-sha256;x-amz-date"
-	canonical := strings.Join([]string{"GET", path, q, "host:" + u.Host + "\nx-amz-content-sha256:" + payload + "\nx-amz-date:" + amz + "\n", signed, payload}, "\n")
+	canonical := strings.Join([]string{method, path, q, "host:" + u.Host + "\nx-amz-content-sha256:" + payload + "\nx-amz-date:" + amz + "\n", signed, payload}, "\n")
 	scope := day + "/" + b.region + "/s3/aws4_request"
 	ch := sha256.Sum256([]byte(canonical))
 	toSign := "AWS4-HMAC-SHA256\n" + amz + "\n" + scope + "\n" + hex.EncodeToString(ch[:])
@@ -94,7 +107,7 @@ func (b *backupBucket) get(key string, query map[string]string) ([]byte, error) 
 	for _, p := range []string{b.region, "s3", "aws4_request"} {
 		k = hmacSHA(k, p)
 	}
-	req, _ := http.NewRequest("GET", u.String(), nil)
+	req, _ := http.NewRequest(method, u.String(), bytes.NewReader(body))
 	req.Header.Set("x-amz-content-sha256", payload)
 	req.Header.Set("x-amz-date", amz)
 	req.Header.Set("Authorization", "AWS4-HMAC-SHA256 Credential="+b.accessKey+"/"+scope+", SignedHeaders="+signed+", Signature="+hex.EncodeToString(hmacSHA(k, toSign)))
@@ -103,19 +116,19 @@ func (b *backupBucket) get(key string, query map[string]string) ([]byte, error) 
 		return nil, err
 	}
 	defer resp.Body.Close()
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 16<<20))
+	out, err := io.ReadAll(io.LimitReader(resp.Body, 16<<20))
 	if err != nil {
 		return nil, err
 	}
 	if resp.StatusCode != 200 {
 		var e struct{ Code string }
-		xml.Unmarshal(body, &e)
+		xml.Unmarshal(out, &e)
 		if e.Code == "" {
 			e.Code = fmt.Sprintf("HTTP %d", resp.StatusCode)
 		}
-		return nil, fmt.Errorf("the backup bucket refused %s: %s", path, e.Code)
+		return nil, fmt.Errorf("the backup bucket refused %s %s: %s", method, path, e.Code)
 	}
-	return body, nil
+	return out, nil
 }
 
 // list: every key under prefix (all pages)
@@ -157,7 +170,7 @@ type backupObject struct {
 // all: the store backups and the sensitivity markers, as they are
 func (b *backupBucket) all() ([]backupObject, error) {
 	out := []backupObject{}
-	for _, prefix := range []string{"stores/", "sensitive/"} {
+	for _, prefix := range []string{"stores/", "keys/", "sensitive/"} {
 		keys, err := b.list(prefix)
 		if err != nil {
 			return nil, err

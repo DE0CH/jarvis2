@@ -105,7 +105,7 @@ func main() {
 	log.SetFlags(0)
 	log.SetPrefix("[jarvis2] ")
 	if len(os.Args) < 2 {
-		log.Fatal("usage: jarvis2-machine boot | init | stores [--json] | add-store <name> | await-store <name> | downgrade <store>… | --none | allow [<holder> <duration> | --remove <holder>]")
+		log.Fatal("usage: jarvis2-machine boot | init | stores [--json] | put-key <store> <key> [--explain <text>] < value | delete-key <store> <key> | add-store <name> | await-store <name> | downgrade <store>… | --none | allow [<holder> <duration> | --remove <holder>]")
 	}
 	var err error
 	switch os.Args[1] {
@@ -125,6 +125,10 @@ func main() {
 		err = awaitStore(os.Args[2])
 	case "stores":
 		err = storesCmd(os.Args[2:]) // stores.go
+	case "put-key":
+		err = putKeyCmd(os.Args[2:], false) // putkey.go
+	case "delete-key":
+		err = putKeyCmd(os.Args[2:], true)
 	case "downgrade":
 		var keep []string
 		if keep, err = downgradeArgs(os.Args[2:]); err == nil {
@@ -708,6 +712,10 @@ func agent() error {
 		for _, cmd := range out.Commands {
 			if cmd == "free" && booted() && !frozen.Load() { // memory.go: an Upgrade, before its snapshot
 				freeMemory()
+				continue
+			}
+			if cmd == "refresh-secrets" && booted() { // putkey.go: an unlock for this cert went through
+				go refreshFromRouter(c)
 				continue
 			}
 			if cmd == "snapshot" {

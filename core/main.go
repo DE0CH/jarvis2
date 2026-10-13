@@ -117,12 +117,13 @@ func Handler(c *Core) http.Handler {
 	h("POST /stores", func(r *http.Request, b body) (any, error) { return c.Stores(str(b, "nonce")) })
 	h("POST /stores/create", func(r *http.Request, b body) (any, error) { return c.CreateStore(str(b, "name")) })
 	h("POST /stores/mark-sensitive", func(r *http.Request, b body) (any, error) { return c.MarkSensitive(str(b, "name")) })
-	h("POST /stores/write", func(r *http.Request, b body) (any, error) {
-		var s StoreBlob
-		if json.Unmarshal(b["store"], &s) != nil {
-			return nil, fail(400, "not a store blob")
+	h("POST /stores/write-key", func(r *http.Request, b body) (any, error) {
+		var in WriteKeyInput
+		raw, _ := json.Marshal(b)
+		if json.Unmarshal(raw, &in) != nil {
+			return nil, fail(400, "bad write-key request")
 		}
-		return c.WriteStore(s)
+		return c.WriteKey(in)
 	})
 
 	// ---- machines ----
@@ -171,9 +172,11 @@ func Handler(c *Core) http.Handler {
 	// ---- unlock ----
 	h("POST /unlock/begin", func(r *http.Request, b body) (any, error) { return c.UnlockBegin(str(b, "store"), str(b, "for")) })
 	h("POST /unlock/finish", func(r *http.Request, b body) (any, error) {
-		var s Sealed
-		json.Unmarshal(b["share"], &s)
-		return c.UnlockFinish(str(b, "pending"), s)
+		shares := map[string]Sealed{}
+		if json.Unmarshal(b["shares"], &shares) != nil {
+			return nil, fail(400, "shares: {key: sealed share}")
+		}
+		return c.UnlockFinish(str(b, "pending"), shares)
 	})
 	h("POST /lock", func(r *http.Request, b body) (any, error) { return c.Lock(str(b, "id")) })
 

@@ -98,7 +98,7 @@ func (r *Router) buildHandlers() {
 		}))
 	}
 	r.registerFeatures(app, m, mux.Handle)
-	r.registerStoreKeys(app, m, mux) // storekeys.go: every store's key names
+	r.registerStoreDocs(app, m, mux) // storedocs.go: every store's keys, what they are for, and writing one key
 	r.registerActions(m)             // actions.go: each session's actions, on its machine key
 	// the router's own health, for an operator with no way into the box: secret NAMES present, image, core up
 	mux.Handle("GET /setup/status", r.requireSetup(func(w http.ResponseWriter, req *http.Request) {
@@ -148,7 +148,7 @@ func (r *Router) buildHandlers() {
 	setup("GET /setup/identity", "GET", "/identity")
 	setup("POST /setup/stores", "POST", "/stores")
 	setup("POST /setup/stores/create", "POST", "/stores/create")
-	setup("POST /setup/stores/write", "POST", "/stores/write")
+	setup("POST /setup/stores/write", "POST", "/stores/write") // a core from before keys.go (until the held core is live)
 	setup("POST /setup/stores/mark-sensitive", "POST", "/stores/mark-sensitive")
 	// the core's Fly token, sealed to the core (after a Reset; a Recover brings it from the backups)
 	setup("POST /setup/fly-token", "POST", "/fly-token")
@@ -459,13 +459,30 @@ func (r *Router) buildHandlers() {
 	})
 
 	// ---- the core, relayed unchanged ------------------------------------------------------------------
-	for _, p := range []string{"stores", "stores/create", "stores/mark-sensitive", "stores/write", "unlock/begin", "unlock/finish", "lock", "unlocked", "store-key"} {
+	for _, p := range []string{"stores", "stores/create", "stores/mark-sensitive", "unlock/begin", "lock", "unlocked", "store-key"} {
 		path := "/" + p
 		app("POST /api/core"+path, func(w http.ResponseWriter, req *http.Request) {
 			b, _ := io.ReadAll(io.LimitReader(req.Body, 1<<20))
 			r.relay(w, "POST", path, b)
 		})
 	}
+
+	// an unlock for one running session's cert: its machine pulls again (storedocs.go unlockArrived)
+	app("POST /api/core/unlock/finish", func(w http.ResponseWriter, req *http.Request) {
+		b, _ := io.ReadAll(io.LimitReader(req.Body, 1<<20))
+		status, out, err := r.core.Raw("POST", "/unlock/finish", b)
+		if err != nil {
+			log.Printf("core POST /unlock/finish: %v", err)
+			writeJSON(w, 503, map[string]any{"error": "the core isn't running", "coreDown": true})
+			return
+		}
+		if status == 200 {
+			r.unlockArrived(out)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(status)
+		w.Write(out)
+	})
 
 	// ---- machines --------------------------------------------------------------------------------------
 	m("GET /m/cert", func(w http.ResponseWriter, req *http.Request, machine string, _ []byte) {
@@ -553,6 +570,7 @@ func (r *Router) buildHandlers() {
 		if err == nil {
 			r.pulled(machine, cert, d)
 			markPulled(machine) // vouch.go: a pause waits briefly for such a machine's boot to finish
+			go r.refreshAfterPull(machine, d) // storedocs.go: stores behind a write → the phone is asked to refresh them
 		}
 		release()
 		r.noteSecretsPull(machine, err) // the app says which locked store the machine waits on, and offers to unlock it

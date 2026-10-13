@@ -99,7 +99,7 @@ func TestCreateBeforeTheClaimLeavesNoTrace(t *testing.T) {
 	if _, err := c.CreateStore("infra"); err == nil {
 		t.Fatal("a store was created on an empty core")
 	}
-	if _, err := c.WriteStore(StoreBlob{Name: "infra", Wrapped: WrappedKey{E: "x"}, Data: "y"}); err == nil {
+	if _, err := setupWrite(c, KeyEntry{Store: "infra", Key: "K", Wrapped: WrappedKey{E: "x", Wrapped: "x"}, Data: "y"}); err == nil {
 		t.Fatal("a store was written on an empty core")
 	}
 	// even if one got in somehow, the claim sets the non-sensitive set to exactly the bundle's
@@ -120,7 +120,7 @@ func TestCreateBeforeTheClaimLeavesNoTrace(t *testing.T) {
 // Finding: github-deploy-keys (the deploy-key admin token) could be given to a session or standing-unlocked.
 func TestTheDeployKeyTokenNeverGoesToASessionOrAnUnlock(t *testing.T) {
 	c, _, p := setup(t)
-	pl(t)(c.WriteStore(writeStore(t, c, p, DeployKeyTokenStore, map[string]string{DeployKeyTokenKey: "ghp"})))
+	pl(t)(writeStore(t, c, p, DeployKeyTokenStore, map[string]string{DeployKeyTokenKey: "ghp"}))
 	if _, err := routerSuccession(c, SuccessionInput{Image: img, Stores: []string{"default", DeployKeyTokenStore}}); err == nil {
 		t.Fatal("a session was offered the deploy-key token")
 	}
@@ -132,34 +132,32 @@ func TestTheDeployKeyTokenNeverGoesToASessionOrAnUnlock(t *testing.T) {
 	}
 }
 
-// Finding: open write_store let the router replace a store; the phone now sees who wrote the blob it unlocks.
+// Finding: an open write let the router replace a store; the phone sees who wrote each key it unlocks.
 func TestUnlockNamesTheWriter(t *testing.T) {
 	c, _, p := setup(t)
-	b := writeStore(t, c, p, "gmail", map[string]string{"G": "x"})
-	b.Writer = "core" // a writer can't pass itself off as the core
-	pl(t)(c.WriteStore(b))
+	x := sealKey(t, c, p, "gmail", "G", "x")
+	x.Writer = &EntryWriter{By: "core"} // a writer can't pass itself off as the core
+	if _, err := c.WriteKey(WriteKeyInput{Store: x.Store, Key: x.Key, Wrapped: x.Wrapped, Data: x.Data}); err == nil {
+		t.Fatal("a write with no writer was taken")
+	}
+	pl(t)(setupWrite(c, x))
 	d, err := c.UnlockBegin("gmail", "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	var m map[string]any
-	json.Unmarshal([]byte(d.Payload), &m)
-	if m["writer"] != nil {
-		t.Fatalf("an unsigned blob was shown as written by %v", m["writer"])
+	var m struct {
+		Keys []struct {
+			Key, DataSha256 string
+			Writer          EntryWriter
+		}
 	}
-	b.WriterSig = "c2ln"
-	pl(t)(c.WriteStore(b))
-	d, _ = c.UnlockBegin("gmail", "")
 	json.Unmarshal([]byte(d.Payload), &m)
-	if w, _ := m["writer"].(map[string]any); w["by"] != "setup" || w["sig"] != "c2ln" || m["dataSha256"] != sha256Hex(b.Data) {
-		t.Fatalf("got %v", m)
+	if len(m.Keys) != 1 || m.Keys[0].Writer.By != "setup" || m.Keys[0].Writer.Sig != "c2ln" || m.Keys[0].DataSha256 != sha256Hex(x.Data) {
+		t.Fatalf("got %+v", m)
 	}
 	d, _ = c.UnlockBegin("default", "") // claimed from a Recover: the core wrapped it
 	json.Unmarshal([]byte(d.Payload), &m)
-	if w, _ := m["writer"].(map[string]any); w["by"] != "core" {
-		t.Fatalf("got %v", m)
-	}
-	if st := pl(t)(c.Stores("n")); st["writers"] != true {
-		t.Fatal("the store list doesn't say unlocks name their writer")
+	if len(m.Keys) != 2 || m.Keys[0].Writer.By != "core" {
+		t.Fatalf("got %+v", m)
 	}
 }
