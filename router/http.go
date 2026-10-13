@@ -786,7 +786,10 @@ func (r *Router) requireMachine(fn func(w http.ResponseWriter, req *http.Request
 		})
 		sum := sha256.Sum256(body)
 		msg := req.Method + " " + req.URL.Path + " " + t + " " + hex.EncodeToString(sum[:])
-		if key == "" || !verifyP256(key, []byte(msg), sig) {
+		// a signature over the path WITH its query is as good (it binds more): the session image of 2026-10-13
+		// 01:30-03:00 signed its Claude login polls that way
+		withQuery := req.Method + " " + req.URL.Path + "?" + req.URL.RawQuery + " " + t + " " + hex.EncodeToString(sum[:])
+		if key == "" || !(verifyP256(key, []byte(msg), sig) || (req.URL.RawQuery != "" && verifyP256(key, []byte(withQuery), sig))) {
 			writeJSON(w, 401, map[string]string{"error": "not signed by a machine the core started"})
 			return
 		}

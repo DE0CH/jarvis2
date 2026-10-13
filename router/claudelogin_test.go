@@ -2,12 +2,15 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -391,5 +394,27 @@ func TestLoginFollowMirrorsJarvis1(t *testing.T) {
 	}
 	if pushed.Load() != 1 {
 		t.Fatal("the push didn't reach Jarvis 1")
+	}
+}
+
+// a machine that signed its poll's path with the query (the session image of 2026-10-13 01:30-03:00) is answered too
+func TestLoginPollSignedWithQuery(t *testing.T) {
+	newFakeAnthropic(t)
+	r, h := ownRouter(t)
+	h.offer(pairOf("a", time.Now().Add(8*time.Hour).UnixMilli()), acct1, "seed", true, false)
+	addSession(r, "sA", "started", "mA", false)
+	r.st.Do(func(d *persisted) { d.Sessions["sA"].Stores = []string{"claude"} })
+	m := newTestMachine(r, "mA")
+	req := httptest.NewRequest("GET", "/m/claude-login?have=0&ack=0&wait=0", nil)
+	ts := strconv.FormatInt(time.Now().Unix(), 10)
+	sum := sha256.Sum256(nil)
+	sig, _ := signP256(m.key, []byte("GET /m/claude-login?have=0&ack=0&wait=0 "+ts+" "+hex.EncodeToString(sum[:])))
+	req.Header.Set("X-Machine", "mA")
+	req.Header.Set("X-Time", ts)
+	req.Header.Set("X-Sig", sig)
+	w := httptest.NewRecorder()
+	r.MachineHandler().ServeHTTP(w, req)
+	if w.Code != 200 || !strings.Contains(w.Body.String(), "at-a") {
+		t.Fatal(w.Code, w.Body.String())
 	}
 }
