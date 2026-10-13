@@ -12,7 +12,7 @@ import { Box, Button, Card, Flex, Heading, Lbl, Muted, Pill, P, Quote, Row, Rows
 import { PButton } from "../ui/bits";
 import { Cards } from "../ui/cards";
 
-const KIND: Record<string, string> = { "repo-key": "Repo key", grant: "Grant", unlock: "Unlock", "new-session": "New session", "resume-upgrade": "Resume", "add-store": "Add a store", "api-call": "API call" };
+const KIND: Record<string, string> = { "repo-key": "Repo key", grant: "Grant", unlock: "Unlock", "new-session": "New session", "resume-upgrade": "Resume", "add-store": "Add a store", "api-call": "API call", restore: "Restore store" };
 
 /** open the entry's secure page; once it went through (or was denied there) the Inbox refreshes */
 export function reviewRequest(it: InboxItem) {

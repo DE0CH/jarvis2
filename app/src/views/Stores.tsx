@@ -1,6 +1,7 @@
 // The core's secret stores (GET api/stores), shown as listed with what each store and key is for (editable in
 // place: ui/storedocs.tsx). Unlocking, locking and marking a store sensitive happen on the shell's secure page, which
-// checks the core's signatures itself; the web page only shows the list.
+// checks the core's signatures itself; the web page only shows the list, and each store's earlier versions with a
+// "Propose restore" that files an Inbox request (ui/storeversions.tsx).
 import { useEffect } from "react";
 import { useStore, loadStores, refresh } from "../lib/store";
 import { hasShell, requestSecure } from "../lib/shell";
@@ -8,6 +9,7 @@ import { Button, Card, Flex, Heading, Muted, P, Pill, Spinner } from "../ui/kit"
 import { Cards } from "../ui/cards";
 import { CORE_STORE, harnessStoreSet } from "../lib/api";
 import { StoreDocs } from "../ui/storedocs";
+import { StoreVersions } from "../ui/storeversions";
 
 export function Stores() {
   const r = useStore((s) => s.stores);
@@ -30,6 +32,7 @@ export function Stores() {
                 <Flex gap={1} wrap justify="flex-end" style={{ flexShrink: 1 }}>{s.sensitive && <Pill kind="bad">sensitive</Pill>}{s.unlocked ? <Pill kind="ok">unlocked</Pill> : <Pill kind="dim">locked</Pill>}{s.empty && <Pill kind="dim">empty</Pill>}{harness.has(s.name) && <Pill kind="info">harness</Pill>}{s.keysFrom === "recorded" && <Pill kind="dim">recorded</Pill>}</Flex>
               </Flex>
               <StoreDocs store={s} edit />
+              {!s.name.startsWith("github-") || s.name === "github-deploy-keys" ? <StoreVersions store={s.name} /> : null}
             </Card>
           ))}
         </Cards>}

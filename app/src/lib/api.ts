@@ -168,9 +168,9 @@ export type Approval = {
 // approvals. The list's title is rendered here from kind + params (lib/inbox.ts); the review page renders what is
 // signed from the signed content itself.
 export type InboxItem = {
-  id: string; kind: "repo-key" | "grant" | "unlock" | "api-call" | ApprovalKind; approval: boolean;
+  id: string; kind: "repo-key" | "grant" | "unlock" | "api-call" | "restore" | ApprovalKind; approval: boolean;
   params: { action?: "add" | "remove"; repo?: string; sensitive?: boolean; session?: string; holder?: string; minutes?: number; days?: number;
-    method?: string; path?: string; body?: string; contentType?: string }; // api-call: the call a session's actions ask to run as Deyao
+    method?: string; path?: string; body?: string; contentType?: string; store?: string; seq?: number }; // api-call: the call a session's actions ask to run as Deyao
   session?: string; sessionName?: string; caller: { kind: string; session?: string }; callerText: string;
   call: { method: string; path: string; args?: Record<string, unknown> }; explanation: string; created: string; expires?: string;
   options?: Record<string, string>; open: { kind: string; options: Record<string, unknown> };
@@ -221,6 +221,20 @@ export async function coreStores(): Promise<CoreStore[]> {
 /** what a store and its keys are for: `about` (omitted = unchanged), key explanations ("" removes one) */
 export async function putStoreDocs(store: string, docs: { about?: string; keys?: Record<string, string> }): Promise<void> {
   await api("PUT", "api/stores/" + encodeURIComponent(store) + "/docs", docs);
+}
+
+/** one kept version of a store (core/history.go), as the core's signed list names it — never a value */
+export type StoreVersion = {
+  seq: number; at: string; version: string;
+  cause: { kind: string; key?: string; from?: number; writer?: { by: string; machine?: string; line?: string } };
+  keys: { name: string }[];
+};
+/** a store's kept versions, newest first, and which is current: read for display only (the app checks the core's
+ * signature before Deyao signs a restore) */
+export async function storeVersions(store: string): Promise<{ current: string; versions: StoreVersion[] }> {
+  const d = await api<{ payload: string }>("POST", "api/core/stores/versions", { store, nonce: "web-" + Date.now() });
+  const p = JSON.parse(d.payload);
+  return { current: p.current || "", versions: p.versions || [] };
 }
 
 /** what a challenge asks for, read for display only (the shell checks it before signing) */

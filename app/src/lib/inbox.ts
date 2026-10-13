@@ -22,6 +22,7 @@ export function inboxTitle(it: InboxItem): string {
     case "api-call": return "API call";
     case "add-store": return "Add store";
     case "resume-upgrade": return "Resume on latest image";
+    case "restore": return "Restore store";
   }
   return it.options?.restore ? "Restore session" : "New session";
 }
@@ -45,6 +46,10 @@ export function inboxRows(it: InboxItem, approvals: Approval[] = [], policy: Pol
       return rows;
     case "unlock":
       add("session", "Session", session);
+      return rows;
+    case "restore":
+      add("store", "Store", p.store);
+      add("version", "Version", p.seq);
       return rows;
     case "api-call":
       add("request", "Runs", `${p.method} ${p.path}`);
@@ -87,6 +92,7 @@ export async function fileFromWeb(kind: string, o: Record<string, unknown>): Pro
     if (o.grantKind === "rule") body.days = Math.max(1, Math.min(365, Math.round((Date.parse(String(o.until || "")) - Date.now()) / 86400000) || 30));
     else body.minutes = o.minutes || 10;
   } else if (kind === "unlock") { path = "api/requests/unlock"; body = { session: o.sessionId }; }
+  else if (kind === "restore") { path = "api/requests/restore"; body = { store: o.store, seq: o.seq }; }
   else { toast("This needs the Jarvis 2 app on the iPhone.", "info"); return false; }
   try {
     const r = await api<{ id: string; duplicate: boolean }>("POST", path, body);
