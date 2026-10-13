@@ -15,21 +15,39 @@
 # fresh read-only narrowing of JARVIS2_FLY_TOKEN (infra/fly-read-token.sh), as production's. All of it rides in the box's
 # user-data (cloud-init's SYNC_YAML/EXTRA_MANIFEST), none in git.
 # Env: HCLOUD_TOKEN (project runners), JARVIS2_FLY_TOKEN, JARVIS2_SETUP_KEY, CF_JARVIS2_INFRA_TOKEN, CLOUDFLARE_API,
-#      HETZNER_S3_*. Optional: REHEARSAL_NAME (default jarvis2-rehearsal), REHEARSAL_REF (the commit Flux applies;
-#      default origin/main), SERVER_TYPE (cx23), REHEARSAL_LOGS, KEEP=1 (no teardown on exit).
+#      HETZNER_S3_*. Optional: REHEARSAL_NAME (the base name, default jarvis2-rehearsal), REHEARSAL_RUN (the run id,
+#      digits; default the unix time), REHEARSAL_REF (the commit Flux applies; default origin/main), SERVER_TYPE (cx23),
+#      REHEARSAL_LOGS, KEEP=1 (no teardown on exit).
+#
+# One run at a time per base name, and every run's resources are its own: the box, firewall, WireGuard peer, tunnel,
+# hostname, Access apps, service token and bucket are all named NAME = <base>-<run id> (the box also carries the label
+# rehearsal-base=<base>). A run refuses to start while another run of the same base has a server, bucket or tunnel
+# (a run in flight, or one's leftovers: `<script> teardown <run id>` removes exactly that run's), and teardown only
+# ever removes its own run's resources. (Two parallel replicas with one shared name each deleted the other's token,
+# PAT and bucket, 2026-10-13.)
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-NAME="${REHEARSAL_NAME:-jarvis2-rehearsal}"
-case "$NAME" in jarvis2-rehearsal*) ;; *) echo "REHEARSAL_NAME must start with jarvis2-rehearsal"; exit 2 ;; esac
-# a new bucket name per run (Hetzner's S3 refuses a name for a while after its bucket was deleted); teardown
-# removes every bucket named $NAME-<digits>
-HOST="$NAME.deyaochen.com"; BUCKET="$NAME-$(date +%s)"
+BASE="${REHEARSAL_NAME:-jarvis2-rehearsal}"
+case "$BASE" in jarvis2-rehearsal*) ;; *) echo "REHEARSAL_NAME must start with jarvis2-rehearsal"; exit 2 ;; esac
+# `<script> teardown <run id>`: that run's resources only
+if [ "${1:-}" = teardown ]; then
+  [ -n "${2:-}" ] || { echo "usage: $0 teardown <run id> (the digits after $BASE- in its names)"; exit 2; }
+  REHEARSAL_RUN="$2"
+fi
+RUN="${REHEARSAL_RUN:-$(date +%s)}"
+case "$RUN" in ''|*[!0-9]*) echo "REHEARSAL_RUN must be digits"; exit 2 ;; esac
+export REHEARSAL_RUN="$RUN"
+# the run's own name for everything (a new bucket name per run, too: Hetzner's S3 refuses a name for a while after
+# its bucket was deleted)
+NAME="$BASE-$RUN"; HOST="$NAME.deyaochen.com"; BUCKET="$NAME"
 : "${HCLOUD_TOKEN:?}" "${JARVIS2_FLY_TOKEN:?}" "${JARVIS2_SETUP_KEY:?}" "${CF_JARVIS2_INFRA_TOKEN:?}" "${CLOUDFLARE_API:?}"
 : "${HETZNER_S3_ENDPOINT:?}" "${HETZNER_S3_REGION:?}" "${HETZNER_S3_ACCESS_KEY:?}" "${HETZNER_S3_SECRET_KEY:?}"
 LOGS="${REHEARSAL_LOGS:-/tmp/jarvis2-rehearsal-logs}"; mkdir -p "$LOGS"
 mkdir -p "$HOME/.jarvis2"
-# one run per NAME at a time (a second run's teardown would take the first one's work dir and box)
-exec 9>"$HOME/.jarvis2/$NAME.lock"
-flock -n 9 || { echo "another $NAME run (or its teardown) is still going"; exit 1; }
+# one run per base at a time on this machine (others() below covers other machines)
+if [ "${1:-}" != teardown ]; then
+  exec 9>"$HOME/.jarvis2/$BASE.lock"
+  flock -n 9 || { echo "another $BASE run (or its teardown) is still going on this machine"; exit 1; }
+fi
 W="${REHEARSAL_WORK:-$HOME/.jarvis2/$NAME}"; mkdir -p "$W"; chmod 700 "$W"
 H="https://api.hetzner.cloud/v1"
 step() { echo; echo "######## $* ($(date -u +%H:%M:%S))"; }
@@ -38,9 +56,42 @@ hz() { # hz METHOD PATH [JSON]
   curl -sS -X "$1" "$H$2" -H "Authorization: Bearer $HCLOUD_TOKEN" -H "Content-Type: application/json" ${3:+-d "$3"}
 }
 
+# another run of the same base (in flight, or its leftovers): its servers, buckets and tunnels, one per line; empty
+# when there's none
+others() {
+  BASE="$BASE" NAME="$NAME" python3 - <<'PY'
+import json, os, re, urllib.request, boto3
+base, name = os.environ["BASE"], os.environ["NAME"]
+# another run's: <base>-<digits>, or <base> alone (a run from before run ids)
+other = lambda n: n != name and re.fullmatch(re.escape(base) + r"(-[0-9]+)?", n) is not None
+def get(url, token):
+    req = urllib.request.Request(url, headers={"Authorization": "Bearer " + token, "User-Agent": "jarvis2-infra/1"})
+    return json.load(urllib.request.urlopen(req))
+H = "https://api.hetzner.cloud/v1/servers?label_selector="
+for sel in ("rehearsal-base=" + base, "rehearsal=" + base):
+    for s in get(H + sel, os.environ["HCLOUD_TOKEN"])["servers"]:
+        if other(s["labels"].get("rehearsal", "")): print(f"server {s['name']} ({s['id']})")
+s3 = boto3.client("s3", endpoint_url=os.environ["HETZNER_S3_ENDPOINT"], region_name=os.environ["HETZNER_S3_REGION"],
+                  aws_access_key_id=os.environ["HETZNER_S3_ACCESS_KEY"], aws_secret_access_key=os.environ["HETZNER_S3_SECRET_KEY"])
+for b in s3.list_buckets()["Buckets"]:
+    if other(b["Name"]): print(f"bucket {b['Name']}")
+acct = "ee3b4deef856baf11e1a67b242438325"
+for t in get(f"https://api.cloudflare.com/client/v4/accounts/{acct}/cfd_tunnel?is_deleted=false&per_page=1000",
+             os.environ["CF_JARVIS2_INFRA_TOKEN"])["result"]:
+    if other(t["name"]): print(f"tunnel {t['name']}")
+PY
+}
+refuse_if_others() {
+  local o; o=$(others) || { echo "couldn't check for other $BASE runs"; exit 1; }
+  [ -z "$o" ] && return 0
+  echo "another $BASE run has resources (a run in flight, or its leftovers: 'teardown <run id>' removes one run's):"
+  echo "$o" | sed 's/^/  /'
+  exit 1
+}
+
 teardown() {
   set +e
-  step "teardown"
+  step "teardown ($NAME)"
   if declare -F teardown_extra >/dev/null; then teardown_extra; fi
   for id in $(hz GET "/servers?label_selector=rehearsal=$NAME" | python3 -c "import json,sys;print(' '.join(str(s['id']) for s in json.load(sys.stdin)['servers']))"); do
     hz DELETE "/servers/$id" >/dev/null && echo "server $id deleted"
@@ -64,14 +115,12 @@ for m in json.load(sys.stdin):
     done
   fi
   REHEARSAL="$NAME" python3 "$ROOT/infra/cloudflare.py" --delete
-  python3 - "$NAME-" <<'PY'
+  python3 - "$BUCKET" <<'PY'
 import os, sys, boto3
-prefix = sys.argv[1]
 s3 = boto3.client("s3", endpoint_url=os.environ["HETZNER_S3_ENDPOINT"], region_name=os.environ["HETZNER_S3_REGION"],
                   aws_access_key_id=os.environ["HETZNER_S3_ACCESS_KEY"], aws_secret_access_key=os.environ["HETZNER_S3_SECRET_KEY"])
-import re
-# exactly NAME-<unix time>: jarvis2-rehearsal-* must not take jarvis2-rehearsal-replica-*'s bucket
-for b in [x["Name"] for x in s3.list_buckets()["Buckets"] if re.fullmatch(re.escape(prefix) + r"[0-9]+", x["Name"])]:
+# this run's bucket only
+for b in [x["Name"] for x in s3.list_buckets()["Buckets"] if x["Name"] == sys.argv[1]]:
     n = 0
     for page in s3.get_paginator("list_object_versions").paginate(Bucket=b):
         for v in page.get("Versions", []) + page.get("DeleteMarkers", []):
@@ -87,6 +136,7 @@ PY
 prepare() {
   REF="${REHEARSAL_REF:-$(git -C "$ROOT" ls-remote https://github.com/DE0CH/jarvis2 refs/heads/main | cut -f1)}"
   echo "$MODE $NAME: https://$HOST/, bucket $BUCKET, Flux at commit $REF"
+  refuse_if_others
 
   step "Cloudflare: tunnel, hostname, Access, service token ($NAME, $MODE)"
   if [ "$MODE" = replica ]; then
@@ -112,6 +162,8 @@ else:
     sys.exit(f"bucket {b} never appeared")
 print(f"ok: {b}")
 PY
+  # two runs started together both passed the first check: now each sees the other's bucket, and both stop
+  refuse_if_others
 
   step "the core's Fly token (narrowed as production's, expiring in 6 h)"
   FLY_TOKEN_HOURS=6 bash "$ROOT/infra/fly-token.sh" "$W/fly.tok"
@@ -224,7 +276,7 @@ make_box() {
 }
 make_box_once() {
   HCLOUD_PROJECT_TOKEN="$HCLOUD_TOKEN" WG_PEER="$NAME" CF_ENV="$W/cloudflare.env" KEYS_OUT="$W/keys" FIREWALL="$NAME" \
-    LABELS="{\"role\":\"$NAME\",\"rehearsal\":\"$NAME\",\"session\":\"${SESSION_ID:-none}\"}" \
+    LABELS="{\"role\":\"$NAME\",\"rehearsal\":\"$NAME\",\"rehearsal-base\":\"$BASE\",\"session\":\"${SESSION_ID:-none}\"}" \
     SYNC_YAML_FILE="$W/sync.yaml" EXTRA_MANIFEST_FILE="$W/extra.yaml" SERVER_TYPE="${SERVER_TYPE:-cx23}" \
     bash "$ROOT/infra/create.sh" "$NAME" 2>&1 | tee -a "$LOGS/create.log"
   [ "${PIPESTATUS[0]}" = 0 ]

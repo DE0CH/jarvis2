@@ -509,8 +509,8 @@ machines. Run it from a setup session (needs `JARVIS2_FLY_TOKEN`, `JARVIS2_SETUP
 `CLOUDFLARE_API`, `HETZNER_S3_*`) with a swift.org toolchain (`SWIFT_BIN`; the app's side is the `Rehearse` target
 in `ios/interop`, the app's own CoreSetup/CoreCrypto):
 
-1. its own tunnel + `jarvis2-rehearsal.deyaochen.com` + Access app + service token, its own versioned bucket
-   `jarvis2-rehearsal-<unix time>`, a core Fly token narrowed as production's that also expires after 6 h, then the box;
+1. its own tunnel + `jarvis2-rehearsal-<run>.deyaochen.com` + Access app + service token, its own versioned bucket
+   `jarvis2-rehearsal-<run>` (the run id: the unix time at start), a core Fly token narrowed as production's that also expires after 6 h, then the box;
 2. Reset with the TEST kit (`e2e/testdata`), stores written with `infra/setup.py` (dummy values: not sensitive,
    sensitive, created-then-marked, the harness's `claude` and `tunnel`, the core's Fly token), backups checked;
 3. power failure (Hetzner hard reset) → Recover → every store and its sensitivity back (backups and the core's
@@ -518,12 +518,12 @@ in `ios/interop`, the app's own CoreSetup/CoreCrypto):
 4. the app's restart (the kit wipes the core, Kubernetes starts an empty one) → Recover;
 5. the server deleted and made again (new box key, new peer) → Recover → a session again (`SKIP_REBUILD=1` skips);
 6. teardown, also on failure: servers, firewall, peer, the rehearsal cores' machines (`JARVIS2_CORE_KEY`),
-   Cloudflare tunnel/DNS/app/token, every object version and the bucket. After a crash: `infra/rehearse-recover.sh
-   teardown`.
+   Cloudflare tunnel/DNS/app/token, every object version and the bucket: this run's only. After a crash:
+   `infra/rehearse-recover.sh teardown <run>`.
 
 Test-only differences (all in the box's user-data, none in git; `infra/rehearsal-box.sh`, shared with the phone
 replica): the router runs `NO_ACCESS=1` behind an Access app whose only policy is the rehearsal service token (the
-router's own check wants Deyao's email login); a Flux patch sets `MACHINE_URL` (the peer `jarvis2-rehearsal`),
+router's own check wants Deyao's email login); a Flux patch sets `MACHINE_URL` (the peer `jarvis2-rehearsal-<run>`),
 `BACKUP_BUCKET`, `RECORDS_OFF=1` and Discord off, and there is no `k8s/secrets` Kustomization (encrypted to
 production's age key); the router's backup read key is the admin S3 key (a narrowed one is Console-only); the kit is
 the public test key, so the bucket holds only dummy values and the expiring Fly token. A hard reset waits 90 s after
@@ -551,9 +551,18 @@ throwaway repo's deploy key added and removed by the core; the script checks Git
 a session stuck at boot (its store locked right after Create) destroyed within 90 s, Destroy, then Recover with the
 kit (restart and recover) and every store back with its sensitivity, and a relaunch. A step fails on a missing
 element within its time, a near-blank screenshot, or a session not running in time. The run's video, screenshots and
-logs land in `~/artifacts/replica/<time>/`. Teardown also removes the keys branch `rehearsal-keys-<time>`, the repo
-`DE0CH/jarvis2-replica-<time>` and its 7-day PAT. `infra/phone-replica.sh teardown` after a crash. One run per
-box name at a time (a lock); the rehearsal and the replica use different names and can run together.
+logs land in `~/artifacts/replica/<run>/`. Teardown also removes the keys branch `rehearsal-keys-<run>`, the repo
+`DE0CH/jarvis2-replica-<run>` and its 7-day PAT `jarvis2-replica-deploy-keys-<run>`. `infra/phone-replica.sh teardown
+<run>` after a crash.
+
+**One run at a time, and each run's resources are its own** (`infra/rehearsal-box.sh`): every name carries the run id
+(`<base>-<run>`: box, firewall, WireGuard peer, tunnel, hostname, Access apps, service token, bucket; the box is also
+labelled `rehearsal-base=<base>`), the script finds its workflow run by name (`replica rehearsal-keys-<run>`), and
+teardown removes only its own run's. A run refuses to start while another run of the same base has a server, bucket
+or tunnel, anywhere (it lists them: a run in flight, or a crashed run's leftovers, removed with `teardown <run>`); two
+runs started at the same moment both see each other's bucket and both stop. The rehearsal (`jarvis2-rehearsal`) and
+the replica (`jarvis2-rehearsal-replica`) are different bases and can run together. Before this, two sessions' replicas
+under one shared name deleted each other's service token, PAT and bucket (2026-10-13).
 
 - **The gate:** the `ios` workflow's TestFlight job (environment `release`, main only) ships only when a `replica` run
   passed on a commit with the same `ios/` and `policy/` (it checks the last 30 successful replica runs). After an app

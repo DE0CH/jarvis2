@@ -20,11 +20,14 @@
 #   done        the end
 # What the test box needs that production keeps elsewhere: its keys/box.pub on a branch rehearsal-keys-<time> (the
 # Release build reads keys from that git ref: JarvisKeysRef, KeySource.swift), a throwaway private repo
-# DE0CH/jarvis2-replica-<time>. Teardown removes them with the box, its Cloudflare bits, bucket, Fly machines and PAT.
+# DE0CH/jarvis2-replica-<run>. Teardown removes them with the box, its Cloudflare bits, bucket, Fly machines and PAT —
+# its own run's only: every name carries the run id (infra/rehearsal-box.sh: one run at a time, refuses to start while
+# another replica's server, bucket or tunnel exists). After a crash: `infra/phone-replica.sh teardown <run id>`.
 #
 # Env: as infra/rehearsal-box.sh, plus BOT_EMAIL_PASSWORD, GITHUB_TOKEN (gh), GITHUB_USER/PASSWORD/TOTP_SECRET (the
 # github-web skill: the PAT and deleting the repo; GITHUB_WEB_DIR, default ~/workspace/claude-env/.claude/skills/
-# github-web). Optional: REPLICA_REF (the branch the workflow runs from, default main), KEEP=1.
+# github-web). Optional: REPLICA_REF (the branch the workflow runs from, default main), REHEARSAL_RUN (the run id),
+# KEEP=1.
 # Output: the run's video, screenshots and logs in ~/artifacts/replica/<time>/.
 set -euo pipefail
 MODE=replica
@@ -32,19 +35,17 @@ export REHEARSAL_NAME="${REHEARSAL_NAME:-jarvis2-rehearsal-replica}" REHEARSAL_E
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/rehearsal-box.sh"
 : "${BOT_EMAIL_PASSWORD:?}" "${GITHUB_TOKEN:?}"
 GW="${GITHUB_WEB_DIR:-$HOME/workspace/claude-env/.claude/skills/github-web}"
-T="${REPLICA_TIME:-$(date +%s)}"
-KEYS_BRANCH="rehearsal-keys-$T"; TREPO="jarvis2-replica-$T"; PAT="jarvis2-replica-deploy-keys"
+T="$RUN"   # rehearsal-box.sh's run id: in every name below, so teardown removes this run's and no other's
+KEYS_BRANCH="rehearsal-keys-$T"; TREPO="jarvis2-replica-$T"; PAT="jarvis2-replica-deploy-keys-$T"
 OUT="$HOME/artifacts/replica/$T"; mkdir -p "$OUT"
 
 teardown_extra() {
   [ -s "$W/run" ] && gh run cancel "$(cat "$W/run")" -R DE0CH/jarvis2 >/dev/null 2>&1 || true
   record_core
-  for b in $(gh api "repos/DE0CH/jarvis2/branches?per_page=100" -q '.[].name' 2>/dev/null | grep '^rehearsal-keys-' || true); do
-    gh api -X DELETE "repos/DE0CH/jarvis2/git/refs/heads/$b" >/dev/null 2>&1 && echo "branch $b deleted"
-  done
-  for r in $(gh repo list DE0CH --limit 200 --json name -q '.[].name' 2>/dev/null | grep '^jarvis2-replica-' || true); do
-    (cd "$GW" && NODE_PATH="$(npm root -g)" node github_web.js repo-delete "$r" >/dev/null 2>&1) && echo "repo DE0CH/$r deleted"
-  done
+  gh api -X DELETE "repos/DE0CH/jarvis2/git/refs/heads/$KEYS_BRANCH" >/dev/null 2>&1 && echo "branch $KEYS_BRANCH deleted"
+  if gh repo view "DE0CH/$TREPO" >/dev/null 2>&1; then
+    (cd "$GW" && NODE_PATH="$(npm root -g)" node github_web.js repo-delete "$TREPO" >/dev/null 2>&1) && echo "repo DE0CH/$TREPO deleted"
+  fi
   (cd "$GW" && NODE_PATH="$(npm root -g)" node github_web.js pat-delete "$PAT" >/dev/null 2>&1) && echo "PAT $PAT deleted"
 }
 # the test box's core key, so teardown can find the session machines it started (JARVIS2_CORE_KEY)
@@ -55,7 +56,7 @@ spec = importlib.util.spec_from_file_location("jarvis2_setup", sys.argv[1]); m =
 print(m.call("GET", "/setup/identity")["signingKey"])
 PY
 }
-if [ "${1:-}" = teardown ]; then teardown; exit 0; fi
+if [ "${1:-}" = teardown ]; then teardown; exit 0; fi   # `teardown <run id>` (rehearsal-box.sh)
 [ "${KEEP:-}" = 1 ] || trap teardown EXIT
 
 # while a core change waits for Deyao's go (k8s/apps/core.yaml jarvis2/core-pin: hold), production runs an older
@@ -90,8 +91,14 @@ RELAY="https://ppng.io/$(python3 -c "import secrets;print(secrets.token_hex(16))
 step "the replica run on a GitHub macOS runner"
 gh workflow run replica.yml -R DE0CH/jarvis2 --ref "${REPLICA_REF:-main}" -f base="https://$HOST/" -f keys_ref="$KEYS_BRANCH" \
   -f relay="$RELAY" -f email="$REHEARSAL_EMAIL" -f repo="DE0CH/$TREPO"
-sleep 15
-gh run list -R DE0CH/jarvis2 -w replica.yml -L 1 --json databaseId -q '.[0].databaseId' > "$W/run"
+# this run's workflow run: the one named after its keys branch (replica.yml run-name), not just the newest
+for _ in $(seq 1 24); do
+  sleep 5
+  gh run list -R DE0CH/jarvis2 -w replica.yml -L 20 --json databaseId,displayTitle \
+    -q ".[] | select(.displayTitle == \"replica $KEYS_BRANCH\") | .databaseId" | head -1 > "$W/run"
+  [ -s "$W/run" ] && break
+done
+[ -s "$W/run" ] || { echo "the replica workflow run for $KEYS_BRANCH didn't show up"; exit 1; }
 echo "run https://github.com/DE0CH/jarvis2/actions/runs/$(cat "$W/run")"
 
 # ---- the setup session's answers ------------------------------------------------------------------------

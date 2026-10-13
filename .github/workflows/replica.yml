@@ -4,6 +4,8 @@ name: replica
 # matching Deyao's iPhone (iPhone 17 = iPhone18,3, iOS 27.0, Xcode 27.0: .github/actions/ios-simulator, pinned),
 # with Face ID enrolled and every flow tapped by ReplicaUITests against the real box and real Fly sessions. The video,
 # screenshots and logs are the run's artifact `replica`.
+# named after the keys branch, so infra/phone-replica.sh finds ITS run among others
+run-name: replica ${{ inputs.keys_ref }}
 on:
   workflow_dispatch:
     inputs:
