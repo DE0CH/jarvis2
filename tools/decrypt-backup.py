@@ -3,30 +3,50 @@
 
 Runs fully offline (Python 3.9+ and the `cryptography` package; nothing else, no network):
 
-  decrypt-backup.py FILE [--kit-file KIT | -] [--setup-pub keys/setup.pub] [--out PATH] [--stdout] [--force] [--skip-bad]
+  decrypt-backup.py FILE [--kit-file KIT | -] [--setup-pub keys/setup.pub] [--box-pub keys/box.pub]
+                    [--out PATH] [--stdout] [--force] [--skip-bad]
 
 FILE is what the Jarvis 2 app's Settings → Encrypted backup → "Download encrypted backup" saves
 (`jarvis2-backup-<date>.json`, format "jarvis2-backup-export" version 1: the objects exactly as `GET /api/backups`
-served them, the bucket, the fetch time and the setup public key the app checked them with). Also taken: the router's
-raw `GET /api/backups` answer ({bucket, objects}), and a single `stores/<name>.json` object ({doc, sig}) as stored in
-the bucket (e.g. an older version fetched from the versioned bucket). Those carry no setup key: pass --setup-pub.
+served them, the bucket, the fetch time, the setup public key the app checked them with and, when the file has one, the
+box public key `boxKey`). Also taken: the router's raw `GET /api/backups` answer ({bucket, objects}), a single
+`stores/<name>.json` object ({doc, sig}) as stored in the bucket (e.g. an older version fetched from the versioned
+bucket), and a single `keys/<store>/<key>.json` object. Those carry no setup or box key: pass --setup-pub / --box-pub.
+
+The bucket holds three kinds of object (docs/DESIGN.md "Writing stores and their backups"):
+  stores/<name>.json     an older whole-store backup, {doc, sig} signed by the setup key; `at` in unix seconds
+  sensitive/<name>.json  a sensitivity marker, signed by the setup key
+  keys/<store>/<key>.json  one key's backup, written by the router before the key reaches the core:
+      {kind "key-backup", store, key, deleted, sealed {e, data} | null, backupSha256, e, dataSha256,
+       writer {by "setup"|"machine", sig, cert?}, core {signingKey, agreementKey, boxSig, state, bundle},
+       explanation, at (RFC3339)}
+    Checks: backupSha256 = hex sha256(sealed.e + "\n" + sealed.data) (a delete: no sealed value, empty hashes); the
+    writer's signature over WriterText = "jarvis2-store-key\n{store}\n{key}\n{e}\n{dataSha256}\n{backupSha256}":
+    writer "setup" = the setup key; writer "machine" = the signing key in writer.cert ({payload, sig}, a succession
+    cert signed by core.signingKey), the core's identity "jarvis2-core-identity {signingKey} {agreementKey}" signed by
+    the box key (core.boxSig). Without a box key (--box-pub or the file's boxKey) a session-written key fails its check.
 
 The kit (`jarvis2-kit:2:<master private key>`; a version-1 kit's master part works too) is read from --kit-file, from
 stdin with `--kit-file -`, or asked for without echo when stdin is a terminal. Never pass it as an argument: it would
 end up in the shell history.
 
-Every object's signature is checked against the setup key in the file AND, when given, --setup-pub (the two must be the
-same key); every store is decrypted (ECDH with the master key, HKDF-SHA256 info "jarvis2/backup", AES-256-GCM with the
-store's name as associated data). Any problem stops it before anything is written, unless --skip-bad (the bad objects
-are then left out and listed). The plaintext goes to --out (default ./jarvis2-stores-<date>.json), created with mode
-0600 and never over an existing file unless --force; an --out ending in "/" (or an existing directory) gets one
-<store>.json per store in a 0700 directory. Values are printed only with --stdout.
+Every signature is checked against the key in the file AND, when given, the --setup-pub / --box-pub file (each pair
+must be the same key); every store and key is decrypted (ECDH with the master key, HKDF-SHA256 info "jarvis2/backup",
+AES-256-GCM 12-byte nonce ‖ ciphertext ‖ tag; associated data: the store's name for a whole-store backup,
+"{store}\n{key}" for a key, whose value is its raw UTF-8 string). Then, per store, like the app's Recover: the
+whole-store backup is the base (none: the store starts empty), every key backup of that store written later (its `at`
+after the base's) replaces that key, a deleted one removes it; an older key backup is ignored. Any problem stops it
+before anything is written, unless --skip-bad (the bad objects are then left out and listed). The plaintext goes to
+--out (default ./jarvis2-stores-<date>.json), created with mode 0600 and never over an existing file unless --force; an
+--out ending in "/" (or an existing directory) gets one <store>.json per store in a 0700 directory. Values are printed
+only with --stdout.
 
 Output file: {"format": "jarvis2-stores", "version": 1, "source", "bucket", "fetchedAt", "setupKey",
-              "stores": {name: {"sensitive", "at", "values": {KEY: value}}}}
+              "stores": {name: {"sensitive", "at", "values": {KEY: value}, "explanations": {KEY: text}}}}
+  (`at`: the whole-store backup's, unix seconds, or null; `explanations`: what each key written since is for, not secret)
 Exit codes: 0 done, 1 a check or decryption failed, 2 bad usage or input.
 """
-import argparse, base64, datetime, getpass, json, os, sys
+import argparse, base64, datetime, getpass, hashlib, json, os, re, sys
 
 try:
     from cryptography.exceptions import InvalidSignature, InvalidTag
@@ -131,10 +151,16 @@ def load_input(path):
     if d.get("format") == EXPORT_FORMAT:
         if d.get("version") not in EXPORT_VERSIONS:
             raise Usage(f"{path} is a newer export (version {d.get('version')}); this script reads {list(EXPORT_VERSIONS)}")
-        meta = {k: d.get(k) for k in ("bucket", "fetchedAt", "setupKey")}
+        meta = {k: d.get(k) for k in ("bucket", "fetchedAt", "setupKey", "boxKey")}
         objs = d.get("objects")
     elif "objects" in d:  # the router's raw GET /api/backups answer
         meta, objs = {"bucket": d.get("bucket"), "fetchedAt": None, "setupKey": None}, d["objects"]
+    elif d.get("kind") == "key-backup":  # one key's backup as stored in the bucket
+        if not isinstance(d.get("store"), str) or not isinstance(d.get("key"), str):
+            raise Usage(f"{path} is a key backup without its store and key")
+        with open(path, encoding="utf-8") as f:
+            body = f.read()
+        meta, objs = {"bucket": None, "fetchedAt": None, "setupKey": None}, [{"key": f"keys/{d['store']}/{d['key']}.json", "body": body}]
     elif "doc" in d and "sig" in d:  # one object as stored in the bucket
         try:
             name = json.loads(d["doc"])["name"]
@@ -160,12 +186,136 @@ def name_of(key, prefix):
     return None
 
 
-def check_and_open(objs, setup_keys, master):
-    """the same checks as the app's Recover (ios/Jarvis2/Security/CoreSetup.swift readBackups), per object.
-    → (stores {name: {sensitive, at, values}}, problems [(key, why)])"""
-    problems, docs = [], []
+KEY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,127}$")
+
+
+def key_path(key):
+    """keys/<store>/<key>.json → (store, key), else None"""
+    m = re.fullmatch(r"keys/([^/]+)/([^/]+)\.json", key)
+    return (m.group(1), m.group(2)) if m else None
+
+
+def writer_text(store, key, e, data_sha, backup_sha):
+    """core.WriterText: what a key's writer signs"""
+    return f"jarvis2-store-key\n{store}\n{key}\n{e}\n{data_sha}\n{backup_sha}".encode()
+
+
+def parse_at(at):
+    """an RFC3339 time → unix seconds (float)"""
+    if not isinstance(at, str):
+        raise ValueError
+    t = at.strip()
+    if t.endswith("Z") or t.endswith("z"):
+        t = t[:-1] + "+00:00"
+    t = re.sub(r"(\.\d{6})\d+", r"\1", t)  # Go's nanoseconds → microseconds
+    dt = datetime.datetime.fromisoformat(t)
+    if dt.tzinfo is None:
+        raise ValueError
+    return dt.timestamp()
+
+
+def check_key_writer(d, store, key, setup_keys, box_keys):
+    """None when the writer's signature checks, else why not"""
+    w = d.get("writer")
+    if not isinstance(w, dict) or not isinstance(w.get("sig"), str):
+        return "names no writer"
+    text = writer_text(store, key, d.get("e") or "", d.get("dataSha256") or "", d.get("backupSha256") or "")
+    if w.get("by") == "setup":
+        if not setup_keys:
+            return "is written by the setup session: pass --setup-pub keys/setup.pub"
+        bad = [label for label, pub in setup_keys if not valid(pub, text, w["sig"])]
+        return ("isn't signed by " + " / ".join(bad)) if bad else None
+    if w.get("by") != "machine":
+        return "names an unknown writer"
+    if not box_keys:
+        return "is written by a session: pass --box-pub keys/box.pub to check it"
+    c = d.get("core")
+    if not isinstance(c, dict) or not all(isinstance(c.get(k), str) for k in ("signingKey", "agreementKey", "boxSig")):
+        return "carries no core identity"
+    ident = f"jarvis2-core-identity {c['signingKey']} {c['agreementKey']}".encode()
+    bad = [label for label, pub in box_keys if not valid(pub, ident, c["boxSig"])]
+    if bad:
+        return "its core's identity isn't signed by " + " / ".join(bad)
+    try:
+        core_pub = load_pub(c["signingKey"], "the core's signing key")
+    except Usage:
+        return "its core's signing key isn't a P-256 key"
+    cert = w.get("cert")
+    if not isinstance(cert, dict) or not isinstance(cert.get("payload"), str) or not isinstance(cert.get("sig"), str):
+        return "a session's write without the machine's cert"
+    if not valid(core_pub, cert["payload"].encode(), cert["sig"]):
+        return "the machine's cert isn't signed by its core"
+    try:
+        cp = json.loads(cert["payload"])
+        mkey = load_pub(cp["machine"]["signingKey"], "the machine's signing key")
+    except (ValueError, KeyError, TypeError, Usage):
+        return "the machine's cert names no signing key"
+    if cp.get("kind") != "succession-cert":
+        return "the machine's cert isn't a succession cert"
+    if not valid(mkey, text, w["sig"]):
+        return "isn't signed by the key in the machine's cert"
+    return None
+
+
+def open_key(key_obj, d, setup_keys, box_keys, master):
+    """one keys/<store>/<key>.json → (store, key, at, value or None for a delete, explanation); raises Bad(why)"""
+    store, key = key_obj
+    if d.get("kind") != "key-backup" or d.get("store") != store or d.get("key") != key:
+        raise Bad("names another key")
+    if not KEY_RE.match(key):
+        raise Bad("isn't a key name")
+    try:
+        at = parse_at(d.get("at"))
+    except (ValueError, TypeError):
+        raise Bad("has no time (at)")
+    deleted = d.get("deleted")
+    if not isinstance(deleted, bool):
+        raise Bad("doesn't say whether it is a delete")
+    sealed = d.get("sealed")
+    if deleted:
+        if sealed is not None or d.get("backupSha256") or d.get("e") or d.get("dataSha256"):
+            raise Bad("a delete that carries a value")
+    else:
+        if not isinstance(sealed, dict) or not isinstance(sealed.get("e"), str) or not isinstance(sealed.get("data"), str):
+            raise Bad("carries no sealed value")
+        if hashlib.sha256((sealed["e"] + "\n" + sealed["data"]).encode()).hexdigest() != d.get("backupSha256"):
+            raise Bad("backupSha256 isn't its sealed value's")
+    why = check_key_writer(d, store, key, setup_keys, box_keys)
+    if why:
+        raise Bad(why)
+    value = None
+    if not deleted:
+        plain = open_sealed(sealed, master, f"{store}\n{key}".encode())
+        try:
+            value = plain.decode("utf-8")
+        except UnicodeDecodeError:
+            raise Bad("holds something that isn't text")
+    expl = d.get("explanation")
+    return store, key, at, value, expl if isinstance(expl, str) else ""
+
+
+def check_and_open(objs, setup_keys, master, box_keys=()):
+    """the same checks as the app's Recover (ios/Jarvis2/Security/CoreSetup.swift readBackups), per object, then the
+    merge: each store's whole-store backup, then its key backups written after it.
+    → (stores {name: {sensitive, at, values, explanations}}, problems [(key, why)])"""
+    problems, docs, keyobjs, seen = [], [], [], set()
     for o in objs:
         key = o["key"]
+        if key in seen:
+            problems.append((key, "comes twice"))
+            continue
+        seen.add(key)
+        kp = key_path(key)
+        if kp is not None:
+            try:
+                d = json.loads(o["body"])
+                if not isinstance(d, dict):
+                    raise ValueError
+            except ValueError:
+                problems.append((key, "isn't JSON"))
+                continue
+            keyobjs.append((key, kp, d))
+            continue
         try:
             s = json.loads(o["body"])
             doc_text, sig = s["doc"], s["sig"]
@@ -173,6 +323,9 @@ def check_and_open(objs, setup_keys, master):
                 raise ValueError
         except Exception:
             problems.append((key, "isn't a signed document"))
+            continue
+        if not setup_keys:
+            problems.append((key, "is signed by the setup key: pass --setup-pub keys/setup.pub"))
             continue
         bad = [label for label, pub in setup_keys if not valid(pub, doc_text.encode(), sig)]
         if bad:
@@ -196,7 +349,7 @@ def check_and_open(objs, setup_keys, master):
         n = name_of(key, "stores/")
         if n is None:
             if name_of(key, "sensitive/") is None:
-                problems.append((key, "isn't under stores/ or sensitive/"))
+                problems.append((key, "isn't under stores/, sensitive/ or keys/"))
             continue
         if n in stores:
             problems.append((key, "comes twice"))
@@ -216,7 +369,27 @@ def check_and_open(objs, setup_keys, master):
         except ValueError:
             problems.append((key, "holds something that isn't a store"))
             continue
-        stores[n] = {"sensitive": bool(d.get("sensitive")) or n in marked, "at": d.get("at"), "values": values}
+        stores[n] = {"sensitive": bool(d.get("sensitive")) or n in marked, "at": d.get("at"), "values": values, "explanations": {}}
+    # key backups, oldest first, onto each store's whole-store backup (a store with only key backups starts empty;
+    # the core makes a store sensitive on its first key, so such a store is sensitive)
+    opened = []
+    for key, kp, d in keyobjs:
+        try:
+            opened.append(open_key(kp, d, setup_keys, box_keys, master))
+        except Bad as e:
+            problems.append((key, str(e)))
+    for store, k, at, value, expl in sorted(opened, key=lambda x: x[2]):
+        s = stores.setdefault(store, {"sensitive": True, "at": None, "values": {}, "explanations": {}})
+        base_at = s["at"]
+        if isinstance(base_at, (int, float)) and not isinstance(base_at, bool) and at <= base_at:
+            continue  # written before the whole-store backup: that backup already has it as it was then
+        if value is None:
+            s["values"].pop(k, None)
+            s["explanations"].pop(k, None)
+        else:
+            s["values"][k] = value
+            if expl:  # a write without one keeps the key's explanation as it was
+                s["explanations"][k] = expl
     return stores, problems
 
 
@@ -248,6 +421,8 @@ def main(argv=None):
     p.add_argument("file", help="the app's jarvis2-backup-<date>.json (or a raw /api/backups answer, or one stores/<name>.json)")
     p.add_argument("--kit-file", metavar="KIT", help="a file holding the recovery kit; - = stdin (default: asked for, no echo)")
     p.add_argument("--setup-pub", metavar="PATH", help="keys/setup.pub from a clone of DE0CH/jarvis2: must be the file's setup key too")
+    p.add_argument("--box-pub", metavar="PATH", help="keys/box.pub from a clone of DE0CH/jarvis2: checks keys written by sessions "
+                   "(their core's identity); must be the file's box key too, when it names one")
     p.add_argument("--out", metavar="PATH", help="where the plaintext goes (default ./jarvis2-stores-<date>.json; a path ending in / = one file per store)")
     p.add_argument("--stdout", action="store_true", help="print the plaintext stores (JSON) to stdout instead of writing a file")
     p.add_argument("--force", action="store_true", help="replace an existing output file")
@@ -267,7 +442,18 @@ def main(argv=None):
             if setup_keys and public_bytes(gk) != public_bytes(setup_keys[0][1]):
                 raise Bad(f"the file's setup key isn't {a.setup_pub}: the file was checked against another key")
             setup_keys.append((a.setup_pub, gk))
-        if not setup_keys:
+        box_keys = []
+        if meta.get("boxKey"):
+            box_keys.append(("the file's box key", load_pub(meta["boxKey"], "the file's boxKey")))
+        if a.box_pub:
+            try:
+                bk = load_pub(read_text(a.box_pub), a.box_pub)
+            except OSError as e:
+                raise Usage(f"can't read {a.box_pub}: {e}")
+            if box_keys and public_bytes(bk) != public_bytes(box_keys[0][1]):
+                raise Bad(f"the file's box key isn't {a.box_pub}: the file names another key")
+            box_keys.append((a.box_pub, bk))
+        if not setup_keys and not all(session_written(o) for o in objs):
             raise Usage("this file names no setup key: pass --setup-pub keys/setup.pub")
         if a.kit_file and a.kit_file != "-":
             try:
@@ -280,11 +466,12 @@ def main(argv=None):
             kit = getpass.getpass("Recovery kit (jarvis2-kit:2:…, not echoed): ")
         master, kit_kind = parse_kit(kit)
         del kit
-        stores, problems = check_and_open(objs, setup_keys, master)
+        stores, problems = check_and_open(objs, setup_keys, master, box_keys)
         log = lambda *x: print(*x, file=sys.stderr)
         log(f"{len(objs)} objects from {meta.get('bucket') or 'an unknown bucket'}"
             + (f", fetched {meta['fetchedAt']}" if meta.get("fetchedAt") else "") + f"; master key from the {kit_kind}")
-        log("setup key checked: " + ", ".join(label for label, _ in setup_keys))
+        log("setup key checked: " + (", ".join(label for label, _ in setup_keys) or "none given")
+            + "; box key: " + (", ".join(label for label, _ in box_keys) or "none given"))
         for key, why in problems:
             log(f"BAD  {key}: {why}")
         if problems and not a.skip_bad:
@@ -295,7 +482,7 @@ def main(argv=None):
         if not stores:
             raise Bad("no store in the file")
         out = {"format": "jarvis2-stores", "version": 1, "source": os.path.basename(a.file), "bucket": meta.get("bucket"),
-               "fetchedAt": meta.get("fetchedAt"), "setupKey": public_b64(setup_keys[-1][1]),
+               "fetchedAt": meta.get("fetchedAt"), "setupKey": public_b64(setup_keys[-1][1]) if setup_keys else None,
                "stores": {n: stores[n] for n in sorted(stores)}}
         if a.stdout:
             print(json.dumps(out, indent=2, sort_keys=True))
@@ -317,6 +504,16 @@ def main(argv=None):
     except Bad as e:
         print(f"decrypt-backup: {e}", file=sys.stderr)
         return 1
+
+
+def session_written(o):
+    """a keys/ object whose writer is a session (needs no setup key)"""
+    if key_path(o["key"]) is None:
+        return False
+    try:
+        return json.loads(o["body"])["writer"]["by"] == "machine"
+    except Exception:
+        return False
 
 
 def read_text(path):
