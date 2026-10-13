@@ -269,8 +269,9 @@ make_box() {
   for i in $(seq 1 10); do
     make_box_once > "$W/make.out" 2>&1 && { cat "$W/make.out"; return 0; }
     cat "$W/make.out"
-    grep -q "primary_ip_limit\|resource_limit_exceeded" "$W/make.out" || return 1
-    echo "the project's IP/server limit: trying again in 30 s"; sleep 30
+    # the project's IP/server limit, or no room in the location just now ("error during placement")
+    grep -q "primary_ip_limit\|resource_limit_exceeded\|resource_unavailable" "$W/make.out" || return 1
+    echo "the project's IP/server limit or Hetzner's placement: trying again in 30 s"; sleep 30
   done
   return 1
 }
