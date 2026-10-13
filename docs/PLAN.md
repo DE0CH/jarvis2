@@ -52,8 +52,7 @@ every store back from the backups). docs/DESIGN.md "Setting a core up".
   or the apps get Jarvis 2 as a second server.
 - **Before Jarvis 1 retires** (Deyao keeps using Jarvis 1 until Jarvis 2 is ready and polished, then retires it and
   handles the conflicts then): Jarvis 2 must stop depending on it. Today it uses Jarvis 1 for the stored Claude
-  login (`/api/credentials`, refresh and Re-login), transcript search and the iCloud index (forwarded with
-  `jarvis2-services`), the usage quota, and the Browserbase budget DM; leases and content stores are planned the
+  login (`/api/credentials`, refresh and Re-login), the usage quota, and the Browserbase budget DM; leases and content stores are planned the
   same way. Each moves into Jarvis 2 (or a service of its own) at retirement, and the confined Jarvis 1 tokens
   go away.
 

@@ -112,7 +112,7 @@ gone (moved to records); `failed` (with `error`).
 | `POST /api/repos/key/finish {pending, signature, share}` | Relayed to `deploy-keys/finish`; on the core's signed `deploy-key-added` the repo goes on the list (with `sensitive`, and `fingerprint` = SHA256 of the answer's `publicKey`, or the answer's own `fingerprint` from a core before R2), on `deploy-key-removed` it comes off. The answer is the core's, unchanged. |
 | `GET /api/github/repos` | `{repos: [{fullName, url, htmlUrl, private, fork, archived, description, language, pushedAt, owner}], cachedAt, configured}` (5 min cache, `?refresh=1`), listed with `GITHUB_READ_TOKEN` (router env; Metadata read picked explicitly, else GitHub lists public repos only — sessions push with their repos' deploy keys). 503 without it. |
 | `GET /api/usage` | Forwarded to Jarvis 1's `/api/usage` (query kept) with the services token: Jarvis 1 holds the Claude login. |
-| `GET /api/search`, `/api/search/context`, `/api/search/status`; `GET /api/icloud/search`, `/api/icloud/file`, `/api/icloud/status`; `POST /api/icloud/relist` | The app's Search tab: forwarded to Jarvis 1's transcript search and iCloud index unchanged (path, query, body) with the services token `JARVIS1_SERVICES_ID/SECRET` and no `X-Jarvis2-Session`; Jarvis 1's shapes (its `selfhost/API.md`). 503 without the token. |
+| `GET /api/search`, `/api/search/context`, `/api/search/status`, `POST /api/search/reindex`; `GET /api/icloud/search`, `/api/icloud/file`, `/api/icloud/status`; `POST /api/icloud/relist`, `/api/icloud/retry` | The app's Search tab: forwarded to the box's own services (`router/searchsvc.go`; "Transcript search" and "iCloud index" below) with the query and body unchanged. 502 `{error: "… unreachable: …"}` when the service is down. |
 
 ### Archives (Storage Box, router env `STORAGEBOX_HOST/USER/PASSWORD`)
 
@@ -335,7 +335,7 @@ off.
 | `GET /m/attachments` | `{files: [{name, size, isImage}], attest: {<name>: <core doc>}}`: the first-prompt attachments bound to this machine's session (404 none), each with the core's input-log entry for it (`/attest` machine, input `attachment`, origin `cert`, the sha256 of the file as it is on the volume; 502 when the core doesn't answer). The machine takes a file only when its bytes match the cert's sha256 + size AND its attestation. `GET /m/attachments/:name` the bytes; `DELETE /m/attachments` drops the router's copy once fetched. |
 | `POST /m/task-result` | A task line's machine (harness `task:<template>`, below) after its run: `{run, exitCode, timedOut, error, startedAt, finishedAt, log /* tail ≤ 256 KB */, output /* ≤ 64 KB */}`, store values already redacted by the machine. `run: ""` = a boot with no run (the line's first machine). The router records the run and pauses the line. 403 for a machine that isn't a running task line. |
 | `POST /m/status` | Body `{raw, appTitle}`: `raw` = the output of Jarvis 1's registry command (`machine/status.go`), sent by the agent when it changes and at least every 60 s; parsed by the router (`router/registry.go`). `appTitle` = the Claude app's title of the session's Remote Control entry, which the machine reads (at most once a minute) from `api.anthropic.com/v1/code/sessions/cse_<bridge>` with the session's own Claude login (`machine/apptitle.go`); "" keeps the last one. It becomes the session's `serverTitle`, and a resume without a label passes it on as `SESSION_RESUME_TITLE` (Jarvis 1's supervisor names a fresh Remote Control entry with it). |
-| `POST /m/live-transcript` | Header `X-Name: <uuid>.jsonl`, body = the whole transcript (≤ 256 MB). The machine sends each conversation under `~/.claude/projects` that changed, every `JARVIS2_LIVE_SYNC_SECONDS` (default 300; router env `LIVE_SYNC_SECONDS` sets it), skipping Jarvis's delivery relays (`machine/livesync.go`). The router PUTs it to `claude-records/.live/<session id>/<name>` with its own Storage Box credentials — Jarvis 1's layout, so its transcript search indexes running Jarvis 2 sessions — and records `liveSync` on the session; with no Storage Box (or `RECORDS_OFF=1`) it answers `{ok, stored: false}`. The folder goes when the session is destroyed. 403 for a machine with no running session. |
+| `POST /m/live-transcript` | Header `X-Name: <uuid>.jsonl`, body = the whole transcript (≤ 256 MB). The machine sends each conversation under `~/.claude/projects` that changed, every `JARVIS2_LIVE_SYNC_SECONDS` (default 300; router env `LIVE_SYNC_SECONDS` sets it), skipping Jarvis's delivery relays (`machine/livesync.go`). The router PUTs it to `claude-records/.live/<session id>/<name>` with its own Storage Box credentials — Jarvis 1's layout, which transcript search indexes — and records `liveSync` on the session; with no Storage Box (or `RECORDS_OFF=1`) it answers `{ok, stored: false}`. The folder goes when the session is destroyed. 403 for a machine with no running session. |
 
 ## The input log (`router/vouch.go`, `core/audit.go`)
 
@@ -451,12 +451,12 @@ signed as every `/m` call). Any `:id` in the path must be the calling machine's 
 | wakeups, crons, notify-idle | The router (above). Arming also puts holder `scheduler` on the session's allow list (a wakeup: due + 1 h; a cron: max(31 d, 2 periods + 1 h), renewed at each firing by `jarvis2-machine allow-at-least`). |
 | `DELETE /api/sessions/:id` | The router: the session retires itself (Destroy) → 202 `{started}`; 409 `{pending}` while it has wakeups or crons. |
 | `…/watches` | 501: not in Jarvis 2. |
+| search, iCloud index | `GET /m/api/search`, `/m/api/search/context`, `/m/api/search/status`, `POST /m/api/search/reindex`, `GET /m/api/icloud/search`, `/m/api/icloud/file`, `/m/api/icloud/status`, `POST /m/api/icloud/relist`, `/m/api/icloud/retry`: the box's own services, as for the app (any running session; 403 for a machine with none). |
 | Jarvis 1's services (below) | Forwarded to `JARVIS1_URL` (default `https://jarvis.deyaochen.com`) with the Access service token `JARVIS1_SERVICES_ID/SECRET` and header `X-Jarvis2-Session: <id>`; path, query, body, Content-Type/Accept/Range unchanged. |
 | anything else | 404 |
 
 Forwarded Jarvis 1 paths (what the cf-tunnel Worker must let the services token reach):
-`GET /api/search`, `GET /api/search/context`, `GET /api/search/status`, `GET /api/icloud/search`,
-`GET /api/icloud/file`, `GET /api/icloud/status`, `POST /api/icloud/relist`, `GET /api/usage` (the app's, without `X-Jarvis2-Session`), `GET /api/leases`,
+`GET /api/usage` (the app's, without `X-Jarvis2-Session`), `GET /api/leases`,
 `GET /api/leases/:name`, `POST|PUT|PATCH|DELETE /api/sessions/:id/leases/:name`,
 `POST /api/sessions/:id/leases/:name/seen`, `GET /api/sessions/:id/content`,
 `GET|PUT|DELETE /api/sessions/:id/content/:name/file`, `GET|POST /api/credentials`.
@@ -464,3 +464,40 @@ Forwarded Jarvis 1 paths (what the cf-tunnel Worker must let the services token 
 The session routes among them carry the Jarvis 2 session id (`s…`) and no Jarvis 1 session token: Jarvis 1 checks
 `SESSION_API_TOKEN` against its own machine metadata (`requireSessionToken`, `sessionContentStore`), so until
 it accepts the services token + `X-Jarvis2-Session` as the session's identity they answer 401/403.
+
+## Transcript search (`services/search`)
+
+Its own pod (`k8s/apps/search.yaml`, namespace jarvis2-edge), reached only through the router (above). It crawls
+`claude-records/` on the Storage Box every 10 minutes (and when the router archives a session): archived sessions of
+both Jarvises (`<dir>/transcript-<id>.jsonl`), Jarvis 1's pause snapshots (`.paused/<id>/`), running sessions of both
+(`.live/<id>/`) and the text records in archive dirs (`.md .txt .html .log`, the task records). Other dot-dirs
+(`.index/`, `.jarvis2-services/`) are skipped. Hybrid keyword (FTS5, 中文 as phrases/bigrams) + semantic
+(`qwen/qwen3-embedding-8b` via OpenRouter) retrieval, reranked by `cohere/rerank-4-fast`.
+
+| Call | |
+|---|---|
+| `GET /api/search?q=` | `&limit=` (1-50, 10), `&kind=msg,tool,doc`, `&after=`/`&before=` (YYYY-MM-DD), `&state=live,paused,archive` (the session's state now), `&archived=1` (only text read from an archive dir), `&session=` (id / dir / title fragment), `&mode=hybrid|keyword|semantic`, `&rerank=0`, `&group=1` (by session), `&full=1` (whole chunk text). `"quoted phrases"` must match. → `{query, mode, reranked, total, tookMs, timing, notes, terms, hits: [{id, score, via, kind, date, ts, title, sid, dir, state, machineId, file, lines, snippet, text?}]}` (or `sessions: [{title, sid, dir, state, machineId, date, score, count, hits}]` with `group=1`). |
+| `GET /api/search/context?id=&before=3&after=3` | The chunks around a hit, in file order → `{session, file, chunks: [{id, kind, ts, lineFrom, lineTo, text, hit?}]}`; 404 for an unknown id. |
+| `GET /api/search/status` | Counts (`chunks, sessions, files, vectors, kinds, sessions_by_state, span`), models and the indexer's state (`indexer: {state, lastRun, lastError, billing}`). |
+| `POST /api/search/reindex` | Crawl now → 202 `{started}`. |
+
+The index is one SQLite file on the pod's volume; a missing one is seeded from `claude-records/.jarvis2-services/search.db.gz`
+on the Storage Box, which the pod rewrites daily.
+
+## iCloud index (`services/icloud-index`)
+
+Its own pod (`k8s/apps/icloud-index.yaml`, namespace jarvis2-edge), reached only through the router. It lists Deyao's
+iCloud Drive daily (rclone, the saved login in `k8s/secrets/icloud-session.enc.yaml`) and reads each file: text,
+OCR of scans and photos, video frames and speech (AI reading capped by `AI_BUDGET_USD`, a lifetime total kept in the
+index), then embeds the text.
+
+| Call | |
+|---|---|
+| `GET /api/icloud/search?q=` | `&limit=` (1-100, 10), `&kind=text,pdf,office,iwork,image,raw,audio,video,archive,other`, `&ext=`, `&under=<folder>`, `&after=`/`&before=`, `&mode=hybrid|keyword|semantic`, `&rerank=0`, `&full=1` → `{query, total, hits: [{path, kind, size, mtime, score, snippet, …}]}`. A hit's `path` is the iCloud path: `rclone copy "icloud:<path>" .` fetches it. |
+| `GET /api/icloud/file?path=` | One file's record and all its extracted text, by part; 404 when it isn't indexed. |
+| `GET /api/icloud/status` | Counts by state and kind, `aiSpentUsd`/`aiBudgetUsd`, `embedSpentUsd`, the last listing, the file being read, recent errors. |
+| `POST /api/icloud/relist` | List iCloud now → 202. |
+| `POST /api/icloud/retry` | Give failed files another go → 202. |
+
+A missing index is seeded from `claude-records/.jarvis2-services/icloud-index.db.gz` (rewritten weekly); with no copy
+the pod refuses to start (`SEED_REQUIRED=1`), so the budget is never spent twice.

@@ -150,8 +150,8 @@ made around it; the app's own list is `app/DECISIONS.md`.
 41. **Indexing an archive by hand** (`POST /api/records`, Jarvis 1's) puts a folder already on the Storage Box on the
     Previous list (tail, Remove, Delete). It can't be restored in Jarvis 2: restore trusts only a machine-signed
     snapshot with its core-signed cert, which such a folder doesn't have.
-42. **Search and the iCloud index stay Jarvis 1's** (as PLAN.md "Later" says for retirement): the app's Search tab is
-    forwarded with the router's confined `jarvis2-services` token, not reimplemented.
+42. **Search and the iCloud index were forwarded to Jarvis 1** until they moved to the Jarvis 2 box (2026-10-13, entries
+    106-111).
 43. **When the core can't be reached the router answers 503 `{coreDown}`** (it said 502 "core unreachable"): while
     its pod restarts (after a wipe) that is the normal state, and the app waits or shows it as a plain note.
 44. **Lease pills are not in the app**: leases are forwarded to Jarvis 1, which doesn't accept Jarvis 2 sessions yet
@@ -587,3 +587,37 @@ key to decrypt it offline"; the download in the iPhone app, the decryptor a comm
     decrypts the file the app's Swift code made from the router's stand-in bucket; the phone replica downloads the copy
     in the Release build and the runner opens the saved file with that run's throwaway kit. The production master key
     is never used (no session has it).
+
+## Transcript search and the iCloud index move to the Jarvis 2 box, 2026-10-13
+
+106. **Transcript search and the iCloud index run on the Jarvis 2 box, in jarvis2-edge** (`services/search`,
+    `services/icloud-index`, ported from Jarvis 1 with the same API shapes, so the app and session scripts change only
+    their base URL). They read untrusted content (transcripts, PDFs, images through ffmpeg), so they sit next to the
+    news pod rather than the router or the core, and their NetworkPolicies admit only the router's pod: they have no
+    login of their own, and the router forwards behind Access (the app) or the machine signature (any running session,
+    `router/searchsvc.go`). Change: give them a namespace of their own if more services join.
+107. **Two fixes came along with the port**: Jarvis 1's iCloud pod had restarted 623 times (out of memory on a
+    95-megapixel image, picked again after every restart). A file now counts a try BEFORE it is read and is given up
+    after 3 (`error: not read: stopped the indexer N times`), and images over 40 megapixels are decoded at a reduced
+    scale (JPEG) or skipped. Everything else is as it was.
+108. **The databases were copied, not rebuilt** (the embeddings and the iCloud AI-budget ledger are paid for). The setup
+    session's Jarvis 1 token can read logs but not exec into Jarvis 1's pods, so a temporary read-only Job in
+    claude-env (`selfhost/k8s/jarvis2-export`, Flux-applied next to the running pods, which it doesn't touch) took
+    SQLite online backups of both and put them on the Storage Box. At the copy: search 45,460 chunks / 44,067 vectors
+    (386 MB); iCloud 781,864 files / 1,696,050 chunks / 746,995 vectors (8.0 GB), `ai_spent` USD 25.00 of the USD 25
+    budget, so AI reading was already paused at its cap.
+109. **The Storage Box copy doubles as the seed and the backup**: `claude-records/.jarvis2-services/<db>.gz`, rewritten
+    daily (search) or weekly (iCloud: each backup stages 8 GB plus its gzip on the volume). A pod with no database
+    seeds from it. The iCloud index refuses to start without one (`SEED_REQUIRED=1`), because an empty index would
+    forget the ledger and spend the budget again. Change: drop the backups if the Storage Box traffic matters.
+110. **Their credentials**: the Storage Box account Jarvis 1's services used (its main login, read and write: the
+    backups go there too) and the same OpenRouter key, in their own SOPS parts (`search`, `icloud-index`). The iCloud
+    login is the Jarvis 1 pod's own rclone file (rclone keeps its cookies fresh there; the `identity` store's copy is
+    older), encrypted to the box key by the export Job, so no session saw it: part `icloud-session`, mounted as a file.
+    It can't reach a code push, so it sits with the box's other secrets, as it did on Jarvis 1's box. Change: a
+    Storage Box sub-account limited to `claude-records/` if Deyao wants the services narrower.
+111. **Until Jarvis 1's freeze both indexes run**: they share the budget ledger only by having copied it, but the budget
+    was already used up, so neither reads with AI; both still embed new text (not capped) and list iCloud daily. Scale
+    Jarvis 1's `search` and `icloud-index` Deployments to 0 at the freeze. The box is a cx23 (4 GB RAM, 40 GB disk):
+    the iCloud database alone is 8 GB and its pod may use 1.5 GB, so watch the box's disk and memory; a bigger box is
+    `infra/create.sh` with `SERVER_TYPE`.

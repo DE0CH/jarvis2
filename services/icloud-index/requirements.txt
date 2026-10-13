@@ -1,0 +1,6 @@
+pymupdf==1.28.2
+pillow==12.3.0
+pillow-heif==1.8.0
+numpy==2.5.3
+charset-normalizer==3.5.2
+striprtf==0.0.33

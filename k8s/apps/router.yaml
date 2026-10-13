@@ -74,6 +74,11 @@ spec:
       ports: [{ port: 53, protocol: UDP }, { port: 53, protocol: TCP }]
     - to: [{ namespaceSelector: { matchLabels: { jarvis2/ns: core } } }]
       ports: [{ port: 8090 }]
+    # transcript search and the iCloud index (k8s/apps/search.yaml, icloud-index.yaml; router/searchsvc.go)
+    - to: [{ namespaceSelector: { matchLabels: { jarvis2/ns: edge } }, podSelector: { matchLabels: { app: search } } }]
+      ports: [{ port: 8090 }]
+    - to: [{ namespaceSelector: { matchLabels: { jarvis2/ns: edge } }, podSelector: { matchLabels: { app: icloud-index } } }]
+      ports: [{ port: 8091 }]
     - to: [{ ipBlock: { cidr: 0.0.0.0/0, except: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16] } }]
       ports: [{ port: 443 }]
     # Fly's WireGuard gateway (lhr1.gateway.6pn.dev)

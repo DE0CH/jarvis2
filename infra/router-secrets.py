@@ -2,7 +2,7 @@
 """router-secrets.py — write the router's non-sensitive secrets into git, SOPS-encrypted to the box's age key
 (keys/box-age.pub); Flux decrypts them on the box (k8s/flux/sync.yaml, Kustomization jarvis2-secrets).
 
-    infra/router-secrets.py [--part backup|github|flyorgs|news] KEY[=SRC] …
+    infra/router-secrets.py [--part backup|github|flyorgs|news|search|icloud-index|icloud-session] KEY[=SRC] …
 
 SRC is `env:VAR` (default `env:KEY`) or `file:PATH`. A part is one Secret, rewritten whole each run, so name
 every key of that part (nobody can read the old values back: only the box holds the age key):
@@ -16,6 +16,13 @@ every key of that part (nobody can read the old values back: only the box holds 
                  {"<org slug>": "<read-only org token>"} for the Machines view's other orgs (router/flyorgs.go)
   --part news    k8s/secrets/news.enc.yaml, Secret news-secrets in jarvis2-edge — OPENROUTER_API and HKEJ_PROXY
                  for the hk-news-stream pod (k8s/apps/news.yaml), not the router
+  --part search  k8s/secrets/search.enc.yaml, Secret search-secrets in jarvis2-edge — STORAGEBOX_HOST/USER/PASSWORD
+                 and OPENROUTER_API for transcript search (k8s/apps/search.yaml)
+  --part icloud-index    k8s/secrets/icloud-index.enc.yaml, Secret icloud-index-secrets in jarvis2-edge — OPENROUTER_API,
+                 LOBSTER_TOKEN, STORAGEBOX_HOST/USER/PASSWORD for the iCloud index (k8s/apps/icloud-index.yaml)
+  --part icloud-session  k8s/secrets/icloud-session.enc.yaml, Secret icloud-index-session — ICLOUD_RCLONE_CONF only (the
+                 saved iCloud login, mounted as a file; write it again after a re-login, e.g.
+                 ICLOUD_RCLONE_CONF=file:~/.config/rclone/rclone.conf)
 Only for secrets that can't reach a code push (Deyao, 2026-10-09); the router's pod gets them as env
 (k8s/apps/router.yaml envFrom). Prints names only, never a value."""
 import hashlib, json, os, re, subprocess, sys, tempfile
@@ -27,6 +34,9 @@ PARTS = {  # part → (file, Secret name, annotation, namespace, manifest carryi
     "github": ("router-github.enc.yaml", "router-secrets-github", "jarvis2/secrets-rev-github", "jarvis2-router", "router.yaml"),
     "flyorgs": ("router-flyorgs.enc.yaml", "router-secrets-flyorgs", "jarvis2/secrets-rev-flyorgs", "jarvis2-router", "router.yaml"),
     "news": ("news.enc.yaml", "news-secrets", "jarvis2/secrets-rev-news", "jarvis2-edge", "news.yaml"),
+    "search": ("search.enc.yaml", "search-secrets", "jarvis2/secrets-rev-search", "jarvis2-edge", "search.yaml"),
+    "icloud-index": ("icloud-index.enc.yaml", "icloud-index-secrets", "jarvis2/secrets-rev-icloud-index", "jarvis2-edge", "icloud-index.yaml"),
+    "icloud-session": ("icloud-session.enc.yaml", "icloud-index-session", "jarvis2/secrets-rev-icloud-session", "jarvis2-edge", "icloud-index.yaml"),
 }
 
 

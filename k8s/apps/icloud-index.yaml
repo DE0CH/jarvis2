@@ -1,0 +1,89 @@
+# The iCloud Drive index (services/icloud-index): every file in Deyao's iCloud Drive searchable by name, folder and
+# content (document text, OCR of scans and photos, video frames, speech). The router forwards /api/icloud/* and
+# /m/api/icloud/* here (router/searchsvc.go); nothing else can reach it (NetworkPolicy below). In jarvis2-edge: it
+# parses untrusted files (PDF, office, images, ffmpeg), so it stays away from the router and the core.
+#
+# The index is ONE SQLite file on the PVC and expensive to rebuild (weeks of reading iCloud plus the AI spend, whose
+# lifetime ledger `ai_spent` lives in it), so a new volume is seeded from its copy on the Storage Box
+# (claude-records/.jarvis2-services/icloud-index.db.gz, written weekly) and SEED_REQUIRED=1 makes a missing copy an
+# error rather than a fresh start that would spend the budget again.
+# Secrets: k8s/secrets/icloud-index.enc.yaml (infra/router-secrets.py --part icloud-index: OPENROUTER_API,
+# LOBSTER_TOKEN, STORAGEBOX_HOST/USER/PASSWORD) and k8s/secrets/icloud-session.enc.yaml (--part icloud-session:
+# ICLOUD_RCLONE_CONF, the saved iCloud login; a new login = write that part again, the pod picks it up by itself).
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata: { name: icloud-index-data, namespace: jarvis2-edge }
+spec:
+  accessModes: [ReadWriteOnce]
+  resources: { requests: { storage: 20Gi } }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: icloud-index, namespace: jarvis2-edge }
+spec:
+  replicas: 1
+  strategy: { type: Recreate }  # one writer on the volume
+  selector: { matchLabels: { app: icloud-index } }
+  template:
+    metadata: { labels: { app: icloud-index }, annotations: { jarvis2/secrets-rev-icloud-index: "02cea1fb27e9", jarvis2/secrets-rev-icloud-session: "94113e915dcb" } }
+    spec:
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      terminationGracePeriodSeconds: 10
+      securityContext: { fsGroup: 1001 }
+      containers:
+        - name: icloud-index
+          image: ghcr.io/de0ch/jarvis2-icloud-index:sha-000000000000
+          ports: [{ containerPort: 8091 }]
+          env:
+            - { name: PORT, value: "8091" }
+            - { name: INDEX_DB, value: /data/index.db }
+            - { name: SEED_NAME, value: icloud-index.db }
+            - { name: SEED_REQUIRED, value: "1" }
+            - { name: BACKUP_INTERVAL_H, value: "168" }  # weekly: a backup stages an 8 GB copy (+ its gzip) in /data/tmp
+            - { name: WORK_DIR, value: /data/work }
+            - { name: TMPDIR, value: /data/tmp }
+            - { name: HOME, value: /data }
+            - { name: RCLONE_CONFIG, value: /data/rclone.conf }   # rclone's own copy: it rewrites cookies here
+            - { name: ICLOUD_CONF_FILE, value: /secrets/icloud.conf }
+            - { name: XDG_CACHE_HOME, value: /data/cache }
+            - { name: PYTHONDONTWRITEBYTECODE, value: "1" }
+            # Total, lifetime cap on OpenRouter spend for images, scans, video frames and speech (USD). Raise it to
+            # let more of the Drive be read; names and text documents are free.
+            - { name: AI_BUDGET_USD, value: "25" }  # Deyao, 2026-10-01
+            - { name: VISION_MODEL, value: google/gemini-2.5-flash-lite }
+            - { name: AUDIO_MODEL, value: google/gemini-2.5-flash-lite }
+            - { name: LIST_INTERVAL_H, value: "24" }
+          envFrom: [{ secretRef: { name: icloud-index-secrets } }]
+          volumeMounts:
+            - { name: data, mountPath: /data }
+            - { name: session, mountPath: /secrets, readOnly: true }
+          readinessProbe: { httpGet: { path: /healthz, port: 8091 }, initialDelaySeconds: 3, periodSeconds: 10 }
+          resources: { requests: { cpu: 100m, memory: 256Mi }, limits: { cpu: "1", memory: 1536Mi } }  # ffmpeg must not starve the router on the 2-vCPU box
+          securityContext: { runAsNonRoot: true, runAsUser: 1001, runAsGroup: 1001, allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: { drop: [ALL] }, seccompProfile: { type: RuntimeDefault } }
+      volumes:
+        - { name: data, persistentVolumeClaim: { claimName: icloud-index-data } }
+        - { name: session, secret: { secretName: icloud-index-session, items: [{ key: ICLOUD_RCLONE_CONF, path: icloud.conf }], defaultMode: 0400 } }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: icloud-index, namespace: jarvis2-edge }
+spec:
+  selector: { app: icloud-index }
+  ports: [{ port: 8091, targetPort: 8091 }]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: { name: icloud-index, namespace: jarvis2-edge }
+spec:
+  podSelector: { matchLabels: { app: icloud-index } }
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from: [{ namespaceSelector: { matchLabels: { jarvis2/ns: router } }, podSelector: { matchLabels: { app: router } } }]
+      ports: [{ port: 8091 }]
+  egress:
+    - to: [{ namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: kube-system } }, podSelector: { matchLabels: { k8s-app: kube-dns } } }]
+      ports: [{ port: 53, protocol: UDP }, { port: 53, protocol: TCP }]
+    # iCloud, OpenRouter, Discord (lobster's DMs) and the Storage Box
+    - to: [{ ipBlock: { cidr: 0.0.0.0/0, except: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16] } }]
+      ports: [{ port: 443, protocol: TCP }]

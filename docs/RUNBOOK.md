@@ -224,7 +224,17 @@ on the box with the age key the box got in user-data. Four Secrets, each rewritt
   org personal: a read token returns Jarvis 1's session machines' env, their secrets included (Jarvis 1 relays a
   sanitized list instead).
 
-After a box rebuild, re-run all four (the age key is new).
+The box's services have their own parts (Secrets in jarvis2-edge):
+
+- `infra/router-secrets.py --part search STORAGEBOX_HOST STORAGEBOX_USER STORAGEBOX_PASSWORD OPENROUTER_API` →
+  `k8s/secrets/search.enc.yaml` (transcript search).
+- `infra/router-secrets.py --part icloud-index OPENROUTER_API LOBSTER_TOKEN STORAGEBOX_HOST STORAGEBOX_USER STORAGEBOX_PASSWORD`
+  → `k8s/secrets/icloud-index.enc.yaml` (the iCloud index; LOBSTER_TOKEN for its DMs: login expired, budget used up).
+- `infra/router-secrets.py --part icloud-session ICLOUD_RCLONE_CONF=file:<rclone.conf with the [icloud] section>` →
+  `k8s/secrets/icloud-session.enc.yaml`: the saved iCloud login. After a re-login (claude-env `icloud-drive` skill),
+  write it again and push; the pod reads the mounted file and switches by itself (no restart needed).
+
+After a box rebuild, re-run all of them (the age key is new).
 
 ### The backup bucket's read credential
 
@@ -255,6 +265,32 @@ infra/backup-read-key.py login` when they aren't in the env):
 4. `install` — `infra/router-secrets.py --part backup` from the file, then the file is shredded; commit and push
    `k8s/secrets/router-backup.enc.yaml` and `k8s/apps/router.yaml` (the router restarts with it). Stop the Chrome
    and delete its profile.
+
+## Transcript search and the iCloud index
+
+Two pods in jarvis2-edge (`services/search`, `services/icloud-index`; `k8s/apps/search.yaml`, `icloud-index.yaml`),
+built by `.github/workflows/services.yml` (only the service that changed; its unit tests run inside the image build)
+and pinned by digest like the router. Only the router reaches them (`router/searchsvc.go`); API.md "Transcript search"
+and "iCloud index" for the calls. Check them from any Jarvis 2 session:
+`curl -s "$JARVIS_URL/api/search/status"` and `curl -s "$JARVIS_URL/api/icloud/status"`.
+
+- **Their databases live on the pods' volumes, with a copy on the Storage Box** (`claude-records/.jarvis2-services/`:
+  `search.db.gz` daily, `icloud-index.db.gz` weekly). A missing database (a new box, a lost volume) is seeded from
+  that copy at start. The iCloud index refuses to start without one (`SEED_REQUIRED=1`): its database holds the AI
+  budget's lifetime ledger (`ai_spent`, USD 25 cap, Deyao 2026-10-01), and starting empty would spend it again. To
+  really start from nothing, set `SEED_REQUIRED` to "0" for one rollout.
+- **The AI budget**: `AI_BUDGET_USD` in `k8s/apps/icloud-index.yaml`. At the move (2026-10-13) it was used up
+  (USD 25.00 spent), so images, scans, video and speech wait (`wait-ai`); names and text documents are still read.
+  Raising it is Deyao's call.
+- **The iCloud login expired**: the pod DMs Deyao once and pauses. A session re-logs in (claude-env `icloud-drive`
+  skill), then the `icloud-session` part is written again (above).
+- **A file that kills the pod** (out of memory, a native crash) is retried at most 3 times, then marked
+  `error: not read: stopped the indexer N times`; images over 40 megapixels are decoded small (JPEG) or skipped.
+- **Moving from Jarvis 1** (done 2026-10-13): Jarvis 1's session token can't exec into its pods, so a temporary
+  read-only Job in claude-env (`selfhost/k8s/jarvis2-export`) copied both databases (SQLite online backup) and the
+  iCloud pod's own rclone session (SOPS-encrypted to `keys/box-age.pub`) to the Storage Box; the Jarvis 2 pods
+  seeded from it. Jarvis 1's two pods keep running until its freeze: scale them to 0 then, so only one index reads
+  iCloud and spends on embeddings.
 
 ## Rebuilding the box
 

@@ -25,47 +25,53 @@ func TestRelayCoreNotRunning(t *testing.T) {
 	}
 }
 
-func TestAppSearchForwardsToJarvis1(t *testing.T) {
+func TestAppSearchForwardsToServices(t *testing.T) {
 	r := newTestRouter(t)
-	var got []*http.Request
-	var bodies []string
-	j1 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-		b, _ := io.ReadAll(req.Body)
-		got, bodies = append(got, req), append(bodies, string(b))
-		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`{"hits":[]}`))
-	}))
-	defer j1.Close()
-	t.Setenv("JARVIS1_URL", j1.URL)
+	type hit struct {
+		svc, method, uri, body string
+		hdr                    http.Header
+	}
+	var got []hit
+	serve := func(svc string) *httptest.Server {
+		return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+			b, _ := io.ReadAll(req.Body)
+			got = append(got, hit{svc, req.Method, req.URL.RequestURI(), string(b), req.Header})
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(202)
+			w.Write([]byte(`{"hits":[]}`))
+		}))
+	}
+	search, icloud := serve("search"), serve("icloud")
+	defer search.Close()
+	defer icloud.Close()
+	t.Setenv("SEARCH_URL", search.URL)
+	t.Setenv("ICLOUD_INDEX_URL", icloud.URL+"/")
 	t.Setenv("JARVIS1_SERVICES_ID", "id")
 	t.Setenv("JARVIS1_SERVICES_SECRET", "sec")
-	for _, c := range []struct{ method, target, body string }{
-		{"GET", "/api/search?q=hello+world&group=1", ""},
-		{"GET", "/api/search/context?id=7&before=3", ""},
-		{"GET", "/api/search/status", ""},
-		{"GET", "/api/icloud/search?q=passport", ""},
-		{"GET", "/api/icloud/file?path=Documents%2Fa.pdf", ""},
-		{"GET", "/api/icloud/status", ""},
-		{"POST", "/api/icloud/relist", "{}"},
+	for _, c := range []struct{ method, target, body, svc, uri string }{
+		{"GET", "/api/search?q=hello+world&group=1", "", "search", "/search?q=hello+world&group=1"},
+		{"GET", "/api/search/context?id=7&before=3", "", "search", "/context?id=7&before=3"},
+		{"GET", "/api/search/status", "", "search", "/status"},
+		{"POST", "/api/search/reindex", "", "search", "/reindex"},
+		{"GET", "/api/icloud/search?q=passport", "", "icloud", "/search?q=passport"},
+		{"GET", "/api/icloud/file?path=Documents%2Fa.pdf", "", "icloud", "/file?path=Documents%2Fa.pdf"},
+		{"GET", "/api/icloud/status", "", "icloud", "/status"},
+		{"POST", "/api/icloud/relist", "{}", "icloud", "/relist"},
+		{"POST", "/api/icloud/retry", "", "icloud", "/retry"},
 	} {
 		code, _ := appDo(t, r, c.method, c.target, c.body)
-		if code != 200 {
+		if code != 202 {
 			t.Fatalf("%s %s: %d", c.method, c.target, code)
 		}
 		g := got[len(got)-1]
-		if g.Method != c.method || g.URL.RequestURI() != c.target || g.Header.Get("CF-Access-Client-Id") != "id" ||
-			g.Header.Get("CF-Access-Client-Secret") != "sec" || g.Header.Values("X-Jarvis2-Session") != nil {
-			t.Fatalf("%s %s forwarded as %s %s %v", c.method, c.target, g.Method, g.URL.RequestURI(), g.Header)
-		}
-		if bodies[len(bodies)-1] != c.body {
-			t.Fatalf("body %q", bodies[len(bodies)-1])
+		if g.svc != c.svc || g.method != c.method || g.uri != c.uri || g.body != c.body || g.hdr.Get("CF-Access-Client-Id") != "" {
+			t.Fatalf("%s %s forwarded as %+v", c.method, c.target, g)
 		}
 	}
-	// not on the list: the router's own 404 (the web page's fallback), never Jarvis 1
-	n := len(got)
-	appDo(t, r, "POST", "/api/icloud/retry", "")
-	if len(got) != n {
-		t.Fatal("an unlisted path reached Jarvis 1")
+	// a service that is down: 502 in words
+	search.Close()
+	if code, out := appDo(t, r, "GET", "/api/search?q=x", ""); code != 502 || !strings.Contains(out["error"].(string), "transcript search unreachable") {
+		t.Fatalf("%d %v", code, out)
 	}
 }
 

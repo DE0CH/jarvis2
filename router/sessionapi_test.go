@@ -130,17 +130,26 @@ func TestMachineAPIForwardsToJarvis1(t *testing.T) {
 		seen.Header.Get("X-Sig") != "" || seenBody != `{"purpose":"x"}` {
 		t.Fatalf("forwarded %s %v %q", seen.URL, seen.Header, seenBody)
 	}
-	if code, _ := m.do(t, h, "GET", "/m/api/search?q=hello+world&n=5", ""); code != 201 || seen.URL.RawQuery != "q=hello+world&n=5" {
-		t.Fatalf("%d %s", code, seen.URL)
-	}
 	// a session-scoped Jarvis 1 path for another session: refused before forwarding
 	seen = nil
 	if code, _ := m.do(t, h, "GET", "/m/api/sessions/sOther/content", ""); code != 403 || seen != nil {
 		t.Fatalf("%d", code)
 	}
 	// a Jarvis 1 path that isn't on the list: not forwarded
-	if code, _ := m.do(t, h, "POST", "/m/api/search/reindex", ""); code != 404 || seen != nil {
+	if code, _ := m.do(t, h, "POST", "/m/api/sessions/sA/content/x/zip", ""); code != 404 || seen != nil {
 		t.Fatalf("%d", code)
+	}
+	// search is the box's own service now, never Jarvis 1
+	var svc *http.Request
+	search := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) { svc = req; w.Write([]byte(`{"hits":[]}`)) }))
+	defer search.Close()
+	t.Setenv("SEARCH_URL", search.URL)
+	if code, _ := m.do(t, h, "GET", "/m/api/search?q=hello+world&n=5", ""); code != 200 || seen != nil || svc == nil || svc.URL.RequestURI() != "/search?q=hello+world&n=5" {
+		t.Fatalf("%d %v", code, svc)
+	}
+	// a machine with no running session can't search
+	if code, _ := newTestMachine(r, "mNone").do(t, h, "GET", "/m/api/search?q=x", ""); code != 403 {
+		t.Fatalf("no session: %d", code)
 	}
 }
 

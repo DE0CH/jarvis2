@@ -7,8 +7,9 @@ package main
 //
 // Served by the router: wakeups and crons (schedule.go), notify-idle (autopilot.go's switch), and the session
 // retiring itself.
-// Forwarded to Jarvis 1 (its own services, which Deyao lets Jarvis 2 sessions use "like Jarvis 1"): transcript
-// search, the iCloud index, device leases and the shared Claude login (content stores: content.go), with the
+// Transcript search and the iCloud index: the box's own services (searchsvc.go).
+// Forwarded to Jarvis 1 (its own services, which Deyao lets Jarvis 2 sessions use "like Jarvis 1"): device
+// leases and the shared Claude login (content stores: content.go), with the
 // Access service token JARVIS1_SERVICES_ID/SECRET (the cf-tunnel Worker confines it to those paths) and the header
 // X-Jarvis2-Session naming the calling session. The pull-secrets and changes calls never reach the router:
 // the machine answers them itself (it holds its secrets and its repos).
@@ -27,20 +28,11 @@ import (
 
 // jarvis1Routes: the Jarvis 1 paths a Jarvis 2 session may reach (method + Go mux path under /api)
 var jarvis1Routes = []string{
-	"GET /api/search", "GET /api/search/context", "GET /api/search/status",
-	"GET /api/icloud/search", "GET /api/icloud/file", "GET /api/icloud/status", "POST /api/icloud/relist",
 	"GET /api/leases", "GET /api/leases/{name}",
 	"POST /api/sessions/{id}/leases/{name}", "PUT /api/sessions/{id}/leases/{name}",
 	"PATCH /api/sessions/{id}/leases/{name}", "DELETE /api/sessions/{id}/leases/{name}",
 	"POST /api/sessions/{id}/leases/{name}/seen",
 	"GET /api/credentials", "POST /api/credentials",
-}
-
-// appJarvis1Routes: the same services for the app's Search tab (Deyao, with his Access login) — forwarded with
-// the services token and no X-Jarvis2-Session (they aren't a session's calls)
-var appJarvis1Routes = []string{
-	"GET /api/search", "GET /api/search/context", "GET /api/search/status",
-	"GET /api/icloud/search", "GET /api/icloud/file", "GET /api/icloud/status", "POST /api/icloud/relist",
 }
 
 // maxProposedSessions: new sessions one session may have waiting for Deyao's approval at a time
@@ -78,12 +70,7 @@ func (r *Router) registerSessionAPI(app appRoute, m machineRoute) {
 		r.deleteCron(w, req.PathValue("id"), req.PathValue("name"))
 	})
 
-	for _, p := range appJarvis1Routes {
-		app(p, func(w http.ResponseWriter, req *http.Request) {
-			b, _ := io.ReadAll(io.LimitReader(req.Body, 1<<20))
-			r.forwardJarvis1(w, req, "", b)
-		})
-	}
+	r.registerSearchServices(app, m) // transcript search + the iCloud index, on this box (searchsvc.go)
 
 	// ---- the session itself (through its machine's local proxy) -------------------------------------------
 	own := func(pattern string, fn func(w http.ResponseWriter, req *http.Request, sid string, body []byte)) {

@@ -44,7 +44,7 @@ watches.
 - Fly budget cap and "Also on Fly": present (`router/budget.go`, read-only `FLY_READ_TOKEN`).
 - Browserbase budget DM: stays in Jarvis 1.
 - Discord channel per session (DT, SB): present (`router/discord.go`, lobster, category "Jarvis 2"), named by the title above and renamed as it changes (2 edits per 10 min), exported to `claude-records/<date> <title>/discord/` and deleted on destroy. Topic has no Remote Control link.
-- **Live transcript sync to SB**: present. The machine sends changed transcripts every 5 min (`machine/livesync.go`); the router writes `claude-records/.live/<session id>/` with its own creds, so Jarvis 1's search indexes running Jarvis 2 sessions; removed on destroy. No grant (the machine pushes; DECISIONS 38).
+- **Live transcript sync to SB**: present. The machine sends changed transcripts every 5 min (`machine/livesync.go`); the router writes `claude-records/.live/<session id>/` with its own creds, so transcript search indexes running Jarvis 2 sessions; removed on destroy. No grant (the machine pushes; DECISIONS 38).
 
 ## Scheduling and devices
 - Wakeups, crons: present (router/schedule.go; Jarvis 1's shapes, under `/api` and `/m/api`; delivery through the `scheduler` grant).
@@ -69,7 +69,7 @@ watches.
 - Workspace layer: to verify. on-start hooks: present.
 - Peer-message delivery: present (`r.Deliver`, router/peer.go; Jarvis 1's lib/peer.js run through the `scheduler` grant).
 - Session-facing API (`$JARVIS_URL`): present — the machine's local proxy signs to `/m/api`; pull-secrets and changes answered on the machine; notify-idle and self-retire on the router; watches answer 501.
-- Transcript search, iCloud index: forwarded to Jarvis 1 with the confined `jarvis2-services` token — for sessions (`/m/api`) and for the app (`/api/search*`, `/api/icloud/*`).
+- Transcript search, iCloud index: present, on the Jarvis 2 box (`services/search`, `services/icloud-index`, k8s/apps/search.yaml + icloud-index.yaml, moved from Jarvis 1's box with their databases on 2026-10-13: embeddings and the iCloud AI-budget ledger carried over). The router forwards the app's `/api/search*`, `/api/icloud/*` and sessions' `/m/api/search*`, `/m/api/icloud/*` (`router/searchsvc.go`). The index covers both Jarvises' archives, Jarvis 1's `.paused/`, both `.live/` and the task records.
 
 ## Design questions parity raised
 1. A command channel replacing Fly exec: answered — grants (DESIGN.md "Grants", DECISIONS 24).

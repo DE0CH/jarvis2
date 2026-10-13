@@ -1,1 +1,1 @@
-resources: [core.yaml, router.yaml, edge.yaml, news.yaml]
+resources: [core.yaml, router.yaml, edge.yaml, news.yaml, search.yaml, icloud-index.yaml]

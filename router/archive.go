@@ -212,6 +212,7 @@ func (r *Router) archive(id string) (*ArchiveInfo, error) {
 				x.ArchiveDir = info.Dir
 			}
 		})
+		pokeSearch() // searchable at once (searchsvc.go)
 	}
 	return info, err
 }
