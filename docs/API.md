@@ -69,6 +69,13 @@ holder is saved.
 `initialising` → `started` (running) → `pausing` → `paused` (no machine) → `resuming` → … ; `destroying` →
 gone (moved to records); `failed` (with `error`).
 
+While the router drains for a rollout (`router/drain.go`), every call that starts a lifecycle action (create's first
+start after the approval answer, `respond`, pause, resume, destroy, restart, upgrade, the permission-mode switch, and
+the same calls under `/m/api`, `/setup` and `/actions`) answers **503 `{error: "router updating, try again shortly"}`**;
+the apps show the text as is and the action can be retried a moment later. Everything else is served as usual. A
+session a router crash left mid-action comes back `failed` with `error` "the … was cut off by a router crash: … again"
+(a cut-off resume: `paused` with that error).
+
 | Call | Does |
 |---|---|
 | `GET /api/state` | `{sessions, approvals, core: {up, signingKey, agreementKey}}` |

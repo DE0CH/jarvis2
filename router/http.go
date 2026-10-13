@@ -46,7 +46,10 @@ func writeErr(w http.ResponseWriter, err error) {
 		return
 	}
 	status := 400
-	if errors.Is(err, errBusy) {
+	switch {
+	case errors.Is(err, errDraining):
+		status = 503 // drain.go: "router updating, try again shortly", shown as is
+	case errors.Is(err, errBusy):
 		status = 409
 	}
 	writeJSON(w, status, map[string]string{"error": err.Error()})

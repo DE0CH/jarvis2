@@ -22,6 +22,10 @@ spec:
     spec:
       automountServiceAccountToken: false
       enableServiceLinks: false
+      # SIGTERM drains (router/drain.go): running lifecycle actions finish before the pod exits. The longest is a
+      # restart/upgrade job: a pause (SNAPSHOT_WAIT_SECONDS 600 + the kill) then a resume (a machine's init, up to
+      # 12 min); DRAIN_SECONDS (1740) stays under this. Recreate: the new pod starts once this one has drained.
+      terminationGracePeriodSeconds: 1800
       securityContext: { fsGroup: 65532 }
       containers:
         - name: router

@@ -291,6 +291,14 @@ by the core, approved by the phone; the box alone can never make one, and no AI 
   dead machine → `certify(approval, none)` → burn cert. The router deletes the carried blob with the snapshots;
   burnt, it could open for nothing anyway (no successor can be certified, the killed machine's certs read none).
 
+- **A router rollout drains first (Deyao, 2026-10-13; `router/drain.go`).** Every flow above runs in a goroutine of the
+  router that began it; each is tracked (the session lifecycle lock and the approval answer begin one). On SIGTERM the
+  router refuses new lifecycle actions (503 "router updating, try again shortly"; the schedulers back off as from a busy
+  session), lets every running one finish while it keeps serving reads, the machines' reports and the login's long
+  polls, then exits; the pod's grace period (30 min) covers the longest one. A crash still cuts actions off: at start
+  the router turns each session it left mid-action into a `failed` (or, for a resume whose line is intact, `paused`)
+  session with the reason, and Deyao runs the action again. Nothing is saved to be redone.
+
 ## Carried secrets (Deyao, 2026-10-11)
 
 "After a session is started, there's no reason to keep the store unlocked in the core. So just lock it then." For

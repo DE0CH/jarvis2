@@ -87,12 +87,17 @@ func main() {
 	} else {
 		go func() { log.Fatal(http.ListenAndServe(maddr, r.MachineHandler())) }()
 	}
-	// SIGTERM (a rollout): a Claude login refresh in flight is let finish, so its answer reaches the volume (the old
-	// refresh token is dead the moment the token endpoint answers)
+	// SIGTERM (a rollout): drain (drain.go): new lifecycle actions get 503 "router updating, try again shortly", the
+	// running ones finish, while both listeners keep serving reads, the machines' reports and the login's long
+	// polls. Then a Claude login refresh in flight is let finish, so its answer reaches the volume (the old refresh
+	// token is dead the moment the token endpoint answers). DRAIN_SECONDS stays under the pod's
+	// terminationGracePeriodSeconds (k8s/apps/router.yaml).
+	drainMax, _ := strconv.Atoi(env("DRAIN_SECONDS", "1740"))
 	go func() {
 		ch := make(chan os.Signal, 1)
 		signal.Notify(ch, syscall.SIGTERM, syscall.SIGINT)
 		<-ch
+		r.Drain(time.Duration(drainMax) * time.Second)
 		r.loginHub().drain(20 * time.Second)
 		os.Exit(0)
 	}()

@@ -32,6 +32,15 @@ run it): it pins the newest core and Flux restarts it. A core from aa0443a on st
 add `- { name: MACHINE_URL, value: "http://jarvis2-box._peer.internal:8081" }` to the core container's env (test cores
 get their own peer's address from `infra/e2e.sh` / `infra/rehearsal-box.sh`).
 
+A router rollout drains (`router/drain.go`): the old pod refuses new lifecycle actions with 503 "router updating, try
+again shortly" and exits once the running ones have finished (its log: `draining: … waiting for N running: [...]`, every
+minute `still running`, then `drained`); the new pod starts only then (strategy Recreate), so a deploy during a pause can
+take up to the snapshot wait (10 min) to go live, at most 30 min (`terminationGracePeriodSeconds: 1800`, `DRAIN_SECONDS`
+1740). Watch it with `kubectl -n jarvis2-router logs deploy/router -f`. A start waiting out Fly's machine limit ends
+when the drain begins ("…start it again"). After a crash (OOM, node reboot), sessions cut off mid-action show `failed`
+(a resume: `paused`) with "cut off by a router crash" and are started, paused or destroyed again from the app; a
+cut-off start may leave an uncertified machine that the Machines tab flags with no session (Destroy it there).
+
 ## The keys (`keys/`)
 
 - `box.pub` — written by `infra/create.sh` with each new box; commit it. The app and `setup.py` check a core's

@@ -29,8 +29,9 @@ type Router struct {
 	results  map[string]chan ExecResult // exec request id → its waiting caller
 	hk       holders
 	snapped  map[string]chan struct{}
-	locks    sync.Map // session id → *sync.Mutex: one lifecycle action at a time
-	ops      opsState // sessionops.go: busy marks, permission-mode/restart jobs, uploads, repos
+	locks    sync.Map   // session id → *sync.Mutex: one lifecycle action at a time
+	drain    drainState // drain.go: the lifecycle goroutines running, refused once SIGTERM came
+	ops      opsState   // sessionops.go: busy marks, permission-mode/restart jobs, uploads, repos
 
 	policy Policy
 
@@ -57,15 +58,21 @@ func randID() string {
 var errBusy = errors.New("the session is in the middle of another action")
 
 // lock: a session's lifecycle actions don't overlap; a clash is refused (409), not queued. kind names the
-// action in /api/state's `busy` (sessionops.go).
+// action in /api/state's `busy` (sessionops.go). Each lock is a tracked lifecycle action (drain.go): refused with
+// errDraining (503) once the router drains, waited for until its unlock.
 func (r *Router) lock(id, kind string) (func(), error) {
+	done, err := r.begin(id, kind)
+	if err != nil {
+		return nil, err
+	}
 	m, _ := r.locks.LoadOrStore(id, &sync.Mutex{})
 	mu := m.(*sync.Mutex)
 	if !mu.TryLock() {
+		done()
 		return nil, errBusy
 	}
 	r.ops.setBusy(id, kind)
-	return func() { r.ops.setBusy(id, ""); mu.Unlock() }, nil
+	return func() { r.ops.setBusy(id, ""); mu.Unlock(); done() }, nil
 }
 
 func (r *Router) setState(id, state, errMsg string) {
@@ -165,7 +172,7 @@ var (
 // startMachine: the core's start (one Fly create), then its init until Fly reports the machine up and the image's
 // init command gave its keys → the core's signed "started" document. A machine that never comes up is killed.
 // A core from before R2 answers "started" from /start itself (it waited and retried inside).
-func (r *Router) startMachine(image, size string, onCreated ...func(id string)) (*Doc, error) {
+func (r *Router) startMachine(image, size string) (*Doc, error) {
 	if size == "" {
 		size = "medium"
 	}
@@ -173,9 +180,15 @@ func (r *Router) startMachine(image, size string, onCreated ...func(id string)) 
 	d, err := r.core.Call("/start", in)
 	// Fly's org machine limit (lessons/58): nothing was created and the approval is still unused, so wait for a
 	// machine to go (sessions pause by themselves) instead of failing a start Deyao already approved
+	// A drain (drain.go) doesn't wait out the limit: the start ends with errLimitDraining and Deyao starts it again.
 	for waited := time.Duration(0); err != nil && flyMachineLimit(err) && waited < machineLimitWait; waited += machineLimitStep {
+		if r.draining() {
+			return nil, errLimitDraining
+		}
 		log.Printf("start: the Fly org is at its machine limit; trying again in %s", machineLimitStep)
-		time.Sleep(machineLimitStep)
+		if r.sleepUnlessDraining(machineLimitStep) {
+			return nil, errLimitDraining
+		}
 		d, err = r.core.Call("/start", in)
 	}
 	if err != nil {
@@ -188,9 +201,6 @@ func (r *Router) startMachine(image, size string, onCreated ...func(id string)) 
 	d.Decode(&c)
 	if c.Kind != "created" {
 		return d, nil
-	}
-	for _, f := range onCreated {
-		f(c.ID)
 	}
 	deadline := time.Now().Add(initMax)
 	for {
@@ -245,13 +255,7 @@ func (r *Router) startAndCertify(sid string, approval *Doc) {
 		}
 	})
 	r.setState(sid, "starting", "")
-	d, err := r.startMachine(a.Request.Image, s.Size, func(id string) {
-		r.st.Do(func(d *persisted) {
-			if x := d.Sessions[sid]; x != nil && x.Pending != nil {
-				x.Pending.Machine = id
-			}
-		})
-	})
+	d, err := r.startMachine(a.Request.Image, s.Size)
 	if err != nil {
 		r.setState(sid, "failed", "start: "+err.Error())
 		return
@@ -288,7 +292,7 @@ func (r *Router) startAndCertify(sid string, approval *Doc) {
 	r.st.Do(func(d *persisted) {
 		d.Certs[m.ID] = cert
 		if x := d.Sessions[sid]; x != nil {
-			x.Cert, x.MachineID, x.Image, x.State, x.Error, x.PausedAt, x.Pending = cert, m.ID, m.Image, "initialising", "", nil, nil
+			x.Cert, x.MachineID, x.Image, x.State, x.Error, x.PausedAt = cert, m.ID, m.Image, "initialising", "", nil
 		}
 	})
 	r.logInputs(ans.Entry) // vouch.go: the cert's input-log entry
@@ -461,8 +465,15 @@ func (r *Router) Respond(id, signature string) (*Doc, string, error) {
 	if a.Kind == "add-store" {
 		in["carry"] = r.readCarry(a.Machine) // answered rebound to the machine's new cert
 	}
+	// a start the answer leads to is a tracked lifecycle action (drain.go): during a drain the answer is refused before
+	// the core uses it up, so the approval stays in the Inbox for the phone to answer again
+	done, err := r.begin(a.Session, "approved")
+	if err != nil {
+		return nil, "", err
+	}
 	ans, extra, err := r.core.CallAnswer("/approve/by-phone", in)
 	if err != nil {
+		done()
 		return nil, "", err
 	}
 	r.logInputs(extra.Entry) // an add-store's new cert (an approval for a new line has none)
@@ -478,9 +489,13 @@ func (r *Router) Respond(id, signature string) (*Doc, string, error) {
 			}
 		})
 		r.carryAfter(a.Machine, a.Machine, ans, extra) // its carried stores go on; the added one comes from its unlock
+		done()
 		return ans, a.Session, nil
 	}
-	go r.startAndCertify(a.Session, ans)
+	go func() {
+		defer done()
+		r.startAndCertify(a.Session, ans)
+	}()
 	return ans, a.Session, nil
 }
 
@@ -559,11 +574,6 @@ func (r *Router) Resume(id string, upgrade bool) error {
 		return fmt.Errorf("session %s isn't paused", id)
 	}
 	r.setState(id, "resuming", "")
-	r.st.Do(func(d *persisted) {
-		if x := d.Sessions[id]; x != nil {
-			x.Pending = &PendingStart{Upgrade: upgrade}
-		}
-	})
 	go func() {
 		defer unlock()
 		image := s.Image // the same image, pinned by digest

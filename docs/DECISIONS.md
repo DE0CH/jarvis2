@@ -891,3 +891,22 @@ Deyao: several actions approved together with ONE Face ID; the caller groups the
      sooner of its own 10 minutes and the batch's). Imports and proposed sessions come in a moment after filing (the core's
      challenge); the batch shows them as `preparing` and the phone waits for them before Allow all.
 
+146. **Router rollouts drain; nothing is redone after a crash** (Deyao, 2026-10-13: drain on SIGTERM, remove the
+     save-to-disk-and-redo). Tracking lives in the lifecycle lock (`lock` begins a tracked action, its unlock ends it) plus
+     the approval answer (`Respond`); a restart or upgrade job is tracked as a whole and its own pause/resume steps still
+     begin during a drain, so a drain between its steps doesn't leave the session paused half way. Creating a session
+     (only an approval, no machine) is not refused; the phone's answer is, before the core uses the approval up, so it
+     stays in the Inbox. Preparing a Jarvis 1 import (hashing, no machine) isn't tracked.
+147. **A drain doesn't wait out Fly's machine limit.** A start in the limit wait (up to 3 h) when the drain begins, or one
+     that would begin it during a drain, ends `failed` with "the Fly org is at its machine limit and the router is
+     updating: start it again". Change: let it wait in the next pod (it would need the saved state we just removed).
+148. **Grace 30 min, not 15.** `terminationGracePeriodSeconds: 1800`, `DRAIN_SECONDS` 1740: the longest tracked job is a
+     restart/upgrade (a pause's 600 s snapshot wait + the kill, then a resume's machine init, up to 12 min). Flux applies
+     with `wait: false` and no workflow waits on the rollout, so the long grace delays only the new pod. A drain past it is
+     cut off like a crash.
+149. **After a crash: `paused` for a cut-off resume, `failed` otherwise.** A resume cut off before certify keeps its line
+     (the core marks the predecessor used only at certify), so the session goes back to `paused` with the reason and a
+     plain Resume works. A new line's start (its phone approval is spent), a pause and a destroy become `failed` with the
+     reason; Pause and Destroy both run from `failed`. The cut-off start's machine, if the core had made one, isn't known
+     any more: it holds no secret (never certified) and the Machines tab flags it as having no session. Old state.json's
+     `pendingStart` is dropped on load.

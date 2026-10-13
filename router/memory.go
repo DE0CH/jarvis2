@@ -247,12 +247,19 @@ func (r *Router) Upgrade(id string) (map[string]any, error) {
 	if to == "" {
 		return nil, fmt.Errorf("session is already on the biggest size (%s)", from)
 	}
+	// the whole job is one tracked lifecycle action (drain.go): its pause and resume go on during a drain
+	endJob, err := r.beginJob(id, "upgrade")
+	if err != nil {
+		return nil, err
+	}
 	j, err := r.ops.startJob(id, "upgrade")
 	if err != nil {
+		endJob()
 		return nil, err
 	}
 	r.ops.setBusy(id, "upgrading")
 	go func() {
+		defer endJob()
 		defer r.ops.setBusy(id, "")
 		fail := func(err error) {
 			log.Printf("[memory] upgrade of %s failed: %v", id, err)

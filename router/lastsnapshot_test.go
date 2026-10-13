@@ -1,6 +1,8 @@
 package main
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -70,70 +72,65 @@ func TestLastSnapshotNeverWaitsOnABootingMachine(t *testing.T) {
 	}
 }
 
-// a router restart cut off a destroy (the session sat at "destroying" for ever): the new router destroys it again
-// on start, and the core's kill force-destroys the machine (running, stopped or gone)
-func TestRestartResumesACutOffDestroy(t *testing.T) {
+// a crash cut actions off (no goroutine runs them any more): at start each such session becomes a plain one with
+// the reason, nothing is run again by itself, and Deyao's retry works from there (Deyao, 2026-10-13)
+func TestCutOffActionsEndWithAReason(t *testing.T) {
 	rg := newRig(t)
 	r := rg.r
 	r.st.Do(func(d *persisted) {
 		s := d.Sessions["s1"]
-		s.State, s.MachineID, s.Cert = "destroying", "m1", rg.cert
+		s.State, s.MachineID, s.Cert = "starting", "", rg.cert       // a resume: its line is still there
+		d.Sessions["sNew"] = &Session{ID: "sNew", State: "starting"} // a new line's first start
+		d.Sessions["sP"] = &Session{ID: "sP", State: "pausing", MachineID: "m2", Cert: rg.cert, Waiting: "x"}
+		d.Sessions["sD"] = &Session{ID: "sD", State: "destroying", MachineID: "m3", Cert: rg.cert}
+		d.Sessions["sR"] = &Session{ID: "sR", State: "resuming", Cert: rg.cert}
+		d.Sessions["sOK"] = &Session{ID: "sOK", State: "started", MachineID: "m4", Cert: rg.cert}
 	})
-	r.resumeInterrupted()
-	until := time.Now().Add(10 * time.Second)
-	for time.Now().Before(until) {
-		st := ""
-		r.st.Do(func(d *persisted) {
-			if s := d.Sessions["s1"]; s != nil {
-				st = s.State
+	r.endCutOff()
+	want := map[string]string{"s1": "paused", "sR": "paused", "sNew": "failed", "sP": "failed", "sD": "failed", "sOK": "started"}
+	r.st.Do(func(d *persisted) {
+		for id, st := range want {
+			s := d.Sessions[id]
+			if s.State != st {
+				t.Errorf("%s: %s, want %s", id, s.State, st)
 			}
-		})
-		if st != "destroying" {
-			break
+			if st != "started" && !strings.Contains(s.Error, "cut off by a router crash") {
+				t.Errorf("%s: error %q", id, s.Error)
+			}
+			if s.Waiting != "" {
+				t.Errorf("%s: still waiting %q", id, s.Waiting)
+			}
 		}
-		time.Sleep(50 * time.Millisecond)
-	}
-	killed := false
-	rg.core.mu.Lock()
-	for _, c := range rg.core.calls {
-		killed = killed || c == "/kill"
-	}
-	rg.core.mu.Unlock()
-	var left *Session
-	r.st.Do(func(d *persisted) { left = d.Sessions["s1"] })
-	if !killed || (left != nil && left.State == "destroying") {
-		t.Fatalf("killed=%v, session %+v", killed, left)
-	}
-}
-
-// a router restart cut off a resume before certify (the session sat at "starting" for ever, 2026-10-13): the new
-// router runs the resume again; a new line's cut-off start fails instead (its phone approval is gone)
-func TestRestartRedoesACutOffResume(t *testing.T) {
-	rg := newRig(t)
-	r := rg.r
-	r.st.Do(func(d *persisted) {
-		s := d.Sessions["s1"]
-		s.State, s.MachineID, s.Cert, s.Pending = "starting", "", rg.cert, &PendingStart{}
-		d.Sessions["sNew"] = &Session{ID: "sNew", State: "starting", Pending: &PendingStart{}}
 	})
-	r.resumeInterrupted()
-	st := func(id string) (string, string, *PendingStart) {
-		var a, b string
-		var p *PendingStart
-		r.st.Do(func(d *persisted) { a, b, p = d.Sessions[id].State, d.Sessions[id].Error, d.Sessions[id].Pending })
-		return a, b, p
+	rg.core.mu.Lock()
+	calls := len(rg.core.calls)
+	rg.core.mu.Unlock()
+	if calls != 0 {
+		t.Fatalf("the core was called (something ran again): %v", rg.core.calls)
 	}
-	if s, e, _ := st("sNew"); s != "failed" || !strings.Contains(e, "cut off") {
-		t.Fatalf("new line: %s %s", s, e)
+	// the retry: the cut-off resume resumes again
+	if err := r.Resume("s1", false); err != nil {
+		t.Fatal(err)
 	}
-	if s, _, _ := st("s1"); s == "starting" || s == "failed" {
-		t.Fatalf("the cut-off resume wasn't run again: %s", s)
-	}
-	// let the resume's goroutine finish before the rig's directory goes
 	for until := time.Now().Add(10 * time.Second); time.Now().Before(until); time.Sleep(20 * time.Millisecond) {
 		if unlock, err := r.lock("s1", "test"); err == nil {
 			unlock()
 			break
 		}
+	}
+}
+
+// state.json from before the drain kept "pendingStart" on a resuming session: it loads (the field is dropped)
+func TestOldPendingStartIsDropped(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "state.json"), []byte(`{"sessions":{"s1":{"id":"s1","state":"resuming","pendingStart":{"upgrade":true,"machine":"m9"}}}}`), 0o600)
+	st, err := LoadState(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	st.Do(func(d *persisted) {})
+	b, _ := os.ReadFile(filepath.Join(dir, "state.json"))
+	if strings.Contains(string(b), "pendingStart") {
+		t.Fatalf("pendingStart kept: %s", b)
 	}
 }

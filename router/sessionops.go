@@ -494,12 +494,19 @@ func (r *Router) Restart(id string, in RestartRequest) (map[string]any, error) {
 	if s.State != "paused" && (s.MachineID == "" || (s.State != "started" && s.State != "initialising")) {
 		return nil, fmt.Errorf("session is %s", s.State)
 	}
+	// the whole job is one tracked lifecycle action (drain.go): its pause and resume go on during a drain
+	endJob, err := r.beginJob(id, "restart")
+	if err != nil {
+		return nil, err
+	}
 	j, err := r.ops.startJob(id, "restart")
 	if err != nil {
+		endJob()
 		return nil, err
 	}
 	r.ops.setBusy(id, "restarting")
 	go func() {
+		defer endJob()
 		defer r.ops.setBusy(id, "")
 		fail := func(err error) { r.ops.phase(j, "failed", err) }
 		if s.MachineID != "" {

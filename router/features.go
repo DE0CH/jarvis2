@@ -10,7 +10,6 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
-	"time"
 )
 
 type (
@@ -43,104 +42,21 @@ func (r *Router) registerFeatures(app appRoute, m machineRoute, public publicRou
 
 // startFeatures: called once from main after the router is built
 func (r *Router) startFeatures() {
+	r.endCutOff() // drain.go: what a crash cut off becomes a failed or paused session, before any loop looks
 	r.startDiscord()
 	r.startAutopilot()
-	go r.scheduleLoop() // schedule.go: wakeups, crons, resume prompts
-	go r.leaseLoop()    // leases.go: expire silent holders, wake promoted ones
-	go r.watchLoop()    // watches.go: run due checks on the watch runner, deliver met / given-up watches
-	go r.archiveLoop()  // archive.go: restore files tidied
-	go r.budgetLoop()   // budget.go: the Fly budget cap
-	go r.bbBudgetLoop() // bbbudget.go: the Browserbase spend DM
-	go r.uploadsLoop()  // uploads.go: stale attachments
-	go r.inboxLoop()    // inbox.go: requests and approvals go after 10 min
-	go r.tasksLoop()    // tasks.go: daily schedules, runs, pausing finished task lines
-	go r.inputLogLoop() // vouch.go: the core's input log onto the volume
-	go r.resumeInterrupted()
+	go r.scheduleLoop()   // schedule.go: wakeups, crons, resume prompts
+	go r.leaseLoop()      // leases.go: expire silent holders, wake promoted ones
+	go r.watchLoop()      // watches.go: run due checks on the watch runner, deliver met / given-up watches
+	go r.archiveLoop()    // archive.go: restore files tidied
+	go r.budgetLoop()     // budget.go: the Fly budget cap
+	go r.bbBudgetLoop()   // bbbudget.go: the Browserbase spend DM
+	go r.uploadsLoop()    // uploads.go: stale attachments
+	go r.inboxLoop()      // inbox.go: requests and approvals go after 10 min
+	go r.tasksLoop()      // tasks.go: daily schedules, runs, pausing finished task lines
+	go r.inputLogLoop()   // vouch.go: the core's input log onto the volume
 	go r.coreChangeLoop() // corechange.go: a new core → the earlier core's paused sessions are destroyed
 	go r.loginLoop()      // claudelogin.go: refresh the Claude login (own) or mirror Jarvis 1's (follow)
-}
-
-// resumeInterrupted: a pause or destroy runs in a goroutine of the router that started it; a router restart (any
-// rollout) ends that goroutine but not the session's state, which then sat at "destroying" or "pausing" for ever
-// (a destroy waiting out a stuck machine's snapshot was cut off by a rollout, 2026-10-10). On start, each such
-// session's pause or destroy runs again from the top: the kill force-destroys the machine whether it is running,
-// stopped or gone, and the archive and burn follow.
-func (r *Router) resumeInterrupted() {
-	var destroying, pausing, resuming []string
-	r.st.Do(func(d *persisted) {
-		for id, s := range d.Sessions {
-			switch s.State {
-			case "destroying":
-				destroying = append(destroying, id)
-			case "pausing":
-				pausing = append(pausing, id)
-			case "resuming", "starting":
-				resuming = append(resuming, id)
-			}
-		}
-	})
-	if len(destroying)+len(pausing)+len(resuming) == 0 {
-		return
-	}
-	// the kill needs a set-up core (its Fly token): after a box restart the core is empty until Deyao's Recover
-	for i := 0; !r.coreSetUp(); i++ {
-		if i == 0 {
-			log.Printf("%d cut-off pause/destroy/resume waiting for the core to be set up", len(destroying)+len(pausing)+len(resuming))
-		}
-		time.Sleep(15 * time.Second)
-	}
-	for _, id := range destroying {
-		log.Printf("session %s: its destroy was cut off by a router restart; destroying again", id)
-		if err := r.destroy(id, destroyOpts{}); err != nil {
-			log.Printf("session %s: destroy again: %v", id, err)
-		}
-	}
-	// a resume cut off before certify: its machine (if the core made one) never got a line and its approval lived
-	// only in the goroutine; the predecessor is still killed and unused (the core marks it used at certify), so the
-	// resume runs again from the top. A new line's start needs the phone's approval again: it fails instead.
-	for _, id := range resuming {
-		r.redoResume(id)
-	}
-	for _, id := range pausing {
-		log.Printf("session %s: its pause was cut off by a router restart; pausing again", id)
-		if err := r.Pause(id); err != nil {
-			log.Printf("session %s: pause again: %v", id, err)
-			r.setState(id, "failed", "pause cut off by a router restart: "+err.Error())
-		}
-	}
-}
-
-func (r *Router) redoResume(id string) {
-	var s Session
-	r.st.Do(func(d *persisted) {
-		if x := d.Sessions[id]; x != nil {
-			s = *x
-		}
-	})
-	p := s.Pending
-	if p != nil && p.Machine != "" {
-		if _, err := r.killUntilDestroyed(map[string]any{"machine": p.Machine}); err != nil {
-			log.Printf("session %s: kill the cut-off resume's machine %s: %v", id, p.Machine, err)
-		}
-	}
-	if s.Cert == nil || s.MachineID != "" {
-		r.st.Do(func(d *persisted) {
-			if x := d.Sessions[id]; x != nil {
-				x.Pending = nil
-			}
-		})
-		r.setState(id, "failed", "start cut off by a router restart")
-		return
-	}
-	log.Printf("session %s: its resume was cut off by a router restart; resuming again", id)
-	r.st.Do(func(d *persisted) {
-		if x := d.Sessions[id]; x != nil {
-			x.State, x.Pending = "paused", nil
-		}
-	})
-	if err := r.Resume(id, p != nil && p.Upgrade); err != nil {
-		log.Printf("session %s: resume again: %v", id, err)
-	}
 }
 
 // stateHooks: add fields to GET /api/state

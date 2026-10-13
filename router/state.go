@@ -12,43 +12,42 @@ import (
 )
 
 type Session struct {
-	ID             string        `json:"id"`        // stable: the first machine's id
-	MachineID      string        `json:"machineId"` // "" while paused
-	State          string        `json:"state"`
-	Error          string        `json:"error,omitempty"`
-	Created        time.Time     `json:"created"`
-	PausedAt       *time.Time    `json:"pausedAt,omitempty"`
-	Label          string        `json:"label"`
-	Prompt         string        `json:"-"`
-	Model          string        `json:"model"`
-	PermissionMode string        `json:"permissionMode"`
-	Size           string        `json:"size"`
-	Harness        string        `json:"harness"`
-	Stores         []string      `json:"stores"`
-	Repos          string        `json:"repos"`
-	Content        []string      `json:"content,omitempty"` // content.go: the content stores the line gets (signed in its config)
-	Image          string        `json:"image"`             // what the current line runs (ref@digest), pinned on resume
-	Cert           *Doc          `json:"-"`                 // the line's latest succession cert
-	RequestID      string        `json:"createRequestId,omitempty"`
-	Title          string        `json:"aiTitle,omitempty"`
-	Status         string        `json:"status,omitempty"`
-	UserTitle      string        `json:"userTitle,omitempty"`      // Deyao's own rename (the transcript's custom title): beats Label
-	AppTitle       string        `json:"serverTitle,omitempty"`    // the Claude app's own title (machine report; Jarvis 1's serverTitle): beats all
-	LiveSync       *LiveSync     `json:"liveSync,omitempty"`       // livesync.go: the transcripts the machine last copied out
-	DiscordChannel string        `json:"discordChannel,omitempty"` // the session's channel (discord.go), LOBSTER_CHANNEL on the machine
-	Live           *Liveness     `json:"live,omitempty"`           // reported status, auto-pause/one-shot settings (autopilot.go)
-	Pending        *PendingStart `json:"pendingStart,omitempty"`   // a resume in flight (flows.go): what resumeInterrupted re-runs after a router restart
-	ArchiveDir     string        `json:"archiveDir,omitempty"`     // archive.go: fixed by the destroy that archives it
-	RestoreFrom    string        `json:"restoreFrom,omitempty"`    // restore.go: the record this session restores
-	RestoreCert    *Doc          `json:"restoreCert,omitempty"`    // restore.go: that record's signer cert
-	ImportFrom     string        `json:"importFrom,omitempty"`     // jarvis1import.go: the paused Jarvis 1 session this line imports
-	ImportSha      string        `json:"importSha256,omitempty"`   // jarvis1import.go: that import manifest's sha256 (in the cert's restore)
-	Ops            *SessionOps   `json:"ops,omitempty"`            // sessionops.go: API proxy, env patch, rollback, attachments
-	Booted         string        `json:"booted,omitempty"`         // the machine that has reported status: it got past boot (lastSnapshot)
-	Waiting        string        `json:"waiting,omitempty"`        // what a pause or destroy is waiting on, in plain words (the app shows it)
-	LockedStore    string        `json:"lockedStore,omitempty"`    // the store the machine waits on at boot (its secrets pull got 423 "store X is locked")
-	OldCore        bool          `json:"oldCore,omitempty"`        // corechange.go: its line is an earlier core's; destroyed once paused
-	taskConfig     *TaskConfig   // vouch.go: a task line's instance + parameters while its first challenge is made (not kept)
+	ID             string      `json:"id"`        // stable: the first machine's id
+	MachineID      string      `json:"machineId"` // "" while paused
+	State          string      `json:"state"`
+	Error          string      `json:"error,omitempty"`
+	Created        time.Time   `json:"created"`
+	PausedAt       *time.Time  `json:"pausedAt,omitempty"`
+	Label          string      `json:"label"`
+	Prompt         string      `json:"-"`
+	Model          string      `json:"model"`
+	PermissionMode string      `json:"permissionMode"`
+	Size           string      `json:"size"`
+	Harness        string      `json:"harness"`
+	Stores         []string    `json:"stores"`
+	Repos          string      `json:"repos"`
+	Content        []string    `json:"content,omitempty"` // content.go: the content stores the line gets (signed in its config)
+	Image          string      `json:"image"`             // what the current line runs (ref@digest), pinned on resume
+	Cert           *Doc        `json:"-"`                 // the line's latest succession cert
+	RequestID      string      `json:"createRequestId,omitempty"`
+	Title          string      `json:"aiTitle,omitempty"`
+	Status         string      `json:"status,omitempty"`
+	UserTitle      string      `json:"userTitle,omitempty"`      // Deyao's own rename (the transcript's custom title): beats Label
+	AppTitle       string      `json:"serverTitle,omitempty"`    // the Claude app's own title (machine report; Jarvis 1's serverTitle): beats all
+	LiveSync       *LiveSync   `json:"liveSync,omitempty"`       // livesync.go: the transcripts the machine last copied out
+	DiscordChannel string      `json:"discordChannel,omitempty"` // the session's channel (discord.go), LOBSTER_CHANNEL on the machine
+	Live           *Liveness   `json:"live,omitempty"`           // reported status, auto-pause/one-shot settings (autopilot.go)
+	ArchiveDir     string      `json:"archiveDir,omitempty"`     // archive.go: fixed by the destroy that archives it
+	RestoreFrom    string      `json:"restoreFrom,omitempty"`    // restore.go: the record this session restores
+	RestoreCert    *Doc        `json:"restoreCert,omitempty"`    // restore.go: that record's signer cert
+	ImportFrom     string      `json:"importFrom,omitempty"`     // jarvis1import.go: the paused Jarvis 1 session this line imports
+	ImportSha      string      `json:"importSha256,omitempty"`   // jarvis1import.go: that import manifest's sha256 (in the cert's restore)
+	Ops            *SessionOps `json:"ops,omitempty"`            // sessionops.go: API proxy, env patch, rollback, attachments
+	Booted         string      `json:"booted,omitempty"`         // the machine that has reported status: it got past boot (lastSnapshot)
+	Waiting        string      `json:"waiting,omitempty"`        // what a pause or destroy is waiting on, in plain words (the app shows it)
+	LockedStore    string      `json:"lockedStore,omitempty"`    // the store the machine waits on at boot (its secrets pull got 423 "store X is locked")
+	OldCore        bool        `json:"oldCore,omitempty"`        // corechange.go: its line is an earlier core's; destroyed once paused
+	taskConfig     *TaskConfig // vouch.go: a task line's instance + parameters while its first challenge is made (not kept)
 }
 
 type Approval struct {
@@ -187,11 +186,4 @@ func (s *State) save() {
 
 func (s *State) snapshotPath(machine string) string {
 	return filepath.Join(s.dir, "snapshots", machine+".tar.gz")
-}
-
-// PendingStart: a resume the router is running. A rollout ends its goroutine but not the session's state ("resuming",
-// "starting"), so the router keeps what it needs to clean up and run it again (features.go resumeInterrupted).
-type PendingStart struct {
-	Upgrade bool   `json:"upgrade"`
-	Machine string `json:"machine,omitempty"` // created by the core, not yet certified
 }
