@@ -10,8 +10,7 @@ Facts: the router has no Fly token (it calls the core's start/kill/certify). Its
 a standing rule or its own allow list — DESIGN.md "Grants") and what the machine sends by itself (status reports,
 snapshots, live transcripts, task results).
 
-Deferred by Deyao (PLAN.md "Later"): device leases, content stores, device pairing for the OpenClaw/Paseo apps,
-watches.
+Deferred by Deyao (PLAN.md "Later"): content stores, device pairing for the OpenClaw/Paseo apps.
 
 ## Session lifecycle
 - **Create** (FT, AT): present. Idempotent `requestId`: present (a repeat answers the session it made). Lifecycle lock: 409 and `busy {kind, since}` in `/api/state`.
@@ -48,8 +47,8 @@ watches.
 
 ## Scheduling and devices
 - Wakeups, crons: present (router/schedule.go; Jarvis 1's shapes, under `/api` and `/m/api`; delivery through the `scheduler` grant).
-- Watches: deferred (they run a script with store plaintext on the box; `/m/api/…/watches` answers 501).
-- Device leases (iphone, mac, wechat-phone): deferred. The router forwards the paths to Jarvis 1, which doesn't accept Jarvis 2 sessions yet, so no lease can be held and the app shows no lease pills.
+- Watches: present (`router/watches.go`, Jarvis 1's shapes): the check runs on the box's watch runner (`services/watch`, no secrets, public internet only), so a paused session's watch still fires; delivery is the session's own signed request, and the machine re-runs the check for the context. A check can't use a store's secret (DECISIONS 114).
+- Device leases (iphone, mac, wechat-phone): present in the router (`router/leases.go`, Jarvis 1's rules and shapes; wake messages are machine-checked deliveries; DECISIONS 113). Jarvis 1's lease table is separate until the cutover.
 - Tasks + schedules: present on the router (`router/tasks.go`, `machine/task.go`, templates in `tasks/`; DECISIONS 32–37) and in the app (Tasks and Schedules tabs, app/DECISIONS 35). Jarvis 1's templates aren't ported (many need content stores).
 
 ## Stores, repos, content
@@ -59,7 +58,7 @@ watches.
 
 ## Account and apps
 - Re-login: via Jarvis 1. Usage quota: forwarded to Jarvis 1 (Settings card). Device pairing for OpenClaw/Paseo apps: deferred.
-- Dashboard (app/DECISIONS.md 23–38): Sessions (live status, auto-pause/idle switches, resume prompt, destroy with the changes check, transcript, Discord link, needsGrant one-tap, permission mode, copy id), Grants (secure page, phone-signed), Terminal, Remote (with copy), per-session wakeups/crons, **Search** (conversations of both Jarvises, iCloud files), Previous (restore/tail/remove/delete), Tasks, Schedules, Stores, Repos, Settings (usage, Fly spend, core keys with copy), New session (one-shot, auto-pause, repos, API proxy, permission mode), banners, "Also on Fly": present. Devices, Content, lease pills, first-prompt attachments, the per-tab transcript filter on Sessions/Previous: missing.
+- Dashboard (app/DECISIONS.md 23–38): Sessions (live status, auto-pause/idle switches, resume prompt, destroy with the changes check, transcript, Discord link, needsGrant one-tap, permission mode, copy id), Grants (secure page, phone-signed), Terminal, Remote (with copy), per-session wakeups/crons, **Search** (conversations of both Jarvises, iCloud files), Previous (restore/tail/remove/delete), Tasks, Schedules, Stores, Repos, Settings (usage, Fly spend, core keys with copy), New session (one-shot, auto-pause, repos, API proxy, permission mode), banners, "Also on Fly": present. Devices (lease admin), Content, lease pills, first-prompt attachments, the per-tab transcript filter on Sessions/Previous: missing.
 
 ## Harnesses and image
 - Claude: present. OpenCode + Paseo, OpenClaw + claw-code: present (policy: opencode brings `openrouter` + `tunnel`, openclaw brings `claude` + `tunnel`; `GET /api/models[?harness=]`; the harness is signed in the cert's options). `harness-send`: present (holder `scheduler`). API proxy: present.
@@ -68,7 +67,7 @@ watches.
   Jarvis 1's image is no longer used.
 - Workspace layer: to verify. on-start hooks: present.
 - Peer-message delivery: present (`r.Deliver`, router/peer.go; Jarvis 1's lib/peer.js run through the `scheduler` grant).
-- Session-facing API (`$JARVIS_URL`): present — the machine's local proxy signs to `/m/api`; pull-secrets and changes answered on the machine; notify-idle and self-retire on the router; watches answer 501.
+- Session-facing API (`$JARVIS_URL`): present — the machine's local proxy signs to `/m/api`; pull-secrets and changes answered on the machine; notify-idle and self-retire on the router; watches and leases on the router.
 - Transcript search, iCloud index: present, on the Jarvis 2 box (`services/search`, `services/icloud-index`, k8s/apps/search.yaml + icloud-index.yaml, moved from Jarvis 1's box with their databases on 2026-10-13: embeddings and the iCloud AI-budget ledger carried over). The router forwards the app's `/api/search*`, `/api/icloud/*` and sessions' `/m/api/search*`, `/m/api/icloud/*` (`router/searchsvc.go`). The index covers both Jarvises' archives, Jarvis 1's `.paused/`, both `.live/` and the task records. The iCloud index is identity-level: sessions need the `identity` store (DECISIONS).
 
 ## Design questions parity raised
@@ -76,7 +75,7 @@ watches.
 2. Free text into machines (wakeup/cron/resume prompts, nudges): open — unsigned today (DESIGN.md "Open").
 3. Where archives and transcripts live: answered — the Storage Box in Jarvis 1's layout with the router's creds, the signed snapshot alongside (DECISIONS 27, 38).
 4. Restore after a burn: answered — the old core-signed cert + the snapshot's signature (DECISIONS 28).
-5. Secrets outside sessions: tasks answered (DECISIONS 32–34); watches deferred; Discord and the budget cap use the router's own secrets (DECISIONS 25).
+5. Secrets outside sessions: tasks answered (DECISIONS 32–34); watches answered without secrets (DECISIONS 114); Discord and the budget cap use the router's own secrets (DECISIONS 25).
 6. Fly read access for the budget cap: answered (`FLY_READ_TOKEN`, DECISIONS 17).
 7. The Discord bot token: answered — lobster, in the router's SOPS secrets (DECISIONS 25–26).
 8. Per-session tunnel origins: answered — the confined `jarvis2-tunnel` token + per-id proof.

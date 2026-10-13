@@ -154,8 +154,7 @@ made around it; the app's own list is `app/DECISIONS.md`.
     106-111).
 43. **When the core can't be reached the router answers 503 `{coreDown}`** (it said 502 "core unreachable"): while
     its pod restarts (after a wipe) that is the normal state, and the app waits or shows it as a plain note.
-44. **Lease pills are not in the app**: leases are forwarded to Jarvis 1, which doesn't accept Jarvis 2 sessions yet
-    (PLAN.md "Later"), so no Jarvis 2 session can hold one and the pill would never show.
+44. **Lease pills**: superseded by 113 (leases are the router's own and listed in `/api/state`).
 45. **A new line's challenge carries a random salt** (`Request.salt`, core.go Succession): the nonce is the request's
     MAC and an approval nonce is used once, so two new sessions with the same stores, harness, mode and image used to
     get the same nonce and the second failed with "this approval was already used". Fixed before the first recovery
@@ -631,3 +630,50 @@ key to decrypt it offline"; the download in the iPhone app, the decryptor a comm
     box rebuild, in the new sensitive store `icloud-backup` (`ICLOUD_BACKUP_AGE_KEY`). The plain copy from the Jarvis 1
     import is read once (`SEED_PLAIN_OK=1`) and deleted by the first encrypted backup. Change: keep that key in the
     `identity` store itself instead (a full rewrite of that store, so Deyao's or the orchestrator's call).
+
+## Device leases and watches in Jarvis 2, 2026-10-13
+
+113. **Device leases are the router's own** (Jarvis 1's lib/leases.js ported to `router/leases.go`; nothing forwarded
+    to Jarvis 1). Same rules and request shapes: one holder and a FIFO queue per device (`wechat-phone`, `iphone`,
+    `mac` always listed), acquire / renew / describe / return, `lowPriority` never queued, a 1 h renewable lease, expiry
+    and gone sessions swept every 30 s, Deyao's take-over / hand-back and force return. The state is in the router's
+    `state.json`. The holder is the calling machine's own session (its path id must be its own, as for every `/m/api`
+    call). **Jarvis 1's lease table is separate and not consulted**: while both run, a Jarvis 1 session and a Jarvis 2
+    session could each hold the same device; after the cutover Jarvis 2 is the only authority. Change: a one-way check
+    of Jarvis 1's table before granting, if Deyao wants the overlap closed while both run.
+    - **Wake messages are deliveries the machine checks**, never router text: `lease-granted` carries the waiter's own
+      signed acquire request (its prompt, and the device in the signed path; the machine refuses a device that isn't
+      the one its request named) plus two flags and the lease's minutes; `lease-taken` and `lease-back` are texts built
+      into the image over the device name (a lease-name word). Deyao's notes (take-over, hand-back) never go into a
+      session: nothing vouches for them. The session reads them with `lease.py status` (its own choice to read).
+    - **Scripts that drive a device by themselves** (tunnel button pages, pay buttons) run inside a session and take
+      the lease as that session through `$JARVIS_URL` (`lease.holding`), so no separate lease token exists; the
+      `shopping` store's `JARVIS1_LEASE_ACCESS_ID/SECRET` (Jarvis 1's Worker-confined token) is no longer used by
+      Jarvis 2 sessions. A Jarvis 2 session is queued and woken like a Jarvis 1 session was (Jarvis 1 could only answer
+      it "busy").
+    - The app's take-over, hand-back and force return are Deyao's Access login (no Face ID): they only move a lease,
+      never a secret. Change: phone-signed if he wants it.
+114. **Watches run on the box, with no secrets** (`router/watches.go`, `services/watch`, `k8s/apps/watch.yaml`).
+    Jarvis 1 ran each check on its box with the session's store plaintext; Jarvis 2's box never holds store plaintext,
+    and a watch must fire while its session is paused (no machine). So the router runs each due check on a **watch
+    runner** pod in `jarvis2-edge` that holds nothing: no secrets, no service account token, no volume; its
+    NetworkPolicy admits only the router and lets it reach only DNS and public addresses on 80/443/993 (never a
+    private range: not the router, the core, the search pods or the metadata address). A check gets a clean env
+    (PATH, HOME/TMPDIR = a throwaway dir, LANG, WATCH_NAME), 90 s, capped output, and its process group is killed;
+    while no check runs every other process in the runner is killed too. The checks of different sessions share the
+    runner: one could disturb another's (a false "met" delivers only that session's own signed prompt; a missed check
+    runs again). Considered and not chosen: running the check on the session's machine (impossible while paused, and
+    a resume per check costs a Fly start each interval), a task line per watch (a new line needs the phone).
+    - **What a check can't do**: use a store's secret (Gmail, a private repo's token). Such a condition needs a
+      public signal, or the session waits running and checks itself. Change: a check that needs a secret could run
+      as a task-style resume of the session's line every N minutes (no phone, carried secrets), at the cost of a
+      machine start each time.
+    - **Delivery is the session's own signed request** (`watch` when met, `watch-fail` on exit 3 or past `maxSeconds`),
+      attested by the core and checked by the machine against its line's keys, like a wakeup; one of the two, once
+      (`.jarvis2-delivered.json`). The runner's output never reaches the agent (the router keeps its last line and the
+      start of its stdout for the app only); instead the machine runs the check once more itself, with the session's
+      own env, within 40 s, and appends that output, as Jarvis 1 appended the check's stdout.
+    - Arming is the session's own (`POST /m/api/sessions/:id/watches`, Jarvis 1's body); the app can list and cancel,
+      not arm (nothing would vouch for the delivery). A watch keeps its session (`PendingSchedule`: no self-retire,
+      no automatic destroy) until it fires, gives up, or is cancelled. Script limit 32 KB (Jarvis 1's 4000 characters
+      was a Fly metadata limit).

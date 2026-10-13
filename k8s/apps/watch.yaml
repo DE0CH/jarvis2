@@ -1,0 +1,56 @@
+# Watch check runner (services/watch): runs the check scripts of the sessions' watches (conditional wakeups) for the
+# router (router/watches.go), which calls it with each due check and decides what its exit means. A check is the
+# session's own script; it gets NO secrets (docs/DECISIONS.md 101): this pod holds none, mounts no volume and no
+# service account token, and its NetworkPolicy lets it reach only DNS and public addresses (not the router, the core
+# or any other pod), so a check can do no more than any stranger on the internet. It lives in jarvis2-edge because
+# Flux may create nothing outside the three Jarvis 2 namespaces. Image pinned by its linux/amd64 digest by
+# .github/workflows/services.yml.
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: watch, namespace: jarvis2-edge }
+spec:
+  replicas: 1
+  strategy: { type: Recreate }
+  selector: { matchLabels: { app: watch } }
+  template:
+    metadata: { labels: { app: watch } }
+    spec:
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      terminationGracePeriodSeconds: 5
+      containers:
+        - name: watch
+          image: ghcr.io/de0ch/jarvis2-watch:sha-000000000000
+          ports: [{ containerPort: 8095 }]
+          env:
+            - { name: PORT, value: "8095" }
+            - { name: TMPDIR, value: /tmp }
+          volumeMounts: [{ name: tmp, mountPath: /tmp }]
+          readinessProbe: { httpGet: { path: /healthz, port: 8095 }, initialDelaySeconds: 1, periodSeconds: 10 }
+          resources: { requests: { cpu: 10m, memory: 32Mi }, limits: { cpu: 500m, memory: 256Mi, ephemeral-storage: 256Mi } }
+          securityContext: { runAsNonRoot: true, runAsUser: 65532, runAsGroup: 65532, allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: { drop: [ALL] }, seccompProfile: { type: RuntimeDefault } }
+      volumes:
+        - { name: tmp, emptyDir: { sizeLimit: 128Mi } }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: watch, namespace: jarvis2-edge }
+spec:
+  selector: { app: watch }
+  ports: [{ port: 8095, targetPort: 8095 }]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: { name: watch, namespace: jarvis2-edge }
+spec:
+  podSelector: { matchLabels: { app: watch } }
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from: [{ namespaceSelector: { matchLabels: { jarvis2/ns: router } }, podSelector: { matchLabels: { app: router } } }]
+      ports: [{ port: 8095 }]
+  egress:
+    - to: [{ namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: kube-system } }, podSelector: { matchLabels: { k8s-app: kube-dns } } }]
+      ports: [{ port: 53, protocol: UDP }, { port: 53, protocol: TCP }]
+    # public web (http, https) and IMAP over TLS; never a private address
+    - to: [{ ipBlock: { cidr: 0.0.0.0/0, except: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16, 100.64.0.0/10] } }]
+      ports: [{ port: 80, protocol: TCP }, { port: 443, protocol: TCP }, { port: 993, protocol: TCP }]

@@ -90,8 +90,8 @@ func TestMachineAPIWakeupsAndCrons(t *testing.T) {
 	if code, out := m.do(t, h, "POST", "/m/api/sessions/sA/notify-idle", `{"enabled": false}`); code != 200 || out["notifyIdle"] != "off" || !r.st.data.Sessions["sA"].Live.NotifyIdleOff {
 		t.Fatalf("%d %v", code, out)
 	}
-	if code, _ := m.do(t, h, "POST", "/m/api/sessions/sA/watches", `{}`); code != 501 {
-		t.Fatalf("watches: %d", code)
+	if code, _ := m.do(t, h, "POST", "/m/api/sessions/sA/watches", `{}`); code != 400 {
+		t.Fatalf("watches (watches.go) refuse an empty one: %d", code)
 	}
 	if code, _ := m.do(t, h, "GET", "/m/api/whatever", ""); code != 404 {
 		t.Fatalf("unknown: %d", code)

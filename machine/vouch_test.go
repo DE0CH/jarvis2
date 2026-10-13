@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func envMap(env []string) map[string]string {
@@ -318,5 +319,48 @@ func TestLeaseDeliveries(t *testing.T) {
 	if s, _, err := deliveryText(Delivery{Kind: "lease-granted", Device: "mac", Minutes: 5, Handover: true, Interrupted: true}, keys); err != nil ||
 		!strings.Contains(s, "(interrupting you") || strings.Contains(s, "Your note") {
 		t.Fatalf("%q %v", s, err)
+	}
+}
+
+func TestWatchDeliveries(t *testing.T) {
+	mine, stranger := newKey(), newKey()
+	keys := []string{mine.pub()}
+	body := []byte(`{"name":"ci","script":"echo done; exit 0","prompt":"CI  finished: read the run","failPrompt":"no CI result in 7 days","interval":60}`)
+	req := signedRequest(mine, "m1", "POST", "/m/api/sessions/s1/watches", body)
+	text, attested, err := deliveryText(Delivery{Kind: "watch", Request: req}, keys)
+	if err != nil || text != `[watch "ci" met] CI finished: read the run` || string(attested) != string(body) {
+		t.Fatalf("%q %v", text, err)
+	}
+	if f, _, err := deliveryText(Delivery{Kind: "watch-fail", Request: req}, keys); err != nil || f != `[watch "ci" gave up] no CI result in 7 days` {
+		t.Fatalf("%q %v", f, err)
+	}
+	for _, d := range []Delivery{
+		{Kind: "watch", Request: signedRequest(stranger, "mX", "POST", "/m/api/sessions/s1/watches", body)},
+		{Kind: "watch", Request: signedRequest(mine, "m1", "POST", "/m/api/sessions/s1/wakeup", body)},
+		{Kind: "watch"},
+	} {
+		if _, _, err := deliveryText(d, keys); err == nil {
+			t.Fatalf("took %+v", d)
+		}
+	}
+	// met or given up: one of the two, once
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	if err := notReplayed(Delivery{Kind: "watch", Request: req}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if notReplayed(Delivery{Kind: "watch-fail", Request: req}, time.Now()) == nil || notReplayed(Delivery{Kind: "watch", Request: req}, time.Now()) == nil {
+		t.Fatal("a watch delivered twice")
+	}
+	// the check runs again here, with this machine's env, for the context
+	w, _, _ := ownWatch(req, keys)
+	if out := rerunCheck(w); !strings.Contains(out, "(run again on this machine just now, exit 0)\ndone") {
+		t.Fatalf("%q", out)
+	}
+	rerunTimeout = time.Second
+	defer func() { rerunTimeout = 40 * time.Second }()
+	w.Script = "echo partial; sleep 30"
+	if out := rerunCheck(w); !strings.Contains(out, "didn't finish") {
+		t.Fatalf("%q", out)
 	}
 }

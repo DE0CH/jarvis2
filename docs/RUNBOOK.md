@@ -297,6 +297,17 @@ and "iCloud index" for the calls. Check them from any Jarvis 2 session:
   seeded from it. Jarvis 1's two pods keep running until its freeze: scale them to 0 then, so only one index reads
   iCloud and spends on embeddings.
 
+## Device leases and watches
+
+Nothing to set up: both live in the router (`router/leases.go`, `router/watches.go`; API.md). Leases: `GET /api/leases`
+shows every device's holder, queue and log; a stuck holder is cleared with `POST /api/leases/<name>/force-return`
+(the app's Devices tab when it has one), and a lease that nobody renews lapses after its ttl (1 h) by itself.
+Watches: each session's `watches` in `/api/state` show `runs`, `lastExit`, `lastError` and `lastOutput`; a watch whose
+check always exits 2 with "not found" is usually missing a secret, which a check never gets (DECISIONS 114). The
+watch runner is the Deployment `watch` in `jarvis2-edge` (`services/watch`, pinned by the `services` workflow); it
+holds no state, so a restart only delays the due checks. When it is down every check counts as "not yet" (the
+router logs `the watch runner is unreachable`) and nothing is delivered until it is back.
+
 ## Rebuilding the box
 
 1. Delete the server in the jarvis2 Hetzner project (API or console).

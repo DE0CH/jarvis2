@@ -1,5 +1,5 @@
 name: services
-# The box's own services (services/search, services/icloud-index) to GHCR as ghcr.io/de0ch/jarvis2-<name>, tagged
+# The box's own services (services/search, services/icloud-index, services/watch) to GHCR as ghcr.io/de0ch/jarvis2-<name>, tagged
 # sha-<12> and latest (their unit tests run inside the image build), then pinned in k8s/apps/<name>.yaml by the
 # linux/amd64 digest (a commit by this workflow; Flux rolls them out). Only the service whose files changed is
 # built and pinned, so a search change never restarts the iCloud index.
@@ -24,7 +24,7 @@ jobs:
       - id: c
         run: |
           names=()
-          for n in search icloud-index; do
+          for n in search icloud-index watch; do
             # a dispatch, a change in the service, or no pin yet (sha-000000000000) builds it
             if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ] || grep -q "jarvis2-$n:sha-000000000000" "k8s/apps/$n.yaml" \
                || ! git diff --quiet "${{ github.event.before }}" "$GITHUB_SHA" -- "services/$n" .github/workflows/services.yml 2>/dev/null; then names+=("\"$n\""); fi

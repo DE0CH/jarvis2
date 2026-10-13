@@ -16,6 +16,8 @@ package main
 // keep the grant-checked exec path ("scheduler"), which a machine whose cert vouches (Vouch 2) refuses.
 
 import (
+	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
@@ -30,6 +32,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -100,7 +103,7 @@ var deliveredMu sync.Mutex
 
 // notReplayed: records the delivery, or refuses a repeat of one already made (wakeup, cron); other kinds pass
 func notReplayed(d Delivery, now time.Time) error {
-	if (d.Kind != "wakeup" && d.Kind != "cron") || d.Request == nil {
+	if (d.Kind != "wakeup" && d.Kind != "cron" && d.Kind != "watch" && d.Kind != "watch-fail") || d.Request == nil {
 		return nil
 	}
 	deliveredMu.Lock()
@@ -112,9 +115,15 @@ func notReplayed(d Delivery, now time.Time) error {
 		json.Unmarshal(b, &seen)
 	}
 	key := d.Kind + " " + d.Request.Sig
+	if d.Kind == "watch" || d.Kind == "watch-fail" {
+		key = "watch " + d.Request.Sig // met or given up: one of the two, once
+	}
 	last, ok := seen[key]
 	if d.Kind == "wakeup" && ok {
 		return errors.New("this wakeup was already delivered")
+	}
+	if strings.HasPrefix(key, "watch ") && ok {
+		return errors.New("this watch was already delivered")
 	}
 	if d.Kind == "cron" && ok {
 		every := int64(24 * 60 * 60)
@@ -234,6 +243,18 @@ func deliveryText(d Delivery, keys []string) (text string, attested []byte, err 
 		return fmt.Sprintf("[recurring wakeup %q — run %d] %s", name, max(1, d.Run), prompt), body, nil
 	case "continue":
 		return "continue", []byte("continue"), nil
+	case "watch", "watch-fail":
+		w, body, err := ownWatch(d.Request, keys)
+		if err != nil {
+			return "", nil, err
+		}
+		if d.Kind == "watch" {
+			return fmt.Sprintf("[watch %q met] %s", w.Name, w.Prompt), body, nil
+		}
+		if w.FailPrompt != "" {
+			return fmt.Sprintf("[watch %q gave up] %s", w.Name, w.FailPrompt), body, nil
+		}
+		return fmt.Sprintf("[watch %q gave up] Conditional wakeup %q gave up (its check said to give up, or its time ran out without the condition being met). Decide what to do next.", w.Name, w.Name), body, nil
 	case "lease-granted", "lease-taken", "lease-back":
 		t, err := leaseText(d, keys)
 		if err != nil {
@@ -320,6 +341,12 @@ func deliver(c *client, d Delivery) error {
 	}
 	if err := notReplayed(d, time.Now()); err != nil {
 		return err
+	}
+	if d.Kind == "watch" || d.Kind == "watch-fail" {
+		// the check once more, here, with the session's own env: its output is the context (the runner's never is)
+		if w, _, err := ownWatch(d.Request, readLineKeys()); err == nil {
+			text += rerunCheck(w)
+		}
 	}
 	return sendToHarness(cert.Options.Harness, certMode(cert), "jarvis", text)
 }
@@ -480,4 +507,91 @@ func leaseText(d Delivery, keys []string) (string, error) {
 		t += " Your note: " + prompt
 	}
 	return t, nil
+}
+
+// ---- watches (router/watches.go) -------------------------------------------------------------------------------
+
+type watchReq struct {
+	Name       string `json:"name"`
+	Script     string `json:"script"`
+	Prompt     string `json:"prompt"`
+	FailPrompt string `json:"failPrompt"`
+}
+
+var watchNameRE = regexp.MustCompile(`^[A-Za-z0-9_-]{1,40}$`)
+
+// ownWatch: the watch this line's machine armed (its signed POST …/watches)
+func ownWatch(r *SignedRequest, keys []string) (*watchReq, []byte, error) {
+	body, err := ownRequestBody(r, keys)
+	if err != nil {
+		return nil, nil, err
+	}
+	if r.Method != "POST" || !strings.HasPrefix(r.Path, "/m/api/sessions/") || !strings.HasSuffix(r.Path, "/watches") {
+		return nil, nil, errors.New("the signed request isn't a watch")
+	}
+	var w watchReq
+	if json.Unmarshal(body, &w) != nil || strings.TrimSpace(w.Prompt) == "" || !watchNameRE.MatchString(strings.TrimSpace(w.Name)) {
+		return nil, nil, errors.New("the signed request has no watch")
+	}
+	w.Name = strings.TrimSpace(w.Name)
+	w.Prompt = strings.Join(strings.Fields(w.Prompt), " ")
+	w.FailPrompt = strings.Join(strings.Fields(w.FailPrompt), " ")
+	return &w, body, nil
+}
+
+var rerunTimeout = 40 * time.Second
+
+// rerunCheck: the watch's check run here (a login shell: the session's env and secrets) in a throwaway directory,
+// within rerunTimeout (the router waits 60 s for the delivery's answer); its stdout, capped, as the prompt's context
+func rerunCheck(w *watchReq) string {
+	dir, err := os.MkdirTemp("", "watch-")
+	if err != nil {
+		return ""
+	}
+	defer os.RemoveAll(dir)
+	f := filepath.Join(dir, "check.sh")
+	if os.WriteFile(f, []byte(w.Script), 0o700) != nil {
+		return ""
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), rerunTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "bash", "-l", f)
+	cmd.Dir = dir
+	cmd.Env = append(os.Environ(), "WATCH_NAME="+w.Name)
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }
+	cmd.WaitDelay = 2 * time.Second
+	var out bytes.Buffer
+	cmd.Stdout = &limitedWriter{w: &out, n: 6000}
+	err = cmd.Run()
+	code := 0
+	if ee, ok := err.(*exec.ExitError); ok {
+		code = ee.ExitCode()
+	} else if err != nil {
+		code = -1
+	}
+	s := strings.TrimSpace(out.String())
+	if ctx.Err() != nil {
+		return fmt.Sprintf("\n\n[watch %q check output] (the check, run again on this machine, didn't finish within %s) %s", w.Name, rerunTimeout, s)
+	}
+	if s == "" {
+		return ""
+	}
+	return fmt.Sprintf("\n\n[watch %q check output] (run again on this machine just now, exit %d)\n%s", w.Name, code, s)
+}
+
+type limitedWriter struct {
+	w *bytes.Buffer
+	n int
+}
+
+func (l *limitedWriter) Write(p []byte) (int, error) {
+	if room := l.n - l.w.Len(); room > 0 {
+		if len(p) > room {
+			l.w.Write(p[:room])
+		} else {
+			l.w.Write(p)
+		}
+	}
+	return len(p), nil
 }

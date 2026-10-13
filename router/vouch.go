@@ -298,7 +298,7 @@ func deliveryQueue(machine string) chan Delivery {
 // attested: what the core attests for a delivery (the machine recomputes it the same way)
 func attested(d Delivery) ([]byte, string, error) {
 	switch d.Kind {
-	case "wakeup", "cron":
+	case "wakeup", "cron", "watch", "watch-fail":
 		if d.Request == nil {
 			return nil, "", errors.New("no signed request")
 		}

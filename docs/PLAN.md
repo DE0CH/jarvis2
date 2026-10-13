@@ -44,7 +44,7 @@ every store back from the backups). docs/DESIGN.md "Setting a core up".
 
 ## Later (Deyao, 2026-10-09)
 
-- **Device leases and content stores for Jarvis 2 sessions.** Jarvis 1 accepts a Jarvis 2 session's identity from
+- **Content stores for Jarvis 2 sessions.** (Device leases and watches are the router's own: DECISIONS 113–114.) Jarvis 1 accepts a Jarvis 2 session's identity from
   the confined `jarvis2-services` token (`X-Jarvis2-Session`), and wakes a queued Jarvis 2 session through a new
   Jarvis 2 router endpoint behind its own confined token. The router already forwards the paths
   (`router/sessionapi.go`); add them to the Worker's `CONFINED_TOKENS` when Jarvis 1 accepts them.
@@ -52,7 +52,7 @@ every store back from the backups). docs/DESIGN.md "Setting a core up".
   or the apps get Jarvis 2 as a second server.
 - **Before Jarvis 1 retires** (Deyao keeps using Jarvis 1 until Jarvis 2 is ready and polished, then retires it and
   handles the conflicts then): Jarvis 2 must stop depending on it. Today it uses Jarvis 1 for the stored Claude
-  login (`/api/credentials`, refresh and Re-login), the usage quota, and the Browserbase budget DM; leases and content stores are planned the
+  login (`/api/credentials`, refresh and Re-login), the usage quota, and the Browserbase budget DM; content stores are planned the
   same way. Each moves into Jarvis 2 (or a service of its own) at retirement, and the confined Jarvis 1 tokens
   go away.
 

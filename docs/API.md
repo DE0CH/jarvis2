@@ -45,7 +45,7 @@ same thing:
   userTitle /* a name pinned in the CLI */, title /* what the card, channel and archive use: serverTitle → userTitle →
   label → aiTitle → id, Jarvis 1's pickTitle */, liveSync /* {at, files: {<name>: bytes}, stored, error} — the last live
   transcript copy (below) */,
-  discordChannel /* the session's Discord channel id */, waiting /* what a pause or destroy waits on, plain words, or "" */, lockedStore /* the store the machine waits on at boot: its secrets pull got the core's 423 "store X is locked"; cleared by the next pull that goes through */, oldCore /* its line is an earlier core's: destroyed (archived in Previous) once paused (DESIGN "Carried secrets") */, wakeups: [wakeup view], crons: [cron view] /* below */,
+  discordChannel /* the session's Discord channel id */, waiting /* what a pause or destroy waits on, plain words, or "" */, lockedStore /* the store the machine waits on at boot: its secrets pull got the core's 423 "store X is locked"; cleared by the next pull that goes through */, oldCore /* its line is an earlier core's: destroyed (archived in Previous) once paused (DESIGN "Carried secrets") */, wakeups: [wakeup view], crons: [cron view], watches: [watch view] /* below */,
   resumePrompt /* a prompt queued for delivery once started */ }
 ```
 
@@ -436,6 +436,62 @@ unlocked; a line without them (its blob lost, or first started under a core that
 store like any start: a run whose machine isn't up 30 min after the resume (`waiting` says so) fails and the line is
 paused.
 
+## Device leases (`router/leases.go`)
+
+Jarvis 1's lib/leases.js and shapes. One holder and a FIFO queue per device; `wechat-phone`, `iphone` and `mac` are
+always listed. The session calls the `/m/api` paths through its machine's proxy (`scripts/lease.py`, which the device
+helpers call); its path id must be its own. `/api/state` carries `leases` (the list below).
+
+```
+lease = { name, holder: null | {sid /* a session id, or "deyao" */, human, purpose, description, describedAt, note, since,
+          expiresAt /* ms, null for Deyao */, expiresInSeconds}, queue: [{position, sid, purpose, description, describedAt,
+          enqueuedAt, interrupted}], log /* last 20: {at, kind: granted|promoted|returned|force-returned|expired|taken-over|
+          handed-back|note, sid, purpose?, note?, interrupted?} */ }
+```
+
+| Call | Does |
+|---|---|
+| `GET /api/leases`, `/m/api/leases` | `{leases}` |
+| `GET /api/leases/:name`, `/m/api/leases/:name` | `{lease}` |
+| `POST /m/api/sessions/:id/leases/:name` | `{purpose, description?, prompt? /* the wake note */, ttlSeconds? /* 60–21600, default 3600 */, lowPriority?}` → `{status: granted | renewed | queued | busy, position?, lease}`; `busy` (409) only for `lowPriority`. |
+| `PUT /m/api/sessions/:id/leases/:name` | Renew (holder only) → `{status: "renewed", lease}`; 409 otherwise, `{takenOver: true}` with Deyao's note while he has it (and the session is told when he hands it back). |
+| `PATCH /m/api/sessions/:id/leases/:name` | `{purpose?, description?}` (holder or waiter; no renew) → `{status: holder | queued, lease}` |
+| `POST /m/api/sessions/:id/leases/:name/seen` | The session looked at a device Deyao has (lease.py status) → `{takenOver}`; it is told when he hands it back. |
+| `DELETE /m/api/sessions/:id/leases/:name` | Return it (holder) or leave the queue → `{returned, left, next /* the woken session or null */}` |
+| `POST /api/leases/:name/force-return` | The app: `{returned, previous, next}` |
+| `POST /api/leases/:name/take-over` | The app: `{note?}` Deyao takes the device (never expires; agents' actions refused); the holder goes to the front of the queue and is told (`lease-taken`). While he has it, a note only replaces his note. → `{taken, interrupted, noteUpdated}` |
+| `POST /api/leases/:name/hand-back` | The app: `{note?}` → `{handedBack, next, notified}`; the next waiter is woken, every other session that found it taken over is told (`lease-back`). |
+
+Wake messages are deliveries (`/m/commands`, checked by the machine, attested by the core): `lease-granted` (the
+waiter's own signed acquire request: its prompt, and the device in the signed path; `minutes`, `handover`,
+`interrupted`), `lease-taken` and `lease-back` (image texts over `device`). A promoted holder that can't be woken is
+retried every 30 s (20 tries). A destroyed session's holder or queue place goes at the next sweep.
+
+## Watches (`router/watches.go`, `services/watch`)
+
+Conditional wakeups, Jarvis 1's shapes. The session arms one (its own signed request); the router runs the check on the
+watch runner (k8s/apps/watch.yaml: no secrets, public internet only) every `interval`, whether the session runs or is
+paused. Exit 0 = met → `watch` delivery (the session's request: `[watch "<name>" met] <prompt>`); exit 3, or
+`maxSeconds` past arming = give up → `watch-fail` (`failPrompt`, or a default). Any other exit, or a runner error =
+not yet. The machine runs the check once more itself (its own env, 40 s) and appends that output; the runner's output
+never reaches the session. A failed delivery backs off and after 5 attempts the watch is dropped with a DM.
+
+```
+watch view = { name, prompt, failPrompt, interval, maxSeconds, armedAt, armedAtIso, expiresAtIso, nextCheckIso, runs,
+               lastExit /* null before the first run or when the runner failed */, lastRunIso, lastError /* the last stderr
+               line, or why it couldn't run */, lastOutput /* the start of stdout */, outcome /* "" | met | gave-up */ }
+```
+
+| Call | Does |
+|---|---|
+| `POST /m/api/sessions/:id/watches` | `{name, script /* bash, ≤ 32 KB */, prompt, failPrompt?, interval? /* 30–3600 s, default 60 */, maxSeconds? /* ≤ 400 d, default 7 d */}` → `{ok, watch}`; the same name replaces. The app's `POST /api/sessions/:id/watches` → 400 (only the session's own request can be delivered). |
+| `GET /api/sessions/:id/watches`, `/m/api/…` | `{watches}` (no script bodies) |
+| `DELETE /api/sessions/:id/watches/:name`, `/m/api/…` | `{ok}` |
+
+The runner (`POST http://watch.jarvis2-edge.svc.cluster.local:8095/run {script, name, timeout}` →
+`{exit, stdout, stderr, timedOut, ms}`, router env `WATCH_URL`): a check gets PATH, HOME and TMPDIR (a throwaway
+directory), LANG and WATCH_NAME; bash, curl, python3, git, openssl, jq; 90 s; stdout capped at 16 KB.
+
 ## Session-facing API (`/m/api/*`)
 
 Jarvis 1's session scripts call `$JARVIS_URL/api/…`. A Jarvis 2 machine gets `JARVIS_URL=http://127.0.0.1:7171`
@@ -449,16 +505,14 @@ signed as every `/m` call). Any `:id` in the path must be the calling machine's 
 | `GET /api/sessions/:id/secrets` | The machine itself: `/m/pull-secrets`, opened with its key → `{ok, environment, secrets}` (Jarvis 1's shape). |
 | `GET /api/sessions/:id/changes` | The machine itself: `{checked, repos: [{name, uncommitted, unpushed /* -1 no upstream */}], status}`. |
 | wakeups, crons, notify-idle | The router (above). Arming also puts holder `scheduler` on the session's allow list (a wakeup: due + 1 h; a cron: max(31 d, 2 periods + 1 h), renewed at each firing by `jarvis2-machine allow-at-least`). |
-| `DELETE /api/sessions/:id` | The router: the session retires itself (Destroy) → 202 `{started}`; 409 `{pending}` while it has wakeups or crons. |
-| `…/watches` | 501: not in Jarvis 2. |
+| `DELETE /api/sessions/:id` | The router: the session retires itself (Destroy) → 202 `{started}`; 409 `{pending}` while it has wakeups, crons or watches. |
+| leases, watches | The router (above). |
 | search, iCloud index | `GET /m/api/search`, `/m/api/search/context`, `/m/api/search/status`, `POST /m/api/search/reindex` (any running session), `GET /m/api/icloud/search`, `/m/api/icloud/file`, `/m/api/icloud/status`, `POST /m/api/icloud/relist`, `/m/api/icloud/retry` (only a session whose cert holds the `identity` store; otherwise 403 `{error, needsStore: "identity"}`): the box's own services, as for the app. 403 for a machine with no running session. |
 | Jarvis 1's services (below) | Forwarded to `JARVIS1_URL` (default `https://jarvis.deyaochen.com`) with the Access service token `JARVIS1_SERVICES_ID/SECRET` and header `X-Jarvis2-Session: <id>`; path, query, body, Content-Type/Accept/Range unchanged. |
 | anything else | 404 |
 
 Forwarded Jarvis 1 paths (what the cf-tunnel Worker must let the services token reach):
-`GET /api/usage` (the app's, without `X-Jarvis2-Session`), `GET /api/leases`,
-`GET /api/leases/:name`, `POST|PUT|PATCH|DELETE /api/sessions/:id/leases/:name`,
-`POST /api/sessions/:id/leases/:name/seen`, `GET /api/sessions/:id/content`,
+`GET /api/usage` (the app's, without `X-Jarvis2-Session`), `GET /api/sessions/:id/content`,
 `GET|PUT|DELETE /api/sessions/:id/content/:name/file`, `GET|POST /api/credentials`.
 
 The session routes among them carry the Jarvis 2 session id (`s…`) and no Jarvis 1 session token: Jarvis 1 checks

@@ -71,10 +71,11 @@ type Schedule struct {
 	Wakeups      map[string]*Wakeup `json:"wakeups,omitempty"`
 	Crons        map[string]*Cron   `json:"crons,omitempty"`
 	ResumePrompt string             `json:"resumePrompt,omitempty"`
+	Watches      map[string]*Watch  `json:"watches,omitempty"` // watches.go
 }
 
 func (s *Schedule) empty() bool {
-	return len(s.Wakeups) == 0 && len(s.Crons) == 0 && s.ResumePrompt == ""
+	return len(s.Wakeups) == 0 && len(s.Crons) == 0 && s.ResumePrompt == "" && len(s.Watches) == 0
 }
 
 // sched: the session's schedule, made on demand (callers hold the state lock)
@@ -92,6 +93,9 @@ func sched(d *persisted, sid string) *Schedule {
 	}
 	if s.Crons == nil {
 		s.Crons = map[string]*Cron{}
+	}
+	if s.Watches == nil {
+		s.Watches = map[string]*Watch{}
 	}
 	return s
 }
@@ -339,7 +343,7 @@ func scheduleView(d *persisted, sid string, v map[string]any) {
 			v["resumePrompt"] = sc.ResumePrompt
 		}
 	}
-	v["wakeups"], v["crons"] = ws, cs
+	v["wakeups"], v["crons"], v["watches"] = ws, cs, watchesViewOf(d, sid)
 }
 
 func sortedWakeups(s *Schedule) []*Wakeup {
@@ -518,7 +522,7 @@ func (r *Router) SetResumePrompt(sid, prompt string) {
 	schedRun.forget(sid + "/resume")
 }
 
-// PendingSchedule: the session's armed wakeups and crons ("wakeup <name>", "cron <name>"). Automatic paths
+// PendingSchedule: the session's armed wakeups, crons and watches ("wakeup <name>", "cron <name>", "watch <name>"). Automatic paths
 // (auto-destroy, one-shot clean-up, retirement) must not destroy a session while this is non-empty.
 func (r *Router) PendingSchedule(sid string) []string {
 	out := []string{}
@@ -529,6 +533,9 @@ func (r *Router) PendingSchedule(sid string) []string {
 		}
 		for _, c := range sortedCrons(s) {
 			out = append(out, "cron "+c.Name)
+		}
+		for _, w := range sortedWatches(s) {
+			out = append(out, "watch "+w.Name)
 		}
 	})
 	return out

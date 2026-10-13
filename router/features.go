@@ -27,6 +27,7 @@ func (r *Router) registerFeatures(app appRoute, m machineRoute, public publicRou
 	r.registerHarnesses(app)              // harness.go: /api/models
 	r.registerRemote(app, m, public)      // remote.go: remote pages, /api/remotes, tunnel proofs
 	r.registerLeases(app, m)              // leases.go: shared-device leases (before sessionapi.go's /m/api/ catch-all)
+	r.registerWatches(app, m)             // watches.go: conditional wakeups
 	r.registerSessionAPI(app, m)          // sessionapi.go: wakeups, crons, /m/api
 	r.registerArchive(app, m)             // archive.go, restore.go (budget.go needs no routes: /api/state via stateHooks)
 	r.registerSessionOps(app, m)          // sessionops.go, uploads.go, repos.go
@@ -44,6 +45,7 @@ func (r *Router) startFeatures() {
 	r.startAutopilot()
 	go r.scheduleLoop() // schedule.go: wakeups, crons, resume prompts
 	go r.leaseLoop()    // leases.go: expire silent holders, wake promoted ones
+	go r.watchLoop()    // watches.go: run due checks on the watch runner, deliver met / given-up watches
 	go r.archiveLoop()  // archive.go: restore files tidied
 	go r.budgetLoop()   // budget.go: the Fly budget cap
 	go r.uploadsLoop()  // uploads.go: stale attachments

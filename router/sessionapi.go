@@ -5,7 +5,7 @@ package main
 // signs each request with the machine key and sends it here as /m/api/<rest>. Any session id in the path must
 // be the calling machine's own session.
 //
-// Served by the router: wakeups and crons (schedule.go), notify-idle (autopilot.go's switch), and the session
+// Served by the router: wakeups and crons (schedule.go), watches (watches.go), notify-idle (autopilot.go's switch), and the session
 // retiring itself.
 // Transcript search and the iCloud index: the box's own services (searchsvc.go). Device leases: leases.go; content
 // stores: content.go.
@@ -166,9 +166,6 @@ func (r *Router) registerSessionAPI(app appRoute, m machineRoute) {
 		}
 		writeJSON(w, 200, map[string]any{"id": id, "requestId": strings.TrimPrefix(ns.RequestID, sid+":"), "approval": true})
 	})
-	// watches run a script on Jarvis with the session's store secrets; Jarvis 2 doesn't (docs/PARITY.md)
-	own("/m/api/sessions/{id}/watches", notInJarvis2("conditional wakeups (watches) aren't in Jarvis 2"))
-	own("/m/api/sessions/{id}/watches/{name}", notInJarvis2("conditional wakeups (watches) aren't in Jarvis 2"))
 	own("/m/api/", func(w http.ResponseWriter, req *http.Request, sid string, _ []byte) {
 		writeJSON(w, 404, map[string]string{"error": fmt.Sprintf("Jarvis 2 doesn't serve %s %s", req.Method, strings.TrimPrefix(req.URL.Path, "/m"))})
 	})
@@ -205,12 +202,6 @@ func cleanResumePrompt(p string) (string, error) {
 		return "", fmt.Errorf("prompt longer than %d characters", resumePromptMax)
 	}
 	return p, nil
-}
-
-func notInJarvis2(msg string) func(w http.ResponseWriter, req *http.Request, sid string, _ []byte) {
-	return func(w http.ResponseWriter, req *http.Request, sid string, _ []byte) {
-		writeJSON(w, 501, map[string]string{"error": msg})
-	}
 }
 
 // machineSession: the session a machine currently runs (a paused or replaced machine has none)
