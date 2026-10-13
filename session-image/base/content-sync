@@ -1,0 +1,207 @@
+#!/usr/bin/env python3
+"""Sync this session's content stores (folders of files on the Storage Box) with ~/content/<store>/.
+
+The stores are the ones the session was started with (SESSION_CONTENT, picked in Jarvis's New
+Session form). The entrypoint runs `content-sync pull` at boot; after that the folder is an
+ordinary local copy and nothing goes back to the store until `push` is run.
+
+Usage:
+  content-sync list                 # this session's stores and their remote file counts
+  content-sync status [STORE...]    # local changes since the last pull/push (new / changed / deleted)
+  content-sync pull [STORE...] [--force]
+                                    # download the store(s) into ~/content/<store>/ (mirror: local
+                                    # files the store doesn't have are removed). Refuses to overwrite
+                                    # unpushed local changes unless --force.
+  content-sync push STORE [--force] # upload new/changed files and delete the ones removed locally.
+                                    # Refuses if the store changed remotely since the last pull/push
+                                    # (another session pushed) unless --force.
+
+Every transfer goes through Jarvis, authorized by this session's own SESSION_API_TOKEN; the
+session never holds Storage Box credentials for this. Files are capped at 25 MB each (the
+cf-tunnel's request-body limit). Sync state lives in ~/.content-sync/<store>.json.
+"""
+import hashlib, json, os, shutil, sys, urllib.error, urllib.parse, urllib.request
+
+JARVIS = (os.environ.get("JARVIS_URL") or "https://jarvis.deyaochen.com").rstrip("/")
+TOKEN = os.environ.get("SESSION_API_TOKEN", "")
+SID = os.environ.get("SESSION_ID") or os.environ.get("FLY_MACHINE_ID", "")
+CID, CSEC = os.environ.get("CF_ACCESS_CLIENT_ID", ""), os.environ.get("CF_ACCESS_CLIENT_SECRET", "")
+ROOT = os.path.expanduser("~/content")
+STATE = os.path.expanduser("~/.content-sync")
+MAX_BYTES = 25 * 1024 * 1024
+
+
+def die(msg, code=1):
+    print(f"content-sync: {msg}", file=sys.stderr)
+    sys.exit(code)
+
+
+def call(method, path, body=None, length=None, raw=False):
+    if not TOKEN: die("SESSION_API_TOKEN not set in this session's environment")
+    if not SID: die("SESSION_ID / FLY_MACHINE_ID not set (are we on a Fly session machine?)")
+    headers = {"Authorization": f"Bearer {TOKEN}",
+               # perimeter gate only — Jarvis authorizes by the session token above
+               "CF-Access-Client-Id": CID, "CF-Access-Client-Secret": CSEC,
+               # Cloudflare's browser-integrity check 403s (error 1010) urllib's default UA
+               "User-Agent": "claude-session-content-sync/1"}
+    if body is not None:
+        headers["Content-Type"] = "application/octet-stream"
+        headers["Content-Length"] = str(length)
+    req = urllib.request.Request(f"{JARVIS}/api/sessions/{SID}/{path}", data=body, method=method, headers=headers)
+    try:
+        r = urllib.request.urlopen(req, timeout=300)
+    except urllib.error.HTTPError as e:
+        try: msg = json.loads(e.read().decode() or "{}").get("error", "")
+        except Exception: msg = ""
+        die(f"{method} {path}: HTTP {e.code} {msg}".strip())
+    except urllib.error.URLError as e:
+        die(f"{method} {path}: {e.reason}")
+    if raw: return r
+    with r: return json.loads(r.read().decode() or "{}")
+
+
+def q(p): return urllib.parse.quote(p, safe="")
+def file_url(store, p): return f"content/{q(store)}/file?path={q(p)}"
+
+
+def sha256(path):
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""): h.update(chunk)
+    return h.hexdigest()
+
+
+def local_files(store):
+    base = os.path.join(ROOT, store)
+    out = {}
+    for d, dirs, files in os.walk(base):
+        dirs[:] = [x for x in dirs if not os.path.islink(os.path.join(d, x))]
+        for f in files:
+            full = os.path.join(d, f)
+            if os.path.islink(full) or not os.path.isfile(full): continue
+            out[os.path.relpath(full, base).replace(os.sep, "/")] = full
+    return out
+
+
+def load_state(store):
+    try:
+        with open(os.path.join(STATE, store + ".json")) as f: return json.load(f)
+    except (OSError, ValueError): return None
+
+
+def save_state(store, remote, hashes):
+    os.makedirs(STATE, exist_ok=True)
+    state = {"remote": {f["path"]: [f["size"], f["modified"]] for f in remote}, "hashes": hashes}
+    with open(os.path.join(STATE, store + ".json"), "w") as f: json.dump(state, f)
+
+
+def changes(store, state):
+    """(new, changed, deleted) local paths relative to the last synced state."""
+    hashes = (state or {}).get("hashes", {})
+    loc = local_files(store)
+    new = sorted(p for p in loc if p not in hashes)
+    changed = sorted(p for p in loc if p in hashes and sha256(loc[p]) != hashes[p])
+    deleted = sorted(p for p in hashes if p not in loc)
+    return new, changed, deleted
+
+
+def remote_listing():
+    return call("GET", "content").get("stores", {})
+
+
+def mine():
+    return [s for s in (os.environ.get("SESSION_CONTENT") or "").split(",") if s.strip()]
+
+
+def pick(args):
+    stores = [a for a in args if not a.startswith("-")]
+    have = mine()
+    for s in stores:
+        if s not in have: die(f"'{s}' is not one of this session's content stores ({', '.join(have) or 'none'})")
+    return stores or have
+
+
+def pull(stores, force):
+    listing = remote_listing()
+    for store in stores:
+        state = load_state(store)
+        if state is not None and not force:
+            new, changed, deleted = changes(store, state)
+            if new or changed or deleted:
+                die(f"{store}: {len(new) + len(changed) + len(deleted)} unpushed local change(s) — push them, or pull --force to discard")
+        files = listing.get(store, [])
+        base = os.path.join(ROOT, store)
+        os.makedirs(base, exist_ok=True)
+        hashes, wanted = {}, set()
+        for f in files:
+            p = f["path"]; wanted.add(p)
+            dest = os.path.join(base, *p.split("/"))
+            os.makedirs(os.path.dirname(dest), exist_ok=True)
+            tmp = dest + ".content-sync-part"
+            with call("GET", file_url(store, p), raw=True) as r, open(tmp, "wb") as out:
+                shutil.copyfileobj(r, out)
+            os.replace(tmp, dest)
+            hashes[p] = sha256(dest)
+        for p, full in local_files(store).items():
+            if p not in wanted: os.remove(full)
+        for d, dirs, _ in os.walk(base, topdown=False):
+            for x in dirs:
+                try: os.rmdir(os.path.join(d, x))
+                except OSError: pass
+        save_state(store, files, hashes)
+        print(f"{store}: {len(files)} file(s) -> {base}")
+
+
+def push(store, force):
+    state = load_state(store)
+    if state is None: die(f"{store}: never pulled in this session — run `content-sync pull {store}` first")
+    remote = remote_listing().get(store, [])
+    now = {f["path"]: [f["size"], f["modified"]] for f in remote}
+    if now != state.get("remote", {}) and not force:
+        die(f"{store}: the store changed remotely since the last pull/push — pull first (that discards local changes; copy them aside), or push --force to overwrite")
+    new, changed, deleted = changes(store, state)
+    if not (new or changed or deleted):
+        print(f"{store}: nothing to push"); return
+    loc = local_files(store)
+    for p in new + changed:
+        size = os.path.getsize(loc[p])
+        if size > MAX_BYTES: die(f"{store}/{p}: {size} bytes is over the 25 MB per-file limit — nothing after it was pushed")
+        with open(loc[p], "rb") as f:
+            call("PUT", file_url(store, p), body=f, length=size)
+        print(f"  {'+' if p in new else '~'} {p}")
+    for p in deleted:
+        call("DELETE", file_url(store, p))
+        print(f"  - {p}")
+    remote = remote_listing().get(store, [])
+    save_state(store, remote, {p: sha256(full) for p, full in local_files(store).items()})
+    print(f"{store}: pushed {len(new)} new, {len(changed)} changed, {len(deleted)} deleted")
+
+
+def main():
+    a = sys.argv[1:]
+    force = "--force" in a
+    cmd, rest = (a[0], [x for x in a[1:] if x != "--force"]) if a else ("", [])
+    if cmd == "list" and not rest:
+        for s, files in remote_listing().items():
+            print(f"{s}: {len(files)} file(s), {sum(f['size'] for f in files)} bytes -> {os.path.join(ROOT, s)}")
+    elif cmd == "status":
+        for s in pick(rest):
+            st = load_state(s)
+            if st is None: print(f"{s}: not pulled"); continue
+            new, changed, deleted = changes(s, st)
+            print(f"{s}: " + ("clean" if not (new or changed or deleted) else f"{len(new)} new, {len(changed)} changed, {len(deleted)} deleted"))
+            for p in new: print(f"  + {p}")
+            for p in changed: print(f"  ~ {p}")
+            for p in deleted: print(f"  - {p}")
+    elif cmd == "pull":
+        stores = pick(rest)
+        if not stores: print("no content stores in this session"); return
+        pull(stores, force)
+    elif cmd == "push" and len(rest) == 1:
+        push(pick(rest)[0], force)
+    else:
+        print(__doc__.strip(), file=sys.stderr); sys.exit(2)
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,37 @@
+#!/bin/bash
+# Keeps a copy of this RUNNING session's transcript(s) on the Storage Box, so the transcript
+# search index (selfhost/jarvis/search) covers sessions that are still going, not only archived
+# and paused ones:
+#     claude-records/.live/<session id>/<session uuid>.jsonl
+# (session id = SESSION_ID, the stable id Jarvis keys the session by across the machines it
+# runs on; FLY_MACHINE_ID on a session's first machine, whose id IS the session id)
+# Every SYNC_LIVE_INTERVAL_S (default 300) each ~/.claude/projects/*/*.jsonl that changed since
+# its last upload is PUT again (whole file — WebDAV has no append; 80 MB goes up in a few
+# seconds). Jarvis's peer-message relays (`claude -p` "You are a delivery relay…") are
+# plumbing and are skipped. Jarvis deletes the .live folder when the session is destroyed;
+# the archive (same uuid) replaces it in the index. Started by session-supervisor.sh; reads the
+# Storage Box creds from the session environment and never echoes them.
+set -u
+[ -f "$HOME/.secrets" ] && { set -a; . "$HOME/.secrets"; set +a; }
+ID="${SESSION_ID:-${FLY_MACHINE_ID:-$(hostname)}}"
+INTERVAL="${SYNC_LIVE_INTERVAL_S:-300}"
+STATE="$HOME/.claude/.live-sync"; mkdir -p "$STATE"
+if [ -z "${STORAGEBOX_HOST:-}" ] || [ -z "${STORAGEBOX_USER:-}" ] || [ -z "${STORAGEBOX_PASSWORD:-}" ]; then
+  echo "[live-sync] no STORAGEBOX_* in this environment; not syncing"; exit 0
+fi
+BASE="https://$STORAGEBOX_HOST/claude-records/.live"
+dav() { curl -sS -o /dev/null -w '%{http_code}' -m 600 -u "$STORAGEBOX_USER:$STORAGEBOX_PASSWORD" "$@" 2>/dev/null; }
+made=""
+while true; do
+  for f in "$HOME"/.claude/projects/*/*.jsonl; do
+    [ -f "$f" ] || continue
+    name="$(basename "$f")"; stamp="$STATE/$name"
+    [ -e "$stamp" ] && [ ! "$f" -nt "$stamp" ] && continue
+    if head -c 4000 "$f" | grep -q 'You are a delivery relay'; then touch "$stamp"; continue; fi
+    if [ -z "$made" ]; then dav -X MKCOL "$BASE/" >/dev/null; dav -X MKCOL "$BASE/$ID/" >/dev/null; made=1; fi
+    touch "$stamp.new"
+    code="$(dav -T "$f" "$BASE/$ID/$name")"
+    case "$code" in 2*) mv "$stamp.new" "$stamp" ;; *) rm -f "$stamp.new"; made=""; echo "[live-sync] $name -> HTTP $code" ;; esac
+  done
+  sleep "$INTERVAL"
+done

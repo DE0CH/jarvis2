@@ -1,0 +1,106 @@
+#!/usr/bin/env python3
+"""Export the OpenClaw gateway's main conversation (agent:main:main — the one the Control UI, the app and
+Jarvis's prompts use) as a Claude-Code-shaped transcript, so everything downstream that reads
+~/.claude/projects/*/*.jsonl — live transcript sync, the pause snapshot, the Destroy archive, the search
+index, the dashboard title/tail — works for an OpenClaw session as it does for a Claude one.
+  gateway `chat.history` {sessionKey: agent:main:main}
+    rows: user | assistant (text / thinking / toolCall blocks) | toolResult (toolCallId, content, isError)
+      -> ~/.claude/projects/<cwd slug>/openclaw-<OpenClaw session id>.jsonl
+Rewritten whole (atomically) only when it changed. Entry uuids derive from the session id + row index,
+so re-exports dedupe in the search index. Usage: openclaw-transcript [<working dir>]   (one pass)
+"""
+import hashlib, json, os, subprocess, sys, uuid
+from datetime import datetime, timezone
+
+HOME = os.path.expanduser("~")
+NS = uuid.UUID("0b8f7c1e-2f43-4d1a-9a65-6c1d1e0f5a77")
+SESSION_KEY = "agent:main:main"
+
+
+def iso(ms):
+    try:
+        return datetime.fromtimestamp(int(ms) / 1000, tz=timezone.utc).isoformat().replace("+00:00", "Z")
+    except Exception:
+        return None
+
+
+def text_of(content):
+    if isinstance(content, str):
+        return content
+    return "\n".join(b.get("text", "") for b in content or [] if isinstance(b, dict) and b.get("type") == "text")
+
+
+def blocks(content):
+    """OpenClaw assistant blocks -> Claude content blocks."""
+    if isinstance(content, str):
+        return [{"type": "text", "text": content}] if content.strip() else []
+    out = []
+    for b in content or []:
+        t = b.get("type") if isinstance(b, dict) else None
+        if t == "text" and (b.get("text") or "").strip():
+            out.append({"type": "text", "text": b["text"]})
+        elif t == "thinking" and (b.get("thinking") or "").strip():
+            out.append({"type": "thinking", "thinking": b["thinking"]})
+        elif t == "toolCall":
+            out.append({"type": "tool_use", "id": b.get("id") or "", "name": b.get("name") or "tool", "input": b.get("arguments") or {}})
+    return out
+
+
+def convert(history, cwd):
+    sid = history.get("sessionId") or "openclaw"
+    lines, parent = [], None
+    for i, m in enumerate(history.get("messages") or []):
+        role = m.get("role")
+        if role == "user":
+            msg = {"role": "user", "content": text_of(m.get("content"))}
+        elif role == "assistant":
+            content = blocks(m.get("content"))
+            if not content:
+                continue
+            msg = {"role": "assistant", "model": m.get("model") or "", "content": content}
+        elif role == "toolResult":
+            msg = {"role": "user", "content": [{"type": "tool_result", "tool_use_id": m.get("toolCallId") or "",
+                                                 "content": text_of(m.get("content")), "is_error": bool(m.get("isError"))}]}
+            role = "user"
+        else:
+            continue
+        e = {"type": role, "uuid": str(uuid.uuid5(NS, f"{sid}:{i}")), "parentUuid": parent, "sessionId": sid,
+             "timestamp": iso(m.get("timestamp")), "cwd": cwd, "harness": "openclaw", "message": msg}
+        parent = e["uuid"]
+        lines.append(e)
+    title = history.get("title") or (history.get("session") or {}).get("title")
+    if title:
+        lines.append({"type": "ai-title", "aiTitle": title, "sessionId": sid})
+    return sid, lines
+
+
+def main():
+    wd = sys.argv[1] if len(sys.argv) > 1 else os.path.join(HOME, "workspace")
+    r = subprocess.run(["/usr/local/bin/openclaw", "gateway", "call", "chat.history", "--json", "--timeout", "60000",
+                        "--params", json.dumps({"sessionKey": SESSION_KEY})], capture_output=True, text=True, timeout=120)
+    if r.returncode != 0:
+        print("chat.history failed:", (r.stderr or r.stdout)[-300:], file=sys.stderr)
+        return 1
+    out = r.stdout
+    history = json.loads(out[out.index("{"):])
+    if not history.get("messages"):
+        return 0
+    sid, lines = convert(history, wd)
+    slug = "".join(c if c.isalnum() else "-" for c in wd)  # Claude Code's project-dir rule
+    d = os.path.join(HOME, ".claude", "projects", slug)
+    os.makedirs(d, exist_ok=True)
+    path = os.path.join(d, f"openclaw-{sid}.jsonl")
+    body = "".join(json.dumps(l, ensure_ascii=False) + "\n" for l in lines)
+    try:
+        if hashlib.sha256(open(path, "rb").read()).digest() == hashlib.sha256(body.encode()).digest():
+            return 0
+    except FileNotFoundError:
+        pass
+    tmp = path + ".tmp"
+    open(tmp, "w").write(body)
+    os.replace(tmp, path)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -7,7 +7,15 @@ through git, and a box git can't fix is replaced.
 ## Deploying
 
 `git push` to main. The `images` workflow builds the core, router and session images, then pins them by digest in
-`k8s/apps/` (and signs the session image for the phone, `SESSION_IMAGE_SIG`); Flux applies within a minute. Its pin job
+`k8s/apps/` (and signs the session image for the phone, `SESSION_IMAGE_SIG`); Flux applies within a minute.
+The session image stands on its base, `session-image/base/` (every tool, harness, the entrypoint and supervisor: add a
+tool a session should always have to `session-image/base/Dockerfile` and push). The workflow's `base` job rebuilds the base
+only when that directory changed since the base pinned in `session-image/Dockerfile` (`ARG BASE=…jarvis2-session:base-sha-<12>@sha256:…`),
+or on `gh workflow run images -R DE0CH/jarvis2 -f base=true` (newer tools, the latest claude CLI); it takes 20-30 min,
+and the pin job then moves `BASE` in the same commit as the k8s pins. Before pinning, the build job checks the session
+image is anonymously pullable (Fly pulls without credentials) and needs at most 8.0e9 bytes on disk once unpacked
+(`infra/image-unpacked-size.py`): Fly refuses a bigger one (it refused 8.380e9; 8.340e9 booted) and destroys the machine
+before it boots, so every new session breaks. A failure there pins nothing. Its pin job
 runs only for a commit on main, in the GitHub environment `release`, and pushes with its own deploy key
 (`jarvis2-ci-pin`): main's ruleset lets only repo admins and deploy keys update main, so no workflow's GITHUB_TOKEN can.
 

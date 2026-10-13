@@ -1,12 +1,19 @@
 name: images
 # core, router and session images to GHCR, tagged sha-<12> and latest. The router image carries the
 # app's web export. k8s/ pins the core and router tags (a commit by this workflow), the router is
-# told the session image's tag through its deployment.
+# told the session image's tag through its deployment. The session image's base (session-image/base/: the tools,
+# harnesses, entrypoint) is built only when that directory changed since the base it pins (or on a dispatch with
+# base=true), pushed as jarvis2-session:base-sha-<12>, and pinned in session-image/Dockerfile's BASE by the pin job.
 on:
   push:
     branches: [main]
-    paths: [core/**, router/**, machine/**, session-image/**, policy/**, tasks/**, app/**, infra/setup.py, infra/setup_trust_test.py, .github/workflows/images.yml]
+    paths: [core/**, router/**, machine/**, session-image/**, policy/**, tasks/**, app/**, infra/setup.py, infra/setup_trust_test.py, infra/image-unpacked-size.py, .github/workflows/images.yml]
   workflow_dispatch:
+    inputs:
+      base:
+        description: rebuild the session image's base (session-image/base/) even if it didn't change, e.g. for newer tools
+        type: boolean
+        default: false
 permissions:
   contents: write
   packages: write
@@ -24,8 +31,49 @@ jobs:
       - run: cd router && go vet ./... && go test ./...
       - run: cd machine && go vet ./... && go test ./...
       - run: pip install -q cryptography && python3 infra/setup_trust_test.py
-  build:
+  base:
     needs: test
+    runs-on: ubuntu-latest
+    outputs:
+      ref: ${{ steps.ref.outputs.ref }}
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }  # compares session-image/base/ against the commit of the pinned base
+      - id: need
+        run: |
+          cur="$(grep -o 'jarvis2-session:base-sha-[0-9a-f]*' session-image/Dockerfile | head -1 | cut -d- -f4)"
+          if [ "${{ github.event_name }}" = workflow_dispatch ] && [ "${{ inputs.base }}" = true ]; then b=1
+          elif [ -z "$cur" ] || ! full="$(git rev-parse -q --verify "$cur^{commit}")" || ! git diff --quiet "$full" "$GITHUB_SHA" -- session-image/base/; then b=1
+          else b=0; fi
+          echo "base pinned: ${cur:-none}; rebuild: $b"; echo "build=$b" >> "$GITHUB_OUTPUT"
+      - if: steps.need.outputs.build == '1'
+        name: free disk (the base is several GB; runners ship with ~14 GB free)
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL /usr/local/.ghcup
+          sudo docker image prune -af >/dev/null 2>&1 || true
+          df -h / | tail -1
+      - if: steps.need.outputs.build == '1'
+        uses: docker/setup-buildx-action@v3
+      - if: steps.need.outputs.build == '1'
+        uses: docker/login-action@v3
+        with: { registry: ghcr.io, username: "${{ github.actor }}", password: "${{ secrets.GITHUB_TOKEN }}" }
+      - id: tag
+        run: echo "base=base-sha-${GITHUB_SHA::12}" >> "$GITHUB_OUTPUT"
+      - if: steps.need.outputs.build == '1'
+        uses: docker/build-push-action@v6
+        with:
+          context: session-image/base
+          file: session-image/base/Dockerfile
+          push: true
+          tags: ghcr.io/de0ch/jarvis2-session:${{ steps.tag.outputs.base }}
+          labels: org.opencontainers.image.source=https://github.com/${{ github.repository }}
+          cache-from: type=gha,scope=session-base
+          cache-to: type=gha,mode=max,scope=session-base
+      - id: ref
+        if: steps.need.outputs.build == '1'
+        run: echo "ref=$(infra/image-digest.sh "ghcr.io/de0ch/jarvis2-session:${{ steps.tag.outputs.base }}")" >> "$GITHUB_OUTPUT"
+  build:
+    needs: [test, base]
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -58,6 +106,8 @@ jobs:
           context: ${{ matrix.context }}
           file: ${{ matrix.file }}
           push: true
+          # the session image on the base this run built (when it built one), else on the BASE the Dockerfile pins
+          build-args: ${{ (matrix.name == 'session' && needs.base.outputs.ref) && format('BASE={0}', needs.base.outputs.ref) || '' }}
           tags: |
             ghcr.io/de0ch/jarvis2-${{ matrix.name }}:${{ steps.tag.outputs.sha }}
             ghcr.io/de0ch/jarvis2-${{ matrix.name }}:latest
@@ -67,8 +117,32 @@ jobs:
           subject-name: ghcr.io/de0ch/jarvis2-${{ matrix.name }}
           subject-digest: ${{ steps.push.outputs.digest }}
           push-to-registry: true
+      # Fly pulls the session image with no credentials, so the package must be public; and Fly refuses an image that
+      # doesn't fit 8 GiB once unpacked onto its filesystem: the machine is created, the pull fails ("Not enough space
+      # to unpack image, possibly exceeds maximum of 8GiB uncompressed") and Fly destroys it, so EVERY new session
+      # breaks. What counts is ON-DISK size (files rounded up to 4 KiB blocks + a block per directory + inodes, after
+      # whiteouts), not the tar bytes: 8.340e9 disk bytes booted, 8.380e9 was refused (2026-10-11). A failure here
+      # stops the pin job, so nothing is pinned.
+      - if: matrix.name == 'session'
+        name: session image anonymously pullable and under Fly's unpack limit
+        run: |
+          set -e
+          T="${{ steps.tag.outputs.sha }}"
+          tok=$(curl -fsSL "https://ghcr.io/token?scope=repository:de0ch/jarvis2-session:pull" | jq -r .token)
+          curl -fsS -o /dev/null -H "Authorization: Bearer $tok" \
+            -H "Accept: application/vnd.oci.image.index.v1+json, application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.docker.distribution.manifest.v2+json" \
+            "https://ghcr.io/v2/de0ch/jarvis2-session/manifests/$T" \
+            || { echo "::error::ghcr.io/de0ch/jarvis2-session:$T is not anonymously pullable: the package must be PUBLIC (Fly pulls without credentials)"; exit 1; }
+          out=$(python3 infra/image-unpacked-size.py de0ch/jarvis2-session "$T" --top)
+          echo "$out"
+          disk=$(echo "$out" | tail -1 | jq .disk_bytes)
+          echo "on disk: $disk bytes ($(awk "BEGIN{printf \"%.3f\", $disk/1e9}") GB); Fly refused 8.380e9, limit here 8.0e9"
+          if [ "$disk" -gt 8000000000 ]; then
+            echo "::error::the session image needs $disk bytes on disk, too close to or over Fly's 8 GiB unpack limit: sessions would not boot. Not pinned. Make session-image/base/ smaller."
+            exit 1
+          fi
   pin:
-    needs: build
+    needs: [base, build]
     # only main pins (R1 audit): a dispatch on another ref builds images but never moves main. The environment
     # `release` admits refs/heads/main only, and holds the pin job's deploy key (the one CI identity the main ruleset
     # lets push) and the key that signs the session image for the phone (keys/ci.pub)
@@ -100,6 +174,12 @@ jobs:
           k="$(mktemp)"; printf '%s\n' "$CI_IMAGE_KEY" > "$k"
           SIG="$(printf '%s' "jarvis2-session-image $S" | openssl dgst -sha256 -sign "$k" | base64 -w0)"; rm -f "$k"
           sed -i -E "s#(name: SESSION_IMAGE_SIG, value: \")[^\"]*#\1$SIG#" k8s/apps/router.yaml
+          # the base this run built: the session image above stands on it, so session-image/Dockerfile's BASE moves to it
+          B="${{ needs.base.outputs.ref }}"
+          if [ -n "$B" ]; then
+            sed -i -E "s#^ARG BASE=.*#ARG BASE=$B#" session-image/Dockerfile
+            grep -qxF "ARG BASE=$B" session-image/Dockerfile || { echo "session-image/Dockerfile has no ARG BASE line"; exit 1; }
+          fi
           grep -q "SESSION_IMAGE_SIG, value: \"$SIG\"" k8s/apps/router.yaml || { echo "router.yaml has no SESSION_IMAGE_SIG line"; exit 1; }
           # the core moves ONLY when core/ changed (the CI-only fake and the tests don't count): a core restart is a new, empty
           # core (Deyao sets it up again: Reset or Recover), so a router or app push must never restart it
@@ -113,5 +193,5 @@ jobs:
           fi
           git diff --quiet && exit 0
           git config user.name "jarvis2-ci"; git config user.email "ci@jarvis2.invalid"
-          git commit -qam "images: pin $T [skip ci]"
+          git commit -qam "images: pin $T${B:+ + session base $(echo "$B" | grep -o "base-sha-[0-9a-f]*")} [skip ci]"
           git push -q origin HEAD:main

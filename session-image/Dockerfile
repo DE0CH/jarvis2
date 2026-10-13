@@ -1,13 +1,16 @@
-# Jarvis 2 session image: Jarvis 1's session image (tools, harnesses, entrypoint, supervisor) with Jarvis 2's
-# machine side in front of it. jarvis2-machine is the entry point: it makes the machine's key pairs, waits
+# Jarvis 2 session image: the base (session-image/base/: tools, harnesses, entrypoint, supervisor, carried over from
+# Jarvis 1's session image) with Jarvis 2's machine side in front of it. jarvis2-machine is the entry point: it makes the machine's key pairs, waits
 # for the core's init (which prints them), takes the core's key from its Fly config (the core sets it), checks the succession cert, restores the predecessor's snapshot, pulls the secrets,
-# then execs Jarvis 1's entrypoint. The base is pinned by digest; moving it is a visible commit.
+# then execs the base's entrypoint. The base is pinned by digest in BASE below; moving it is a visible commit (the
+# images workflow's pin job writes it after building a changed session-image/base/, and builds this image from that
+# new base in the same run through --build-arg BASE).
+ARG BASE=ghcr.io/de0ch/claude-sessions:sha-d8dda24b0a99@sha256:e29ba0b11a8789b338a873b91dbbf2c4e9662d0ed60d30688005c4d6c12a7b0a
 FROM golang:1.25-bookworm AS build
 WORKDIR /src
 COPY machine/ ./
 RUN CGO_ENABLED=0 go build -trimpath -o /out/jarvis2-machine .
 
-FROM ghcr.io/de0ch/claude-sessions:sha-d8dda24b0a99@sha256:e29ba0b11a8789b338a873b91dbbf2c4e9662d0ed60d30688005c4d6c12a7b0a
+FROM ${BASE}
 COPY --from=build /out/jarvis2-machine /usr/local/bin/jarvis2-machine
 # task templates (tasks/<name>/, router/tasks.go): a task line's machine runs one of these instead of a harness;
 # the image digest in the line's cert fixes which code that is
@@ -18,7 +21,7 @@ USER root
 # Only vouched inputs shape a machine (docs/DESIGN.md "Inputs to a machine"):
 #  - the image's own ENV, recorded here, is the env jarvis2-machine keeps (everything the machine's config adds
 #    besides the core's key and the router's address is dropped at boot: machine/vouch.go cleanEnv);
-#  - Jarvis 1's restore-snapshot would fetch unsigned state from the Storage Box whenever a store holds its
+#  - the base's restore-snapshot (Jarvis 1's) would fetch unsigned state from the Storage Box whenever a store holds its
 #    credentials: here it does nothing (the predecessor's state comes only from the snapshot the cert names);
 #  - the OpenClaw runtime bundle is pinned by sha256, not only by URL.
 RUN mkdir -p /opt/jarvis2 && env | grep -Ev '^(HOSTNAME|HOME|PWD|OLDPWD|SHLVL|_|TERM|USER|LOGNAME|SHELL)=' | sort > /opt/jarvis2/image.env \

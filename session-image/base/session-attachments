@@ -1,0 +1,45 @@
+#!/bin/bash
+# First-prompt attachments (SESSION_ATTACHMENTS_JSON): download the files the New Session form
+# staged on the Storage Box into ~/uploads, write the text buffer (prompt + paths of non-image
+# files) to $1 and the image buffer (space-separated image paths) to $2, then delete the staging
+# dir. Shared by session-supervisor.sh (claude) and harness-opencode.sh. Never echoes the creds.
+python3 - "$1" "$2" <<'PY'
+import base64, json, os, sys, urllib.parse, urllib.request
+textf, imgf = sys.argv[1], sys.argv[2]
+prompt = os.environ.get("SESSION_PROMPT", "")
+try: items = json.loads(os.environ.get("SESSION_ATTACHMENTS_JSON") or "[]")
+except Exception: items = []
+base = (os.environ.get("SESSION_ATTACH_DAV_BASE") or "").rstrip("/")
+d = os.environ.get("SESSION_ATTACH_DIR") or ""
+user, pw = os.environ.get("SESSION_ATTACH_DAV_USER", ""), os.environ.get("SESSION_ATTACH_DAV_PASS", "")
+auth = "Basic " + base64.b64encode(f"{user}:{pw}".encode()).decode()
+updir = os.path.expanduser("~/uploads"); os.makedirs(updir, exist_ok=True)
+images, files = [], []
+for it in items:
+    name = (it or {}).get("name") or ""
+    if not name: continue
+    url = base + "/" + "/".join(urllib.parse.quote(s) for s in (d.split("/") + [name]))
+    dest = os.path.join(updir, name)
+    try:
+        req = urllib.request.Request(url, headers={"Authorization": auth})
+        with urllib.request.urlopen(req, timeout=600) as r, open(dest, "wb") as out:
+            while True:
+                chunk = r.read(1 << 20)
+                if not chunk: break
+                out.write(chunk)
+        (images if it.get("isImage") else files).append(dest)
+    except Exception as e:
+        sys.stderr.write(f"[supervisor] attachment download failed: {name}: {e}\n")
+parts = []
+if prompt.strip(): parts.append(prompt)
+if files: parts.append("Attached files (in ~/uploads): " + " ".join(files))
+if images: parts.append("Attached images:")
+open(textf, "w").write("\n\n".join(parts))
+open(imgf, "w").write(" ".join(images))
+sys.stderr.write(f"[supervisor] attachments: {len(images)} image(s), {len(files)} file(s) downloaded\n")
+PY
+# staging is a one-time hand-off; drop it once downloaded (best effort, creds not echoed)
+if [ -n "${SESSION_ATTACH_DAV_BASE:-}" ] && [ -n "${SESSION_ATTACH_DIR:-}" ]; then
+  curl -sS -o /dev/null -m 60 -u "$SESSION_ATTACH_DAV_USER:$SESSION_ATTACH_DAV_PASS" \
+    -X DELETE "$SESSION_ATTACH_DAV_BASE/$SESSION_ATTACH_DIR/" 2>/dev/null || true
+fi

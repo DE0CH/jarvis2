@@ -1,0 +1,62 @@
+#!/bin/bash
+# Deliver a prompt (stdin) to this session's non-Claude-app harness — what Jarvis execs for the
+# first prompt, scheduled wakeups / watches, the stall nudge and Deyao's resume prompt, in place of
+# the remote-control path's peer message / typed prompt. Never keystrokes, so it cannot answer a
+# pending permission ask. Which harness is running decides the route:
+#   opencode    (harness-opencode.sh)   `paseo send` to the session's MAIN agent (recorded in
+#                                       ~/.claude/.paseo-agent); with no main agent yet it creates one.
+#   openclaw    (harness-openclaw.sh)   the gateway's `chat.send` into its main session
+#                                       (agent:main:main) — the one the Control UI and the app open;
+#                                       it answers "started" at once, the turn runs in the gateway.
+#   harness-send [--images <file with space-separated image paths>] < prompt.txt
+#   harness-send --queue < prompt.txt   spool it for the supervisor's inbox loop and return at once.
+#                                       What the JARVIS uses: delivery can take seconds (paseo) and
+#                                       a Fly exec is cut off at ~60 s, so the exec only writes a
+#                                       file; delivery (with retries) is local.
+set -u
+export HOME=/home/claude PATH="/home/claude/.local/bin:/usr/local/bin:/usr/bin:/bin"
+[ -f "$HOME/.secrets" ] && { set -a; . "$HOME/.secrets"; set +a; }
+INBOX="$HOME/.claude/harness-inbox"
+if pgrep -u "$(id -u)" -f harness-opencode.sh >/dev/null; then HARNESS=opencode
+elif pgrep -u "$(id -u)" -f harness-openclaw.sh >/dev/null; then HARNESS=openclaw
+else HARNESS=""; fi
+
+if [ "${1:-}" = "--queue" ]; then
+  TEXT="$(cat)"; [ -n "$TEXT" ] || { echo "harness-send: empty prompt" >&2; exit 2; }
+  [ -n "$HARNESS" ] || { echo "harness-send: no harness supervisor is running" >&2; exit 3; }
+  mkdir -p "$INBOX"; f="$INBOX/$(date +%s%N).txt"; (umask 077; printf '%s' "$TEXT" > "$f.tmp") && mv "$f.tmp" "$f"
+  echo '{"ok":true,"queued":true}'; exit 0
+fi
+IMGS=()
+if [ "${1:-}" = "--images" ]; then read -r -a IMGS < "${2:-/dev/null}" || true; fi
+TEXT="$(cat)"; [ -n "$TEXT" ] || { echo "harness-send: empty prompt" >&2; exit 2; }
+# SESSION_* are the machine's env, which a Fly exec does not inherit: read them off the supervisor
+envof() { tr '\0' '\n' < "/proc/$(pgrep -o -u "$(id -u)" -f "harness-$2.sh")/environ" 2>/dev/null | sed -n "s/^$1=//p" | head -1; }
+
+# ---------------------------------------------------------------- openclaw (gateway) -------------
+if [ "$HARNESS" = openclaw ]; then
+  # images: the gateway takes attachments as data; until then they go in as paths the agent can read
+  for i in "${IMGS[@]:-}"; do [ -n "$i" ] && TEXT="$TEXT
+[attached image: $i]"; done
+  params="$(python3 -c 'import json,sys,uuid; print(json.dumps({"sessionKey":"agent:main:main","message":sys.stdin.read(),"idempotencyKey":"jarvis-"+uuid.uuid4().hex}))' <<< "$TEXT")"
+  # the gateway token is in its config (the CLI reads it); the port is the harness's own
+  exec /usr/local/bin/openclaw gateway call chat.send --json --timeout 45000 --params "$params"
+fi
+
+# ---------------------------------------------------------------- opencode (Paseo) ---------------
+[ "$HARNESS" = opencode ] || { echo "harness-send: no harness supervisor is running" >&2; exit 3; }
+export PASEO_HOME="$HOME/.paseo"
+REC="$HOME/.claude/.paseo-agent"
+IMG_ARGS=(); for i in "${IMGS[@]:-}"; do [ -n "$i" ] && IMG_ARGS+=(--image "$i"); done
+WD="$HOME/workspace"; mapfile -t DIRS < <(find "$WD" -mindepth 1 -maxdepth 1 -type d 2>/dev/null); [ "${#DIRS[@]}" = 1 ] && WD="${DIRS[0]}"
+MODEL="${SESSION_MODEL:-$(envof SESSION_MODEL opencode)}"; LABEL="${SESSION_LABEL:-$(envof SESSION_LABEL opencode)}"
+
+id="$(cat "$REC" 2>/dev/null)"
+if [ -n "$id" ] && ls "$PASEO_HOME"/agents/*/"$id".json >/dev/null 2>&1; then
+  f="$(mktemp)"; printf '%s' "$TEXT" > "$f"
+  paseo send "$id" --no-wait --prompt-file "$f" "${IMG_ARGS[@]}" --json; rc=$?; rm -f "$f"; exit $rc
+fi
+out="$(cd "$WD" && paseo run -d --provider opencode --model "${MODEL:-openrouter/z-ai/glm-5.3}" --mode build ${LABEL:+--title "$LABEL"} "${IMG_ARGS[@]}" --json -- "$TEXT")" || { echo "$out" >&2; exit 1; }
+id="$(printf '%s' "$out" | python3 -c 'import json,sys;s=sys.stdin.read();print(json.loads(s[s.index("{"):]).get("agentId",""))' 2>/dev/null)"
+[ -n "$id" ] || { echo "harness-send: no agent id in: $out" >&2; exit 1; }
+printf '%s' "$id" > "$REC"; echo "{\"ok\":true,\"agentId\":\"$id\",\"created\":true}"

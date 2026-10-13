@@ -37,7 +37,7 @@ every store back from the backups). docs/DESIGN.md "Setting a core up".
 - Infra: box `jarvis2` (cx23, fsn1) with k3s + Flux from this repo; tunnel `jarvis2` + Access apps
   (`jarvis2.deyaochen.com` for Deyao, `/m` for machines); Fly app `jarvis2-sessions` in org `jarvis2-370`.
 - Router: `router/` (docs/API.md), deployed.
-- Session image: `session-image/` + `machine/`, built by CI.
+- Session image: `session-image/` (its base in `session-image/base/`, no longer Jarvis 1's image) + `machine/`, built by CI.
 - End-to-end test on real Fly with a software phone: passed (every flow).
 - iOS app: `ios/`; web page: `app/` — see app/DECISIONS.md.
 - Decisions to review: docs/DECISIONS.md.

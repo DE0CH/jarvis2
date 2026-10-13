@@ -536,3 +536,30 @@ session setting (`Checks.configKeys`) if a session should keep its screen from t
     the Fly machine stays up for the snapshot. The list of what was stopped is written inside the snapshot, and the
     successor reads it, so the router's word never reaches the agent; the `upgraded` message itself is an image text
     over two size words. Change: make Upgrade phone-approved if Deyao wants a Face ID on it.
+
+## The session image's base moves into Jarvis 2, 2026-10-13
+
+100. **The base is its own image, rebuilt only when `session-image/base/` changes** (not one combined Dockerfile). It is
+    ~7 GB and takes 20-30 min to build, so rebuilding it for every `machine/` or `tasks/` push would slow every deploy.
+    It goes to the existing public package `jarvis2-session` as tag `base-sha-<12>` (a new GHCR package would start
+    private), and `session-image/Dockerfile` names it by digest in `ARG BASE`, which the pin job moves in the same commit
+    as the k8s pins: moving the base stays a visible commit, as it was when it pointed at Jarvis 1's
+    `claude-sessions`. The session image built in that run stands on the new base (`--build-arg BASE`). Change: fold
+    the two Dockerfiles into one if the build cache makes a full build cheap.
+101. **Carried over as it was; only the Dockerfile's comments were rewritten.** The scripts are byte-for-byte Jarvis 1's
+    (`selfhost/session-image/` at claude-env 32e9a0f, the base of Jarvis 1's last image sha-32e9a0f7c8c6) plus the
+    cf-tunnel agent (`cf-tunnel-agent.js`, was a second build context); every Dockerfile command is the same. The
+    comments had notes about other projects and private workflows, now generic. Jarvis 1 code paths stay where they are
+    inert or harmless in a Jarvis 2 machine, so the move is mechanical: `restore-snapshot` (replaced by a no-op in the
+    session layer), the kubeconfig the entrypoint writes only when a store carries KUBE_SERVER + KUBE_TOKEN, the
+    `jarvis.deyaochen.com` default of `JARVIS_URL` in pull-secrets / content-sync / push-claude-credentials (never used:
+    jarvis2-machine always sets `JARVIS_URL` to its local proxy), `sync-live-transcripts` (runs only when a store carries
+    STORAGEBOX_*; goes with the transcript-search port), and the entrypoint's handling of SESSION_SECRETS_JSON and
+    CLAUDE_* (jarvis2-machine relies on it). `forks.json` pins the claw binary by hand commit here; claude-env's
+    fork-pin workflow keeps writing only claude-env's copy. Change: a fork-pin workflow here (it would need its own
+    deploy key in `release`, main's ruleset lets no GITHUB_TOKEN push).
+102. **The image checks moved with it**: the build job fails, so nothing pins, when the session image isn't anonymously
+    pullable or needs more than 8.0e9 bytes on disk unpacked (Jarvis 1's limit and script, `infra/image-unpacked-size.py`).
+    A too-big session image therefore also holds back a router or core pin in the same run, which is louder than Jarvis
+    1's (it skipped only the session pin). Change: split the check into its own job if that blocks deploys.
+

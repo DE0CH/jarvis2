@@ -1,0 +1,46 @@
+{
+  "id": "claw-code",
+  "name": "claw-code harness",
+  "description": "Runs agent turns with the claw-code CLI (DE0CH/claw-code) in its NDJSON event-stream mode; text and tool calls stream into OpenClaw.",
+  "categories": [
+    "agent-runtimes"
+  ],
+  "enabledByDefault": true,
+  "activation": {
+    "onStartup": true
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "command": {
+        "type": "string",
+        "description": "claw binary (default: claw on PATH)"
+      },
+      "permissionMode": {
+        "type": "string",
+        "enum": [
+          "bypass",
+          "ask",
+          "read-only"
+        ],
+        "description": "bypass = danger-full-access; ask = workspace-write, escalations become OpenClaw approvals"
+      },
+      "claudeCodeVersion": {
+        "type": "string",
+        "description": "CLAW_CLAUDE_CODE_VERSION for Claude subscription OAuth (default 2.1.287)"
+      },
+      "env": {
+        "type": "object",
+        "additionalProperties": {
+          "type": "string"
+        },
+        "description": "extra env for claw (e.g. ANTHROPIC_BASE_URL)"
+      },
+      "statusFile": {
+        "type": "string",
+        "description": "Jarvis status shim path (busy/waiting/idle per turn); unset = none"
+      }
+    }
+  }
+}

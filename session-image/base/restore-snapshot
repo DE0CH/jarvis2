@@ -1,0 +1,88 @@
+#!/bin/bash
+# Fetch this SESSION's pause snapshot from the Storage Box into place — the restore half of what
+# jarvis/lib/archive.js snapshots at pause time. The snapshot is keyed by the session id: SESSION_ID
+# (set by Jarvis on a machine re-created for a paused session), else FLY_MACHINE_ID (a session's
+# first machine — its id IS the session id). Run as user `claude` with STORAGEBOX_HOST/USER/PASSWORD
+# in the environment, from one of two places:
+#   - the entrypoint, at boot, when the session's own secrets carry the box creds (the usual case);
+#   - the JARVIS, via Fly exec with the creds as exec-time environment only, on a machine booted
+#     with SESSION_RESTORE_VIA_JARVIS=1 (a store without box creds) — the entrypoint
+#     waits for the marker this script leaves before starting the harness.
+# Stages the transcripts in ~/.paused-restore (the entrypoint places them under the project slug once
+# the working dir is known), extracts ~/workspace, ~/artifacts and the harness tarball, and fetches
+# an archive's plain-file artifacts for a Previous-restore. No snapshot => nothing changes. Always
+# writes ~/.restore-done at the end (with the outcome), so a waiter can proceed.
+set -u
+export HOME="${HOME:-/home/claude}"
+RESTORE_DIR="$HOME/.paused-restore"; rm -rf "$RESTORE_DIR"
+MARK="$HOME/.restore-done"; rm -f "$MARK"
+finish() { echo "$1 $(date -u +%FT%TZ)" > "$MARK"; echo "[restore] $1"; }
+SID="${SESSION_ID:-${FLY_MACHINE_ID:-}}"
+if [ -z "$SID" ] || [ -z "${STORAGEBOX_HOST:-}" ] || [ -z "${STORAGEBOX_USER:-}" ] || [ -z "${STORAGEBOX_PASSWORD:-}" ]; then
+  finish "skipped: no SESSION_ID / FLY_MACHINE_ID / STORAGEBOX_* in the environment"; exit 0
+fi
+SNAP="https://${STORAGEBOX_HOST}/claude-records/.paused/${SID}"
+sbget() { curl -fsS -m 300 -u "${STORAGEBOX_USER}:${STORAGEBOX_PASSWORD}" "$SNAP/$1" -o "$2"; }
+mkdir -p "$RESTORE_DIR"
+if ! sbget manifest.txt "$RESTORE_DIR/manifest.txt" 2>/dev/null; then
+  rm -rf "$RESTORE_DIR"; finish "none: no pause snapshot for session $SID (fresh session)"; exit 0
+fi
+sbget claude.json "$HOME/.claude.json" 2>/dev/null || true
+while IFS= read -r name; do
+  case "$name" in *.jsonl) sbget "$name" "$RESTORE_DIR/$name" && echo "[restore] transcript $name ($(wc -c < "$RESTORE_DIR/$name") bytes)" || echo "[restore] WARN restore of $name failed";; esac
+done < "$RESTORE_DIR/manifest.txt"
+# Belt and braces: every transcript IN the snapshot dir comes back, listed in the manifest or not.
+# On 2026-09-21 two overlapping pause uploaders left a manifest naming two relay transcripts and
+# not the 32 MB conversation that sat right next to it, and the machine resumed a relay (lessons/60).
+extra="$(curl -fsS -m 60 -u "${STORAGEBOX_USER}:${STORAGEBOX_PASSWORD}" -X PROPFIND -H "Depth: 1" "$SNAP/" 2>/dev/null \
+  | grep -o '[0-9a-f]\{8\}-[0-9a-f]\{4\}-[0-9a-f]\{4\}-[0-9a-f]\{4\}-[0-9a-f]\{12\}\.jsonl' | sort -u | grep -vxF -f "$RESTORE_DIR/manifest.txt")"
+for name in $extra; do
+  echo "[restore] WARN $name is in the snapshot but not in its manifest; fetching it too"
+  sbget "$name" "$RESTORE_DIR/$name" && { echo "[restore] transcript $name ($(wc -c < "$RESTORE_DIR/$name") bytes)"; echo "$name" >> "$RESTORE_DIR/manifest.txt"; } || echo "[restore] WARN restore of $name failed"
+done
+# ~/workspace (repos with uncommitted work, node_modules, …) and ~/artifacts, as tarred at pause time.
+GOT_ARTIFACTS=""
+# Streamed (curl | tar -xz), never staged on disk: a multi-GB workspace tarball next to its extracted
+# copy does not fit the 16 GB rootfs. No overall time limit (a multi-GB download outlasts any fixed
+# one); a transfer that stalls under 10 KB/s for 2 min is cut off instead.
+for d in workspace artifacts; do
+  code=$(curl -sS -o /dev/null -w '%{http_code}' -m 60 -I -u "${STORAGEBOX_USER}:${STORAGEBOX_PASSWORD}" "$SNAP/$d.tar.gz" 2>/dev/null)
+  case "$code" in 2*) ;; *) continue;; esac
+  if ( set -o pipefail; curl -fsS --speed-limit 10240 --speed-time 120 -u "${STORAGEBOX_USER}:${STORAGEBOX_PASSWORD}" "$SNAP/$d.tar.gz" | tar -C "$HOME" -xzf - ); then
+    echo "[restore] ~/$d"; [ "$d" = artifacts ] && GOT_ARTIFACTS=1
+  else echo "[restore] WARN restoring $d.tar.gz failed"; fi
+done
+# A non-Claude-app harness's state (lib/archive.js): an OpenCode session's ~/.paseo + OpenCode's
+# session database.
+if sbget harness.tar.gz "$RESTORE_DIR/harness.tar.gz" 2>/dev/null; then
+  tar -C "$HOME" -xzf "$RESTORE_DIR/harness.tar.gz" && echo "[restore] harness state ($(stat -c %s "$RESTORE_DIR/harness.tar.gz") bytes compressed)" || echo "[restore] WARN extracting harness.tar.gz failed"
+  rm -f "$RESTORE_DIR/harness.tar.gz"
+fi
+# A session RESTORED from a destroyed session's archive (dashboard → Previous): Jarvis seeded
+# this snapshot from the archive, where ~/artifacts is plain files, not a tarball.
+# artifacts-manifest.txt = line 1 the archive's artifacts dir on the box, then one relative path per
+# line; fetch each into ~/artifacts. Only when no tarball came: after this machine's first real
+# pause the tarball is the truth and the (stale) manifest must not overwrite it.
+if [ -z "$GOT_ARTIFACTS" ] && sbget artifacts-manifest.txt "$RESTORE_DIR/artifacts-manifest.txt" 2>/dev/null; then
+  python3 - "$RESTORE_DIR/artifacts-manifest.txt" <<'PY' || echo "[restore] WARN restoring ~/artifacts from the archive failed"
+import base64,os,sys,urllib.parse,urllib.request
+lines=[l.rstrip("\n") for l in open(sys.argv[1], encoding="utf-8")]
+src, rels = lines[0].strip("/"), [l for l in lines[1:] if l]
+root=os.path.realpath(os.path.expanduser("~/artifacts"))
+auth="Basic "+base64.b64encode(f'{os.environ["STORAGEBOX_USER"]}:{os.environ["STORAGEBOX_PASSWORD"]}'.encode()).decode()
+ok=bad=0
+for rel in rels:
+    dst=os.path.realpath(os.path.join(root, rel))
+    if not dst.startswith(root+os.sep): bad+=1; continue
+    url=f'https://{os.environ["STORAGEBOX_HOST"]}/'+urllib.parse.quote(f"{src}/{rel}")
+    try:
+        os.makedirs(os.path.dirname(dst), exist_ok=True)
+        with urllib.request.urlopen(urllib.request.Request(url, headers={"Authorization": auth}), timeout=300) as r, open(dst, "wb") as f:
+            while chunk := r.read(1 << 20): f.write(chunk)
+        ok+=1
+    except Exception as e:
+        bad+=1; print(f"[restore] WARN artifact {rel}: {e}")
+print(f"[restore] ~/artifacts from the archive: {ok} file(s), {bad} failed")
+PY
+fi
+finish "restored: $(wc -l < "$RESTORE_DIR/manifest.txt") transcript(s) staged"
