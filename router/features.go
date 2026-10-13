@@ -26,7 +26,7 @@ func (r *Router) registerFeatures(app appRoute, m machineRoute, public publicRou
 	r.registerMemory(app, m)              // memory.go
 	r.registerHarnesses(app)              // harness.go: /api/models
 	r.registerRemote(app, m, public)      // remote.go: remote pages, /api/remotes, tunnel proofs
-	r.registerLeases(app, m)              // leases.go: shared-device leases (before sessionapi.go's /m/api/ catch-all)
+	r.registerLeases(app, m, public)      // leases.go: shared-device leases (before sessionapi.go's /m/api/ catch-all)
 	r.registerWatches(app, m)             // watches.go: conditional wakeups
 	r.registerSessionAPI(app, m)          // sessionapi.go: wakeups, crons, /m/api
 	r.registerArchive(app, m)             // archive.go, restore.go (budget.go needs no routes: /api/state via stateHooks)

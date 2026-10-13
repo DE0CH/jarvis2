@@ -74,6 +74,11 @@ export async function uploadFile(uploadId: string, name: string, body: Blob): Pr
 
 // ---- the router's shapes (docs/API.md) ----
 export type SessionState = "starting" | "approval" | "initialising" | "started" | "pausing" | "paused" | "resuming" | "destroying" | "failed";
+export type LeaseEntry = { sid: string; human?: boolean; purpose: string; description: string; describedAt?: number; note?: string; since?: number; expiresAt?: number | null; expiresInSeconds?: number | null };
+export type LeaseWaiter = { position: number; sid: string; purpose: string; description: string; enqueuedAt: number; interrupted?: boolean };
+export type LeaseEvent = { at: number; kind: string; sid: string; purpose?: string; note?: string; interrupted?: string };
+export type Lease = { name: string; holder: LeaseEntry | null; queue: LeaseWaiter[]; log: LeaseEvent[] };
+export type Watch = { name: string; prompt: string; failPrompt: string; interval: number; maxSeconds: number; armedAtIso: string; expiresAtIso: string; nextCheckIso: string; runs: number; lastExit: number | null; lastRunIso: string | null; lastError: string; lastOutput: string; outcome: string };
 export type Wakeup = { name: string; at: number; atIso?: string; prompt: string };
 export type Cron = { name: string; prompt: string; everySeconds: number; tz?: string; nextAt: number; nextAtIso?: string; until?: number | null; untilIso?: string | null; runs?: number; lastFiredIso?: string | null };
 export type Refusal = { kind: "fallback" | "refusal"; at?: string; from?: string; to?: string; model?: string; category?: string };
@@ -85,7 +90,7 @@ export type Session = {
   aiTitle?: string; liveName?: string; userTitle?: string; serverTitle?: string; liveSync?: { at: string; files: Record<string, number>; stored: boolean; error?: string } | null; bgTasks?: number; needsGrant?: string; pauseInMs?: number;
   autoPause?: "on" | "off"; notifyIdle?: "on" | "off"; oneShot?: boolean; oneShotDone?: boolean; authFailed?: boolean;
   credsExpiresAt?: string | number; discordChannel?: string; statusUpdatedAt?: string; lastReport?: string; refusals?: Refusal[];
-  wakeups?: Wakeup[]; crons?: Cron[]; resumePrompt?: string; createRequestId?: string; repos?: string;
+  wakeups?: Wakeup[]; crons?: Cron[]; watches?: Watch[]; resumePrompt?: string; createRequestId?: string; repos?: string;
   // a lifecycle action holding the session (others are refused 409) and a permission-mode / restart job
   // what a pause or destroy is waiting on, in plain words (e.g. "waiting for the machine's last snapshot (up to 10 min)")
   waiting?: string;
@@ -143,7 +148,7 @@ export type InboxItem = {
 export type CoreStatus = { up: boolean; signingKey?: string; agreementKey?: string };
 export type State = {
   sessions: Session[]; approvals: Approval[]; core: CoreStatus; inbox?: InboxItem[];
-  budget?: Budget | null; fly?: FlyView | null; flyApp?: string; repos?: RepoEntry[];
+  budget?: Budget | null; fly?: FlyView | null; flyApp?: string; repos?: RepoEntry[]; leases?: Lease[];
   loadError?: string | null; // client-side: the last api/state fetch failed
   loaded?: boolean; // client-side: api/state has answered at least once
 };

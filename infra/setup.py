@@ -32,6 +32,8 @@ both). Values never print.
                                        refreshes (docs/RUNBOOK.md "The Claude login")
   infra/setup.py repos                 the router's repo list (repo, store, key fingerprint)
   infra/setup.py sessions              the router's sessions: id, current machine, state, title
+  infra/setup.py lease take-over|hand-back DEVICE [--note TEXT]
+                                       for Deyao: take a shared device over (agents refused) or hand it back
   infra/setup.py requests              what waits in the phone's Inbox (requests and approvals)
   infra/setup.py request add-repo OWNER/NAME --why TEXT [--sensitive]
   infra/setup.py request remove-repo OWNER/NAME --why TEXT
@@ -386,6 +388,12 @@ def main():
             print(s["id"], s["machineId"] or "-", s["state"], s["title"])
             if "-v" in args:  # the autopilot's view: status, background jobs, stall clock, last nudge
                 print("   ", json.dumps({k: v for k, v in s.items() if k not in ("id", "machineId", "state", "title")}, sort_keys=True))
+    elif cmd == "lease":
+        if len(args) < 2 or args[0] not in ("take-over", "hand-back"):
+            raise SystemExit(__doc__)
+        act, dev = args[0], args[1]
+        note = opt(args, "--note")
+        print(json.dumps(call("POST", f"/setup/leases/{dev}/{act}", {"note": note} if note is not None else {}), indent=1))
     elif cmd == "requests":
         for q in call("GET", "/setup/requests")["requests"]:
             c = q.get("call") or {}

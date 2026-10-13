@@ -256,9 +256,17 @@ fixes, 34–40 carried over from the old app and still true, 41–43 the web pag
     Files, AirDrop and the rest come from the system share sheet). A failure is an inline error row, never an alert. No
     kit, no Face ID: the page reads and checks only public, sealed data.
 
+## Devices (2026-10-13)
+
+65. **The web page's Devices tab** (`views/Devices.tsx`, Jarvis 1's): one card per shared device: holder (a session's
+    title, or Deyao), purpose, what it is doing, Deyao's note, when it lapses, the queue (position, title, purpose,
+    what it waits to do) and the last five events; Take over / Hand back (a note in the dialog) and Force return, each
+    two-phase (the card changes when /api/state shows it). Session cards carry lease pills ("holds iphone", "#2 for
+    mac"). No Face ID: moving a lease reaches no secret. The iOS app has neither yet.
+
 ## Unfinished / known gaps
 
 - Free text (prompt, title) reaches the machine signed only with a core that vouches (the held core doesn't).
-- Content stores, devices and lease pills are not in either app yet; attachments are images only (no other files).
+- Content stores are not in either app yet; devices and lease pills are in the web page only (65); attachments are images only (no other files).
 - After a reinstall that loses the Keychain, the phone's keys and device key are new: an already-recovered core refuses a
   second claim; restart the core (a new, empty core) and Recover.

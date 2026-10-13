@@ -20,6 +20,7 @@ import { Settings } from "../views/Settings";
 import { Tasks } from "../views/Tasks";
 import { TaskSchedules } from "../views/TaskSchedules";
 import { Machines } from "../views/Machines";
+import { Devices } from "../views/Devices";
 
 function Banners() {
   const st = useStore((s) => s.state);
@@ -69,6 +70,7 @@ export default function Dashboard() {
             {tab === "tasks" && <Tasks />}
             {tab === "schedules" && <TaskSchedules />}
             {tab === "machines" && <Machines />}
+            {tab === "devices" && <Devices />}
             {tab === "settings" && <Settings />}
           </View>
         </View>

@@ -1,6 +1,6 @@
 import { useRef } from "react";
 import { Linking, View } from "react-native";
-import { api, ago, isTaskLine, challengeRequest, cronEvery, holderTitle, HOLDERS, HARNESS, REGION, sessionTitle, storesOf, when, type Approval, type Session, type State } from "../lib/api";
+import { api, ago, isTaskLine, challengeRequest, cronEvery, holderTitle, HOLDERS, HARNESS, REGION, sessionTitle, storesOf, when, type Approval, type Lease, type Session, type State } from "../lib/api";
 import { useStore, setTab, getStore, pend, refresh, refreshUntil, pendUntil, settle, ask, askText, toast, failed, exclusive, BUSY_LABEL } from "../lib/store";
 import { hasShell, requestSecure } from "../lib/shell";
 import { requestGrant } from "../lib/grants";
@@ -16,7 +16,12 @@ import { openMenu, type MenuItem } from "../ui/overlays";
 
 const find = (s: State, id: string) => s.sessions.find((x) => x.id === id);
 const MOVING: Record<string, string> = { starting: "starting…", approval: "waiting for approval", initialising: "initialising…", pausing: "pausing…", resuming: "resuming…", destroying: "destroying…" };
-const hasSchedule = (m: Session) => !!(m.wakeups || []).length || !!(m.crons || []).length;
+// lease pills (Jarvis 1's DeviceLine): "holds iphone", "#2 for mac"
+const leasePills = (ls: Lease[], sid: string) => [
+  ...ls.filter((l) => l.holder && l.holder.sid === sid).map((l) => ({ key: "h" + l.name, held: true, text: "holds " + l.name })),
+  ...ls.flatMap((l) => l.queue.filter((w) => w.sid === sid).map((w) => ({ key: "q" + l.name, held: false, text: `#${w.position} for ${l.name}` }))),
+];
+const hasSchedule = (m: Session) => !!(m.wakeups || []).length || !!(m.crons || []).length || !!(m.watches || []).length;
 const clip = (t: string) => t.length > 90 ? t.slice(0, 90) + "…" : t;
 
 // the steps of an Upgrade job (wake.kind "upgrade"), as the busy label
@@ -284,6 +289,7 @@ export function Sessions() {
   const pending = useStore((s) => s.pending);
   const policy = useStore((s) => s.policy);
   const models = useStore((s) => s.models);
+  const leases = useStore((s) => s.state.leases) || [];
   // within each group newest-first, so cards never swap between polls
   // task lines show in the Tasks tab
   const list = [...sessions].filter((m) => !isTaskLine(m)).sort((a, b) => String(b.created || "").localeCompare(String(a.created || "")) || a.id.localeCompare(b.id));
@@ -313,7 +319,8 @@ export function Sessions() {
                   <Heading size={3} style={{ flex: 1 }}>{sessionTitle(m)}</Heading>
                   <Flex gap={1} wrap justify="flex-end" style={{ flexShrink: 0, maxWidth: "55%" }}><SessionPill m={m} />{!paused && hasSchedule(m) && <Pill kind="info">scheduled</Pill>}</Flex>
                 </Flex></Aligned>
-                <Aligned part="badges">{(m.permissionMode === "bypass" || m.oneShot || m.authFailed) && <Flex gap={1} wrap align="center" mb={1}>
+                <Aligned part="badges">{(m.permissionMode === "bypass" || m.oneShot || m.authFailed || leasePills(leases, m.id).length > 0) && <Flex gap={1} wrap align="center" mb={1}>
+                  {leasePills(leases, m.id).map((l) => <Pill key={l.key} kind={l.held ? "info" : "dim"}>{l.text}</Pill>)}
                   {m.permissionMode === "bypass" ? <Pill kind="bad">skip perms</Pill> : null}
                   {m.oneShot && <Pill kind="dim">one-shot</Pill>}
                   {m.authFailed && <Pill kind="bad">login failed</Pill>}

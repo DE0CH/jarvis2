@@ -702,7 +702,7 @@ func optStr(m map[string]any, k string) *string {
 	return &s
 }
 
-func (r *Router) registerLeases(app appRoute, m machineRoute) {
+func (r *Router) registerLeases(app appRoute, m machineRoute, public publicRoute) {
 	// ---- the app (Deyao) -------------------------------------------------------------------------------
 	app("GET /api/leases", func(w http.ResponseWriter, req *http.Request) {
 		writeJSON(w, 200, map[string]any{"leases": r.LeaseList()})
@@ -721,54 +721,29 @@ func (r *Router) registerLeases(app appRoute, m machineRoute) {
 		r.kickLeases(out.Promoted)
 	})
 	app("POST /api/leases/{name}/take-over", func(w http.ResponseWriter, req *http.Request) {
-		name := req.PathValue("name")
 		b, _ := io.ReadAll(io.LimitReader(req.Body, 1<<16))
-		m, err := leaseBody(b)
-		if err != nil {
-			leaseErr(w, err)
-			return
-		}
-		var out *takeOverOut
-		err = r.leaseTx(func(st *LeaseState) (e error) {
-			out, e = st.takeOver(name, optStr(m, "note"), time.Now().UnixMilli())
-			return
-		})
-		if err != nil {
-			leaseErr(w, err)
-			return
-		}
-		log.Printf("[lease] %s: Deyao took it over (interrupted %q)", name, out.Interrupted)
-		writeJSON(w, 200, map[string]any{"taken": out.Taken, "interrupted": nullIfEmpty(out.Interrupted), "noteUpdated": out.NoteUpdated})
-		if out.Interrupted != "" {
-			leaseWG.Add(1)
-			go r.tellLease(out.Interrupted, Delivery{Kind: "lease-taken", Device: name}, 1)
-		}
+		r.takeOverLease(w, req.PathValue("name"), b)
 	})
 	app("POST /api/leases/{name}/hand-back", func(w http.ResponseWriter, req *http.Request) {
-		name := req.PathValue("name")
 		b, _ := io.ReadAll(io.LimitReader(req.Body, 1<<16))
-		m, err := leaseBody(b)
-		if err != nil {
-			leaseErr(w, err)
-			return
-		}
-		var out *handBackOut
-		err = r.leaseTx(func(st *LeaseState) (e error) {
-			out, e = st.handBack(name, deref(optStr(m, "note")), time.Now().UnixMilli())
-			return
-		})
-		if err != nil {
-			leaseErr(w, err)
-			return
-		}
-		log.Printf("[lease] %s: Deyao handed it back%s; telling %v", name, promotedSuffix(out.Promoted), out.Notify)
-		writeJSON(w, 200, map[string]any{"handedBack": out.HandedBack, "next": promotedSid(out.Promoted), "notified": orEmptyS(out.Notify)})
-		r.kickLeases(out.Promoted)
-		for _, sid := range out.Notify {
-			leaseWG.Add(1)
-			go r.tellLease(sid, Delivery{Kind: "lease-back", Device: name}, 5)
-		}
+		r.handBackLease(w, req.PathValue("name"), b)
 	})
+	// the setup session (Claude, fully trusted: DECISIONS 57) acts for Deyao here, e.g. to carry his Jarvis 1
+	// take-overs over (DECISIONS 113); signed with the setup key like every /setup call
+	for _, act := range []string{"take-over", "hand-back"} {
+		public("POST /setup/leases/{name}/"+act, r.requireSetup(func(w http.ResponseWriter, req *http.Request) {
+			b, _ := io.ReadAll(io.LimitReader(req.Body, 1<<16))
+			if err := r.checkSetupSig(req.Method, req.URL.Path, req.Header.Get("X-Setup-Time"), req.Header.Get("X-Setup-Sig"), b); err != nil {
+				writeJSON(w, 401, map[string]string{"error": err.Error()})
+				return
+			}
+			if act == "take-over" {
+				r.takeOverLease(w, req.PathValue("name"), b)
+			} else {
+				r.handBackLease(w, req.PathValue("name"), b)
+			}
+		}))
+	}
 
 	// ---- the session itself (through its machine's local proxy; the path's id must be its own) ---------------------
 	own := func(pattern string, fn func(w http.ResponseWriter, req *http.Request, sid, machine string, body []byte)) {
@@ -886,6 +861,55 @@ func (r *Router) registerLeases(app appRoute, m machineRoute) {
 		writeJSON(w, 200, map[string]any{"returned": gb.Returned, "left": left, "next": promotedSid(gb.Promoted)})
 		r.kickLeases(gb.Promoted)
 	})
+}
+
+// takeOverLease: Deyao takes the device himself (the app, or the setup session for him)
+func (r *Router) takeOverLease(w http.ResponseWriter, name string, b []byte) {
+	m, err := leaseBody(b)
+	if err != nil {
+		leaseErr(w, err)
+		return
+	}
+	var out *takeOverOut
+	err = r.leaseTx(func(st *LeaseState) (e error) {
+		out, e = st.takeOver(name, optStr(m, "note"), time.Now().UnixMilli())
+		return
+	})
+	if err != nil {
+		leaseErr(w, err)
+		return
+	}
+	log.Printf("[lease] %s: Deyao took it over (interrupted %q)", name, out.Interrupted)
+	writeJSON(w, 200, map[string]any{"taken": out.Taken, "interrupted": nullIfEmpty(out.Interrupted), "noteUpdated": out.NoteUpdated})
+	if out.Interrupted != "" {
+		leaseWG.Add(1)
+		go r.tellLease(out.Interrupted, Delivery{Kind: "lease-taken", Device: name}, 1)
+	}
+}
+
+// handBackLease: Deyao gives it back
+func (r *Router) handBackLease(w http.ResponseWriter, name string, b []byte) {
+	m, err := leaseBody(b)
+	if err != nil {
+		leaseErr(w, err)
+		return
+	}
+	var out *handBackOut
+	err = r.leaseTx(func(st *LeaseState) (e error) {
+		out, e = st.handBack(name, deref(optStr(m, "note")), time.Now().UnixMilli())
+		return
+	})
+	if err != nil {
+		leaseErr(w, err)
+		return
+	}
+	log.Printf("[lease] %s: Deyao handed it back%s; telling %v", name, promotedSuffix(out.Promoted), out.Notify)
+	writeJSON(w, 200, map[string]any{"handedBack": out.HandedBack, "next": promotedSid(out.Promoted), "notified": orEmptyS(out.Notify)})
+	r.kickLeases(out.Promoted)
+	for _, sid := range out.Notify {
+		leaseWG.Add(1)
+		go r.tellLease(sid, Delivery{Kind: "lease-back", Device: name}, 5)
+	}
 }
 
 func (r *Router) getLease(w http.ResponseWriter, name string) {

@@ -5,8 +5,8 @@ import { useSyncExternalStore } from "react";
 import { AppState, Platform } from "react-native";
 import { api, coreStores, loadPolicy, RUN_ACTIVE, type Choice, type CoreStore, type Policy, type Rec, type State, type TasksOverview, type Machine, type FlyOrgView, type MachinesOverview } from "./api";
 
-export type Tab = "sessions" | "inbox" | "search" | "stores" | "records" | "tasks" | "schedules" | "machines" | "settings";
-export const TABS: [Tab, string][] = [["sessions", "Sessions"], ["inbox", "Inbox"], ["search", "Search"], ["stores", "Stores"], ["records", "Previous"], ["tasks", "Tasks"], ["schedules", "Schedules"], ["machines", "Machines"], ["settings", "Settings"]];
+export type Tab = "sessions" | "inbox" | "search" | "stores" | "records" | "tasks" | "schedules" | "machines" | "devices" | "settings";
+export const TABS: [Tab, string][] = [["sessions", "Sessions"], ["inbox", "Inbox"], ["search", "Search"], ["stores", "Stores"], ["records", "Previous"], ["tasks", "Tasks"], ["schedules", "Schedules"], ["machines", "Machines"], ["devices", "Devices"], ["settings", "Settings"]];
 // tasks + their schedules (api/tasks): loaded while the Tasks or Schedules tab (or a task page) is open
 export type TasksState = { loading: boolean; loaded: boolean; data: TasksOverview; err: string | null };
 // what holds a session right now (api/state `busy`), as a button label

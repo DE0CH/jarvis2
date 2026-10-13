@@ -257,6 +257,13 @@ func TestLeaseAPI(t *testing.T) {
 	if code, out := appDo(t, r, "POST", "/api/leases/mac/force-return", ``); code != 200 || out["previous"] != "sC" {
 		t.Fatalf("%d %v", code, out)
 	}
+	// the setup session can take over and hand back for Deyao
+	if code, out := appDo(t, r, "POST", "/setup/leases/iphone/take-over", `{"note":"long term"}`); code != 200 || out["taken"] != true {
+		t.Fatalf("%d %v", code, out)
+	}
+	if code, out := appDo(t, r, "GET", "/api/leases/iphone", ``); code != 200 || out["lease"].(map[string]any)["holder"].(map[string]any)["note"] != "long term" {
+		t.Fatalf("%d %v", code, out)
+	}
 	// /api/state lists them; a destroyed session's queue place goes at the next tick
 	ma.do(t, h, "POST", "/m/api/sessions/sA/leases/wechat-phone", `{}`)
 	mc.do(t, h, "POST", "/m/api/sessions/sC/leases/wechat-phone", `{}`)

@@ -514,6 +514,7 @@ lease = { name, holder: null | {sid /* a session id, or "deyao" */, human, purpo
 | `POST /api/leases/:name/force-return` | The app: `{returned, previous, next}` |
 | `POST /api/leases/:name/take-over` | The app: `{note?}` Deyao takes the device (never expires; agents' actions refused); the holder goes to the front of the queue and is told (`lease-taken`). While he has it, a note only replaces his note. → `{taken, interrupted, noteUpdated}` |
 | `POST /api/leases/:name/hand-back` | The app: `{note?}` → `{handedBack, next, notified}`; the next waiter is woken, every other session that found it taken over is told (`lease-back`). |
+| `POST /setup/leases/:name/take-over`, `…/hand-back` | The same, by the setup session for Deyao (setup-key signed; `infra/setup.py lease take-over DEVICE --note …`). |
 
 Wake messages are deliveries (`/m/commands`, checked by the machine, attested by the core): `lease-granted` (the
 waiter's own signed acquire request: its prompt, and the device in the signed path; `minutes`, `handover`,
