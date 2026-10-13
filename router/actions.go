@@ -2,7 +2,7 @@ package main
 
 // The actions key (Deyao, 2026-10-13): one Access service token, jarvis2-actions, kept in the not-sensitive `default`
 // store, for actions anyone holding it may take because none of them reaches a secret or a new input: list sessions
-// and the Inbox, resume a paused session with no prompt (same image: approve_by_dead_machine), pause one, move a running one to the next size, deny a
+// and the Inbox, resume a paused session with no prompt (same image: approve_by_dead_machine), pause one, move a running one to the next size, destroy one (the app's Destroy), deny a
 // request or approval, and file requests (a new session, an added store, a repo, a grant, an unlock), which only wait
 // in Deyao's Inbox for his Face ID. A session can already message every other session, so this grants nothing an
 // injected session couldn't already cause. Anything that needs Deyao's signature still does.
@@ -67,6 +67,14 @@ func (r *Router) registerActions(handle func(string, http.Handler)) {
 			return
 		}
 		writeJSON(w, 202, out)
+	})
+	// destroy (Deyao, 2026-10-13): exactly the app's Destroy, ?force=1 included (its "confirm lost work")
+	act("POST /actions/sessions/{id}/destroy", func(w http.ResponseWriter, req *http.Request, _ []byte) {
+		if err := r.DestroyWith(req.PathValue("id"), req.URL.Query().Get("force") == "1"); err != nil {
+			writeErr(w, err)
+			return
+		}
+		writeJSON(w, 200, map[string]bool{"ok": true})
 	})
 	// deny: an Inbox request leaves; an approval is rejected as Deny in the app would (a new session disappears, a
 	// resume stays paused)
