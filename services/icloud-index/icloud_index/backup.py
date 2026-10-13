@@ -5,10 +5,15 @@ it), so:
   seed(db_file)   before the database is opened: a missing database is restored from the copy. With
                   SEED_REQUIRED=1 (the default in k8s) a missing copy is an error, not a fresh start: a fresh
                   index would forget what the budget already paid for and spend it again.
-  backup(db_file) SQLite's online backup -> gzip -> PUT <name>.gz.part -> MOVE <name>.gz; every
+  backup(db_file) SQLite's online backup -> gzip -> age -> PUT <name>.gz.age.part -> MOVE <name>.gz.age; every
                   BACKUP_INTERVAL_H hours (backup_loop).
-env: STORAGEBOX_HOST/USER/PASSWORD (STORAGEBOX_SCHEME for tests), SEED_NAME (default: the db file's name)."""
-import base64, gzip, os, shutil, sqlite3, tempfile, threading, time, urllib.error, urllib.parse, urllib.request
+The index is identity-level (Deyao, 2026-10-13: as private as the iCloud login), and the Storage Box is readable by
+more than this pod, so the copy is age-encrypted: `<name>.gz.age`, to BACKUP_AGE_RECIPIENT (public, in the manifest),
+opened with BACKUP_AGE_KEY (the private key, only in this pod's SOPS part). A plain `<name>.gz` (the one-time import
+from Jarvis 1) is read only with SEED_PLAIN_OK=1, and the first backup deletes it.
+env: STORAGEBOX_HOST/USER/PASSWORD (STORAGEBOX_SCHEME for tests), SEED_NAME (default: the db file's name),
+     BACKUP_AGE_RECIPIENT, BACKUP_AGE_KEY, SEED_PLAIN_OK."""
+import base64, gzip, os, shutil, sqlite3, subprocess, tempfile, threading, time, urllib.error, urllib.parse, urllib.request
 
 DIR = "claude-records/.jarvis2-services"
 
@@ -26,6 +31,15 @@ def _dav(env):
     return auth, lambda path: base + urllib.parse.quote(path)
 
 
+def _get(url, auth):
+    """-> the open response, or None on 404"""
+    try:
+        return urllib.request.urlopen(urllib.request.Request(url, headers={"Authorization": auth}), timeout=3600)
+    except urllib.error.HTTPError as e:
+        if e.code == 404: return None
+        raise
+
+
 def seed(db_file, env=os.environ, log=print):
     if os.path.exists(db_file):
         return "exists"
@@ -36,16 +50,32 @@ def seed(db_file, env=os.environ, log=print):
         return "none"
     auth, url = d
     name = env.get("SEED_NAME") or os.path.basename(db_file)
-    try:
-        r = urllib.request.urlopen(urllib.request.Request(url(f"{DIR}/{name}.gz"), headers={"Authorization": auth}), timeout=3600)
-    except urllib.error.HTTPError as e:
-        if e.code == 404:
-            if required: raise NoSeed(f"SEED_REQUIRED and no {DIR}/{name}.gz on the Storage Box")
-            return "none"
-        raise
     tmp = db_file + ".seed"
-    with r, gzip.GzipFile(fileobj=r) as g, open(tmp, "wb") as f:
-        shutil.copyfileobj(g, f, 1 << 22)
+    r = _get(url(f"{DIR}/{name}.gz.age"), auth)
+    if r is not None:
+        key = env.get("BACKUP_AGE_KEY")
+        if not key: raise NoSeed(f"{name}.gz.age is there but BACKUP_AGE_KEY isn't set")
+        work = tempfile.mkdtemp(prefix="seed-")
+        try:
+            kf = os.path.join(work, "key"); fd = os.open(kf, os.O_WRONLY | os.O_CREAT, 0o600)
+            with os.fdopen(fd, "w") as f: f.write(key.strip() + "\n")
+            p = subprocess.Popen(["age", "-d", "-i", kf], stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+            def feed():
+                with r: shutil.copyfileobj(r, p.stdin, 1 << 22)
+                p.stdin.close()
+            t = threading.Thread(target=feed, daemon=True); t.start()
+            with gzip.GzipFile(fileobj=p.stdout) as g, open(tmp, "wb") as f:
+                shutil.copyfileobj(g, f, 1 << 22)
+            t.join(); p.wait()
+            if p.returncode != 0: raise RuntimeError(f"age -d failed ({p.returncode})")
+        finally:
+            shutil.rmtree(work, ignore_errors=True)
+    elif env.get("SEED_PLAIN_OK", "") in ("1", "true") and (r := _get(url(f"{DIR}/{name}.gz"), auth)) is not None:
+        with r, gzip.GzipFile(fileobj=r) as g, open(tmp, "wb") as f:
+            shutil.copyfileobj(g, f, 1 << 22)
+    else:
+        if required: raise NoSeed(f"SEED_REQUIRED and no {DIR}/{name}.gz.age on the Storage Box")
+        return "none"
     os.replace(tmp, db_file)
     log(f"seeded {db_file} from the Storage Box ({os.path.getsize(db_file)} bytes)")
     return "seeded"
@@ -58,20 +88,31 @@ def backup(db_file, env=os.environ, log=print):
     auth, url = d
     name = env.get("SEED_NAME") or os.path.basename(db_file)
     work = tempfile.mkdtemp(prefix="backup-")
-    raw, gz = os.path.join(work, name), os.path.join(work, name + ".gz")
+    rcpt = env.get("BACKUP_AGE_RECIPIENT")
+    if not rcpt:
+        log("backup: no BACKUP_AGE_RECIPIENT, nothing written"); return False
+    raw, gz = os.path.join(work, name), os.path.join(work, name + ".gz.age")
     try:
         src, dst = sqlite3.connect(db_file, timeout=120), sqlite3.connect(raw)
         src.backup(dst); src.close(); dst.close()
-        with open(raw, "rb") as f, gzip.open(gz, "wb", compresslevel=3) as g:
-            shutil.copyfileobj(f, g, 1 << 22)
+        with open(gz, "wb") as out:
+            p = subprocess.Popen(["age", "-r", rcpt], stdin=subprocess.PIPE, stdout=out)
+            with open(raw, "rb") as f, gzip.GzipFile(fileobj=p.stdin, mode="wb", compresslevel=3) as g:
+                shutil.copyfileobj(f, g, 1 << 22)
+            p.stdin.close(); p.wait()
+            if p.returncode != 0: raise RuntimeError(f"age -r failed ({p.returncode})")
         os.remove(raw)
         size = os.path.getsize(gz)
         with open(gz, "rb") as f:
-            urllib.request.urlopen(urllib.request.Request(url(f"{DIR}/{name}.gz.part"), method="PUT", data=f,
+            urllib.request.urlopen(urllib.request.Request(url(f"{DIR}/{name}.gz.age.part"), method="PUT", data=f,
                                    headers={"Authorization": auth, "Content-Length": str(size)}), timeout=3600).read()
-        urllib.request.urlopen(urllib.request.Request(url(f"{DIR}/{name}.gz.part"), method="MOVE",
-                               headers={"Authorization": auth, "Destination": url(f"{DIR}/{name}.gz"), "Overwrite": "T"}), timeout=600).read()
-        log(f"backup: {name}.gz ({size} bytes) on the Storage Box")
+        urllib.request.urlopen(urllib.request.Request(url(f"{DIR}/{name}.gz.age.part"), method="MOVE",
+                               headers={"Authorization": auth, "Destination": url(f"{DIR}/{name}.gz.age"), "Overwrite": "T"}), timeout=600).read()
+        try:  # the plain import copy, if it is still there, goes once an encrypted one exists
+            urllib.request.urlopen(urllib.request.Request(url(f"{DIR}/{name}.gz"), method="DELETE", headers={"Authorization": auth}), timeout=120).read()
+        except urllib.error.HTTPError as e:
+            if e.code != 404: raise
+        log(f"backup: {name}.gz.age ({size} bytes) on the Storage Box")
         return True
     finally:
         shutil.rmtree(work, ignore_errors=True)

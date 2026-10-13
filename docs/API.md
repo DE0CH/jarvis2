@@ -451,7 +451,7 @@ signed as every `/m` call). Any `:id` in the path must be the calling machine's 
 | wakeups, crons, notify-idle | The router (above). Arming also puts holder `scheduler` on the session's allow list (a wakeup: due + 1 h; a cron: max(31 d, 2 periods + 1 h), renewed at each firing by `jarvis2-machine allow-at-least`). |
 | `DELETE /api/sessions/:id` | The router: the session retires itself (Destroy) → 202 `{started}`; 409 `{pending}` while it has wakeups or crons. |
 | `…/watches` | 501: not in Jarvis 2. |
-| search, iCloud index | `GET /m/api/search`, `/m/api/search/context`, `/m/api/search/status`, `POST /m/api/search/reindex`, `GET /m/api/icloud/search`, `/m/api/icloud/file`, `/m/api/icloud/status`, `POST /m/api/icloud/relist`, `/m/api/icloud/retry`: the box's own services, as for the app (any running session; 403 for a machine with none). |
+| search, iCloud index | `GET /m/api/search`, `/m/api/search/context`, `/m/api/search/status`, `POST /m/api/search/reindex` (any running session), `GET /m/api/icloud/search`, `/m/api/icloud/file`, `/m/api/icloud/status`, `POST /m/api/icloud/relist`, `/m/api/icloud/retry` (only a session whose cert holds the `identity` store; otherwise 403 `{error, needsStore: "identity"}`): the box's own services, as for the app. 403 for a machine with no running session. |
 | Jarvis 1's services (below) | Forwarded to `JARVIS1_URL` (default `https://jarvis.deyaochen.com`) with the Access service token `JARVIS1_SERVICES_ID/SECRET` and header `X-Jarvis2-Session: <id>`; path, query, body, Content-Type/Accept/Range unchanged. |
 | anything else | 404 |
 
@@ -499,5 +499,6 @@ index), then embeds the text.
 | `POST /api/icloud/relist` | List iCloud now → 202. |
 | `POST /api/icloud/retry` | Give failed files another go → 202. |
 
-A missing index is seeded from `claude-records/.jarvis2-services/icloud-index.db.gz` (rewritten weekly); with no copy
-the pod refuses to start (`SEED_REQUIRED=1`), so the budget is never spent twice.
+Identity-level: sessions reach it only with the `identity` store (above). A missing index is seeded from
+`claude-records/.jarvis2-services/icloud-index.db.gz.age` (age-encrypted, rewritten weekly); with no copy the pod refuses
+to start (`SEED_REQUIRED=1`), so the budget is never spent twice.

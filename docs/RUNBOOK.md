@@ -228,7 +228,8 @@ The box's services have their own parts (Secrets in jarvis2-edge):
 
 - `infra/router-secrets.py --part search STORAGEBOX_HOST STORAGEBOX_USER STORAGEBOX_PASSWORD OPENROUTER_API` →
   `k8s/secrets/search.enc.yaml` (transcript search).
-- `infra/router-secrets.py --part icloud-index OPENROUTER_API LOBSTER_TOKEN STORAGEBOX_HOST STORAGEBOX_USER STORAGEBOX_PASSWORD`
+- `infra/router-secrets.py --part icloud-index OPENROUTER_API LOBSTER_TOKEN STORAGEBOX_HOST STORAGEBOX_USER STORAGEBOX_PASSWORD BACKUP_AGE_KEY=env:ICLOUD_BACKUP_AGE_KEY`
+  (the last from the store `icloud-backup`)
   → `k8s/secrets/icloud-index.enc.yaml` (the iCloud index; LOBSTER_TOKEN for its DMs: login expired, budget used up).
 - `infra/router-secrets.py --part icloud-session ICLOUD_RCLONE_CONF=file:<rclone.conf with the [icloud] section>` →
   `k8s/secrets/icloud-session.enc.yaml`: the saved iCloud login. After a re-login (claude-env `icloud-drive` skill),
@@ -274,8 +275,12 @@ and pinned by digest like the router. Only the router reaches them (`router/sear
 and "iCloud index" for the calls. Check them from any Jarvis 2 session:
 `curl -s "$JARVIS_URL/api/search/status"` and `curl -s "$JARVIS_URL/api/icloud/status"`.
 
+- **The iCloud index is identity-level**: sessions reach it only while they hold the `identity` store (router 403
+  otherwise; Deyao's app always). Its Storage Box copy is age-encrypted; the private key is `BACKUP_AGE_KEY` in the
+  `icloud-index` part and `ICLOUD_BACKUP_AGE_KEY` in the sensitive store `icloud-backup` (re-run the part from that
+  store after a box rebuild, or the copy can't be opened).
 - **Their databases live on the pods' volumes, with a copy on the Storage Box** (`claude-records/.jarvis2-services/`:
-  `search.db.gz` daily, `icloud-index.db.gz` weekly). A missing database (a new box, a lost volume) is seeded from
+  `search.db.gz` daily, `icloud-index.db.gz.age` weekly). A missing database (a new box, a lost volume) is seeded from
   that copy at start. The iCloud index refuses to start without one (`SEED_REQUIRED=1`): its database holds the AI
   budget's lifetime ledger (`ai_spent`, USD 25 cap, Deyao 2026-10-01), and starting empty would spend it again. To
   really start from nothing, set `SEED_REQUIRED` to "0" for one rollout.

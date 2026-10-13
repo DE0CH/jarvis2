@@ -144,6 +144,26 @@ func TestMachineAPINothingGoesToJarvis1(t *testing.T) {
 	if code, _ := m.do(t, h, "GET", "/m/api/search?q=hello+world&n=5", ""); code != 200 || seen != nil || svc == nil || svc.URL.RequestURI() != "/search?q=hello+world&n=5" {
 		t.Fatalf("%d %v", code, svc)
 	}
+	// the iCloud index: only a session whose cert holds the identity store (Deyao, 2026-10-13)
+	var ic *http.Request
+	icloud := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) { ic = req; w.Write([]byte(`{"hits":[]}`)) }))
+	defer icloud.Close()
+	t.Setenv("ICLOUD_INDEX_URL", icloud.URL)
+	r.st.Do(func(d *persisted) { d.Sessions["sA"].Stores = []string{"default"} })
+	for _, c := range [][2]string{{"GET", "/m/api/icloud/search?q=passport"}, {"GET", "/m/api/icloud/file?path=a"}, {"GET", "/m/api/icloud/status"}, {"POST", "/m/api/icloud/relist"}, {"POST", "/m/api/icloud/retry"}} {
+		code, out := m.do(t, h, c[0], c[1], "")
+		if code != 403 || ic != nil || out["needsStore"] != "identity" || !strings.Contains(out["error"].(string), "jarvis2-request add-store identity") {
+			t.Fatalf("%s %s without identity: %d %v", c[0], c[1], code, out)
+		}
+	}
+	// transcript search isn't gated
+	if code, _ := m.do(t, h, "GET", "/m/api/search/status", ""); code != 200 {
+		t.Fatalf("search without identity: %d", code)
+	}
+	r.st.Do(func(d *persisted) { d.Sessions["sA"].Stores = []string{"default", "identity"} })
+	if code, _ := m.do(t, h, "GET", "/m/api/icloud/search?q=passport", ""); code != 200 || ic == nil || ic.URL.RequestURI() != "/search?q=passport" {
+		t.Fatalf("with identity: %d %v", code, ic)
+	}
 	// a machine with no running session can't search
 	if code, _ := newTestMachine(r, "mNone").do(t, h, "GET", "/m/api/search?q=x", ""); code != 403 {
 		t.Fatalf("no session: %d", code)

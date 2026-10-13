@@ -69,7 +69,7 @@ watches.
 - Workspace layer: to verify. on-start hooks: present.
 - Peer-message delivery: present (`r.Deliver`, router/peer.go; Jarvis 1's lib/peer.js run through the `scheduler` grant).
 - Session-facing API (`$JARVIS_URL`): present — the machine's local proxy signs to `/m/api`; pull-secrets and changes answered on the machine; notify-idle and self-retire on the router; watches answer 501.
-- Transcript search, iCloud index: present, on the Jarvis 2 box (`services/search`, `services/icloud-index`, k8s/apps/search.yaml + icloud-index.yaml, moved from Jarvis 1's box with their databases on 2026-10-13: embeddings and the iCloud AI-budget ledger carried over). The router forwards the app's `/api/search*`, `/api/icloud/*` and sessions' `/m/api/search*`, `/m/api/icloud/*` (`router/searchsvc.go`). The index covers both Jarvises' archives, Jarvis 1's `.paused/`, both `.live/` and the task records.
+- Transcript search, iCloud index: present, on the Jarvis 2 box (`services/search`, `services/icloud-index`, k8s/apps/search.yaml + icloud-index.yaml, moved from Jarvis 1's box with their databases on 2026-10-13: embeddings and the iCloud AI-budget ledger carried over). The router forwards the app's `/api/search*`, `/api/icloud/*` and sessions' `/m/api/search*`, `/m/api/icloud/*` (`router/searchsvc.go`). The index covers both Jarvises' archives, Jarvis 1's `.paused/`, both `.live/` and the task records. The iCloud index is identity-level: sessions need the `identity` store (DECISIONS).
 
 ## Design questions parity raised
 1. A command channel replacing Fly exec: answered — grants (DESIGN.md "Grants", DECISIONS 24).

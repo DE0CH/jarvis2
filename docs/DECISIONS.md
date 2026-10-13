@@ -621,3 +621,13 @@ key to decrypt it offline"; the download in the iPhone app, the decryptor a comm
     Jarvis 1's `search` and `icloud-index` Deployments to 0 at the freeze. The box is a cx23 (4 GB RAM, 40 GB disk):
     the iCloud database alone is 8 GB and its pod may use 1.5 GB, so watch the box's disk and memory; a bigger box is
     `infra/create.sh` with `SERVER_TYPE`.
+112. **The iCloud index is identity-level** (Deyao, 2026-10-13: "the index should be guarded by key identity store"). A
+    session reaches `/m/api/icloud/*` only while its cert holds the `identity` store (where the iCloud login lives):
+    the router checks the session's cert stores (`Session.Stores`, which follow add-store and downgrade) and answers
+    any other session 403 `{error: "… jarvis2-request add-store identity …", needsStore: "identity"}`. Deyao's app
+    keeps `/api/icloud/*`. Transcript search stays open to every running session. On the box the index keeps its own
+    SOPS parts (`icloud-index`, `icloud-session`), its pod admits only the router, and its Storage Box copy is
+    age-encrypted (`icloud-index.db.gz.age`) to a key whose private half is only in that pod's SOPS part and, for a
+    box rebuild, in the new sensitive store `icloud-backup` (`ICLOUD_BACKUP_AGE_KEY`). The plain copy from the Jarvis 1
+    import is read once (`SEED_PLAIN_OK=1`) and deleted by the first encrypted backup. Change: keep that key in the
+    `identity` store itself instead (a full rewrite of that store, so Deyao's or the orchestrator's call).

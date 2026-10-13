@@ -174,18 +174,31 @@ class IndexTest(unittest.TestCase):
                 self.send_response(200 if b is not None else 404); self.end_headers(); self.wfile.write(b or b"")
             def do_PUT(self):
                 files[self.p()] = self.rfile.read(int(self.headers["Content-Length"])); self.send_response(201); self.end_headers()
+            def do_DELETE(self):
+                self.send_response(204 if files.pop(self.p(), None) is not None else 404); self.end_headers()
             def do_MOVE(self):
                 files[urllib.parse.unquote(urllib.parse.urlparse(self.headers["Destination"]).path[1:])] = files.pop(self.p()); self.send_response(201); self.end_headers()
         import urllib.parse
         srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), H); threading.Thread(target=srv.serve_forever, daemon=True).start()
         env = {"STORAGEBOX_HOST": f"127.0.0.1:{srv.server_address[1]}", "STORAGEBOX_USER": "u", "STORAGEBOX_PASSWORD": "p", "STORAGEBOX_SCHEME": "http", "SEED_NAME": "index.db"}
         quiet = lambda *a: None
+        import gzip, subprocess
+        kp = subprocess.run(["age-keygen"], capture_output=True, text=True).stdout
+        pub = [l.split(": ")[1] for l in kp.splitlines() if l.startswith("# public key")][0]
+        env.update(BACKUP_AGE_RECIPIENT=pub, BACKUP_AGE_KEY=kp)
         try:
             fresh = self.tmp + "/fresh.db"
             with self.assertRaises(B.NoSeed): B.seed(fresh, {**env, "SEED_REQUIRED": "1"}, quiet)
             self.assertEqual(B.seed(fresh, env, quiet), "none")
+            # the one-time plain import copy: read only with SEED_PLAIN_OK
+            files[f"{B.DIR}/index.db.gz"] = gzip.compress(open(self.db, "rb").read())
+            self.assertEqual(B.seed(fresh, env, quiet), "none")
+            self.assertEqual(B.seed(fresh, {**env, "SEED_PLAIN_OK": "1"}, quiet), "seeded"); os.remove(fresh)
             D.kv_add(self.conn, "ai_spent", 12.5)
             self.assertTrue(B.backup(self.db, env, quiet))
+            self.assertNotIn(f"{B.DIR}/index.db.gz", files)  # the plain copy is gone
+            self.assertTrue(files[f"{B.DIR}/index.db.gz.age"].startswith(b"age-encryption.org/v1"))
+            with self.assertRaises(B.NoSeed): B.seed(fresh, {**env, "BACKUP_AGE_KEY": ""}, quiet)
             self.assertEqual(B.seed(fresh, {**env, "SEED_REQUIRED": "1"}, quiet), "seeded")
             self.assertEqual(float(D.kv_get(D.connect(fresh), "ai_spent")), 12.5)  # the budget ledger travels with it
             self.assertEqual(B.seed(fresh, env, quiet), "exists")
