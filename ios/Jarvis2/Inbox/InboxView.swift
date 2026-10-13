@@ -2,7 +2,8 @@
 // setup session), and the router's approvals. Each row: the action (a fixed name per kind), what it is about (repo,
 // feature, session: the router's record; the review page renders the exact facts from the signed content), who asked,
 // when, the call, and the caller's reason in its own words.
-// Review opens the page for it; Deny (a swipe or the page's button) drops it.
+// Review opens the page for it; Deny (a swipe or the page's button) drops it. An API call a session's actions asked
+// for (router/apicalls.go) has no secure page: tapping it asks to run it, as Deyao, with no Face ID.
 import SwiftUI
 
 struct InboxView: View {
@@ -45,9 +46,10 @@ struct InboxView: View {
 private struct InboxRow: View {
   @Environment(AppModel.self) private var model
   let it: InboxItem
+  @State private var confirmCall = false
 
   var body: some View {
-    Button(action: review) {
+    Button(action: { if it.kind == "api-call" { confirmCall = true } else { review() } }) {
       VStack(alignment: .leading, spacing: 4) {
         HStack(alignment: .firstTextBaseline) {
           Text(action).font(.headline).foregroundStyle(Color.primary).accessibilityIdentifier("request-title-\(it.id)")
@@ -70,14 +72,26 @@ private struct InboxRow: View {
       }
     }
     .accessibilityIdentifier("request-review-\(it.id)")
+    .confirmationDialog("Run \(callTarget) as you?", isPresented: $confirmCall, titleVisibility: .visible) {
+      Button("Approve") { Task { await model.approveCall(it) } }.accessibilityIdentifier("request-approve-\(it.id)")
+      Button("Deny", role: .destructive) { Task { await model.deny(it) } }
+    } message: {
+      Text("Asked by \(it.callerText).")
+    }
     .swipeActions {
       Button("Deny", role: .destructive) { Task { await model.deny(it) } }
     }
     .contextMenu {
-      Button("Review", systemImage: "faceid", action: review)
+      if it.kind == "api-call" {
+        Button("Approve", systemImage: "checkmark") { Task { await model.approveCall(it) } }
+      } else {
+        Button("Review", systemImage: "faceid", action: review)
+      }
       Button("Deny", systemImage: "xmark", role: .destructive) { Task { await model.deny(it) } }
     }
   }
+
+  private var callTarget: String { "\(it.params["method"].string ?? "") \(it.params["path"].string ?? "")" }
 
   private func review() {
     guard let r = SecureRequest.fromInbox(it) else { model.say("This request can't be opened here."); return }
@@ -85,7 +99,7 @@ private struct InboxRow: View {
   }
 
   private var kindName: String {
-    ["repo-key": "Repo key", "grant": "Grant", "unlock": "Unlock", "new-session": "New session", "resume-upgrade": "Resume", "add-store": "Add a store"][it.kind] ?? it.kind
+    ["repo-key": "Repo key", "grant": "Grant", "unlock": "Unlock", "new-session": "New session", "resume-upgrade": "Resume", "add-store": "Add a store", "api-call": "API call"][it.kind] ?? it.kind
   }
   /// the list's title: the core action (or the phone grant) the entry leads to, a fixed name per kind
   private var action: String { it.actionTitle }
@@ -100,6 +114,7 @@ private struct InboxRow: View {
       let d = p["days"].int ?? 0
       return [Holder.title(p["holder"].string ?? ""), who, d > 0 ? "\(d) d" : "\(p["minutes"].int ?? 10) min"].compactMap { $0 }
     case "add-store": return [it.j["options"]["store"].string, who].compactMap { $0 }
+    case "api-call": return [callTarget, p["body"].string].compactMap { $0 }
     default:
       if let r = it.j["options"]["restore"].text { return [r] }
       return [who].compactMap { $0 }

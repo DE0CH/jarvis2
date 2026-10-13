@@ -16,7 +16,6 @@ that come from the core are relayed as the core's signed error document `{payloa
 |---|---|---|
 | `/api/*`, `/` (web page) | Deyao's app / browser | Access app `jarvis2.deyaochen.com`, Deyao's email only. The iPhone app sends the Access token in the `cf-access-token` header (got once from `/api/auth/start`). The router also verifies the `Cf-Access-Jwt-Assertion` header itself. |
 | `/setup/*` | the trusted setup session | Access app `jarvis2.deyaochen.com/setup`, service token `jarvis2-setup` only (kept in Jarvis 1's `default` store, never on a machine). The router then checks the setup key's signature on each call (below). |
-| `/actions/*` | anyone holding the actions key (`default` store) | Access app `jarvis2.deyaochen.com/actions`, service token `jarvis2-actions` only; the router checks the JWT's audience and client id (below, "Actions"). |
 | `/m/*` | session machines | Not on the public hostname at all: the router serves `/m` on a second port (8081) that only Fly's private network reaches (the box is a WireGuard peer of org `jarvis2-370`). The router checks the machine's own signature on each request. |
 
 ## App sign-in
@@ -227,6 +226,7 @@ item = { id, kind: "repo-key" | "grant" | "unlock" | "new-session" | "resume-upg
 | `GET /api/requests/:id` | one item (404 when answered, denied or expired); the shell reads the call and the reason here |
 | `DELETE /api/requests/:id` | Deny: dropped (an approval is rejected, as `…/approvals/:id/reject`) |
 | `POST /api/requests/:id/done` | the shell's page went through: the request leaves the Inbox |
+| `POST /api/requests/:id/approve` | an `api-call` request (below, "Actions"): the router runs the call now as Deyao and keeps its outcome → `{ok, state: done \| failed, status, error}`; 404 when gone. No Face ID: a step that needs the core's signature asks for its own afterwards |
 | `GET /setup/requests`, `GET /m/api/requests` | the same list for Claude; a session sees only its own |
 | `GET /setup/repos` | the router's repo list (`infra/setup.py repos`) |
 | `GET /setup/sessions` | `{sessions: [{id, machineId, state, title, image, stores, …}]}` (`infra/setup.py sessions`; the phone replica finds a session's machine here) |
@@ -239,9 +239,9 @@ lists the batch as one entry and the phone allows every item under ONE Face ID, 
 
 | Call | Does |
 |---|---|
-| `POST …/requests/batch` (`/api`, `/setup`, `/m/api`, `/actions`) | Body `{summary /* required, as explanation */, items: [{intent, …that intent's body…, explanation?}]}`; intents: `repo/add`, `repo/remove`, `grant`, `unlock` (as above), `add-store` (`{store}`; a session for itself, others name `session`), `new-session` (`POST /m/api/sessions`'s body), `jarvis1-import` (`{id, stores, size?, prompt?}`; setup session and Deyao only). 1–20 items. Every item is checked first, as its own endpoint checks it: one bad item (400/403, `item` = its index) or the same item twice and nothing is filed. → `{id: "b…", expires, items: [{intent, id?, session?, duplicate?, batch?, error?}]}`: an item that fails while being filed (the core refused its challenge) carries `error` and the rest stand. A request already waiting outside any batch joins this one (`duplicate`); one in another batch stays there (`batch`). Limits: a batch counts once toward the caller's 20 waiting requests and, when it proposes a session, once toward the 3 waiting proposals (429). |
+| `POST …/requests/batch` (`/api`, `/setup`, `/m/api`, `/m/api/actions`) | Body `{summary /* required, as explanation */, items: [{intent, …that intent's body…, explanation?}]}`; intents: `repo/add`, `repo/remove`, `grant`, `unlock` (as above), `add-store` (`{store}`; a session for itself, others name `session`), `new-session` (`POST /m/api/sessions`'s body), `jarvis1-import` (`{id, stores, size?, prompt?}`; setup session and Deyao only). 1–20 items. Every item is checked first, as its own endpoint checks it: one bad item (400/403, `item` = its index) or the same item twice and nothing is filed. → `{id: "b…", expires, items: [{intent, id?, session?, duplicate?, batch?, error?}]}`: an item that fails while being filed (the core refused its challenge) carries `error` and the rest stand. A request already waiting outside any batch joins this one (`duplicate`); one in another batch stays there (`batch`). Limits: a batch counts once toward the caller's 20 waiting requests and, when it proposes a session, once toward the 3 waiting proposals (429). |
 | `GET /api/requests/batches/:id` (`/setup/…`; `/m/api/…` its own) | `{batch, items: [item]}`; 404 when gone |
-| `DELETE /api/requests/batches/:id`, `POST /actions/requests/batches/:id/deny` | Deny all: its requests leave, its approvals are rejected (an approval still being made is rejected as it arrives) |
+| `DELETE /api/requests/batches/:id`, `POST /m/api/actions/requests/batches/:id/deny` | Deny all: its requests leave, its approvals are rejected (an approval still being made is rejected as it arrives) |
 
 ```
 batch = { id, summary, caller, callerText, call: {method, path, args: {items}}, created, expires, items: [inbox ids, as filed],
@@ -346,27 +346,35 @@ base64(combined)}` → `unlock/finish {pending, share}`.
   HKDF-SHA256 of x(e·storeKey) with info `"jarvis2/store-data-key"`, AES-256-GCM nonce‖ciphertext), since CryptoKit
   can't add points: a deploy key's store, and every store of a Recover's bundle (`claim`, above).
 
-## Actions (`/actions/*`, `router/actions.go`)
+## Actions (`/m/api/actions/*`, `router/actions.go`)
 
-The actions key (Deyao, 2026-10-13): the Access app `jarvis2.deyaochen.com/actions` admits one service token,
-`jarvis2-actions` (`infra/cloudflare.py --actions`), whose id and secret are `JARVIS2_ACTIONS_ID/SECRET` in the
-`default` store. The router checks the Access JWT's audience (`ACCESS_ACTIONS_AUD`) and client id
-(`ACTIONS_CLIENT_ID`). Only actions that need no signature from Deyao and reach no secret: anyone with the key could
-already message any session. Client: claude-env `scripts/jarvis2-actions.py`. Inbox entries name the caller "the
-actions key (default store)".
+A session's actions (Deyao, 2026-10-13): what a session may do to Jarvis 2 beyond its own business. Each session's key
+is its own machine key (minted when the core starts the machine; the machine's local proxy signs every
+`$JARVIS_URL/api/actions/…` call with it), so every action is that session's: Inbox entries name the caller "the
+actions of session “title” (id)", and the router logs each non-GET action with its session. The key works only while
+the session runs (`started`/`initialising`): from the moment it starts pausing or destroying every action is 403 and
+its pending `api-call` requests leave the Inbox. Client: claude-env `scripts/jarvis2-actions.py`.
 
 | Route | What |
 |---|---|
-| `GET /actions/sessions` | `{sessions: [{id, machineId, state, title, error, image, status?, needsGrant?}]}` |
-| `GET /actions/requests` | The Inbox, as `GET /api/requests` |
-| `POST /actions/sessions/:id/resume` | Resume a paused session: same image, no prompt, no option changes, so the core answers `approve_by_dead_machine` and the phone isn't asked. A line whose permission mode differs from its cert still gets its `resume-upgrade` approval. 4xx when not paused |
-| `POST /actions/sessions/:id/pause` | As the app's pause |
-| `POST /actions/sessions/:id/upgrade` | As the app's Upgrade (next size up, `router/memory.go`) → 202 |
-| `POST /actions/sessions/:id/destroy` | The app's Destroy, the same call: archived first, `?force=1` = its "destroy anyway" past a failed archive. |
-| `POST /actions/requests/:id/deny` | An Inbox request leaves; an approval is rejected as the app's Deny |
-| `POST /actions/sessions` | Propose a new session (body as `POST /m/api/sessions`, `explanation` required): a `new-session` approval in the Inbox; at most 3 wait |
-| `POST /actions/requests/{repo/add,repo/remove,grant,unlock}` | As `/setup/requests/*`: an Inbox request |
-| `POST /actions/requests/batch`, `POST /actions/requests/batches/:id/deny` | A batch (Requests "Batches"); Deny all |
+| `GET /m/api/actions/sessions` | `{sessions: [{id, machineId, state, title, error, image, status?, needsGrant?}]}` |
+| `GET /m/api/actions/requests` | The Inbox, as `GET /api/requests` |
+| `POST /m/api/actions/sessions/:id/resume` | Resume a paused session: same image, no prompt, no option changes, so the core answers `approve_by_dead_machine` and the phone isn't asked. A line whose permission mode differs from its cert still gets its `resume-upgrade` approval. 4xx when not paused |
+| `POST /m/api/actions/sessions/:id/pause` | As the app's pause |
+| `POST /m/api/actions/sessions/:id/upgrade` | As the app's Upgrade (next size up, `router/memory.go`) → 202 |
+| `POST /m/api/actions/sessions/:id/destroy` | The app's Destroy, the same call: archived first, `?force=1` = its "destroy anyway" past a failed archive. |
+| `POST /m/api/actions/requests/:id/deny` | An Inbox request leaves; an approval is rejected as the app's Deny |
+| `POST /m/api/actions/sessions` | Propose a new session (body as `POST /m/api/sessions`, `explanation` required): a `new-session` approval in the Inbox; at most 3 wait per session |
+| `POST /m/api/actions/requests/{repo/add,repo/remove,grant,unlock}` | As `/setup/requests/*`: an Inbox request (any session, any repo) |
+| `POST /m/api/actions/requests/batch`, `POST /m/api/actions/requests/batches/:id/deny` | A batch (Requests "Batches"); Deny all |
+| `POST /m/api/actions/requests/call` | Ask for ANY app API call to be run as Deyao (`router/apicalls.go`). Body `{method, path /* with its query */, body? /* any JSON, sent as application/json */ \| bodyText? + contentType?, explanation /* required */}`, body at most 64 KB. The path must reach an app route that `callRules` allows (400 otherwise, e.g. the Inbox itself). → `{id, duplicate, expires}`: an `api-call` Inbox request with `params {method, path, body, contentType}` and `call.args.route` = the route's pattern |
+| `GET /m/api/actions/requests/call/:id` | That session's own call: `{state: "pending", expires}` while it waits, then `{state: done \| denied \| failed, status, contentType, body, withheld, error, approvedBy: app \| web, at}` for 10 min. `withheld`: the route's response carries a credential (`callStatus`), so only the status comes back. 404 for another session's |
+
+Every app route is classified in `router/apicalls.go` `callRules` (`TestEveryAppRouteClassified` fails on one left
+out): `callBody` (status and body go back), `callStatus` (status only: the response carries a credential) or `callNo`
+(the Inbox and approvals, and calls that would hand out Deyao's login or can't run on the router). On approval the
+router serves the call through its own public mux with the approving request's Access headers, so the route's own
+`requireDeyao` checks Deyao himself.
 
 ## Setup (`/setup/*`)
 
@@ -386,7 +394,7 @@ against `SETUP_KEY` (`k8s/apps/router.yaml`), within ±2 min, each signature onc
 | `GET /setup/stores/keys` | (the router's own) the store list with key names, as `GET /api/stores` |
 | `GET /setup/jarvis1/paused[/{id}]`, `POST /setup/jarvis1/paused/{id}/prepare\|import` | (the router's own) as `/api/jarvis1/…` (Jarvis 1 import, above); the import's caller is `setup`. `infra/setup.py jarvis1 …` |
 | `POST /setup/sessions/{id}/pause` | (the router's own) cancels the session's wakeups and crons, then pauses it (202; the snapshot if its machine answers within the wait, else none). `infra/setup.py pause` |
-| `POST /setup/sessions/{id}/resume`, `POST /setup/sessions/{id}/restart` | (the router's own) the actions key's resume (same image, no prompt) and the app's Restart (pause + that resume); wakeups and crons stay armed. A Claude line on an image from before the router's login gets a `resume-upgrade` approval instead (DECISIONS 151). 202. `infra/setup.py resume|restart` |
+| `POST /setup/sessions/{id}/resume`, `POST /setup/sessions/{id}/restart` | (the router's own) the actions' resume (same image, no prompt) and the app's Restart (pause + that resume); wakeups and crons stay armed. A Claude line on an image from before the router's login gets a `resume-upgrade` approval instead (DECISIONS 151). 202. `infra/setup.py resume|restart` |
 | `POST /setup/store-keys` | (the router's own) `{name, keys: [names] \| null}` → `{ok}`: records a store's key names (env-var style, ≤ 128 chars, de-duplicated and sorted); `null` forgets them. No values. `infra/setup.py write` sends it after every write; `infra/setup.py keys NAME KEY…` and `infra/store-keys.sh` (every store, from the layout file) record names alone. |
 
 `GET /setup/status` — the router's health: the names of its secrets that are set (values never), the session

@@ -44,6 +44,7 @@ type Router struct {
 
 	muxOnce               sync.Once
 	publicMux, machineMux *http.ServeMux
+	appPatterns           map[string]bool // http.go: every app route's pattern (apicalls.go classifies them)
 }
 
 func NewRouter(cfg Config, st *State, core *CoreClient, policy Policy) *Router {

@@ -985,3 +985,24 @@ Deyao: several actions approved together with ONE Face ID; the caller groups the
      challenge stale. The waiter reads the machine's keys on every poll (a downgrade replaces them).
      *Deploy*: router and machine (session image) go live with the push; the core change waits for Deyao's go (the core
      is held: a new core is a Recover).
+
+155. **A session's actions run on its own machine key, and can ask for any app API call** (Deyao, 2026-10-13: "the
+     action key can request anything … action keys should be scoped and minted for each session, so i can see and log
+     where that comes from … and they should be disabled with each session pausing/destroying").
+     *Per session*: the shared Access service token `jarvis2-actions` (in the `default` store) is gone, with its Access
+     app and router env. The actions moved to `/m/api/actions/*`, signed by the calling machine's key, which the core
+     mints for each machine it starts; the router names the caller `Caller{Kind: "actions", Session}`, shows it in the
+     Inbox and logs every non-GET action with its session. A machine key already dies with its machine; the actions
+     also refuse a session that is pausing, destroying or paused (`actionsSession`), and its pending call requests
+     leave the Inbox, so no action outlives the session's run.
+     *Any call*: `POST /m/api/actions/requests/call` files an `api-call` request naming one app route's method, path and
+     body. Deyao approves it on its Inbox card (app or web page); the router runs it through its own public mux with
+     the approving request's Access headers, so the route checks Deyao exactly as when he calls it, and keeps the
+     result 10 min for that session alone. No Face ID for the approval: Face ID signs only what the core verifies, and
+     a call that needs it (a switch to bypass needs the terminal grant) asks for that separately.
+     *The sweep*: `callRules` classifies every app route. `callNo`: the Inbox and approvals (a request never files or
+     approves another), and calls that hand out Deyao's own login or can't run server-side. `callStatus`: allowed, but
+     the response carries a credential, so the session gets only the status. Everything else is `callBody`.
+     *Not chosen*: replaying with a router-held identity (the call must run as the person who approved it), and a
+     per-session Access service token (a machine key is already per session, rotates with each machine and needs no
+     Cloudflare state).

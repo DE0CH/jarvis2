@@ -335,4 +335,6 @@ final class RouterClient: NSObject, ASWebAuthenticationPresentationContextProvid
   /// Deny the whole batch: its requests leave, its approvals are rejected
   func inboxDenyBatch(_ id: String) async throws { try await call("DELETE", "api/requests/batches/\(id)") }
   func inboxDone(_ id: String) async { _ = try? await raw("POST", "api/requests/\(id)/done") }
+  /// an api-call request (router/apicalls.go): the router runs the call now as Deyao → its outcome
+  func inboxApproveCall(_ id: String) async throws -> JSON { try await call("POST", "api/requests/\(id)/approve") }
 }

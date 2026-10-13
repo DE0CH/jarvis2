@@ -74,7 +74,11 @@ func (r *Router) handlers() {
 func (r *Router) buildHandlers() {
 	mux, mmux := http.NewServeMux(), http.NewServeMux()
 	r.publicMux, r.machineMux = mux, mmux
-	app := func(pattern string, fn http.HandlerFunc) { mux.Handle(pattern, r.requireDeyao(fn)) }
+	r.appPatterns = map[string]bool{}
+	app := func(pattern string, fn http.HandlerFunc) {
+		r.appPatterns[pattern] = true
+		mux.Handle(pattern, r.requireDeyao(fn))
+	}
 	m := func(pattern string, fn func(w http.ResponseWriter, req *http.Request, machine string, body []byte)) {
 		mmux.Handle(pattern, r.requireMachine(fn))
 	}
@@ -95,7 +99,7 @@ func (r *Router) buildHandlers() {
 	}
 	r.registerFeatures(app, m, mux.Handle)
 	r.registerStoreKeys(app, m, mux) // storekeys.go: every store's key names
-	r.registerActions(mux.Handle)    // actions.go: the actions key (default store)
+	r.registerActions(m)             // actions.go: each session's actions, on its machine key
 	// the router's own health, for an operator with no way into the box: secret NAMES present, image, core up
 	mux.Handle("GET /setup/status", r.requireSetup(func(w http.ResponseWriter, req *http.Request) {
 		if err := r.checkSetupSig(req.Method, req.URL.Path, req.Header.Get("X-Setup-Time"), req.Header.Get("X-Setup-Sig"), nil); err != nil {

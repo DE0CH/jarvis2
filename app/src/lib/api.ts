@@ -168,8 +168,9 @@ export type Approval = {
 // approvals. The list's title is rendered here from kind + params (lib/inbox.ts); the review page renders what is
 // signed from the signed content itself.
 export type InboxItem = {
-  id: string; kind: "repo-key" | "grant" | "unlock" | ApprovalKind; approval: boolean;
-  params: { action?: "add" | "remove"; repo?: string; sensitive?: boolean; session?: string; holder?: string; minutes?: number; days?: number };
+  id: string; kind: "repo-key" | "grant" | "unlock" | "api-call" | ApprovalKind; approval: boolean;
+  params: { action?: "add" | "remove"; repo?: string; sensitive?: boolean; session?: string; holder?: string; minutes?: number; days?: number;
+    method?: string; path?: string; body?: string; contentType?: string }; // api-call: the call a session's actions ask to run as Deyao
   session?: string; sessionName?: string; caller: { kind: string; session?: string }; callerText: string;
   call: { method: string; path: string; args?: Record<string, unknown> }; explanation: string; created: string; expires?: string;
   options?: Record<string, string>; open: { kind: string; options: Record<string, unknown> };

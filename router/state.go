@@ -96,16 +96,17 @@ type persisted struct {
 	SessCerts map[string]*Doc         `json:"sessionCerts"`
 	Grants    map[string]*StoredGrant `json:"grants"` // id → a phone-signed grant or standing rule (grants.go)
 
-	Schedules map[string]*Schedule     `json:"schedules,omitempty"` // session id → wakeups, crons, resume prompt (schedule.go)
-	Budget    *BudgetState             `json:"budget,omitempty"`    // budget.go: this month's Fly spend estimate
-	BBBudget  *BBBudgetState           `json:"bbBudget,omitempty"`  // bbbudget.go: this month's Browserbase DM flags
-	Devices   map[string]*Device       `json:"devices,omitempty"`   // devices.go: Deyao's paired OpenClaw/Paseo apps
-	Uploads   map[string]*Upload       `json:"uploads,omitempty"`   // uploads.go: first-prompt attachments staged on the volume
-	Tasks     *TaskState               `json:"tasks,omitempty"`     // tasks.go: task instances (session lines), runs, daily schedules
-	Inbox     map[string]*InboxRequest `json:"inbox,omitempty"`     // inbox.go: requests waiting for the phone
-	Batches   map[string]*Batch        `json:"batches,omitempty"`   // batches.go: requests and approvals filed together, one review
-	CoreKey   string                   `json:"coreKey,omitempty"`   // corechange.go: the signing key of the core the sessions' lines belong to
-	Leases    *LeaseState              `json:"leases,omitempty"`    // leases.go: shared-device leases (holder + queue per device)
+	Schedules   map[string]*Schedule     `json:"schedules,omitempty"`   // session id → wakeups, crons, resume prompt (schedule.go)
+	Budget      *BudgetState             `json:"budget,omitempty"`      // budget.go: this month's Fly spend estimate
+	BBBudget    *BBBudgetState           `json:"bbBudget,omitempty"`    // bbbudget.go: this month's Browserbase DM flags
+	Devices     map[string]*Device       `json:"devices,omitempty"`     // devices.go: Deyao's paired OpenClaw/Paseo apps
+	Uploads     map[string]*Upload       `json:"uploads,omitempty"`     // uploads.go: first-prompt attachments staged on the volume
+	Tasks       *TaskState               `json:"tasks,omitempty"`       // tasks.go: task instances (session lines), runs, daily schedules
+	Inbox       map[string]*InboxRequest `json:"inbox,omitempty"`       // inbox.go: requests waiting for the phone
+	Batches     map[string]*Batch        `json:"batches,omitempty"`     // batches.go: requests and approvals filed together, one review
+	CallResults map[string]*CallResult   `json:"callResults,omitempty"` // apicalls.go: approved/denied API calls, for their caller
+	CoreKey     string                   `json:"coreKey,omitempty"`     // corechange.go: the signing key of the core the sessions' lines belong to
+	Leases      *LeaseState              `json:"leases,omitempty"`      // leases.go: shared-device leases (holder + queue per device)
 }
 
 type State struct {

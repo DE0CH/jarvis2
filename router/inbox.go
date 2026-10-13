@@ -62,11 +62,16 @@ type RequestParams struct {
 	Holder    string `json:"holder,omitempty"`  // grant
 	Minutes   int    `json:"minutes,omitempty"` // grant: 1–10
 	Days      int    `json:"days,omitempty"`    // a standing rule instead: 1–365 days
+	// api-call (apicalls.go): the call to run as Deyao
+	Method      string `json:"method,omitempty"`
+	Path        string `json:"path,omitempty"` // with its query
+	Body        string `json:"body,omitempty"`
+	ContentType string `json:"contentType,omitempty"`
 }
 
 type InboxRequest struct {
 	ID          string        `json:"id"`
-	Kind        string        `json:"kind"` // repo-key | grant | unlock
+	Kind        string        `json:"kind"` // repo-key | grant | unlock | api-call
 	Params      RequestParams `json:"params"`
 	Origin      Origin        `json:"origin"`
 	Explanation string        `json:"explanation"`
@@ -191,6 +196,8 @@ func (r *Router) normalizeRequest(kind string, p RequestParams) (RequestParams, 
 			out.Minutes = p.Minutes
 		}
 		return out, nil
+	case requestKindCall: // checked by fileCall (apicalls.go)
+		return RequestParams{Method: p.Method, Path: p.Path, Body: p.Body, ContentType: p.ContentType}, nil
 	}
 	return p, fmt.Errorf("unknown request kind %s", kind)
 }
@@ -212,7 +219,7 @@ func (r *Router) FileRequest(kind string, p RequestParams, explanation string, o
 	if err := callerMay(o.Caller, kind, p); err != nil {
 		return nil, false, &forbidden{err.Error()}
 	}
-	explanation, err = cleanExplanation(explanation, o.Caller.Kind == "session" || o.Caller.Kind == "setup")
+	explanation, err = cleanExplanation(explanation, o.Caller.Kind == "session" || o.Caller.Kind == "setup" || o.Caller.Kind == "actions")
 	if err != nil {
 		return nil, false, &badRequest{err.Error()}
 	}
@@ -247,6 +254,9 @@ func pruneRequests(d *persisted, now time.Time) {
 	}
 	for id, q := range d.Inbox {
 		gone := !now.Before(q.Expires)
+		if q.Kind == requestKindCall { // the actions end with the session's run (actions.go)
+			gone = gone || !callerRunning(d, q.Origin.Caller)
+		}
 		if q.Params.Session != "" {
 			s := d.Sessions[q.Params.Session]
 			gone = gone || s == nil || s.State == "destroyed"
@@ -270,8 +280,12 @@ func (r *Router) dropRequests(match func(q *InboxRequest) bool) {
 
 // ---- who called -----------------------------------------------------------------------------------------
 
-// appCaller: Deyao's own login. The iPhone app sends its device login in cf-access-token; a browser doesn't.
+// appCaller: Deyao's own login. The iPhone app sends its device login in cf-access-token; a browser doesn't. A call
+// the router runs for an approved API-call request (apicalls.go) carries its requester instead.
 func appCaller(req *http.Request) Caller {
+	if c, ok := req.Context().Value(onBehalfKey{}).(Caller); ok {
+		return c
+	}
 	if req.Header.Get("cf-access-token") != "" {
 		return Caller{Kind: "app"}
 	}
@@ -287,7 +301,7 @@ func callerText(d *persisted, c Caller) string {
 	case "setup":
 		return "Claude (setup session)"
 	case "actions":
-		return "the actions key (default store)"
+		return "the actions of " + callerText(d, Caller{Kind: "session", Session: c.Session})
 	case "session":
 		title := c.Session
 		if s := d.Sessions[c.Session]; s != nil {
@@ -425,6 +439,8 @@ func requestItem(d *persisted, q *InboxRequest, now time.Time) InboxItem {
 	case requestKindUnlock:
 		it.SessionName = inboxSessionName(d, q.Params.Session)
 		opts["sessionId"], opts["label"] = q.Params.Session, it.SessionName
+	case requestKindCall: // approved in the Inbox itself (POST /api/requests/{id}/approve), no shell page
+		it.Session, it.SessionName = q.Origin.Caller.Session, inboxSessionName(d, q.Origin.Caller.Session)
 	}
 	it.Open = map[string]any{"kind": q.Kind, "options": opts}
 	return it
@@ -480,9 +496,13 @@ func (r *Router) inboxLoop() {
 func (r *Router) DenyRequest(id string) error {
 	var found bool
 	r.st.Do(func(d *persisted) {
-		if _, ok := d.Inbox[id]; ok {
+		if q, ok := d.Inbox[id]; ok {
 			delete(d.Inbox, id)
 			found = true
+			if q.Kind == requestKindCall { // the caller reads that it was denied
+				pruneCallResults(d, time.Now().UTC())
+				d.CallResults[id] = &CallResult{ID: id, Caller: q.Origin.Caller, Method: q.Params.Method, Path: q.Params.Path, State: "denied", At: time.Now().UTC()}
+			}
 		}
 	})
 	if found {
@@ -617,6 +637,19 @@ func (r *Router) registerInbox(app appRoute, m machineRoute, public publicRoute)
 		id := req.PathValue("id")
 		r.dropRequests(func(q *InboxRequest) bool { return q.ID == id })
 		writeJSON(w, 200, map[string]bool{"ok": true})
+	})
+	// approve an API-call request (apicalls.go): the call runs now as Deyao (this request's Access login)
+	app("POST /api/requests/{id}/approve", func(w http.ResponseWriter, req *http.Request) {
+		res, err := r.ApproveCall(req.PathValue("id"), req)
+		if errors.Is(err, errNoRequest) {
+			writeJSON(w, 404, map[string]string{"error": err.Error()})
+			return
+		}
+		if err != nil {
+			writeErr(w, err)
+			return
+		}
+		writeJSON(w, 200, map[string]any{"ok": res.State == "done", "state": res.State, "status": res.Status, "error": res.Error})
 	})
 	// batches (batches.go): several items filed together, reviewed on one page under one Face ID
 	app("POST /api/requests/batch", func(w http.ResponseWriter, req *http.Request) {

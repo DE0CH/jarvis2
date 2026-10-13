@@ -227,6 +227,17 @@ extension AppModel {
                     until: { m in !m.inbox.contains { $0.id == it.id } })
   }
 
+  /// an API call a session's actions asked for: run now as Deyao. No Face ID: Face ID signs only what the core
+  /// verifies, and a call that needs that (a switch to bypass) asks for it itself afterwards.
+  func approveCall(_ it: InboxItem) async {
+    var outcome: JSON?
+    await pendUntil("q:" + it.id, "Running…", 30, action: { outcome = try await RouterClient.shared.inboxApproveCall(it.id) },
+                    until: { m in !m.inbox.contains { $0.id == it.id } })
+    guard let o = outcome else { return }
+    let line = "\(it.params["method"].string ?? "") \(it.params["path"].string ?? "")"
+    if o["ok"].bool == true { say("Ran \(line): HTTP \(o["status"].int ?? 0)") } else { say(o["error"].string ?? "The call didn't run") }
+  }
+
   func denyBatch(_ b: InboxBatch) async {
     await pendUntil("b:" + b.id, "Denying…", 30, action: { try await RouterClient.shared.inboxDenyBatch(b.id) },
                     until: { m in !m.inboxBatches.contains { $0.id == b.id } })

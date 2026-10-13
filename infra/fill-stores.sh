@@ -13,7 +13,6 @@
 #   core               FLY_API_TOKEN              a fresh infra/fly-token.sh
 #   default, identity, infra, money, devices, work, jarvis1   Deyao's own stores by kind: the keys are listed in
 #                      claude-env .claude/skills/jarvis2/stores.txt (values from this session's env)
-#   default            JARVIS2_ACTIONS_ID/SECRET      Access service token jarvis2-actions (the actions key), rotated
 #   openrouter         OPENROUTER_API
 #
 # Needs: CLOUDFLARE_API, JARVIS2_FLY_TOKEN, JARVIS2_SETUP_*, HETZNER_S3_*, the env values above, and claude-env's
@@ -26,7 +25,7 @@ GW="${GITHUB_WEB_DIR:-$HOME/workspace/claude-env/.claude/skills/github-web}"
 for v in CLOUDFLARE_API JARVIS2_FLY_TOKEN LOBSTER_TOKEN OPENROUTER_API EXA_API; do
   [ -n "${!v:-}" ] || { echo "missing env $v"; exit 1; }
 done
-trap 'shred -u "$D"/fly.tok "$D"/gh-*.token "$D"/j2tunnel.* "$D"/actions.env 2>/dev/null || true' EXIT
+trap 'shred -u "$D"/fly.tok "$D"/gh-*.token "$D"/j2tunnel.* 2>/dev/null || true' EXIT
 
 (cd "$GW" && NODE_PATH="$(npm root -g)" node github_web.js pat-create-all jarvis2-deploy-keys "$D/gh-deploy-keys.token" Administration=write)
 
@@ -80,9 +79,6 @@ done
 # Deyao's own stores, by kind, from the layout file (key names only; private, in claude-env): each line is
 # "<store> KEY…", values from this session's env. Only `default` and `shopping` are created (not sensitive); the rest are sensitive.
 LAYOUT="${STORES_LAYOUT:-$HOME/workspace/claude-env/.claude/skills/jarvis2/stores.txt}"
-# the actions key (default store): rotated, its values only in the store and its backup
-ROTATE=1 python3 infra/cloudflare.py --actions "$D/actions.env"
-set -a; . "$D/actions.env"; set +a
 grep -v '^#' "$LAYOUT" | while read -r store keys; do
   [ -n "$store" ] || continue
   # shellcheck disable=SC2086

@@ -19,6 +19,7 @@ export function inboxTitle(it: InboxItem): string {
     case "repo-key": return it.params.action === "remove" ? "Remove deploy key" : "Make deploy key";
     case "grant": return it.params.days ? "Standing rule" : "Grant";
     case "unlock": return "Unlock stores";
+    case "api-call": return "API call";
     case "add-store": return "Add store";
     case "resume-upgrade": return "Resume on latest image";
   }
@@ -45,6 +46,10 @@ export function inboxRows(it: InboxItem, approvals: Approval[] = [], policy: Pol
     case "unlock":
       add("session", "Session", session);
       return rows;
+    case "api-call":
+      add("request", "Runs", `${p.method} ${p.path}`);
+      if (p.body) add("body", "Body", p.contentType === "application/json" ? p.body : `${p.contentType}: ${p.body}`);
+      return rows;
   }
   const a = approvals.find((x) => x.id === it.id);
   const r = a ? challengeRequest(a, policy) : null;
@@ -63,6 +68,13 @@ export function inboxCall(it: InboxItem): string {
 }
 
 export const denyRequest = (it: InboxItem) => api("DELETE", `api/requests/${it.id}`);
+/** an API call a session's actions asked for (router/apicalls.go): the router runs it now, as Deyao. No Face ID here:
+ * a step that needs the core's signature asks for its own afterwards. */
+export async function approveCall(it: InboxItem) {
+  const r = await api<{ ok: boolean; state: string; status: number; error?: string }>("POST", `api/requests/${it.id}/approve`);
+  if (r.ok) toast(`Ran ${it.params.method} ${it.params.path}: HTTP ${r.status}`, r.status < 400 ? "ok" : "error");
+  else toast(r.error || "The call didn't run", "error");
+}
 /** Deny a whole batch: its requests leave, its approvals are rejected */
 export const denyBatch = (id: string) => api("DELETE", `api/requests/batches/${id}`);
 

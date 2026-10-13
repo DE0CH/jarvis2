@@ -313,6 +313,7 @@ func (r *Router) registerDevices(app appRoute, public publicRoute) {
 		writeJSON(w, 200, map[string]bool{"ok": true})
 	})
 	// the apps: their sessions, and Start for a paused one (a resume on the same image: no phone step)
+	r.appPatterns["GET /api/remotes"], r.appPatterns["POST /api/sessions/{id}/start"] = true, true // Deyao's too (apicalls.go)
 	public("GET /api/remotes", r.requireDeyaoOrDevice(r.remotes))
 	public("POST /api/sessions/{id}/start", r.requireDeyaoOrDevice(func(w http.ResponseWriter, req *http.Request) {
 		if err := r.resumeWithPrompt(req.PathValue("id"), false, ""); err != nil {

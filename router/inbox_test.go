@@ -244,30 +244,41 @@ func TestSetupSessionsAndRequests(t *testing.T) {
 	}
 }
 
-// the actions key (default store): resume only a paused session, deny an Inbox item, propose a session and file a
-// request — each named as the actions key's in the Inbox
+// a session's actions (its machine key): resume only a paused session, deny an Inbox item, propose a session and
+// file a request — each named as that session's actions in the Inbox; nothing once the session stops running
 func TestActionsKey(t *testing.T) {
 	r := newTestRouter(t)
 	addSession(r, "sR", "started", "mR", false)
-	if code, out := inboxDo(t, r, "POST", "/actions/sessions/sR/resume", "", false); code == 200 {
+	addSession(r, "sP", "paused", "", false)
+	m, mh := newTestMachine(r, "mR"), r.MachineHandler()
+	if code, out := m.do(t, mh, "POST", "/m/api/actions/sessions/sR/resume", ""); code == 200 {
 		t.Fatalf("a running session was resumed: %d %v", code, out)
 	}
-	if code, out := inboxDo(t, r, "GET", "/actions/sessions", "", false); code != 200 || len(out["sessions"].([]any)) != 1 {
+	if code, out := m.do(t, mh, "GET", "/m/api/actions/sessions", ""); code != 200 || len(out["sessions"].([]any)) != 2 {
 		t.Fatalf("%d %v", code, out)
 	}
-	code, out := inboxDo(t, r, "POST", "/actions/requests/unlock", `{"session": "sR", "explanation": "it waits for a store"}`, false)
+	code, out := m.do(t, mh, "POST", "/m/api/actions/requests/unlock", `{"session": "sP", "explanation": "it waits for a store"}`)
 	if code != 200 {
 		t.Fatalf("%d %v", code, out)
 	}
 	id := out["id"].(string)
-	if it, _ := r.InboxItem(id); it.CallerText != "the actions key (default store)" {
+	if it, _ := r.InboxItem(id); it.CallerText != "the actions of session “label sR” (sR)" || it.Call.Path != "/api/actions/requests/unlock" {
 		t.Fatalf("%+v", it)
 	}
-	if code, out := inboxDo(t, r, "POST", "/actions/requests/"+id+"/deny", "", false); code != 200 || len(r.Inbox()) != 0 {
+	if code, out := m.do(t, mh, "POST", "/m/api/actions/requests/"+id+"/deny", ""); code != 200 || len(r.Inbox()) != 0 {
 		t.Fatalf("not denied: %d %v", code, out)
 	}
-	if code, out := inboxDo(t, r, "POST", "/actions/sessions", `{"label": "x", "explanation": "a test"}`, false); code != 400 {
+	if code, out := m.do(t, mh, "POST", "/m/api/actions/sessions", `{"label": "x", "explanation": "a test"}`); code != 400 {
 		t.Fatalf("a proposal with no prompt: %d %v", code, out)
+	}
+	// the old shared key's path is gone (only the web page's fallback answers it)
+	if _, out := inboxDo(t, r, "GET", "/actions/sessions", "", false); out["sessions"] != nil {
+		t.Fatalf("/actions still served: %v", out)
+	}
+	// pausing ends the key
+	r.st.Do(func(d *persisted) { d.Sessions["sR"].State = "pausing" })
+	if code, out := m.do(t, mh, "GET", "/m/api/actions/sessions", ""); code != 403 {
+		t.Fatalf("a pausing session's actions still work: %d %v", code, out)
 	}
 }
 

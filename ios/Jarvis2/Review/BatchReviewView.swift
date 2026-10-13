@@ -333,6 +333,7 @@ extension InboxItem {
     case "unlock": return "Unlock stores"
     case "add-store": return "Add a store"
     case "resume-upgrade": return "Resume on the latest image"
+    case "api-call": return "API call"
     default: return j["options"]["restore"].text != nil ? "Restore" : "New session"
     }
   }

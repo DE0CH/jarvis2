@@ -50,10 +50,6 @@ spec:
             # and the one service token it admits, jarvis1-claude-login (infra/cloudflare.py --peer); neither is secret
             - { name: ACCESS_PEER_AUD, value: 0ede1ae31fb19bf1cbd58a9b86bf4237d67b62bacecd7ce704c16e760fba4fb6 }
             - { name: JARVIS1_LOGIN_CLIENT_ID, value: "4825630869d1df65df6e8205338f80d9.access" }
-            # the actions key (router/actions.go): the Access app jarvis2.deyaochen.com/actions and its one service token
-            # jarvis2-actions, whose id/secret are JARVIS2_ACTIONS_ID/SECRET in the default store (infra/cloudflare.py --actions)
-            - { name: ACCESS_ACTIONS_AUD, value: c389372c2fe29d78e7601d44601596420dac27c96153ee0b9d9151403173067f }
-            - { name: ACTIONS_CLIENT_ID, value: "0809a8cc5787fc705c0dad4f954b7246.access" }
             # Access app "Jarvis 2 devices" (/api/remotes, /api/sessions/*/start; infra/cloudflare.py --devices): Deyao's
             # paired OpenClaw/Paseo apps (router/devices.go)
             - { name: ACCESS_DEVICES_AUD, value: 84f7faa757a2c8d49667a3e18bfd9af7d924732de682c501388a78d5e7e85a25 }

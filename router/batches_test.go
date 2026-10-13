@@ -137,7 +137,7 @@ func TestBatchChecksEveryItemFirst(t *testing.T) {
 			t.Fatalf("%s: something was filed: %+v", name, r.Inbox())
 		}
 	}
-	// the setup session and the actions key file batches too; a standalone request already waiting joins
+	// the setup session and a session's actions file batches too; a standalone request already waiting joins
 	q, _, err := r.FileRequest(requestKindRepo, RequestParams{Action: "add", Repo: "DE0CH/b"}, "why", Origin{Caller: Caller{Kind: "setup"}})
 	if err != nil {
 		t.Fatal(err)
@@ -152,10 +152,10 @@ func TestBatchChecksEveryItemFirst(t *testing.T) {
 	if it, _ := r.InboxItem(q.ID); it.Batch != out["id"] {
 		t.Fatalf("the waiting request didn't join: %+v", it)
 	}
-	if code, out := inboxDo(t, r, "POST", "/actions/requests/batch", batchBody("unlock", `{"intent": "unlock", "session": "sA"}`), false); code != 200 {
+	if code, out := m.do(t, h, "POST", "/m/api/actions/requests/batch", batchBody("unlock", `{"intent": "unlock", "session": "sB"}`)); code != 200 {
 		t.Fatalf("%d %v", code, out)
 	}
-	if code, out := inboxDo(t, r, "POST", "/actions/requests/batches/"+r.InboxBatches(&Caller{Kind: "actions"})[0].ID+"/deny", "", false); code != 200 {
+	if code, out := m.do(t, h, "POST", "/m/api/actions/requests/batches/"+r.InboxBatches(&Caller{Kind: "actions", Session: "sA"})[0].ID+"/deny", ""); code != 200 {
 		t.Fatalf("%d %v", code, out)
 	}
 }
