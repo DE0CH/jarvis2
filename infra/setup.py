@@ -10,14 +10,22 @@ both). Values never print.
   infra/setup.py status                the router's health: secret names present, session image, core up
   infra/setup.py identity              whether the core is empty or set up (and with which master public key),
                                        checked against keys/box.pub and the core's own signature
-  infra/setup.py stores                every store (the core's signed list) with the key NAMES it holds
-  infra/setup.py keys NAME KEY[=SRC]…  record a store's key names at the router only (no values needed or sent);
-                                       `write` records them itself. `keys NAME --forget` drops them
+  infra/setup.py stores [--keys]       every store (the core's signed list) with the key NAMES it holds (--keys: each
+                                       key's explanation and writer)
   infra/setup.py create NAME           a new, empty, NOT sensitive store (once per name)
-  infra/setup.py write NAME KEY[=SRC]… new contents for a store; each value from this session's env var KEY,
-                                       or SRC: another env var name, or file:PATH. Written to the core wrapped
-                                       to the phone + core key, and backed up to S3 (encrypted to the master key
-                                       the core was set up with)
+  infra/setup.py write NAME KEY[=SRC]… [--explain KEY=TEXT]…
+                                       write these keys of a store, one by one (the store's other keys are never read
+                                       or touched); each value from this session's env var KEY, or SRC: another env var
+                                       name, or file:PATH. Each is sealed to the store key (phone + core) and, for its
+                                       backup, to the master key the core was set up with; the router backs it up first
+                                       (keys/<store>/<key>.json) and asks the phone to refresh the running sessions that
+                                       hold the store. A key name that has no explanation yet needs --explain
+  infra/setup.py delete NAME KEY…      delete these keys of a store (the backup keeps their earlier versions)
+  infra/setup.py docs NAME [--about TEXT] [KEY=TEXT…]
+                                       what a store and its keys are for (shown in the app, the web page, `jarvis2 stores
+                                       --keys`); KEY= with no text removes one
+  infra/setup.py keys NAME KEY[=SRC]…  a core from before stores were made of keys (until the held core is live): record
+                                       a store's key names at the router only. `keys NAME --forget` drops them
   infra/setup.py mark-sensitive NAME   the one-way upgrade, in the core and in the backup
   infra/setup.py backup NAME KEY[=SRC]… [--not-sensitive]
                                        a store's backup only, for the next Recover; sensitive unless
@@ -168,7 +176,8 @@ def identity():
     st = json.loads(d["payload"])
     if st.get("kind") != "core-state":
         raise SystemExit("not the core's state")
-    return {"signingKey": k["signingKey"], "agreementKey": k["agreementKey"], "master": st.get("master") or "", "phone": st.get("phone")}
+    return {"signingKey": k["signingKey"], "agreementKey": k["agreementKey"], "master": st.get("master") or "", "phone": st.get("phone"),
+            "keys": k.get("bundle") == "keys"}
 
 
 def set_up():
@@ -252,6 +261,37 @@ def trust(me):
 # this list and marks a store sensitive before it writes into it (R1 audit). A change here is a visible commit.
 # ---- stores ---------------------------------------------------------------------------------------------
 
+def store_key(phone_agreement, core_agreement):
+    """P + K, the key every store key is wrapped to (from the core's state, checked against the box key)"""
+    return _pub(*_add(_pt(phone_agreement), _pt(core_agreement)))
+
+
+def writer_text(store, key, e, data, backup_sha):
+    """core.WriterText: what a key's writer signs"""
+    sum_ = hashlib.sha256(data.encode()).hexdigest() if data else ""
+    return f"jarvis2-store-key\n{store}\n{key}\n{e}\n{sum_}\n{backup_sha}"
+
+
+def key_write(store, key, value, me, explanation=""):
+    """router keyWriteIn for one key: the value sealed to the store key (AAD store\nkey), its backup sealed to the master
+    key, both signed by the setup key (value None = a delete)"""
+    req = {"delete": value is None, "explanation": explanation}
+    e = data = bsha = ""
+    if value is not None:
+        dk = os.urandom(32)
+        ek = ec.generate_private_key(ec.SECP256R1())
+        shared_x = ek.exchange(ec.ECDH(), store_key(me["phone"]["agreementKey"], me["agreementKey"]))
+        e = base64.b64encode(_x963(ek.public_key())).decode()
+        aad = f"{store}\n{key}".encode()
+        data = base64.b64encode(_gcm(dk, value.encode(), aad)).decode()
+        b = seal_to(me["master"], value.encode(), "jarvis2/backup", aad)
+        bsha = hashlib.sha256((b["e"] + "\n" + b["data"]).encode()).hexdigest()
+        req.update({"wrapped": {"e": e, "wrapped": base64.b64encode(_gcm(_kdf(shared_x, "jarvis2/store-data-key"), dk)).decode()},
+                    "data": data, "backup": b, "backupSha256": bsha})
+    req["sig"] = base64.b64encode(setup_key().sign(writer_text(store, key, e, data, bsha).encode(), ec.ECDSA(hashes.SHA256()))).decode()
+    return req
+
+
 def blob(name, values, phone_agreement, core_agreement):
     """core.StoreBlob: the values under a data key (the name as associated data), the key wrapped to P + K, and the
     writer's signature, which the phone checks (keys/setup.pub) before it unlocks the blob (core.WriterText)"""
@@ -334,8 +374,32 @@ def main():
     elif cmd == "stores":
         for s in call("GET", "/setup/stores/keys")["stores"]:
             flags = ["sensitive" if s["sensitive"] else "not-sensitive"] + (["empty"] if s["empty"] else []) + (["unlocked"] if s["unlocked"] else [])
-            keys = " ".join(s["keys"]) if s["keys"] is not None else "(key names not recorded)"
+            keys = " ".join(k["name"] for k in s["keys"]) if s["keys"] is not None else "(key names not recorded)"
             print(f"{s['name']} [{', '.join(flags)}]: {keys}")
+            if "--keys" in args:
+                if s.get("about"):
+                    print("  " + s["about"])
+                for k in s["keys"] or []:
+                    w = k.get("writer") or {}
+                    by = f" [written by session {w.get('sessionLabel')} {w.get('session')}]" if w.get("by") == "machine" else ""
+                    print(f"  {k['name']}: {k.get('explanation') or '(no explanation yet)'}{by}")
+    elif cmd == "docs":
+        about, rest = None, args[1:]
+        if "--about" in rest:
+            i = rest.index("--about")
+            about, rest = rest[i + 1], rest[:i] + rest[i + 2:]
+        body = {"store": args[0], "keys": dict(a.split("=", 1) for a in rest)}
+        if about is not None:
+            body["about"] = about
+        call("POST", "/setup/store-docs", body)
+        print(f"ok: {args[0]}: {len(body['keys'])} explanation(s)" + (" and its about text" if about is not None else "") + " kept")
+    elif cmd == "delete":
+        me = set_up()
+        if not me["keys"]:
+            raise SystemExit("this core predates stores made of keys: `write` the store without those keys instead")
+        for k in args[1:]:
+            out = call("POST", f"/setup/stores/{args[0]}/keys/{k}", key_write(args[0], k, None, me))
+            print(f"ok: {args[0]}: {k} deleted; refresh asked of {len(out.get('refreshAsked') or [])} running session(s)")
     elif cmd == "keys":
         names = None if args[1:] == ["--forget"] else [a.partition("=")[0] for a in args[1:]]
         call("POST", "/setup/store-keys", {"name": args[0], "keys": names})
@@ -354,6 +418,12 @@ def main():
         call("POST", "/setup/stores/create", {"name": args[0]})
         print(f"ok: store {args[0]} created (empty, not sensitive)")
     elif cmd == "write":
+        explain = {}
+        while "--explain" in args:
+            i = args.index("--explain")
+            k, _, t = args[i + 1].partition("=")
+            explain[k] = t
+            del args[i:i + 2]
         name, vals = args[0], dict(value(a) for a in args[1:])
         me = set_up()
         want_sensitive = name not in NOT_SENSITIVE
@@ -363,6 +433,16 @@ def main():
             call("POST", "/setup/stores/mark-sensitive", {"name": name})
             mark_sensitive_backup(name)
             print(f"note: {name} existed as not sensitive; marked sensitive before writing", file=sys.stderr)
+        if me["keys"]:
+            for k in sorted(vals):
+                out = call("POST", f"/setup/stores/{name}/keys/{k}", key_write(name, k, vals[k], me, explain.get(k, "")))
+                print(f"ok: {name}: {k} written (backed up first); refresh asked of {len(out.get('refreshAsked') or [])} running session(s)")
+            if want_sensitive and not store_list()[name]["sensitive"]:
+                raise SystemExit(f"the core calls {name} not sensitive after the write")
+            if explain:
+                call("POST", "/setup/store-docs", {"store": name, "keys": explain})
+            return
+        # a core from before stores were made of keys (until the held core is live): the whole store at once
         b = blob(name, vals, me["phone"]["agreementKey"], me["agreementKey"])
         d = call("POST", "/setup/stores/write", {"store": b})
         sens = json.loads(d["payload"])["sensitive"]
