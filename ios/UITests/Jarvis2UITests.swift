@@ -61,6 +61,16 @@ final class Jarvis2UITests: JarvisUITestCase {
     XCTAssertEqual(made, 200, "[\(tag)] the web page's session request: \(String(decoding: out, as: UTF8.self))")
     tabRoot("Inbox")
     guard wait(prefixed("request-review-"), 60, "the web session's approval in the Inbox") else { return }
+    // the Inbox open with a pending request, the app sent away and back (as locking and unlocking the phone does: the
+    // crash of builds 1039/1064 came on unlock, from the foreground refresh)
+    XCUIDevice.shared.press(.home)
+    sleep(5)
+    app.activate()
+    XCTAssertTrue(app.wait(for: .runningForeground, timeout: 20), "[\(tag)] the app is back in the foreground")
+    sleep(3)
+    XCTAssertEqual(app.state, .runningForeground, "[\(tag)] still running after coming back (no crash on the foreground refresh)")
+    guard wait(prefixed("request-review-"), 30, "the approval still in the Inbox after coming back") else { return }
+    shot("inbox-after-foreground")
     prefixed("request-review-").tap()
     guard arrives(el("secure-approve"), 30, "the approval page") else { return }
     let row = el("signed-attachment-web.png")

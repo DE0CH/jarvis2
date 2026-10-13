@@ -38,6 +38,11 @@ final class RouterClient: NSObject, ASWebAuthenticationPresentationContextProvid
       var c = URLComponents(url: base.appending(path: "api/auth/start"), resolvingAgainstBaseURL: false)
       c?.queryItems = [URLQueryItem(name: "redirect", value: "jarvis2://auth")]
       guard let start = c?.url else { return "" }
+      // not while the phone is locked or the app is on its way back (a refresh on unlock finds the login expired):
+      // the sheet can't present then, so wait until the app is active with a window to present on
+      while UIApplication.shared.applicationState != .active || Self.keyWindow == nil {
+        try? await Task.sleep(for: .milliseconds(300))
+      }
       // ResumeOnce: a sheet that can't present both calls back (with an error) and returns false from start()
       let url: URL? = await ResumeOnce.run(failed: nil) { done in
         let s = ASWebAuthenticationSession(url: start, callback: .customScheme("jarvis2")) { u, _ in done(u) }
@@ -57,10 +62,11 @@ final class RouterClient: NSObject, ASWebAuthenticationPresentationContextProvid
     signing = t
     return await t.value
   }
+  private static var keyWindow: UIWindow? {
+    UIApplication.shared.connectedScenes.compactMap { ($0 as? UIWindowScene)?.keyWindow }.first
+  }
   nonisolated func presentationAnchor(for session: ASWebAuthenticationSession) -> ASPresentationAnchor {
-    MainActor.assumeIsolated {
-      UIApplication.shared.connectedScenes.compactMap { ($0 as? UIWindowScene)?.keyWindow }.first ?? ASPresentationAnchor()
-    }
+    MainActor.assumeIsolated { Self.keyWindow ?? ASPresentationAnchor() }
   }
 
   // ---- requests ----
