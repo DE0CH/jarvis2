@@ -10,6 +10,7 @@
 #     its settings from the router as before
 #   E2E_ONLY=jarvis1-import: after the core's setup, only the Jarvis 1 import step (a fake paused session on 127.0.0.1:${PP}070)
 #   E2E_ONLY=drain: after the first session is up, only the drain: SIGTERM to the router with a pause in flight
+#   E2E_ONLY=restore: after the core's setup, only the restore of a store to an earlier version (no machines)
 # Always with Jarvis 1 unreachable (e2e/nojarvis1.go): the router runs in its own mount namespace (sudo unshare) whose
 #   /etc/hosts sends jarvis.deyaochen.com to a listener that fails the test on any connection; each machine gets it
 #   blackholed too; search, the watch runner and the Storage Box are local stand-ins

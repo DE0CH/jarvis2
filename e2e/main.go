@@ -240,6 +240,12 @@ func main() {
 		log.Fatal("still unlocked after lock")
 	}
 
+	if os.Getenv("E2E_ONLY") == "restore" { // the restore of a store alone, on a core set up as above (no machines)
+		restoreStep(p, master, skey.StoreKey)
+		expectNoUnlocks("at the end")
+		log.Printf("E2E PASSED (the restore of a store only)")
+		return
+	}
 	if os.Getenv("E2E_ONLY") == "jarvis1-import" { // the import alone, on a core set up as above
 		jarvis1ImportStep(p)
 		expectNoUnlocks("at the end")
@@ -618,6 +624,9 @@ func main() {
 	must2(call(router, "DELETE", "/api/tasks/instances/"+iid, nil, nil))
 
 	jarvis1ImportStep(p) // jarvis1import.go
+	if keysCore {
+		restoreStep(p, master, skey.StoreKey) // storerestore.go
+	}
 
 	step("no store was left unlocked; the unlocked list is signed and empty")
 	expectNoUnlocks("at the end")
