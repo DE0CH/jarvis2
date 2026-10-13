@@ -7,9 +7,10 @@ package main
 //
 // Served by the router: wakeups and crons (schedule.go), notify-idle (autopilot.go's switch), and the session
 // retiring itself.
-// Transcript search and the iCloud index: the box's own services (searchsvc.go).
-// Forwarded to Jarvis 1 (its own services, which Deyao lets Jarvis 2 sessions use "like Jarvis 1"): device
-// leases and the shared Claude login (content stores: content.go), with the
+// Transcript search and the iCloud index: the box's own services (searchsvc.go). Device leases: leases.go; content
+// stores: content.go.
+// Forwarded to Jarvis 1 (its own services, which Deyao lets Jarvis 2 sessions use "like Jarvis 1"): the shared Claude
+// login, with the
 // Access service token JARVIS1_SERVICES_ID/SECRET (the cf-tunnel Worker confines it to those paths) and the header
 // X-Jarvis2-Session naming the calling session. The pull-secrets and changes calls never reach the router:
 // the machine answers them itself (it holds its secrets and its repos).
@@ -28,10 +29,6 @@ import (
 
 // jarvis1Routes: the Jarvis 1 paths a Jarvis 2 session may reach (method + Go mux path under /api)
 var jarvis1Routes = []string{
-	"GET /api/leases", "GET /api/leases/{name}",
-	"POST /api/sessions/{id}/leases/{name}", "PUT /api/sessions/{id}/leases/{name}",
-	"PATCH /api/sessions/{id}/leases/{name}", "DELETE /api/sessions/{id}/leases/{name}",
-	"POST /api/sessions/{id}/leases/{name}/seen",
 	"GET /api/credentials", "POST /api/credentials",
 }
 

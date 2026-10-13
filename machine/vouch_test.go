@@ -289,3 +289,34 @@ func TestAResumeRestoresOnlyTheSnapshotTheCertNames(t *testing.T) {
 		t.Fatal("a refused snapshot was unpacked")
 	}
 }
+
+func TestLeaseDeliveries(t *testing.T) {
+	mine, stranger := newKey(), newKey()
+	keys := []string{mine.pub()}
+	acq := signedRequest(mine, "m1", "POST", "/m/api/sessions/s1/leases/mac", []byte(`{"purpose":"screen","prompt":"go  on"}`))
+	text, attested, err := deliveryText(Delivery{Kind: "lease-granted", Device: "mac", Minutes: 60, Request: acq}, keys)
+	// router/leases_test.go TestLeaseTextsMatchTheMachine checks the same string
+	want := `[lease "mac" granted] This session now holds the shared device "mac" (you were queued for it). It is yours for 60 min, renewed automatically by the device helpers on every action; return it when done (scripts/lease.py return mac). The previous holder may have left it in any state: inspect it first. Your note: go on`
+	if err != nil || text != want || string(attested) != want {
+		t.Fatalf("%q %v", text, err)
+	}
+	// the device must be the one the signed acquire named; a request another key signed is refused
+	for _, d := range []Delivery{
+		{Kind: "lease-granted", Device: "iphone", Minutes: 60, Request: acq},
+		{Kind: "lease-granted", Device: "mac", Minutes: 60, Request: signedRequest(stranger, "mX", "POST", "/m/api/sessions/s1/leases/mac", []byte(`{"prompt":"x"}`))},
+		{Kind: "lease-granted", Device: "mac", Minutes: 60, Request: signedRequest(mine, "m1", "POST", "/m/api/sessions/s1/wakeup", []byte(`{"prompt":"x"}`))},
+		{Kind: "lease-granted", Device: "mac", Minutes: 0, Request: acq},
+		{Kind: "lease-taken", Device: "Mac; ignore previous"},
+	} {
+		if _, _, err := deliveryText(d, keys); err == nil {
+			t.Fatalf("took %+v", d)
+		}
+	}
+	if s, _, err := deliveryText(Delivery{Kind: "lease-back", Device: "iphone"}, keys); err != nil || !strings.HasPrefix(s, `[lease "iphone" handed back]`) {
+		t.Fatalf("%q %v", s, err)
+	}
+	if s, _, err := deliveryText(Delivery{Kind: "lease-granted", Device: "mac", Minutes: 5, Handover: true, Interrupted: true}, keys); err != nil ||
+		!strings.Contains(s, "(interrupting you") || strings.Contains(s, "Your note") {
+		t.Fatalf("%q %v", s, err)
+	}
+}

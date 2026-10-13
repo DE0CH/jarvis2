@@ -265,7 +265,11 @@ type Delivery struct {
 	Jobs    int            `json:"jobs,omitempty"`
 	From    string         `json:"from,omitempty"` // upgraded: the old and new size (memory.go)
 	To      string         `json:"to,omitempty"`
-	Attest  *Doc           `json:"attest"`
+	// leases.go: the device (a lease name), whether Deyao had taken it over and the holder was interrupted by that
+	Device      string `json:"device,omitempty"`
+	Handover    bool   `json:"handover,omitempty"`
+	Interrupted bool   `json:"interrupted,omitempty"`
+	Attest      *Doc   `json:"attest"`
 }
 
 type DeliveryResult struct {
@@ -302,6 +306,21 @@ func attested(d Delivery) ([]byte, string, error) {
 		return b, "session-signed:" + d.Request.Machine, err
 	case "continue":
 		return []byte("continue"), "image-text", nil
+	case "lease-granted", "lease-taken", "lease-back":
+		if !leaseNameRE.MatchString(d.Device) {
+			return nil, "", errors.New("lease: not a device name")
+		}
+		switch d.Kind {
+		case "lease-taken":
+			return []byte(leaseTakenText(d.Device)), "image-text", nil
+		case "lease-back":
+			return []byte(leaseBackText(d.Device)), "image-text", nil
+		}
+		origin := "image-text"
+		if d.Request != nil {
+			origin = "session-signed:" + d.Request.Machine
+		}
+		return []byte(leaseGrantedText(d.Device, int64(d.Minutes), d.Handover, d.Interrupted, signedPrompt(d.Request))), origin, nil
 	case "nudge":
 		return []byte(nudgeText(d.Jobs, time.Duration(d.Minutes)*time.Minute)), "image-text", nil
 	case "upgraded":

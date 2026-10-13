@@ -26,6 +26,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -171,7 +172,13 @@ type Delivery struct {
 	Jobs    int            `json:"jobs,omitempty"`    // nudge: background jobs (a number)
 	From    string         `json:"from,omitempty"`    // upgraded: the old size (small | medium | large)
 	To      string         `json:"to,omitempty"`      // upgraded: the new size
-	Attest  *SignedDoc     `json:"attest"`
+	// a lease (leases.go): the device (a lease name), and whether Deyao had taken it over (and interrupted this
+	// session); a granted lease also carries this session's own signed acquire request (its prompt) and the lease's
+	// length in Minutes
+	Device      string     `json:"device,omitempty"`
+	Handover    bool       `json:"handover,omitempty"`
+	Interrupted bool       `json:"interrupted,omitempty"`
+	Attest      *SignedDoc `json:"attest"`
 }
 
 // ownRequestBody: the body of a request one of this line's machines signed (a wakeup or cron it asked for)
@@ -227,6 +234,12 @@ func deliveryText(d Delivery, keys []string) (text string, attested []byte, err 
 		return fmt.Sprintf("[recurring wakeup %q — run %d] %s", name, max(1, d.Run), prompt), body, nil
 	case "continue":
 		return "continue", []byte("continue"), nil
+	case "lease-granted", "lease-taken", "lease-back":
+		t, err := leaseText(d, keys)
+		if err != nil {
+			return "", nil, err
+		}
+		return t, []byte(t), nil
 	case "nudge":
 		jobs := fmt.Sprintf("%d background jobs have", d.Jobs)
 		if d.Jobs == 1 {
@@ -402,4 +415,69 @@ func upgradedText(from, to string) (string, error) {
 		"To free memory for the move, every process of the old machine was stopped: Claude itself, background jobs, builds, dev servers, browsers. " +
 		"Their list is in ~/artifacts/jarvis2-upgrade-freed.txt. Check which of them the task still needs, restart only those (and keep an eye on memory: run fewer heavy things at once), then carry on with the task. " +
 		"This is an automated message from Jarvis, not from Deyao, and not an answer to any open question.", nil
+}
+
+// ---- leases (router/leases.go builds the same texts) ------------------------------------------------------------
+
+var (
+	leaseNameRE  = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,40}$`)
+	leaseSpaceRE = regexp.MustCompile(`\s+`)
+	leasePathRE  = regexp.MustCompile(`^/m/api/sessions/[^/]+/leases/([a-z0-9][a-z0-9-]{0,40})$`)
+)
+
+// leaseText: the wake text for a lease delivery. The router names only the device (a lease name), two flags and a
+// number; a granted lease's note is this session's own, from its signed acquire request, whose path names the device.
+func leaseText(d Delivery, keys []string) (string, error) {
+	if !leaseNameRE.MatchString(d.Device) {
+		return "", errors.New("lease: not a device name")
+	}
+	dev := d.Device
+	switch d.Kind {
+	case "lease-taken":
+		return fmt.Sprintf("[lease %q taken over] Deyao has taken the shared device %q himself. Stop using it now: every device action is refused while he has it. ", dev, dev) +
+			"You are first in the queue; when he hands it back you'll be woken. Then look at the device first: it will be in whatever state he left it. " +
+			"This is an automated message from Jarvis, not an answer to any open question.", nil
+	case "lease-back":
+		return fmt.Sprintf("[lease %q handed back] Deyao has handed the shared device %q back. Earlier this session found it taken over: that no longer applies. ", dev, dev) +
+			fmt.Sprintf("Run scripts/lease.py status %s to see whether it is free or who holds it now, and acquire it if this session still needs it (scripts/lease.py acquire %s --purpose \"…\"). ", dev, dev) +
+			"If you told Deyao or planned around it being unavailable, reconsider now. It is in whatever state he left it: look at it first. " +
+			"This is an automated message from Jarvis, not an answer to any open question.", nil
+	}
+	prompt := ""
+	if d.Request != nil {
+		body, err := ownRequestBody(d.Request, keys)
+		if err != nil {
+			return "", err
+		}
+		m := leasePathRE.FindStringSubmatch(d.Request.Path)
+		if d.Request.Method != "POST" || m == nil || m[1] != dev {
+			return "", errors.New("the signed request isn't this session's acquire of that device")
+		}
+		var b struct {
+			Prompt string `json:"prompt"`
+		}
+		json.Unmarshal(body, &b)
+		prompt = strings.TrimSpace(leaseSpaceRE.ReplaceAllString(b.Prompt, " "))
+		if r := []rune(prompt); len(r) > 2000 {
+			prompt = string(r[:2000])
+		}
+	}
+	if d.Minutes < 1 || d.Minutes > 6*60 {
+		return "", errors.New("lease: not a lease length")
+	}
+	t := fmt.Sprintf("[lease %q granted] This session now holds the shared device %q (you were queued for it). ", dev, dev) +
+		fmt.Sprintf("It is yours for %d min, renewed automatically by the device helpers on every action; return it when done (scripts/lease.py return %s). ", d.Minutes, dev)
+	if d.Handover {
+		t += fmt.Sprintf("Deyao had taken %q over himself", dev)
+		if d.Interrupted {
+			t += " (interrupting you: your earlier steps may no longer apply)"
+		}
+		t += fmt.Sprintf(" and has handed it back; his notes are in scripts/lease.py status %s. The device is in whatever state he left it: look at it first (screenshot / UI tree) and continue from there.", dev)
+	} else {
+		t += "The previous holder may have left it in any state: inspect it first."
+	}
+	if prompt != "" {
+		t += " Your note: " + prompt
+	}
+	return t, nil
 }

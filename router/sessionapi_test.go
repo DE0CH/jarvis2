@@ -122,11 +122,11 @@ func TestMachineAPIForwardsToJarvis1(t *testing.T) {
 	m := newTestMachine(r, "mA")
 	h := r.MachineHandler()
 
-	code, out := m.do(t, h, "POST", "/m/api/sessions/sA/leases/iphone", `{"purpose":"x"}`)
+	code, out := m.do(t, h, "POST", "/m/api/credentials", `{"purpose":"x"}`)
 	if code != 201 || out["status"] != "granted" {
 		t.Fatalf("%d %v", code, out)
 	}
-	if seen.URL.Path != "/api/sessions/sA/leases/iphone" || seen.Header.Get("CF-Access-Client-Id") != "cid" || seen.Header.Get("X-Jarvis2-Session") != "sA" ||
+	if seen.URL.Path != "/api/credentials" || seen.Header.Get("CF-Access-Client-Id") != "cid" || seen.Header.Get("X-Jarvis2-Session") != "sA" ||
 		seen.Header.Get("X-Sig") != "" || seenBody != `{"purpose":"x"}` {
 		t.Fatalf("forwarded %s %v %q", seen.URL, seen.Header, seenBody)
 	}
@@ -150,6 +150,10 @@ func TestMachineAPIForwardsToJarvis1(t *testing.T) {
 	// a machine with no running session can't search
 	if code, _ := newTestMachine(r, "mNone").do(t, h, "GET", "/m/api/search?q=x", ""); code != 403 {
 		t.Fatalf("no session: %d", code)
+	}
+	// leases are Jarvis 2's own (leases.go): never forwarded
+	if code, out := m.do(t, h, "POST", "/m/api/sessions/sA/leases/iphone", `{"purpose":"x"}`); code != 200 || out["status"] != "granted" || seen != nil {
+		t.Fatalf("%d %v", code, out)
 	}
 }
 

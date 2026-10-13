@@ -99,6 +99,7 @@ type persisted struct {
 	Inbox     map[string]*InboxRequest `json:"inbox,omitempty"`     // inbox.go: requests waiting for the phone
 	CoreKey   string                   `json:"coreKey,omitempty"`   // corechange.go: the signing key of the core the sessions' lines belong to
 	ImageSigs map[string]string        `json:"imageSigs,omitempty"` // session image → CI's signature, for every image this router was given (SESSION_IMAGE/_SIG)
+	Leases    *LeaseState              `json:"leases,omitempty"`    // leases.go: shared-device leases (holder + queue per device)
 }
 
 type State struct {
