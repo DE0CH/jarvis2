@@ -15,6 +15,16 @@ this session as the caller, from the machine's key) and the reason given here, a
                   [--size small|medium|large] [--harness claude] [--request-id ID] --why TEXT
                                     propose a NEW session: it appears in the Inbox like the app's New session and starts
                                     only when Deyao approves it with Face ID (no attachments; at most 3 waiting)
+  jarvis2-request batch --file FILE --summary TEXT
+                                    several of the above as ONE Inbox entry, allowed together under one Face ID (or
+                                    denied together). FILE: a JSON list of items, each {"intent": …} plus that
+                                    intent's fields: {"intent":"repo/add","repo":"OWNER/NAME"},
+                                    {"intent":"grant","holder":"terminal","minutes":5}, {"intent":"unlock"},
+                                    {"intent":"add-store","store":"gmail"},
+                                    {"intent":"new-session","label":…,"prompt":…,"stores":[…],"repos":…};
+                                    an item may carry its own "explanation"; --summary (required) says what the
+                                    whole batch is for. At most 20 items; a batch counts as one of the 3 waiting
+                                    proposals. Every item is checked first: one bad item and nothing is filed
   jarvis2-request list              this session's requests still waiting
 
 A session may ask only for itself (grant, unlock, add-store), for a repo to be added, and propose new sessions; --why is required (plain
@@ -51,13 +61,45 @@ def opt(args, name):
     return None
 
 
+def start_await(store):
+    """the approval only lands in the cert: a detached waiter pulls the store's secrets once it does (no second ask; a
+    foreground wait would outlive a tool call's timeout)"""
+    log = os.path.expanduser("~/.jarvis2-await-" + "".join(c if c.isalnum() or c in "-_" else "_" for c in store) + ".log")
+    with open(log, "ab") as f:
+        subprocess.Popen(["jarvis2-machine", "await-store", store], stdout=f, stderr=f, stdin=subprocess.DEVNULL,
+                         start_new_session=True)
+    print(f"Once he allows {store}, it is pulled into ~/.secrets by itself (log: {log}); then run "
+          "`set -a; . ~/.secrets; set +a` in a shell to load it.", file=sys.stderr)
+
+
 def main():
     args = sys.argv[1:]
     if not args or args[0] in ("-h", "--help"):
         raise SystemExit(__doc__)
     if args[0] == "list":
-        for q in call("GET", "/api/requests")["requests"]:
-            print(q["id"], q["kind"], json.dumps(q.get("params") or {}, sort_keys=True), "waiting since", q["created"])
+        out = call("GET", "/api/requests")
+        for q in out["requests"]:
+            print(q["id"], q["kind"], json.dumps(q.get("params") or {}, sort_keys=True), "waiting since", q["created"],
+                  ("in batch " + q["batch"]) if q.get("batch") else "")
+        for b in out.get("batches") or []:
+            print(b["id"], "batch of", len(b["items"]), "(+%d preparing)" % b["preparing"] if b.get("preparing") else "", "until", b["expires"], "|", b["summary"])
+        return
+    if args[0] == "batch":
+        rest = args[1:]
+        f, summary = opt(rest, "--file"), opt(rest, "--summary")
+        if not f or not summary or rest:
+            raise SystemExit("batch --file FILE --summary TEXT (FILE: a JSON list of items, see --help)")
+        with open(f) as fh:
+            items = json.load(fh)
+        if not isinstance(items, list):
+            raise SystemExit("FILE must hold a JSON list of items")
+        out = call("POST", "/api/requests/batch", {"summary": summary, "items": items})
+        # the added stores are pulled by a waiter each, as for a single add-store
+        for x in items:
+            if x.get("intent") == "add-store" and x.get("store"):
+                start_await(x["store"])
+        print(json.dumps(out))
+        print("Waiting in Deyao's Inbox as one batch (the Jarvis 2 app); nothing happens until he allows it.", file=sys.stderr)
         return
     why = opt(args, "--why")
     new_session = {}
@@ -100,14 +142,7 @@ def main():
         out = call("POST", "/api/sessions", dict(new_session, explanation=why))
     elif kind == "add-store" and len(rest) == 1:
         out = call("POST", "/api/requests/add-store", {"store": rest[0], "explanation": why})
-        # the approval only lands in the cert: a detached waiter pulls the store's secrets once it does (no second
-        # ask; a foreground wait would outlive a tool call's timeout)
-        log = os.path.expanduser("~/.jarvis2-await-" + "".join(c if c.isalnum() or c in "-_" else "_" for c in rest[0]) + ".log")
-        with open(log, "ab") as f:
-            subprocess.Popen(["jarvis2-machine", "await-store", rest[0]], stdout=f, stderr=f, stdin=subprocess.DEVNULL,
-                             start_new_session=True)
-        print(f"Once he allows it, the store is pulled into ~/.secrets by itself (log: {log}); then run "
-              "`set -a; . ~/.secrets; set +a` in a shell to load it.", file=sys.stderr)
+        start_await(rest[0])
     else:
         raise SystemExit(__doc__)
     print(json.dumps(out))

@@ -320,38 +320,48 @@ func (r *Router) postNotifyIdle(w http.ResponseWriter, sid string, body []byte) 
 // approval names the caller and carries its reason. No attachments (uploads are the app's). prefix keeps the
 // caller's request ids apart from the app's and every other caller's.
 func (r *Router) proposeSession(w http.ResponseWriter, c Caller, prefix string, b []byte) {
-	var in struct {
-		NewSession
-		Explanation string `json:"explanation"`
-	}
+	var in proposalIn
 	if err := json.Unmarshal(b, &in); err != nil {
 		writeJSON(w, 400, map[string]string{"error": "bad JSON: " + err.Error()})
 		return
 	}
-	expl, err := cleanExplanation(in.Explanation, true)
+	ns, err := r.checkProposal(c, prefix, in, true)
 	if err != nil {
-		writeJSON(w, 400, map[string]string{"error": err.Error()})
-		return
-	}
-	if in.Attachments != nil {
-		writeJSON(w, 400, map[string]string{"error": "a new session proposed here can't carry attachments: put them where the new session can fetch them"})
-		return
-	}
-	if strings.TrimSpace(in.Prompt) == "" {
-		writeJSON(w, 400, map[string]string{"error": "prompt is required"})
+		writeRequestErr(w, err)
 		return
 	}
 	waiting := 0
-	r.st.Do(func(d *persisted) {
-		for _, a := range d.Approvals {
-			if a.Kind == "new-session" && a.Origin != nil && a.Origin.Caller == c {
-				waiting++
-			}
-		}
-	})
+	r.st.Do(func(d *persisted) { _, waiting = callerLoad(d, c) })
 	if waiting >= maxProposedSessions {
 		writeJSON(w, 429, map[string]string{"error": fmt.Sprintf("%d proposed sessions already wait for Deyao", waiting)})
 		return
+	}
+	id, err := r.CreateSession(ns)
+	if err != nil {
+		scheduleErr(w, err)
+		return
+	}
+	writeJSON(w, 200, map[string]any{"id": id, "requestId": strings.TrimPrefix(ns.RequestID, prefix+":"), "approval": true})
+}
+
+// proposalIn: a proposed new session (POST /m/api/sessions, /actions/sessions, a batch's new-session item)
+type proposalIn struct {
+	NewSession
+	Explanation string `json:"explanation"`
+}
+
+// checkProposal: the proposal checked and made into the NewSession CreateSession takes (the caller and its call
+// recorded); explanation required unless the batch's summary stands for it
+func (r *Router) checkProposal(c Caller, prefix string, in proposalIn, explRequired bool) (NewSession, error) {
+	expl, err := cleanExplanation(in.Explanation, explRequired)
+	if err != nil {
+		return NewSession{}, &badRequest{err.Error()}
+	}
+	if in.Attachments != nil {
+		return NewSession{}, &badRequest{"a new session proposed here can't carry attachments: put them where the new session can fetch them"}
+	}
+	if strings.TrimSpace(in.Prompt) == "" {
+		return NewSession{}, &badRequest{"prompt is required"}
 	}
 	if in.RequestID == "" {
 		in.RequestID = randID()
@@ -368,10 +378,5 @@ func (r *Router) proposeSession(w http.ResponseWriter, c Caller, prefix string, 
 	ns := in.NewSession
 	ns.Origin = &Origin{Caller: c, Call: APICall{Method: "POST", Path: "/api/sessions", Args: args}}
 	ns.Explanation = expl
-	id, err := r.CreateSession(ns)
-	if err != nil {
-		scheduleErr(w, err)
-		return
-	}
-	writeJSON(w, 200, map[string]any{"id": id, "requestId": strings.TrimPrefix(ns.RequestID, prefix+":"), "approval": true})
+	return ns, nil
 }

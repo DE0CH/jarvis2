@@ -18,7 +18,7 @@ func (r *Router) registerActions(handle func(string, http.Handler)) {
 	caller := Caller{Kind: "actions"}
 	act := func(pattern string, fn func(w http.ResponseWriter, req *http.Request, b []byte)) {
 		handle(pattern, gate(func(w http.ResponseWriter, req *http.Request) {
-			b, _ := io.ReadAll(io.LimitReader(req.Body, 1<<16))
+			b, _ := io.ReadAll(io.LimitReader(req.Body, 1<<20))
 			fn(w, req, b)
 		}))
 	}
@@ -39,7 +39,7 @@ func (r *Router) registerActions(handle func(string, http.Handler)) {
 		writeJSON(w, 200, map[string]any{"sessions": out})
 	})
 	act("GET /actions/requests", func(w http.ResponseWriter, req *http.Request, _ []byte) {
-		writeJSON(w, 200, map[string]any{"requests": r.Inbox()})
+		writeJSON(w, 200, map[string]any{"requests": r.Inbox(), "batches": r.InboxBatches(nil)})
 	})
 	// resume: same image, no prompt, no option changes, so the core answers approve_by_dead_machine and nothing
 	// reaches the phone (a line whose permission mode differs from its cert still gets its approval in the Inbox)
@@ -87,6 +87,12 @@ func (r *Router) registerActions(handle func(string, http.Handler)) {
 	})
 	act("POST /actions/sessions", func(w http.ResponseWriter, req *http.Request, b []byte) {
 		r.proposeSession(w, caller, "actions", b)
+	})
+	act("POST /actions/requests/batch", func(w http.ResponseWriter, req *http.Request, b []byte) {
+		r.serveFileBatch(w, caller, req.Method, req.URL.Path, b)
+	})
+	act("POST /actions/requests/batches/{id}/deny", func(w http.ResponseWriter, req *http.Request, _ []byte) {
+		r.serveDenyBatch(w, req.PathValue("id"))
 	})
 	for intent := range intents {
 		act("POST /actions/requests/"+intent, func(w http.ResponseWriter, req *http.Request, b []byte) {

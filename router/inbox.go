@@ -72,7 +72,8 @@ type InboxRequest struct {
 	Explanation string        `json:"explanation"`
 	Created     time.Time     `json:"created"`
 	Expires     time.Time     `json:"expires"`
-	Key         string        `json:"key"` // dedup: kind + params
+	Key         string        `json:"key"`             // dedup: kind + params
+	Batch       string        `json:"batch,omitempty"` // batches.go: filed in this batch
 }
 
 // what a caller may ask for. Every request still needs Face ID on the phone; this only keeps a session to its
@@ -220,20 +221,16 @@ func (r *Router) FileRequest(kind string, p RequestParams, explanation string, o
 	var dup *InboxRequest
 	r.st.Do(func(d *persisted) {
 		pruneRequests(d, now)
-		mine := 0
 		for _, x := range d.Inbox {
 			if x.Key == q.Key {
 				dup = x
-			}
-			if x.Origin.Caller == o.Caller {
-				mine++
 			}
 		}
 		if dup != nil {
 			return
 		}
-		if mine >= requestPerCaller {
-			err = &badRequest{fmt.Sprintf("this caller has %d requests waiting already", mine)}
+		if mine, _ := callerLoad(d, o.Caller); mine >= requestPerCaller {
+			err = &badRequest{fmt.Sprintf("this caller has %d requests waiting already", requestPerCaller)}
 			return
 		}
 		d.Inbox[q.ID] = q
@@ -371,6 +368,7 @@ type InboxItem struct {
 	Expires     *time.Time        `json:"expires,omitempty"`
 	Options     map[string]string `json:"options,omitempty"` // an approval's unsigned form fields
 	Open        map[string]any    `json:"open"`              // the shell page to open: {kind, options}
+	Batch       string            `json:"batch,omitempty"`   // batches.go: reviewed together with the batch's other items
 }
 
 func (r *Router) Inbox() []InboxItem {
@@ -379,6 +377,7 @@ func (r *Router) Inbox() []InboxItem {
 	r.expireApprovals(now)
 	r.st.Do(func(d *persisted) {
 		pruneRequests(d, now)
+		pruneBatches(d, now)
 		for _, q := range d.Inbox {
 			out = append(out, requestItem(d, q, now))
 		}
@@ -409,7 +408,8 @@ func inboxSessionName(d *persisted, sid string) string {
 func requestItem(d *persisted, q *InboxRequest, now time.Time) InboxItem {
 	exp := q.Expires
 	it := InboxItem{ID: q.ID, Kind: q.Kind, Params: q.Params, Session: q.Params.Session, Caller: q.Origin.Caller,
-		CallerText: callerText(d, q.Origin.Caller), Call: q.Origin.Call, Explanation: q.Explanation, Created: q.Created, Expires: &exp}
+		CallerText: callerText(d, q.Origin.Caller), Call: q.Origin.Call, Explanation: q.Explanation, Created: q.Created, Expires: &exp,
+		Batch: q.Batch}
 	opts := map[string]any{"inboxId": q.ID}
 	switch q.Kind {
 	case requestKindRepo:
@@ -436,7 +436,12 @@ func approvalItem(d *persisted, a *Approval) InboxItem {
 		o = *a.Origin
 	}
 	it := InboxItem{ID: a.ID, Kind: a.Kind, Approval: true, Session: a.Session, SessionName: inboxSessionName(d, a.Session),
-		Caller: o.Caller, CallerText: callerText(d, o.Caller), Call: o.Call, Explanation: a.Explanation, Created: a.Created, Options: a.Options}
+		Caller: o.Caller, CallerText: callerText(d, o.Caller), Call: o.Call, Explanation: a.Explanation, Created: a.Created, Options: a.Options,
+		Batch: a.Batch}
+	if b := d.Batches[a.Batch]; b != nil {
+		exp := approvalDeadline(d, a)
+		it.Expires = &exp
+	}
 	if a.Label != "" && d.Sessions[a.Session] == nil {
 		it.SessionName = a.Label
 	}
@@ -450,7 +455,7 @@ func (r *Router) expireApprovals(now time.Time) {
 	var old []string
 	r.st.Do(func(d *persisted) {
 		for id, a := range d.Approvals {
-			if !now.Before(a.Created.Add(inboxTTL)) {
+			if !now.Before(approvalDeadline(d, a)) {
 				old = append(old, id)
 			}
 		}
@@ -467,7 +472,7 @@ func (r *Router) inboxLoop() {
 		time.Sleep(time.Minute)
 		now := time.Now().UTC()
 		r.expireApprovals(now)
-		r.st.Do(func(d *persisted) { pruneRequests(d, now) })
+		r.st.Do(func(d *persisted) { pruneRequests(d, now); pruneBatches(d, now) })
 	}
 }
 
@@ -586,10 +591,10 @@ func (r *Router) fileIntent(w http.ResponseWriter, method, path, intent string, 
 }
 
 func (r *Router) registerInbox(app appRoute, m machineRoute, public publicRoute) {
-	readBody := func(req *http.Request) []byte { b, _ := io.ReadAll(io.LimitReader(req.Body, 1<<16)); return b }
+	readBody := func(req *http.Request) []byte { b, _ := io.ReadAll(io.LimitReader(req.Body, 1<<20)); return b } // a batch of 20 new sessions with their prompts
 	// ---- the app and the web page (Deyao's Access login) ----
 	app("GET /api/requests", func(w http.ResponseWriter, req *http.Request) {
-		writeJSON(w, 200, map[string]any{"requests": r.Inbox()})
+		writeJSON(w, 200, map[string]any{"requests": r.Inbox(), "batches": r.InboxBatches(nil)})
 	})
 	app("GET /api/requests/{id}", func(w http.ResponseWriter, req *http.Request) {
 		it, ok := r.InboxItem(req.PathValue("id"))
@@ -613,6 +618,12 @@ func (r *Router) registerInbox(app appRoute, m machineRoute, public publicRoute)
 		r.dropRequests(func(q *InboxRequest) bool { return q.ID == id })
 		writeJSON(w, 200, map[string]bool{"ok": true})
 	})
+	// batches (batches.go): several items filed together, reviewed on one page under one Face ID
+	app("POST /api/requests/batch", func(w http.ResponseWriter, req *http.Request) {
+		r.serveFileBatch(w, appCaller(req), req.Method, req.URL.Path, readBody(req))
+	})
+	app("GET /api/requests/batches/{id}", func(w http.ResponseWriter, req *http.Request) { r.serveBatch(w, req.PathValue("id"), nil) })
+	app("DELETE /api/requests/batches/{id}", func(w http.ResponseWriter, req *http.Request) { r.serveDenyBatch(w, req.PathValue("id")) })
 	for intent := range intents {
 		app("POST /api/requests/"+intent, func(w http.ResponseWriter, req *http.Request) {
 			r.fileIntent(w, req.Method, req.URL.Path, intent, appCaller(req), readBody(req))
@@ -631,7 +642,7 @@ func (r *Router) registerInbox(app appRoute, m machineRoute, public publicRoute)
 		})
 	}
 	public("GET /setup/requests", setupOnly(func(w http.ResponseWriter, req *http.Request, _ []byte) {
-		writeJSON(w, 200, map[string]any{"requests": r.Inbox()})
+		writeJSON(w, 200, map[string]any{"requests": r.Inbox(), "batches": r.InboxBatches(nil)})
 	}))
 	// the sessions and their current machines (ids and states only): the phone replica runs jarvis2-request in a
 	// session's machine (flyctl exec) and finds it here, since machines carry no router env any more
@@ -659,6 +670,12 @@ func (r *Router) registerInbox(app appRoute, m machineRoute, public publicRoute)
 	public("GET /setup/repos", setupOnly(func(w http.ResponseWriter, req *http.Request, _ []byte) {
 		writeJSON(w, 200, map[string]any{"repos": r.Repos()})
 	}))
+	public("POST /setup/requests/batch", setupOnly(func(w http.ResponseWriter, req *http.Request, b []byte) {
+		r.serveFileBatch(w, Caller{Kind: "setup"}, req.Method, req.URL.Path, b)
+	}))
+	public("GET /setup/requests/batches/{id}", setupOnly(func(w http.ResponseWriter, req *http.Request, _ []byte) {
+		r.serveBatch(w, req.PathValue("id"), nil)
+	}))
 	for intent := range intents {
 		public("POST /setup/requests/"+intent, setupOnly(func(w http.ResponseWriter, req *http.Request, b []byte) {
 			r.fileIntent(w, req.Method, req.URL.Path, intent, Caller{Kind: "setup"}, b)
@@ -678,12 +695,19 @@ func (r *Router) registerInbox(app appRoute, m machineRoute, public publicRoute)
 	}
 	m("GET /m/api/requests", own(func(w http.ResponseWriter, req *http.Request, sid string, _ []byte) {
 		mine := []InboxItem{}
+		c := Caller{Kind: "session", Session: sid}
 		for _, it := range r.Inbox() {
-			if it.Caller.Kind == "session" && it.Caller.Session == sid {
+			if it.Caller == c {
 				mine = append(mine, it)
 			}
 		}
-		writeJSON(w, 200, map[string]any{"requests": mine})
+		writeJSON(w, 200, map[string]any{"requests": mine, "batches": r.InboxBatches(&c)})
+	}))
+	m("POST /m/api/requests/batch", own(func(w http.ResponseWriter, req *http.Request, sid string, b []byte) {
+		r.serveFileBatch(w, Caller{Kind: "session", Session: sid}, req.Method, strings.TrimPrefix(req.URL.Path, "/m"), b)
+	}))
+	m("GET /m/api/requests/batches/{id}", own(func(w http.ResponseWriter, req *http.Request, sid string, _ []byte) {
+		r.serveBatch(w, req.PathValue("id"), &Caller{Kind: "session", Session: sid})
 	}))
 	for intent := range intents {
 		m("POST /m/api/requests/"+intent, own(func(w http.ResponseWriter, req *http.Request, sid string, b []byte) {
@@ -706,7 +730,7 @@ func (r *Router) registerInbox(app appRoute, m machineRoute, public publicRoute)
 			}
 		})
 		o := Origin{Caller: Caller{Kind: "session", Session: sid}, Call: APICall{Method: "POST", Path: "/api/requests/add-store", Args: map[string]any{"store": in.Store}}}
-		if err := r.AddStoreFrom(machine, in.Store, o, expl); err != nil {
+		if err := r.AddStoreFrom(machine, in.Store, o, expl, ""); err != nil {
 			writeErr(w, err)
 			return
 		}
@@ -718,6 +742,7 @@ func init() {
 	stateHooks = append(stateHooks, func(r *Router, out map[string]any) {
 		if r != nil {
 			out["inbox"] = r.Inbox()
+			out["inboxBatches"] = r.InboxBatches(nil)
 		}
 	})
 	onDestroy = append(onDestroy, func(r *Router, s Session) {

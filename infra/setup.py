@@ -39,9 +39,10 @@ both). Values never print.
   infra/setup.py jarvis1               Jarvis 1's paused sessions (its index) and each one's import state here
   infra/setup.py jarvis1 prepare ID… [--wait]
                                        the router hashes each paused Jarvis 1 session's files (in the background)
-  infra/setup.py jarvis1 import ID --stores a,b [--size S] [--prompt-file F] --why TEXT
+  infra/setup.py jarvis1 import ID [ID…] --stores a,b [--size S] [--prompt-file F] --why TEXT [--summary TEXT]
                                        a prepared one as a new Jarvis 2 session, waiting in the Inbox for Face ID
-                                       (its cert names the import manifest's sha256; docs/API.md "Jarvis 1 import")
+                                       (its cert names the import manifest's sha256; docs/API.md "Jarvis 1 import");
+                                       several IDs (or --summary) file them as ONE batch, allowed under one Face ID
   infra/setup.py request add-repo OWNER/NAME --why TEXT [--sensitive]
   infra/setup.py request remove-repo OWNER/NAME --why TEXT
   infra/setup.py request grant SESSION HOLDER [--minutes N | --days N] --why TEXT
@@ -49,6 +50,11 @@ both). Values never print.
                                        a request in the Inbox of the Jarvis 2 app (docs/API.md "Requests"): Deyao
                                        reviews what would be signed and allows it with Face ID, or denies it. The
                                        router records it as from "Claude (setup session)"; --why is required
+  infra/setup.py request batch --file FILE --summary TEXT
+                                       several requests as ONE Inbox entry (allowed together under one Face ID, or
+                                       denied together): FILE is a JSON list of items, each {"intent": …} plus that
+                                       intent's fields (repo/add, repo/remove, grant, unlock, add-store, new-session,
+                                       jarvis1-import; docs/API.md "Batches"), each with an optional "explanation"
 
 Everything is sealed to the master public key the core was set up with (Reset or Recover in the app), which
 this script reads from the core's signed state, after checking the core's keys against keys/box.pub — so it
@@ -405,9 +411,13 @@ def main():
         # pause (the snapshot if the machine answers) and cancel its wakeups and crons first
         print(json.dumps(call("POST", "/setup/sessions/" + args[0] + "/pause", {})))
     elif cmd == "requests":
-        for q in call("GET", "/setup/requests")["requests"]:
+        out = call("GET", "/setup/requests")
+        for q in out["requests"]:
             c = q.get("call") or {}
-            print(q["id"], q["kind"], json.dumps(q.get("params") or {}, sort_keys=True), "from", q["callerText"], "·", c.get("method", ""), c.get("path", ""))
+            print(q["id"], q["kind"], json.dumps(q.get("params") or {}, sort_keys=True), "from", q["callerText"], "·", c.get("method", ""), c.get("path", ""),
+                  ("· batch " + q["batch"]) if q.get("batch") else "")
+        for b in out.get("batches") or []:
+            print(b["id"], "batch of", len(b["items"]), f"(+{b['preparing']} preparing)" if b.get("preparing") else "", "from", b["callerText"], "|", b["summary"])
     elif cmd == "request":
         print(json.dumps(file_request(args), indent=1))
     elif cmd == "jarvis1":
@@ -431,6 +441,15 @@ def opt(args, name, default=None):
 def file_request(args):
     """infra/setup.py request KIND …: an Inbox request, signed with the setup key (the router names the caller)"""
     args = list(args)
+    if args[:1] == ["batch"]:
+        rest = args[1:]
+        f, summary = opt(rest, "--file"), opt(rest, "--summary")
+        if not f or not summary or rest:
+            raise SystemExit("request batch --file FILE --summary TEXT")
+        items = json.load(open(os.path.expanduser(f)))
+        if not isinstance(items, list):
+            raise SystemExit("FILE must hold a JSON list of items")
+        return call("POST", "/setup/requests/batch", {"summary": summary, "items": items})
     why = opt(args, "--why")
     sensitive = "--sensitive" in args
     args = [a for a in args if a != "--sensitive"]
@@ -484,16 +503,24 @@ def jarvis1(args):
     elif sub == "status" and len(args) == 1:
         print(json.dumps(call("GET", f"/setup/jarvis1/paused/{args[0]}"), indent=1))
     elif sub == "import" and args:
-        i = args.pop(0)
         why, stores, size, pf = opt(args, "--why"), opt(args, "--stores"), opt(args, "--size"), opt(args, "--prompt-file")
-        if not why or not stores or args:
-            raise SystemExit("jarvis1 import ID --stores a,b [--size S] [--prompt-file F] --why TEXT")
+        summary = opt(args, "--summary")
+        ids = args
+        if not why or not stores or not ids:
+            raise SystemExit("jarvis1 import ID [ID…] --stores a,b [--size S] [--prompt-file F] --why TEXT [--summary TEXT]")
         body = {"stores": [x for x in stores.split(",") if x], "explanation": why}
         if size:
             body["size"] = size
         if pf:
             body["prompt"] = open(os.path.expanduser(pf)).read()
-        print(json.dumps(call("POST", f"/setup/jarvis1/paused/{i}/import", body), indent=1))
+        if len(ids) == 1 and not summary:
+            print(json.dumps(call("POST", f"/setup/jarvis1/paused/{ids[0]}/import", body), indent=1))
+            return
+        # several: one batch (docs/API.md "Batches"), every import checked before any is filed
+        if not summary:
+            raise SystemExit("several imports are one batch: --summary TEXT says what the batch is for")
+        items = [dict(body, intent="jarvis1-import", id=i) for i in ids]
+        print(json.dumps(call("POST", "/setup/requests/batch", {"summary": summary, "items": items}), indent=1))
     else:
         raise SystemExit(jarvis1.__doc__)
 

@@ -67,6 +67,8 @@ type Approval struct {
 	// ImageSig: CI's signature over "jarvis2-session-image <image>" for the image the challenge names, when that is the
 	// current CI build (SESSION_IMAGE_SIG, made by images.yml with the key of keys/ci.pub): the phone checks it
 	ImageSig string `json:"imageSig,omitempty"`
+	// batches.go: the batch it was filed in (reviewed with the batch's others under one Face ID)
+	Batch string `json:"batch,omitempty"`
 }
 
 type Record struct {
@@ -102,6 +104,7 @@ type persisted struct {
 	Uploads   map[string]*Upload       `json:"uploads,omitempty"`   // uploads.go: first-prompt attachments staged on the volume
 	Tasks     *TaskState               `json:"tasks,omitempty"`     // tasks.go: task instances (session lines), runs, daily schedules
 	Inbox     map[string]*InboxRequest `json:"inbox,omitempty"`     // inbox.go: requests waiting for the phone
+	Batches   map[string]*Batch        `json:"batches,omitempty"`   // batches.go: requests and approvals filed together, one review
 	CoreKey   string                   `json:"coreKey,omitempty"`   // corechange.go: the signing key of the core the sessions' lines belong to
 	Leases    *LeaseState              `json:"leases,omitempty"`    // leases.go: shared-device leases (holder + queue per device)
 }
@@ -132,6 +135,9 @@ func LoadState(dir string) (*State, error) {
 	}
 	if d.Approvals == nil {
 		d.Approvals = map[string]*Approval{}
+	}
+	if d.Batches == nil {
+		d.Batches = map[string]*Batch{}
 	}
 	if d.Started == nil {
 		d.Started = map[string]*Started{}

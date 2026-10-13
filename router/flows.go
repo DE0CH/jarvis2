@@ -100,6 +100,7 @@ type NewSession struct {
 	Explanation    string         `json:"-"`           // a session's proposal: its reason, shown with the approval (sessionapi.go)
 	Task           *TaskConfig    `json:"-"`           // tasks.go: a task line's instance and parameters (into the cert's config)
 	Import         *J1ImportRef   `json:"-"`           // jarvis1import.go: the paused Jarvis 1 session this line restores
+	Batch          string         `json:"-"`           // batches.go: the batch its approval belongs to
 }
 
 const nullImage = "null" // a succession to it burns the predecessor (core.NullImage)
@@ -316,7 +317,17 @@ func (r *Router) addApproval(a *Approval) {
 	} else if img != "" {
 		a.ImageSig = r.cfg.ImageSigs[img]
 	}
-	r.st.Do(func(d *persisted) { d.Approvals[a.ID] = a })
+	denied := false
+	r.st.Do(func(d *persisted) {
+		// a batch denied while this approval's challenge was being made: the approval goes the way the batch did
+		if a.Batch != "" && d.Batches[a.Batch] == nil {
+			denied = true
+		}
+		d.Approvals[a.ID] = a
+	})
+	if denied {
+		r.Reject(a.ID)
+	}
 }
 
 // loadImageSigs reads k8s/apps/session-image-sigs.txt as mounted ("<image> <sig>" per line; images.yml appends one per
@@ -409,7 +420,7 @@ func (r *Router) CreateSession(in NewSession) (string, error) {
 	}
 	go func() {
 		r.addApproval(&Approval{Kind: "new-session", Session: s.ID, Label: s.Label, Challenge: ch,
-			Options: opts, Origin: in.Origin, Explanation: in.Explanation})
+			Options: opts, Origin: in.Origin, Explanation: in.Explanation, Batch: in.Batch})
 	}()
 	return s.ID, nil
 }
@@ -712,11 +723,11 @@ func (r *Router) finish(id string) {
 func (r *Router) AddStore(machine, store string) error {
 	var sid string
 	r.st.Do(func(d *persisted) { sid = d.Machines[machine] })
-	return r.AddStoreFrom(machine, store, Origin{Caller: Caller{Kind: "session", Session: sid}, Call: APICall{Method: "POST", Path: "/m/add-store", Args: map[string]any{"store": store}}}, "")
+	return r.AddStoreFrom(machine, store, Origin{Caller: Caller{Kind: "session", Session: sid}, Call: APICall{Method: "POST", Path: "/m/add-store", Args: map[string]any{"store": store}}}, "", "")
 }
 
 // AddStoreFrom: the add-store approval, with its caller and the caller's explanation (inbox.go)
-func (r *Router) AddStoreFrom(machine, store string, o Origin, explanation string) error {
+func (r *Router) AddStoreFrom(machine, store string, o Origin, explanation, batch string) error {
 	var s Session
 	r.st.Do(func(d *persisted) {
 		if x := d.Sessions[d.Machines[machine]]; x != nil {
@@ -735,7 +746,7 @@ func (r *Router) AddStoreFrom(machine, store string, o Origin, explanation strin
 		return err
 	}
 	r.addApproval(&Approval{Kind: "add-store", Session: s.ID, Machine: machine, Label: s.Label, Challenge: ch,
-		Options: map[string]string{"store": store}, Origin: &o, Explanation: explanation})
+		Options: map[string]string{"store": store}, Origin: &o, Explanation: explanation, Batch: batch})
 	return nil
 }
 
