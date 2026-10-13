@@ -199,7 +199,7 @@ final class Jarvis2UITests: JarvisUITestCase {
     let unlocks = el("ns-unlocks")
     XCTAssertTrue(scrolledTo(unlocks) && said(unlocks).contains("claude-login"), "[\(tag)] Start says it unlocks the locked harness store")
     scrolledUpTo(el("ns-title"))
-    el("ns-title").tap(); el("ns-title").typeText("ci session")
+    focusAndType(el("ns-title"), "ci session")
     let image = attachImage()
     if el("secure-store-gmail").waitForExistence(timeout: 3) {
       el("secure-store-gmail").tap(); sleep(1)

@@ -143,6 +143,17 @@ class JarvisUITestCase: XCTestCase {
     }
   }
   /// one character at a time (a burst into a URL keyboard can reorder characters)
+  /// tap a field until it has the keyboard (a tap right after a scroll can land while the form still moves: "Neither
+  /// element nor any descendant has keyboard focus", walkthrough run 38347022232), then type
+  func focusAndType(_ e: XCUIElement, _ text: String) {
+    for _ in 1...4 {
+      if e.isHittable { e.tap() }
+      if (e.value(forKey: "hasKeyboardFocus") as? Bool) == true { break }
+      sleep(1)
+      if (e.value(forKey: "hasKeyboardFocus") as? Bool) == true { break }
+    }
+    e.typeText(text)
+  }
   func slowType(_ e: XCUIElement, _ text: String) { for ch in text { e.typeText(String(ch)); usleep(120_000) } }
   /// scroll the current list until `e` is there (a Form draws rows lazily), then back to the top
   @discardableResult func scrolledTo(_ e: XCUIElement, max: Int = 6) -> Bool {
