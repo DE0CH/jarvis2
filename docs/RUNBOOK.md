@@ -222,12 +222,14 @@ on the box with the age key the box got in user-data. Four Secrets, each rewritt
 
 - `infra/router-secrets.py KEY[=SRC]…` → `k8s/secrets/router.enc.yaml`:
   `LOBSTER_TOKEN STORAGEBOX_HOST STORAGEBOX_USER STORAGEBOX_PASSWORD FLY_READ_TOKEN=file:~/.jarvis2/fly-read.tok
-  JARVIS1_CREDENTIALS_ID=file:… JARVIS1_CREDENTIALS_SECRET=file:… JARVIS1_SERVICES_ID=file:… JARVIS1_SERVICES_SECRET=file:…
   JARVIS2_TUNNEL_KEY=file:…` (`JARVIS2_TUNNEL_KEY`: the tunnel proof key, the same value as the cf-tunnel Worker's
-  secret `JARVIS2_TUNNEL_KEY` — without it no OpenCode/OpenClaw web UI)
-  (`JARVIS1_CREDENTIALS_ID/SECRET` = `jarvis2-claude-credentials`, used only while the Claude login is in mode `follow`;
-  (`jarvis2-claude-credentials` and `jarvis2-services` are Jarvis 1 Access service tokens that claude-env's cf-tunnel
-  Worker confines to their own paths, `CONFINED_TOKENS`) (the read-only Fly token: `infra/fly-read-token.sh`).
+  secret `JARVIS2_TUNNEL_KEY` — without it no OpenCode/OpenClaw web UI) (the read-only Fly token:
+  `infra/fly-read-token.sh`). The file written 2026-10-09 still carries four keys the router no longer reads
+  (`JARVIS1_CREDENTIALS_ID/SECRET`, `JARVIS1_SERVICES_ID/SECRET`, Jarvis 1 Access service tokens) and the stale
+  `GITHUB_READ_TOKEN` (DECISIONS 150): the next rewrite of this part leaves all five out. That rewrite needs every value
+  above, and nobody can read the old `JARVIS2_TUNNEL_KEY` back: mint a new one and set it on the Worker in the same step
+  (`wrangler secret put JARVIS2_TUNNEL_KEY` in claude-env `cf-tunnel/`); running OpenCode/OpenClaw sessions keep their
+  old proof until they restart.
 - `infra/router-secrets.py --part github GITHUB_READ_TOKEN=file:…` → `k8s/secrets/router-github.enc.yaml`: the
   repo picker's list token, the fine-grained PAT `jarvis2-repo-list` (`github-web pat-create-read jarvis2-repo-list
   <out>`: all repositories, no expiry, **Metadata read picked explicitly**). A fine-grained token with NO permission
@@ -301,18 +303,13 @@ infra/backup-read-key.py login` when they aren't in the env):
 ## The Claude login
 
 The router holds the one Claude OAuth pair every Claude session shares (`router/claudelogin.go`, API.md "The Claude
-login", DECISIONS 115-121), on its volume. `infra/setup.py claude-login` shows it (no secrets): `mode`, account,
-expiry, last refresh, the participants of the refresh protocol (`m:<machine>` per session, `jarvis1`).
+login", DECISIONS 115-121), on its volume, and is its ONLY refresher (Jarvis 2 never calls Jarvis 1; Jarvis 1, while it
+still runs, follows the pair from here through `/peer/claude-login`). `infra/setup.py claude-login` shows it (no
+secrets): account, expiry, last refresh, the participants of the refresh protocol (`m:<machine>` per session, `jarvis1`
+while Jarvis 1 follows).
 
-- **Who refreshes:** `mode own` = the router, alone; `mode follow` = Jarvis 1 (the router mirrors its pair every 30 s).
-  A refresh revokes the previous access token at once, so there must never be two refreshers. To move it from Jarvis 1
-  to the router: (1) Jarvis 1 follows first: its Secret `jarvis-claude-login` (claude-env
-  `selfhost/k8s/secrets/jarvis-claude-login.sops.yaml`: `JARVIS2_LOGIN_ID/SECRET`, the service token
-  `jarvis1-claude-login` from `infra/cloudflare.py --peer`) and a restart; its log says "the Claude login is Jarvis 2's"
-  and `/api/state` `creds.refresher` is `jarvis2`; (2) then `infra/setup.py claude-login own`. Best right after a
-  refresh (the pair lives 8 h). Back: `infra/setup.py claude-login follow` first, then remove Jarvis 1's Secret.
 - **Re-login:** Settings → Claude account → Re-login (web page or app): the sign-in page opens; sign in, copy the code
-  it shows (`code#state`), paste, Sign in. Jarvis 1's Settings Re-login lands here too. A new box starts with no login:
+  it shows (`code#state`), paste, Sign in. A new box starts with no login:
   Re-login once. A Re-login to another Claude account: also `infra/setup.py write claude CLAUDE_ACCOUNT_UUID` with the
   new account (DECISIONS 116).
 - **A dead login** (the refresh was refused) DMs Deyao once; sessions stuck on "Please run /login" get "continue" after
@@ -427,7 +424,11 @@ per app.
 - The web page: the `web` workflow (typecheck + export of `app/`).
 - End to end on real Fly with a software phone and the public TEST master key: `infra/e2e.sh` (a local core
   and router, a throwaway WireGuard peer, the session image; set `E2E_SESSION_IMAGE` to a pinned tag). It sets its
-  own core up and never touches the production core.
+  own core up and never touches the production core. It always runs with Jarvis 1 unreachable (DECISIONS 152; needs
+  passwordless sudo, which sessions have): the router in its own mount namespace whose /etc/hosts sends
+  jarvis.deyaochen.com to a listener that fails the test on any connection, each machine with it blackholed; search, the
+  watch runner and the Storage Box are local stand-ins, so it also covers a search, a device lease, a watch, a content
+  store pulled at boot and pushed back, and a newer Claude pair reaching a running machine.
   `E2E_ONLY=drain` (with its own `E2E_PEER`/`E2E_PORT` when another run is going) checks a rollout's drain instead of
   the rest: SIGTERM to the router while the first session's pause waits for its snapshot → reads served, new actions
   503, the pause ends `paused`, the router exits.

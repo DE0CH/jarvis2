@@ -50,6 +50,9 @@ every store back from the backups). docs/DESIGN.md "Setting a core up".
   Jarvis 1's paused sessions move with the Jarvis 1 import (RUNBOOK "Importing a paused Jarvis 1 session"; Jarvis 1's
   records stay on the Storage Box). Content stores, the paired OpenClaw/Paseo apps, the Browserbase budget DM and the
   Machines tab's org personal are the router's own (DECISIONS 132-139); the apps' server URL moves to this host at
-  retirement (PARITY "Device pairing"). The confined Jarvis 1 tokens go away; the router's `JARVIS1_CREDENTIALS_ID/SECRET` are used only in
-  the login's `follow` mode (before the cutover) and go with it.
+  retirement (PARITY "Device pairing"). Done 2026-10-13 (Deyao: "make sure Jarvis 2 runs fully without Jarvis 1"):
+  nothing in the router, the machine or the session image calls Jarvis 1 any more (the login's `follow` mode and the
+  image's jarvis.deyaochen.com defaults are gone), and the end-to-end test runs with every Jarvis 1 hostname
+  unreachable (RUNBOOK "Testing", DECISIONS 152). Jarvis 1 → Jarvis 2 (its `/peer/claude-login` follower) stays until Deyao
+  sets Jarvis 1 to 0.
 

@@ -910,3 +910,28 @@ Deyao: several actions approved together with ONE Face ID; the caller groups the
      reason; Pause and Destroy both run from `failed`. The cut-off start's machine, if the core had made one, isn't known
      any more: it holds no secret (never certified) and the Machines tab flags it as having no session. Old state.json's
      `pendingStart` is dropped on load.
+
+150. **The router's default secret part keeps four dead Jarvis 1 keys until its next rewrite.** The router no longer reads
+     `JARVIS1_CREDENTIALS_*` / `JARVIS1_SERVICES_*` (nor the stale `GITHUB_READ_TOKEN`), but `router.enc.yaml` is rewritten
+     whole and nobody can read `JARVIS2_TUNNEL_KEY` back: dropping them now means a new tunnel key on the Worker and the
+     router at once, and every running OpenCode/OpenClaw session's web UI would fail on its next reconnect until it
+     restarts. The values are inert (no code reads them); their Access service tokens can be revoked on Cloudflare when
+     Jarvis 1 goes to 0, which kills them for good. Change: rotate the tunnel key in a quiet moment and rewrite the part
+     (RUNBOOK "The router's secrets").
+151. **A paused Claude session on a pre-router-login image resumes on the newest image.** Images pinned before
+     `sha-c5427052a542` (2026-10-13 01:39) fetched the Claude login from Jarvis 1 with the store `claude`'s
+     `JARVIS1_CREDENTIALS_*`; those keys leave the store, so such a line would boot logged out. The router's Resume (the
+     app, the actions key, a wakeup, a lease or watch wake) of a line with the store `claude` whose image comes before that
+     pin in `session-image-sigs.txt` (or isn't listed at all) asks for the newest image instead: a `resume-upgrade`
+     approval in the Inbox, so the phone approves it; nothing boots before. A wakeup that resumes such a line waits on
+     that approval (and lapses with it after 10 minutes, leaving the line paused). Change: resume on the old image and
+     let the router's login repair (holder `login`) copy the pair in.
+152. **The end-to-end test runs with Jarvis 1 unreachable, always.** The router runs in its own mount namespace (`sudo
+     unshare`) whose /etc/hosts sends jarvis.deyaochen.com to 127.0.0.2, where a root listener logs every connection; any
+     line fails the test. Each session machine gets `0.0.0.0 jarvis.deyaochen.com` in /etc/hosts through Fly exec as soon
+     as Fly lists it started; the machine boots on its own, so the first boot can finish before that (the test logs
+     "before boot"/"after boot" per machine); every later step runs blackholed. Search, the watch runner and the Storage
+     Box (for content stores) are local stand-ins (an in-memory WebDAV over TLS, trusted through the router's
+     SSL_CERT_FILE); the watch stand-in doesn't run scripts (the real runner kills every other process in its
+     container). The router's own refresh against Anthropic isn't run (it would need a real login); the test covers a
+     newer pair reaching a running machine by itself.

@@ -428,7 +428,7 @@ Deyao handing a feature a shell, and the session's own allow list is the session
 | The watchdog's nudge, "continue" after a re-login, "upgraded" after an Upgrade | the image: texts built into it; the router picks when, never what (numbers, or a size: small, medium or large) |
 | An added store | (a) the new cert, phone-approved |
 | The OpenClaw runtime | (d) the GitHub release, pinned by sha256 in the image |
-| Jarvis 1's restore-snapshot (would fetch unsigned state from the Storage Box when a store holds its credentials) | disabled in the image |
+| Jarvis 1's restore-snapshot (would fetch unsigned state from the Storage Box when a store holds its credentials) | removed from the image |
 
 **Format exceptions** (the router's word alone, `GET /m/config`, each refused unless it matches): the session id
 (`[a-z0-9-]`), the Discord channel id (digits), the live-sync interval (5–86400 s), a task run's id and its trigger
