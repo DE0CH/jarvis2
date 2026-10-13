@@ -944,3 +944,44 @@ Deyao: several actions approved together with ONE Face ID; the caller groups the
      only the outer image; the base's own `openclaw` wrapper and forks.json's `openclaw` entry are gone). It pushes with
      its own deploy key `FORK_PIN_DEPLOY_KEY` (environment `release`, main only), and that push starts `images.yml`.
      Change: a GitHub App for the dispatch.
+
+## Two add-stores pending for one session, 2026-10-13
+
+154. **An add-store is answered onto the machine's newest cert** (Deyao, 2026-10-13: "The race shouldn't happen. Fix
+     the root issue."). What happened: a session filed `jarvis2-request add-store identity` and, 20 minutes later,
+     `… yyc`; Deyao approved both close together. Each challenge was made from the cert the machine had when it was
+     filed (`stores = s.Stores + X`), so both continued the same cert. The production core (sha-06ab2452f8ad, from before
+     R1) has no newest-cert check: it answered the second from the stale cert, the router stored that answer as the
+     session's cert, and yyc left the session. The core on main (R1) refuses the second instead (409 "isn't the newest"),
+     which loses the second store the other way. Reproduced by core/addstore_test.go (fails on main's core) and against
+     the held core's own code (its second answer named [default openrouter], not all three).
+     *The fix, in the core* (`answer` + `addOnto`): a stale add-store challenge is answered onto the machine's newest
+     cert, which the router sends as `current` (the core keeps only the newest nonce, so it takes the router's copy only
+     when it signed it, it names the same machine and line, and its nonce is the newest): its stores plus X, its keys,
+     its options (which must equal the challenge's). Each self-succession challenge is answered once (`approvalsUsed`),
+     which is what made a saved challenge useless before (R1); the newest-cert rule for pulls, resumes and downgrades is
+     unchanged. Unlocks opened for a cert that is replaced before it pulled go to the cert that replaces it, for the stores
+     it still names (`passUnlocks`), exactly as the carry does when the pull came first: otherwise the first store,
+     unlocked for the first answer's cert, would be locked for the second.
+     *Why this keeps the security model*: the phone signs "add store X to this running machine" (the review shows the
+     store, the session from the signed predecessor, the machine id). Every store in the newest cert was approved for this
+     machine before, by the phone (an add-store, the Start) or kept by its own old key (a downgrade), so the answer
+     grants exactly one store the phone didn't already grant this machine: X. What a downgrade did stays done: the
+     dropped stores aren't in the newest cert, so they don't come back (R1's concern), and its new key pair is the one
+     the answer names (the challenge's old keys are never used again). A replayed challenge gets nothing. The phone's
+     "Stores after" row is now "Stores when asked", and the app checks the answer for the same machine id holding X
+     rather than the challenge's whole machine (after a downgrade its keys are the new ones).
+     *Not chosen*: re-making every pending add-store challenge when a cert changes and having the app fetch again before
+     signing. A batch signs all its challenges under one Face ID before sending any, so the second would still be stale,
+     and a single approval racing an answer would need a second Face ID.
+     *The router* (`respondAddStore`): one new cert per machine at a time (`selfSuccessionLock`, also around a downgrade's
+     finish), sends `current` and the carry under that lock, and never stores an answer that loses a store the session
+     holds: with the held core (which ignores `current`) the approval is filed again from the newest cert and the respond
+     says "approve it again". That path is dead once the core is released, and harmless before.
+     *The machine*: `~/.secrets`, the cert file and the deploy keys are written under one flock
+     (`~/.jarvis2-secrets.lock`); a waiter pulls inside the lock, after the previous write, so it pulls from the router's
+     newest cert at that moment and a slower waiter can't write an older pull over a newer file (machine
+     secretslock_test.go). A downgrade holds the same lock and starts again (new key pair) when an add-store made its
+     challenge stale. The waiter reads the machine's keys on every poll (a downgrade replaces them).
+     *Deploy*: router and machine (session image) go live with the push; the core change waits for Deyao's go (the core
+     is held: a new core is a Recover).

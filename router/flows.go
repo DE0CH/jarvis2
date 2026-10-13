@@ -514,10 +514,10 @@ func (r *Router) Respond(id, signature string) (*Doc, string, error) {
 	if a == nil {
 		return nil, "", fmt.Errorf("no such approval (answered, denied or expired)")
 	}
-	in := map[string]any{"challenge": a.Challenge, "signature": signature}
 	if a.Kind == "add-store" {
-		in["carry"] = r.readCarry(a.Machine) // answered rebound to the machine's new cert
+		return r.respondAddStore(a, signature)
 	}
+	in := map[string]any{"challenge": a.Challenge, "signature": signature}
 	// a start the answer leads to is a tracked lifecycle action (drain.go): during a drain the answer is refused before
 	// the core uses it up, so the approval stays in the Inbox for the phone to answer again
 	done, err := r.begin(a.Session, "approved")
@@ -529,27 +529,119 @@ func (r *Router) Respond(id, signature string) (*Doc, string, error) {
 		done()
 		return nil, "", err
 	}
-	r.logInputs(extra.Entry) // an add-store's new cert (an approval for a new line has none)
+	r.logInputs(extra.Entry)
 	r.st.Do(func(d *persisted) { delete(d.Approvals, id) })
-	if a.Kind == "add-store" {
-		// adding a store answers with the machine's new cert at once
-		r.st.Do(func(d *persisted) {
-			d.Certs[a.Machine] = ans
-			if s := d.Sessions[a.Session]; s != nil {
-				var c struct{ Stores []string }
-				ans.Decode(&c)
-				s.Cert, s.Stores = ans, c.Stores
-			}
-		})
-		r.carryAfter(a.Machine, a.Machine, ans, extra) // its carried stores go on; the added one comes from its unlock
-		done()
-		return ans, a.Session, nil
-	}
 	go func() {
 		defer done()
 		r.startAndCertify(a.Session, ans)
 	}()
 	return ans, a.Session, nil
+}
+
+// selfSuccessionLocks: one new cert of a running machine at a time (an add-store answer, a downgrade's finish), so each
+// call sends the core the machine's newest cert and carry and stores the answer before the next one reads them
+var selfSuccessionLocks sync.Map
+
+func selfSuccessionLock(machine string) func() {
+	m, _ := selfSuccessionLocks.LoadOrStore(machine, &sync.Mutex{})
+	mu := m.(*sync.Mutex)
+	mu.Lock()
+	return mu.Unlock
+}
+
+// respondAddStore: the phone's answer to "add store X to this running machine". Every add-store challenge is made from
+// the cert the machine had when it was filed; when another add-store (or a downgrade) was answered since, the core
+// answers it onto the machine's newest cert, which the router sends beside it as current (core addOnto), so every
+// approved store ends in the session whatever order and timing the phone answers in (2026-10-13: identity and yyc,
+// filed 20 minutes apart and approved together; the second answer rebuilt the cert from the stale one and yyc left).
+// The router never stores an answer that loses a store the session holds: a core that ignores current (the held core
+// from before 2026-10-13) answers from the stale cert, and then the approval is filed again from the newest cert for the
+// phone to answer once more, instead of dropping a store.
+func (r *Router) respondAddStore(a *Approval, signature string) (*Doc, string, error) {
+	unlock := selfSuccessionLock(a.Machine)
+	defer unlock()
+	var cur *Doc
+	var have []string
+	r.st.Do(func(d *persisted) {
+		if s := d.Sessions[a.Session]; s != nil && s.MachineID == a.Machine && s.State == "started" {
+			cur, have = s.Cert, append([]string{}, s.Stores...)
+		}
+	})
+	if cur == nil {
+		r.st.Do(func(d *persisted) { delete(d.Approvals, a.ID) })
+		return nil, "", fmt.Errorf("the session no longer runs on the machine this store was asked for")
+	}
+	store := a.Options["store"]
+	done, err := r.begin(a.Session, "approved")
+	if err != nil {
+		return nil, "", err
+	}
+	defer done()
+	in := map[string]any{"challenge": a.Challenge, "signature": signature, "current": cur, "carry": r.readCarry(a.Machine)}
+	ans, extra, err := r.core.CallAnswer("/approve/by-phone", in)
+	if err != nil {
+		var ce *CoreError
+		if errors.As(err, &ce) && ce.Status == 409 && containsString(have, store) {
+			// this very challenge was answered before (the same store asked for twice from one cert): it is in already
+			r.st.Do(func(d *persisted) { delete(d.Approvals, a.ID) })
+			return cur, a.Session, nil
+		}
+		return nil, "", err
+	}
+	r.logInputs(extra.Entry) // the machine's new cert
+	var c struct {
+		Stores  []string `json:"stores"`
+		Machine *Started `json:"machine"`
+	}
+	ans.Decode(&c)
+	if c.Machine == nil || c.Machine.ID != a.Machine || !containsAll(c.Stores, append(have, store)) {
+		log.Printf("add-store %s for %s: the core answered %v from a stale cert (the session holds %v): filed again", store, a.Session, c.Stores, have)
+		harness, mode, config := "", certMode(cur), ""
+		r.st.Do(func(d *persisted) {
+			if s := d.Sessions[a.Session]; s != nil {
+				harness, config = s.Harness, lineConfig(s)
+			}
+		})
+		ch, err := r.succession(cur, a.Machine, sortedSet(append(have, store)), harness, mode, "", config, "")
+		if err != nil {
+			r.st.Do(func(d *persisted) { delete(d.Approvals, a.ID) })
+			return nil, "", fmt.Errorf("another store was added while this approval waited, and asking again failed: %v", err)
+		}
+		r.st.Do(func(d *persisted) {
+			if x := d.Approvals[a.ID]; x != nil {
+				x.Challenge = ch
+			}
+		})
+		return nil, "", fmt.Errorf("another store was added to this session while this approval waited: approve it again")
+	}
+	r.st.Do(func(d *persisted) {
+		delete(d.Approvals, a.ID)
+		d.Certs[a.Machine] = ans
+		if s := d.Sessions[a.Session]; s != nil {
+			s.Cert, s.Stores = ans, c.Stores
+		}
+	})
+	r.carryAfter(a.Machine, a.Machine, ans, extra) // its carried stores go on; the added one comes from its unlock
+	return ans, a.Session, nil
+}
+
+func containsString(list []string, x string) bool {
+	for _, s := range list {
+		if s == x {
+			return true
+		}
+	}
+	return false
+}
+
+// containsAll: every name of want is in have
+func containsAll(have, want []string) bool {
+	for _, w := range want {
+		if !containsString(have, w) {
+			return false
+		}
+	}
+	return true
 }
 
 func (r *Router) Reject(id string) error {
@@ -846,6 +938,8 @@ func (r *Router) DowngradeBegin(machine string, stores []string, encKey, sigKey 
 // DowngradeFinish: the challenge signed with the machine's old key → its new cert; from now on the router
 // knows the machine by its new signing key
 func (r *Router) DowngradeFinish(machine string, challenge *Doc, signature string) (*Doc, error) {
+	unlock := selfSuccessionLock(machine)
+	defer unlock()
 	cert, ans, err := r.core.CallAnswer("/approve/by-old-key", map[string]any{"challenge": challenge, "signature": signature, "carry": r.readCarry(machine)})
 	if err != nil {
 		return nil, err

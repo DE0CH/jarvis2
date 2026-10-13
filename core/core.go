@@ -189,7 +189,7 @@ type Core struct {
 
 	phoneSigning, phoneAgreement string
 
-	approvalsUsed map[string]bool // approval nonces already certified
+	approvalsUsed map[string]bool // approval nonces already certified, and self-succession challenges already answered
 	// latest: a certified machine → the nonce of its newest cert (certify, then each add-store or downgrade). A
 	// machine's older certs are superseded: they pull nothing, continue nothing and succeed to nothing, so a
 	// downgrade (or an add-store answered again) can't be undone with a cert from before it.
@@ -919,20 +919,33 @@ func (c *Core) readChallenge(d *SignedDoc) (challenge, error) {
 }
 
 // answer: what an approval turns a challenge into — for a machine succeeding itself the new cert at
-// once, else an approval that certify() binds to one machine
-func (c *Core) answer(ch challenge, by, carry string) (SignedDoc, error) {
+// once, else an approval that certify() binds to one machine. current: for an add-store, the machine's newest cert
+// (the router's copy; ignored unless this core signed it and it is the newest), see addOnto.
+func (c *Core) answer(ch challenge, by, carry string, current *SignedDoc) (SignedDoc, error) {
 	r := ch.Request
 	now := c.now().UTC().Format(time.RFC3339)
 	if r.AddedStore != "" || r.Downgrade {
-		// once per cert: the machine is alive and the challenge continues its newest cert, which this answer
-		// supersedes — so a saved challenge and signature answered again (or after a downgrade) gets nothing
+		// once per challenge: a saved challenge and signature answered again (or after a downgrade) gets nothing
 		if r.Machine == nil || c.isKilled(r.Machine.ID) {
 			return SignedDoc{}, fail(409, "the machine is gone")
 		}
-		if err := c.isLatest(r.Predecessor); err != nil {
+		if c.approvalsUsed[ch.Nonce] {
+			return SignedDoc{}, fail(409, "this challenge was already answered")
+		}
+		if r.AddedStore != "" && c.isLatest(r.Predecessor) != nil {
+			// another self-succession of this machine (an add-store, a downgrade) was answered after this challenge
+			// was made: the phone's "add store X to this machine" goes onto the machine's newest cert
+			var err error
+			if r, err = c.addOnto(r, current); err != nil {
+				return SignedDoc{}, err
+			}
+		} else if err := c.isLatest(r.Predecessor); err != nil {
 			return SignedDoc{}, err
 		}
-		c.latest[r.Machine.ID] = ch.Nonce
+		var pc Cert
+		json.Unmarshal([]byte(r.Predecessor.Payload), &pc) // checked above: this core's, the machine's newest
+		c.approvalsUsed[ch.Nonce], c.latest[r.Machine.ID] = true, ch.Nonce
+		c.passUnlocks(pc.Nonce, ch.Nonce, r.Stores)
 		if r.Downgrade {
 			if _, ok := c.signing[r.Machine.ID]; ok { // its kill's snapshot is signed with the new key from now on
 				c.signing[r.Machine.ID] = r.Machine.SigningKey
@@ -943,9 +956,52 @@ func (c *Core) answer(ch challenge, by, carry string) (SignedDoc, error) {
 	return c.sign(Approval{Kind: "approval", Nonce: ch.Nonce, Request: r, By: by})
 }
 
+// addOnto: an add-store challenge whose predecessor cert another self-succession of the same machine has since
+// replaced, rebased onto that machine's newest cert: its stores plus the added one, its keys, its options. The
+// phone approved "add store X to this running machine"; every store already in the newest cert was approved for
+// this machine before (by the phone, or kept by its own old key in a downgrade), so the answer grants nothing the
+// phone didn't, and keeps what the newest cert says: a store a downgrade dropped stays dropped, a key pair a
+// downgrade replaced stays replaced. Two add-stores filed before either is answered thus both end in the session,
+// whatever order and timing the phone answers them in (2026-10-13: the second answer used to rebuild the cert from
+// the stale predecessor, and the first store left the session). The newest cert is the caller's copy: the core
+// keeps only its nonce, and takes the copy only when it signed it and it is that nonce.
+func (c *Core) addOnto(r Request, current *SignedDoc) (Request, error) {
+	var stale, cur Cert
+	if r.Predecessor == nil || c.verifyOwn(r.Predecessor, &stale) != nil || stale.Machine == nil {
+		return r, fail(400, "predecessor is not a succession cert this core signed")
+	}
+	if current == nil {
+		return r, fail(409, "the predecessor cert isn't %s's newest: send its newest cert as current", r.Machine.ID)
+	}
+	if err := c.verifyOwn(current, &cur); err != nil || cur.Kind != "succession-cert" || cur.Machine == nil {
+		return r, fail(400, "current is not a succession cert this core signed")
+	}
+	if cur.Machine.ID != r.Machine.ID || stale.Machine.ID != r.Machine.ID || cur.Line != stale.Line {
+		return r, fail(409, "current is another machine's cert")
+	}
+	if c.latest[cur.Machine.ID] != cur.Nonce {
+		return r, fail(409, "current isn't %s's newest cert", cur.Machine.ID)
+	}
+	if persistentOptions(cur.Options) != r.Options {
+		return r, fail(409, "the machine's options changed since the challenge")
+	}
+	set := map[string]bool{r.AddedStore: true}
+	for _, n := range cur.Stores {
+		set[n] = true
+	}
+	stores := make([]string, 0, len(set))
+	for n := range set {
+		stores = append(stores, n)
+	}
+	sort.Strings(stores)
+	c.logf("add-store %s for %s rebased onto its newest cert %s", r.AddedStore, r.Machine.ID, cur.Nonce[:12])
+	r.Predecessor, r.Machine, r.Stores = current, cur.Machine, stores
+	return r, nil
+}
+
 // ApproveByPhone: the iPhone's Secure Enclave signature over exactly the challenge text. The phone is the
 // highest privilege: whatever challenge it signs is answered.
-func (c *Core) ApproveByPhone(d *SignedDoc, sig, carry string) (SignedDoc, error) {
+func (c *Core) ApproveByPhone(d *SignedDoc, sig, carry string, current *SignedDoc) (SignedDoc, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	ch, err := c.readChallenge(d)
@@ -957,7 +1013,7 @@ func (c *Core) ApproveByPhone(d *SignedDoc, sig, carry string) (SignedDoc, error
 	}
 	r := ch.Request
 	c.logf("phone approved %s: %s → %v", ch.Nonce[:12], orNull(r.PredID), r.Stores)
-	return c.answer(ch, "phone", carry)
+	return c.answer(ch, "phone", carry, current)
 }
 
 // ApproveByDeadMachine: automatic — predecessor killed (Fly-confirmed) and never used, and store set, image and
@@ -978,7 +1034,7 @@ func (c *Core) ApproveByDeadMachine(d *SignedDoc) (SignedDoc, error) {
 	}
 	if r.Image == NullImage {
 		c.logf("approve_by_dead_machine: burn of %s", r.PredID)
-		return c.answer(ch, "dead-machine", "")
+		return c.answer(ch, "dead-machine", "", nil)
 	}
 	var pc Cert
 	if err := c.verifyOwn(r.Predecessor, &pc); err != nil {
@@ -991,7 +1047,7 @@ func (c *Core) ApproveByDeadMachine(d *SignedDoc) (SignedDoc, error) {
 		return SignedDoc{}, fail(403, "store set, image or options differ from the predecessor's (or a one-time input is asked for)")
 	}
 	c.logf("approve_by_dead_machine: %s → a new machine", r.PredID)
-	return c.answer(ch, "dead-machine", "")
+	return c.answer(ch, "dead-machine", "", nil)
 }
 
 // ApproveByOldKey: automatic — a succession of a machine to itself with a subset of its stores and a new key
@@ -1014,7 +1070,7 @@ func (c *Core) ApproveByOldKey(d *SignedDoc, sig, carry string) (SignedDoc, erro
 		return SignedDoc{}, fail(403, "not signed by the key in the predecessor cert")
 	}
 	c.logf("downgrade: %s keeps %v, new keys", r.Machine.ID, r.Stores)
-	return c.answer(ch, "machine", carry)
+	return c.answer(ch, "machine", carry, nil)
 }
 
 // ---- unlock / lock -------------------------------------------------------------------------------

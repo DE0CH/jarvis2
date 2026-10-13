@@ -177,7 +177,7 @@ approval = { id, kind: "new-session" | "resume-upgrade" | "add-store", created, 
 | Call | Does |
 |---|---|
 | `GET /api/approvals` | `{approvals: [...]}` |
-| `POST /api/approvals/:id/respond` | Body `{signature}` = base64 DER signature by the phone's signing key over **exactly** `challenge.payload`. Router → core `approve/by-phone`. Answers `{answer, session}`: a core-signed `approval` (then the router starts and certifies the machine) or, for `add-store`, the new `succession-cert`. |
+| `POST /api/approvals/:id/respond` | Body `{signature}` = base64 DER signature by the phone's signing key over **exactly** `challenge.payload`. Router → core `approve/by-phone` (for `add-store` with the machine's newest cert as `current`, and its carry). Answers `{answer, session}`: a core-signed `approval` (then the router starts and certifies the machine) or, for `add-store`, the new `succession-cert`: the machine's newest cert plus the store, so add-stores answered in any order all stay (DESIGN "A machine succeeding itself"). An answer that would lose a store the session holds (a core from before 2026-10-13) isn't stored: the approval is filed again from the newest cert and the respond fails with "approve it again". |
 | `POST /api/approvals/:id/reject` | Drops it; a new session disappears, a resume-upgrade stays paused. |
 
 The phone may approve anything; it shows exactly what it signs (`request.stores`, `request.sensitive`,

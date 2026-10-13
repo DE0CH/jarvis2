@@ -160,6 +160,7 @@ func main() {
 		"blobs": []map[string]any{
 			wrapStore(skey.StoreKey, "e2e", map[string]string{"E2E_SECRET": secret}),
 			wrapStore(skey.StoreKey, "e2e-extra", map[string]string{"E2E_EXTRA": "extra-" + secret}),
+			wrapStore(skey.StoreKey, "e2e-more", map[string]string{"E2E_MORE": "more-" + secret}),
 			// the Claude login store: the account the machine accepts a login for, and a stand-in for Anthropic's
 			// profile endpoint (a public file naming that account), named in the store itself; the router's pair is
 			// a fake one seeded below
@@ -335,14 +336,30 @@ func main() {
 	expectOnMachine(m1, "su - claude -c 'jarvis2 stores' | grep -c '^e2e-extra \\[sensitive, locked\\]: E2E_EXTRA$'", "1")
 	expectOnMachine(m1, "su - claude -c 'jarvis2 stores' | grep -c '^e2e \\[in this session, locked\\]: (key names not recorded)$'", "1")
 
-	step("add a store from the machine (e2e-extra, unlocked for that add-store only; e2e comes from the carried secrets)")
+	step("two add-stores pending at once (e2e-extra, e2e-more), each unlocked for its own add-store only, answered in the order " +
+		"they weren't filed: the session ends with both (2026-10-13: the second answer used to drop the first store); e2e comes from the carried secrets")
 	go flyExec(m1, []string{"su", "-", "claude", "-c", "jarvis2 add-store e2e-extra"})
-	a = waitApproval("add-store", id)
-	checkChallenge(a, []string{"e2e", "e2e-extra"}, "e2e-extra")
-	unlock(p, "e2e-extra", nonceOf(*a.Challenge))
-	approve(p, a)
-	expectOnMachine(m1, "for i in $(seq 1 30); do grep -q E2E_EXTRA /home/claude/.secrets && break; sleep 2; done; grep -c E2E_EXTRA /home/claude/.secrets; grep -c E2E_SECRET /home/claude/.secrets", "1\n1")
-	expectNoUnlocks("after the add-store's pull")
+	go flyExec(m1, []string{"su", "-", "claude", "-c", "jarvis2 add-store e2e-more"})
+	pending := waitApprovals("add-store", id, 2)
+	byStore := map[string]approval{}
+	for _, a := range pending {
+		var ch struct{ Request struct{ AddedStore string } }
+		verify(*a.Challenge, &ch)
+		byStore[ch.Request.AddedStore] = a
+	}
+	checkChallenge(byStore["e2e-extra"], []string{"e2e", "e2e-extra"}, "e2e-extra")
+	checkChallenge(byStore["e2e-more"], []string{"e2e", "e2e-more"}, "e2e-more")
+	for _, n := range []string{"e2e-more", "e2e-extra"} {
+		unlock(p, n, nonceOf(*byStore[n].Challenge))
+	}
+	approve(p, byStore["e2e-more"])
+	approve(p, byStore["e2e-extra"]) // its challenge continues the cert the first answer replaced
+	if st, _ := session(id)["stores"].([]any); fmt.Sprint(st) != "[e2e e2e-extra e2e-more]" {
+		log.Fatalf("the session's stores after both answers: %v", st)
+	}
+	expectOnMachine(m1, "for i in $(seq 1 30); do grep -q E2E_EXTRA /home/claude/.secrets && grep -q E2E_MORE /home/claude/.secrets && break; sleep 2; done; "+
+		"sleep 6; grep -c E2E_EXTRA /home/claude/.secrets; grep -c E2E_MORE /home/claude/.secrets; grep -c E2E_SECRET /home/claude/.secrets", "1\n1\n1")
+	expectNoUnlocks("after the add-stores' pulls")
 
 	step("downgrade in place: back to [e2e], new keys, the extra secret shredded")
 	expectOnMachine(m1, "su - claude -c 'jarvis2 downgrade e2e' >/dev/null 2>&1 && grep -c E2E_SECRET /home/claude/.secrets && grep -c E2E_EXTRA /home/claude/.secrets || true", "1\n0")
@@ -721,6 +738,30 @@ func waitApproval(kind, session string) approval {
 	dumpState()
 	log.Fatalf("no %s approval", kind)
 	return approval{}
+}
+
+// waitApprovals: n approvals of that kind for the session, all pending at once
+func waitApprovals(kind, session string, n int) []approval {
+	deadline := time.Now().Add(5 * time.Minute)
+	for time.Now().Before(deadline) {
+		var out struct {
+			Approvals []approval `json:"approvals"`
+		}
+		call(router, "GET", "/api/approvals", nil, &out)
+		var got []approval
+		for _, a := range out.Approvals {
+			if a.Kind == kind && a.Session == session {
+				got = append(got, a)
+			}
+		}
+		if len(got) == n {
+			return got
+		}
+		time.Sleep(3 * time.Second)
+	}
+	dumpState()
+	log.Fatalf("not %d %s approvals", n, kind)
+	return nil
 }
 
 // the checks the iPhone makes before signing (docs/API.md)

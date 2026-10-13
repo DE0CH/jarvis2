@@ -110,7 +110,7 @@ enum SignedAction {
       if sens.contains(added) { f.append(.init(id: "sensitive", label: "Sensitive", value: "Yes", style: .warning)) }
       f.append(.init(id: "machine", label: "Running machine", value: r.challenge.request.machine?.id ?? "", style: .code))
       f.append(.init(id: "keeps-keys", label: "Keeps its keys", value: "Yes"))
-      f.append(.init(id: "stores", label: "Stores after", value: list(r.stores), style: .code))
+      f.append(.init(id: "stores", label: "Stores when asked", value: list(r.stores), style: .code))
     case .other:
       f.append(.init(id: "challenge", label: "Challenge kind", value: r.challenge.request.kind, style: .code))
       f.append(.init(id: "stores", label: "Stores", value: list(r.stores), style: .code))

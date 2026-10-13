@@ -101,6 +101,33 @@ func (c *Core) releaseFor(nonce string) []string {
 	return out
 }
 
+// passUnlocks: a machine's cert `from` is replaced by its cert `to` (an add-store, a downgrade) before `from` pulled:
+// the unlocks that were for `from` go to `to` for the stores `to` still names, and are released for the rest. Exactly
+// what the carry does when `from` pulled first (its stores rebound beside `to`, keeping only `to`'s), so the order
+// of a pull and a second approval decides nothing.
+func (c *Core) passUnlocks(from, to string, stores []string) {
+	keep := map[string]bool{}
+	for _, n := range stores {
+		keep[n] = true
+	}
+	for name, u := range c.unlocked {
+		for id, h := range u.ids {
+			if h.For != from {
+				continue
+			}
+			if keep[name] {
+				h.For = to
+				u.ids[id] = h
+			} else {
+				delete(u.ids, id)
+			}
+		}
+		if len(u.ids) == 0 {
+			delete(c.unlocked, name)
+		}
+	}
+}
+
 // carryPayload: what a carry blob holds, under the carry key
 type carryPayload struct {
 	Kind     string                       `json:"kind"`    // "carry"

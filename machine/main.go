@@ -825,27 +825,97 @@ func awaitStore(name string) error {
 	}
 	fmt.Fprintf(os.Stderr, "waiting up to 1 h for %s (Deyao's approval in the Jarvis 2 app)\n", name)
 	me := c.me
-	keys, _ := ownKeys()
 	deadline := time.Now().Add(time.Hour)
 	for time.Now().Before(deadline) {
 		time.Sleep(5 * time.Second)
-		var certs struct {
-			Cert *SignedDoc `json:"cert"`
-		}
-		if c.json("GET", "/m/cert", nil, &certs) != nil || certs.Cert == nil {
+		if !hasStore(certStores(c, coreKey, me), name) {
 			continue
 		}
-		var cert Cert
-		if verifyDoc(coreKey, certs.Cert, &cert) != nil || cert.Kind != "succession-cert" || cert.Machine == nil ||
-			cert.Machine.ID != me || cert.Machine.SigningKey != keys["signingKey"] {
-			continue
+		n, err := refreshSecrets(func() error {
+			doc, ok := newestCert(c, coreKey, me)
+			if !ok {
+				return errors.New("the router has no cert for this machine")
+			}
+			raw, _ := json.Marshal(doc)
+			return os.WriteFile(certPath, raw, 0o644)
+		}, func() (map[string]string, error) { return pullSecrets(c, coreKey, me) })
+		if err != nil {
+			return err
 		}
-		if i := sort.SearchStrings(cert.Stores, name); i >= len(cert.Stores) || cert.Stores[i] != name {
-			continue
+		fmt.Fprintf(os.Stderr, "added %s: ~/.secrets rewritten (%d keys); run `set -a; . ~/.secrets; set +a` in a shell to load them\n", name, n)
+		return nil
+	}
+	return errors.New("no approval within 1 h")
+}
+
+// newestCert: the router's cert for this machine, when it is core-signed for this machine and its current keys (read
+// per call: a downgrade replaces them)
+func newestCert(c *client, coreKey, me string) (*SignedDoc, bool) {
+	var certs struct {
+		Cert *SignedDoc `json:"cert"`
+	}
+	if c.json("GET", "/m/cert", nil, &certs) != nil || certs.Cert == nil {
+		return nil, false
+	}
+	keys, _ := ownKeys()
+	var cert Cert
+	if verifyDoc(coreKey, certs.Cert, &cert) != nil || cert.Kind != "succession-cert" || cert.Machine == nil ||
+		cert.Machine.ID != me || cert.Machine.SigningKey != keys["signingKey"] {
+		return nil, false
+	}
+	return certs.Cert, true
+}
+
+func certStores(c *client, coreKey, me string) []string {
+	doc, ok := newestCert(c, coreKey, me)
+	if !ok {
+		return nil
+	}
+	var cert Cert
+	json.Unmarshal([]byte(doc.Payload), &cert)
+	return cert.Stores
+}
+
+func hasStore(stores []string, name string) bool {
+	for _, s := range stores {
+		if s == name {
+			return true
 		}
-		raw, _ := json.Marshal(certs.Cert)
-		os.WriteFile(certPath, raw, 0o644)
-		secrets, err := pullSecrets(c, coreKey, me)
+	}
+	return false
+}
+
+// secretsLockPath: one writer of ~/.secrets at a time (with the cert file and the deploy keys it implies)
+func secretsLockPath() string {
+	home, _ := os.UserHomeDir()
+	return filepath.Join(home, ".jarvis2-secrets.lock")
+}
+
+// withSecretsLock: run fn holding the machine-wide lock on ~/.secrets
+func withSecretsLock(fn func() error) error {
+	lock, err := os.OpenFile(secretsLockPath(), os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return err
+	}
+	defer lock.Close()
+	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX); err != nil {
+		return err
+	}
+	defer syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
+	return fn()
+}
+
+// refreshSecrets: under the lock, take the newest cert (prepare) and pull with it, then write ~/.secrets and the deploy
+// keys. Two waiters (two add-stores approved together) used to pull and write side by side, and the slower one could
+// write an older pull over a newer file; under the lock each pull happens after the previous write, from the router's
+// newest cert at that moment, so the last file written is always the newest.
+func refreshSecrets(prepare func() error, pull func() (map[string]string, error)) (int, error) {
+	n := 0
+	err := withSecretsLock(func() error {
+		if err := prepare(); err != nil {
+			return err
+		}
+		secrets, err := pull()
 		if err != nil {
 			return err
 		}
@@ -855,10 +925,10 @@ func awaitStore(name string) error {
 		if err := setupDeployKeys(secrets); err != nil { // a repo's store: its key and rewrites now
 			return err
 		}
-		fmt.Fprintf(os.Stderr, "added %s: ~/.secrets rewritten (%d keys); run `set -a; . ~/.secrets; set +a` in a shell to load them\n", name, len(secrets))
+		n = len(secrets)
 		return nil
-	}
-	return errors.New("no approval within 1 h")
+	})
+	return n, err
 }
 
 // downgradeArgs: the stores to keep. No names is refused rather than read as "keep none": a session that
@@ -880,8 +950,24 @@ func downgradeArgs(args []string) ([]string, error) {
 
 // downgrade: keep only the named stores, in place. A new key pair; the core's challenge signed with the old
 // key; the new cert checked; only then the old keys and the secrets of the dropped stores are shredded (the
-// old cert still pulls, but sealed to a key that no longer exists).
+// old cert still pulls, but sealed to a key that no longer exists). Under the ~/.secrets lock, so an add-store's
+// waiter neither pulls with the keys being replaced nor writes over the downgraded file; an add-store answered
+// between the challenge and its answer makes the challenge stale (the core takes only the newest cert), and the
+// downgrade starts again from the new cert, with a new key pair (nothing was kept from the stale try).
 func downgrade(keep []string) error {
+	return withSecretsLock(func() error {
+		var err error
+		for try := 0; try < 3; try++ {
+			if err = downgradeOnce(keep); err == nil || !strings.Contains(err.Error(), "newest") {
+				return err
+			}
+			log.Printf("downgrade: the cert changed meanwhile (%v); again from the newest", err)
+		}
+		return err
+	})
+}
+
+func downgradeOnce(keep []string) error {
 	coreKey, err := readTrim(coreKeyPath)
 	if err != nil {
 		return err

@@ -161,7 +161,7 @@ func Handler(c *Core) http.Handler {
 		return c.Succession(in)
 	})
 	h("POST /approve/by-phone", func(r *http.Request, b body) (any, error) {
-		return c.ApproveByPhone(doc(b, "challenge"), str(b, "signature"), str(b, "carry"))
+		return c.ApproveByPhone(doc(b, "challenge"), str(b, "signature"), str(b, "carry"), doc(b, "current"))
 	})
 	h("POST /approve/by-old-key", func(r *http.Request, b body) (any, error) {
 		return c.ApproveByOldKey(doc(b, "challenge"), str(b, "signature"), str(b, "carry"))

@@ -27,7 +27,7 @@ func startWithUnlocks(t *testing.T, c *Core, p *phone, stores ...string) (Signed
 	for _, n := range stores {
 		unlockFor(t, c, p, n, challengeNonce(ch))
 	}
-	a, err := c.ApproveByPhone(&ch, p.sign(ch.Payload), "")
+	a, err := c.ApproveByPhone(&ch, p.sign(ch.Payload), "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -255,7 +255,7 @@ func TestAnAddedStoreIsUnlockedForItsChallengeOnly(t *testing.T) {
 		t.Fatal(err)
 	}
 	unlockFor(t, c, p, "gmail", challengeNonce(ch))
-	cert2, err := c.ApproveByPhone(&ch, p.sign(ch.Payload), out.Carry)
+	cert2, err := c.ApproveByPhone(&ch, p.sign(ch.Payload), out.Carry, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

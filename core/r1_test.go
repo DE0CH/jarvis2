@@ -81,13 +81,15 @@ func TestAnAddStoreApprovalCantBeReplayedAfterADowngrade(t *testing.T) {
 		t.Fatal(err)
 	}
 	phoneSig := p.sign(ch.Payload)
-	cert2, err := c.ApproveByPhone(&ch, phoneSig, "")
+	cert2, err := c.ApproveByPhone(&ch, phoneSig, "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	downgradeTo(t, c, f, cert2, id, "", "default") // the session drops gmail again
-	if _, err := c.ApproveByPhone(&ch, phoneSig, ""); err == nil {
-		t.Fatal("the add-store approval was answered again after the downgrade")
+	cert3, _, _, _ := downgradeTo(t, c, f, cert2, id, "", "default") // the session drops gmail again
+	for _, cur := range []*SignedDoc{nil, &cert3} {                  // also with the newest cert beside it (an add-store answered late)
+		if _, err := c.ApproveByPhone(&ch, phoneSig, "", cur); err == nil {
+			t.Fatal("the add-store approval was answered again after the downgrade")
+		}
 	}
 }
 

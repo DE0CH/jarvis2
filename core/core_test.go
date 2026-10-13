@@ -292,7 +292,7 @@ func approve(t *testing.T, c *Core, p *phone, in SuccessionInput) SignedDoc {
 	if err != nil {
 		t.Fatal(err)
 	}
-	a, err := c.ApproveByPhone(&ch, p.sign(ch.Payload), "")
+	a, err := c.ApproveByPhone(&ch, p.sign(ch.Payload), "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -596,14 +596,14 @@ func TestLockWipesWhenTheLastIDGoes(t *testing.T) {
 func TestPhoneSignatureMustCoverExactlyTheChallenge(t *testing.T) {
 	c, _, p := setup(t)
 	ch, _ := routerSuccession(c, SuccessionInput{Image: img, Stores: []string{"default"}})
-	if _, err := c.ApproveByPhone(&ch, p.sign("something else"), ""); err == nil {
+	if _, err := c.ApproveByPhone(&ch, p.sign("something else"), "", nil); err == nil {
 		t.Fatal("accepted a signature over something else")
 	}
 	altered := SignedDoc{Payload: strings.Replace(ch.Payload, "default", "gmail", 1), Sig: ch.Sig}
-	if _, err := c.ApproveByPhone(&altered, p.sign(altered.Payload), ""); err == nil {
+	if _, err := c.ApproveByPhone(&altered, p.sign(altered.Payload), "", nil); err == nil {
 		t.Fatal("accepted an altered challenge")
 	}
-	if _, err := c.ApproveByPhone(&ch, newPhone().sign(ch.Payload), ""); err == nil {
+	if _, err := c.ApproveByPhone(&ch, newPhone().sign(ch.Payload), "", nil); err == nil {
 		t.Fatal("accepted another phone")
 	}
 	if _, err := c.ApproveByDeadMachine(&ch); err == nil {
@@ -696,7 +696,7 @@ func TestResumeByDeadMachineExactlyOnce(t *testing.T) {
 	if _, err := c.ApproveByDeadMachine(&ch2); err == nil {
 		t.Fatal("forked: a used predecessor got a second approval")
 	}
-	ad2, _ := c.ApproveByPhone(&ch2, p.sign(ch2.Payload), "")
+	ad2, _ := c.ApproveByPhone(&ch2, p.sign(ch2.Payload), "", nil)
 	if _, err := tryStart(c, ad2); err == nil {
 		t.Fatal("forked: a used predecessor got a second machine")
 	}
@@ -797,13 +797,13 @@ func TestAddAStoreToARunningSession(t *testing.T) {
 	if _, err := c.ApproveByDeadMachine(&chd); err == nil {
 		t.Fatal("approve_by_dead_machine added a store")
 	}
-	c2, err := c.ApproveByPhone(&chd, p.sign(chd.Payload), "")
+	c2, err := c.ApproveByPhone(&chd, p.sign(chd.Payload), "", nil)
 	cert2 := pl(t)(c2, err)
 	if cert2["kind"] != "succession-cert" || cert2["machine"].(map[string]any)["id"] != id {
 		t.Fatalf("got %v", cert2)
 	}
 	// once: the same challenge and signature answered again gets nothing (the cert it continues is superseded)
-	if _, err := c.ApproveByPhone(&chd, p.sign(chd.Payload), ""); err == nil {
+	if _, err := c.ApproveByPhone(&chd, p.sign(chd.Payload), "", nil); err == nil {
 		t.Fatal("an add-store approval was answered twice")
 	}
 	unlock(t, c, p, "default")
@@ -819,7 +819,7 @@ func TestAddAStoreToARunningSession(t *testing.T) {
 		{Predecessor: &cert, Machine: id, Stores: set, Options: Options{Harness: "opencode"}},
 	} {
 		if ch, err := routerSuccession(c, bad); err == nil {
-			if _, err := c.ApproveByPhone(&ch, p.sign(ch.Payload), ""); err == nil {
+			if _, err := c.ApproveByPhone(&ch, p.sign(ch.Payload), "", nil); err == nil {
 				t.Fatalf("accepted %v", bad.Stores)
 			}
 		}
@@ -1004,7 +1004,7 @@ func TestRaisingToBypassOnResumeNeedsThePhone(t *testing.T) {
 	if _, err := c.ApproveByDeadMachine(&ch); err == nil {
 		t.Fatal("a dead machine approved raising the mode to bypass")
 	}
-	a := pl(t)(c.ApproveByPhone(&ch, p.sign(ch.Payload), ""))
+	a := pl(t)(c.ApproveByPhone(&ch, p.sign(ch.Payload), "", nil))
 	if a["kind"] != "approval" {
 		t.Fatalf("the phone's approval: %v", a)
 	}

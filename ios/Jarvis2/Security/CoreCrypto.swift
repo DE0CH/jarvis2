@@ -164,7 +164,7 @@ struct SuccessionRequest: Codable {
 struct Challenge: Codable { let kind: String; let nonce: String; let request: SuccessionRequest }
 /// the core's answer to an approved challenge: an "approval" (a new line, bound to a machine later) or a
 /// "succession-cert" (a running machine with one more store)
-struct Answer: Codable { let kind: String; let nonce: String; let machine: StartedMachine? }
+struct Answer: Codable { let kind: String; let nonce: String; let machine: StartedMachine?; var stores: [String]? = nil }
 struct StoreView: Codable, Identifiable, Equatable {
   let name: String; let sensitive: Bool; let empty: Bool; let unlocked: Bool; var id: String { name }
   /// the store named `core` holds the core's own Fly token: it never shows for sessions
@@ -316,7 +316,11 @@ enum Checks {
     let a = try CoreCrypto.decode(doc, by: coreKey, as: Answer.self, what: "the core's answer")
     guard a.nonce == r.challenge.nonce else { throw TrustError.stale("answer") }
     if r.kind == .addStore {
-      guard a.kind == "succession-cert", a.machine == r.challenge.request.machine else { throw TrustError.stale("cert") }
+      // the same running machine, now holding the added store. Not the challenge's whole machine and store list: when
+      // another add-store or a downgrade was answered after this challenge was made, the core adds the store to the
+      // machine's newest cert (its keys after a downgrade, its stores), core/core.go addOnto
+      guard a.kind == "succession-cert", let m = a.machine, m.id == r.challenge.request.machine?.id,
+            let added = r.addedStore, (a.stores ?? []).contains(added) else { throw TrustError.stale("cert") }
     } else {
       guard a.kind == "approval" || a.kind == "succession-cert" else { throw TrustError.stale("answer kind \(a.kind)") }
     }
