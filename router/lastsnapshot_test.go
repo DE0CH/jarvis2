@@ -1,6 +1,7 @@
 package main
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -91,5 +92,37 @@ func TestRestartResumesACutOffDestroy(t *testing.T) {
 	r.st.Do(func(d *persisted) { left = d.Sessions["s1"] })
 	if !killed || (left != nil && left.State == "destroying") {
 		t.Fatalf("killed=%v, session %+v", killed, left)
+	}
+}
+
+// a router restart cut off a resume before certify (the session sat at "starting" for ever, 2026-10-13): the new
+// router runs the resume again; a new line's cut-off start fails instead (its phone approval is gone)
+func TestRestartRedoesACutOffResume(t *testing.T) {
+	rg := newRig(t)
+	r := rg.r
+	r.st.Do(func(d *persisted) {
+		s := d.Sessions["s1"]
+		s.State, s.MachineID, s.Cert, s.Pending = "starting", "", rg.cert, &PendingStart{}
+		d.Sessions["sNew"] = &Session{ID: "sNew", State: "starting", Pending: &PendingStart{}}
+	})
+	r.resumeInterrupted()
+	st := func(id string) (string, string, *PendingStart) {
+		var a, b string
+		var p *PendingStart
+		r.st.Do(func(d *persisted) { a, b, p = d.Sessions[id].State, d.Sessions[id].Error, d.Sessions[id].Pending })
+		return a, b, p
+	}
+	if s, e, _ := st("sNew"); s != "failed" || !strings.Contains(e, "cut off") {
+		t.Fatalf("new line: %s %s", s, e)
+	}
+	if s, _, _ := st("s1"); s == "starting" || s == "failed" {
+		t.Fatalf("the cut-off resume wasn't run again: %s", s)
+	}
+	// let the resume's goroutine finish before the rig's directory goes
+	for until := time.Now().Add(10 * time.Second); time.Now().Before(until); time.Sleep(20 * time.Millisecond) {
+		if unlock, err := r.lock("s1", "test"); err == nil {
+			unlock()
+			break
+		}
 	}
 }

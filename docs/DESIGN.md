@@ -429,7 +429,8 @@ Show only what Deyao understands; what he clicks is exactly the challenge string
 challenge field and refuses anything it can't: store names; "Claude" / "opencode"; the image as "latest CI
 build" / "CI build from <date>" (verified with CI's signature over the image, `keys/ci.pub` from GitHub: the key
 exists only in the GitHub environment `release`, which admits refs/heads/main only; the router passes it on as the
-approval's `imageSig` and can only withhold it);
+approval's `imageSig` and can only withhold it; every image CI ever pinned keeps its signature in
+`k8s/apps/session-image-sigs.txt`, so a resume on a session's own older image is still a CI build);
 machine ids and public keys are signed but not shown.
 
 ## iOS app structure: one native app (Deyao, 2026-10-11)

@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -32,9 +34,10 @@ func TestOnlyCIBuildsCarryTheirSignature(t *testing.T) {
 	if a.ImageSig != "c2ln" || b.ImageSig != "" {
 		t.Fatalf("got %q and %q", a.ImageSig, b.ImageSig)
 	}
-	// a newer image is pinned (the router restarts with it): a resume on the old image still carries the old signature
-	NewRouter(Config{SessionImage: "ghcr.io/de0ch/jarvis2-session:sha-1@sha256:aa", SessionImageSig: "c2ln"}, st, nil, Policy{})
-	r2 := NewRouter(Config{SessionImage: "ghcr.io/de0ch/jarvis2-session:sha-2@sha256:cc", SessionImageSig: "bmV3"}, st, nil, Policy{})
+	// a newer image is pinned: a resume on the old image gets the old signature from the list (the file images.yml keeps)
+	f := filepath.Join(t.TempDir(), "sigs.txt")
+	os.WriteFile(f, []byte("ghcr.io/de0ch/jarvis2-session:sha-1@sha256:aa c2ln\n"), 0o600)
+	r2 := &Router{cfg: Config{SessionImage: "ghcr.io/de0ch/jarvis2-session:sha-2@sha256:cc", SessionImageSig: "bmV3", ImageSigs: loadImageSigs(f)}, st: st}
 	c := &Approval{Challenge: ch("ghcr.io/de0ch/jarvis2-session:sha-1@sha256:aa"), Origin: &Origin{}}
 	r2.addApproval(c)
 	d := &Approval{Challenge: ch("ghcr.io/de0ch/jarvis2-session:sha-2@sha256:cc"), Origin: &Origin{}}

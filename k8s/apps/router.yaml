@@ -31,6 +31,8 @@ spec:
             - { name: SESSION_IMAGE, value: "ghcr.io/de0ch/jarvis2-session:sha-c5427052a542@sha256:b578706da6cc585484b2dbca94be921129282a04918240d1b692b5f2c6445a54" }
             # the CI key's signature over "jarvis2-session-image <SESSION_IMAGE>" (images.yml, keys/ci.pub): the phone checks it
             - { name: SESSION_IMAGE_SIG, value: "MEYCIQCsQfOEczYh/1oANbuCDV1lqai5PJv5PlTVcJzpKMHHKgIhAKi7Ow2wC5b3fCeCLxzNnFne1VJOWTxF6JbCNKuGAa0L" }
+            # every earlier CI-pinned session image with its signature (k8s/apps/session-image-sigs.txt, images.yml)
+            - { name: SESSION_IMAGE_SIGS_FILE, value: /sigs/session-image-sigs.txt }
             - { name: FLY_REGION, value: lhr }
             # the box's WireGuard peer in Fly org jarvis2-370 (fly wireguard create jarvis2-370 lhr jarvis2-box)
             - { name: MACHINE_URL, value: "http://jarvis2-box._peer.internal:8081" }
@@ -50,12 +52,13 @@ spec:
           # — all SOPS-encrypted to the box's age key (infra/router-secrets.py). router-secrets-github stays LAST: with a
           # key in several envFrom sources the last one wins, and the default part still holds an old GITHUB_READ_TOKEN
           envFrom: [{ secretRef: { name: router-secrets, optional: true } }, { secretRef: { name: router-secrets-backup, optional: true } }, { secretRef: { name: router-secrets-github, optional: true } }, { secretRef: { name: router-secrets-flyorgs, optional: true } }]
-          volumeMounts: [{ name: data, mountPath: /data }, { name: wg, mountPath: /wg, readOnly: true }]
+          volumeMounts: [{ name: data, mountPath: /data }, { name: wg, mountPath: /wg, readOnly: true }, { name: sigs, mountPath: /sigs, readOnly: true }]
           resources: { requests: { cpu: 20m, memory: 64Mi }, limits: { memory: 1Gi } }
           securityContext: { runAsNonRoot: true, runAsUser: 65532, runAsGroup: 65532, allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: { drop: [ALL] }, seccompProfile: { type: RuntimeDefault } }
       volumes:
         - { name: data, persistentVolumeClaim: { claimName: router-data } }
         - { name: wg, secret: { secretName: router-wg, defaultMode: 0440 } }
+        - { name: sigs, configMap: { name: session-image-sigs } }
 ---
 apiVersion: v1
 kind: Service

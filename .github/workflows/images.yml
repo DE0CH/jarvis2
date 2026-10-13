@@ -181,6 +181,8 @@ jobs:
             grep -qxF "ARG BASE=$B" session-image/Dockerfile || { echo "session-image/Dockerfile has no ARG BASE line"; exit 1; }
           fi
           grep -q "SESSION_IMAGE_SIG, value: \"$SIG\"" k8s/apps/router.yaml || { echo "router.yaml has no SESSION_IMAGE_SIG line"; exit 1; }
+          # and keep it in the list of every pinned image, so a resume on a session's own older image still shows as a CI build
+          grep -q "^$S " k8s/apps/session-image-sigs.txt || echo "$S $SIG" >> k8s/apps/session-image-sigs.txt
           # the core moves ONLY when core/ changed (the CI-only fake and the tests don't count): a core restart is a new, empty
           # core (Deyao sets it up again: Reset or Recover), so a router or app push must never restart it
           corecur="$(grep -ho 'jarvis2-core:sha-[0-9a-f]*' k8s/apps/core.yaml | cut -d- -f3)"

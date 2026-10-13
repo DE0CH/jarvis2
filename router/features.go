@@ -61,7 +61,7 @@ func (r *Router) startFeatures() {
 // session's pause or destroy runs again from the top: the kill force-destroys the machine whether it is running,
 // stopped or gone, and the archive and burn follow.
 func (r *Router) resumeInterrupted() {
-	var destroying, pausing []string
+	var destroying, pausing, resuming []string
 	r.st.Do(func(d *persisted) {
 		for id, s := range d.Sessions {
 			switch s.State {
@@ -69,16 +69,18 @@ func (r *Router) resumeInterrupted() {
 				destroying = append(destroying, id)
 			case "pausing":
 				pausing = append(pausing, id)
+			case "resuming", "starting":
+				resuming = append(resuming, id)
 			}
 		}
 	})
-	if len(destroying)+len(pausing) == 0 {
+	if len(destroying)+len(pausing)+len(resuming) == 0 {
 		return
 	}
 	// the kill needs a set-up core (its Fly token): after a box restart the core is empty until Deyao's Recover
 	for i := 0; !r.coreSetUp(); i++ {
 		if i == 0 {
-			log.Printf("%d cut-off pause/destroy waiting for the core to be set up", len(destroying)+len(pausing))
+			log.Printf("%d cut-off pause/destroy/resume waiting for the core to be set up", len(destroying)+len(pausing)+len(resuming))
 		}
 		time.Sleep(15 * time.Second)
 	}
@@ -88,12 +90,51 @@ func (r *Router) resumeInterrupted() {
 			log.Printf("session %s: destroy again: %v", id, err)
 		}
 	}
+	// a resume cut off before certify: its machine (if the core made one) never got a line and its approval lived
+	// only in the goroutine; the predecessor is still killed and unused (the core marks it used at certify), so the
+	// resume runs again from the top. A new line's start needs the phone's approval again: it fails instead.
+	for _, id := range resuming {
+		r.redoResume(id)
+	}
 	for _, id := range pausing {
 		log.Printf("session %s: its pause was cut off by a router restart; pausing again", id)
 		if err := r.Pause(id); err != nil {
 			log.Printf("session %s: pause again: %v", id, err)
 			r.setState(id, "failed", "pause cut off by a router restart: "+err.Error())
 		}
+	}
+}
+
+func (r *Router) redoResume(id string) {
+	var s Session
+	r.st.Do(func(d *persisted) {
+		if x := d.Sessions[id]; x != nil {
+			s = *x
+		}
+	})
+	p := s.Pending
+	if p != nil && p.Machine != "" {
+		if _, err := r.killUntilDestroyed(map[string]any{"machine": p.Machine}); err != nil {
+			log.Printf("session %s: kill the cut-off resume's machine %s: %v", id, p.Machine, err)
+		}
+	}
+	if s.Cert == nil || s.MachineID != "" {
+		r.st.Do(func(d *persisted) {
+			if x := d.Sessions[id]; x != nil {
+				x.Pending = nil
+			}
+		})
+		r.setState(id, "failed", "start cut off by a router restart")
+		return
+	}
+	log.Printf("session %s: its resume was cut off by a router restart; resuming again", id)
+	r.st.Do(func(d *persisted) {
+		if x := d.Sessions[id]; x != nil {
+			x.State, x.Pending = "paused", nil
+		}
+	})
+	if err := r.Resume(id, p != nil && p.Upgrade); err != nil {
+		log.Printf("session %s: resume again: %v", id, err)
 	}
 }
 

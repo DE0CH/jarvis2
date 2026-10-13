@@ -45,7 +45,6 @@ type Router struct {
 }
 
 func NewRouter(cfg Config, st *State, core *CoreClient, policy Policy) *Router {
-	rememberImageSig(st, cfg)
 	return &Router{cfg: cfg, st: st, core: core, policy: policy, setupSeen: map[string]time.Time{}, commands: map[string]chan string{}, execs: map[string]chan execItem{}, results: map[string]chan ExecResult{}, snapped: map[string]chan struct{}{}}
 }
 
@@ -164,7 +163,7 @@ var (
 // startMachine: the core's start (one Fly create), then its init until Fly reports the machine up and the image's
 // init command gave its keys → the core's signed "started" document. A machine that never comes up is killed.
 // A core from before R2 answers "started" from /start itself (it waited and retried inside).
-func (r *Router) startMachine(image, size string) (*Doc, error) {
+func (r *Router) startMachine(image, size string, onCreated ...func(id string)) (*Doc, error) {
 	if size == "" {
 		size = "medium"
 	}
@@ -179,6 +178,9 @@ func (r *Router) startMachine(image, size string) (*Doc, error) {
 	d.Decode(&c)
 	if c.Kind != "created" {
 		return d, nil
+	}
+	for _, f := range onCreated {
+		f(c.ID)
 	}
 	deadline := time.Now().Add(initMax)
 	for {
@@ -226,7 +228,13 @@ func (r *Router) startAndCertify(sid string, approval *Doc) {
 		}
 	})
 	r.setState(sid, "starting", "")
-	d, err := r.startMachine(a.Request.Image, s.Size)
+	d, err := r.startMachine(a.Request.Image, s.Size, func(id string) {
+		r.st.Do(func(d *persisted) {
+			if x := d.Sessions[sid]; x != nil && x.Pending != nil {
+				x.Pending.Machine = id
+			}
+		})
+	})
 	if err != nil {
 		r.setState(sid, "failed", "start: "+err.Error())
 		return
@@ -263,7 +271,7 @@ func (r *Router) startAndCertify(sid string, approval *Doc) {
 	r.st.Do(func(d *persisted) {
 		d.Certs[m.ID] = cert
 		if x := d.Sessions[sid]; x != nil {
-			x.Cert, x.MachineID, x.Image, x.State, x.Error, x.PausedAt = cert, m.ID, m.Image, "initialising", "", nil
+			x.Cert, x.MachineID, x.Image, x.State, x.Error, x.PausedAt, x.Pending = cert, m.ID, m.Image, "initialising", "", nil, nil
 		}
 	})
 	r.logInputs(ans.Entry) // vouch.go: the cert's input-log entry
@@ -286,25 +294,33 @@ func (r *Router) addApproval(a *Approval) {
 	if a.Challenge != nil && a.Challenge.Decode(&ch) == nil {
 		img = ch.Request.Image
 	}
-	r.st.Do(func(d *persisted) {
-		// a resume without an upgrade names the session's own, older image: its signature was kept when it was current
-		if img != "" && img == r.cfg.SessionImage {
-			a.ImageSig = r.cfg.SessionImageSig
-		} else if img != "" {
-			a.ImageSig = d.ImageSigs[img]
-		}
-		d.Approvals[a.ID] = a
-	})
+	// a resume on the session's own image names an older CI build than the current one: its signature is in the list
+	if img != "" && img == r.cfg.SessionImage {
+		a.ImageSig = r.cfg.SessionImageSig
+	} else if img != "" {
+		a.ImageSig = r.cfg.ImageSigs[img]
+	}
+	r.st.Do(func(d *persisted) { d.Approvals[a.ID] = a })
 }
 
-// rememberImageSig keeps CI's signature for the session image this router was started with, so an approval that
-// names it after a newer image is pinned (a resume on the session's own image) still carries it. The phone checks
-// the signature itself (keys/ci.pub); the router can only pass it on or withhold it.
-func rememberImageSig(st *State, cfg Config) {
-	if st == nil || cfg.SessionImage == "" || cfg.SessionImageSig == "" {
-		return
+// loadImageSigs reads k8s/apps/session-image-sigs.txt as mounted ("<image> <sig>" per line; images.yml appends one per
+// pin). The phone checks each signature itself (keys/ci.pub): the router can only pass one on or withhold it.
+func loadImageSigs(path string) map[string]string {
+	out := map[string]string{}
+	if path == "" {
+		return out
 	}
-	st.Do(func(d *persisted) { d.ImageSigs[cfg.SessionImage] = cfg.SessionImageSig })
+	b, err := os.ReadFile(path)
+	if err != nil {
+		log.Printf("session image signatures: %v", err)
+		return out
+	}
+	for _, l := range strings.Split(string(b), "\n") {
+		if f := strings.Fields(l); len(f) == 2 {
+			out[f[0]] = f[1]
+		}
+	}
+	return out
 }
 
 // ---- new session ------------------------------------------------------------------------------------
@@ -510,6 +526,11 @@ func (r *Router) Resume(id string, upgrade bool) error {
 		return fmt.Errorf("session %s isn't paused", id)
 	}
 	r.setState(id, "resuming", "")
+	r.st.Do(func(d *persisted) {
+		if x := d.Sessions[id]; x != nil {
+			x.Pending = &PendingStart{Upgrade: upgrade}
+		}
+	})
 	go func() {
 		defer unlock()
 		image := s.Image // the same image, pinned by digest
