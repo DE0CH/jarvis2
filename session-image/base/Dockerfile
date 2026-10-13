@@ -168,17 +168,19 @@ COPY api-proxy.js /usr/local/lib/api-proxy.js
 COPY cf-tunnel-agent.js /usr/local/lib/cf-tunnel-agent.js
 RUN chmod +x /usr/local/bin/harness-opencode.sh /usr/local/bin/harness-send /usr/local/bin/session-attachments /usr/local/bin/opencode-transcript.py /usr/local/bin/opencode-instructions.py
 # The claw-code harness (a "claw-code · OpenClaw" model): claw-code (DE0CH/claw-code) is the agent loop, an OpenClaw
-# gateway (DE0CH/openclaw) the front end. claw (~20 MB) is baked in from the release pinned in forks.json. OpenClaw + its
-# Node 26 (~900 MB) are NOT: /usr/local/bin/openclaw fetches a pinned runtime bundle on first use (session-image/Dockerfile
-# replaces it with one that checks the bundle's sha256, session-image/openclaw-runtime.json).
+# gateway (DE0CH/openclaw) the front end. claw (~20 MB) is baked in from the release pinned in forks.json, checked by
+# sha256 (.github/workflows/fork-pin.yml writes the pin). OpenClaw + its Node 26 (~900 MB) are NOT in the image:
+# session-image/Dockerfile adds /usr/local/bin/openclaw, which fetches the runtime bundle pinned by sha256 in
+# session-image/openclaw-runtime.json on first use.
 COPY forks.json /usr/local/share/forks.json
 RUN url="$(python3 -c 'import json;print(json.load(open("/usr/local/share/forks.json"))["claw"]["url"])')" \
- && curl -fsSL -o /usr/local/bin/claw "$url" && chmod +x /usr/local/bin/claw && /usr/local/bin/claw --version
-COPY openclaw /usr/local/bin/openclaw
+ && sum="$(python3 -c 'import json;print(json.load(open("/usr/local/share/forks.json"))["claw"]["sha256"])')" \
+ && curl -fsSL -o /usr/local/bin/claw "$url" && echo "$sum  /usr/local/bin/claw" | sha256sum -c - \
+ && chmod +x /usr/local/bin/claw && /usr/local/bin/claw --version
 COPY openclaw-claw-harness /usr/local/lib/openclaw-claw-harness
 COPY harness-openclaw.sh /usr/local/bin/harness-openclaw.sh
 COPY openclaw-transcript /usr/local/bin/openclaw-transcript
-RUN chmod +x /usr/local/bin/harness-openclaw.sh /usr/local/bin/openclaw-transcript /usr/local/bin/openclaw
+RUN chmod +x /usr/local/bin/harness-openclaw.sh /usr/local/bin/openclaw-transcript
 RUN chmod +x /usr/local/bin/entrypoint.sh /usr/local/bin/session-supervisor.sh /usr/local/bin/workspace-layer.sh /usr/local/bin/pull-secrets /usr/local/bin/content-sync /usr/local/bin/set-permission-mode
 USER claude
 WORKDIR /home/claude

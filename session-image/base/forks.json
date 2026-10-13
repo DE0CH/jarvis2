@@ -1,10 +1,7 @@
 {
   "claw": {
     "url": "https://github.com/DE0CH/claw-code/releases/download/de0ch-1730d0846c02/claw-linux-x86_64",
-    "sha": "1730d0846c02e8b7e76173b8584df5769eabc069"
-  },
-  "openclaw": {
-    "url": "https://github.com/DE0CH/openclaw/releases/download/de0ch-fd2d7b2153eb/openclaw-runtime-linux-x64.tar.gz",
-    "sha": "fd2d7b2153eb04414ff7292170b33434c1a365c6"
+    "sha": "1730d0846c02e8b7e76173b8584df5769eabc069",
+    "sha256": "73e0a40906e2ae8dd87a474c2bed92a144cd08d0067da07ee617e85555d3a1e7"
   }
 }

@@ -1,0 +1,76 @@
+name: fork-pin
+# Deyao's forks DE0CH/claw-code and DE0CH/openclaw publish a build on every push to their main (release
+# `de0ch-<sha12>`) and start this workflow (`gh workflow run fork-pin.yml -R DE0CH/jarvis2 -f name= -f url= -f sha=`,
+# a token with Actions write on this repo only: it can start a workflow, not push). It pins that build:
+#   claw     -> session-image/base/forks.json {url, sha, sha256}   (baked into the base, checked by sha256)
+#   openclaw -> session-image/openclaw-runtime.json {url, sha256}  (fetched on first use, checked by sha256)
+# and pushes to main with its own deploy key (environment `release`; main's ruleset lets no workflow token push),
+# which starts images.yml (the commit touches session-image/**). Inputs are untrusted: the URL must be exactly the
+# fork's own release asset for a commit on the fork's main, and never older than the current pin.
+on:
+  workflow_dispatch:
+    inputs:
+      name: { description: "claw or openclaw", required: true, type: string }
+      url: { description: "the release asset URL", required: true, type: string }
+      sha: { description: "the fork commit (40 hex)", required: true, type: string }
+permissions:
+  contents: read
+concurrency: { group: fork-pin, cancel-in-progress: false }
+jobs:
+  pin:
+    if: github.ref == 'refs/heads/main'
+    environment: release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { ssh-key: "${{ secrets.FORK_PIN_DEPLOY_KEY }}" }
+      - name: check, pin, push
+        env:
+          NAME: ${{ inputs.name }}
+          URL: ${{ inputs.url }}
+          SHA: ${{ inputs.sha }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          case "$NAME" in
+            claw) REPO=DE0CH/claw-code; ASSET=claw-linux-x86_64; FILE=session-image/base/forks.json ;;
+            openclaw) REPO=DE0CH/openclaw; ASSET=openclaw-runtime-linux-x64.tar.gz; FILE=session-image/openclaw-runtime.json ;;
+            *) echo "::error::unknown fork: $NAME"; exit 1 ;;
+          esac
+          [[ "$SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::sha must be 40 lowercase hex"; exit 1; }
+          want="https://github.com/$REPO/releases/download/de0ch-${SHA::12}/$ASSET"
+          [ "$URL" = "$want" ] || { echo "::error::url must be $want"; exit 1; }
+          # the commit is on the fork's main (main is it or ahead of it)
+          st="$(gh api "repos/$REPO/compare/$SHA...main" --jq .status)"
+          case "$st" in identical|ahead) ;; *) echo "::error::$SHA is not on $REPO main ($st)"; exit 1 ;; esac
+          # never over a newer pin: the pinned commit must be an ancestor of (or equal to) the new one
+          cur="$(python3 -I - "$NAME" "$FILE" <<'PY'
+          import json, re, sys
+          name, f = sys.argv[1], sys.argv[2]
+          d = json.load(open(f))
+          url = d[name]["url"] if name == "claw" else d["url"]
+          m = re.search(r"/de0ch-([0-9a-f]{12})/", url)
+          print(m.group(1) if m else "")
+          PY
+          )"
+          if [ -n "$cur" ]; then
+            st="$(gh api "repos/$REPO/compare/$cur...$SHA" --jq .status)"
+            case "$st" in identical) echo "already pinned"; exit 0 ;; ahead) ;; *) echo "main pins $cur, newer than or diverged from ${SHA::12} ($st): not pinned"; exit 0 ;; esac
+          fi
+          curl -fsSL --retry 3 -o "$RUNNER_TEMP/asset" "$URL"
+          SUM="$(sha256sum "$RUNNER_TEMP/asset" | cut -d' ' -f1)"
+          python3 -I - "$NAME" "$FILE" "$URL" "$SHA" "$SUM" <<'PY'
+          import json, sys
+          name, f, url, sha, s256 = sys.argv[1:]
+          if name == "claw":
+              d = json.load(open(f)); d["claw"] = {"url": url, "sha": sha, "sha256": s256}
+          else:
+              d = {"url": url, "sha256": s256}
+          open(f, "w").write(json.dumps(d, indent=2) + "\n")
+          PY
+          git config user.name "jarvis2-fork-pin"; git config user.email "fork-pin@jarvis2.invalid"
+          git add "$FILE"
+          git diff --cached --quiet && { echo "already pinned"; exit 0; }
+          git commit -qm "session image: pin $NAME ${SHA::12} ($REPO)"
+          for i in 1 2 3 4 5; do git pull -q --rebase origin main && git push -q origin HEAD:main && exit 0; sleep $((i * 5)); done
+          echo "::error::push failed"; exit 1

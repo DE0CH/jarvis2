@@ -19,10 +19,17 @@ before it boots, so every new session breaks. A failure there pins nothing. Its 
 runs only for a commit on main, in the GitHub environment `release`, and pushes with its own deploy key
 (`jarvis2-ci-pin`): main's ruleset lets only repo admins and deploy keys update main, so no workflow's GITHUB_TOKEN can.
 
+Deyao's forks pin their builds themselves: on every push to its main, DE0CH/claw-code (`de0ch-latest.yml`) and
+DE0CH/openclaw (`de0ch-package.yml`) publish release `de0ch-<sha12>` and run `gh workflow run fork-pin.yml -R
+DE0CH/jarvis2 -f name=claw|openclaw -f url=… -f sha=…` with `JARVIS2_DISPATCH_TOKEN` (fine-grained PAT
+`jarvis2-fork-dispatch`: Actions write on DE0CH/jarvis2 only). `fork-pin.yml` checks the inputs, pins the asset with its
+sha256 (claw: `session-image/base/forks.json`, so the base rebuilds; OpenClaw: `session-image/openclaw-runtime.json`)
+and pushes with its deploy key, which runs `images`. By hand: the same `gh workflow run` line (DECISIONS 153).
+
 GitHub settings (R1 audit, 2026-10-11; `gh api`): ruleset "main: only admins and deploy keys update it" (deletion,
 non_fast_forward, update; bypass: the admin role and deploy keys); environment `release` (deployment branches: main only)
 with secrets ASC_KEY_ID / ASC_ISSUER_ID / ASC_PRIVATE_KEY (ios.yml's TestFlight job), CI_IMAGE_KEY (the private half of
-`keys/ci.pub`) and PIN_DEPLOY_KEY. A workflow that must push to main gets its own deploy key in `release`, never
+`keys/ci.pub`), PIN_DEPLOY_KEY and FORK_PIN_DEPLOY_KEY (`fork-pin.yml`, deploy key `jarvis2-fork-pin`). A workflow that must push to main gets its own deploy key in `release`, never
 `contents: write` on GITHUB_TOKEN. Rotating the CI key: a new P-256 key into CI_IMAGE_KEY and its public half (base64
 X9.63) into `keys/ci.pub` in one go, then run `images` so the router gets a fresh signature. The core's tag moves only when `core/` changed (a core restart is a
 new, empty core: see "Setting the core up"), and never while the core Deployment in `k8s/apps/core.yaml` carries the
@@ -226,7 +233,7 @@ on the box with the age key the box got in user-data. Four Secrets, each rewritt
   secret `JARVIS2_TUNNEL_KEY` — without it no OpenCode/OpenClaw web UI) (the read-only Fly token:
   `infra/fly-read-token.sh`). The file written 2026-10-09 still carries four keys the router no longer reads
   (`JARVIS1_CREDENTIALS_ID/SECRET`, `JARVIS1_SERVICES_ID/SECRET`, Jarvis 1 Access service tokens) and the stale
-  `GITHUB_READ_TOKEN` (DECISIONS 150): the next rewrite of this part leaves all five out. That rewrite needs every value
+  `GITHUB_READ_TOKEN` (DECISIONS 153): the next rewrite of this part leaves all five out. That rewrite needs every value
   above, and nobody can read the old `JARVIS2_TUNNEL_KEY` back: mint a new one and set it on the Worker in the same step
   (`wrangler secret put JARVIS2_TUNNEL_KEY` in claude-env `cf-tunnel/`); running OpenCode/OpenClaw sessions keep their
   old proof until they restart.

@@ -554,9 +554,8 @@ session setting (`Checks.configKeys`) if a session should keep its screen from t
     `jarvis.deyaochen.com` default of `JARVIS_URL` in pull-secrets / content-sync / push-claude-credentials (never used:
     jarvis2-machine always sets `JARVIS_URL` to its local proxy), `sync-live-transcripts` (runs only when a store carries
     STORAGEBOX_*; goes with the transcript-search port), and the entrypoint's handling of SESSION_SECRETS_JSON and
-    CLAUDE_* (jarvis2-machine relies on it). `forks.json` pins the claw binary by hand commit here; claude-env's
-    fork-pin workflow keeps writing only claude-env's copy. Change: a fork-pin workflow here (it would need its own
-    deploy key in `release`, main's ruleset lets no GITHUB_TOKEN push).
+    CLAUDE_* (jarvis2-machine relies on it). The forks' builds are pinned here by `fork-pin.yml`
+    (entry 153).
 102. **The image checks moved with it**: the build job fails, so nothing pins, when the session image isn't anonymously
     pullable or needs more than 8.0e9 bytes on disk unpacked (Jarvis 1's limit and script, `infra/image-unpacked-size.py`).
     A too-big session image therefore also holds back a router or core pin in the same run, which is louder than Jarvis
@@ -935,3 +934,13 @@ Deyao: several actions approved together with ONE Face ID; the caller groups the
      SSL_CERT_FILE); the watch stand-in doesn't run scripts (the real runner kills every other process in its
      container). The router's own refresh against Anthropic isn't run (it would need a real login); the test covers a
      newer pair reaching a running machine by itself.
+153. **The forks pin their builds with a `workflow_dispatch`, not a `repository_dispatch`.** DE0CH/claw-code and
+     DE0CH/openclaw run `gh workflow run fork-pin.yml -R DE0CH/jarvis2` with a fine-grained token that has only
+     Actions write on this repo (`JARVIS2_DISPATCH_TOKEN` in each fork). A `repository_dispatch` needs Contents write,
+     which as Deyao's token (an admin, whom main's ruleset lets through) could push main from a fork's CI. The workflow
+     checks every input (the URL must be the fork's own `de0ch-<sha12>` release asset for a commit on the fork's main,
+     never older than the current pin), downloads it and pins it with its sha256: claw in `session-image/base/forks.json`
+     (baked into the base, checked at build), OpenClaw in `session-image/openclaw-runtime.json` (so an OpenClaw pin builds
+     only the outer image; the base's own `openclaw` wrapper and forks.json's `openclaw` entry are gone). It pushes with
+     its own deploy key `FORK_PIN_DEPLOY_KEY` (environment `release`, main only), and that push starts `images.yml`.
+     Change: a GitHub App for the dispatch.
