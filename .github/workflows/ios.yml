@@ -58,6 +58,9 @@ jobs:
         with: { go-version: "1.25" }
       - name: stand-ins (keys, S3 with seeded backups, core, router)
         run: bash ios/ci/standins.sh "$RUNNER_TEMP/w"
+      - name: swift run Units (app code that needs no simulator, e.g. ResumeOnce)
+        working-directory: ios/interop
+        run: swift run Units
       - name: swift run Interop
         working-directory: ios/interop
         run: |

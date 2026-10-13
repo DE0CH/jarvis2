@@ -309,6 +309,8 @@ and "iCloud index" for the calls. Check them from any Jarvis 2 session:
 - Unit: `go test ./...` in core/, router/, machine/ (the core's guarantees are tested in core/).
 - The app's crypto against the real core and router: the `ios` workflow's interop job (`ios/interop`, runs on
   Linux too with swift-crypto: `ios/ci/standins.sh W`, then `swift run Interop` with the `INTEROP_*` env).
+- App code that needs no simulator (ResumeOnce: a continuation answered at most once): `swift run Units` in
+  `ios/interop` (the interop job runs it first).
 - The iOS app on a simulator: the `ios` workflow (compile both flavours, the walkthrough in light and dark against a
   real core and router on the runner, recorded); `transitions.yml` taps every navigation and fails on a blank screen.
 - The web page: the `web` workflow (typecheck + export of `app/`).

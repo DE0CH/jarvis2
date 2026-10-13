@@ -38,11 +38,12 @@ final class RouterClient: NSObject, ASWebAuthenticationPresentationContextProvid
       var c = URLComponents(url: base.appending(path: "api/auth/start"), resolvingAgainstBaseURL: false)
       c?.queryItems = [URLQueryItem(name: "redirect", value: "jarvis2://auth")]
       guard let start = c?.url else { return "" }
-      let url: URL? = await withCheckedContinuation { k in
-        let s = ASWebAuthenticationSession(url: start, callback: .customScheme("jarvis2")) { u, _ in k.resume(returning: u) }
+      // ResumeOnce: a sheet that can't present both calls back (with an error) and returns false from start()
+      let url: URL? = await ResumeOnce.run(failed: nil) { done in
+        let s = ASWebAuthenticationSession(url: start, callback: .customScheme("jarvis2")) { u, _ in done(u) }
         s.presentationContextProvider = self
         webSession = s
-        if !s.start() { k.resume(returning: nil) }
+        return s.start()
       }
       webSession = nil
       guard let frag = url?.fragment, let tok = URLComponents(string: "x:?" + frag)?.queryItems?.first(where: { $0.name == "token" })?.value, !tok.isEmpty else {
