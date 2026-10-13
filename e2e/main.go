@@ -347,10 +347,16 @@ func main() {
 		" && chown -R claude /home/claude/.claude/projects && echo ok", "ok")
 	waitLiveSync(id, tname, 3*time.Minute)
 
-	step("store key names: recorded by setup, listed to the session for every store (not only its own)")
-	must2(call(router, "POST", "/setup/store-keys", map[string]any{"name": "e2e-extra", "keys": []string{"E2E_EXTRA"}}, nil))
-	expectOnMachine(m1, "su - claude -c 'jarvis2 stores' | grep -c '^e2e-extra \\[sensitive, locked\\]: E2E_EXTRA$'", "1")
-	expectOnMachine(m1, "su - claude -c 'jarvis2 stores' | grep -c '^e2e \\[in this session, locked\\]: (key names not recorded)$'", "1")
+	if keysCore {
+		step("store key names: the core's, listed to the session for every store (not only its own)")
+		expectOnMachine(m1, "su - claude -c 'jarvis2 stores' | grep -c '^e2e-extra \\[sensitive, locked\\]: E2E_EXTRA$'", "1")
+		expectOnMachine(m1, "su - claude -c 'jarvis2 stores' | grep -c '^e2e \\[in this session, locked\\]: E2E_SECRET$'", "1")
+	} else {
+		step("store key names: recorded by setup, listed to the session for every store (not only its own)")
+		must2(call(router, "POST", "/setup/store-keys", map[string]any{"name": "e2e-extra", "keys": []string{"E2E_EXTRA"}}, nil))
+		expectOnMachine(m1, "su - claude -c 'jarvis2 stores' | grep -c '^e2e-extra \\[sensitive, locked\\]: E2E_EXTRA$'", "1")
+		expectOnMachine(m1, "su - claude -c 'jarvis2 stores' | grep -c '^e2e \\[in this session, locked\\]: (key names not recorded)$'", "1")
+	}
 
 	step("two add-stores pending at once (e2e-extra, e2e-more), each unlocked for its own add-store only, answered in the order " +
 		"they weren't filed: the session ends with both (2026-10-13: the second answer used to drop the first store); e2e comes from the carried secrets")
