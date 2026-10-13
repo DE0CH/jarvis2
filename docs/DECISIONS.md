@@ -595,10 +595,12 @@ key to decrypt it offline"; the download in the iPhone app, the decryptor a comm
     news pod rather than the router or the core, and their NetworkPolicies admit only the router's pod: they have no
     login of their own, and the router forwards behind Access (the app) or the machine signature (any running session,
     `router/searchsvc.go`). Change: give them a namespace of their own if more services join.
-107. **Two fixes came along with the port**: Jarvis 1's iCloud pod had restarted 623 times (out of memory on a
-    95-megapixel image, picked again after every restart). A file now counts a try BEFORE it is read and is given up
-    after 3 (`error: not read: stopped the indexer N times`), and images over 40 megapixels are decoded at a reduced
-    scale (JPEG) or skipped. Everything else is as it was.
+107. **Fixes came along with the port**: Jarvis 1's iCloud pod had restarted 623 times (OOMKilled at 1536Mi). Loading
+    its ~750k vectors with `fetchall()` held the blob list next to the matrix at every start and every reload; they now
+    stream into a preallocated matrix and later loads add only new vectors (limit 2 GiB). A file now counts a try
+    BEFORE it is read and is given up after 3 (`error: not read: stopped the indexer N times`), and images over 40
+    megapixels are decoded at a reduced scale (JPEG) or skipped with that reason. The AI budget ledger is carried as
+    it was: no new AI spend beyond USD 25 without Deyao.
 108. **The databases were copied, not rebuilt** (the embeddings and the iCloud AI-budget ledger are paid for). The setup
     session's Jarvis 1 token can read logs but not exec into Jarvis 1's pods, so a temporary read-only Job in
     claude-env (`selfhost/k8s/jarvis2-export`, Flux-applied next to the running pods, which it doesn't touch) took
