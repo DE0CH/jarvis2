@@ -1,5 +1,5 @@
-// Settings: the Claude account (Jarvis 1 holds it), the repos and their deploy keys (Repos.tsx), the Fly spend
-// against the cap, and whether Jarvis 2 runs, with
+// Settings: the Claude account (the router holds it: status, Refresh, Re-login), its usage, the repos and their deploy
+// keys (Repos.tsx), the Fly spend against the cap, and whether Jarvis 2 runs, with
 // the way into the shell's Reset or recover page (the app only).
 import { Linking } from "react-native";
 import { useEffect, useRef, useState } from "react";
@@ -7,7 +7,7 @@ import { api, fromNow, usd, type Usage, type UsageLimit } from "../lib/api";
 import { useStore, failed, pend } from "../lib/store";
 import { PButton } from "../ui/bits";
 import { hasShell, requestSecure } from "../lib/shell";
-import { Badge, Box, Button, Card, Flex, Heading, Muted, P, Pill, Progress, Row, Rows } from "../ui/kit";
+import { Badge, Box, Button, Card, Flex, Heading, Muted, P, Pill, Progress, Row, Rows, TextField } from "../ui/kit";
 import { Cards } from "../ui/cards";
 import { ReposCard } from "./Repos";
 
@@ -24,7 +24,62 @@ function money(v: number, currency: string, dp: number) {
   try { return new Intl.NumberFormat(undefined, { style: "currency", currency, maximumFractionDigits: dp }).format(v / Math.pow(10, dp)); }
   catch { return (v / Math.pow(10, dp)).toFixed(dp) + " " + currency; }
 }
-// the Claude quota (GET api/usage, forwarded to Jarvis 1, which holds the login)
+type ClaudeLogin = { mode: "own" | "follow"; hasLogin: boolean; expiresAt: number | null; expired: boolean; email: string; source: string;
+  refreshedAt: string | null; needLogin?: boolean; error?: string; loginInProgress: boolean };
+
+// the Claude login (GET api/claude-login; router/claudelogin.go): account, expiry, who refreshes it; Refresh (when the
+// router refreshes it) and Re-login (the CLI's sign-in: open the page, sign in, paste the code it shows)
+function ClaudeCard() {
+  const [l, setL] = useState<ClaudeLogin | null>(null), [err, setErr] = useState<string | null>(null);
+  const [signing, setSigning] = useState(false), [code, setCode] = useState("");
+  async function load() {
+    try { setL(await api<ClaudeLogin>("GET", "api/claude-login")); setErr(null); } catch (e: any) { setErr(e.message); }
+  }
+  useEffect(() => { load(); }, []);
+  async function refreshToken() {
+    pend("claude-refresh", "Refreshing…");
+    try { await api("POST", "api/claude-login/refresh"); await load(); } catch (e) { failed(e); }
+    pend("claude-refresh", null);
+  }
+  async function start() {
+    pend("claude-start", "Opening…");
+    try { const r = await api<{ url: string }>("POST", "api/claude-login/start"); setSigning(true); setCode(""); open(r.url); } catch (e) { failed(e); }
+    pend("claude-start", null);
+  }
+  async function finish() {
+    pend("claude-code", "Signing in…");
+    try { await api("POST", "api/claude-login/code", { code: code.trim() }); setSigning(false); setCode(""); await load(); } catch (e) { failed(e); }
+    pend("claude-code", null);
+  }
+  return (
+    <Card data={{ settings: "claude" }}>
+      <Heading size={3} mb={1}>Claude account</Heading>
+      {!l && !err ? <Muted>Loading…</Muted> : !l ? <P size={2} color="red">{err}</P> : <>
+        <Rows id="claude-rows">
+          <Row label="Account">{l.email || "—"}</Row>
+          <Row label="Login">{l.needLogin ? <Badge color="red">Re-login needed</Badge> : l.expired ? <Badge color="red">expired</Badge> : <Badge color="green">ok</Badge>}</Row>
+          {!!l.expiresAt && <Row label="Token valid">{fromNow(new Date(l.expiresAt))}</Row>}
+          <Row label="Refreshed by">{l.mode === "own" ? "Jarvis 2" : "Jarvis 1"}</Row>
+          {!!l.refreshedAt && <Row label="Last refresh">{fromNow(l.refreshedAt)}</Row>}
+          {!!l.error && <Row label="Error" color="red">{l.error}</Row>}
+        </Rows>
+        <Flex mt={3} gap={2} wrap>
+          {l.mode === "own" && <PButton pkey="claude-refresh" id="claude-refresh" variant="soft" label="Refresh token" onPress={refreshToken} />}
+          <PButton pkey="claude-start" id="claude-relogin" variant="soft" label="Re-login" onPress={start} />
+        </Flex>
+        {signing && <Box mt={3}>
+          <Muted>Paste the code the sign-in page shows.</Muted>
+          <Flex mt={2} gap={2} align="center">
+            <Box style={{ flex: 1 }}><TextField id="claude-code" autoCapitalize="none" autoCorrect={false} autoComplete="off" placeholder="code#state" value={code} onChangeText={setCode} /></Box>
+            <PButton pkey="claude-code" id="claude-code-submit" label="Sign in" cool={!code.includes("#")} onPress={finish} />
+          </Flex>
+        </Box>}
+      </>}
+    </Card>
+  );
+}
+
+// the Claude quota (GET api/usage, from the router's Claude login)
 function UsageCard() {
   const [u, setU] = useState<Usage | null>(null), [err, setErr] = useState<string | null>(null);
   const seq = useRef(0); // latest request wins
@@ -116,11 +171,7 @@ export function Settings() {
   const core = useStore((s) => s.state.core);
   return (
     <Cards>
-      <Card data={{ settings: "claude" }}>
-        <Heading size={3} mb={1}>Claude account</Heading>
-        <Muted>Jarvis 1's login; re-login there.</Muted>
-        <Flex mt={3}><Button variant="soft" id="open-jarvis1" onPress={() => open("https://jarvis.deyaochen.com/")}>Jarvis 1 ↗</Button></Flex>
-      </Card>
+      <ClaudeCard />
       <UsageCard />
       <ReposCard />
       <FlyCard />

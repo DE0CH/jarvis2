@@ -85,8 +85,8 @@ whose value lived only in the old stores and backups, sends the core its Fly tok
 session's live store values); `github-deploy-keys` (sensitive; GITHUB_DEPLOY_KEYS_TOKEN: a new fine-grained PAT
 `jarvis2-deploy-keys`, all repositories, Repository "Administration: read and write" only, minted by `github-web
 pat-create-all`, which deletes the same-name token first; its line is in the layout file too); the harness stores
-`openrouter` (OPENROUTER_API), `claude` (JARVIS1_CREDENTIALS_ID/SECRET: Access service token `jarvis2-store-claude`,
-rotated), `tunnel` (CF_ACCESS_CLIENT_ID/SECRET: `jarvis2-tunnel`, rotated) and `core` (the Fly token). The narrowed
+`openrouter` (OPENROUTER_API), `claude` (CLAUDE_ACCOUNT_UUID: the Claude account sessions accept the router's login
+for, read from the router's login; not secret), `tunnel` (CF_ACCESS_CLIENT_ID/SECRET: `jarvis2-tunnel`, rotated) and `core` (the Fly token). The narrowed
 Fly token in an old `core` backup can't be revoked on its own (an attenuation of JARVIS2_FLY_TOKEN); it stays sealed
 to the old master key. Old backup versions stay in the versioned bucket, sealed to their old key. Nothing needs
 unlocking ahead (each Start unlocks what its session needs, for that session only); Deyao adds his repos again in
@@ -204,6 +204,7 @@ on the box with the age key the box got in user-data. Four Secrets, each rewritt
   JARVIS2_TUNNEL_KEY=file:… JARVIS2_REMOTES_CLIENT_ID=…` (`JARVIS2_TUNNEL_KEY`: the tunnel proof key, the same value as the cf-tunnel Worker's
   secret `JARVIS2_TUNNEL_KEY` — without it no OpenCode/OpenClaw web UI; `JARVIS2_REMOTES_CLIENT_ID`: optional, the
   client id of the service token that may read `/api/remotes`)
+  (`JARVIS1_CREDENTIALS_ID/SECRET` = `jarvis2-claude-credentials`, used only while the Claude login is in mode `follow`;
   (`jarvis2-claude-credentials` and `jarvis2-services` are Jarvis 1 Access service tokens that claude-env's cf-tunnel
   Worker confines to their own paths, `CONFINED_TOKENS`) (the read-only Fly token: `infra/fly-read-token.sh`).
 - `infra/router-secrets.py --part github GITHUB_READ_TOKEN=file:…` → `k8s/secrets/router-github.enc.yaml`: the
@@ -266,6 +267,29 @@ infra/backup-read-key.py login` when they aren't in the env):
 4. `install` — `infra/router-secrets.py --part backup` from the file, then the file is shredded; commit and push
    `k8s/secrets/router-backup.enc.yaml` and `k8s/apps/router.yaml` (the router restarts with it). Stop the Chrome
    and delete its profile.
+
+## The Claude login
+
+The router holds the one Claude OAuth pair every Claude session shares (`router/claudelogin.go`, API.md "The Claude
+login", DECISIONS 115-121), on its volume. `infra/setup.py claude-login` shows it (no secrets): `mode`, account,
+expiry, last refresh, the participants of the refresh protocol (`m:<machine>` per session, `jarvis1`).
+
+- **Who refreshes:** `mode own` = the router, alone; `mode follow` = Jarvis 1 (the router mirrors its pair every 30 s).
+  A refresh revokes the previous access token at once, so there must never be two refreshers. To move it from Jarvis 1
+  to the router: (1) Jarvis 1 follows first: its Secret `jarvis-claude-login` (claude-env
+  `selfhost/k8s/secrets/jarvis-claude-login.sops.yaml`: `JARVIS2_LOGIN_ID/SECRET`, the service token
+  `jarvis1-claude-login` from `infra/cloudflare.py --peer`) and a restart; its log says "the Claude login is Jarvis 2's"
+  and `/api/state` `creds.refresher` is `jarvis2`; (2) then `infra/setup.py claude-login own`. Best right after a
+  refresh (the pair lives 8 h). Back: `infra/setup.py claude-login follow` first, then remove Jarvis 1's Secret.
+- **Re-login:** Settings → Claude account → Re-login (web page or app): the sign-in page opens; sign in, copy the code
+  it shows (`code#state`), paste, Sign in. Jarvis 1's Settings Re-login lands here too. A new box starts with no login:
+  Re-login once. A Re-login to another Claude account: also `infra/setup.py write claude CLAUDE_ACCOUNT_UUID` with the
+  new account (DECISIONS 116).
+- **A dead login** (the refresh was refused) DMs Deyao once; sessions stuck on "Please run /login" get "continue" after
+  the Re-login.
+- **Sessions:** a machine whose cert names the store `claude` takes the pair at boot and keeps a long poll open
+  (`jarvis2-machine creds-sync`, its log in the machine's output), writing a new pair only when Anthropic says it is the
+  store's account.
 
 ## Transcript search and the iCloud index
 

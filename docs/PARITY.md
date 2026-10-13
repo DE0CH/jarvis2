@@ -39,7 +39,7 @@ Deferred by Deyao (PLAN.md "Later"): content stores, device pairing for the Open
 
 ## Automatic behaviour
 - Auto-pause, Escape-cancel of a stale prompt (holder `status`), "needs you"/idle/dead DMs (+ `notify-idle` mute), model-downgrade DM (holder `status`), stall nudge, one-shot destroy: present (`router/autopilot.go`, `router/oneshot.go`). Refused commands set `needsGrant`.
-- Claude credential refresh: via Jarvis 1 (shared login), by the machine itself for a session with the store `claude` (no grant). Login repair + "continue": present (holder `login`, for a session without it).
+- Claude credential refresh: present (`router/claudelogin.go`): the router keeps the one shared pair on its volume and is its only refresher (mode `own`; `follow` mirrors Jarvis 1 until the cutover), with lessons/74's refresh lock as a long-poll protocol that every session machine with the store `claude` and Jarvis 1 take part in. Login repair + "continue": present (holder `login`, for a session without it).
 - Fly budget cap and "Also on Fly": present (`router/budget.go`, read-only `FLY_READ_TOKEN`).
 - Browserbase budget DM: stays in Jarvis 1.
 - Discord channel per session (DT, SB): present (`router/discord.go`, lobster, category "Jarvis 2"), named by the title above and renamed as it changes (2 edits per 10 min), exported to `claude-records/<date> <title>/discord/` and deleted on destroy. Topic has no Remote Control link.
@@ -57,7 +57,7 @@ Deferred by Deyao (PLAN.md "Later"): content stores, device pairing for the Open
 - Content stores: deferred. Drop tokens: missing.
 
 ## Account and apps
-- Re-login: via Jarvis 1. Usage quota: forwarded to Jarvis 1 (Settings card). Device pairing for OpenClaw/Paseo apps: deferred.
+- Re-login: present (Settings → Claude account in the web page and the app: the CLI's sign-in page, paste the code; `POST /api/claude-login/start|code`); Jarvis 1's Settings Re-login also lands here. Usage quota: present (the router reads it with its own pair). Device pairing for OpenClaw/Paseo apps: deferred.
 - Dashboard (app/DECISIONS.md 23–38): Sessions (live status, auto-pause/idle switches, resume prompt, destroy with the changes check, transcript, Discord link, needsGrant one-tap, permission mode, copy id), Grants (secure page, phone-signed), Terminal, Remote (with copy), per-session wakeups/crons, **Search** (conversations of both Jarvises, iCloud files), Previous (restore/tail/remove/delete), Tasks, Schedules, Stores, Repos, Settings (usage, Fly spend, core keys with copy), New session (one-shot, auto-pause, repos, API proxy, permission mode), banners, "Also on Fly": present. Devices (lease admin), Content, lease pills, first-prompt attachments, the per-tab transcript filter on Sessions/Previous: missing.
 
 ## Harnesses and image
@@ -79,7 +79,7 @@ Deferred by Deyao (PLAN.md "Later"): content stores, device pairing for the Open
 6. Fly read access for the budget cap: answered (`FLY_READ_TOKEN`, DECISIONS 17).
 7. The Discord bot token: answered — lobster, in the router's SOPS secrets (DECISIONS 25–26).
 8. Per-session tunnel origins: answered — the confined `jarvis2-tunnel` token + per-id proof.
-9. Cross-Jarvis services: answered for now — Worker-confined Jarvis 1 tokens; each moves into Jarvis 2 before Jarvis 1 retires (PLAN.md "Later").
+9. Cross-Jarvis services: answered for now — Worker-confined Jarvis 1 tokens; each moves into Jarvis 2 before Jarvis 1 retires (PLAN.md "Later"). The Claude login has moved (DECISIONS 115-121): Jarvis 1 now reads it from Jarvis 2.
 10. Which options are signed: answered — the harness and the permission mode (DECISIONS 30); size, model, one-shot, auto-pause, API proxy unsigned.
 11. Arbitrary env injection: non-secret names only (DECISIONS 31).
 12. Store authoring in the app (the app as trusted writer), copy between stores: open.

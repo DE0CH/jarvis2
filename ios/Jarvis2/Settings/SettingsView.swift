@@ -1,4 +1,4 @@
-// Settings: the Claude account (Jarvis 1 holds it) and its usage, Stores, Repos and Machines, the Fly spend against the
+// Settings: the Claude account (the router holds it: Refresh, Re-login) and its usage, Stores, Repos and Machines, the Fly spend against the
 // cap, and Jarvis 2 itself with Reset or recover and the encrypted backup (an offline copy of the stores).
 import SwiftUI
 
@@ -23,10 +23,7 @@ struct SettingsView: View {
           NavigationLink(value: SettingsRoute.machines) { Label("Machines", systemImage: "server.rack") }
             .accessibilityIdentifier("open-machines")
         }
-        Section {
-          LabeledContent("Login from", value: "Jarvis 1")
-          if let u = URL(string: "https://jarvis.deyaochen.com/") { Link(destination: u) { Label("Jarvis 1", systemImage: "arrow.up.right.square") }.accessibilityIdentifier("open-jarvis1") }
-        } header: { Text("Claude account") }
+        ClaudeAccountSection()
         UsageSection()
         FlySection()
         Section {
@@ -53,7 +50,69 @@ struct SettingsView: View {
   }
 }
 
-/// the Claude quota (GET api/usage, forwarded to Jarvis 1, which holds the login)
+/// the Claude login (GET api/claude-login, router/claudelogin.go): account, expiry, who refreshes it; Refresh token (when
+/// the router refreshes it) and Re-login (the CLI's sign-in: open the page, sign in, paste the code it shows)
+private struct ClaudeAccountSection: View {
+  @Environment(\.openURL) private var openURL
+  @State private var l: JSON?
+  @State private var error: String?
+  @State private var busy: String?
+  @State private var signing = false
+  @State private var code = ""
+  var body: some View {
+    Section {
+      if let l {
+        LabeledContent("Account", value: l["email"].text ?? "—")
+        LabeledContent("Login") {
+          if l["needLogin"].bool == true { StatusPill(text: "Re-login needed", color: .red) }
+          else if l["expired"].bool == true { StatusPill(text: "Expired", color: .red) }
+          else { StatusPill(text: "OK", color: .green) }
+        }
+        if let ms = l["expiresAt"].double { LabeledContent("Token valid", value: Fmt.fromNow(Date(timeIntervalSince1970: ms / 1000))) }
+        LabeledContent("Refreshed by", value: l["mode"].string == "own" ? "Jarvis 2" : "Jarvis 1")
+        if let r = l["refreshedAt"].string?.isoDate { LabeledContent("Last refresh", value: Fmt.fromNow(r)) }
+        if let e = l["error"].string { ErrorRow(text: e) }
+        if l["mode"].string == "own" {
+          Button(busy == "refresh" ? "Refreshing…" : "Refresh token", systemImage: "arrow.clockwise") { Task { await refreshToken() } }
+            .disabled(busy != nil).accessibilityIdentifier("claude-refresh")
+        }
+        Button(busy == "start" ? "Opening…" : "Re-login", systemImage: "person.badge.key") { Task { await start() } }
+          .disabled(busy != nil).accessibilityIdentifier("claude-relogin")
+        if signing {
+          TextField("code#state", text: $code).textInputAutocapitalization(.never).autocorrectionDisabled().accessibilityIdentifier("claude-code")
+          Button(busy == "code" ? "Signing in…" : "Sign in") { Task { await finish() } }
+            .disabled(busy != nil || !code.contains("#")).accessibilityIdentifier("claude-code-submit")
+        }
+      } else if let error { ErrorRow(text: error) } else { ProgressView() }
+    } header: { Text("Claude account") } footer: {
+      if signing { Text("Paste the code the sign-in page shows.") }
+    }
+    .task { await load() }
+  }
+  private func load() async {
+    do { l = try await RouterClient.shared.get("api/claude-login"); error = nil } catch { self.error = errText(error) }
+  }
+  private func refreshToken() async {
+    busy = "refresh"; defer { busy = nil }
+    do { try await RouterClient.shared.call("POST", "api/claude-login/refresh"); await load() } catch { self.error = errText(error) }
+  }
+  private func start() async {
+    busy = "start"; defer { busy = nil }
+    do {
+      let r = try await RouterClient.shared.call("POST", "api/claude-login/start")
+      if let s = r["url"].string, let u = URL(string: s) { signing = true; code = ""; openURL(u) }
+    } catch { self.error = errText(error) }
+  }
+  private func finish() async {
+    busy = "code"; defer { busy = nil }
+    do {
+      try await RouterClient.shared.call("POST", "api/claude-login/code", ["code": code.trimmingCharacters(in: .whitespacesAndNewlines)])
+      signing = false; code = ""; await load()
+    } catch { self.error = errText(error) }
+  }
+}
+
+/// the Claude quota (GET api/usage, from the router's Claude login)
 private struct UsageSection: View {
   @State private var u: JSON?
   @State private var error: String?

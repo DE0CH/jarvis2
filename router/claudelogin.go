@@ -1,7 +1,7 @@
 package main
 
 // The Claude login: one OAuth pair shared by every Claude session (Jarvis 1's lib/oauth.js, lib/claudelogin.js,
-// /api/credentials, /api/usage and its Re-login, moved here; DECISIONS 100-105). The router keeps the pair on its
+// /api/credentials, /api/usage and its Re-login, moved here; docs/DECISIONS.md 115-121). The router keeps the pair on its
 // volume (claude-login.json, 0600) and is its ONLY refresher. A refresh revokes the previous access token at once,
 // so two refreshers break each other: the file's `mode` says whether this router refreshes ("own") or mirrors
 // Jarvis 1's pair ("follow", Jarvis 1 refreshing) — the cutover is one signed setup call (POST

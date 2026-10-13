@@ -405,7 +405,7 @@ Deyao handing a feature a shell, and the session's own allow list is the session
 | An archived snapshot (restore) | (a) its sha256 in the config, plus the old cert (core-signed) and its machine's signature |
 | Repo contents (CLAUDE.md, hooks, skills) | (d) GitHub, for exactly the repos the cert names (a cert whose config names none: the repos of the deploy-key stores in the cert) |
 | Secrets | the cert's stores, sealed to the machine by the core; written to `~/.secrets` only under env-name keys |
-| The Claude login | (d) Jarvis 1's `/api/credentials` over the `claude` store's Access-confined token: taken by the machine at boot, kept in step every 30 s (`machine/claudelogin.go`); no router write, no grant |
+| The Claude login | (d) Anthropic: the router hands the pair over `/m/claude-login` (machine-signed, only to a cert with the store `claude`), and the machine writes it only when Anthropic's profile endpoint names the account the store vouches for (`CLAUDE_ACCOUNT_UUID`; on a resume whose carried store predates it, the account in the snapshot's `~/.claude.json`); taken at boot, kept in step by a long poll with the router's refresh protocol (`machine/claudelogin.go`, `router/claudelogin.go`); no router write, no grant |
 | Wakeups, crons | (c) the session's own signed request + the core's attestation; the line records what it delivered (in the snapshot): a wakeup once, a cron once per run and at most every half period |
 | The watchdog's nudge, "continue" after a re-login, "upgraded" after an Upgrade | the image: texts built into it; the router picks when, never what (numbers, or a size: small, medium or large) |
 | An added store | (a) the new cert, phone-approved |

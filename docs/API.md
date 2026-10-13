@@ -57,9 +57,9 @@ was lost: dirty repos as its final snapshot recorded them, a repo check that cou
 (`router/oneshot.go`, Jarvis 1's finishOneShot); Escape a prompt left `waiting` for 1 h (holder `status`); DM
 "needs you" / idle / dead after 5 min in that state (the idle one muted by `notifyIdle` off); DM new safeguard
 refusals and the "switch model?" dialog (holder `status` reads the pane); a Jarvis watchdog peer message every
-15 min while idle with background jobs; and login repair: when the session's credentials expire before Jarvis
-1's shared pair (`JARVIS1_CREDENTIALS_ID/SECRET` in the router's env) or its transcript ends on "Please run
-/login", write the pair (holder `login`) and, for the latter, deliver "continue". A session holding the store
+15 min while idle with background jobs; and login repair: when the session's credentials expire before the
+router's stored pair ("The Claude login" below) or its transcript ends on "Please run /login", write the pair
+(holder `login`) and, for the latter, deliver "continue". A session holding the store
 `claude` logs in and keeps in step by itself (machine/claudelogin.go): the router writes nothing there unless it
 stays behind for 5 min, and only delivers "continue" to a stuck one once its pair is in step. A command the machine
 refuses sets `needsGrant` to that holder and the loop leaves it alone for 10 min, or until a phone grant for that
@@ -112,7 +112,11 @@ gone (moved to records); `failed` (with `error`).
 | `POST /api/repos/key/begin {action: add \| remove, repo: owner/name \| GitHub URL, sensitive?, store, title, publicKey?, blob?}` | Relayed to the core's `deploy-keys/begin` (the repo normalised to `owner/name`; the app's store, title and key pair as sent): its signed begin document, which the shell's secure page checks and the phone answers. 400 for a non-GitHub repo or another action; 501 `{error}` from a core older than deploy keys. |
 | `POST /api/repos/key/finish {pending, signature, share}` | Relayed to `deploy-keys/finish`; on the core's signed `deploy-key-added` the repo goes on the list (with `sensitive`, and `fingerprint` = SHA256 of the answer's `publicKey`, or the answer's own `fingerprint` from a core before R2), on `deploy-key-removed` it comes off. The answer is the core's, unchanged. |
 | `GET /api/github/repos` | `{repos: [{fullName, url, htmlUrl, private, fork, archived, description, language, pushedAt, owner}], cachedAt, configured}` (5 min cache, `?refresh=1`), listed with `GITHUB_READ_TOKEN` (router env; Metadata read picked explicitly, else GitHub lists public repos only — sessions push with their repos' deploy keys). 503 without it. |
-| `GET /api/usage` | Forwarded to Jarvis 1's `/api/usage` (query kept) with the services token: Jarvis 1 holds the Claude login. |
+| `GET /api/usage` | The Claude quota, read by the router with its stored access token (Jarvis 1's shape, `router/claudelogin.go`): `{fetchedAt, limits: [{kind, group, percent, severity, resetsAt, model, surface, active}], extraUsage: {enabled, monthlyLimit, usedCredits, utilization, currency, decimalPlaces, disabledReason, spendLimitReached} \| null, cached, stale?, error?}`; cached a minute (`?refresh=1` skips it); a failed fetch answers the last good reading with `stale`; 409 `{error, needLogin}` when Claude refuses the token. |
+| `GET /api/claude-login` | The Claude login, no secrets: `{mode: "own" \| "follow", hasLogin, expiresAt, expired, email, accountUuid, source, updatedAt, refreshedAt, participants: [{id, seen}], loginInProgress, preparing, error?, rejected?, needLogin?}` (below, "The Claude login"). |
+| `POST /api/claude-login/refresh` | Refresh now (mode `own` only; 409 in `follow`) → `{ok, refreshed, expiresAt}`; 409/502 `{error, needLogin}`. |
+| `POST /api/claude-login/start` | Re-login, step 1 → `{url}`: the CLI's sign-in page (claude.com/cai/oauth/authorize, PKCE, the manual redirect). The verifier is kept on the router's volume for 15 minutes, so a rollout doesn't lose it. |
+| `POST /api/claude-login/code` | Re-login, step 2: `{code}` = the `code#state` the sign-in page shows → the CLI's token exchange and profile → stored (any account: Deyao's own action) → `{ok, email, expiresAt}`; sessions stuck on "Please run /login" get "continue" on the next tick. In mode `follow` the new pair also goes to Jarvis 1. |
 | `GET /api/search`, `/api/search/context`, `/api/search/status`, `POST /api/search/reindex`; `GET /api/icloud/search`, `/api/icloud/file`, `/api/icloud/status`; `POST /api/icloud/relist`, `/api/icloud/retry` | The app's Search tab: forwarded to the box's own services (`router/searchsvc.go`; "Transcript search" and "iCloud index" below) with the query and body unchanged. 502 `{error: "… unreachable: …"}` when the service is down. |
 
 ### Archives (Storage Box, router env `STORAGEBOX_HOST/USER/PASSWORD`)
@@ -327,6 +331,35 @@ image, whether the core answers, and `githubRepos` — `{total, private}` repos 
 sees (or `{error}`; same 5-minute cache as `/api/github/repos`). `private: 0` = the token has no permission picked.
 `flyOrgs` — the Machines view's orgs as counts only: `[{org, via, error, apps: [name…], machines, attention}]`.
 
+## The Claude login (`router/claudelogin.go`)
+
+One OAuth pair shared by every Claude session (Jarvis 1's too, which follows it), on the router's volume
+(`claude-login.json`, 0600; DECISIONS 115-121). Its `mode`: `own` = the router is the ONLY refresher (when under 30 min
+are left), `follow` = it mirrors Jarvis 1's pair every 30 s and never refreshes. A refresh revokes the previous access
+token at once, so never two refreshers: the switch is `infra/setup.py claude-login own|follow` (RUNBOOK "The Claude
+login").
+
+Everyone who takes the pair long-polls `GET …/claude-login?have=<their expiresAt>&ack=<gen they hold a lock for, 0
+none>&wait=<s, ≤ 55>` → `{credentials? (only when it expires later than have), account, expiresAt, gen, preparing,
+mode}`. It answers at once when there is a newer pair, when a refresh is being prepared that the caller hasn't
+acknowledged, or when the caller still holds a lock for a refresh that is over; else after `wait`. The refresh
+protocol (lessons/74 over the network): the router sets `preparing` with a new `gen`; each participant takes the CLI's
+refresh lock (`~/.claude/.oauth_refresh.lock`) and polls again with `ack=gen`; the router waits for every participant
+seen in the last 2 minutes (at most 10 s), refreshes, writes the answer to its volume first, then answers every poll
+with it; a participant writes its credentials file, then releases the lock. A failed refresh answers `preparing:
+false` with no newer pair: participants release. A refused refresh (the grant is dead) DMs Deyao once.
+
+`POST …/claude-login {credentials, account?}` offers a pair (a participant whose claude refreshed by itself): stored only
+when it expires later and Anthropic's profile endpoint says it is the stored account's (403 otherwise) → `{stored,
+expiresAt}`; in mode `follow` it also goes to Jarvis 1.
+
+| Path | Who |
+|---|---|
+| `GET/POST /m/claude-login` | a session machine whose cert names the store `claude` (403 otherwise); participant `m:<machine>`. `GET/POST /m/api/credentials` (Jarvis 1's session script, through `$JARVIS_URL`) is the same pair and push. |
+| `GET/POST /peer/claude-login`, `GET /peer/claude-login/status` | Jarvis 1: Access app `jarvis2.deyaochen.com/peer`, service token `jarvis1-claude-login` only (router env `ACCESS_PEER_AUD`, `JARVIS1_LOGIN_CLIENT_ID`; `infra/cloudflare.py --peer`); participant `jarvis1`. Its push may carry `relogin: true` (a Re-login in Jarvis 1's Settings), which may change the account. |
+| `GET /setup/claude-login`, `POST /setup/claude-login/mode {mode}` | the setup session (signed): status, the cutover switch. |
+| `/api/claude-login*`, `/api/usage` | the app (above, "Sessions"). |
+
 ## Machines (`/m/*`)
 
 Every request carries `X-Machine: <fly machine id>`, `X-Time: <unix seconds>`, `X-Sig: <base64 DER signature
@@ -527,16 +560,11 @@ signed as every `/m` call). Any `:id` in the path must be the calling machine's 
 | `DELETE /api/sessions/:id` | The router: the session retires itself (Destroy) → 202 `{started}`; 409 `{pending}` while it has wakeups, crons or watches. |
 | leases, watches | The router (above). |
 | search, iCloud index | `GET /m/api/search`, `/m/api/search/context`, `/m/api/search/status`, `POST /m/api/search/reindex` (any running session), `GET /m/api/icloud/search`, `/m/api/icloud/file`, `/m/api/icloud/status`, `POST /m/api/icloud/relist`, `/m/api/icloud/retry` (only a session whose cert holds the `identity` store; otherwise 403 `{error, needsStore: "identity"}`): the box's own services, as for the app. 403 for a machine with no running session. |
-| Jarvis 1's services (below) | Forwarded to `JARVIS1_URL` (default `https://jarvis.deyaochen.com`) with the Access service token `JARVIS1_SERVICES_ID/SECRET` and header `X-Jarvis2-Session: <id>`; path, query, body, Content-Type/Accept/Range unchanged. |
+| device leases, content stores | The router (`router/leases.go`, `router/content.go`). |
+| `GET/POST /api/credentials` | The router's Claude login ("The Claude login" above), for a machine whose cert names the store `claude`. |
 | anything else | 404 |
 
-Forwarded Jarvis 1 paths (what the cf-tunnel Worker must let the services token reach):
-`GET /api/usage` (the app's, without `X-Jarvis2-Session`), `GET /api/sessions/:id/content`,
-`GET|PUT|DELETE /api/sessions/:id/content/:name/file`, `GET|POST /api/credentials`.
-
-The session routes among them carry the Jarvis 2 session id (`s…`) and no Jarvis 1 session token: Jarvis 1 checks
-`SESSION_API_TOKEN` against its own machine metadata (`requireSessionToken`, `sessionContentStore`), so until
-it accepts the services token + `X-Jarvis2-Session` as the session's identity they answer 401/403.
+Nothing is forwarded to Jarvis 1.
 
 ## Transcript search (`services/search`)
 

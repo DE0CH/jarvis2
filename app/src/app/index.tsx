@@ -31,7 +31,7 @@ function Banners() {
       {dead.length > 0 && <Callout color="red" mb={3} id="banner-creds">
         <P size={2} weight="bold" color="red">Claude login failed</P>
         <Rows><Row label="Sessions"><BadgeList color="red" items={dead.map(sessionTitle)} /></Row></Rows>
-        <P size={1} color="red">If this stays, re-login in Jarvis 1.</P>
+        <P size={1} color="red">If this stays: Settings → Claude account → Re-login.</P>
       </Callout>}
       {b?.capped || b?.warned ? <Callout color={b.capped ? "red" : "amber"} mb={3} id="banner-budget">
         <P size={2} weight="bold" color={b.capped ? "red" : "amber"}>{b.capped ? "Fly spend cap reached" : "Fly spend warning"}</P>

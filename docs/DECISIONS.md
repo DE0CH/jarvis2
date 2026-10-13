@@ -677,3 +677,49 @@ key to decrypt it offline"; the download in the iPhone app, the decryptor a comm
       not arm (nothing would vouch for the delivery). A watch keeps its session (`PendingSchedule`: no self-retire,
       no automatic destroy) until it fires, gives up, or is cancelled. Script limit 32 KB (Jarvis 1's 4000 characters
       was a Fly metadata limit).
+
+## The Claude login moves into Jarvis 2, 2026-10-13
+
+Jarvis 2 stops depending on Jarvis 1 for the shared Claude login (PLAN "Before Jarvis 1 retires"). Replaces 22 and the
+Jarvis 1 half of 89.
+
+115. **The router holds the Claude login**, on its volume (`claude-login.json`, 0600), not in the core and not in a
+     store. The pair rotates every 8 hours with nobody there and goes to every Claude session: in the core that is
+     state changing without Deyao and branching beyond accept/reject (DESIGN "Trust boundary"); a store's value is
+     fixed until the setup session rewrites it. The router already reached the pair (its login repair used Jarvis 1's
+     confined token), and Jarvis 1 kept it in an untrusted box too, so nothing is exposed that wasn't. A box rebuild
+     loses it: one Re-login in the app (Settings → Claude account). A rollout waits for a refresh in flight (SIGTERM
+     drains it), and the answer reaches the volume before anything else. Change: a pod of its own if router rollouts
+     ever cut a refresh short.
+116. **Machines check the account of every pair before writing it** (DESIGN "Inputs to a machine": the login decides
+     whose Claude app reaches the session through Remote Control, so the router must not pick it). Anthropic's profile
+     endpoint must name the account the store `claude` vouches for (`CLAUDE_ACCOUNT_UUID`, written by the setup session;
+     on a resume whose carried store predates it, the account in the `~/.claude.json` the signed snapshot restored).
+     The router can only withhold the login. The router checks pushes the same way. Cost: a Re-login to ANOTHER Claude
+     account needs `infra/setup.py write claude CLAUDE_ACCOUNT_UUID` (fill-stores.sh reads it from the router), and
+     running lines take the new value at their next pull with an unlock. Change: drop the check if Deyao switches
+     accounts often.
+117. **One refresher, chosen by a switch**: the file's `mode` is `follow` (mirror Jarvis 1's pair every 30 s, never
+     refresh; the default, so a new router can't start a second refresher) or `own` (the router is the only
+     refresher), set only by the setup session (`infra/setup.py claude-login own|follow`). Cutover order: Jarvis 1
+     becomes a follower first (its Secret `jarvis-claude-login`; then both follow and nobody refreshes, harmless for
+     hours since a pair lives 8 h), then `own` here. Never `own` while Jarvis 1 still refreshes.
+118. **lessons/74's refresh lock, over the network**: every taker long-polls the router; before refreshing, the router
+     announces it (`preparing`, a generation number), each participant takes its CLI refresh lock and acknowledges, the
+     router waits for every participant seen in the last 2 minutes (at most 10 s), refreshes, and answers every poll
+     with the new pair; a participant writes it and then releases the lock (released after 45 s regardless). Jarvis 1
+     is one participant for all its sessions (it locks them through Fly exec, as before). Replaces Jarvis 1's exec-based
+     guard for Jarvis 2 sessions, which had none (they polled Jarvis 1 every 30 s).
+119. **Re-login is the CLI's OAuth flow in Go** (`router/claudelogin.go`), not a PTY around `claude auth login`
+     (lessons/39 drove the real CLI): the router image is distroless with no CLI, and a pending sign-in kept on the volume
+     (the PKCE verifier, 15 minutes) survives a rollout, which Jarvis 1 needed a separate broker for. The parameters
+     (authorize URL, client id, scopes, manual redirect, token endpoint, the `code#state` paste) are read from claude
+     2.1.296; after a CLI upgrade that changes them, update the vars at the top of the file.
+120. **Jarvis 1 reads the login from Jarvis 2** (`/peer/claude-login`): a path-scoped Access app
+     `jarvis2.deyaochen.com/peer` admitting one service token, `jarvis1-claude-login` (router env `ACCESS_PEER_AUD`,
+     `JARVIS1_LOGIN_CLIENT_ID`; its secret only in Jarvis 1's Secret `jarvis-claude-login`). Jarvis 1 stores each newer
+     pair in its own Secret, so its sessions, its `/api/credentials` (still used by Jarvis 2 sessions on older images)
+     and its usage card keep working unchanged; it pushes its sessions' own refreshes and its Settings Re-login
+     (`relogin: true`, which may change the account) to Jarvis 2. The token reaches nothing else on the router.
+121. **A refused refresh DMs once and isn't retried**: only a newer pair (a Re-login or a push) clears it, as in
+     Jarvis 1. Usage is read with the stored access token and cached a minute.
