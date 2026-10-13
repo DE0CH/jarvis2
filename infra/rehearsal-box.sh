@@ -213,7 +213,7 @@ PY
 }
 
 make_box() {
-  # a just-deleted server's primary IP counts against the project's limit for a while: wait and try again
+  # the project's server limit (or a just-deleted server still counted): wait and try again
   for i in $(seq 1 10); do
     make_box_once > "$W/make.out" 2>&1 && { cat "$W/make.out"; return 0; }
     cat "$W/make.out"

@@ -52,7 +52,7 @@ made around it; the app's own list is `app/DECISIONS.md`.
 
 ## Infra
 
-16. **Box**: Hetzner cx23 (2 vCPU, 4 GB, 40 GB) in fsn1, EUR 6.588/month gross plus its IPv4, in the
+16. **Box**: Hetzner cx23 (2 vCPU, 4 GB, 40 GB) in fsn1, EUR 6.588/month gross, IPv6-only (DECISIONS 156), in the
     `jarvis2-mock` project (renaming a Hetzner project needs the console).
 17. **Fly**: app `jarvis2-sessions` in org `jarvis2-370`, region `lhr`, sizes small/medium/large = 2/4/8 shared
     CPUs with 2/4/8 GB. The router's budget cap (Jarvis 1's: DM at USD 25, pause all at USD 30) reads the app with a
@@ -1006,3 +1006,33 @@ Deyao: several actions approved together with ONE Face ID; the caller groups the
      *Not chosen*: replaying with a router-held identity (the call must run as the person who approved it), and a
      per-session Access service token (a machine key is already per session, rotates with each machine and needs no
      Cloudflare state).
+
+## The box is IPv6-only, 2026-10-13
+
+156. **Every Jarvis 2 box is IPv6-only, with Cloudflare's free WARP client for the outgoing IPv4** (Deyao, 2026-10-13:
+     every Hetzner server, because the account is at its limit of 10 primary IPs). `infra/create.sh` creates with
+     `public_net: {enable_ipv4: false, enable_ipv6: true}`; `infra/warp-host.sh` (ahead of `cloud-init.sh` in the
+     user-data) installs WARP from Cloudflare's apt repo (reachable over IPv6), registers, `mode tunnel_only` and
+     `tunnel ip add-range ::/0`, so only IPv4 enters the tunnel: GitHub, GHCR, Fly's WireGuard gateways
+     (`*.gateway.6pn.dev` have no AAAA) and anything else IPv4-only. Claude's choices around it:
+     *tunnel_only, not warp*: mode `warp` puts WARP's DNS proxy (127.0.2.2) in front of systemd-resolved; tunnel_only
+     leaves Hetzner's IPv6 resolvers. *IPv6 excluded*: WARP's default captures IPv6 too, which would cut inbound IPv6.
+     *k3s stays IPv4*: on a host without a public IPv4 k3s picks the IPv6 address and builds an IPv6-only cluster
+     (pods `fd00:42::/56`) whose pods reach no IPv4 at all (tested: SERVFAIL, no GitHub). So the node gets
+     `10.254.254.1` on a dummy interface `k3s0` (`node-ip`, `flannel-iface`; 10.0.0.0/8 is outside the tunnel), pods'
+     IPv4 is masqueraded out through WARP, and CoreDNS forwards to 1.1.1.1/8.8.8.8 (`resolv-conf`) through WARP; set in
+     `/etc/rancher/k3s/config.yaml`. *Not chosen*: dual-stack pods (more change, nothing needs pod IPv6 today); WARP's
+     SOCKS proxy mode (every client — containerd, git, Flux, the router's Go code — would need proxy settings);
+     wgcf/a hand-made WireGuard to WARP (an unofficial client). WARP's free tier has no SLA: if WARP is down, the box
+     loses GitHub/GHCR, the Fly WireGuard peer (machines can't reach the router) and the Cloudflare tunnel (cloudflared runs
+     in an IPv4-only pod, so its edge connection goes through WARP too) until it's back; nothing is lost, it reconnects. Tested on throwaway boxes in project runners: curl -4
+     api.github.com, git ls-remote, GHCR pulls, Flux, the core through the tunnel, the router through the WireGuard
+     peer, a reboot.
+157. **The production box converts in place, with Deyao's go** (`infra/convert-ipv6.sh`): shutdown → the primary IPv4
+     unassigned (Hetzner allows it only while the server is off) and deleted → a single-use rescue boot with a
+     throwaway SSH key writes `warp-host.sh` and a oneshot unit (before k3s) onto the disk → reboot. The disk keeps the
+     box key, age key, Secrets and Flux state, so nothing is re-minted (a rebuild would need every router-secrets part
+     again, a new backup read credential and a new tunnel key, and loses paused sessions). Both reboot the box, so the
+     core starts empty either way: Deyao Recovers, as after a power failure. Rehearsed on a throwaway box built the
+     pre-change way.
+

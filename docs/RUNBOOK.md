@@ -407,13 +407,32 @@ The apps call `JarvisConfig.baseURL` (DE0CH/openclaw `apps/ios/Sources/Jarvis/Ja
 is that one constant per fork and a TestFlight build (claude-env skills `openclaw-ios`, `paseo-ios`), then one pairing
 per app.
 
+## The box's network: IPv6-only, IPv4 out through WARP
+
+Every box has no public IPv4 (Deyao, 2026-10-13: the Hetzner account is at its limit of 10 primary IPs; DECISIONS 156).
+`infra/warp-host.sh` (run by cloud-init, and by the unit `jarvis2-warp-host.service` on a converted box) installs
+Cloudflare's WARP client in mode `tunnel_only` with IPv6 excluded (`tunnel ip add-range ::/0`): IPv4 (GitHub, GHCR,
+Fly's WireGuard gateways, 1.1.1.1 for CoreDNS) goes through WARP, IPv6 stays native. k3s's node IP is `10.254.254.1`
+on the dummy interface `k3s0` (`/etc/rancher/k3s/config.yaml`), so the cluster stays IPv4. Everything the pods reach goes through WARP (they have no IPv6), the cloudflared tunnel included. Signs that WARP
+is down: jarvis2.deyaochen.com unreachable (tunnel down), Flux "failed to checkout" from github.com, ImagePullBackOff on ghcr.io, machines unable to reach the router over the
+peer. There is no way in to look; WARP reconnects by itself (warp-svc, always on), and a box git can't fix is
+rebuilt. The same WARP steps for every other Hetzner server Claude makes: claude-env `scripts/hetzner-warp.sh`.
+
+### Converting a box that still has its IPv4 (production, once, with Deyao's go)
+
+`CONFIRM=yes infra/convert-ipv6.sh` (env `HETZNER_JARVIS2_MOCK_API`, plus `JARVIS2_SETUP_ACCESS_ID/SECRET` for the
+wait): graceful shutdown, the primary IPv4 unassigned and deleted, a single-use rescue boot (throwaway SSH key, over
+IPv6) that writes `warp-host.sh` and its boot unit onto the disk, then a boot into the box's own system; it waits until
+the core answers through the tunnel. About 10 minutes of downtime. The box keeps its keys, Secrets and Flux state, but
+it reboots, so the core starts empty: Deyao Recovers in the app (as after a power failure). DECISIONS 157.
+
 ## Rebuilding the box
 
 1. Delete the server in the jarvis2 Hetzner project (API or console).
 2. `infra/cloudflare.py ~/.jarvis2/cloudflare.env` (with `ROTATE=1` if that file is gone: a new setup service
    token; put it in the `default` store as JARVIS2_SETUP_ACCESS_ID/SECRET).
 3. `infra/create.sh` — a new box key and age key (commit `keys/box.pub`, `keys/box-age.pub`), a new WireGuard
-   peer, no SSH, no open port. Then both `infra/router-secrets.py …` runs (above; the backup read credential
+   peer, no SSH, no open port, no IPv4 (above). Then both `infra/router-secrets.py …` runs (above; the backup read credential
    needs a new one, since its old value exists nowhere but the old box's Secret). It waits until
    `setup.py identity` answers.
 4. Deyao sets the core up in the app: Recover (above). Paused sessions are lost (their certs were signed by the
@@ -446,7 +465,7 @@ per app.
 the way production is (`infra/cloudflare.py`, `infra/create.sh`, `infra/cloud-init.sh`, Flux applying `./k8s/apps`
 with the production images at a pinned commit), in the Hetzner project **runners** (`HCLOUD_TOKEN`). It never
 touches the production box, core, router, tunnel, Access apps, WireGuard peer or bucket. About 45 minutes; one
-cx23 for about an hour plus a second one for the rebuild (EUR 0.01056/h each + IPv4), a few minutes of small Fly
+cx23 for about an hour plus a second one for the rebuild (EUR 0.01056/h each; IPv6-only, no IPv4), a few minutes of small Fly
 machines. Run it from a setup session (needs `JARVIS2_FLY_TOKEN`, `JARVIS2_SETUP_KEY`, `CF_JARVIS2_INFRA_TOKEN`,
 `CLOUDFLARE_API`, `HETZNER_S3_*`) with a swift.org toolchain (`SWIFT_BIN`; the app's side is the `Rehearse` target
 in `ios/interop`, the app's own CoreSetup/CoreCrypto):

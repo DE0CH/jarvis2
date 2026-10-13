@@ -3,6 +3,7 @@
 # no SSH, no k8s API from outside (the firewall has no inbound rules at all), no admin token. A box that
 # git can't fix is replaced, not repaired. Secrets (the tunnel token, the router's WireGuard peer, the box key, the age key) arrive
 # in user-data and become k8s Secrets here; the user-data is shredded at the end.
+# create.sh also puts infra/warp-host.sh (warp_host_setup) ahead of this file.
 # Injected: TUNNEL_TOKEN WG_CONF (the wg-quick file of `fly wireguard create`) BOX_KEY (the box key, PEM)
 #           AGE_KEY (Flux decrypts k8s/secrets with it)
 #           SYNC_YAML, EXTRA_MANIFEST  empty in production; a rehearsal box (infra/rehearse-recover.sh) sets them:
@@ -12,8 +13,12 @@ set -uo pipefail
 export DEBIAN_FRONTEND=noninteractive
 exec > >(tee -a /var/log/jarvis2-bootstrap.log) 2>&1
 echo "=== jarvis2 bootstrap $(date -u +%FT%TZ) ==="
-apt-get update -y && apt-get install -y --no-install-recommends ca-certificates curl git
+apt-get update -y && apt-get install -y --no-install-recommends ca-certificates curl git gnupg
 systemctl disable --now ssh.socket ssh.service 2>/dev/null || true
+
+# The box is IPv6-only (create.sh: no primary IPv4; Deyao, 2026-10-13): IPv4 out through Cloudflare WARP, k3s on an IPv4
+# of a dummy interface (infra/warp-host.sh, which create.sh puts ahead of this file). Before anything fetches from GitHub.
+warp_host_setup || exit 1
 
 # no pod reaches the metadata address (it keeps serving this user-data: the box key, the age key): dropped in the raw
 # table before any of k3s's own rules see it, at every boot, whatever a namespace's NetworkPolicy says (R1 audit)

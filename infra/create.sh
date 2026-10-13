@@ -4,7 +4,8 @@
 #   JARVIS2_FLY_TOKEN         to (re)make the box's WireGuard peer in Fly org jarvis2-370
 #   JARVIS2_SETUP_KEY, JARVIS2_SETUP_ACCESS_ID/SECRET  only to wait for the box to come up (setup.py identity)
 #   ~/.jarvis2/cloudflare.env from infra/cloudflare.py (run it first; ROTATE=1 on a rebuild if the file is gone)
-# The box has no SSH and no reachable k8s API: its firewall has no inbound rules, and everything after
+# The box is IPv6-only (no primary IPv4: the Hetzner account is at its limit of 10 primary IPs; Deyao, 2026-10-13);
+# cloud-init.sh sends its outgoing IPv4 through Cloudflare WARP. The box has no SSH and no reachable k8s API: its firewall has no inbound rules, and everything after
 # this script comes from git (Flux). Prints no secret.
 # The defaults are production's. infra/rehearse-recover.sh makes a throwaway box with this same script and these
 # overrides (each named, so nothing of production is touched):
@@ -50,7 +51,7 @@ age-keygen -y "$KEY/age.key" > "$KOUT/box-age.pub"
 { echo '#!/bin/bash'
   printf 'TUNNEL_TOKEN=%q\nWG_CONF=%q\nBOX_KEY=%q\nAGE_KEY=%q\n' "$TUNNEL_TOKEN" "$(cat "$KEY/wg.conf")" "$(cat "$KEY/box-key.pem")" "$(cat "$KEY/age.key")"
   printf 'SYNC_YAML=%q\nEXTRA_MANIFEST=%q\n' "$(cat "${SYNC_YAML_FILE:-/dev/null}")" "$(cat "${EXTRA_MANIFEST_FILE:-/dev/null}")"
-  cat "$HERE/cloud-init.sh"; } > "$UD"
+  cat "$HERE/warp-host.sh" "$HERE/cloud-init.sh"; } > "$UD"
 # Hetzner mails a root password when a server has no SSH key: give it a throwaway key whose private half
 # is deleted with this script (sshd is off and port 22 closed anyway)
 ssh-keygen -q -t ed25519 -N "" -C jarvis2-throwaway -f "$KEY/k"
@@ -73,10 +74,10 @@ try:   # the throwaway key goes whatever happens (a refused create used to leave
     else:
         fw=call("POST","/firewalls",{"name":fwname,"rules":[]})["firewall"]["id"]   # no inbound at all
     s=call("POST","/servers",{"name":name,"server_type":stype,"image":"ubuntu-24.04","location":loc,"ssh_keys":[key],
-      "firewalls":[{"firewall":fw}],"labels":json.loads(os.environ["LABELS"]),"user_data":open(ud).read()})["server"]
+      "firewalls":[{"firewall":fw}],"public_net":{"enable_ipv4":False,"enable_ipv6":True},"labels":json.loads(os.environ["LABELS"]),"user_data":open(ud).read()})["server"]
 finally:
     call("DELETE",f"/ssh_keys/{key}")
-print("server",s["id"],s["public_net"]["ipv4"]["ip"])
+print("server",s["id"],s["public_net"]["ipv6"]["ip"])
 PY
 echo "$KOUT/box.pub and box-age.pub are the new box's keys (production: re-run infra/router-secrets.py, which encrypts to the new age key, then commit and push)"
 echo "waiting for the bootstrap (k3s + Flux + the core behind the tunnel)…"
