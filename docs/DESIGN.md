@@ -267,7 +267,7 @@ by the core, approved by the phone; the box alone can never make one, and no AI 
 - **New session:** the router adds the harness's stores (policy) → `succession(null, …)` ← iPhone approval →
   `start(image)` → `certify(approval, machine)` → succession cert. (The router may start the machine while
   Deyao is still deciding, and destroy it on a reject.)
-- **Pause:** the machine stops every process of the session (SIGSTOP), signs its snapshot (artefacts + transcript)
+- **Pause:** the machine stops every process of the session (SIGSTOP), signs its snapshot (artefacts, workspace, transcript, the harnesses' state)
   with its signing key and uploads it; it signs only this one in its life and answers any later snapshot command with
   the same one, so the router holds no earlier signed state to roll a successor back to →
   `kill(machine, snapshot hash + its signature)`: the successor's cert names that snapshot and no other. Its carried secrets (sealed by the core at its last pull) are already next to the snapshot. Skipped/failed

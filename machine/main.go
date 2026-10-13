@@ -450,8 +450,29 @@ func cloneRepos(repos []string) {
 
 // ---- snapshots ------------------------------------------------------------------------------------
 
-// what a snapshot holds (relative to $HOME): the conversation, the work, the artefacts
-var snapshotPaths = []string{".claude/projects", ".claude.json", ".claude/.first-prompt-sent", "workspace", "artifacts", allowFile, changesFile, lineKeysFile, deliveredFile}
+// what a snapshot holds (relative to $HOME): the conversation, the work, the artefacts, and the OpenCode/Paseo and
+// OpenClaw harnesses' own state (Paseo's daemon identity and pairings, OpenCode's sessions, the OpenClaw gateway's
+// state and device pairings), so their apps stay paired across a pause, as in Jarvis 1 (its lib/archive.js)
+var snapshotPaths = []string{".claude/projects", ".claude.json", ".claude/.first-prompt-sent", "workspace", "artifacts",
+	".paseo", ".claude/.paseo-agent", ".local/share/opencode", ".openclaw",
+	allowFile, changesFile, lineKeysFile, deliveredFile}
+
+// snapshotSkip: what the snapshot leaves out under those roots (filepath.Match against the path relative to $HOME):
+// the harnesses' logs, pid files, caches and downloaded binaries, which a successor rebuilds (Jarvis 1's excludes)
+var snapshotSkip = []string{
+	".paseo/models", ".paseo/runtime", ".paseo/paseo.pid", ".paseo/*.log", ".paseo/*.out", ".paseo/*.err",
+	".local/share/opencode/log", ".local/share/opencode/bin",
+	".openclaw/logs", ".openclaw/tmp", ".openclaw/*.out", ".openclaw/*.err", ".openclaw/.hold", ".openclaw/gateway.pid",
+}
+
+func skipInSnapshot(rel string) bool {
+	for _, pat := range snapshotSkip {
+		if ok, _ := filepath.Match(pat, rel); ok {
+			return true
+		}
+	}
+	return false
+}
 
 // makeSnapshot: the snapshot as a tar.gz written to path (streamed: a workspace can be several GB) → its sha256
 func makeSnapshot(path string) (string, int64, error) {
@@ -475,6 +496,12 @@ func makeSnapshot(path string) (string, int64, error) {
 				return nil
 			}
 			name, _ := filepath.Rel(home, p)
+			if skipInSnapshot(name) {
+				if fi.IsDir() {
+					return filepath.SkipDir
+				}
+				return nil
+			}
 			link := ""
 			if fi.Mode()&os.ModeSymlink != 0 {
 				link, _ = os.Readlink(p)

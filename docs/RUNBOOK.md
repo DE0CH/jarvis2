@@ -233,7 +233,7 @@ on the box with the age key the box got in user-data. Four Secrets, each rewritt
   secret `JARVIS2_TUNNEL_KEY` — without it no OpenCode/OpenClaw web UI) (the read-only Fly token:
   `infra/fly-read-token.sh`). The file written 2026-10-09 still carries four keys the router no longer reads
   (`JARVIS1_CREDENTIALS_ID/SECRET`, `JARVIS1_SERVICES_ID/SECRET`, Jarvis 1 Access service tokens) and the stale
-  `GITHUB_READ_TOKEN` (DECISIONS 153): the next rewrite of this part leaves all five out. That rewrite needs every value
+  `GITHUB_READ_TOKEN` (DECISIONS 150): the next rewrite of this part leaves all five out. That rewrite needs every value
   above, and nobody can read the old `JARVIS2_TUNNEL_KEY` back: mint a new one and set it on the Worker in the same step
   (`wrangler secret put JARVIS2_TUNNEL_KEY` in claude-env `cf-tunnel/`); running OpenCode/OpenClaw sessions keep their
   old proof until they restart.

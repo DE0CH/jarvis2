@@ -91,3 +91,41 @@ func TestRestoreArchivedOnlyWhenTheCertNamesIt(t *testing.T) {
 		t.Fatal("a successor acted on a restore")
 	}
 }
+
+// The harnesses' own state (Paseo pairings, OpenCode sessions, the OpenClaw gateway's state) travels in the
+// snapshot, so the OpenCode/OpenClaw apps stay paired across a pause; their logs, pid files and caches don't.
+func TestSnapshotCarriesHarnessState(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	files := map[string]bool{ // path → kept
+		".paseo/config.json": true, ".paseo/agents/a.json": true, ".claude/.paseo-agent": true,
+		".local/share/opencode/storage/session/s.json": true, ".openclaw/openclaw.json": true,
+		".openclaw/jarvis-remote.json": true, ".openclaw/devices/paired.json": true, "workspace/w.txt": true,
+		".paseo/models/big.bin": false, ".paseo/runtime/x": false, ".paseo/paseo.pid": false, ".paseo/daemon.out": false,
+		".paseo/a.log": false, ".local/share/opencode/log/x.log": false, ".local/share/opencode/bin/rg": false,
+		".openclaw/logs/l": false, ".openclaw/tmp/t": false, ".openclaw/gateway.out": false, ".openclaw/gateway.pid": false,
+		".openclaw/.hold": false, ".config/other/x": false,
+	}
+	for p := range files {
+		os.MkdirAll(filepath.Dir(filepath.Join(home, p)), 0o755)
+		os.WriteFile(filepath.Join(home, p), []byte(p), 0o600)
+	}
+	snap := filepath.Join(t.TempDir(), "s.tar.gz")
+	if _, _, err := makeSnapshot(snap); err != nil {
+		t.Fatal(err)
+	}
+	next := t.TempDir()
+	t.Setenv("HOME", next)
+	if _, err := unpackFile(snap); err != nil {
+		t.Fatal(err)
+	}
+	for p, kept := range files {
+		b, err := os.ReadFile(filepath.Join(next, p))
+		if kept && string(b) != p {
+			t.Errorf("%s not restored (%v)", p, err)
+		}
+		if !kept && err == nil {
+			t.Errorf("%s travelled in the snapshot", p)
+		}
+	}
+}

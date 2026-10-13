@@ -13,7 +13,7 @@ snapshots, live transcripts, task results).
 
 ## Session lifecycle
 - **Create** (FT, AT): present. Idempotent `requestId`: present (a repeat answers the session it made). Lifecycle lock: 409 and `busy {kind, since}` in `/api/state`.
-- **Pause / resume / resume on newer image**: present (snapshot on the router volume, machine-signed, not encrypted).
+- **Pause / resume / resume on newer image**: present (snapshot on the router volume, machine-signed, not encrypted). The snapshot holds the transcripts, `~/.claude.json`, `~/workspace`, `~/artifacts` and, as in Jarvis 1, the OpenCode/Paseo and OpenClaw harnesses' state (`~/.paseo`, `~/.claude/.paseo-agent`, `~/.local/share/opencode`, `~/.openclaw`, without their logs, pid files and caches: `machine/main.go` `snapshotPaths`/`snapshotSkip`), so their apps stay paired across a pause.
 - **Resume prompt**: present (`POST /api/sessions/:id/resume {prompt}`, delivered as a peer message once started; router/schedule.go). Jarvis 1 typed it as a user prompt instead.
 - **Start on another size / model**: present (`POST …/resume {size, model, apiProxy}`), unsigned: no phone step.
 - **Wake job status**: present for permission-mode and restart (`wake {kind, phase, error, finishedAt}` in `/api/state`).

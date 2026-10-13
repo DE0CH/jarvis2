@@ -266,6 +266,10 @@ func main() {
 	}
 	expectNoUnlocks("after the Start's pull")
 	expectOnMachine(m1, "echo marker-"+secret+" > /home/claude/artifacts/e2e-marker && chown claude /home/claude/artifacts/e2e-marker && echo ok", "ok")
+	// the OpenCode/Paseo and OpenClaw harnesses' state travels in the snapshot too (their pairings), their pid files don't
+	expectOnMachine(m1, "cd /home/claude && mkdir -p .paseo .openclaw/devices .local/share/opencode/storage && echo paseo > .paseo/e2e-state && "+
+		"echo openclaw > .openclaw/devices/e2e-state && echo opencode > .local/share/opencode/storage/e2e-state && echo 1 > .openclaw/gateway.pid && "+
+		"chown -R claude .paseo .openclaw .local && echo ok", "ok")
 
 	if os.Getenv("E2E_ONLY") == "drain" {
 		drainStep(id)
@@ -348,7 +352,7 @@ func main() {
 	must(s, b, "pause")
 	waitState(id, "paused", 12*time.Minute)
 
-	step("resume, same image → no approval (dead-machine responder), snapshot restored, secrets carried with no store unlocked")
+	step("resume, same image → no approval (dead-machine responder), snapshot restored (harness state too), secrets carried with no store unlocked")
 	s, b = call(router, "POST", "/api/sessions/"+id+"/resume", map[string]bool{"upgrade": false}, nil)
 	must(s, b, "resume")
 	waitState(id, "started", 8*time.Minute)
@@ -357,6 +361,8 @@ func main() {
 		log.Fatal("resume reused the old machine")
 	}
 	expectOnMachine(m2, "cat /home/claude/artifacts/e2e-marker", "marker-"+secret)
+	expectOnMachine(m2, "cd /home/claude && cat .paseo/e2e-state .openclaw/devices/e2e-state .local/share/opencode/storage/e2e-state && "+
+		"{ test -e .openclaw/gateway.pid && echo pid || echo no-pid; }", "paseo\nopenclaw\nopencode\nno-pid")
 	expectOnMachine(m2, "grep -c E2E_EXTRA /home/claude/.secrets || true", "0")
 	expectOnMachine(m2, "grep -c E2E_SECRET /home/claude/.secrets", "1")
 	expectNoUnlocks("after the resume")
