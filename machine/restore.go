@@ -22,6 +22,9 @@ import (
 	"path/filepath"
 )
 
+// restoreTmp: where a restore's bytes land while they are checked (a var: tests move it)
+var restoreTmp = dir + "/restore.tar.gz"
+
 // changesFile: the repos' state when the snapshot was taken (router/archive.go reads it); in snapshotPaths
 const changesFile = ".jarvis2-changes.txt"
 
@@ -42,11 +45,25 @@ func writeChanges() {
 }
 
 // restoreArchived: the archived snapshot into a new line's first machine, only when the cert names it
-// (Config.restore: the old line's machine and the snapshot's sha256, approved on the phone with the new line)
+// (Config.restore: the old line's machine and the snapshot's sha256, approved on the phone with the new line). The
+// bytes whose hash the cert names are either a destroyed Jarvis 2 session's signed snapshot, or a Jarvis 1 import's
+// manifest (jarvis1import.go), told apart by their content: either way they are exactly what the phone approved.
 func restoreArchived(c *client, coreKey, me string, cert *Cert, v Vouched) error {
 	ref := v.Config.Restore
 	if cert.PredID != "" || ref == nil {
 		return nil
+	}
+	tmp := restoreTmp
+	defer os.Remove(tmp)
+	sum, hdr, err := c.download("/m/restore-snapshot", tmp)
+	if err != nil {
+		return fmt.Errorf("a restore was asked for but the router serves no snapshot (%v)", err)
+	}
+	if sum != ref.Sha256 {
+		return errors.New("the archived snapshot isn't the one the cert names")
+	}
+	if man, ok := readJ1Manifest(tmp, ref.Machine); ok {
+		return importJarvis1(c, man)
 	}
 	var rc struct {
 		Cert *SignedDoc `json:"cert"`
@@ -61,20 +78,10 @@ func restoreArchived(c *client, coreKey, me string, cert *Cert, v Vouched) error
 	if old.Machine.ID != ref.Machine {
 		return fmt.Errorf("the old cert is for %s, the cert names %s", old.Machine.ID, ref.Machine)
 	}
-	body, hdr, status, err := c.raw("GET", "/m/restore-snapshot", nil)
-	if err != nil {
-		return err
+	if !verify(old.Machine.SigningKey, []byte(sum), hdr.Get("X-Snapshot-Sig")) {
+		return errors.New("the snapshot isn't signed by the machine its cert names")
 	}
-	if status != 200 {
-		return fmt.Errorf("a restore was asked for but the router serves no snapshot (HTTP %d)", status)
-	}
-	if sum := sha256.Sum256(body); hex.EncodeToString(sum[:]) != ref.Sha256 {
-		return errors.New("the archived snapshot isn't the one the cert names")
-	}
-	if err := checkSnapshotSig(old.Machine.SigningKey, body, hdr.Get("X-Snapshot-Sig")); err != nil {
-		return err
-	}
-	n, err := unpack(body)
+	n, err := unpackFile(tmp)
 	if err != nil {
 		return err
 	}

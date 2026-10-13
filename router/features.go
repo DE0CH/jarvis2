@@ -23,21 +23,22 @@ type (
 // registerFeatures: called once from buildHandlers
 func (r *Router) registerFeatures(app appRoute, m machineRoute, public publicRoute) {
 	r.registerAutopilot(app, m)
-	r.registerMemory(app, m)              // memory.go
-	r.registerHarnesses(app)              // harness.go: /api/models
-	r.registerRemote(app, m, public)      // remote.go: remote pages, /api/remotes, tunnel proofs
-	r.registerLeases(app, m, public)      // leases.go: shared-device leases (before sessionapi.go's /m/api/ catch-all)
-	r.registerWatches(app, m)             // watches.go: conditional wakeups
-	r.registerSessionAPI(app, m)          // sessionapi.go: wakeups, crons, /m/api
-	r.registerArchive(app, m)             // archive.go, restore.go (budget.go needs no routes: /api/state via stateHooks)
-	r.registerSessionOps(app, m)          // sessionops.go, uploads.go, repos.go
-	r.registerTasks(app, m)               // tasks.go: task instances (one-shot session lines), runs, schedules
-	r.registerInbox(app, m, public)       // inbox.go: requests waiting for the phone (the app's Inbox)
-	r.registerVouch(app, m)               // vouch.go: /m/config, /m/restore-cert, deliveries, the input log
-	r.registerMachines(app)               // machines.go: every Fly machine of the app; Destroy for one with no session
-	r.registerContent(app, m)             // content.go: content stores (Storage Box folders) for the app and the sessions
-	r.registerClaudeLogin(app, m, public) // claudelogin.go: the Claude login, its refresh, Re-login, the usage quota
-	r.registerDevices(app, public)        // devices.go: pairing Deyao's OpenClaw/Paseo apps, /api/remotes, Start
+	r.registerMemory(app, m)                // memory.go
+	r.registerHarnesses(app)                // harness.go: /api/models
+	r.registerRemote(app, m, public)        // remote.go: remote pages, /api/remotes, tunnel proofs
+	r.registerLeases(app, m, public)        // leases.go: shared-device leases (before sessionapi.go's /m/api/ catch-all)
+	r.registerWatches(app, m)               // watches.go: conditional wakeups
+	r.registerSessionAPI(app, m)            // sessionapi.go: wakeups, crons, /m/api
+	r.registerJarvis1Import(app, m, public) // jarvis1import.go: paused Jarvis 1 sessions as new lines
+	r.registerArchive(app, m)               // archive.go, restore.go (budget.go needs no routes: /api/state via stateHooks)
+	r.registerSessionOps(app, m)            // sessionops.go, uploads.go, repos.go
+	r.registerTasks(app, m)                 // tasks.go: task instances (one-shot session lines), runs, schedules
+	r.registerInbox(app, m, public)         // inbox.go: requests waiting for the phone (the app's Inbox)
+	r.registerVouch(app, m)                 // vouch.go: /m/config, /m/restore-cert, deliveries, the input log
+	r.registerMachines(app)                 // machines.go: every Fly machine of the app; Destroy for one with no session
+	r.registerContent(app, m)               // content.go: content stores (Storage Box folders) for the app and the sessions
+	r.registerClaudeLogin(app, m, public)   // claudelogin.go: the Claude login, its refresh, Re-login, the usage quota
+	r.registerDevices(app, public)          // devices.go: pairing Deyao's OpenClaw/Paseo apps, /api/remotes, Start
 }
 
 // startFeatures: called once from main after the router is built

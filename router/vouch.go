@@ -132,6 +132,9 @@ func (r *Router) sessionConfig(s *Session) (string, error) {
 		}
 		c.Restore = &RestoreRef{Machine: oc.Machine.ID, Sha256: sum}
 	}
+	if s.ImportFrom != "" { // jarvis1import.go: the Jarvis 1 session id (its first machine's) and the import manifest's hash
+		c.Restore = &RestoreRef{Machine: s.ImportFrom, Sha256: s.ImportSha}
+	}
 	if s.taskConfig != nil {
 		c.Task = s.taskConfig
 	} else if isTaskHarness(s.Harness) {

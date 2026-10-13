@@ -756,6 +756,10 @@ func (r *Router) registerArchive(app appRoute, m machineRoute) {
 	m("POST /m/live-transcript", r.liveTranscript) // livesync.go
 	app("POST /api/records", r.indexRecord)        // records.go: an archive already on the Storage Box, by hand
 	m("GET /m/restore-snapshot", func(w http.ResponseWriter, req *http.Request, machine string, _ []byte) {
+		if id := r.importFor(machine); id != "" { // jarvis1import.go: an import's manifest (the cert names its hash)
+			r.serveImportManifest(w, id)
+			return
+		}
 		dir := r.restoreFilesFor(machine)
 		if dir == "" {
 			writeJSON(w, 404, map[string]string{"error": "no restore for this machine"})
@@ -789,6 +793,7 @@ func sha256hex(p string) (string, error) {
 func (r *Router) archiveLoop() {
 	for {
 		r.tidyRestores()
+		r.tidyImports() // jarvis1import.go
 		time.Sleep(time.Minute)
 	}
 }

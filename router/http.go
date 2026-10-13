@@ -506,8 +506,12 @@ func (r *Router) buildHandlers() {
 		w.Header().Set("Content-Type", "application/gzip")
 		http.ServeFile(w, req, p)
 	})
-	m("POST /m/snapshot", func(w http.ResponseWriter, req *http.Request, machine string, body []byte) {
+	// the snapshot streams to the volume (a session's workspace can be several GB; the router has 1 GiB of memory):
+	// hashed on the way, the machine's request signature checked against that hash, then put in place
+	mmux.Handle("POST /m/snapshot", r.requireMachineStream(func(w http.ResponseWriter, req *http.Request, machine, tmp string) {
+		p := r.st.snapshotPath(machine)
 		if req.Header.Get("X-Snapshot-None") != "" {
+			os.Remove(tmp)
 			// a machine still booting has nothing to snapshot: the waiting pause or destroy goes on at once
 			log.Printf("machine %s: nothing to snapshot (%s)", machine, req.Header.Get("X-Snapshot-None"))
 			r.snapshotArrived(machine)
@@ -516,19 +520,19 @@ func (r *Router) buildHandlers() {
 		}
 		sig := req.Header.Get("X-Snapshot-Sig")
 		if sig == "" {
+			os.Remove(tmp)
 			writeJSON(w, 400, map[string]string{"error": "X-Snapshot-Sig missing"})
 			return
 		}
-		p := r.st.snapshotPath(machine)
-		if err := os.WriteFile(p+".tmp", body, 0o600); err != nil {
+		if err := os.Rename(tmp, p); err != nil {
+			os.Remove(tmp)
 			writeErr(w, err)
 			return
 		}
-		os.Rename(p+".tmp", p)
 		os.WriteFile(p+".sig", []byte(sig), 0o600)
 		r.snapshotArrived(machine)
 		writeJSON(w, 200, map[string]bool{"ok": true})
-	})
+	}))
 	m("POST /m/pull-secrets", func(w http.ResponseWriter, req *http.Request, machine string, body []byte) {
 		var cert *Doc
 		r.st.Do(func(d *persisted) { cert = d.Certs[machine] })
@@ -787,6 +791,58 @@ func (r *Router) requireMachine(fn func(w http.ResponseWriter, req *http.Request
 			return
 		}
 		fn(w, req, machine, body)
+	})
+}
+
+// snapshotMax: the largest snapshot the router takes (the volume is the limit; a machine's disk is 16 GB)
+const snapshotMax = 32 << 30
+
+// requireMachineStream: requireMachine for a large body — streamed to a temp file on the volume while it is hashed,
+// then the signature (over that hash) checked; fn gets the file's path and must move or remove it
+func (r *Router) requireMachineStream(fn func(w http.ResponseWriter, req *http.Request, machine, tmp string)) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		machine, t, sig := req.Header.Get("X-Machine"), req.Header.Get("X-Time"), req.Header.Get("X-Sig")
+		ts, _ := strconv.ParseInt(t, 10, 64)
+		if d := time.Since(time.Unix(ts, 0)); d > 120*time.Second || d < -120*time.Second {
+			writeJSON(w, 401, map[string]string{"error": "X-Time too far off"})
+			return
+		}
+		var key string
+		r.st.Do(func(d *persisted) {
+			if s := d.Started[machine]; s != nil {
+				key = s.SigningKey
+			}
+		})
+		if key == "" { // before reading a byte: only a machine the core started may write to the volume
+			writeJSON(w, 401, map[string]string{"error": "not signed by a machine the core started"})
+			return
+		}
+		f, err := os.CreateTemp(filepath.Dir(r.st.snapshotPath(machine)), ".upload-*")
+		if err != nil {
+			writeErr(w, err)
+			return
+		}
+		tmp := f.Name()
+		h := sha256.New()
+		n, err := io.Copy(io.MultiWriter(f, h), io.LimitReader(req.Body, snapshotMax+1))
+		if cerr := f.Close(); err == nil {
+			err = cerr
+		}
+		if err == nil && n > snapshotMax {
+			err = fmt.Errorf("body over %d bytes", int64(snapshotMax))
+		}
+		if err != nil {
+			os.Remove(tmp)
+			writeErr(w, err)
+			return
+		}
+		msg := req.Method + " " + req.URL.Path + " " + t + " " + hex.EncodeToString(h.Sum(nil))
+		if !verifyP256(key, []byte(msg), sig) {
+			os.Remove(tmp)
+			writeJSON(w, 401, map[string]string{"error": "not signed by a machine the core started"})
+			return
+		}
+		fn(w, req, machine, tmp)
 	})
 }
 

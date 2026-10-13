@@ -133,6 +133,30 @@ it only with no predecessor, checks it against the core key, the snapshot (`GET 
 machine key, and refuses a sensitive line's snapshot into a line without a sensitive store. Which snapshot is restored is the
 router's word, not the phone's (the core's options can't carry it).
 
+### Jarvis 1 import (`router/jarvis1import.go`, `machine/jarvis1import.go`)
+
+A paused Jarvis 1 session (`claude-records/.paused/<id>/` on the Storage Box: `<uuid>.jsonl`, `claude.json`,
+`workspace.tar.gz`, `artifacts.tar.gz`, `harness.tar.gz`, `session.json`, `manifest.txt` written last) becomes a NEW
+line, approved on the phone like a new session, whose first machine restores it and resumes the same conversation.
+
+| Call | Does |
+|---|---|
+| `GET /api/jarvis1/paused` (`/setup/…` too) | `{sessions: [{id, title, pausedAt, size, model, environment, repos, prepare?, sha256?, sessions: [{id, state}], imported?}]}` from Jarvis 1's index `claude-records/.index/paused-sessions.json`, with each one's import state here. |
+| `GET /api/jarvis1/paused/{id}` | That one's state: `prepare {state preparing\|ready\|failed, file, bytesDone, bytesTotal, error, sha256}`, `sha256` (the prepared manifest's), the Jarvis 2 sessions made from it, `imported {session, at}` once one came up. |
+| `POST /api/jarvis1/paused/{id}/prepare` | 202: the router streams every file once (the names above; `changes.txt` and `artifacts-manifest.txt` are not taken) and hashes it, then writes the import manifest `{kind: "jarvis1-import", v: 1, session, files: [{name, sha256, size}]}` and Jarvis 1's record onto its volume (`jarvis1-imports/<id>/`). Refused without `manifest.txt` (an incomplete snapshot). |
+| `POST /api/jarvis1/paused/{id}/import` | Body `{stores: [...], explanation, prompt?, size?}` (the harness's stores come with it; `explanation` required from the setup session) → `{id, from, approval: true}`: a new session in `approval` (Inbox kind `new-session`, `options.restore` = "Jarvis 1 session “title” (id, paused date)"). Its cert's config: `label` = Jarvis 1's app title, `prompt` = a move notice typed into the resumed conversation (or the given one), Jarvis 1's model, permission mode, repos, auto-pause; `size` Jarvis 1's (`xlarge` → `large`); `restore = {machine: <Jarvis 1 id>, sha256: <the manifest's sha256>}`. The same import again answers the same session (`createRequestId` `jarvis1-import:<id>:<sha prefix>`). 400 before a prepare. |
+
+The machine (only the line's first, only when its cert names the restore) fetches the manifest (`GET /m/restore-snapshot`),
+checks its sha256 against the cert, then each file (`GET /m/import-file/{name}`, streamed from the Storage Box: the machine
+holds no Storage Box credential) against the manifest's sha256 and size, extracting tarballs into a staging dir while
+hashing and moving them into place only once they match (entries outside `workspace/`, `artifacts/` or the harness roots, or
+through a symlink, are skipped). The transcripts go to `~/.claude/projects/<slug of the working dir>/` after the repos are
+cloned, `~/.claude.json` without `oauthAccount`/`userID`, GitHub remotes without embedded credentials (ending in `.git`, so
+the deploy-key rewrites apply). Jarvis 1's armed wakeups and crons (`metadata.wake_*`, `cron_*`) are armed again as the
+line's own signed requests: a passed wakeup 5 minutes after boot; a cron with its period, time zone and end, next run after
+now, plus a one-off wakeup `missed-<name>` 5 minutes after boot when a run fell while paused. What was armed:
+`~/artifacts/jarvis1-import/rearmed.txt` (beside Jarvis 1's `session.json`).
+
 ## Approvals (the shell's secure pages)
 
 ```
@@ -325,6 +349,7 @@ against `SETUP_KEY` (`k8s/apps/router.yaml`), within ±2 min, each signature onc
 | `POST /setup/fly-token` | `/fly-token {sealed}`: `{"FLY_API_TOKEN"}` sealed to the core's agreement key (HKDF info `"jarvis2/fly-token"`) → the core's signed `{"kind":"fly-token-set"}`; 409 while the core is empty |
 | `GET /setup/core-cert` | (the router's own) `{statement, masterSig}` of the claim it kept for the running core (matched by the core's signing key from `/identity`); 404 when none. A core claimed before the router kept claims (the running core until its release) is asked for its own `/core-cert`. |
 | `GET /setup/stores/keys` | (the router's own) the store list with key names, as `GET /api/stores` |
+| `GET /setup/jarvis1/paused[/{id}]`, `POST /setup/jarvis1/paused/{id}/prepare\|import` | (the router's own) as `/api/jarvis1/…` (Jarvis 1 import, above); the import's caller is `setup`. `infra/setup.py jarvis1 …` |
 | `POST /setup/store-keys` | (the router's own) `{name, keys: [names] \| null}` → `{ok}`: records a store's key names (env-var style, ≤ 128 chars, de-duplicated and sorted); `null` forgets them. No values. `infra/setup.py write` sends it after every write; `infra/setup.py keys NAME KEY…` and `infra/store-keys.sh` (every store, from the layout file) record names alone. |
 
 `GET /setup/status` — the router's health: the names of its secrets that are set (values never), the session
@@ -372,8 +397,9 @@ off.
 |---|---|
 | `GET /m/cert` | `{cert, predecessorCert}` — this machine's latest succession cert and the predecessor's cert when it continues a real machine (the machine checks both against the core key the core put in its Fly config, `JARVIS2_CORE_KEY`). 404 until certified. |
 | `GET /m/snapshot` | The predecessor's snapshot: body = tar.gz, header `X-Snapshot-Sig` = base64 signature by the predecessor's signing key over the sha256 of the body. 404 = none. |
-| `POST /m/snapshot` | Upload this machine's snapshot (same format). With header `X-Snapshot-None` and no body: nothing to snapshot (the machine is still booting; its agent answers every snapshot command from the first second of its life), and the waiting pause or destroy goes on at once. A pause or destroy doesn't ask a machine that never got past boot (no `/m/status` from it) at all. |
-| `GET /m/restore-snapshot` | A restoring session's first machine only: the archived snapshot, same format, signed by the OLD machine named in `JARVIS2_RESTORE_CERT`. 404 otherwise. |
+| `POST /m/snapshot` | Upload this machine's snapshot (same format), streamed: the router writes the body to its volume while hashing it and checks `X-Sig` against that hash after (up to 32 GB; a machine the router doesn't know is refused before a byte is read). With header `X-Snapshot-None` and no body: nothing to snapshot (the machine is still booting; its agent answers every snapshot command from the first second of its life), and the waiting pause or destroy goes on at once. A pause or destroy doesn't ask a machine that never got past boot (no `/m/status` from it) at all. |
+| `GET /m/restore-snapshot` | A restoring session's first machine only: the archived snapshot, same format, signed by the OLD machine named in `JARVIS2_RESTORE_CERT`; for a Jarvis 1 import, the import manifest (JSON). 404 otherwise. Streamed to disk by the machine. |
+| `GET /m/import-file/{name}` | A Jarvis 1 import's first machine only: one file the manifest lists, streamed from the Storage Box with `Content-Length` = the manifest's size (the machine checks size and sha256). 404 for any other name or machine. |
 | `POST /m/pull-secrets` | The router adds this machine's cert and the line's carried secrets (`snapshots/<machine>.carry`, else its predecessor's) and relays to the core; answers the core's signed `secrets` doc (sealed to the machine's key; its `carry` field, the next blob, is kept by the router). 423 `store X is locked` when no unlock is open to the cert and the blob doesn't hold the store. |
 | `GET /m/commands` | Long poll (≤ 50 s): `{commands: ["snapshot"]}` or `{commands: []}`. `"free"` (an Upgrade, before its snapshot): the agent SIGSTOPs the harness and SIGKILLs every other process of the session user but itself, and writes their list to `~/artifacts/jarvis2-upgrade-freed.txt` (`machine/memory.go`; ignored while booting or frozen). |
 | `POST /m/memory` | Body `{totalKb, availKb, oomKills, psiFull60, top: [{rssKb, comm}]}` (≤ 10 processes): the machine's RAM, every 10 s once booted (`machine/memory.go`), for the starvation watch (`router/memory.go`). 400 for a malformed sample. |

@@ -27,6 +27,7 @@ Deferred by Deyao (PLAN.md "Later"): content stores, device pairing for the Open
 
 ## Previous sessions
 - List, transcript tail (paused: the volume's snapshot; destroyed: the archive), remove/purge: present. Restore a destroyed session: present as a NEW line (phone-approved like a new session) whose first machine restores the archived snapshot, checking the old core-signed cert and the snapshot's signature (`router/restore.go`, `machine/restore.go`). Not phone-signed: which old snapshot is restored.
+- **Paused Jarvis 1 sessions → Jarvis 2** (no Jarvis 1 counterpart; for the retirement): present (`router/jarvis1import.go`, `machine/jarvis1import.go`): prepare (the router hashes the Storage Box files into an import manifest), import (a new line whose cert's restore names the Jarvis 1 id and the manifest's sha256, approved in the Inbox), the first machine restores transcripts, workspace, artifacts, `~/.claude.json`, fixes remotes, resumes the conversation and re-arms the wakeups and crons. Setup session and `/api/jarvis1/*`; no app UI (the Inbox approval is the app's part).
 - **Indexing an archive by hand** (J1 `POST /api/records`): present (`router/records.go`): on the list with tail / Remove / Delete; Restore refused (no machine-signed snapshot; DECISIONS 41).
 
 ## Terminal, remote control, title

@@ -41,6 +41,8 @@ type Session struct {
 	ArchiveDir     string        `json:"archiveDir,omitempty"`     // archive.go: fixed by the destroy that archives it
 	RestoreFrom    string        `json:"restoreFrom,omitempty"`    // restore.go: the record this session restores
 	RestoreCert    *Doc          `json:"restoreCert,omitempty"`    // restore.go: that record's signer cert
+	ImportFrom     string        `json:"importFrom,omitempty"`     // jarvis1import.go: the paused Jarvis 1 session this line imports
+	ImportSha      string        `json:"importSha256,omitempty"`   // jarvis1import.go: that import manifest's sha256 (in the cert's restore)
 	Ops            *SessionOps   `json:"ops,omitempty"`            // sessionops.go: API proxy, env patch, rollback, attachments
 	Booted         string        `json:"booted,omitempty"`         // the machine that has reported status: it got past boot (lastSnapshot)
 	Waiting        string        `json:"waiting,omitempty"`        // what a pause or destroy is waiting on, in plain words (the app shows it)

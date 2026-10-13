@@ -321,6 +321,26 @@ and "iCloud index" for the calls. Check them from any Jarvis 2 session:
   seeded from it. Jarvis 1's two pods keep running until its freeze: scale them to 0 then, so only one index reads
   iCloud and spends on embeddings.
 
+## Importing a paused Jarvis 1 session
+
+Jarvis 1's paused sessions stay where they are (`claude-records/.paused/<id>/`, read only). From the setup session
+(`JARVIS2_URL=https://jarvis2.deyaochen.com`):
+
+1. `infra/setup.py jarvis1` lists them with their import state; `infra/setup.py jarvis1 prepare ID… --wait` hashes
+   each one's files (minutes for a few GB; the router streams them, nothing is staged).
+2. Pick each one's Jarvis 2 stores: `default` for Jarvis 1's `default`, plus whatever split-off store the session's
+   transcript shows it used (the store layout is private: claude-env `.claude/skills/jarvis2/`), plus the repo stores
+   (`github-<repo>`) for its repos. Say the mapping in the reason.
+3. Only when all are prepared (an approval lapses after 10 minutes): `infra/setup.py jarvis1 import ID --stores a,b
+   --why "…"` for each, then ping Deyao on Discord ("waiting on you: …"). Each is one Inbox approval (Restore,
+   "Restores machine <Jarvis 1 id>"), one Face ID each. A lapsed one: run the same import again.
+4. After his approval: `infra/setup.py jarvis1` shows the new session ids (`imported` once one came up); check each
+   machine's `~/artifacts/jarvis1-import/rearmed.txt` and the transcript tail (the move notice is the first prompt, so
+   the reply shows the conversation resumed).
+
+The machine has Fly's default 8 GB disk: an import that unpacks near 5 GB plus its pause snapshot is near the limit
+(DECISIONS 130).
+
 ## Device leases and watches
 
 Nothing to set up: both live in the router (`router/leases.go`, `router/watches.go`; API.md). Leases: `GET /api/leases`

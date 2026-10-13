@@ -725,3 +725,60 @@ Jarvis 1 half of 89.
      (`relogin: true`, which may change the account) to Jarvis 2. The token reaches nothing else on the router.
 121. **A refused refresh DMs once and isn't retried**: only a newer pair (a Re-login or a push) clears it, as in
      Jarvis 1. Usage is read with the stored access token and cached a minute.
+
+## Importing paused Jarvis 1 sessions, 2026-10-13
+
+Deyao: move every paused Jarvis 1 session to Jarvis 2, so each continues there as the same conversation with its working
+tree; Face ID is unavoidable, the approval burden should be small.
+
+122. **An import is a new line whose cert's `restore` names the Jarvis 1 session id and the sha256 of an import
+     manifest** (`router/jarvis1import.go`): at prepare the router streams every file of `.paused/<id>/` once and records
+     `{name, sha256, size}` for each; Deyao's Face ID signs the manifest's hash, so it vouches for every byte (DESIGN
+     "Inputs to a machine" (a)). It reuses the `restore` key the app already shows ("Restores machine <id>", the hash;
+     a Jarvis 1 id is its first machine's id), so no app release is needed. The machine tells the two kinds apart by the
+     bytes the cert names (an import manifest is JSON naming that id; anything else must be a signed Jarvis 2
+     snapshot), so the router can't switch one for the other. Change: a separate `import` config key the app labels
+     "Imports Jarvis 1 session" (an app release through the phone replica).
+123. **Which bytes are hashed is the router's choice** (as with attachments, 78): the phone binds what the router read
+     from the Storage Box (ours, over TLS) at prepare. The machine fetches each file through the router, streamed (it
+     holds no Storage Box credential), and refuses any whose sha256 or size differs. There is no sensitivity rule to
+     carry over (Jarvis 1 had none): Deyao sees the stores in the approval.
+124. **One Face ID per imported session, no batch approval.** The phone's signature covers one core challenge. Signing a
+     list safely needs either a core primitive that approves N challenges from one signature (a core change, so a
+     Recover) or the app signing N challenges under one Face ID (an app release through the replica). For a one-off,
+     N Inbox approvals (Allow + Face ID each) is the smaller change. The 3-waiting-proposals limit is a session's (it
+     guards against a session flooding the Inbox); the import is filed by the setup session (caller `setup`), whose
+     calls the router already trusts to ask for anything, so no limit is raised or bypassed. Change: a batch approval in
+     the app if imports or restores become routine.
+125. **What the first machine restores** (as Jarvis 1's restore-snapshot + entrypoint did): workspace, artifacts and the
+     harness tarball (`.paseo`, `.openclaw`, `.local/share/opencode`) extracted into a staging dir while hashed, moved into
+     place only after the hash matched, entries outside those roots or through a symlink skipped, files' mtimes kept (git's
+     index stays valid); the transcripts under the working dir's project slug after the repos are cloned (Jarvis 1's
+     rule: the single repo in `~/workspace`, else `~/workspace`); `~/.claude.json` without `oauthAccount` and `userID`
+     (the machine ID stays, so the Claude app's Remote Control entry can reattach); GitHub remotes without embedded
+     credentials and ending in `.git`, so the line's deploy-key rewrites take them. Not taken: `changes.txt` (written
+     again at the next pause) and `artifacts-manifest.txt` (the plain-file artifacts of a Jarvis 1 Previous-restore,
+     used only when no artifacts tarball exists).
+126. **Wakeups and crons are re-armed by the machine as the line's own signed requests** ((c), so later deliveries
+     need no new voucher): a wakeup whose time passed while paused fires 5 minutes after boot; a cron keeps its period,
+     time zone and end and runs next at its first occurrence after now (its time of day kept), and a run that fell
+     while paused fires once 5 minutes after boot as the wakeup `missed-<name>`; a cron past its end isn't armed;
+     Jarvis 1 watches are noted, not armed (their check scripts aren't in the record). The list goes to
+     `~/artifacts/jarvis1-import/rearmed.txt`.
+127. **The first prompt is a move notice** (signed with the line, shown on the phone) typed into the resumed
+     conversation: the environment changed, the stores it now has, Jarvis 1's API is going away, reply in one line and
+     wait. One short turn per session; the reply also shows in the transcript that the resume worked.
+128. **Settings carried over**: label = Jarvis 1's app title (else its label), which names the Remote Control entry;
+     model, permission mode, repos and auto-pause as in Jarvis 1; size `xlarge` → `large` (Jarvis 2's largest; the core
+     refuses others).
+129. **Snapshots stream** (a session can be several GB): the machine writes its final snapshot to disk while hashing it
+     and uploads it streamed, the signature over that hash; the router streams the body onto its volume while hashing
+     and checks the signature after (it read up to 4 GB into a pod with 1 GiB of memory); a restore (predecessor or
+     archive) streams to disk and unpacks from the file. A file that shrinks while the snapshot is taken is padded
+     instead of failing the whole snapshot.
+130. **Disk**: Jarvis 2 machines get Fly's default 8 GB root disk (the core's create sets no size; Jarvis 1 set 16 GB).
+     The largest paused Jarvis 1 session unpacks to 4.3 GB; with its pause snapshot (about 1.8 GB compressed) it fits, with
+     little room. Change: `rootfs: {size_gb: 16}` in the core's create, with the next core release (a core change).
+131. **A new core destroys imported lines like any other** (once paused, archived in Previous; Restore is a new line).
+     Imports made before a pending core release are destroyed at that release; the import manifest stays on the router's
+     volume (`jarvis1-imports/<id>/`) and Jarvis 1's records are only read, so an import can be asked for again.

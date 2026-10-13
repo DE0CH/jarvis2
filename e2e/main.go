@@ -219,6 +219,13 @@ func main() {
 		log.Fatal("still unlocked after lock")
 	}
 
+	if os.Getenv("E2E_ONLY") == "jarvis1-import" { // the import alone, on a core set up as above
+		jarvis1ImportStep(p)
+		expectNoUnlocks("at the end")
+		log.Printf("E2E PASSED (the Jarvis 1 import only)")
+		return
+	}
+
 	step("new session (stores [e2e]): Start unlocks e2e for this session only; locked again once the machine pulled")
 	// E2E_HELD_CORE=1: the core is the held production one (no vouching, no per-session unlocks): the session must get
 	// its settings from the router as before the input guard (machine/legacy.go); the run ends after that check
@@ -489,6 +496,8 @@ func main() {
 	}
 	waitTask(iid, "ready", 5*time.Minute) // paused again for the next run
 	must2(call(router, "DELETE", "/api/tasks/instances/"+iid, nil, nil))
+
+	jarvis1ImportStep(p) // jarvis1import.go
 
 	step("no store was left unlocked; the unlocked list is signed and empty")
 	expectNoUnlocks("at the end")

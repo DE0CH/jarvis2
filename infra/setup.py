@@ -35,6 +35,12 @@ both). Values never print.
   infra/setup.py lease take-over|hand-back DEVICE [--note TEXT]
                                        for Deyao: take a shared device over (agents refused) or hand it back
   infra/setup.py requests              what waits in the phone's Inbox (requests and approvals)
+  infra/setup.py jarvis1               Jarvis 1's paused sessions (its index) and each one's import state here
+  infra/setup.py jarvis1 prepare ID… [--wait]
+                                       the router hashes each paused Jarvis 1 session's files (in the background)
+  infra/setup.py jarvis1 import ID --stores a,b [--size S] [--prompt-file F] --why TEXT
+                                       a prepared one as a new Jarvis 2 session, waiting in the Inbox for Face ID
+                                       (its cert names the import manifest's sha256; docs/API.md "Jarvis 1 import")
   infra/setup.py request add-repo OWNER/NAME --why TEXT [--sensitive]
   infra/setup.py request remove-repo OWNER/NAME --why TEXT
   infra/setup.py request grant SESSION HOLDER [--minutes N | --days N] --why TEXT
@@ -400,6 +406,8 @@ def main():
             print(q["id"], q["kind"], json.dumps(q.get("params") or {}, sort_keys=True), "from", q["callerText"], "·", c.get("method", ""), c.get("path", ""))
     elif cmd == "request":
         print(json.dumps(file_request(args), indent=1))
+    elif cmd == "jarvis1":
+        jarvis1(args)
     else:
         raise SystemExit(__doc__)
 
@@ -441,6 +449,49 @@ def file_request(args):
     if kind == "unlock" and len(rest) == 1:
         return call("POST", "/setup/requests/unlock", {"session": rest[0], "explanation": why})
     raise SystemExit(f"unknown request: {' '.join(args)} (see infra/setup.py without arguments)")
+
+
+def jarvis1(args):
+    """infra/setup.py jarvis1 [prepare ID… [--wait] | status ID | import ID --stores … --why …]"""
+    args = list(args)
+    if not args:
+        for s in call("GET", "/setup/jarvis1/paused")["sessions"]:
+            prep = (s.get("prepare") or {}).get("state") or ("ready" if s.get("sha256") else "-")
+            made = ",".join(f"{x['id']}:{x['state']}" for x in s.get("sessions") or []) or "-"
+            print(s["id"], prep, (s.get("sha256") or "")[:12] or "-", made, s.get("size"), "|", s.get("title"))
+        return
+    sub = args.pop(0)
+    if sub == "prepare":
+        wait = "--wait" in args
+        ids = [a for a in args if a != "--wait"]
+        for i in ids:
+            call("POST", f"/setup/jarvis1/paused/{i}/prepare", {})
+        while wait:
+            states = {i: call("GET", f"/setup/jarvis1/paused/{i}") for i in ids}
+            busy = [i for i, v in states.items() if (v.get("prepare") or {}).get("state") == "preparing"]
+            for i, v in states.items():
+                p = v.get("prepare") or {}
+                print(i, p.get("state"), f"{p.get('bytesDone', 0) / 1e9:.2f}/{p.get('bytesTotal', 0) / 1e9:.2f} GB", p.get("file") or "",
+                      (v.get("sha256") or "")[:12], p.get("error") or "")
+            if not busy:
+                break
+            print("--")
+            time.sleep(10)
+    elif sub == "status" and len(args) == 1:
+        print(json.dumps(call("GET", f"/setup/jarvis1/paused/{args[0]}"), indent=1))
+    elif sub == "import" and args:
+        i = args.pop(0)
+        why, stores, size, pf = opt(args, "--why"), opt(args, "--stores"), opt(args, "--size"), opt(args, "--prompt-file")
+        if not why or not stores or args:
+            raise SystemExit("jarvis1 import ID --stores a,b [--size S] [--prompt-file F] --why TEXT")
+        body = {"stores": [x for x in stores.split(",") if x], "explanation": why}
+        if size:
+            body["size"] = size
+        if pf:
+            body["prompt"] = open(os.path.expanduser(pf)).read()
+        print(json.dumps(call("POST", f"/setup/jarvis1/paused/{i}/import", body), indent=1))
+    else:
+        raise SystemExit(jarvis1.__doc__)
 
 
 if __name__ == "__main__":

@@ -99,6 +99,7 @@ type NewSession struct {
 	Origin         *Origin        `json:"-"`           // inbox.go: who asked, from the credential (the handler sets it)
 	Explanation    string         `json:"-"`           // a session's proposal: its reason, shown with the approval (sessionapi.go)
 	Task           *TaskConfig    `json:"-"`           // tasks.go: a task line's instance and parameters (into the cert's config)
+	Import         *J1ImportRef   `json:"-"`           // jarvis1import.go: the paused Jarvis 1 session this line restores
 }
 
 const nullImage = "null" // a succession to it burns the predecessor (core.NullImage)
@@ -359,6 +360,9 @@ func (r *Router) CreateSession(in NewSession) (string, error) {
 	s := &Session{ID: "s" + randID(), State: "approval", Created: time.Now().UTC(), Label: in.Label, Prompt: in.Prompt, Model: in.Model,
 		PermissionMode: in.PermissionMode, Size: in.Size, Harness: in.Harness, Stores: stores, Repos: in.Repos, Content: content,
 		RequestID: in.RequestID, Live: newLiveness(in)}
+	if in.Import != nil {
+		s.ImportFrom, s.ImportSha = in.Import.Session, in.Import.Sha256
+	}
 	var dup string
 	r.st.Do(func(d *persisted) {
 		if dup, err = admitSession(d, s, in); err == nil && dup == "" {
@@ -385,6 +389,9 @@ func (r *Router) CreateSession(in NewSession) (string, error) {
 	}
 	liveOptions(s, opts)
 	opsOptions(s, opts)
+	if in.Import != nil {
+		opts["restore"] = in.Import.Shown // the app shows it beside the signed "Restores machine" and hash
+	}
 	go func() {
 		r.addApproval(&Approval{Kind: "new-session", Session: s.ID, Label: s.Label, Challenge: ch,
 			Options: opts, Origin: in.Origin, Explanation: in.Explanation})

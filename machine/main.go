@@ -319,6 +319,8 @@ func prepare() error {
 		log.Printf("deploy keys: %v", err)
 	}
 	cloneRepos(reposToClone(v, secrets))
+	placeImportedTranscripts()     // jarvis1import.go: an import's transcripts, under the working dir's project
+	rearmJarvis1(c, sessionID(me)) // jarvis1import.go: its wakeups and crons, as this line's own requests
 
 	// 5. booted: from now on a snapshot command gets a real snapshot; then Jarvis 1's entrypoint runs the harness
 	if err := os.WriteFile(bootedPath, []byte(time.Now().UTC().Format(time.RFC3339)), 0o644); err != nil {
@@ -441,10 +443,17 @@ func cloneRepos(repos []string) {
 // what a snapshot holds (relative to $HOME): the conversation, the work, the artefacts
 var snapshotPaths = []string{".claude/projects", ".claude.json", ".claude/.first-prompt-sent", "workspace", "artifacts", allowFile, changesFile, lineKeysFile, deliveredFile}
 
-func makeSnapshot() ([]byte, error) {
+// makeSnapshot: the snapshot as a tar.gz written to path (streamed: a workspace can be several GB) → its sha256
+func makeSnapshot(path string) (string, int64, error) {
 	home, _ := os.UserHomeDir()
-	var buf bytes.Buffer
-	gz := gzip.NewWriter(&buf)
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
+	if err != nil {
+		return "", 0, err
+	}
+	defer f.Close()
+	h := sha256.New()
+	cw := &countWriter{w: io.MultiWriter(f, h)}
+	gz := gzip.NewWriter(cw)
 	tw := tar.NewWriter(gz)
 	for _, rel := range snapshotPaths {
 		root := filepath.Join(home, rel)
@@ -465,47 +474,79 @@ func makeSnapshot() ([]byte, error) {
 				return nil
 			}
 			h.Name = name
-			if err := tw.WriteHeader(h); err != nil {
-				return err
-			}
 			if fi.Mode().IsRegular() {
 				f, err := os.Open(p)
 				if err != nil {
 					return nil
 				}
 				defer f.Close()
-				_, err = io.Copy(tw, f)
+				if err := tw.WriteHeader(h); err != nil {
+					return err
+				}
+				// a file that shrank while being read would break the archive: pad to the header's size
+				n, err := io.Copy(tw, io.LimitReader(f, h.Size))
+				if err == nil && n < h.Size {
+					_, err = io.Copy(tw, io.LimitReader(zeros{}, h.Size-n))
+				}
 				return err
 			}
-			return nil
+			return tw.WriteHeader(h)
 		})
 		if err != nil {
-			return nil, err
+			return "", 0, err
 		}
 	}
-	tw.Close()
-	gz.Close()
-	return buf.Bytes(), nil
+	if err := tw.Close(); err != nil {
+		return "", 0, err
+	}
+	if err := gz.Close(); err != nil {
+		return "", 0, err
+	}
+	if err := f.Sync(); err != nil {
+		return "", 0, err
+	}
+	return hex.EncodeToString(h.Sum(nil)), cw.n, nil
+}
+
+type countWriter struct {
+	w io.Writer
+	n int64
+}
+
+func (c *countWriter) Write(p []byte) (int, error) {
+	n, err := c.w.Write(p)
+	c.n += int64(n)
+	return n, err
+}
+
+type zeros struct{}
+
+func (zeros) Read(p []byte) (int, error) {
+	for i := range p {
+		p[i] = 0
+	}
+	return len(p), nil
 }
 
 // restore: the predecessor's snapshot. The cert names its hash (the core took it from the predecessor's signed
 // kill): exactly that one, or nothing starts.
+// predecessorTmp: where the predecessor's snapshot lands while it is checked (a var: tests move it)
+var predecessorTmp = dir + "/predecessor.tar.gz"
+
 func restore(c *client, predSigningKey string, v Vouched) error {
-	body, hdr, status, err := c.raw("GET", "/m/snapshot", nil)
+	tmp := predecessorTmp
+	defer os.Remove(tmp)
+	sum, hdr, err := c.download("/m/snapshot", tmp) // streamed to disk, hashed on the way
 	if err != nil {
 		return err
 	}
-	if status != 200 {
-		return fmt.Errorf("HTTP %d", status)
-	}
-	sum := sha256.Sum256(body)
-	if hex.EncodeToString(sum[:]) != v.Cert.Snapshot {
+	if sum != v.Cert.Snapshot {
 		return errors.New("the snapshot isn't the one the cert names")
 	}
-	if !verify(predSigningKey, []byte(hex.EncodeToString(sum[:])), hdr.Get("X-Snapshot-Sig")) {
+	if !verify(predSigningKey, []byte(sum), hdr.Get("X-Snapshot-Sig")) {
 		return errors.New("the snapshot isn't signed by the predecessor")
 	}
-	n, err := unpack(body)
+	n, err := unpackFile(tmp)
 	if err != nil {
 		return err
 	}
@@ -514,9 +555,20 @@ func restore(c *client, predSigningKey string, v Vouched) error {
 }
 
 // unpack: a snapshot (tar.gz relative to $HOME) into $HOME
-func unpack(body []byte) (int, error) {
+func unpack(body []byte) (int, error) { return unpackReader(bytes.NewReader(body)) }
+
+func unpackFile(p string) (int, error) {
+	f, err := os.Open(p)
+	if err != nil {
+		return 0, err
+	}
+	defer f.Close()
+	return unpackReader(f)
+}
+
+func unpackReader(r io.Reader) (int, error) {
 	home, _ := os.UserHomeDir()
-	gz, err := gzip.NewReader(bytes.NewReader(body))
+	gz, err := gzip.NewReader(r)
 	if err != nil {
 		return 0, err
 	}
@@ -553,6 +605,7 @@ func unpack(body []byte) (int, error) {
 			if err != nil {
 				return n, err
 			}
+			os.Chtimes(dst, h.ModTime, h.ModTime) // git's index keeps trusting unchanged files
 			n++
 		}
 	}
@@ -661,47 +714,50 @@ var freezeSession = func() {
 	}
 }
 
-func finalSnapshotBody() ([]byte, string, error) {
-	body, err := os.ReadFile(finalSnapshot)
-	if err != nil {
-		return nil, "", err
-	}
+// finalSnapshotSum: the kept final snapshot's sha256 and signature ("" when there is none yet)
+func finalSnapshotSum() (string, string, error) {
 	sig, err := readTrim(finalSnapshotSig)
-	return body, sig, err
+	if err != nil {
+		return "", "", err
+	}
+	sum, err := readTrim(finalSnapshotSig + ".sha256")
+	if err != nil {
+		return "", "", err
+	}
+	return sum, sig, nil
 }
 
 func uploadSnapshot(c *client) error {
-	body, sig, err := finalSnapshotBody()
+	sum, sig, err := finalSnapshotSum()
 	if err != nil { // the first: freeze, take, sign, keep
 		frozen.Store(true)
 		freezeSession()
 		writeChanges() // restore.go: the repos' state, for the router's uncommitted-work check
-		if body, err = makeSnapshot(); err != nil {
+		if sum, _, err = makeSnapshot(finalSnapshot); err != nil {
 			return err
 		}
-		sum := sha256.Sum256(body)
 		key, err := snapshotKey()
 		if err != nil {
 			return err
 		}
-		if sig, err = sign(key, []byte(hex.EncodeToString(sum[:]))); err != nil {
+		if sig, err = sign(key, []byte(sum)); err != nil {
 			return err
 		}
-		if err := os.WriteFile(finalSnapshot, body, 0o600); err != nil {
+		if err := os.WriteFile(finalSnapshotSig+".sha256", []byte(sum), 0o600); err != nil {
 			return err
 		}
 		if err := os.WriteFile(finalSnapshotSig, []byte(sig), 0o600); err != nil {
 			return err
 		}
 	}
-	_, _, status, err := c.raw("POST", "/m/snapshot", body, "X-Snapshot-Sig", sig)
+	status, n, err := c.upload("/m/snapshot", finalSnapshot, sum, "X-Snapshot-Sig", sig)
 	if err != nil {
 		return err
 	}
 	if status != 200 {
 		return fmt.Errorf("HTTP %d", status)
 	}
-	log.Printf("snapshot uploaded (%d bytes)", len(body))
+	log.Printf("snapshot uploaded (%d bytes)", n)
 	return nil
 }
 
@@ -970,6 +1026,113 @@ func (c *client) raw(method, path string, body []byte, hdr ...string) ([]byte, h
 	defer resp.Body.Close()
 	b, err := io.ReadAll(resp.Body)
 	return b, resp.Header, resp.StatusCode, err
+}
+
+// streamHTTP: for the multi-GB transfers (snapshots, an import's tarballs): no overall time limit
+var streamHTTP = &http.Client{Transport: &http.Transport{ResponseHeaderTimeout: 5 * time.Minute}}
+
+func (c *client) signed(method, path, bodySum string) (map[string]string, error) {
+	if k, err := loadPrivate(); err == nil {
+		c.sig = k.sig
+	}
+	t := strconv.FormatInt(time.Now().Unix(), 10)
+	sig, err := sign(c.sig, []byte(method+" "+path+" "+t+" "+bodySum))
+	if err != nil {
+		return nil, err
+	}
+	return map[string]string{"X-Machine": c.me, "X-Time": t, "X-Sig": sig}, nil
+}
+
+// download: a signed GET streamed into a file → the body's sha256 and the response headers (non-200 is an error)
+func (c *client) download(path, dst string) (string, http.Header, error) {
+	sum, hdr, _, err := c.downloadTo(path, func(r io.Reader) error {
+		f, err := os.OpenFile(dst, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
+		if err != nil {
+			return err
+		}
+		_, err = io.Copy(f, r)
+		if cerr := f.Close(); err == nil {
+			err = cerr
+		}
+		return err
+	})
+	return sum, hdr, err
+}
+
+// downloadTo: a signed GET whose body fn consumes as a stream → the sha256 and size of everything fn read (fn must
+// read to the end; what it leaves is read here too, so the hash always covers the whole body)
+func (c *client) downloadTo(path string, fn func(io.Reader) error) (string, http.Header, int64, error) {
+	empty := sha256.Sum256(nil)
+	h, err := c.signed("GET", path, hex.EncodeToString(empty[:]))
+	if err != nil {
+		return "", nil, 0, err
+	}
+	req, _ := http.NewRequest("GET", c.base+path, nil)
+	for k, v := range h {
+		req.Header.Set(k, v)
+	}
+	hc := c.http
+	if c.http == nil || c.http.Timeout != 0 {
+		hc = streamHTTP
+		if c.http != nil && c.http.Transport != nil {
+			hc = &http.Client{Transport: c.http.Transport} // tests: the fake router's own transport
+		}
+	}
+	resp, err := hc.Do(req)
+	if err != nil {
+		return "", nil, 0, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		b, _ := io.ReadAll(io.LimitReader(resp.Body, 300))
+		return "", resp.Header, 0, fmt.Errorf("GET %s: HTTP %d %s", path, resp.StatusCode, strings.TrimSpace(string(b)))
+	}
+	sh := sha256.New()
+	cw := &countWriter{w: sh}
+	tee := io.TeeReader(resp.Body, cw)
+	if err := fn(tee); err != nil {
+		return "", resp.Header, cw.n, err
+	}
+	if _, err := io.Copy(io.Discard, tee); err != nil {
+		return "", resp.Header, cw.n, err
+	}
+	return hex.EncodeToString(sh.Sum(nil)), resp.Header, cw.n, nil
+}
+
+// upload: a file as a signed POST body, streamed (sum = the file's sha256, which the signature covers)
+func (c *client) upload(path, file, sum string, hdr ...string) (int, int64, error) {
+	f, err := os.Open(file)
+	if err != nil {
+		return 0, 0, err
+	}
+	defer f.Close()
+	fi, err := f.Stat()
+	if err != nil {
+		return 0, 0, err
+	}
+	h, err := c.signed("POST", path, sum)
+	if err != nil {
+		return 0, 0, err
+	}
+	req, _ := http.NewRequest("POST", c.base+path, f)
+	req.ContentLength = fi.Size()
+	for k, v := range h {
+		req.Header.Set(k, v)
+	}
+	for i := 0; i+1 < len(hdr); i += 2 {
+		req.Header.Set(hdr[i], hdr[i+1])
+	}
+	hc := streamHTTP
+	if c.http != nil && c.http.Transport != nil {
+		hc = &http.Client{Transport: c.http.Transport}
+	}
+	resp, err := hc.Do(req)
+	if err != nil {
+		return 0, 0, err
+	}
+	defer resp.Body.Close()
+	io.Copy(io.Discard, resp.Body)
+	return resp.StatusCode, fi.Size(), nil
 }
 
 func (c *client) json(method, path string, in, out any) error {

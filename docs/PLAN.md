@@ -53,7 +53,8 @@ every store back from the backups). docs/DESIGN.md "Setting a core up".
 - **Before Jarvis 1 retires** (Deyao keeps using Jarvis 1 until Jarvis 2 is ready and polished, then retires it and
   handles the conflicts then): Jarvis 2 must stop depending on it. The Claude login (storage, the only refresher,
   Re-login, the usage quota) is the router's (DECISIONS 115-121; Jarvis 1 follows it through `/peer/claude-login`).
-  Today it still uses Jarvis 1 for the Browserbase budget DM. Each moves into Jarvis 2 (or a service of its own) at
+  Jarvis 1's paused sessions move with the Jarvis 1 import (RUNBOOK "Importing a paused Jarvis 1 session"; Jarvis 1's
+  records stay on the Storage Box). Today it still uses Jarvis 1 for the Browserbase budget DM. Each moves into Jarvis 2 (or a service of its own) at
   retirement, and the confined Jarvis 1 tokens go away; the router's `JARVIS1_CREDENTIALS_ID/SECRET` are used only in
   the login's `follow` mode (before the cutover) and go with it.
 
