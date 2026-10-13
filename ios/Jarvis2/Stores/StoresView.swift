@@ -43,7 +43,7 @@ struct StoresView: View {
               .font(.footnote).foregroundStyle(.secondary)
             }
             Spacer()
-            PendingButton(key: "store:" + u.store, title: "Lock", role: .destructive) { await lock(u) }
+            PendingButton(key: "lock:" + u.id, title: "Lock", role: .destructive) { await lock(u) }
               .buttonStyle(.borderless).accessibilityIdentifier("lock-\(u.store)")
           }
         }
@@ -87,7 +87,9 @@ struct StoresView: View {
       await model.loadStores()
     }
   }
-  private func lock(_ u: UnlockRow) async { await run("store:" + u.store, "Locking…") { try await RouterClient.shared.lock(u.id) } }
+  /// keyed by the unlock's id, not the store: a store's unlock still finishing (its trailing reload) never turns its
+  /// open unlocks' Lock into a disabled "Unlocking…" that drops the tap (replica runs 38399852797, 38407156816)
+  private func lock(_ u: UnlockRow) async { await run("lock:" + u.id, "Locking…") { try await RouterClient.shared.lock(u.id) } }
   private func mark(_ n: String) async { markAsk = nil; await run("store:" + n, "Marking…") { try await RouterClient.shared.markSensitive(n) } }
   private func create() async {
     let n = newName.trimmingCharacters(in: .whitespaces).lowercased()
@@ -158,6 +160,8 @@ private struct StoreRow: View {
       .contentShape(Rectangle())
   }
 
+  /// "Unlocking…" lasts until the core's lists show the outcome; the router's key rows are read after it, outside the
+  /// store's key, so the new unlock's Lock works the moment its row shows
   private func unlock() async {
     let key = "store:" + s.name
     await model.exclusive(key) {
@@ -167,8 +171,8 @@ private struct StoreRow: View {
         try await StoreUnlock.signAndUnlock(payload: nil, stores: [s.name], reason: "Unlock \(s.name)", for: nil, shown: writes)
       } catch { model.fail(error) }
       await model.loadStores()
-      await reload()
     }
+    await reload()
   }
 }
 

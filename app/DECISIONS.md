@@ -49,6 +49,9 @@ fixes, 34–40 carried over from the old app and still true, 41–43 the web pag
 13. **Nothing is optimistic**: an action keeps its pending label until the router reports the outcome; one action per
     session (or record, task) at a time; reads of the router's state are coalesced (a call while one runs gets one
     follow-up). 15 s polling, 2 s while a session is moving, and at once when the app comes to the foreground.
+    A pending label ends with the outcome itself; slower follow-up reads (a store's key rows after an unlock) run after
+    it, and an action on one record (Lock of one open unlock) is keyed by that record, so a neighbour's action never
+    leaves its button disabled with the tap dropped.
 14. **New session is one page** (Deyao, 2026-10-10): kind (session / one-shot), prompt, title, stores, harness, repos,
     permission mode, model, size, auto-pause, API proxy. `default` is pre-picked when it isn't sensitive; DE0CH/claude-env
     and its store are pre-picked when the repo is on the list (Deyao, 2026-10-11), never a sensitive store. Start makes the

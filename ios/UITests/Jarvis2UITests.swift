@@ -246,6 +246,13 @@ final class Jarvis2UITests: JarvisUITestCase {
     el("unlock-default").tap()
     wait(el("lock-default"), 30, "default unlocked (the core's signed unlocked list)")
     shot("stores-unlocked")
+    // Lock works the moment the open unlock shows: the unlock's trailing reload once kept it a disabled "Unlocking…"
+    // that dropped the tap (replica runs 38399852797, 38407156816: "rh-plain locked again")
+    XCTAssertTrue(el("lock-default").isEnabled && el("lock-default").label == "Lock", "[\(tag)] the new unlock's Lock is ready at once: \(el("lock-default").label)")
+    el("lock-default").tap()
+    XCTAssertTrue(gone(el("lock-default"), 30), "[\(tag)] default locked again")
+    el("unlock-default").tap()
+    wait(el("lock-default"), 30, "default unlocked again")
     // a store's own page: its keys (the core's names and writers; never values) and its about text, edited in place
     el("store-open-default").tap()
     if arrives(el("key-default-OTHER"), 20, "default's keys") {

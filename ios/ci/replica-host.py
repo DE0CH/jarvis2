@@ -3,7 +3,8 @@
 the UI test (ReplicaUITests) on 127.0.0.1:18300.
 
   GET /faceid/match?for=N   Face ID matches for the next N seconds (each prompt that appears is matched)
-  GET /faceid/nomatch       the next prompt fails (a face that isn't enrolled)
+  GET /faceid/nomatch       the next prompt fails (a face that isn't enrolled): no match is sent, and a nomatch every
+                            1.5 s for 30 s (or until /faceid/match), so the prompt fails whenever it comes up
   GET /relay?msg=M          M to the setup session (infra/phone-replica.sh) through the piping relay; its answer back
   GET /log?msg=M            a line in this helper's log
   GET /memwarn              the simulator's memory warning (Debug → Simulate Memory Warning)
@@ -18,7 +19,7 @@ the UI test (ReplicaUITests) on 127.0.0.1:18300.
 import glob, http.server, json, os, subprocess, sys, tempfile, threading, time, urllib.parse, urllib.request
 
 UDID, RELAY = sys.argv[1], sys.argv[2].rstrip("/")
-state = {"until": 0.0, "fail": False}
+state = {"until": 0.0, "fail_until": 0.0}
 lock = threading.Lock()
 
 
@@ -27,17 +28,16 @@ def notify(name):
 
 
 def matcher():
+    # a nomatch window rather than three blind nomatches: the prompt shows a moment after the tap, and on a slow
+    # simulator all three landed before it (replica run 38407156816: the prompt then sat unanswered)
     while True:
         time.sleep(1.5)
         with lock:
-            fail, until = state["fail"], state["until"]
-            if fail:
-                state["fail"] = False
-        if fail:
-            for _ in range(3):        # the prompt shows a moment after the tap
-                notify("pearl.nomatch")
-                time.sleep(1.5)
-        elif time.time() < until:
+            fail_until, until = state["fail_until"], state["until"]
+        now = time.time()
+        if now < fail_until:
+            notify("pearl.nomatch")
+        elif now < until:
             notify("pearl.match")
 
 
@@ -74,10 +74,10 @@ class H(http.server.BaseHTTPRequestHandler):
         out = "ok"
         if u.path == "/faceid/match":
             with lock:
-                state["until"], state["fail"] = time.time() + float(q.get("for", "40")), False
+                state["until"], state["fail_until"] = time.time() + float(q.get("for", "40")), 0.0
         elif u.path == "/faceid/nomatch":
             with lock:
-                state["until"], state["fail"] = 0, True
+                state["until"], state["fail_until"] = 0, time.time() + 30
         elif u.path == "/relay":
             print(f"relay → {q.get('msg')}", flush=True)
             try:
