@@ -20,7 +20,7 @@ spec:
       terminationGracePeriodSeconds: 5
       containers:
         - name: watch
-          image: ghcr.io/de0ch/jarvis2-watch:sha-000000000000
+          image: ghcr.io/de0ch/jarvis2-watch:sha-255a625009c5@sha256:7f58c0bba381a88198a15af1b5c41d302aa68833d577248c1f57620769ec6238
           ports: [{ containerPort: 8095 }]
           env:
             - { name: PORT, value: "8095" }
