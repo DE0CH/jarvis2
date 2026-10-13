@@ -65,7 +65,7 @@ spec:
             - { name: data, mountPath: /data }
             - { name: session, mountPath: /secrets, readOnly: true }
           readinessProbe: { httpGet: { path: /healthz, port: 8091 }, initialDelaySeconds: 3, periodSeconds: 10 }
-          resources: { requests: { cpu: 100m, memory: 256Mi }, limits: { cpu: "1", memory: 1536Mi } }  # ffmpeg must not starve the router on the 2-vCPU box
+          resources: { requests: { cpu: 100m, memory: 256Mi }, limits: { cpu: "1", memory: 2Gi } }  # ffmpeg must not starve the router on the 2-vCPU box
           securityContext: { runAsNonRoot: true, runAsUser: 1001, runAsGroup: 1001, allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: { drop: [ALL] }, seccompProfile: { type: RuntimeDefault } }
       volumes:
         - { name: data, persistentVolumeClaim: { claimName: icloud-index-data } }

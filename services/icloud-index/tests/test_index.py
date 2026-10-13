@@ -205,6 +205,21 @@ class IndexTest(unittest.TestCase):
         finally:
             srv.shutdown()
 
+    def test_vectors_load_streamed_then_incrementally(self):
+        import numpy as np
+        for i in range(5):
+            self.conn.execute("INSERT INTO emb(hash, vec) VALUES(?,?)", (f"h{i}", np.full(ai.EMBED_DIMS, i, np.float16).tobytes()))
+        s = S.Searcher(self.db); s.load()
+        self.assertEqual(s.hashes, [f"h{i}" for i in range(5)]); self.assertEqual(float(s.matrix[3][0]), 3.0)
+        cap = s.matrix.shape[0]
+        for i in range(5, 5 + cap):  # more than the spare capacity: the matrix grows
+            self.conn.execute("INSERT INTO emb(hash, vec) VALUES(?,?)", (f"h{i}", np.full(ai.EMBED_DIMS, 1, np.float16).tobytes()))
+        s.load()
+        self.assertEqual(len(s.hashes), 5 + cap); self.assertEqual(len(set(s.hashes)), 5 + cap)
+        self.assertEqual(float(s.matrix[s.index["h4"]][0]), 4.0); self.assertEqual(float(s.matrix[s.index[f"h{4 + cap}"]][0]), 1.0)
+        s.load()  # nothing new: nothing added
+        self.assertEqual(len(s.hashes), 5 + cap)
+
     def test_cjk_query_parsing(self):
         pq = S.parse_query('深圳湾口岸 "Walton Street" ferry')
         self.assertIn('"深 圳"', pq["words"]); self.assertIn('"walton street"', pq["phrases"]); self.assertIn('"ferry"', pq["words"])

@@ -19,6 +19,8 @@ from . import ai, backup, db as D, indexer as I, search as S
 
 DB_FILE = os.environ.get("INDEX_DB", "/data/index.db")
 os.makedirs(os.path.dirname(DB_FILE) or ".", exist_ok=True)
+for _d in (os.environ.get("TMPDIR"), os.environ.get("XDG_CACHE_HOME")):  # on the volume: the root filesystem is read-only
+    if _d: os.makedirs(_d, exist_ok=True)
 print(f"seed: {backup.seed(DB_FILE)}", flush=True)  # a missing database starts from its copy, never from nothing
 D.connect(DB_FILE).close()
 searcher = S.Searcher(DB_FILE)

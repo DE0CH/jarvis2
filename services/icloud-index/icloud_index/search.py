@@ -68,16 +68,38 @@ class Searcher:
     def __init__(self, db_file):
         self.db = D.connect(db_file); self.lock = threading.Lock()
         self.hashes, self.matrix, self.dirty, self.loaded_at = [], np.zeros((0, ai.EMBED_DIMS), np.float16), True, 0
+        self.index = {}  # hash -> row in matrix
         self.qcache = {}
 
     def load(self):
-        rows = self.db.execute("SELECT hash, vec FROM emb").fetchall()
-        m = np.zeros((len(rows), ai.EMBED_DIMS), np.float16); hs = []
-        for i, r in enumerate(rows):
-            v = np.frombuffer(r["vec"], np.float16)
-            if v.shape[0] == ai.EMBED_DIMS: m[i] = v
-            hs.append(r["hash"])
-        self.matrix, self.hashes, self.dirty, self.loaded_at = m, hs, False, time.time()
+        """The vectors in memory (the iCloud index has ~750k: 750 MB as float16). Never fetchall() them (a list of
+        750k blobs on top of the matrix took the pod past its memory limit on every start and every reload, the
+        Jarvis 1 crash loop); the first load streams rows into a preallocated matrix, later loads append only the
+        hashes not loaded yet, into spare capacity (an embedding that went away stays as an unmatched row until the
+        next restart: harmless, the chunk join drops it)."""
+        d = ai.EMBED_DIMS
+        if not self.hashes:
+            n = self.db.execute("SELECT count(*) FROM emb").fetchone()[0]
+            m = np.zeros((int(n * 1.1) + 1024, d), np.float16); hs = []; idx = {}
+            for r in self.db.execute("SELECT hash, vec FROM emb"):
+                if len(hs) >= m.shape[0]: m = np.concatenate([m, np.zeros((len(hs) // 4 + 1024, d), np.float16)])
+                v = np.frombuffer(r[1], np.float16)
+                if v.shape[0] == d: m[len(hs)] = v
+                idx[r[0]] = len(hs); hs.append(r[0])
+            self.matrix, self.hashes, self.index = m, hs, idx
+        else:
+            new = [h for (h,) in self.db.execute("SELECT hash FROM emb") if h not in self.index]
+            need = len(self.hashes) + len(new)
+            if need > self.matrix.shape[0]:
+                grown = np.zeros((int(need * 1.1) + 1024, d), np.float16); grown[:len(self.hashes)] = self.matrix[:len(self.hashes)]
+                self.matrix = grown
+            for i in range(0, len(new), 500):
+                part = new[i:i + 500]
+                for h, b in self.db.execute(f"SELECT hash, vec FROM emb WHERE hash IN ({','.join('?' * len(part))})", part):
+                    v = np.frombuffer(b, np.float16)
+                    if v.shape[0] == d: self.matrix[len(self.hashes)] = v
+                    self.index[h] = len(self.hashes); self.hashes.append(h)
+        self.dirty, self.loaded_at = False, time.time()
 
     def maybe_load(self):
         if self.dirty and time.time() - self.loaded_at > 60:
@@ -129,7 +151,7 @@ class Searcher:
                         qv = np.asarray(ai.embed([q], query=True)[0][0], np.float32); self.qcache[q] = qv
                         if len(self.qcache) > 200: self.qcache.pop(next(iter(self.qcache)))
                     timing["embed"] = round((time.time() - t) * 1000)
-                    scores = np.concatenate([self.matrix[i:i + 50000].astype(np.float32) @ qv for i in range(0, len(self.hashes), 50000)])
+                    n = len(self.hashes); scores = np.concatenate([self.matrix[i:min(i + 50000, n)].astype(np.float32) @ qv for i in range(0, n, 50000)])
                     top = np.argsort(-scores)[:LEG * 3]
                     hs = [self.hashes[i] for i in top]; sc = {self.hashes[i]: float(scores[i]) for i in top}
                     rows = self.db.execute(f"SELECT c.id, c.hash FROM chunks c JOIN files f ON f.id=c.file_id WHERE c.hash IN ({','.join('?' * len(hs))}){fw}", (*hs, *fp)).fetchall() if hs else []
