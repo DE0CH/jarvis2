@@ -98,7 +98,11 @@ func waitEmpty(notKey old: String?, minutes: Int = 15) -> (keys: PublicKeys, sta
 func claim(_ c: PublicKeys, _ stores: [RecoveredStore]) -> Int {
   // the app's bundle: every store wrapped to the core's signed store key for this phone (Reset: none)
   let sk = try! CoreCrypto.storeKey(json("POST", "api/core/store-key", ["phone": phone.agreementKey], as: SignedDoc.self), coreKey: c.signingKey, phone: phone.agreementKey)
-  let body = try! CoreSetup.claim(core: c, phone: phone, master: master, bundle: try! CoreSetup.blobsBundle(stores, storeKey: sk))
+  // a core whose identity says bundle "keys": every key on its own; a core from before keys.go (until the held core is
+  // live): one blob per store
+  let id = try! JSONDecoder().decode(CoreSetup.Identity.self, from: call("GET", "api/core/identity").1)
+  let bundle = id.takesKeys ? try! CoreSetup.keysBundle(stores, storeKey: sk) : try! CoreSetup.blobsBundle(stores, storeKey: sk)
+  let body = try! CoreSetup.claim(core: c, phone: phone, master: master, bundle: bundle)
   let d = try! CoreCrypto.decode(json("POST", "api/core/claim", body, as: SignedDoc.self), by: c.signingKey, as: KindDoc.self, what: "the core's answer")
   guard d.kind == "claimed" else { fail("the claim's answer is \(d.kind)") }
   return d.stores ?? 0
@@ -124,8 +128,16 @@ func sessionNow(_ id: String) -> SessionDTO? { json("GET", "api/state", as: Stat
 func unlock(_ store: String, core: String) {
   let b = try! CoreCrypto.decode(json("POST", "api/core/unlock/begin", ["store": store], as: SignedDoc.self), by: core, as: UnlockBegin.self, what: "the unlock")
   guard b.kind == "unlock-begin", b.store == store else { fail("unlock-begin for \(store)") }
-  let x = try! phoneAgreement.sharedSecretFromKeyAgreement(with: P256.KeyAgreement.PublicKey(x963Representation: Data(base64Encoded: b.e)!)).withUnsafeBytes { Data($0) }
-  let u = try! CoreCrypto.decode(json("POST", "api/core/unlock/finish", ["pending": b.pending, "share": try! CoreCrypto.sealShare(x, to: b.t)], as: SignedDoc.self), by: core, as: KindDoc.self, what: "the unlocked answer")
+  func share(_ e: String) -> [String: String] {
+    let x = try! phoneAgreement.sharedSecretFromKeyAgreement(with: P256.KeyAgreement.PublicKey(x963Representation: Data(base64Encoded: e)!)).withUnsafeBytes { Data($0) }
+    return try! CoreCrypto.sealShare(x, to: b.t)
+  }
+  var body: [String: Any] = ["pending": b.pending]
+  if let keys = b.keys {
+    do { try Checks.unlockKeys(b, setupKey: setupKey) } catch { fail("unlock \(store): \(error)") }
+    body["shares"] = Dictionary(uniqueKeysWithValues: keys.map { ($0.key, share($0.e)) })
+  } else { body["share"] = share(b.e ?? "") } // a core from before keys.go (until the held core is live)
+  let u = try! CoreCrypto.decode(json("POST", "api/core/unlock/finish", body, as: SignedDoc.self), by: core, as: KindDoc.self, what: "the unlocked answer")
   guard u.kind == "unlocked", u.store == store else { fail("unlock \(store): \(u.kind)") }
   ok("unlocked \(store) with the phone's share")
 }
@@ -199,7 +211,7 @@ case "recover":
   let served = json("GET", "api/backups", as: B.self)
   say("the router serves \(served.objects.count) backup objects from \(served.bucket ?? "?")")
   let stores: [RecoveredStore]
-  do { stores = try CoreSetup.readBackups(served.objects, master: master, setupKey: setupKey) } catch { fail("the backups: \(error)") }
+  do { stores = try CoreSetup.readBackups(served.objects, master: master, setupKey: setupKey, boxKey: boxKey) } catch { fail("the backups: \(error)") }
   let got = Dictionary(uniqueKeysWithValues: stores.map { ($0.name, $0) })
   guard Set(got.keys) == Set(want.keys).union(["core"]) else { fail("backups hold \(got.keys.sorted()), want \(want.keys.sorted()) + core") }
   for (n, w) in want {

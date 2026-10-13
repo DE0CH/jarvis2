@@ -1,6 +1,6 @@
 // Settings → Encrypted backup: an offline copy of the store backups. "Download encrypted backup" reads them through
-// the router (GET api/backups), checks every signature against keys/setup.pub from GitHub like Recover does (and shows
-// which fail), and keeps ONE file, jarvis2-backup-<date>.json: the objects exactly as served plus the bucket, the fetch
+// the router (GET api/backups), checks every signature against keys/setup.pub from GitHub like Recover does (a key a
+// session wrote: its machine's cert from a core keys/box.pub vouched for; and shows which fail), and keeps ONE file, jarvis2-backup-<date>.json: the objects exactly as served plus the bucket, the fetch
 // time and the setup public key. Save file… hands it to the share sheet (Save to Files, AirDrop…). The page never asks
 // for the recovery kit and never opens a backup: tools/decrypt-backup.py does that offline on the Mac
 // (docs/RUNBOOK.md "Offline copy of the stores").
@@ -9,7 +9,7 @@ import SwiftUI
 struct BackupView: View {
   struct Copy: Equatable {
     let file: URL, name: String, bucket: String, fetched: Date, size: Int
-    let stores: Int, markers: Int, checks: [CoreSetup.BackupCheck]
+    let stores: Int, keys: Int, markers: Int, checks: [CoreSetup.BackupCheck]
     var failed: [CoreSetup.BackupCheck] { checks.filter { $0.problem != nil } }
   }
   @State private var busy = false
@@ -47,6 +47,7 @@ struct BackupView: View {
       LabeledContent("Bucket") { Text(c.bucket).font(.footnote.monospaced()) }
       LabeledContent("Fetched", value: c.fetched.formatted(date: .abbreviated, time: .shortened))
       LabeledContent("Stores", value: "\(c.stores)").accessibilityIdentifier("backup-stores")
+      if c.keys > 0 { LabeledContent("Key backups", value: "\(c.keys)").accessibilityIdentifier("backup-keys") }
       LabeledContent("Sensitive markers", value: "\(c.markers)")
       LabeledContent("Checked against", value: "keys/setup.pub")
       if c.failed.isEmpty {
@@ -69,7 +70,7 @@ struct BackupView: View {
     error = nil
     defer { busy = false }
     do {
-      let setupKey = try await KeySource.key("setup.pub")
+      let setupKey = try await KeySource.key("setup.pub"), boxKey = try await KeySource.key("box.pub")
       let (bucket, objects) = try await RouterClient.shared.backupDump()
       guard !objects.isEmpty else { throw RouterError(message: "The bucket has no backups.") }
       let at = Date.now
@@ -83,8 +84,9 @@ struct BackupView: View {
       try data.write(to: file, options: [.atomic, .completeFileProtection])
       copy = Copy(file: file, name: name, bucket: bucket, fetched: at, size: data.count,
                   stores: objects.count { CoreSetup.name(of: $0.key, prefix: "stores/") != nil },
+                  keys: objects.count { CoreSetup.keyName($0.key) != nil },
                   markers: objects.count { CoreSetup.name(of: $0.key, prefix: "sensitive/") != nil },
-                  checks: CoreSetup.checkSignatures(objects, setupKey: setupKey))
+                  checks: CoreSetup.checkSignatures(objects, setupKey: setupKey, boxKey: boxKey))
     } catch {
       copy = nil
       self.error = "Could not download the backup: " + errText(error)

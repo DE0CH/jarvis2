@@ -175,9 +175,13 @@ final class RouterClient: NSObject, ASWebAuthenticationPresentationContextProvid
     return coreVouchesWriters ?? false
   }
   /// the setup key from git, only when a writer needs checking
-  private func setupKeyIfNeeded(_ w: StoreWriter?) async throws -> String? {
-    w?.by == "setup" ? try await KeySource.key("setup.pub") : nil
+  private func setupKeyIfNeeded(_ ws: [StoreWriter?]) async throws -> String? {
+    ws.contains { $0?.by == "setup" } ? try await KeySource.key("setup.pub") : nil
   }
+  private func setupKeyIfNeeded(_ w: StoreWriter?) async throws -> String? { try await setupKeyIfNeeded([w]) }
+  /// the core's identity says it takes stores of keys (core/keys.go); false = a core from before keys.go (until the held
+  /// core is live). Not signed: a wrong word only makes the core refuse what the app sends.
+  func coreTakesKeys() async throws -> Bool { try await identity().takesKeys }
   func unlocked() async throws -> [UnlockRow] {
     let n = CoreCrypto.nonce()
     let d = try CoreCrypto.decode(try await json("POST", "api/core/unlocked", ["nonce": n], as: SignedDoc.self), by: try CoreTrust.key(), as: UnlockedDoc.self, what: "the unlocked list")
@@ -193,12 +197,29 @@ final class RouterClient: NSObject, ASWebAuthenticationPresentationContextProvid
     guard b.kind == "unlock-begin", b.store == store else { throw TrustError.stale("unlock of \(b.store)") }
     if let got = b.forNonce, !got.isEmpty, got != (forNonce ?? "") { throw TrustError.stale("unlock of \(b.store) for another session") }
     if forNonce == nil, let got = b.forNonce, !got.isEmpty { throw TrustError.stale("unlock of \(b.store) for one session") }
-    // the share opens only a blob the core or the setup session wrote
-    try Checks.writer(b.writer, store: b.store, e: b.e, dataSha256: b.dataSha256, setupKey: try await setupKeyIfNeeded(b.writer), required: try await writersRequired())
+    if let keys = b.keys {
+      // each key's writer: the setup key's signature, a session's machine (the page names it), or the core
+      try Checks.unlockKeys(b, setupKey: try await setupKeyIfNeeded(keys.map(\.writer)))
+    } else {
+      // a core from before keys.go (until the held core is live): the share opens only a blob the core or the setup
+      // session wrote
+      guard let e = b.e else { throw TrustError.mismatch("unlock of \(b.store) names no key") }
+      try Checks.writer(b.writer, store: b.store, e: e, dataSha256: b.dataSha256, setupKey: try await setupKeyIfNeeded(b.writer), required: try await writersRequired())
+    }
     return b
   }
-  func unlockFinish(_ b: UnlockBegin, share: [String: String]) async throws {
-    let d = try CoreCrypto.decode(try await json("POST", "api/core/unlock/finish", ["pending": b.pending, "share": share], as: SignedDoc.self), by: try CoreTrust.key(), as: KindDoc.self, what: "the unlocked answer")
+  /// this phone's shares x(p·E), one per `b.es` in order, each sealed to the core's one-off key T
+  func unlockFinish(_ b: UnlockBegin, shares: [Data]) async throws {
+    guard shares.count == b.es.count else { throw TrustError.stale("unlock of \(b.store)") }
+    var body: [String: Any] = ["pending": b.pending]
+    if let keys = b.keys {
+      var m: [String: Any] = [:]
+      for (k, x) in zip(keys, shares) { m[k.key] = try CoreCrypto.sealShare(x, to: b.t) }
+      body["shares"] = m
+    } else {
+      body["share"] = try CoreCrypto.sealShare(shares[0], to: b.t) // a core from before keys.go (until the held core is live)
+    }
+    let d = try CoreCrypto.decode(try await json("POST", "api/core/unlock/finish", body, as: SignedDoc.self), by: try CoreTrust.key(), as: KindDoc.self, what: "the unlocked answer")
     guard d.kind == "unlocked", d.store == b.store else { throw TrustError.stale("unlocked \(d.store ?? "?")") }
   }
   func lock(_ id: String) async throws {
@@ -222,18 +243,38 @@ final class RouterClient: NSObject, ASWebAuthenticationPresentationContextProvid
   func deployKeyBegin(action: String, repo: String, sensitive: Bool) async throws -> (doc: SignedDoc, begin: DeployKeyBegin) {
     let store = Checks.repoStore(repo), title = "jarvis2 " + store
     var body: [String: Any] = ["action": action, "repo": repo, "sensitive": sensitive, "store": store, "title": title]
-    var sent: (publicKey: String, blob: StoreBlob)?
+    var sent: DeployKeySent?
     if action == "add", let sk = try await storeKey(coreKey: try CoreTrust.key()) {
       let kp = try OpenSSH.ed25519(comment: title)
-      let blob = try CoreCrypto.wrapStore(name: store, values: OpenSSH.storeValues(repo: repo, privateKeyFile: kp.privateKeyFile), storeKey: sk)
+      let values = OpenSSH.storeValues(repo: repo, privateKeyFile: kp.privateKeyFile)
       body["publicKey"] = kp.publicKey
-      body["blob"] = blob.json
-      sent = (kp.publicKey, blob)
+      if try await coreTakesKeys() {
+        // each value under its own data key, "<store>\n<key>" as associated data
+        let keys = try CoreCrypto.wrapKeys(store: store, values: values, storeKey: sk)
+        body["keys"] = keys.map(\.json)
+        sent = DeployKeySent(publicKey: kp.publicKey, keys: keys)
+      } else {
+        // a core from before keys.go (until the held core is live): the whole store as one blob
+        let blob = try CoreCrypto.wrapStore(name: store, values: values, storeKey: sk)
+        body["blob"] = blob.json
+        sent = DeployKeySent(publicKey: kp.publicKey, blob: blob)
+      }
     }
     let d = try await json("POST", "api/repos/key/begin", body, as: SignedDoc.self)
     let b = try Checks.deployKeyBegin(d, coreKey: try CoreTrust.key(), action: action, repo: repo, sensitive: sensitive, sent: sent)
-    try Checks.writer(b.tokenWriter, store: b.tokenStore, e: b.e, dataSha256: b.tokenDataSha256, setupKey: try await setupKeyIfNeeded(b.tokenWriter), required: try await writersRequired())
+    try await checkTokenWriter(b)
     return (d, b)
+  }
+  /// who wrote the GitHub token the phone's share opens: the setup key (its signature over the token key's writer text)
+  /// or the core; never a session (the core refuses a machine write to that store)
+  private func checkTokenWriter(_ b: DeployKeyBegin) async throws {
+    if let key = b.tokenKey {
+      guard let w = b.tokenWriter, w.by != "machine" else { throw TrustError.mismatch("the GitHub token's writer") }
+      try Checks.keyWriter(w, store: b.tokenStore, key: key, e: b.e, dataSha256: b.tokenDataSha256 ?? "", backupSha256: b.tokenBackupSha256 ?? "",
+                           setupKey: try await setupKeyIfNeeded(w))
+    } else { // a core from before keys.go (until the held core is live)
+      try Checks.writer(b.tokenWriter, store: b.tokenStore, e: b.e, dataSha256: b.tokenDataSha256, setupKey: try await setupKeyIfNeeded(b.tokenWriter), required: try await writersRequired())
+    }
   }
   /// the phone's signature over the begin document and its share of the token store; the answer, checked
   func deployKeyFinish(_ b: DeployKeyBegin, signature: Data, share: Data) async throws -> DeployKeyAnswer {
@@ -249,6 +290,18 @@ final class RouterClient: NSObject, ASWebAuthenticationPresentationContextProvid
     if status == 404 { return nil }
     guard status == 200 else { throw Self.failure("POST", "api/core/store-key", status, data) }
     return try CoreCrypto.storeKey(try JSONDecoder().decode(SignedDoc.self, from: data), coreKey: coreKey, phone: phone)
+  }
+
+  // ---- what each store and key is for (router/storedocs.go): names, writers, explanations; never values ----
+  func storeRows() async throws -> [StoreRowDTO] {
+    struct L: Decodable { let stores: [StoreRowDTO] }
+    return try await json("GET", "api/stores", as: L.self).stores
+  }
+  /// a store's about text (nil = unchanged) and its keys' explanations ("" removes one)
+  func setStoreDocs(_ store: String, about: String?, keys: [String: String]) async throws {
+    var body: [String: Any] = ["keys": keys]
+    if let about { body["about"] = about }
+    try await call("PUT", "api/stores/\(Self.escaped(store))/docs", body)
   }
 
   // ---- setting the core up: Reset and Recover ----

@@ -248,17 +248,23 @@ struct SetupView: View {
       }
       guard let c = core else { return }
       busy = "Reading the backups…"
-      let setupKey = try await KeySource.key("setup.pub")
-      let stores = try CoreSetup.readBackups(try await RouterClient.shared.backups(), master: m, setupKey: setupKey)
+      let setupKey = try await KeySource.key("setup.pub"), boxKey = try await KeySource.key("box.pub")
+      let stores = try CoreSetup.readBackups(try await RouterClient.shared.backups(), master: m, setupKey: setupKey, boxKey: boxKey)
       busy = "Restoring…"
       // a new pairing: fresh phone keys, bound to the faces enrolled now (.biometryCurrentSet)
       PhoneKeys.shared.renew()
       let phone = try PhoneKeys.shared.publicKeys()
       let device = try PhoneKeys.shared.devicePublic()
-      // a core that takes blobs gets every store wrapped here (it never sees them in the clear); an earlier core
-      // (no store key, or 400 "bad bundle") takes the stores sealed to it as before
+      // a core whose identity says bundle "keys" gets every key wrapped here on its own (it never sees them in the
+      // clear); a core from before keys.go (until the held core is live) takes blobs, and an earlier core (no store key,
+      // or 400 "bad bundle") the stores sealed to it as before
       var claimed = false
-      if let sk = try await RouterClient.shared.storeKey(coreKey: c.signingKey) {
+      let keys = try await RouterClient.shared.coreTakesKeys()
+      if keys {
+        guard let sk = try await RouterClient.shared.storeKey(coreKey: c.signingKey) else { throw TrustError.stale("store key") }
+        _ = try await RouterClient.shared.claim(try await withDevice(try CoreSetup.claim(core: c, phone: phone, master: m, bundle: try CoreSetup.keysBundle(stores, storeKey: sk), device: device)), core: c)
+        claimed = true
+      } else if let sk = try await RouterClient.shared.storeKey(coreKey: c.signingKey) {
         do {
           _ = try await RouterClient.shared.claim(try await withDevice(try CoreSetup.claim(core: c, phone: phone, master: m, bundle: try CoreSetup.blobsBundle(stores, storeKey: sk), device: device)), core: c)
           claimed = true
@@ -294,8 +300,12 @@ struct SetupView: View {
       PhoneKeys.shared.renew()
       let phone = try PhoneKeys.shared.publicKeys()
       // a core with a store key takes only the app's blobs form (R2); an earlier core, the older empty bundle
+      // a core whose identity says bundle "keys" takes the keys form; a core from before keys.go (until the held core is
+      // live) the app's blobs form (R2); an earlier core, the older empty bundle
       let sk = try await RouterClient.shared.storeKey(coreKey: c.signingKey)
-      let bundle = try sk.map { try CoreSetup.blobsBundle([], storeKey: $0) } ?? CoreSetup.bundle([])
+      let bundle: Data
+      if try await RouterClient.shared.coreTakesKeys(), let sk { bundle = try CoreSetup.keysBundle([], storeKey: sk) }
+      else { bundle = try sk.map { try CoreSetup.blobsBundle([], storeKey: $0) } ?? CoreSetup.bundle([]) }
       _ = try await RouterClient.shared.claim(try await withDevice(try CoreSetup.claim(core: c, phone: phone, master: m, bundle: bundle, device: try PhoneKeys.shared.devicePublic())), core: c)
       finish(c, master: m.publicKey, text: "Reset")
     } catch { busy = nil; failure = plain(error, "Setting up didn't work. Your kit is still the one shown; try again.") }
