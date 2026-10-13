@@ -17,6 +17,7 @@ func TestLastSnapshotNeverWaitsOnABootingMachine(t *testing.T) {
 		r.st.Do(func(d *persisted) {
 			s := d.Sessions["s1"]
 			s.State, s.MachineID, s.Booted, s.Cert = "started", "m1", booted, rg.cert
+			s.Live = &Liveness{LastReport: time.Now()}
 		})
 	}
 
@@ -53,6 +54,16 @@ func TestLastSnapshotNeverWaitsOnABootingMachine(t *testing.T) {
 	r.st.Do(func(d *persisted) { waiting = d.Sessions["s1"].Waiting })
 	if waiting != "" {
 		t.Fatalf("still waiting: %q", waiting)
+	}
+	// booted but silent (its machine stopped or gone): not asked, the pause goes straight to the kill
+	running("m1")
+	r.st.Do(func(d *persisted) { d.Sessions["s1"].Live.LastReport = time.Now().Add(-10 * time.Minute) })
+	t0 = time.Now()
+	if err := r.Pause("s1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.waitState("s1", "paused", 5*time.Second); err != nil || time.Since(t0) > 5*time.Second {
+		t.Fatalf("a silent machine held the pause: %v", err)
 	}
 	if waitText(10*time.Minute) != "10 min" {
 		t.Fatal(waitText(10 * time.Minute))

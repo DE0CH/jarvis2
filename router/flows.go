@@ -826,6 +826,9 @@ func (r *Router) send(machine, cmd string) {
 // while booting), waiting up to SnapshotWait with the reason shown in the app. A machine that never got past boot
 // (no status report from it) isn't asked at all: it has nothing to snapshot, and an older image may never answer
 // (e.g. stuck pulling the secrets of a locked store).
+// silentAfter: a booted machine whose last report is older than this isn't asked for a snapshot
+var silentAfter = 3 * time.Minute
+
 func (r *Router) lastSnapshot(id, machine string) {
 	booted := func() (b bool) {
 		r.st.Do(func(d *persisted) {
@@ -843,6 +846,18 @@ func (r *Router) lastSnapshot(id, machine string) {
 	}
 	if !booted() {
 		log.Printf("session %s: %s never got past boot; nothing to snapshot", id, machine)
+		return
+	}
+	// a machine that has gone silent (stopped or gone: its agent reports at least every 60 s) can't answer: no wait,
+	// so a pause that a router restart re-runs still reaches the kill
+	var last time.Time
+	r.st.Do(func(d *persisted) {
+		if x := d.Sessions[id]; x != nil && x.Live != nil {
+			last = x.Live.LastReport
+		}
+	})
+	if time.Since(last) > silentAfter {
+		log.Printf("session %s: %s silent since %s; not waiting for a snapshot", id, machine, last.Format(time.RFC3339))
 		return
 	}
 	done := r.awaitSnapshot(machine)
