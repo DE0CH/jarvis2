@@ -740,6 +740,7 @@ func (r *Router) registerLeases(app appRoute, m machineRoute) {
 		log.Printf("[lease] %s: Deyao took it over (interrupted %q)", name, out.Interrupted)
 		writeJSON(w, 200, map[string]any{"taken": out.Taken, "interrupted": nullIfEmpty(out.Interrupted), "noteUpdated": out.NoteUpdated})
 		if out.Interrupted != "" {
+			leaseWG.Add(1)
 			go r.tellLease(out.Interrupted, Delivery{Kind: "lease-taken", Device: name}, 1)
 		}
 	})
@@ -764,6 +765,7 @@ func (r *Router) registerLeases(app appRoute, m machineRoute) {
 		writeJSON(w, 200, map[string]any{"handedBack": out.HandedBack, "next": promotedSid(out.Promoted), "notified": orEmptyS(out.Notify)})
 		r.kickLeases(out.Promoted)
 		for _, sid := range out.Notify {
+			leaseWG.Add(1)
 			go r.tellLease(sid, Delivery{Kind: "lease-back", Device: name}, 5)
 		}
 	})
@@ -920,13 +922,15 @@ func promotedSuffix(p *LeaseEntry) string {
 // kickLeases: wake a promoted holder now rather than on the next tick
 func (r *Router) kickLeases(p *LeaseEntry) {
 	if p != nil {
-		go r.leaseTick()
+		leaseWG.Add(1)
+		go func() { defer leaseWG.Done(); r.leaseTick() }()
 	}
 }
 
 // tellLease: an image text about a device (taken over, handed back), with a few retries (a session mid-pause or
 // mid-start refuses a delivery for a while)
 func (r *Router) tellLease(sid string, d Delivery, tries int) {
+	defer leaseWG.Done()
 	for i := 1; ; i++ {
 		err := deliverVouchedHook(r, sid, d)
 		if err == nil {
@@ -942,6 +946,9 @@ func (r *Router) tellLease(sid string, d Delivery, tries int) {
 }
 
 var leaseRetryWait = time.Minute
+
+// leaseWG: the lease goroutines in flight (tests wait for them before restoring their seams)
+var leaseWG sync.WaitGroup
 
 var leaseRun = struct {
 	sync.Mutex
@@ -989,7 +996,9 @@ func (r *Router) leaseTick() {
 		}
 		leaseRun.busy[key] = true
 		leaseRun.Unlock()
+		leaseWG.Add(1)
 		go func(p leasePending) {
+			defer leaseWG.Done()
 			defer func() { leaseRun.Lock(); delete(leaseRun.busy, key); leaseRun.Unlock() }()
 			d := Delivery{Kind: "lease-granted", Device: p.Name, Request: p.Signed, Minutes: int(max(1, p.TTL/60)), Handover: p.Handover, Interrupted: p.Interrupted}
 			if err := deliverVouchedHook(r, p.Sid, d); err != nil {

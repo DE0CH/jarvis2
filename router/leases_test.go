@@ -182,7 +182,7 @@ func TestLeaseAPI(t *testing.T) {
 		got = append(got, d)
 		return nil
 	}
-	t.Cleanup(func() { deliverVouchedHook = old })
+	t.Cleanup(func() { leaseWG.Wait(); deliverVouchedHook = old })
 
 	code, out := ma.do(t, h, "POST", "/m/api/sessions/sA/leases/mac", `{"purpose":"screen","description":"step 1"}`)
 	if code != 200 || out["status"] != "granted" {
