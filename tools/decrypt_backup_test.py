@@ -115,6 +115,38 @@ def key_backup(store, key, value, when, by="setup", explanation="", signer=None,
             "core": identity or core_identity(), "explanation": explanation, "at": at(when)}
 
 
+PHONE_SIG = ec.generate_private_key(ec.SECP256R1())
+
+
+def restore_backups(store, put, remove, when, phone=None, core=None, tamper=None):
+    """keys/<store>/<key>.json as router/storerestore.go writes them after a phone-approved restore: the core's backups
+    (sealed to the master key, core/history.go sealBackup) and its signed receipt carrying the phone-signed begin"""
+    state = json.dumps({"kind": "core-state", "master": pub(MASTER), "phone": {"signingKey": pub(PHONE_SIG), "agreementKey": pub(PHONE_AGR)}})
+    ident = dict(core_identity(), state={"payload": state, "sig": sign(CORE_SIG, state)})
+    begin = json.dumps({"kind": "store-restore-begin", "pending": "p1", "store": store})
+    rows, sealed = [], {}
+    for k, v in put.items():
+        b = S.seal_to(pub(MASTER), v.encode(), "jarvis2/backup", f"{store}\n{k}".encode())
+        sealed[k] = b
+        rows.append({"key": k, "e": "E-" + k, "dataSha256": "d" * 64, "backupSha256": hashlib.sha256((b["e"] + "\n" + b["data"]).encode()).hexdigest()})
+    r = {"kind": "store-restore-approved", "pending": "p1", "store": store, "from": 4, "to": 2, "put": rows, "remove": remove,
+         "begin": begin, "phoneSig": sign(phone or PHONE_SIG, begin)}
+    if tamper:  # the receipt only: the objects stay as the router wrote them
+        r = json.loads(json.dumps(r))
+        tamper(r)
+    rp = json.dumps(r)
+    receipt = {"payload": rp, "sig": sign(core or CORE_SIG, rp)}
+    out = []
+    for x in rows:
+        out.append({"kind": "key-backup", "store": store, "key": x["key"], "deleted": False, "sealed": sealed[x["key"]],
+                    "backupSha256": x["backupSha256"], "e": x["e"], "dataSha256": x["dataSha256"],
+                    "writer": {"by": "restore", "receipt": receipt}, "core": ident, "explanation": "", "at": at(when)})
+    for k in remove:
+        out.append({"kind": "key-backup", "store": store, "key": k, "deleted": True, "sealed": None, "backupSha256": "", "e": "",
+                    "dataSha256": "", "writer": {"by": "restore", "receipt": receipt}, "core": ident, "explanation": "", "at": at(when)})
+    return out
+
+
 def add_keys(bucket, *objs):
     b = dict(bucket)
     for o in objs:
@@ -360,6 +392,29 @@ class T(unittest.TestCase):
                                          "--box-pub", self.box_pub())
             self.assertEqual(code, 1, want)
             self.assertIn("keys/default/X.json: " + want, err)
+
+    def test_restore_written_keys(self):
+        """a phone-approved restore (core/history.go): its keys come back at Recover, its removals remove"""
+        b = seed()
+        t = self.base_at(b, "default")
+        wiped = add_keys(b, key_backup("default", "GITHUB_TOKEN", None, t + 5), key_backup("default", "OTHER", None, t + 5),
+                         key_backup("default", "STRAY", "written by mistake", t + 5))
+        self.assertEqual(self.opened(wiped)["default"]["values"], {"STRAY": "written by mistake"})
+        restored = add_keys(wiped, *restore_backups("default", {"GITHUB_TOKEN": "t-1", "OTHER": "x y\nz"}, ["STRAY"], t + 10))
+        code, _, err = self.run_tool(self.file(export(restored)), "--kit-file", self.kitfile(), "--stdout")
+        self.assertEqual(code, 1, "no box key: a restore can't be checked")
+        self.assertIn("pass --box-pub", err)
+        st = self.opened(restored, "--box-pub", self.box_pub())
+        self.assertEqual(st["default"]["values"], {"GITHUB_TOKEN": "t-1", "OTHER": "x y\nz"})
+        fake = ec.generate_private_key(ec.SECP256R1())
+        for objs, want in ((restore_backups("default", {"GITHUB_TOKEN": "v"}, [], t + 10, phone=fake), "isn't signed by the phone"),
+                           (restore_backups("default", {"GITHUB_TOKEN": "v"}, [], t + 10, core=fake), "receipt isn't signed by its core"),
+                           (restore_backups("default", {"GITHUB_TOKEN": "v"}, [], t + 10, tamper=lambda r: r.update(store="other")), "names another store"),
+                           (restore_backups("default", {"GITHUB_TOKEN": "v"}, [], t + 10, tamper=lambda r: r["put"][0].update(backupSha256="0" * 64)), "another value")):
+            code, _, err = self.run_tool(self.file(export(add_keys(wiped, *objs)), "bad.json"), "--kit-file", self.kitfile(), "--stdout",
+                                         "--box-pub", self.box_pub())
+            self.assertEqual(code, 1, want)
+            self.assertIn(want, err)
 
     def test_deleted_key(self):
         b = seed()
