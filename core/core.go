@@ -920,7 +920,7 @@ func (c *Core) readChallenge(d *SignedDoc) (challenge, error) {
 
 // answer: what an approval turns a challenge into — for a machine succeeding itself the new cert at
 // once, else an approval that certify() binds to one machine. current: for an add-store, the machine's newest cert
-// (the router's copy; ignored unless this core signed it and it is the newest), see addOnto.
+// (the router's copy; refused unless this core signed it and it is the newest), see addOnto.
 func (c *Core) answer(ch challenge, by, carry string, current *SignedDoc) (SignedDoc, error) {
 	r := ch.Request
 	now := c.now().UTC().Format(time.RFC3339)
@@ -932,15 +932,14 @@ func (c *Core) answer(ch challenge, by, carry string, current *SignedDoc) (Signe
 		if c.approvalsUsed[ch.Nonce] {
 			return SignedDoc{}, fail(409, "this challenge was already answered")
 		}
-		if r.AddedStore != "" && c.isLatest(r.Predecessor) != nil {
-			// another self-succession of this machine (an add-store, a downgrade) was answered after this challenge
-			// was made: the phone's "add store X to this machine" goes onto the machine's newest cert
+		if r.AddedStore != "" {
+			// "add store X to this machine": always onto the machine's newest cert, which the caller sends
 			var err error
 			if r, err = c.addOnto(r, current); err != nil {
 				return SignedDoc{}, err
 			}
 		} else if err := c.isLatest(r.Predecessor); err != nil {
-			return SignedDoc{}, err
+			return SignedDoc{}, err // a downgrade continues exactly the cert its old key signed for
 		}
 		var pc Cert
 		json.Unmarshal([]byte(r.Predecessor.Payload), &pc) // checked above: this core's, the machine's newest
@@ -956,22 +955,24 @@ func (c *Core) answer(ch challenge, by, carry string, current *SignedDoc) (Signe
 	return c.sign(Approval{Kind: "approval", Nonce: ch.Nonce, Request: r, By: by})
 }
 
-// addOnto: an add-store challenge whose predecessor cert another self-succession of the same machine has since
-// replaced, rebased onto that machine's newest cert: its stores plus the added one, its keys, its options. The
-// phone approved "add store X to this running machine"; every store already in the newest cert was approved for
-// this machine before (by the phone, or kept by its own old key in a downgrade), so the answer grants nothing the
-// phone didn't, and keeps what the newest cert says: a store a downgrade dropped stays dropped, a key pair a
-// downgrade replaced stays replaced. Two add-stores filed before either is answered thus both end in the session,
-// whatever order and timing the phone answers them in (2026-10-13: the second answer used to rebuild the cert from
-// the stale predecessor, and the first store left the session). The newest cert is the caller's copy: the core
-// keeps only its nonce, and takes the copy only when it signed it and it is that nonce.
+// addOnto: an add-store answered onto the machine's newest cert: its stores plus the added one, its keys, its options.
+// One rule for every add-store (no fresh/stale branch: Deyao, 2026-10-13, "the core doesn't decide; a call made wrong
+// is refused"). The challenge's predecessor is the cert the machine had when the store was asked for (it names the
+// machine and line the phone approved); the cert the answer continues is the caller's `current`, taken only when this
+// core signed it, it is that machine's newest (the core keeps only the nonce) and on the same line. The phone approved
+// "add store X to this running machine"; every store already in the newest cert was approved for this machine before
+// (by the phone, or kept by its own old key in a downgrade), so the answer grants nothing the phone didn't, and keeps
+// what the newest cert says: a store a downgrade dropped stays dropped, a key pair a downgrade replaced stays replaced.
+// Two add-stores filed before either is answered thus both end in the session, whatever order and timing the phone
+// answers in (2026-10-13: identity and yyc; the second answer rebuilt the cert from the cert both were filed against,
+// and identity's answer was lost). A store the newest cert already holds is refused (409): nothing to add.
 func (c *Core) addOnto(r Request, current *SignedDoc) (Request, error) {
 	var stale, cur Cert
 	if r.Predecessor == nil || c.verifyOwn(r.Predecessor, &stale) != nil || stale.Machine == nil {
 		return r, fail(400, "predecessor is not a succession cert this core signed")
 	}
 	if current == nil {
-		return r, fail(409, "the predecessor cert isn't %s's newest: send its newest cert as current", r.Machine.ID)
+		return r, fail(400, "an add-store takes the machine's newest cert as current")
 	}
 	if err := c.verifyOwn(current, &cur); err != nil || cur.Kind != "succession-cert" || cur.Machine == nil {
 		return r, fail(400, "current is not a succession cert this core signed")
@@ -987,6 +988,9 @@ func (c *Core) addOnto(r Request, current *SignedDoc) (Request, error) {
 	}
 	set := map[string]bool{r.AddedStore: true}
 	for _, n := range cur.Stores {
+		if n == r.AddedStore {
+			return r, fail(409, "%s already holds store %s", cur.Machine.ID, n)
+		}
 		set[n] = true
 	}
 	stores := make([]string, 0, len(set))
@@ -994,7 +998,7 @@ func (c *Core) addOnto(r Request, current *SignedDoc) (Request, error) {
 		stores = append(stores, n)
 	}
 	sort.Strings(stores)
-	c.logf("add-store %s for %s rebased onto its newest cert %s", r.AddedStore, r.Machine.ID, cur.Nonce[:12])
+	c.logf("add-store %s for %s onto its newest cert %s", r.AddedStore, r.Machine.ID, cur.Nonce[:12])
 	r.Predecessor, r.Machine, r.Stores = current, cur.Machine, stores
 	return r, nil
 }

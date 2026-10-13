@@ -797,7 +797,7 @@ func TestAddAStoreToARunningSession(t *testing.T) {
 	if _, err := c.ApproveByDeadMachine(&chd); err == nil {
 		t.Fatal("approve_by_dead_machine added a store")
 	}
-	c2, err := c.ApproveByPhone(&chd, p.sign(chd.Payload), "", nil)
+	c2, err := c.ApproveByPhone(&chd, p.sign(chd.Payload), "", &cert)
 	cert2 := pl(t)(c2, err)
 	if cert2["kind"] != "succession-cert" || cert2["machine"].(map[string]any)["id"] != id {
 		t.Fatalf("got %v", cert2)

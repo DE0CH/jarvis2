@@ -555,14 +555,13 @@ func selfSuccessionLock(machine string) func() {
 	return mu.Unlock
 }
 
-// respondAddStore: the phone's answer to "add store X to this running machine". Every add-store challenge is made from
-// the cert the machine had when it was filed; when another add-store (or a downgrade) was answered since, the core
-// answers it onto the machine's newest cert, which the router sends beside it as current (core addOnto), so every
-// approved store ends in the session whatever order and timing the phone answers in (2026-10-13: identity and yyc,
-// filed 20 minutes apart and approved together; the second answer rebuilt the cert from the stale one and yyc left).
-// The router never stores an answer that loses a store the session holds: a core that ignores current (the held core
-// from before 2026-10-13) answers from the stale cert, and then the approval is filed again from the newest cert for the
-// phone to answer once more, instead of dropping a store.
+// respondAddStore: the phone's answer to "add store X to this running machine". The core answers every add-store onto
+// the machine's newest cert, which the router sends beside it as current (core addOnto), so every approved store ends
+// in the session whatever order and timing the phone answers in (2026-10-13: identity and yyc, filed 20 minutes apart
+// and approved together; the second answer rebuilt the cert from the one both were filed against and yyc left). The
+// router never stores an answer that loses a store the session holds: the live core (sha-06ab2452f8ad, until the held
+// one goes live) ignores current and answers from the cert the challenge was made from, and then the approval is filed
+// again from the newest cert for the phone to answer once more, instead of dropping a store.
 func (r *Router) respondAddStore(a *Approval, signature string) (*Doc, string, error) {
 	unlock := selfSuccessionLock(a.Machine)
 	defer unlock()

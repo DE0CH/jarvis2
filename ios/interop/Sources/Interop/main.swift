@@ -213,9 +213,12 @@ func challenge(_ body: [String: Any]) -> SignedDoc {
   if s != 200 { print("succession HTTP \(s): \(String(decoding: d, as: UTF8.self))") }
   return doc(d)
 }
-func approve(_ ch: SignedDoc) -> (Int, SignedDoc?) {
+/// current: an add-store's answer continues the machine's newest cert, which the caller (the router) sends beside it
+func approve(_ ch: SignedDoc, current: SignedDoc? = nil) -> (Int, SignedDoc?) {
   let sig = try! phoneSigning.signature(for: Data(ch.payload.utf8)).derRepresentation.base64EncodedString()
-  let (s, d) = call("/approve/by-phone", ["challenge": docJSON(ch), "signature": sig])
+  var body: [String: Any] = ["challenge": docJSON(ch), "signature": sig]
+  if let current { body["current"] = docJSON(current) }
+  let (s, d) = call("/approve/by-phone", body)
   return (s, s == 200 ? doc(d) : nil)
 }
 struct StartedDoc: Codable { let kind: String; let machine: StartedMachine }
@@ -347,7 +350,7 @@ check(aTs == 200 && rT != nil && !throwsErr { try Checks.answerFor(rT!, answer: 
 let ch2 = challenge(["predecessor": docJSON(cert1), "machine": m1.id, "stores": ["claude-login", "default", "gmail"], "options": ["harness": "claude", "permissionMode": "bypass"]])
 let r2 = try! Checks.review(challenge: ch2, coreKey: coreKey)
 check(r2.kind == .addStore && r2.addedStore == "gmail" && list().first { $0.name == "gmail" }?.sensitive == true, "add-store challenge: one more store, marked sensitive in the core's store list")
-let (a2s, a2) = approve(ch2)
+let (a2s, a2) = approve(ch2, current: cert1)
 check(a2s == 200 && !throwsErr { try Checks.answerFor(r2, answer: a2!, coreKey: coreKey) }, "adding a store answers with the machine's new succession cert")
 check(throwsErr { try Checks.answerFor(r2, answer: a1!, coreKey: coreKey) }, "another answer is refused")
 

@@ -77,10 +77,10 @@ changes nobody can see — no single compromised component is enough.
   machine, only marks it used (a **burn cert**), so it can never be continued.
 - **A machine succeeding itself** — from one of its certs: one more store (approved by the phone), or a
   **downgrade**: a subset of its stores and a new key pair (approved by the old key). The phone's add-store means
-  "add store X to this running machine": when another add-store or a downgrade of the same machine was answered after
-  the challenge was made, the core answers it onto the machine's newest cert (the router sends it as `current`; the
-  core takes it only if it signed it and it is that machine's newest): the newest cert's stores and keys plus X. Each
-  challenge is answered once. A downgrade's challenge stays exact (its old key signs the exact keep-set); a stale one
+  "add store X to this running machine", and the core answers every one the same way: onto the machine's newest cert
+  (the router always sends it as `current`; the core takes it only if it signed it and it is that machine's newest,
+  else refuses): the newest cert's stores and keys plus X; a cert that already holds X is refused. Each challenge is
+  answered once. A downgrade's challenge stays exact (its old key signs the exact keep-set); a stale one
   is refused and the machine starts the downgrade again.
 
 ## Core primitives
@@ -100,7 +100,7 @@ machines, and run exactly one command inside a machine, `/usr/local/bin/jarvis2-
 | `write_store(contents)` | New contents for a store, already wrapped to `P + K` by the writer, with the writer's signature (the setup key) over its name, `E` and data hash. Open, on a set-up core; the core passes the signature on in `unlock_begin`, and the phone checks it before its share. |
 | `stores(nonce)` | The signed list: each store, sensitive or not, empty, unlocked. |
 | `succession(predecessor or null, stores, options, image, salt)` | A signed challenge, before any machine exists (the phone shows each store's sensitivity from the signed store list). Exact values only (the router fills in defaults): a harness, permission mode `auto` or `bypass`, stores sorted and each once, and for a new line the caller's random salt (a repeated salt only gets its second approval refused). `options` = harness, permission mode, the session's settings (`config`) and one machine's one-time inputs (`once`): below, "Inputs to a machine". |
-| `approve_by_phone(challenge, sig, current?)` | The phone is the highest privilege: any challenge it signs is approved, once. An add-store whose predecessor isn't the machine's newest cert any more is answered onto `current`, that newest cert (above). |
+| `approve_by_phone(challenge, sig, current?)` | The phone is the highest privilege: any challenge it signs is approved, once. An add-store is always answered onto `current`, the machine's newest cert (above), and refused without it. |
 | `approve_by_dead_machine(challenge)` | Automatic: the predecessor is killed (Fly-confirmed) and not used, and the stores, image and options are identical (the predecessor's `once` left out; this challenge has none) — or it is a burn. Never a new line, never a machine succeeding itself. |
 | `approve_by_old_key(challenge, sig)` | Automatic: a downgrade (same machine, a subset of its stores, a new key pair) signed with the signing key in the cert it continues. |
 | `start(image, region, size)` | Open (normally the router, which guards it; it can't lead to a secret): one Fly create → a created machine. The image is `ghcr.io/de0ch/jarvis2-session` pinned by digest; `size` is small, medium or large (anything else is refused); the machine's Fly config gets only what the core sets (its key, the router's address). |

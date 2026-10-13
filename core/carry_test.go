@@ -255,7 +255,7 @@ func TestAnAddedStoreIsUnlockedForItsChallengeOnly(t *testing.T) {
 		t.Fatal(err)
 	}
 	unlockFor(t, c, p, "gmail", challengeNonce(ch))
-	cert2, err := c.ApproveByPhone(&ch, p.sign(ch.Payload), out.Carry, nil)
+	cert2, err := c.ApproveByPhone(&ch, p.sign(ch.Payload), out.Carry, &cert)
 	if err != nil {
 		t.Fatal(err)
 	}

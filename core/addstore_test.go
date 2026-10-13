@@ -85,7 +85,7 @@ func TestAStaleAddStoreTakesOnlyTheMachinesNewestCert(t *testing.T) {
 	other, _ := newLine(t, c, p, "default", "gmail")
 	chG := addStoreChallenge(t, c, cert0, id, "gmail")
 	chO := addStoreChallenge(t, c, cert0, id, "openrouter")
-	cert1 := pl2(t)(c.ApproveByPhone(&chG, p.sign(chG.Payload), "", nil))
+	cert1 := pl2(t)(c.ApproveByPhone(&chG, p.sign(chG.Payload), "", &cert0))
 	sigO := p.sign(chO.Payload)
 	for name, cur := range map[string]*SignedDoc{"none": nil, "the stale one": &cert0, "another machine's": &other} {
 		if _, err := c.ApproveByPhone(&chO, sigO, "", cur); err == nil {
@@ -117,22 +117,18 @@ func TestAnAddStoreAfterADowngradeKeepsTheDowngrade(t *testing.T) {
 	}
 }
 
-// The same store asked for twice. From the same cert it is the same challenge (the nonce is the request's MAC),
-// answered once. Asked from two different certs, the later answer changes nothing.
+// The same store asked for twice from the same cert is the same challenge (the nonce is the request's MAC), answered
+// once; asked again from a later cert it is refused (TestAnAddStoreOfAHeldStoreIsRefused).
 func TestTheSameStoreAddedTwice(t *testing.T) {
 	c, _, p := setup(t)
 	cert0, id := newLine(t, c, p, "default")
 	a := addStoreChallenge(t, c, cert0, id, "gmail")
 	b := addStoreChallenge(t, c, cert0, id, "gmail")
-	o := addStoreChallenge(t, c, cert0, id, "openrouter")
-	cert1 := pl2(t)(c.ApproveByPhone(&o, p.sign(o.Payload), "", nil))
-	g := addStoreChallenge(t, c, cert1, id, "gmail")
-	cert2 := pl2(t)(c.ApproveByPhone(&g, p.sign(g.Payload), "", nil))
-	cert3 := pl2(t)(c.ApproveByPhone(&a, p.sign(a.Payload), "", &cert2))
-	if !equalStrings(certOf(t, cert3).Stores, []string{"default", "gmail", "openrouter"}) {
-		t.Fatalf("got %v", certOf(t, cert3).Stores)
+	if a.Payload != b.Payload {
+		t.Fatal("two challenges for the same store from the same cert differ")
 	}
-	if _, err := c.ApproveByPhone(&b, p.sign(b.Payload), "", &cert3); err == nil {
+	cert1 := pl2(t)(c.ApproveByPhone(&a, p.sign(a.Payload), "", &cert0))
+	if _, err := c.ApproveByPhone(&b, p.sign(b.Payload), "", &cert1); err == nil {
 		t.Fatal("the same challenge was answered twice")
 	}
 }
@@ -146,5 +142,39 @@ func pl2(t *testing.T) func(SignedDoc, error) SignedDoc {
 			t.Fatal(err)
 		}
 		return d
+	}
+}
+
+// One rule, no branch (Deyao, 2026-10-13: the core doesn't decide; a call made wrong is refused): every add-store is
+// answered onto the machine's newest cert, which the caller always sends. Without it, even a challenge that is
+// still fresh is refused.
+func TestAnAddStoreAlwaysTakesTheNewestCert(t *testing.T) {
+	c, _, p := setup(t)
+	cert0, id := newLine(t, c, p, "default")
+	ch := addStoreChallenge(t, c, cert0, id, "gmail")
+	sig := p.sign(ch.Payload)
+	if _, err := c.ApproveByPhone(&ch, sig, "", nil); err == nil {
+		t.Fatal("an add-store was answered with no newest cert beside it")
+	}
+	cert1, err := c.ApproveByPhone(&ch, sig, "", &cert0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !equalStrings(certOf(t, cert1).Stores, []string{"default", "gmail"}) {
+		t.Fatalf("got %v", certOf(t, cert1).Stores)
+	}
+}
+
+// A store the newest cert already holds isn't added again: refused, the caller treats it as done.
+func TestAnAddStoreOfAHeldStoreIsRefused(t *testing.T) {
+	c, _, p := setup(t)
+	cert0, id := newLine(t, c, p, "default")
+	a := addStoreChallenge(t, c, cert0, id, "gmail")
+	o := addStoreChallenge(t, c, cert0, id, "openrouter")
+	cert1 := pl2(t)(c.ApproveByPhone(&o, p.sign(o.Payload), "", &cert0))
+	g := addStoreChallenge(t, c, cert1, id, "gmail")
+	cert2 := pl2(t)(c.ApproveByPhone(&g, p.sign(g.Payload), "", &cert1))
+	if _, err := c.ApproveByPhone(&a, p.sign(a.Payload), "", &cert2); err == nil {
+		t.Fatal("gmail was added to a cert that holds it")
 	}
 }

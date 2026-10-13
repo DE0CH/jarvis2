@@ -81,7 +81,7 @@ func TestAnAddStoreApprovalCantBeReplayedAfterADowngrade(t *testing.T) {
 		t.Fatal(err)
 	}
 	phoneSig := p.sign(ch.Payload)
-	cert2, err := c.ApproveByPhone(&ch, phoneSig, "", nil)
+	cert2, err := c.ApproveByPhone(&ch, phoneSig, "", &cert1)
 	if err != nil {
 		t.Fatal(err)
 	}

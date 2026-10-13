@@ -2,7 +2,7 @@ package main
 
 // Two add-stores pending for one running session, both approved (2026-10-13: identity and yyc for one session; the
 // session ended with only the store answered last). Whatever order and timing the phone answers in, the session ends
-// with both stores — with a core that answers a stale add-store onto the newest cert, and, with the held core that
+// with both stores — with a core that answers every add-store onto the newest cert, and, with the production core that
 // doesn't, by filing the stale one again rather than storing an answer that drops a store.
 
 import (
@@ -89,10 +89,14 @@ func (c *addStoreCore) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 			return
 		}
 		stores := ch.Request.Stores
-		if !c.held && c.latest[m] != pc.Nonce {
+		if !c.held { // core addOnto: always the newest cert the router sends, plus the added store
 			var cur fakeCert
 			if in.Current == nil || in.Current.Decode(&cur) != nil || c.latest[m] != cur.Nonce {
-				refuse("the predecessor cert isn't the newest")
+				refuse("current isn't the newest cert")
+				return
+			}
+			if containsString(cur.Stores, ch.Request.AddedStore) {
+				refuse("already holds the store")
 				return
 			}
 			stores = sortedSet(append(append([]string{}, cur.Stores...), ch.Request.AddedStore))
