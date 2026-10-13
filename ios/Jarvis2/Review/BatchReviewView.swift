@@ -146,7 +146,7 @@ struct BatchReviewView: View {
   @State private var failure: String?
 
   private var open: [InboxItem] { items.filter { !isDone($0) } }
-  private func isDone(_ it: InboxItem) -> Bool { if case .success = outcome[it.id] { return true }; return false }
+  private func isDone(_ it: InboxItem) -> Bool { if case .success? = outcome[it.id] { return true }; return false }
   /// every item still to sign is read and signable, and no approval is still being made
   private var ready: Bool {
     !open.isEmpty && (batch?.preparing ?? 0) == 0 && open.allSatisfy { prepared[$0.id] != nil && prepared[$0.id]?.refusal == nil && loadErrors[$0.id] == nil }
@@ -238,15 +238,15 @@ struct BatchReviewView: View {
         Text("\(n). \(it.actionTitle)")
         Spacer()
         switch outcome[it.id] {
-        case .success: StatusPill(text: "Allowed", color: .green)
-        case .failure: StatusPill(text: "Failed", color: .red)
-        case nil: EmptyView()
+        case .some(.success): StatusPill(text: "Allowed", color: .green)
+        case .some(.failure): StatusPill(text: "Failed", color: .red)
+        case .none: EmptyView()
         }
       }
       .accessibilityElement(children: .combine)
       .accessibilityIdentifier("batch-item-\(n)")
     } footer: {
-      if case .failure(let e) = outcome[it.id] { Text(errText(e)).foregroundStyle(.red).accessibilityIdentifier("batch-item-failure-\(n)") }
+      if case .failure(let e)? = outcome[it.id] { Text(errText(e)).foregroundStyle(.red).accessibilityIdentifier("batch-item-failure-\(n)") }
     }
   }
 
