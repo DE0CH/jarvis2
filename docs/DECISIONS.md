@@ -747,7 +747,7 @@ tree; Face ID is unavoidable, the approval burden should be small.
      from the Storage Box (ours, over TLS) at prepare. The machine fetches each file through the router, streamed (it
      holds no Storage Box credential), and refuses any whose sha256 or size differs. There is no sensitivity rule to
      carry over (Jarvis 1 had none): Deyao sees the stores in the approval.
-124. **One Face ID per imported session, no batch approval.** The phone's signature covers one core challenge. Signing a
+124. **(Superseded by 140: imports may be filed as one batch, allowed under one Face ID.) One Face ID per imported session, no batch approval.** The phone's signature covers one core challenge. Signing a
      list safely needs either a core primitive that approves N challenges from one signature (a core change, so a
      Recover) or the app signing N challenges under one Face ID (an app release through the replica). For a one-off,
      N Inbox approvals (Allow + Face ID each) is the smaller change. The 3-waiting-proposals limit is a session's (it
@@ -855,3 +855,39 @@ iCloud index and leases (decided while Deyao was away; the safe, reversible defa
      (withholding, and the import's bytes are what Deyao signed). A destroyed Jarvis 2 session's archive is not taken again.
 134. **`/setup/sessions/{id}/pause` cancels the session's wakeups and crons first** (they would resume it by themselves);
      the imports' re-armed ones are armed again by the re-import at the next resume.
+
+## Batch approvals in the Inbox, 2026-10-13
+
+Deyao: several actions approved together with ONE Face ID; the caller groups them through the API and gives a summary
+(its unverified words, shown above every item's signed details); nothing excluded; Deny works on the whole batch.
+
+140. **One Face ID, every item signed as alone; no core change** (supersedes 124). The app evaluates Face ID once
+     (`PhoneKeys.authorize`: `LAContext.evaluatePolicy(.deviceOwnerAuthenticationWithBiometrics)`) and passes that context
+     to every Secure Enclave use of the batch (`SecureEnclave.P256…PrivateKey(dataRepresentation:authenticationContext:)`),
+     so the Enclave asks no second time; the keys stay `.biometryCurrentSet`. Each item is then signed and sent exactly as
+     from its own page (approvals' core challenges, grant texts, deploy-key begin documents, unlocks' shares), so the core
+     verifies each one unchanged. The simulator does its Face ID stand-in once per batch. The replica proves the one-Face-ID
+     path on the simulator (software keys); the Enclave's reuse of an evaluated context is Apple's documented behaviour,
+     first exercised on Deyao's iPhone. Change: a core primitive approving N challenges from one signature (a Recover).
+141. **Items are read and checked before Face ID; each is signed and sent in order after it.** A batch page reads every
+     item as its own page would (the same Checks: the core key, line pins, the session's cert, CI's image signature, the
+     grant's draft checked field for field before signing) and offers Allow all only when every item is readable and
+     signable and no approval is still being made. An item that fails mid-batch is shown failed; the ones before it went
+     through and left the Inbox (approvals leave when answered, requests on `done`), so Retry is idempotent: it reads only
+     what is left and asks for one more Face ID. Grants and deploy keys draft/begin again on Retry.
+142. **Deny: the whole batch, or one item.** Deny all drops every request and rejects every approval (a new session
+     disappears); an item can also be denied (or allowed) on its own, which takes it out of the batch. The web page shows
+     batches and denies them; approving stays on the phone.
+143. **Limits count a batch once.** A batch is one of the caller's 20 waiting requests and, when it proposes any new
+     session, one of its 3 waiting proposals (a session or the actions key); a batch holds at most 20 items. So a session
+     can have at most 3 proposal entries in the Inbox, as before, each still needing Deyao's Face ID per entry. The setup
+     session's imports, as before, aren't limited beyond the 20 items per batch.
+144. **The batch is checked whole before anything is filed** (an item the caller may not ask for, a bad argument, the same
+     item twice: 400/403 and nothing filed). Filing itself can still fail per item (the core refusing a challenge): that
+     item is reported with its error and the others stand, since undoing filed approvals would be a Deny the caller didn't
+     ask for. A request already waiting alone joins the batch; one already in another batch stays there. Per-item
+     explanations are optional in a batch (the summary is required).
+145. **The whole batch expires 10 minutes after filing** (its requests carry the batch's end; an approval goes at the
+     sooner of its own 10 minutes and the batch's). Imports and proposed sessions come in a moment after filing (the core's
+     challenge); the batch shows them as `preparing` and the phone waits for them before Allow all.
+

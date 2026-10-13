@@ -169,6 +169,19 @@ Claude never adds a repo or allows anything itself: it files a request and Deyao
 
 The reason is required, plain text, ≤ 600 characters. A request (and an approval in the Inbox) goes after 10 minutes (Deyao, 2026-10-12): ask again if it lapsed.
 
+**Several at once = one batch** (Deyao, 2026-10-13): when Claude needs more than one thing, it files them as a batch,
+so Deyao reviews one Inbox entry and allows everything with ONE Face ID (or denies it whole). `--summary` (required)
+says what the batch is for; each item may carry its own `explanation`. Any kind can be in a batch (repo add/remove,
+grant, unlock, add-store, new-session, jarvis1-import); at most 20 items; every item is checked before any is filed.
+
+- Setup session: `infra/setup.py request batch --summary "…" --item repo/add,repo=DE0CH/x --item
+  grant,session=sID,holder=terminal,minutes=5` (or `--file items.json`, a JSON list of `{"intent": …, …}`);
+  several Jarvis 1 imports: `infra/setup.py jarvis1 import ID1 ID2 … --stores a,b --why "…" --summary "…"`.
+- Inside a session: `jarvis2-request batch --summary "…" --item grant,holder=scheduler,minutes=5 --item
+  add-store,store=gmail` (or `--file`); `--item new-session,label=…,prompt=…,stores=a|b` (lists with `|`; a long
+  prompt goes in a `--file` item). A batch counts as one of the session's 3 waiting proposals.
+- `infra/setup.py requests` / `jarvis2-request list` show the batches (`b…` ids) after the loose requests.
+
 ### Emptying the core without its kit
 
 A set-up core ends from the app only with the kit it was set up with (Reset or Recover asks for it). Without that
@@ -453,7 +466,8 @@ sign-in sheet (the PIN read from the bot's mailbox by this script and relayed to
 page, its stores and the harness's unlocked) running on Fly within 10 minutes, a kill and relaunch, the terminal
 (the router's page in a WebView: turned away → the grant review → Deny, then Allow with Face ID → a command's output), Grants (a standing rule,
 forgotten), the Inbox from a session (`jarvis2-request` run in its machine by this script with `flyctl machine exec`:
-a grant request denied, another allowed with Face ID; the badge, the three fields, the caller), Settings → Repos (a
+a grant request denied, another allowed with Face ID; the badge, the three fields, the caller; then a batch of two
+grants filed with `jarvis2-request batch`, allowed with ONE Face ID), Settings → Repos (a
 throwaway repo's deploy key added and removed by the core; the script checks GitHub), the Inbox from the setup session
 (`setup.py request remove-repo` denied with the repo kept, then `request add-repo` allowed: the key made on GitHub),
 a session stuck at boot (its store locked right after Create) destroyed within 90 s, Destroy, then Recover with the

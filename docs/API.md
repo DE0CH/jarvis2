@@ -206,6 +206,7 @@ for that feature is stored), or on Deny.
 
 ```
 item = { id, kind: "repo-key" | "grant" | "unlock" | "new-session" | "resume-upgrade" | "add-store", approval /* bool */,
+         batch /* the batch it was filed in, if any */,
          params: {action, repo, sensitive, session, holder, minutes, days}, session, sessionName,
          caller: {kind: "web" | "app" | "session" | "setup" | "router", session}, callerText /* "session “X” (s…)",
          "the web page", "Claude (setup session)" */, call: {method, path, args},
@@ -222,6 +223,29 @@ item = { id, kind: "repo-key" | "grant" | "unlock" | "new-session" | "resume-upg
 | `GET /setup/requests`, `GET /m/api/requests` | the same list for Claude; a session sees only its own |
 | `GET /setup/repos` | the router's repo list (`infra/setup.py repos`) |
 | `GET /setup/sessions` | `{sessions: [{id, machineId, state, title}]}` (`infra/setup.py sessions`; the phone replica finds a session's machine here) |
+
+### Batches (`router/batches.go`)
+
+A caller files several items at once with one **summary** (its words, unverified, shown above the items); the Inbox
+lists the batch as one entry and the phone allows every item under ONE Face ID, each signed and sent exactly as alone
+(nothing new for the core to verify), or Deny drops them all.
+
+| Call | Does |
+|---|---|
+| `POST …/requests/batch` (`/api`, `/setup`, `/m/api`, `/actions`) | Body `{summary /* required, as explanation */, items: [{intent, …that intent's body…, explanation?}]}`; intents: `repo/add`, `repo/remove`, `grant`, `unlock` (as above), `add-store` (`{store}`; a session for itself, others name `session`), `new-session` (`POST /m/api/sessions`'s body), `jarvis1-import` (`{id, stores, size?, prompt?}`; setup session and Deyao only). 1–20 items. Every item is checked first, as its own endpoint checks it: one bad item (400/403, `item` = its index) or the same item twice and nothing is filed. → `{id: "b…", expires, items: [{intent, id?, session?, duplicate?, batch?, error?}]}`: an item that fails while being filed (the core refused its challenge) carries `error` and the rest stand. A request already waiting outside any batch joins this one (`duplicate`); one in another batch stays there (`batch`). Limits: a batch counts once toward the caller's 20 waiting requests and, when it proposes a session, once toward the 3 waiting proposals (429). |
+| `GET /api/requests/batches/:id` (`/setup/…`; `/m/api/…` its own) | `{batch, items: [item]}`; 404 when gone |
+| `DELETE /api/requests/batches/:id`, `POST /actions/requests/batches/:id/deny` | Deny all: its requests leave, its approvals are rejected (an approval still being made is rejected as it arrives) |
+
+```
+batch = { id, summary, caller, callerText, call: {method, path, args: {items}}, created, expires, items: [inbox ids, as filed],
+          preparing /* approvals still being made: a new session's challenge; the phone waits for them */ }
+```
+
+`GET …/requests` and `GET /api/state` (`inboxBatches`) list the batches; each item carries `batch` and the batch's
+`expires`. The whole batch goes 10 minutes after it was filed. An item can still be allowed or denied on its own (it
+leaves the batch); a batch with nothing left goes. The app's batch page signs the items in order after the one Face ID
+and shows each one's result; one that failed (the others went through and left the Inbox) is read again and signed on
+Retry, with another Face ID.
 
 The app never takes the title from the router: the list renders it from `kind` + `params` (`src/lib/inbox.ts`), and
 the review page renders "What you sign (exact)" from the signed content (`Shell/SignedAction.swift`). The shell checks
@@ -335,6 +359,7 @@ actions key (default store)".
 | `POST /actions/requests/:id/deny` | An Inbox request leaves; an approval is rejected as the app's Deny |
 | `POST /actions/sessions` | Propose a new session (body as `POST /m/api/sessions`, `explanation` required): a `new-session` approval in the Inbox; at most 3 wait |
 | `POST /actions/requests/{repo/add,repo/remove,grant,unlock}` | As `/setup/requests/*`: an Inbox request |
+| `POST /actions/requests/batch`, `POST /actions/requests/batches/:id/deny` | A batch (Requests "Batches"); Deny all |
 
 ## Setup (`/setup/*`)
 

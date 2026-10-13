@@ -363,6 +363,16 @@ their direct flow (no Inbox detour). What a caller may ask for: a session only f
 store) and for a repo to be added (a new key in its own store, which no session holds until Deyao picks it); not
 removing a repo or anything about another session. The web page, the app and the setup session may ask for any kind.
 
+**Batches** (Deyao, 2026-10-13): a caller may file several items as one batch, through the API, with a **summary** of
+its own. The Inbox shows the batch as one entry; its review page shows the summary as the caller's unverified words,
+then every item with its own three fields as above (each item's "What you sign (exact)" rendered from that item's
+signed content), and **Allow all** asks for ONE Face ID: the app evaluates Face ID once on an LAContext and signs every
+item with the Secure Enclave key on that context (the simulator: one stand-in check), each exactly as it would be signed
+alone and sent on its own, so the core and the grant store verify each item unchanged. Nothing about what a signature
+covers changes; a batch is only the router's grouping. Any kind may be in a batch; Deny drops it whole (an item can be
+denied or allowed alone); it goes after 10 minutes like any request; an item that fails is shown failed while the
+others stand, and Retry reads it again and asks for another Face ID.
+
 ## Machine side (in the image)
 
 Boot makes the machine's keys and waits. `jarvis2-init` (run by the core through Fly, no arguments) prints the
