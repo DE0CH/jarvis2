@@ -292,6 +292,17 @@ fixes, 34–40 carried over from the old app and still true, 41–43 the web pag
     claims with the `keys` bundle when the core's identity says so; Settings → Encrypted backup counts and checks key
     backups too. Until the held core is live the app also speaks the earlier whole-store formats (each branch marked).
 
+69. **Restoring a store** (docs/DECISIONS.md 162; Deyao, 2026-10-13). iPhone: a store's page (Settings → Stores → the
+    store) ends with **Versions** (not for a repo's deploy-key store): the core's signed list, newest first, each row
+    "Version N", a Current pill, what made it as a pill (Recover, Key written, Key deleted, Restore + From N, Session
+    when a session wrote it), when, and its key names; every other row has **Restore…**, which opens the restore review
+    sheet (also what an Inbox `restore` request opens): "What you sign (exact)" rendered from the core's signed begin
+    (store, sensitive, version put back, version replaced, keys put back, written by a session, keys removed, keys
+    unchanged, backups), then each key put back with its writer and each removed key; **Restore** signs and shares the
+    keys put back under one Face ID; Cancel (Deny from the Inbox). Web: each store card has **Versions** (the same list,
+    unverified) with **Propose restore**, which files the Inbox request; the Inbox lists it as "Restore store" with Store
+    and Version rows. Walkthrough: a key of default deleted as the setup session, then put back through Versions.
+
 ## Unfinished / known gaps
 
 - Free text (prompt, title) reaches the machine signed only with a core that vouches (the held core doesn't).

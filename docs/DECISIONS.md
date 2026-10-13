@@ -1173,3 +1173,51 @@ Deyao: several actions approved together with ONE Face ID; the caller groups the
      refuses it too) and a harness's stores (they come with the harness). The Restore and Jarvis 1 import flows take
      their stores from the record / the import form and never filtered sensitivity; the web page has no add-store (a
      session asks for one with `jarvis2-request add-store`). The iPhone app needed no change.
+
+## Restoring a store to an earlier version, 2026-10-13
+
+162. **The core keeps each store's last 50 versions; a phone-signed restore puts one back, with no kit and no
+     plaintext outside the core** (Deyao, 2026-10-13, after two whole-store writes of 2 keys wiped 24 keys of `identity`
+     and `yyc`: "it needs to go through the core and be signed, because I don't want to randomly lose my master key").
+     *Built* (DESIGN "Restoring a store"; `core/history.go`, `router/storerestore.go`, the app's Stores → a store →
+     Versions → Restore…, the web page's Propose restore): every change to a store makes a version (its `KeyEntry`s,
+     sealed to `P + K`); `versions` lists them signed; `restore_begin` signs exactly what changes; the phone signs that
+     document and shares the keys put back under one Face ID; `restore_finish` opens them, seals each one's backup to
+     the master PUBLIC key and answers a signed receipt; the router writes the backups (writer `restore`) and only then
+     `restore_commit` changes the store, if it is still the version the phone saw. The restore is a version too.
+     *Security reasoning*: a restore can only put back values the core itself held for that store (the entries keep their
+     writers, so the phone sees who wrote each key on the review and at every unlock); the router can't start one (the
+     phone's signature over the core's exact document) or change what it puts back (the core reads the version from its
+     own memory, never from the caller); the plaintext is in the core for one call, as with a deploy key's token; the
+     master key's private half is never needed, so the kit stays in the password manager. The bucket backups stay the
+     disaster path, and a Recover takes a restore's key backups: the core's receipt (a core the box key vouched for)
+     names each backup's hashes, and carries the phone's signature over the begin.
+     *Choices for Deyao to review*:
+     - **Kept in the core's memory**, not the router's volume: simplest to reason about (the core moves entries it holds
+       itself; no foreign input to verify) and costs little (entries are shared between versions; 50 per store). A
+       restart of the core loses the history, like everything else in it; the bucket stays the way back from that.
+     - **50 versions per store** (`historyMax`), oldest dropped first. A restore is itself a version.
+     - **Backups of the restored keys are made by the core** (it seals each value to the master public key while the
+       phone's shares are open in the finish call) rather than copied from older bucket versions: keys that came from a
+       Recover or a whole-store backup have no per-key backup to copy, and the core's copy is checked by decrypting. The
+       router writes them before the commit; the commit is refused when the store moved on, and a backup the core made
+       but never committed only describes a restore Deyao approved.
+     - **Not restorable**: a repo's deploy-key store (its key on GitHub is deleted on every re-add, so an old one would
+       be dead: make the key again) and the `core` store. `github-deploy-keys` (the PAT) is restorable.
+     - **Who may ask**: the app (direct), the web page and the setup session (an Inbox request `restore {store, seq}`);
+       never a session (a session can't ask about stores beyond its own add-store, and a restore changes what every later
+       unlock of the store releases), never inside a batch (its review needs the begin document and the phone's shares).
+     - **The live core's footgun is closed at both ends now**, before the held core ships: `infra/setup.py write` refuses
+       a whole-store write that leaves out a key name recorded for the store unless `--replace`, and sends the names; the
+       router's `/setup/stores/write` refuses the same (409) unless `replace: true`, and a write naming no keys for a
+       store with recorded names (400). On a core made of keys there is no whole-store write and `--replace` is refused.
+       The app's and web Stores pages write no values (only explanations, which a write never removes), so they needed
+       no guard.
+     *Not chosen*: a restore that decrypts the bucket backups in the app with the kit (that is Recover's path and needs the
+     master private key out of the password manager, which Deyao ruled out for routine use); the router keeping old
+     versions (it would have to prove to the core that a blob was once the core's, adding signed receipts of every write
+     for the core to check, for no gain over the core's own memory); a restore without the phone (any session can already
+     write keys, but a restore rewrites many at once and Deyao asked for it to be signed).
+     *Release*: the core part is behind `jarvis2/core-pin: hold` with 6fc20f8 (stores made of keys); both ship in the
+     same release (RUNBOOK "Releasing the held core"). The router, setup.py, the web page and the app work with either
+     core (a core without versions answers 404 and the Versions page says so).

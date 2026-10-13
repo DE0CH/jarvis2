@@ -201,6 +201,7 @@ kind of caller; the router records the caller from the credential (never from th
 | `POST …/repo/remove` | `{repo}` | not a session |
 | `POST …/grant` | `{session, holder, minutes /* 1–10, default 10 */}` or `{session, holder, days /* 1–365: a standing rule */}` | a session only for itself (it may leave `session` out) |
 | `POST …/unlock` | `{session}`: the locked stores that session waits on | a session only for itself |
+| `POST …/restore` | `{store, seq}`: put version `seq` of a store back (below, "Store versions and restore"); opens the app's restore review | not a session; never in a batch |
 | `POST /m/api/requests/add-store` | `{store}` → the router's `add-store` approval (as `POST /m/add-store`) | a session, for itself |
 | `POST /m/api/sessions` | `POST /api/sessions`'s body without `attachments`, plus `explanation` (required) → `{id, requestId, approval: true}`: a session PROPOSES a new session (`jarvis2-request new-session`). The same line and `new-session` approval as the app's New session (a succession from null, so it starts only on Deyao's Face ID); the approval's caller is the proposing session and it carries the explanation. `requestId` is scoped to the proposing session; at most 3 proposals wait per session (429). | a session |
 
@@ -212,9 +213,9 @@ not ask; at most 20 pending per caller. A request goes after 10 minutes, when it
 for that feature is stored), or on Deny.
 
 ```
-item = { id, kind: "repo-key" | "grant" | "unlock" | "new-session" | "resume-upgrade" | "add-store", approval /* bool */,
+item = { id, kind: "repo-key" | "grant" | "unlock" | "restore" | "new-session" | "resume-upgrade" | "add-store", approval /* bool */,
          batch /* the batch it was filed in, if any */,
-         params: {action, repo, sensitive, session, holder, minutes, days}, session, sessionName,
+         params: {action, repo, sensitive, session, holder, minutes, days, store, seq}, session, sessionName,
          caller: {kind: "web" | "app" | "session" | "setup" | "router", session}, callerText /* "session “X” (s…)",
          "the web page", "Claude (setup session)" */, call: {method, path, args},
          explanation, created, expires, options /* an approval's form fields */,
@@ -313,6 +314,28 @@ Setting the core up (Reset and Recover, the app's Reset or recover page):
 - `wipe`: `statement` = `{"kind":"wipe","core": <the core's signing key>}`, signed by the master key the core was
   set up with → the core's signed `{"kind":"wiping","core"}`, then it exits; a new, empty core follows.
 
+## Store versions and restore (`core/history.go`, `router/storerestore.go`)
+
+DESIGN "Restoring a store". A core from before stores kept versions answers 404.
+
+- `POST /api/core/stores/versions {store, nonce}` (relayed; `/setup/stores/versions` the same) → the core's signed
+  `{"kind":"store-versions", nonce, store, current /* the store's version now */, sensitive, versions: [{seq, at,
+  version, cause: {kind: recover | created | write | delete | deploy-key | restore, key?, writer? {by, machine?, line?},
+  from? /* restore: the version put back */}, keys: [{name, e, dataSha256, backupSha256?, at, writer}]}]}`, newest
+  first, at most 50. 404 for a store that doesn't exist.
+- `POST /api/core/stores/restore/begin {store, seq}` (relayed) → the core's signed `{"kind":"store-restore-begin",
+  pending, store, sensitive, from: {seq, version}, to: {seq, version, at}, put: [{key, e, dataSha256, backupSha256, at,
+  writer /* with a setup writer's sig */}], remove: [names], keep: [names], t}`. 404: no such store or version; 403: a
+  repo's deploy-key store; 409: the store already is that version. A begin lapses after 10 min.
+- `POST /api/stores/restore/finish {pending, signature, shares: {KEY: share}}` (the app, after Face ID): `signature` =
+  the phone's base64 DER ECDSA over the begin's payload; one share per key in `put`, each the phone's x(p·E) sealed to
+  `t` as an unlock's share. The router passes it to the core's `/stores/restore/finish` (403 another signature, 409 the
+  store moved on, 400 a missing share; the begin is spent either way), writes the core's backups to the bucket
+  (`keys/<store>/<key>.json`, below) and only then `/stores/restore/commit {pending}` → `{ok, restored /* the core's
+  signed {"kind":"store-restored", pending, store, from, seq, version, keys, put, remove} */, refreshAsked: [session
+  ids]}`. A backup the router can't write: nothing is committed (502). Every running session holding the store gets
+  an unlock request (as after a key write), and a pending `restore` request for the store leaves the Inbox.
+
 ## Backups (`/api/backups`)
 
 `GET /api/backups` → `{bucket, objects: [{key, body}]}`: every object under `stores/` and `sensitive/` in the
@@ -322,7 +345,11 @@ versioned bucket `jarvis2-backup-de0ch`, `body` its text unchanged — `stores/<
 `sensitive/<name>.json` = a signed `{"kind":"store-sensitive","name","at"}` marker. The router reads them with its
 own read credential (router env `BACKUP_READ_ACCESS_KEY/SECRET_KEY`; `BACKUP_ENDPOINT`, `BACKUP_REGION`,
 `BACKUP_BUCKET` default to the production bucket) and answers 503 without it, 502 when the bucket refuses. The app
-checks each `sig` against `keys/setup.pub` (from GitHub) and opens each backup with the master key from the kit. Settings → Encrypted backup saves the same answer, checked but unopened, as one file for
+checks each `sig` against `keys/setup.pub` (from GitHub) and opens each backup with the master key from the kit. A key
+backup a restore wrote (`keys/<store>/<key>.json` with `writer: {by: "restore", receipt}`) is checked by its receipt: the
+core's signed `{"kind":"store-restore-approved", pending, store, from, to, put: [{key, e, dataSha256, backupSha256}],
+remove, begin, phoneSig, at}`, from a core whose identity (`core` in the object) the box key signed; it must name this
+key's hashes (or list it as removed). Settings → Encrypted backup saves the same answer, checked but unopened, as one file for
 `tools/decrypt-backup.py` (RUNBOOK "Offline copy of the stores").
 
 Unlocks for one session (DESIGN "Carried secrets"): `unlock/begin {store, for}` with `for` = the nonce of the challenge
@@ -415,7 +442,8 @@ against `SETUP_KEY` (`k8s/apps/router.yaml`), within ±2 min, each signature onc
 | `GET /setup/identity` | `/identity` |
 | `POST /setup/stores` | `/stores` |
 | `POST /setup/stores/create` | `/stores/create` |
-| `POST /setup/stores/write` | `/stores/write`: a core from before stores were made of keys only (until the held core is live) |
+| `POST /setup/stores/write` | `/stores/write {store, keys, replace}`: a core from before stores were made of keys only (until the held core is live), which REPLACES the store. `keys` = the key names the write holds; the router refuses it (409, nothing reaches the core) when it leaves out a name recorded for the store, and (400) when it names none for a store with recorded names, unless `replace: true` (`infra/setup.py write … --replace`) |
+| `POST /setup/stores/versions` | `/stores/versions {store, nonce}` (below, "Store versions and restore"). `infra/setup.py versions STORE` |
 | `POST /setup/stores/{store}/keys/{key}` | (the router's own, then `/stores/write-key`) one key written or deleted by the setup session, as `POST /m/stores/{store}/keys/{key}` with the setup key's signature over `WriterText`; its first key of a name the core doesn't have makes that store, sensitive. `infra/setup.py write\|delete` |
 | `GET /setup/store-key` | (the router's own) as `GET /m/store-key` |
 | `POST /setup/store-docs` | (the router's own) `{store, about?, keys: {KEY: text}}` → `{ok}`: as `PUT /api/stores/{store}/docs`. `infra/setup.py docs` |

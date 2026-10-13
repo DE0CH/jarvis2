@@ -99,6 +99,8 @@ machines, and run exactly one command inside a machine, `/usr/local/bin/jarvis2-
 | `mark_sensitive(name)` | The one-way upgrade: the name leaves the non-sensitive set. Open. |
 | `write_key(store, key, sealed value, backupSha256, writer)` | One key written or deleted; the store's other keys are never read or touched (below, "Writing stores and their backups"). Open, on a set-up core. Writer `setup`: its signature over `WriterText` (store, key, `E`, data hash, backup hash), passed on in `unlock_begin` for the phone to check; its first key of a new name makes that store, sensitive. Writer `machine`: the machine's newest cert beside it, and the core checks the signature with the signing key in that cert (a live, certified machine only; never the deploy-key stores or a store that doesn't exist). Answers a signed receipt (`key-written`). |
 | `stores(nonce)` | The signed list: each store, sensitive or not, empty, unlocked. |
+| `versions(store, nonce)` | The signed list of the store's last 50 versions, newest first: each one's number, time, what made it (a Recover, `create_store`, a key written or deleted and by whom, a deploy key, a restore) and its keys' names, `E`s, data hashes and writers; never a value (below, "Restoring a store"). |
+| `restore_begin(store, version)` / `restore_finish(pending, phone sig, phone shares)` / `restore_commit(pending)` | Putting a kept version back (below, "Restoring a store"): the signed document of exactly what changes, then the phone's signature over it and its share of each key put back (the core opens them and seals their backups to the master public key), then, after the router wrote those backups, the change itself, only if the store is still the version the phone saw. Never a repo's deploy-key store or the `core` store. |
 | `succession(predecessor or null, stores, options, image, salt)` | A signed challenge, before any machine exists (the phone shows each store's sensitivity from the signed store list). Exact values only (the router fills in defaults): a harness, permission mode `auto` or `bypass`, stores sorted and each once, and for a new line the caller's random salt (a repeated salt only gets its second approval refused). `options` = harness, permission mode, the session's settings (`config`) and one machine's one-time inputs (`once`): below, "Inputs to a machine". |
 | `approve_by_phone(challenge, sig, current?)` | The phone is the highest privilege: any challenge it signs is approved, once. An add-store is always answered onto `current`, the machine's newest cert (above), and refused without it. |
 | `approve_by_dead_machine(challenge)` | Automatic: the predecessor is killed (Fly-confirmed) and not used, and the stores, image and options are identical (the predecessor's `once` left out; this challenge has none) — or it is a burn. Never a new line, never a machine succeeding itself. |
@@ -117,7 +119,7 @@ machines, and run exactly one command inside a machine, `/usr/local/bin/jarvis2-
 A succession from null is approved only by the phone: every new line starts with Deyao's click.
 
 **State, in memory only:** its own key pairs, the carry key, the master and phone public keys (from the claim), the Fly token,
-the stores, the non-sensitive set, the machines it created and not yet initialised (with the image asked for), each
+the stores, each store's last 50 versions and the pending restores, the non-sensitive set, the machines it created and not yet initialised (with the image asked for), each
 initialised live machine's current signing key, the unlocked stores' plaintext (each unlock standing or for one cert), the pending unlocks and deploy-key requests, and append-only sets — **killed**
 (Fly-confirmed), **used** (predecessors continued or burnt), **spent** approvals, and per certified machine the nonce of
 its **newest** cert. What
@@ -172,6 +174,44 @@ Sensitivity markers (`sensitive/<name>.json`, signed by the setup key) and older
 (`stores/<name>.json`, signed by the setup key, from before stores were made of keys) are in the same bucket; a
 Recover takes a store's whole-store backup and then every key backup of that store written after it.
 
+## Restoring a store (Deyao, 2026-10-13)
+
+"It needs to go through the core and be signed, because I don't want to randomly lose my master key": putting a store
+back to an earlier version must never need the recovery kit for routine use, and is a core-verified, phone-signed action.
+The master-key-sealed bucket backups stay the disaster path (Recover), untouched.
+
+- **Versions.** Every change to a store makes a new version: the store's keys as they then were (`KeyEntry`s, each
+  sealed to `P + K`, so a version reveals nothing the store didn't). The core keeps the last 50 of each store in memory
+  (`core/history.go`), with what made each one; a Recover makes each store's first version. A new core starts with no
+  history beyond what its Recover brought.
+- **Restore = one Face ID, no kit.** `restore_begin(S, V)` answers, signed, the version it starts from and the one it
+  puts back, every key put back (name, `E`, data and backup hashes, its writer, with a setup writer's signature, which
+  the phone checks against `keys/setup.pub` as on an unlock), every key removed and the number kept, with a one-off
+  `T`. The app's review page renders that document (rows: store, sensitive, version put back, version replaced, keys put
+  back, written by a session, keys removed); under one Face ID the phone signs it and computes its share of every key
+  put back, sealed to `T`. `restore_finish` checks the signature against the phone key from the claim and that the store
+  is still the version it started from, opens each key put back (proving it intact), seals each value to the **master
+  public key** as that key's backup (the writers' format: `info jarvis2/backup`, `store\nkey` as associated data), drops
+  the plaintext, and answers the backups beside a signed receipt (`store-restore-approved`: each key's new backup hash,
+  the keys removed, the begin document and the phone's signature over it). Nothing in the store has changed yet.
+- **Backups first.** The router writes each backup to the bucket (`keys/<store>/<key>.json`, writer `restore` with the
+  receipt; a removed key as a delete), then calls `restore_commit`, which puts the version back only if the store is
+  still exactly the version the phone approved it from (a write in between: refused, nothing changes). The restore is
+  itself a new version, so it is undone the same way. The entries put back are the very ones the core held (writer,
+  time and backup hash unchanged), so a later unlock shows who wrote each key, as before.
+- **After.** Sessions holding the store are behind until a new unlock, exactly as after a write: the router asks the
+  phone to refresh them. A Recover takes a restore's key backups like any other (the core's receipt, under a core the box
+  key vouched for, names the backup's hashes; the phone's signature over the begin is in it).
+- **Who asks.** The app's Stores page (a store's page → Versions → Restore…), or an Inbox request (`…/requests/restore
+  {store, seq}`) from the web page (Propose restore) or the setup session (`infra/setup.py request restore STORE V`);
+  never a session, never in a batch. Only the phone approves.
+
+The plaintext a restore touches exists only inside the core, for the length of the finish call (like a deploy key's
+token). A write that silently drops keys can't happen on a core made of keys (every write is one key); the live core
+from before keys replaces a whole store, so `infra/setup.py write` and the router's `/setup/stores/write` refuse a
+write that leaves out a key name recorded for the store unless it says `--replace` (2026-10-13: two writes of 2 keys
+wiped 24).
+
 ## Setting a core up: Reset and Recover (on the iPhone)
 
 Two paths, nothing else, and neither needs Claude or waits on anything Claude does (Deyao, 2026-10-10). Both
@@ -187,7 +227,7 @@ page says only what Deyao acts on; errors are one plain sentence with the detail
 - **Recover:** Deyao pastes his kit. The app fetches the backups through the router (which holds the bucket's
   credential and passes the objects on as they are), checks each writer (a whole-store backup or a setup-written
   key: `keys/setup.pub` from GitHub; a session-written key: the machine's signature with the key in its cert, the cert
-  signed by a core whose identity the box key signed), decrypts them with the master key, takes each store's
+  signed by a core whose identity the box key signed; a restore's key: that core's signed receipt naming its hashes), decrypts them with the master key, takes each store's
   whole-store backup and then its key backups written after it (a deleted key leaves), wraps each key to `P + K` (the
   store key the core signs for this phone: CryptoKit can't add points), and claims the empty core with the same
   statement and a bundle of those keys (format `keys`: every store's name, every key, the `core` store's Fly token on
@@ -551,7 +591,8 @@ signature safe stays the same:
   never-used predecessor (exact match automatically, or with Deyao's click when something changed).
 - Plaintext stores exist only in the core's memory: an unlock for one session until that session's machine has
   pulled (at most 30 minutes), a standing unlock until locked, during a Recover for at most 10 minutes, and
-  `github-deploy-keys` for the length of one phone-approved deploy-key call. Elsewhere a store's values exist only
+  `github-deploy-keys` for the length of one phone-approved deploy-key call, and the keys a phone-approved restore puts
+  back for the length of its finish call (to seal their backups to the master public key). Elsewhere a store's values exist only
   sealed: to a machine's key (its pull), or under the core's carry key, bound to that machine (its carried secrets). The Fly token is the one
   secret the core keeps in memory for its whole life.
 - A deploy key is made or deleted only on a phone-approved request; the core uses the GitHub token for nothing else.

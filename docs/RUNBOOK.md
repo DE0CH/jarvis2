@@ -35,7 +35,12 @@ X9.63) into `keys/ci.pub` in one go, then run `images` so the router gets a fres
 new, empty core: see "Setting the core up"), and never while the core Deployment in `k8s/apps/core.yaml` carries the
 annotation `jarvis2/core-pin: hold`: a core change that waits for Deyao's go (he then Recovers). To roll it out once
 he says so, delete the annotation, push, then `gh workflow run images -R DE0CH/jarvis2` (a k8s/ push alone doesn't
-run it): it pins the newest core and Flux restarts it. A core from aa0443a on starts no machine without `MACHINE_URL`: in the same commit
+run it): it pins the newest core and Flux restarts it. The held core now (2026-10-13) is stores made of keys (6fc20f8) with
+store versions and the phone-signed restore (ad17fec): one release. Before it: the router (already live) and an app
+build from the same main (TestFlight, after the phone replica) that speaks per-key unlock, the keys-format Recover
+and restore-written key backups; after it Deyao Recovers (the bucket has every whole-store backup and every key backup
+since, restores' included), every earlier session is destroyed once paused (DESIGN "Carried secrets"), and the setup
+session checks `infra/setup.py versions default` answers (the history starts at the Recover). A core from aa0443a on starts no machine without `MACHINE_URL`: in the same commit
 add `- { name: MACHINE_URL, value: "http://jarvis2-box._peer.internal:8081" }` to the core container's env (test cores
 get their own peer's address from `infra/e2e.sh` / `infra/rehearsal-box.sh`).
 
@@ -220,6 +225,12 @@ is empty.
 - `infra/setup.py write NAME KEY[=SRC]…` — new contents (values from this session's env, never printed),
   written to the core wrapped to the phone + core key, and backed up to S3 (bucket `jarvis2-backup-de0ch`,
   versioned, encrypted to the master key the core was set up with, signed by the setup key).
+- With the live core from before stores were made of keys, `write` REPLACES the whole store with exactly the keys
+  given: it refuses (and so does the router, 409) a write that leaves out a key name recorded for the store; name every
+  key, or add `--replace` only to drop keys on purpose. A core made of keys writes one key at a time (`delete` removes
+  one) and refuses `--replace`.
+- `infra/setup.py versions NAME` — the store's earlier versions the core keeps (core made of keys: last 50 each).
+- `infra/setup.py request restore NAME VERSION --why TEXT` — asks Deyao (Inbox) to put that version back (below).
 - `infra/setup.py mark-sensitive NAME` — the one-way upgrade, in the core and in the backup.
 - The Fly token: `infra/fly-token.sh ~/.jarvis2/fly.tok` (narrowed to the app and to `jarvis2-init`), then
   `infra/setup.py backup-core ~/.jarvis2/fly.tok` — sent to the core sealed to its key, and backed up as the
@@ -227,6 +238,22 @@ is empty.
 
 All of them need a set-up core: they learn the master public key and the phone's keys from the core's signed
 state, after checking its keys against `keys/box.pub`.
+
+### Restoring a store to an earlier version (DESIGN "Restoring a store")
+
+Keys lost or overwritten by a write (a session's `put-key`, a delete, a mistaken `write`): no kit, no Recover.
+
+1. `JARVIS2_URL=https://jarvis2.deyaochen.com infra/setup.py versions STORE` — find the version before the mistake (each
+   line: number, time, what made it, the key names it held).
+2. `infra/setup.py request restore STORE VERSION --why "…"` and Discord Deyao "waiting on you: restore STORE in the
+   Inbox". He reviews exactly what the core will put back and remove, and allows it with one Face ID (or does it
+   himself: Stores → the store → Versions → Restore…; the web page's Versions → Propose restore files the same request).
+3. Check `infra/setup.py versions STORE`: the newest version says `restore of version N` and is current. Sessions holding
+   the store get the restored values only after the refresh unlock the router files in his Inbox.
+
+A core restart (a new core) keeps no versions: its first version of each store is what the Recover brought. The bucket
+backups (Recover with the kit) stay the way back from anything older or from a lost core. A restore's own backups are in
+the bucket like any key write's, so a later Recover brings the restored store back.
 
 ## The router's secrets
 

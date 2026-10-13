@@ -40,6 +40,9 @@ every store back from the backups). docs/DESIGN.md "Setting a core up".
 - Session image: `session-image/` (its base in `session-image/base/`, no longer Jarvis 1's image) + `machine/`, built by CI.
 - End-to-end test on real Fly with a software phone: passed (every flow).
 - iOS app: `ios/`; web page: `app/` — see app/DECISIONS.md.
+- Held core (`jarvis2/core-pin: hold`, waiting for Deyao's go and a Recover): stores made of keys (DECISIONS 160) and
+  store versions with the phone-signed restore (DECISIONS 162), one release (RUNBOOK "Deploying"). Router, setup.py,
+  web page and app work with either core.
 - Decisions to review: docs/DECISIONS.md.
 
 ## Later (Deyao, 2026-10-09)
