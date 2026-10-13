@@ -416,12 +416,15 @@ func firstNonEmpty(s ...string) string {
 
 // ---- the machine's side: the manifest and the files, only to the importing line's first machine -------------
 
-// importFor: the Jarvis 1 session a machine imports — only the first machine of a line made by an import
+// importFor: the Jarvis 1 session a machine imports
 func (r *Router) importFor(machine string) string {
 	var id string
 	r.st.Do(func(d *persisted) {
 		s := d.Sessions[d.Machines[machine]]
-		if s == nil || s.ImportFrom == "" || s.MachineID != machine || certField(d.Certs[machine], "predecessorId") != "" {
+		// the line's first machine, or a successor whose cert names no snapshot (its predecessor left none: the
+		// machine takes the import again, machine/restore.go reimportJarvis1)
+		cert := d.Certs[machine]
+		if s == nil || s.ImportFrom == "" || s.MachineID != machine || (certField(cert, "predecessorId") != "" && certField(cert, "snapshot") != "") {
 			return
 		}
 		id = s.ImportFrom

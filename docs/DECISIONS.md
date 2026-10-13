@@ -846,3 +846,12 @@ iCloud index and leases (decided while Deyao was away; the safe, reversible defa
      next to the running ones. A refused create made nothing and the phone's approval isn't spent until certify, so
      the router keeps it and tries again as sessions pause, instead of failing a line Deyao already approved (which
      would cost him another Face ID). The session shows `starting` meanwhile. Change: ask Fly to raise the org's limit.
+133. **A successor with no snapshot takes the line's Jarvis 1 import again** (2026-10-13: the imported sessions' Fly
+     machines were stopped by hand right after boot, so their rootfs and keys were gone and no snapshot could be signed;
+     their kills named none). A successor whose cert names no snapshot, on a line whose signed config names a restore that
+     is a Jarvis 1 import, fetches that manifest and its files again and checks them as the first machine did
+     (`machine/restore.go` reimportJarvis1; the router serves them to such a successor). The cost: a router that withholds
+     a later snapshot can bring the line back to the imported state instead of an empty one; both were already in its power
+     (withholding, and the import's bytes are what Deyao signed). A destroyed Jarvis 2 session's archive is not taken again.
+134. **`/setup/sessions/{id}/pause` cancels the session's wakeups and crons first** (they would resume it by themselves);
+     the imports' re-armed ones are armed again by the re-import at the next resume.

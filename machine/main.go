@@ -296,6 +296,13 @@ func prepare() error {
 			if err := restore(c, pc.Machine.SigningKey, v); err != nil {
 				return fmt.Errorf("snapshot: %w", err)
 			}
+		} else if v.Config.Restore != nil {
+			// a line whose machines never left a snapshot (an import stopped mid-way): the import its signed config
+			// names again, Jarvis 1 imports only (restore.go reimportJarvis1)
+			predecessorKey = pc.Machine.SigningKey
+			if err := reimportJarvis1(c, v); err != nil {
+				return fmt.Errorf("re-import: %w", err)
+			}
 		} else {
 			log.Printf("the cert names no snapshot of %s: starting with no predecessor state", cert.PredID)
 		}

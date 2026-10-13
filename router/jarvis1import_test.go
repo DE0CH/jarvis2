@@ -175,8 +175,15 @@ func TestJarvis1ImportPrepareAndImport(t *testing.T) {
 	if code, _ := get("/m/import-file/changes.txt"); code != 404 {
 		t.Fatalf("a file outside the manifest: %d", code)
 	}
+	// a successor whose predecessor left no snapshot takes the import again; one with a snapshot doesn't
 	rg.r.st.Do(func(d *persisted) {
 		d.Certs["m9"] = rg.core.key.doc(map[string]any{"kind": "succession-cert", "predecessorId": "m8"})
+	})
+	if code, _ := get("/m/restore-snapshot"); code != 200 {
+		t.Fatalf("a successor with no snapshot can't take the import again: %d", code)
+	}
+	rg.r.st.Do(func(d *persisted) {
+		d.Certs["m9"] = rg.core.key.doc(map[string]any{"kind": "succession-cert", "predecessorId": "m8", "snapshot": strings.Repeat("b", 64)})
 	})
 	if code, _ := get("/m/import-file/workspace.tar.gz"); code != 404 {
 		t.Fatalf("a successor fetched an import file: %d", code)

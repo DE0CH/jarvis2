@@ -112,3 +112,28 @@ func checkSnapshotSig(signingKey string, body []byte, sig string) error {
 	}
 	return nil
 }
+
+// reimportJarvis1: a successor whose cert names no snapshot (its predecessor left none: e.g. its machine was stopped
+// before it could sign one) while the line's config names a restore takes that restore again, if it is a Jarvis 1
+// import — exactly the bytes the phone approved for the line (DECISIONS 133). A destroyed Jarvis 2 session's snapshot
+// is not taken again this way.
+func reimportJarvis1(c *client, v Vouched) error {
+	ref := v.Config.Restore
+	tmp := restoreTmp
+	defer os.Remove(tmp)
+	sum, _, err := c.download("/m/restore-snapshot", tmp)
+	if err != nil {
+		log.Printf("no snapshot and no import to take again (%v): starting with no predecessor state", err)
+		return nil
+	}
+	if sum != ref.Sha256 {
+		return errors.New("the import manifest isn't the one the cert names")
+	}
+	man, ok := readJ1Manifest(tmp, ref.Machine)
+	if !ok {
+		log.Printf("the line's restore isn't a Jarvis 1 import: starting with no predecessor state")
+		return nil
+	}
+	log.Printf("the predecessor left no snapshot: importing Jarvis 1 session %s again", man.Session)
+	return importJarvis1(c, man)
+}

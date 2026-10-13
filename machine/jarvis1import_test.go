@@ -270,3 +270,25 @@ func TestJ1ScheduleKeepsFutureTimes(t *testing.T) {
 		t.Fatalf("%v", notes)
 	}
 }
+
+func TestASuccessorWithNoSnapshotImportsAgain(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	key := newKey()
+	files, order := j1Files(t, home)
+	c, mb, _ := importRouter(t, key, files, order, nil)
+	cert := v2(`{"v":1,"restore":{"machine":"j1abc","sha256":"`+shaHex(mb)+`"}}`, "")
+	cert.PredID = "m0"
+	v, _ := vouch(cert)
+	if err := reimportJarvis1(c, v); err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := os.ReadFile(filepath.Join(home, "workspace/claude-env/README.md")); string(b) != "readme" {
+		t.Fatal("not imported again")
+	}
+	bad := v2(`{"v":1,"restore":{"machine":"j1abc","sha256":"`+strings.Repeat("c", 64)+`"}}`, "")
+	bv, _ := vouch(bad)
+	if err := reimportJarvis1(c, bv); err == nil {
+		t.Fatal("took a manifest the cert doesn't name")
+	}
+}
