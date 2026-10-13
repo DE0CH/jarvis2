@@ -191,6 +191,7 @@ item = { id, kind: "repo-key" | "grant" | "unlock" | "new-session" | "resume-upg
 | `GET /setup/requests`, `GET /m/api/requests` | the same list for Claude; a session sees only its own |
 | `GET /setup/repos` | the router's repo list (`infra/setup.py repos`) |
 | `GET /setup/sessions` | `{sessions: [{id, machineId, state, title}]}` (`infra/setup.py sessions`; the phone replica finds a session's machine here) |
+| `POST /setup/sessions/:id/resume` | An unattended resume of a paused session (`infra/setup.py resume`): same image, no prompt, no option changes, so the core answers `approve_by_dead_machine` and the phone is not asked (DESIGN "Resume, nothing changed"). A line whose permission mode differs from its cert still gets its `resume-upgrade` approval. 4xx when the session isn't paused |
 
 The app never takes the title from the router: the list renders it from `kind` + `params` (`src/lib/inbox.ts`), and
 the review page renders "What you sign (exact)" from the signed content (`Shell/SignedAction.swift`). The shell checks

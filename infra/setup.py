@@ -26,6 +26,7 @@ both). Values never print.
                                        sent to the core sealed to its key, and backed up as the `core` store
   infra/setup.py repos                 the router's repo list (repo, store, key fingerprint)
   infra/setup.py sessions              the router's sessions: id, current machine, state, title
+  infra/setup.py resume SESSION        resume a paused session unattended: same image, no prompt, no Face ID
   infra/setup.py requests              what waits in the phone's Inbox (requests and approvals)
   infra/setup.py request add-repo OWNER/NAME --why TEXT [--sensitive]
   infra/setup.py request remove-repo OWNER/NAME --why TEXT
@@ -375,6 +376,9 @@ def main():
             print(s["id"], s["machineId"] or "-", s["state"], s["title"])
             if "-v" in args:  # the autopilot's view: status, background jobs, stall clock, last nudge
                 print("   ", json.dumps({k: v for k, v in s.items() if k not in ("id", "machineId", "state", "title")}, sort_keys=True))
+    elif cmd == "resume":
+        # unattended: same image, no prompt (DESIGN "Resume, nothing changed"); a changed mode lands in the Inbox
+        print(json.dumps(call("POST", "/setup/sessions/" + args[0] + "/resume", {})))
     elif cmd == "requests":
         for q in call("GET", "/setup/requests")["requests"]:
             c = q.get("call") or {}

@@ -244,6 +244,15 @@ func TestSetupSessionsAndRequests(t *testing.T) {
 	}
 }
 
+// the setup session resumes a paused session unattended (no prompt, same image); a session that isn't paused is refused
+func TestSetupResumesAPausedSession(t *testing.T) {
+	r := newTestRouter(t)
+	addSession(r, "sR", "started", "mR", false)
+	if code, out := inboxDo(t, r, "POST", "/setup/sessions/sR/resume", "", false); code == 200 {
+		t.Fatalf("a running session was resumed: %d %v", code, out)
+	}
+}
+
 func TestInboxItemsGoAfterTenMinutes(t *testing.T) {
 	r := newTestRouter(t)
 	addSession(r, "sA", "paused", "", false)
