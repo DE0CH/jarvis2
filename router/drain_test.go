@@ -18,6 +18,7 @@ func TestDrainLetsInFlightFinishAndRefusesNew(t *testing.T) {
 	r.st.Do(func(d *persisted) {
 		s := d.Sessions["s1"]
 		s.State, s.MachineID, s.Booted, s.Cert = "started", "m1", "m1", rg.cert
+		s.Live = &Liveness{LastReport: time.Now()} // reporting: the pause waits for its snapshot
 		d.Sessions["s2"] = &Session{ID: "s2", State: "paused", Cert: rg.cert}
 		d.Sessions["s3"] = &Session{ID: "s3", State: "started", MachineID: "m3", Cert: rg.cert}
 		d.Approvals["a1"] = &Approval{ID: "a1", Kind: "new-session", Session: "s2", Created: time.Now().UTC()}
