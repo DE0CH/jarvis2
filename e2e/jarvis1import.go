@@ -154,10 +154,10 @@ func jarvis1ImportStep(p *phone) {
 	id := approve(p, a)
 	waitState(id, "started", 8*time.Minute)
 	m := machineOf(id)
-	expectOnMachine(m, "cat /home/claude/workspace/proj/README.md /home/claude/artifacts/record.md", "from jarvis 1\n# jarvis 1 record")
+	expectOnMachine(m, "cat /home/claude/workspace/proj/README.md; echo; cat /home/claude/artifacts/record.md", "from jarvis 1\n# jarvis 1 record")
 	expectOnMachine(m, "ls /home/claude/.claude/projects/-home-claude-workspace-proj/ | grep -c "+e2eJ1UUID, "1")
 	expectOnMachine(m, "python3 -c \"import json;d=json.load(open('/home/claude/.claude.json'));print(d['machineID'], d.get('userID')=='old')\"", "e2e-j1-machine False")
-	expectOnMachine(m, "git -C /home/claude/workspace/proj config remote.origin.url", "https://github.com/DE0CH/jarvis2.git")
+	expectOnMachine(m, "grep -h 'url = ' /home/claude/workspace/proj/.git/config | tr -d ' \\t'", "url=https://github.com/DE0CH/jarvis2.git")
 	expectOnMachine(m, "grep -c 'passed while paused' /home/claude/artifacts/jarvis1-import/rearmed.txt", "1")
 	expectOnMachine(m, "for i in $(seq 1 60); do ps -eo args | grep -q '[-]-resume "+e2eJ1UUID+"' && break; sleep 2; done; ps -eo args | grep -q '[-]-resume "+e2eJ1UUID+"' && echo resumed", "resumed")
 	var wk struct{ Wakeups []map[string]any }
