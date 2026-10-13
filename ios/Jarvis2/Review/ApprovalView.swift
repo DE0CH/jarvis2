@@ -40,7 +40,20 @@ struct ApprovalView: View {
   var body: some View {
     Form {
       if let inbox { RequestReviewSection(inboxId: inbox, signed: signed, request: request) }
-      if let loadError { Section { ErrorRow(text: loadError, id: "secure-error") } }
+      if let loadError {
+        // nothing can be signed, but the approval can still be rejected here (Deyao, 2026-10-13: a resume's page showed
+        // no Approve and no way out, so another session had to deny it)
+        Section {
+          ErrorRow(text: loadError, id: "secure-error")
+          Text("This page can't be approved on this iPhone. Reject it, or ask for it again after updating the app.")
+            .font(.footnote).foregroundStyle(.secondary).accessibilityIdentifier("secure-cant-approve")
+        }
+        Section {
+          Button(busy == "Rejecting…" ? "Rejecting…" : "Reject", role: .destructive) { Task { await reject() } }
+            .disabled(busy != nil).accessibilityIdentifier("secure-reject")
+          if let failure { ErrorRow(text: failure, id: "secure-reject-error") }
+        }
+      }
       else if let r, let a {
         Section {
           if let ident { IdentityRows(ident: ident) }
@@ -186,9 +199,10 @@ struct ApprovalView: View {
       model.secureCompleted(true)
     } catch { busy = nil; failure = errText(error) }
   }
+  /// Reject needs no signature: it works even when the page couldn't read or check the approval
   private func reject() async {
-    guard let a else { return }
-    do { busy = "Rejecting…"; try await RouterClient.shared.reject(a.id); model.secureCompleted(true) }
+    failure = nil
+    do { busy = "Rejecting…"; try await RouterClient.shared.reject(a?.id ?? approvalId); model.secureCompleted(false) }
     catch { busy = nil; failure = errText(error) }
   }
 }

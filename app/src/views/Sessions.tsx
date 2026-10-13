@@ -41,7 +41,7 @@ function SessionPill({ m }: { m: Session }) {
   if (sb && m.state !== "destroying") return <Pill kind="wait" spin>{sb.toLowerCase()}</Pill>;
   if (m.state === "failed") return <Pill kind="bad">failed</Pill>;
   if (m.state === "paused") return hasSchedule(m) ? <Pill kind="info">scheduled</Pill> : <Pill kind="dim">paused</Pill>;
-  if (m.state === "approval") return <Pill kind="info">needs approval</Pill>;
+  if (m.state === "approval") return <Pill kind="info">approve on your iPhone</Pill>;
   if (MOVING[m.state]) return <Pill kind={m.state === "destroying" ? "bad" : "wait"} spin>{m.waiting ? `${m.state}: ${m.waiting}` : MOVING[m.state]}</Pill>;
   if (m.state === "started") {
     if (m.oneShotDone) return <Pill kind="wait" spin>done · archiving…</Pill>;
@@ -100,7 +100,7 @@ export const resumeSession = (id: string) => exclusive("s:" + id, async () => {
 
 /** Open an approval on the shell's secure page (the app); the web page only points to the app. */
 export function review(a: Approval) {
-  if (!hasShell) { toast("Approvals happen in the Jarvis 2 app on the iPhone."); return; }
+  if (!hasShell) { toast("Approve it on your iPhone: Jarvis 2 app → Inbox. The web page can only deny it."); return; }
   requestSecure("approval", { approvalId: a.id }, (r) => { if (r.result === "done") { refresh(false); settle(60000); } });
 }
 // resume on the newest image: the router asks for an approval first

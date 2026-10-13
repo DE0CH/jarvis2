@@ -87,6 +87,35 @@ final class Jarvis2UITests: JarvisUITestCase {
     XCTAssertTrue(gone(prefixed("srow-"), 30), "[\(tag)] the rejected session is gone from the list")
   }
 
+  /// a resume asked for on the web page with a prompt (Deyao, 2026-10-13: "YYC AI research megathread"): its approval
+  /// waits in the Inbox; opened from there, the page loads with Approve enabled and Reject at hand; Reject sends the
+  /// session back to paused. Ends on the session's page again.
+  func webResumeFromInbox(_ sid: String) {
+    let body = try? JSONSerialization.data(withJSONObject: ["upgrade": false, "prompt": "from the web page"])
+    let (code, out) = routerRaw("POST", "api/sessions/\(sid)/resume", body: body, headers: ["Content-Type": "application/json"])
+    XCTAssertEqual(code, 200, "[\(tag)] the web page's resume: \(String(decoding: out, as: UTF8.self))")
+    tabRoot("Inbox")
+    if wait(prefixed("request-review-"), 90, "the web resume's approval in the Inbox") {
+      prefixed("request-review-").tap()
+      if arrives(el("secure-approve"), 30, "the resume approval from the Inbox") {
+        let until = Date().addingTimeInterval(30)
+        while !el("secure-approve").isEnabled && Date() < until { usleep(500_000) }
+        XCTAssertTrue(el("secure-approve").isEnabled, "[\(tag)] Approve is ready on a resume approval opened from the Inbox")
+        XCTAssertFalse(el("secure-error").exists, "[\(tag)] the resume approval loads without an error")
+        XCTAssertTrue(scrolledTo(el("signed-once-prompt")), "[\(tag)] the signed resume prompt is shown")
+        shot("inbox-resume-approval")
+        if scrolledTo(el("secure-reject")) { el("secure-reject").tap() }
+        XCTAssertTrue(gone(el("secure-approve"), 30), "[\(tag)] Reject closes the page")
+        XCTAssertTrue(gone(prefixed("request-review-"), 30), "[\(tag)] the rejected resume leaves the Inbox")
+      }
+    }
+    tab("Sessions")
+    if !el("resume-\(sid)").waitForExistence(timeout: 10), wait(el("srow-\(sid)"), 20, "the session row after the Inbox") {
+      el("srow-\(sid)").tap()
+    }
+    XCTAssertTrue(wait(el("resume-\(sid)"), 60, "paused after the rejected resume"), "[\(tag)] a rejected resume leaves it paused")
+  }
+
   /// a single request in the Inbox (a grant asked for the session, as a session's jarvis2-request files it), denied each
   /// way the app offers: the review page's Deny (top left), the page's "Deny request", and a swipe on the row. Each time
   /// the item leaves the Inbox and the router has dropped it (Deyao, 2026-10-13: the page's Deny only closed the page)
@@ -401,6 +430,7 @@ final class Jarvis2UITests: JarvisUITestCase {
     // ---- permission mode (signed) and resume with the latest image (the approval opens by itself)
     el("pause-\(sid)").tap()
     guard wait(el("resume-\(sid)"), 120, "paused again") else { return }
+    webResumeFromInbox(sid)
     el("more-\(sid)").tap()
     let toAuto = app.buttons["Switch to auto mode"]
     XCTAssertTrue(toAuto.waitForExistence(timeout: 10), "[\(tag)] made in bypass: switch to auto offered")
