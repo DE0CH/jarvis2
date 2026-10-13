@@ -260,15 +260,22 @@ class JarvisUITestCase: XCTestCase {
       // the picker runs out of process; its grid is reachable through the app's tree: photos are Images
       // "PXGGridLayout-Info" labelled "Photo, <date>", newest first (the one simctl addmedia added)
       let photo = app.images.matching(identifier: "PXGGridLayout-Info").firstMatch
-      if photo.waitForExistence(timeout: 20) {
+      if photo.waitForExistence(timeout: 60) {
         photo.tap()
         // with more than one allowed, the picker's confirm button (identifier "Add", label "Done") ends the pick
         let done = app.buttons.matching(identifier: "Add").firstMatch
         if done.waitForExistence(timeout: 10) { done.tap() } else { note("tree-photos-no-add", app.debugDescription) }
       } else {
         note("tree-photos-picker", app.debugDescription)
-        let cancel = app.buttons.matching(identifier: "Cancel").firstMatch
-        if cancel.exists { cancel.tap() }
+        // a picker stuck on "Loading…" (replica run 38393761270) has no tree to find its close button in: tap its X
+        // (top left of the sheet) by position, then swipe the sheet down, so the Paste fallback below can reach the
+        // page. Both only while the page is covered: the page's own Cancel sits where the X is
+        if !add.isHittable { app.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: 37, dy: 109)).tap(); sleep(2) }
+        if !add.isHittable {
+          app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.1)).press(forDuration: 0.1, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.95)))
+          sleep(2)
+        }
+        shot("photos-picker-closed", checkBlank: false)
       }
     }
     if !row.waitForExistence(timeout: 30) {

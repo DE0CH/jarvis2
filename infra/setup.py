@@ -339,11 +339,12 @@ def signed(doc):
     return {"doc": doc, "sig": base64.b64encode(setup_key().sign(doc.encode(), ec.ECDSA(hashes.SHA256()))).decode()}
 
 
-def backup(name, values, sensitive, master):
+def backup(name, values, sensitive, master, at=None):
     """stores/<name>.json in the versioned bucket: the values sealed to the master key (info "jarvis2/backup",
     the store's name as associated data), signed by the setup key"""
     sealed = seal_to(master, json.dumps(values).encode(), "jarvis2/backup", name.encode())
-    doc = json.dumps({"kind": "store-backup", "name": name, "sensitive": sensitive, "sealed": sealed, "at": int(time.time())})
+    doc = json.dumps({"kind": "store-backup", "name": name, "sensitive": sensitive, "sealed": sealed,
+                      "at": int(time.time()) if at is None else at})
     s3().put_object(Bucket=BUCKET, Key=f"stores/{name}.json", Body=json.dumps(signed(doc)).encode())
 
 
@@ -429,9 +430,13 @@ def main():
     elif cmd == "create":
         if args[0] not in NOT_SENSITIVE:
             raise SystemExit(f"{args[0]} isn't in NOT_SENSITIVE (infra/setup.py): a store not listed there stays sensitive")
-        set_up()
+        me = set_up()
         call("POST", "/setup/stores/create", {"name": args[0]})
-        print(f"ok: store {args[0]} created (empty, not sensitive)")
+        # the backup says so too: a store with only key backups reads as sensitive offline and at a Recover (the core
+        # makes a store sensitive on its first key unless it was created like this). Empty, and a second early, so a key
+        # written in the same second still lays over it (tools/decrypt-backup.py skips key backups not after it)
+        backup(args[0], {}, False, me["master"], at=int(time.time()) - 1)
+        print(f"ok: store {args[0]} created (empty, not sensitive) and its not-sensitive backup written")
     elif cmd == "write":
         explain = {}
         while "--explain" in args:
