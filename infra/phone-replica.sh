@@ -210,6 +210,8 @@ gh run watch "$(cat "$W/run")" -R DE0CH/jarvis2 > /dev/null 2>&1 || true
 CONC=$(gh run view "$(cat "$W/run")" -R DE0CH/jarvis2 --json conclusion -q .conclusion)
 gh run download "$(cat "$W/run")" -R DE0CH/jarvis2 -n replica -D "$OUT" 2>/dev/null || true
 grep -E "Test Case|error:|XCTAssert|failed" "$OUT/test.log" 2>/dev/null | tail -40 || true
+# the simulator's log runs to hundreds of MB: always kept gzipped (an 822 MB one nearly filled the session's disk)
+[ -f "$OUT/sim.log" ] && gzip -f "$OUT/sim.log"
 # the full run (video, logs, crash reports) goes to the Storage Box; locally only the logs and screenshots stay, so
 # runs never fill the session's disk (STORAGEBOX_HOST/USER/PASSWORD; skipped without them)
 if [ -n "${STORAGEBOX_HOST:-}" ] && [ -d "$OUT" ]; then
@@ -217,7 +219,6 @@ if [ -n "${STORAGEBOX_HOST:-}" ] && [ -d "$OUT" ]; then
   SB="https://$STORAGEBOX_HOST/claude-records/.jarvis2-replica-runs"
   curl -s -o /dev/null -K "$K" -X MKCOL "https://$STORAGEBOX_HOST/claude-records/"; curl -s -o /dev/null -K "$K" -X MKCOL "$SB/"
   if tar -C "$(dirname "$OUT")" -czf - "$T" | curl -sf -o /dev/null -K "$K" -T - "$SB/$T.tar.gz"; then
-    [ -f "$OUT/sim.log" ] && gzip -f "$OUT/sim.log"
     rm -rf "$OUT/replica.mp4" "$OUT/crash" "$OUT"/shots/*.mp4
     echo "full run on the Storage Box: claude-records/.jarvis2-replica-runs/$T.tar.gz" > "$OUT/MOVED.txt"
   fi
