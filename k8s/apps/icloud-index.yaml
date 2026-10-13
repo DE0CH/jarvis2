@@ -33,7 +33,7 @@ spec:
       securityContext: { fsGroup: 1001 }
       containers:
         - name: icloud-index
-          image: ghcr.io/de0ch/jarvis2-icloud-index:sha-000000000000
+          image: ghcr.io/de0ch/jarvis2-icloud-index:sha-d87151733d8a@sha256:b33cd7af70c9ae5e18f2c3a22ac17a461a583e4e25898197ace14edf7753c945
           ports: [{ containerPort: 8091 }]
           env:
             - { name: PORT, value: "8091" }
