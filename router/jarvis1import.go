@@ -652,6 +652,24 @@ func (r *Router) registerJarvis1Import(app appRoute, m machineRoute, public publ
 		}
 		writeJSON(w, 202, map[string]any{"ok": true, "phase": "pausing", "cancelled": cancelled})
 	}))
+	// resume and restart from the setup session, as the actions key's resume and the app's Restart (no prompt, no option
+	// change): a line on an image from before the router's Claude login gets a resume-upgrade approval instead
+	// (flows.go legacyLoginImage), so the phone decides; wakeups and crons stay armed
+	public("POST /setup/sessions/{id}/resume", setupOnly(func(w http.ResponseWriter, req *http.Request, _ []byte) {
+		if err := r.Resume(req.PathValue("id"), false); err != nil {
+			writeJSON(w, 400, map[string]string{"error": err.Error()})
+			return
+		}
+		writeJSON(w, 202, map[string]any{"ok": true})
+	}))
+	public("POST /setup/sessions/{id}/restart", setupOnly(func(w http.ResponseWriter, req *http.Request, _ []byte) {
+		out, err := r.Restart(req.PathValue("id"), RestartRequest{})
+		if err != nil {
+			writeJSON(w, 400, map[string]string{"error": err.Error()})
+			return
+		}
+		writeJSON(w, 202, out)
+	}))
 	// the importing line's first machine (its manifest is served at /m/restore-snapshot, restore.go)
 	m("GET /m/import-file/{name}", func(w http.ResponseWriter, req *http.Request, machine string, _ []byte) {
 		r.serveImportFile(w, machine, req.PathValue("name"))

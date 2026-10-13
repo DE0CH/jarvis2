@@ -229,7 +229,7 @@ item = { id, kind: "repo-key" | "grant" | "unlock" | "new-session" | "resume-upg
 | `POST /api/requests/:id/done` | the shell's page went through: the request leaves the Inbox |
 | `GET /setup/requests`, `GET /m/api/requests` | the same list for Claude; a session sees only its own |
 | `GET /setup/repos` | the router's repo list (`infra/setup.py repos`) |
-| `GET /setup/sessions` | `{sessions: [{id, machineId, state, title}]}` (`infra/setup.py sessions`; the phone replica finds a session's machine here) |
+| `GET /setup/sessions` | `{sessions: [{id, machineId, state, title, image, stores, …}]}` (`infra/setup.py sessions`; the phone replica finds a session's machine here) |
 
 ### Batches (`router/batches.go`)
 
@@ -357,7 +357,7 @@ actions key (default store)".
 
 | Route | What |
 |---|---|
-| `GET /actions/sessions` | `{sessions: [{id, machineId, state, title, error, status?, needsGrant?}]}` |
+| `GET /actions/sessions` | `{sessions: [{id, machineId, state, title, error, image, status?, needsGrant?}]}` |
 | `GET /actions/requests` | The Inbox, as `GET /api/requests` |
 | `POST /actions/sessions/:id/resume` | Resume a paused session: same image, no prompt, no option changes, so the core answers `approve_by_dead_machine` and the phone isn't asked. A line whose permission mode differs from its cert still gets its `resume-upgrade` approval. 4xx when not paused |
 | `POST /actions/sessions/:id/pause` | As the app's pause |
@@ -386,6 +386,7 @@ against `SETUP_KEY` (`k8s/apps/router.yaml`), within ±2 min, each signature onc
 | `GET /setup/stores/keys` | (the router's own) the store list with key names, as `GET /api/stores` |
 | `GET /setup/jarvis1/paused[/{id}]`, `POST /setup/jarvis1/paused/{id}/prepare\|import` | (the router's own) as `/api/jarvis1/…` (Jarvis 1 import, above); the import's caller is `setup`. `infra/setup.py jarvis1 …` |
 | `POST /setup/sessions/{id}/pause` | (the router's own) cancels the session's wakeups and crons, then pauses it (202; the snapshot if its machine answers within the wait, else none). `infra/setup.py pause` |
+| `POST /setup/sessions/{id}/resume`, `POST /setup/sessions/{id}/restart` | (the router's own) the actions key's resume (same image, no prompt) and the app's Restart (pause + that resume); wakeups and crons stay armed. A Claude line on an image from before the router's login gets a `resume-upgrade` approval instead (DECISIONS 151). 202. `infra/setup.py resume|restart` |
 | `POST /setup/store-keys` | (the router's own) `{name, keys: [names] \| null}` → `{ok}`: records a store's key names (env-var style, ≤ 128 chars, de-duplicated and sorted); `null` forgets them. No values. `infra/setup.py write` sends it after every write; `infra/setup.py keys NAME KEY…` and `infra/store-keys.sh` (every store, from the layout file) record names alone. |
 
 `GET /setup/status` — the router's health: the names of its secrets that are set (values never), the session
