@@ -655,6 +655,10 @@ key to decrypt it offline"; the download in the iPhone app, the decryptor a comm
       it "busy").
     - The app's take-over, hand-back and force return are Deyao's Access login (no Face ID): they only move a lease,
       never a secret. Change: phone-signed if he wants it.
+    - **Deyao's Jarvis 1 take-overs were carried over** (2026-10-13, by the setup session through
+      `/setup/leases/:name/take-over`): `iphone` with his note "Unavailable to agents long term …" and `mac`, both
+      held by him in Jarvis 1, are held by "deyao" in Jarvis 2 too, so a Jarvis 2 session can't take them. He hands
+      them back in the web page's Devices tab (or `infra/setup.py lease hand-back`).
 114. **Watches run on the box, with no secrets** (`router/watches.go`, `services/watch`, `k8s/apps/watch.yaml`).
     Jarvis 1 ran each check on its box with the session's store plaintext; Jarvis 2's box never holds store plaintext,
     and a watch must fire while its session is paused (no machine). So the router runs each due check on a **watch
