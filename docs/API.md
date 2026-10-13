@@ -304,6 +304,7 @@ actions key (default store)".
 | `GET /actions/requests` | The Inbox, as `GET /api/requests` |
 | `POST /actions/sessions/:id/resume` | Resume a paused session: same image, no prompt, no option changes, so the core answers `approve_by_dead_machine` and the phone isn't asked. A line whose permission mode differs from its cert still gets its `resume-upgrade` approval. 4xx when not paused |
 | `POST /actions/sessions/:id/pause` | As the app's pause |
+| `POST /actions/sessions/:id/upgrade` | As the app's Upgrade (next size up, `router/memory.go`) → 202 |
 | `POST /actions/requests/:id/deny` | An Inbox request leaves; an approval is rejected as the app's Deny |
 | `POST /actions/sessions` | Propose a new session (body as `POST /m/api/sessions`, `explanation` required): a `new-session` approval in the Inbox; at most 3 wait |
 | `POST /actions/requests/{repo/add,repo/remove,grant,unlock}` | As `/setup/requests/*`: an Inbox request |
