@@ -126,6 +126,13 @@ func TestStoresListKeysWritersAndExplanations(t *testing.T) {
 	if code, _ := appDo(t, r, "PUT", "/api/stores/default/docs", `{"keys":{"EXA_API":"Exa web search (the exa skill)"}}`); code != 200 {
 		t.Fatal(code)
 	}
+	long := strings.Repeat("a", 1500) // longer than an Inbox explanation, within an explanation of a key
+	if code, out := appDo(t, r, "POST", "/setup/store-docs", `{"store":"shopping","about":"`+long+`"}`); code != 200 {
+		t.Fatalf("a 1500-character about text: %d %v", code, out)
+	}
+	if code, _ := appDo(t, r, "POST", "/setup/store-docs", `{"store":"shopping","about":"`+long+long+`"}`); code != 400 {
+		t.Fatal("a 3000-character about text was taken")
+	}
 	if code, _ := appDo(t, r, "PUT", "/api/stores/default/docs", `{"keys":{"bad name":"x"}}`); code != 400 {
 		t.Fatal("a bad key name was documented")
 	}

@@ -97,7 +97,7 @@ func (r *Router) readStoreDocs() map[string]StoreDoc {
 // cleanDoc: an explanation as plain text (cleanExplanation's rules, longer)
 func cleanDoc(s string) (string, error) {
 	s = strings.ReplaceAll(s, "\n", " ")
-	out, err := cleanExplanation(s, false)
+	out, err := plainLines(s)
 	if err != nil {
 		return "", err
 	}

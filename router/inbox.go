@@ -112,6 +112,22 @@ func callerMay(c Caller, kind string, p RequestParams) error {
 // cleanExplanation: the caller's words as plain text — control characters dropped (line breaks kept), at most
 // explanationLines lines and explanationMax characters. Required from a session and the setup session.
 func cleanExplanation(s string, required bool) (string, error) {
+	s, err := plainLines(s)
+	if err != nil {
+		return "", err
+	}
+	if n := len([]rune(s)); n > explanationMax {
+		return "", fmt.Errorf("explanation longer than %d characters (%d)", explanationMax, n)
+	}
+	if required && s == "" {
+		return "", errors.New("an explanation is required: say why this is needed")
+	}
+	return s, nil
+}
+
+// plainLines: plain text — control characters dropped (line breaks kept), blank runs collapsed, at most
+// explanationLines lines
+func plainLines(s string) (string, error) {
 	s = strings.ReplaceAll(strings.ReplaceAll(s, "\r\n", "\n"), "\r", "\n")
 	var b strings.Builder
 	for _, ch := range s {
@@ -137,14 +153,7 @@ func cleanExplanation(s string, required bool) (string, error) {
 	if len(out) > explanationLines {
 		return "", fmt.Errorf("explanation longer than %d lines", explanationLines)
 	}
-	s = strings.Join(out, "\n")
-	if n := len([]rune(s)); n > explanationMax {
-		return "", fmt.Errorf("explanation longer than %d characters (%d)", explanationMax, n)
-	}
-	if required && s == "" {
-		return "", errors.New("an explanation is required: say why this is needed")
-	}
-	return s, nil
+	return strings.Join(out, "\n"), nil
 }
 
 // normalize: the request's params checked and in one form (the dedup key depends on it)
