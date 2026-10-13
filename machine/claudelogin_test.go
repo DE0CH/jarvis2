@@ -1,8 +1,12 @@
 package main
 
 import (
+	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -29,9 +33,20 @@ type fakeLoginRouter struct {
 
 func newFakeLoginRouter(t *testing.T) (*fakeLoginRouter, *client) {
 	f := &fakeLoginRouter{other: map[int64]bool{}}
+	key := newKey()
 	f.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		f.mu.Lock()
 		defer f.mu.Unlock()
+		if strings.HasPrefix(req.URL.Path, "/m/") { // signed as the router checks it (router/http.go requireMachine)
+			body, _ := io.ReadAll(req.Body)
+			req.Body = io.NopCloser(bytes.NewReader(body))
+			sum := sha256.Sum256(body)
+			msg := req.Method + " " + req.URL.Path + " " + req.Header.Get("X-Time") + " " + hex.EncodeToString(sum[:])
+			if !verify(key.pub(), []byte(msg), req.Header.Get("X-Sig")) {
+				w.WriteHeader(401)
+				return
+			}
+		}
 		switch {
 		case req.URL.Path == "/profile":
 			exp, _ := strconv.ParseInt(strings.TrimPrefix(strings.TrimPrefix(req.Header.Get("Authorization"), "Bearer "), "a"), 10, 64)
@@ -60,7 +75,6 @@ func newFakeLoginRouter(t *testing.T) (*fakeLoginRouter, *client) {
 	old := profileURL
 	profileURL = f.srv.URL + "/profile"
 	t.Cleanup(func() { profileURL = old })
-	key := newKey()
 	return f, &client{base: f.srv.URL, me: "m1", sig: key.k, http: f.srv.Client()}
 }
 

@@ -132,10 +132,18 @@ func checkPair(creds []byte, want string) error {
 	return nil
 }
 
+// fetchLogin: one poll; the path is signed as every /m call, the query (numbers only) travels beside it as on the
+// session API proxy (apiproxy.go), and what comes back is checked against Anthropic before it is used
 func fetchLogin(c *client, have, ack int64, wait time.Duration) (routerLogin, error) {
 	var l routerLogin
-	err := c.json("GET", fmt.Sprintf("/m/claude-login?have=%d&ack=%d&wait=%d", have, ack, int(wait.Seconds())), nil, &l)
-	return l, err
+	status, _, b, err := c.signedDo("GET", "/m/claude-login", "/m/claude-login", fmt.Sprintf("have=%d&ack=%d&wait=%d", have, ack, int(wait.Seconds())), nil, "")
+	if err != nil {
+		return l, err
+	}
+	if status != 200 {
+		return l, fmt.Errorf("GET /m/claude-login: HTTP %d", status)
+	}
+	return l, json.Unmarshal(b, &l)
 }
 
 // sessionClaudeLogin: a session's first Claude login, at boot, before the harness starts (Deyao, 2026-10-11: a new
