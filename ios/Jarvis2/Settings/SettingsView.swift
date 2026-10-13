@@ -2,7 +2,7 @@
 // cap, and Jarvis 2 itself with Reset or recover and the encrypted backup (an offline copy of the stores).
 import SwiftUI
 
-enum SettingsRoute: Hashable { case stores, repos, addRepo, machines, backup }
+enum SettingsRoute: Hashable { case stores, repos, addRepo, machines, backup, content, pairedApps }
 
 struct SettingsView: View {
   @Environment(AppModel.self) private var model
@@ -20,8 +20,12 @@ struct SettingsView: View {
             LabeledContent { Text("\(model.repos.count)") } label: { Label("Repos", systemImage: "chevron.left.forwardslash.chevron.right") }
           }
           .accessibilityElement(children: .combine).accessibilityIdentifier("open-repos")
+          NavigationLink(value: SettingsRoute.content) { Label("Content", systemImage: "folder") }
+            .accessibilityIdentifier("open-content")
           NavigationLink(value: SettingsRoute.machines) { Label("Machines", systemImage: "server.rack") }
             .accessibilityIdentifier("open-machines")
+          NavigationLink(value: SettingsRoute.pairedApps) { Label("Paired apps", systemImage: "iphone.and.arrow.forward") }
+            .accessibilityIdentifier("open-paired-apps")
         }
         ClaudeAccountSection()
         UsageSection()
@@ -44,6 +48,8 @@ struct SettingsView: View {
         case .addRepo: AddRepoView(path: $path)
         case .machines: MachinesView()
         case .backup: BackupView()
+        case .content: ContentStoresView()
+        case .pairedApps: PairedAppsView()
         }
       }
     }

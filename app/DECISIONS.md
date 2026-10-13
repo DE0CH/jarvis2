@@ -268,11 +268,12 @@ fixes, 34–40 carried over from the old app and still true, 41–43 the web pag
     store with its name typed) and a Content stores picker on New session in both apps (checkbox cards; the iPhone's
     Start refuses a challenge whose signed `content` isn't exactly the picked set, and the review rows list them).
     Task forms list content stores for `optionsFrom: "content"` fields. Settings → Paired apps (web,
-    `views/PairedApps.tsx`) lists Deyao's paired OpenClaw/Paseo apps with Remove.
+    `views/PairedApps.tsx`; iPhone `Settings/ContentView.swift`) lists Deyao's paired OpenClaw/Paseo apps with Remove. In
+    the iPhone app Content and Paired apps are Settings rows, not tabs (the tab bar is full).
 
 ## Unfinished / known gaps
 
 - Free text (prompt, title) reaches the machine signed only with a core that vouches (the held core doesn't).
-- Content stores: the web page has the Content tab and both apps pick them on New session (66); the iPhone app has no Content tab yet. Devices and lease pills are in the web page only (65); attachments are images only (no other files).
+- Content stores: the web page has the Content tab and both apps pick them on New session (66); the iPhone app has Settings → Content (list, files, delete, new store; uploads are the web page's). Devices and lease pills are in the web page only (65); attachments are images only (no other files).
 - After a reinstall that loses the Keychain, the phone's keys and device key are new: an already-recovered core refuses a
   second claim; restart the core (a new, empty core) and Recover.
