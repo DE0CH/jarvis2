@@ -66,6 +66,25 @@ func apiProxyHandler(c *client) http.Handler {
 		home, _ := os.UserHomeDir()
 		writeJSONResp(w, 200, map[string]any{"checked": true, "repos": repoChanges(filepath.Join(home, "workspace")), "status": ""})
 	})
+	// a content file (content-sync, a task's script): taken only with the core's attestation of exactly these bytes
+	mux.HandleFunc("GET /api/sessions/{id}/content/{name}/file", func(w http.ResponseWriter, req *http.Request) {
+		if !ownSession(w, c, req.PathValue("id")) {
+			return
+		}
+		status, hdr, body, err := forwardToRouter(c, req)
+		if err != nil {
+			writeJSONResp(w, 502, map[string]string{"error": "Jarvis 2 router unreachable: " + err.Error()})
+			return
+		}
+		if status == 200 {
+			if err := checkContentAttest(c.me, hdr.Get("X-Jarvis2-Attest"), body); err != nil {
+				log.Printf("content: refused %s: %v", req.URL.Query().Get("path"), err)
+				writeJSONResp(w, 502, map[string]string{"error": "content file refused: " + err.Error()})
+				return
+			}
+		}
+		copyResp(w, status, hdr, body)
+	})
 	for _, p := range []string{"POST /api/sessions/{id}/wakeup", "POST /api/sessions/{id}/wakeups", "POST /api/sessions/{id}/crons"} {
 		mux.HandleFunc(p, func(w http.ResponseWriter, req *http.Request) { armAndAllow(w, req, c) })
 	}
@@ -313,4 +332,21 @@ func allowAtLeastCmd(args []string) error {
 		return err
 	}
 	return extendAllow(c, args[0], time.Now().Add(d))
+}
+
+// readCoreKey: the core's key as boot wrote it (a var so tests can give their own)
+var readCoreKey = func() (string, error) { return readTrim(coreKeyPath) }
+
+// checkContentAttest: the core's input-log entry (machine, "content", sha256 of the bytes) the router sent with a
+// content file (router/content.go)
+func checkContentAttest(me, header string, body []byte) error {
+	coreKey, err := readCoreKey()
+	if err != nil {
+		return errors.New("no core key on this machine")
+	}
+	var d SignedDoc
+	if header == "" || json.Unmarshal([]byte(header), &d) != nil {
+		return errors.New("no core attestation (the input isn't in the core's log)")
+	}
+	return checkAttest(coreKey, me, "content", body, &d)
 }

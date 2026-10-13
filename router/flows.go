@@ -89,6 +89,7 @@ type NewSession struct {
 	Harness        string         `json:"harness"`
 	Stores         []string       `json:"stores"`
 	Repos          string         `json:"repos"`
+	Content        []string       `json:"content"`     // content stores (content.go), signed with the line
 	OneShot        bool           `json:"oneShot"`     // destroyed once its prompt is done (autopilot.go)
 	AutoPause      *bool          `json:"autoPause"`   // default on
 	APIProxy       bool           `json:"apiProxy"`    // SESSION_API_PROXY (sessionops.go)
@@ -332,8 +333,13 @@ func (r *Router) CreateSession(in NewSession) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	content, err := r.checkContentStores(in.Content) // content.go: each an existing store
+	if err != nil {
+		return "", err
+	}
 	s := &Session{ID: "s" + randID(), State: "approval", Created: time.Now().UTC(), Label: in.Label, Prompt: in.Prompt, Model: in.Model,
-		PermissionMode: in.PermissionMode, Size: in.Size, Harness: in.Harness, Stores: stores, Repos: in.Repos, RequestID: in.RequestID, Live: newLiveness(in)}
+		PermissionMode: in.PermissionMode, Size: in.Size, Harness: in.Harness, Stores: stores, Repos: in.Repos, Content: content,
+		RequestID: in.RequestID, Live: newLiveness(in)}
 	var dup string
 	r.st.Do(func(d *persisted) {
 		if dup, err = admitSession(d, s, in); err == nil && dup == "" {
@@ -355,6 +361,9 @@ func (r *Router) CreateSession(in NewSession) (string, error) {
 		return "", err
 	}
 	opts := map[string]string{"model": s.Model, "size": s.Size, "permissionMode": s.PermissionMode, "repos": s.Repos}
+	if len(s.Content) > 0 {
+		opts["content"] = strings.Join(s.Content, ",")
+	}
 	liveOptions(s, opts)
 	opsOptions(s, opts)
 	go func() {

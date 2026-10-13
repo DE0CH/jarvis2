@@ -114,13 +114,22 @@ func TestReposAreTheCertsNeverTheRouters(t *testing.T) {
 	}
 }
 
+func TestVouchRefusesABadContentStore(t *testing.T) {
+	for _, bad := range []string{`["../x"]`, `["A"]`, `[""]`, `["a b"]`} {
+		if _, err := vouch(v2(`{"v":1,"content":`+bad+`}`, "")); err == nil {
+			t.Fatalf("content %s accepted", bad)
+		}
+	}
+}
+
 func TestHarnessEnvHasOnlyVouchedValues(t *testing.T) {
 	clean := []string{"PATH=/usr/bin", "HOME=/home/claude", coreKeyEnv + "=k"}
-	v, _ := vouch(v2(`{"v":1,"label":"My title","prompt":"first","model":"claude-opus-5-5","oneShot":true}`, `{"prompt":"resume"}`))
+	v, _ := vouch(v2(`{"v":1,"label":"My title","prompt":"first","model":"claude-opus-5-5","oneShot":true,"content":["notes","proton-email"]}`, `{"prompt":"resume"}`))
 	v.Ex = checkExceptions(FormatExceptions{SessionID: "s0123abcd", DiscordChannel: "123456"})
 	first := envMap(harnessEnv(clean, v, "m1", true, "{}", map[string]string{"CLAUDE_CREDENTIALS": "c"}))
 	if first["SESSION_PROMPT"] != "first" || first["SESSION_LABEL"] != "My title" || first["SESSION_ONE_SHOT"] != "1" ||
-		first["LOBSTER_CHANNEL"] != "123456" || first["SESSION_ID"] != "s0123abcd" || first["JARVIS_URL"] != "http://"+apiProxyAddr {
+		first["LOBSTER_CHANNEL"] != "123456" || first["SESSION_ID"] != "s0123abcd" || first["JARVIS_URL"] != "http://"+apiProxyAddr ||
+		first["SESSION_CONTENT"] != "notes,proton-email" {
 		t.Fatalf("first: %v", first)
 	}
 	next := envMap(harnessEnv(clean, v, "m2", false, "{}", nil))
@@ -134,7 +143,7 @@ func TestHarnessEnvHasOnlyVouchedValues(t *testing.T) {
 	}
 	held, _ := vouch(Cert{Kind: "succession-cert", Machine: &Machine{ID: "m1"}})
 	h := envMap(harnessEnv(clean, held, "m1", true, "{}", nil))
-	for _, k := range []string{"SESSION_PROMPT", "SESSION_LABEL", "SESSION_MODEL", "SESSION_ONE_SHOT", "SESSION_API_PROXY", "SESSION_RESUME_TITLE", "SESSION_REPOS"} {
+	for _, k := range []string{"SESSION_PROMPT", "SESSION_LABEL", "SESSION_MODEL", "SESSION_ONE_SHOT", "SESSION_API_PROXY", "SESSION_RESUME_TITLE", "SESSION_REPOS", "SESSION_CONTENT"} {
 		if _, ok := h[k]; ok {
 			t.Fatalf("a cert that vouches for nothing gave %s", k)
 		}

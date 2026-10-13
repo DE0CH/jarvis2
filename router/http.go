@@ -367,6 +367,9 @@ func (r *Router) buildHandlers() {
 		if in.Repos != "" {
 			args["repos"] = in.Repos
 		}
+		if len(in.Content) > 0 {
+			args["content"] = in.Content
+		}
 		if in.Prompt != "" {
 			args["prompt"] = fmt.Sprintf("(%d characters)", len([]rune(in.Prompt)))
 		}

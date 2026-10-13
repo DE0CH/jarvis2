@@ -8,8 +8,9 @@ package main
 //             run? ("run.py" | "run.sh" | "run.js" | any executable) or prompt? ("prompt.md": claude -p),
 //             stores? [...], timeoutSeconds? (600), size? ("small"), fields: [{name, label?, type
 //             (text|textarea|number|select|multiselect|checkbox), required?, default?, options?, optionsFrom?
-//             (stores|sizes|models), help?, placeholder?}]}. A (multi)select with optionsFrom "stores" adds the
-//             picked store(s) to the line.
+//             (stores|content|sizes|models), help?, placeholder?}]}. A (multi)select with optionsFrom "stores" adds
+//             the picked store(s) to the line; with "content", the picked content store(s) (content.go: signed in the
+//             line's config, so the task's machine may read and write them through the router).
 //   instance  {id, template, name, params, size, stores, session}: a new session whose harness is
 //             "task:<template>" (signed in the cert's options), approved ONCE on the phone like any new session.
 //   run       a resume of that line (approve_by_dead_machine: same stores, options and image, no phone) whose
@@ -58,7 +59,7 @@ var (
 	taskFieldRE    = regexp.MustCompile(`^[a-z][a-z0-9_]{0,39}$`)
 	taskStoreRE    = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,40}[a-z0-9])?$`)
 	taskTypes      = map[string]bool{"text": true, "textarea": true, "number": true, "select": true, "multiselect": true, "checkbox": true}
-	taskSources    = map[string]bool{"stores": true, "sizes": true, "models": true}
+	taskSources    = map[string]bool{"stores": true, "content": true, "sizes": true, "models": true}
 	taskSizes      = []string{"small", "medium", "large"}
 	// tasksDir: the templates as the router image carries them (the session image has its own copy)
 	tasksDir = env("TASKS_DIR", "/tasks")
@@ -240,7 +241,7 @@ func parseTemplate(name string, spec []byte, files []string) (*TaskTemplate, err
 		if isSelect(f.Type) {
 			if f.OptionsFrom != "" {
 				if !taskSources[f.OptionsFrom] {
-					return nil, fmt.Errorf("field %s: optionsFrom must be stores, sizes or models", f.Name)
+					return nil, fmt.Errorf("field %s: optionsFrom must be stores, content, sizes or models", f.Name)
 				}
 				out.OptionsFrom = f.OptionsFrom
 			} else {
@@ -326,8 +327,8 @@ func withOptions(t *TaskTemplate) *TaskTemplate {
 			for _, m := range modelCatalog {
 				c.Fields[i].Options = append(c.Fields[i].Options, TaskOption{m.ID, m.Label, m.Harness})
 			}
-		case "stores":
-			c.Fields[i].Options = []TaskOption{}
+		case "stores", "content":
+			c.Fields[i].Options = []TaskOption{} // the app lists them (the core's stores, GET /api/content)
 		}
 	}
 	return &c
@@ -353,6 +354,9 @@ func checkParams(t *TaskTemplate, in map[string]any) (map[string]any, error) {
 	allowed := func(f TaskField, v string) bool {
 		if f.OptionsFrom == "stores" {
 			return taskStoreRE.MatchString(v) && v != flyStore
+		}
+		if f.OptionsFrom == "content" {
+			return contentNameRE.MatchString(v)
 		}
 		for _, o := range f.Options {
 			if o.Value == v {
@@ -396,7 +400,7 @@ func checkParams(t *TaskTemplate, in map[string]any) (map[string]any, error) {
 					continue
 				}
 				if !allowed(f, e) {
-					if f.OptionsFrom == "stores" {
+					if f.OptionsFrom == "stores" || f.OptionsFrom == "content" {
 						return nil, bad("“%s”: %q is not a store name", f.Label, e)
 					}
 					return nil, bad("“%s”: %q is not one of %s", f.Label, e, values(f))
@@ -431,7 +435,7 @@ func checkParams(t *TaskTemplate, in map[string]any) (map[string]any, error) {
 		case "select":
 			s := fmt.Sprint(v)
 			if !allowed(f, s) {
-				if f.OptionsFrom == "stores" {
+				if f.OptionsFrom == "stores" || f.OptionsFrom == "content" {
 					return nil, bad("“%s”: %q is not a store name", f.Label, s)
 				}
 				return nil, bad("“%s” must be one of %s", f.Label, values(f))
@@ -446,12 +450,25 @@ func checkParams(t *TaskTemplate, in map[string]any) (map[string]any, error) {
 
 // lineStores: the template's stores plus the ones picked in its store fields (sorted, unique)
 func lineStores(t *TaskTemplate, params map[string]any) []string {
+	return pickedIn(t, params, "stores", t.Stores)
+}
+
+// lineContent: the content stores picked in its content fields (sorted, unique; nil for none)
+func lineContent(t *TaskTemplate, params map[string]any) []string {
+	out := pickedIn(t, params, "content", nil)
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func pickedIn(t *TaskTemplate, params map[string]any, source string, fixed []string) []string {
 	set := map[string]bool{}
-	for _, s := range t.Stores {
+	for _, s := range fixed {
 		set[s] = true
 	}
 	for _, f := range t.Fields {
-		if f.OptionsFrom != "stores" {
+		if f.OptionsFrom != source {
 			continue
 		}
 		switch v := params[f.Name].(type) {
@@ -502,8 +519,9 @@ type TaskInstance struct {
 	Name      string         `json:"name"`
 	Params    map[string]any `json:"params"`
 	Size      string         `json:"size"`
-	Stores    []string       `json:"stores"`  // the line's stores (template + picked), fixed for the line
-	Session   string         `json:"session"` // the line; "" once it is gone
+	Stores    []string       `json:"stores"`            // the line's stores (template + picked), fixed for the line
+	Content   []string       `json:"content,omitempty"` // the content stores picked, fixed for the line (signed in its config)
+	Session   string         `json:"session"`           // the line; "" once it is gone
 	CreatedAt time.Time      `json:"createdAt"`
 	UpdatedAt *time.Time     `json:"updatedAt,omitempty"`
 	Active    string         `json:"active,omitempty"` // the run in progress
@@ -663,7 +681,7 @@ func instanceView(i *TaskInstance, d *persisted) map[string]any {
 	s := d.Sessions[i.Session]
 	state, detail := instanceState(i, s)
 	v := map[string]any{"id": i.ID, "template": i.Template, "name": i.Name, "params": i.Params, "size": i.Size,
-		"stores": i.Stores, "session": nullIfEmpty(i.Session), "createdAt": i.CreatedAt, "updatedAt": i.UpdatedAt,
+		"stores": i.Stores, "content": orEmptyS(i.Content), "session": nullIfEmpty(i.Session), "createdAt": i.CreatedAt, "updatedAt": i.UpdatedAt,
 		"state": state, "detail": detail, "lastRun": nil, "activeRun": nil, "schedules": 0, "image": nil}
 	if s != nil {
 		v["sessionState"], v["image"] = s.State, nullIfEmpty(s.Image)
@@ -839,7 +857,7 @@ func (r *Router) CreateTask(in instanceIn) (map[string]any, error) {
 		return nil, bad("size must be small, medium or large")
 	}
 	inst := &TaskInstance{ID: randID()[:8], Template: t.Name, Name: name, Params: params, Size: size,
-		Stores: lineStores(t, params), CreatedAt: time.Now().UTC(), Runs: []*TaskRun{}}
+		Stores: lineStores(t, params), Content: lineContent(t, params), CreatedAt: time.Now().UTC(), Runs: []*TaskRun{}}
 	if in.RequestID != "" {
 		var dup *TaskInstance
 		r.st.Do(func(d *persisted) {
@@ -875,7 +893,7 @@ func (r *Router) newTaskLine(inst *TaskInstance, requestID string) error {
 		tc.Params[k] = v
 	}
 	sid, err := taskOps.create(r, NewSession{RequestID: requestID, Label: "Task: " + inst.Name, Harness: taskHarnessPrefix + inst.Template,
-		Stores: inst.Stores, Size: inst.Size, AutoPause: &off, PermissionMode: "auto", Task: tc})
+		Stores: inst.Stores, Content: inst.Content, Size: inst.Size, AutoPause: &off, PermissionMode: "auto", Task: tc})
 	if err != nil {
 		return err
 	}
@@ -913,13 +931,18 @@ func (r *Router) UpdateTask(id string, in instanceIn) (map[string]any, error) {
 	if in.Size != "" && !validSize(in.Size) {
 		return nil, bad("size must be small, medium or large")
 	}
-	stores := lineStores(t, params)
+	stores, content := lineStores(t, params), lineContent(t, params)
 	var v map[string]any
 	err = nil
 	r.st.Do(func(d *persisted) {
 		i := tasksOf(d).Instances[id]
 		if i == nil {
 			err = notFound("no such task instance: %s", id)
+			return
+		}
+		if !reflect.DeepEqual(content, i.Content) {
+			err = bad("this changes the task's content stores (%s → %s): they are approved with the task, so make a new task for them",
+				strings.Join(i.Content, ","), strings.Join(content, ","))
 			return
 		}
 		if !reflect.DeepEqual(stores, i.Stores) {

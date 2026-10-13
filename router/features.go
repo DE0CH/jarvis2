@@ -33,6 +33,7 @@ func (r *Router) registerFeatures(app appRoute, m machineRoute, public publicRou
 	r.registerInbox(app, m, public)  // inbox.go: requests waiting for the phone (the app's Inbox)
 	r.registerVouch(app, m)          // vouch.go: /m/config, /m/restore-cert, deliveries, the input log
 	r.registerMachines(app)          // machines.go: every Fly machine of the app; Destroy for one with no session
+	r.registerContent(app, m)        // content.go: content stores (Storage Box folders) for the app and the sessions
 }
 
 // startFeatures: called once from main after the router is built

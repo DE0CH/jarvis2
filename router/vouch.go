@@ -42,6 +42,7 @@ type SessionConfig struct {
 	Prompt      string          `json:"prompt,omitempty"`
 	Model       string          `json:"model,omitempty"`
 	Repos       []string        `json:"repos,omitempty"`
+	Content     []string        `json:"content,omitempty"` // content stores (content.go): ~/content/<name>/ through the router
 	OneShot     bool            `json:"oneShot,omitempty"`
 	APIProxy    bool            `json:"apiProxy,omitempty"`
 	Attachments []AttachmentRef `json:"attachments,omitempty"`
@@ -102,7 +103,7 @@ func splitRepos(s string) []string {
 // sessionConfig: the settings a new line's cert carries (the first machine is the only one that uses the prompt,
 // the attachments and the restore; the rest hold for the whole line)
 func (r *Router) sessionConfig(s *Session) (string, error) {
-	c := SessionConfig{V: 1, Label: s.Label, Prompt: s.Prompt, Model: s.Model, Repos: splitRepos(s.Repos)}
+	c := SessionConfig{V: 1, Label: s.Label, Prompt: s.Prompt, Model: s.Model, Repos: splitRepos(s.Repos), Content: s.Content}
 	if len(c.Repos) == 0 {
 		c.Repos = nil
 	}

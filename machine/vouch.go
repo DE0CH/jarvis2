@@ -142,6 +142,7 @@ type SessionConfig struct {
 	Prompt      string          `json:"prompt,omitempty"`
 	Model       string          `json:"model,omitempty"`
 	Repos       []string        `json:"repos,omitempty"`
+	Content     []string        `json:"content,omitempty"` // content stores: content-sync pulls each into ~/content/<name>/ through the router
 	OneShot     bool            `json:"oneShot,omitempty"`
 	APIProxy    bool            `json:"apiProxy,omitempty"`
 	Attachments []AttachmentRef `json:"attachments,omitempty"`
@@ -185,6 +186,7 @@ var (
 	modelRE     = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._/:\[\]-]{0,99}$`)
 	sha256RE    = regexp.MustCompile(`^[0-9a-f]{64}$`)
 	machineIDRE = regexp.MustCompile(`^[a-z0-9]{1,40}$`)
+	contentRE   = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,40}[a-z0-9])?$`)
 )
 
 // vouch: the cert's settings, strictly read. A field the machine doesn't know refuses the whole config (the phone
@@ -204,6 +206,11 @@ func vouch(cert Cert) (Vouched, error) {
 		for _, r := range c.Repos {
 			if rp := repoOfURL(r); !ghRepoRE.MatchString(rp) || strings.HasSuffix(rp, "/.") || strings.HasSuffix(rp, "/..") || !validRepo(rp) {
 				return v, fmt.Errorf("the cert's repo %q isn't a GitHub repo", r)
+			}
+		}
+		for _, n := range c.Content {
+			if !contentRE.MatchString(n) {
+				return v, fmt.Errorf("the cert's content store %q", n)
 			}
 		}
 		for _, a := range c.Attachments {
@@ -366,6 +373,10 @@ func harnessEnv(clean []string, v Vouched, me string, firstMachine bool, secrets
 	}
 	if c.APIProxy {
 		m["SESSION_API_PROXY"] = "1"
+	}
+	if len(c.Content) > 0 {
+		// Jarvis 1's entrypoint runs `content-sync pull` at every boot; content-sync talks to $JARVIS_URL (apiproxy.go)
+		m["SESSION_CONTENT"] = strings.Join(c.Content, ",")
 	}
 	switch {
 	case firstMachine && c.Prompt != "":

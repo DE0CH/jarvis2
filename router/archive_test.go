@@ -14,6 +14,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -100,6 +101,47 @@ func (m *memDAV) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 			return
 		}
 		w.WriteHeader(204)
+	case "PROPFIND": // Depth 0 or 1, as Apache mod_dav answers (content.go)
+		isDir := p == "" || m.dirs[p]
+		if _, ok := m.files[p]; !ok && !isDir {
+			w.WriteHeader(404)
+			return
+		}
+		type ent struct {
+			href string
+			dir  bool
+			size int
+		}
+		ents := []ent{{"/" + p, isDir, len(m.files[p])}}
+		if isDir && req.Header.Get("Depth") == "1" {
+			for f, b := range m.files {
+				if filepath.Dir(f) == p || (p == "" && !strings.Contains(f, "/")) {
+					ents = append(ents, ent{"/" + f, false, len(b)})
+				}
+			}
+			for d := range m.dirs {
+				if filepath.Dir(d) == p && d != p {
+					ents = append(ents, ent{"/" + d + "/", true, 0})
+				}
+			}
+		}
+		var b strings.Builder
+		b.WriteString(`<?xml version="1.0" encoding="utf-8"?><D:multistatus xmlns:D="DAV:">`)
+		for _, e := range ents {
+			href := e.href
+			if e.dir && !strings.HasSuffix(href, "/") {
+				href += "/"
+			}
+			rt := "<D:resourcetype/>"
+			if e.dir {
+				rt = "<D:resourcetype><D:collection/></D:resourcetype>"
+			}
+			fmt.Fprintf(&b, `<D:response><D:href>%s</D:href><D:propstat><D:prop>%s<lp1:getcontentlength xmlns:lp1="DAV:">%d</lp1:getcontentlength><lp1:getlastmodified xmlns:lp1="DAV:">Mon, 12 Oct 2026 10:00:00 GMT</lp1:getlastmodified></D:prop></D:propstat></D:response>`,
+				(&url.URL{Path: href}).EscapedPath(), rt, e.size)
+		}
+		b.WriteString(`</D:multistatus>`)
+		w.WriteHeader(207)
+		w.Write([]byte(b.String()))
 	default:
 		w.WriteHeader(405)
 	}

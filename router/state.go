@@ -26,8 +26,9 @@ type Session struct {
 	Harness        string      `json:"harness"`
 	Stores         []string    `json:"stores"`
 	Repos          string      `json:"repos"`
-	Image          string      `json:"image"` // what the current line runs (ref@digest), pinned on resume
-	Cert           *Doc        `json:"-"`     // the line's latest succession cert
+	Content        []string    `json:"content,omitempty"` // content.go: the content stores the line gets (signed in its config)
+	Image          string      `json:"image"`             // what the current line runs (ref@digest), pinned on resume
+	Cert           *Doc        `json:"-"`                 // the line's latest succession cert
 	RequestID      string      `json:"createRequestId,omitempty"`
 	Title          string      `json:"aiTitle,omitempty"`
 	Status         string      `json:"status,omitempty"`

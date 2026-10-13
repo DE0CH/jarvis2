@@ -132,3 +132,49 @@ func TestRepoChanges(t *testing.T) {
 		t.Fatalf("%+v", got)
 	}
 }
+
+func TestProxyTakesAContentFileOnlyAttested(t *testing.T) {
+	t.Setenv("JARVIS2_SESSION_ID", "s1")
+	key, core := newKey(), newKey()
+	old := readCoreKey
+	readCoreKey = func() (string, error) { return core.pub(), nil }
+	t.Cleanup(func() { readCoreKey = old })
+	var attest *SignedDoc
+	srv := fakeRouter(t, key, func(w http.ResponseWriter, req *http.Request, body []byte) {
+		if req.URL.Path != "/m/api/sessions/m1/content/notes/file" || req.URL.Query().Get("path") != "a.txt" {
+			w.WriteHeader(404)
+			return
+		}
+		if attest != nil {
+			b, _ := json.Marshal(attest)
+			w.Header().Set("X-Jarvis2-Attest", string(b))
+		}
+		w.Write([]byte("hello"))
+	})
+	defer srv.Close()
+	c := &client{base: srv.URL, me: "m1", sig: key.k, http: srv.Client()}
+	p := httptest.NewServer(apiProxyHandler(c))
+	defer p.Close()
+	get := func() (int, string) {
+		resp, err := http.Get(p.URL + "/api/sessions/m1/content/notes/file?path=a.txt")
+		if err != nil {
+			t.Fatal(err)
+		}
+		b, _ := io.ReadAll(resp.Body)
+		return resp.StatusCode, string(b)
+	}
+	for _, a := range []*SignedDoc{nil, attestFor(core, "m2", "content", []byte("hello")), attestFor(core, "m1", "attachment", []byte("hello")),
+		attestFor(core, "m1", "content", []byte("other")), attestFor(newKey(), "m1", "content", []byte("hello"))} {
+		attest = a
+		if code, _ := get(); code != 502 {
+			t.Fatalf("taken without a matching attestation (%v): %d", a, code)
+		}
+	}
+	attest = attestFor(core, "m1", "content", []byte("hello"))
+	if code, body := get(); code != 200 || body != "hello" {
+		t.Fatalf("%d %q", code, body)
+	}
+	if resp, _ := http.Get(p.URL + "/api/sessions/sX/content/notes/file?path=a.txt"); resp.StatusCode != 403 {
+		t.Fatalf("another session: %d", resp.StatusCode)
+	}
+}

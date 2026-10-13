@@ -8,8 +8,8 @@ package main
 // Served by the router: wakeups and crons (schedule.go), notify-idle (autopilot.go's switch), and the session
 // retiring itself.
 // Forwarded to Jarvis 1 (its own services, which Deyao lets Jarvis 2 sessions use "like Jarvis 1"): transcript
-// search, the iCloud index, device leases, content stores and the shared Claude login, with the Access service
-// token JARVIS1_SERVICES_ID/SECRET (the cf-tunnel Worker confines it to those paths) and the header
+// search, the iCloud index, device leases and the shared Claude login (content stores: content.go), with the
+// Access service token JARVIS1_SERVICES_ID/SECRET (the cf-tunnel Worker confines it to those paths) and the header
 // X-Jarvis2-Session naming the calling session. The pull-secrets and changes calls never reach the router:
 // the machine answers them itself (it holds its secrets and its repos).
 
@@ -33,9 +33,6 @@ var jarvis1Routes = []string{
 	"POST /api/sessions/{id}/leases/{name}", "PUT /api/sessions/{id}/leases/{name}",
 	"PATCH /api/sessions/{id}/leases/{name}", "DELETE /api/sessions/{id}/leases/{name}",
 	"POST /api/sessions/{id}/leases/{name}/seen",
-	"GET /api/sessions/{id}/content",
-	"GET /api/sessions/{id}/content/{name}/file", "PUT /api/sessions/{id}/content/{name}/file",
-	"DELETE /api/sessions/{id}/content/{name}/file",
 	"GET /api/credentials", "POST /api/credentials",
 }
 
@@ -181,6 +178,9 @@ func (r *Router) registerSessionAPI(app appRoute, m machineRoute) {
 		in.RequestID = sid + ":" + in.RequestID // a session's ids never meet the app's or another session's
 		args := map[string]any{"label": in.Label, "harness": in.Harness, "stores": in.Stores, "model": in.Model, "permissionMode": in.PermissionMode,
 			"size": in.Size, "prompt": fmt.Sprintf("(%d characters)", len([]rune(in.Prompt)))}
+		if len(in.Content) > 0 {
+			args["content"] = in.Content
+		}
 		if in.Repos != "" {
 			args["repos"] = in.Repos
 		}
