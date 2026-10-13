@@ -3,7 +3,7 @@
 // actions show as PENDING labels on their buttons.
 import { useSyncExternalStore } from "react";
 import { AppState, Platform } from "react-native";
-import { api, coreStores, loadPolicy, RUN_ACTIVE, type Choice, type CoreStore, type Policy, type Rec, type State, type TasksOverview, type Machine, type FlyOrgView, type MachinesOverview } from "./api";
+import { api, coreStores, loadPolicy, RUN_ACTIVE, type Choice, type CoreStore, type Policy, type Rec, type State, type TasksOverview, type Machine, type FlyOrgView, type MachinesOverview, type InboxItem, type InboxBatch } from "./api";
 
 export type Tab = "sessions" | "inbox" | "search" | "stores" | "content" | "records" | "tasks" | "schedules" | "machines" | "devices" | "settings";
 export const TABS: [Tab, string][] = [["sessions", "Sessions"], ["inbox", "Inbox"], ["search", "Search"], ["stores", "Stores"], ["content", "Content"], ["records", "Previous"], ["tasks", "Tasks"], ["schedules", "Schedules"], ["machines", "Machines"], ["devices", "Devices"], ["settings", "Settings"]];
@@ -43,7 +43,13 @@ export const getStore = () => snap;
 
 export function setTab(t: Tab) { S.tab = t; emit(); if (t === "records" || t === "search") loadRecords(); if (t === "stores" || t === "settings") loadStores(); if (t === "tasks" || t === "schedules") { loadTasks(); loadStores(); } if (t === "machines") loadMachines(); }
 /** the Inbox badge: what waits for the phone */
-export const useInboxCount = () => useStore((s) => (s.state.inbox || []).length);
+/** the Inbox's entries: each batch counts once */
+export const useInboxCount = () => useStore((s) => inboxLoose(s.state.inbox || [], s.state.inboxBatches || []).length + (s.state.inboxBatches || []).length);
+/** the items in no listed batch */
+export function inboxLoose(items: InboxItem[], batches: InboxBatch[]): InboxItem[] {
+  const ids = new Set(batches.map((b) => b.id));
+  return items.filter((it) => !it.batch || !ids.has(it.batch));
+}
 export function pend(key: string, label: string | null) { label ? S.pending.set(key, label) : S.pending.delete(key); S.pending = new Map(S.pending); emit(); }
 
 // ---- notices: no alert()/confirm() — toasts at the bottom of the screen, questions as dialogs ----
@@ -115,7 +121,7 @@ let fastUntil = 0;
 const pollState = coalesce(async () => {
   try {
     const st = await api<State>("GET", "api/state");
-    S.state = { sessions: st.sessions || [], approvals: st.approvals || [], core: st.core || { up: false }, budget: st.budget ?? null, fly: st.fly ?? null, flyApp: st.flyApp, repos: st.repos || [], inbox: st.inbox || [], loaded: true, loadError: null };
+    S.state = { sessions: st.sessions || [], approvals: st.approvals || [], core: st.core || { up: false }, budget: st.budget ?? null, fly: st.fly ?? null, flyApp: st.flyApp, repos: st.repos || [], inbox: st.inbox || [], inboxBatches: st.inboxBatches || [], loaded: true, loadError: null };
   } catch (e: any) { S.state = { ...S.state, loadError: e.message }; }
   S.refreshing = false; emit();
   // a session is on its way somewhere: follow it closely

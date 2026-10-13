@@ -121,7 +121,28 @@ struct InboxItem: Identifiable, Equatable, Hashable {
   var expires: Date? { j["expires"].string?.isoDate }
   var openKind: String { j["open"]["kind"].string ?? "" }
   var openOptions: JSON { j["open"]["options"] }
+  /// the batch it was filed in (router/batches.go)
+  var batch: String? { j["batch"].text }
   /// the call as one line: POST /api/requests/repo/add {"repo":"DE0CH/claude-env"}
+  var callLine: String {
+    let c = j["call"]
+    guard let path = c["path"].text else { return "(no API call recorded)" }
+    return SignedAction.call(method: c["method"].string ?? "", path: path, args: c["args"].object.map { $0.mapValues(\.any) })
+  }
+}
+
+/// several Inbox items a caller filed together (router/batches.go): one Inbox entry, one review page, one Face ID
+struct InboxBatch: Identifiable, Equatable, Hashable {
+  let j: JSON
+  var id: String { j["id"].string ?? "" }
+  /// the caller's words about the whole batch, unverified
+  var summary: String { j["summary"].string ?? "" }
+  var callerText: String { j["callerText"].string ?? "someone" }
+  var items: [String] { j["items"].array.compactMap(\.text) }
+  /// approvals still being made (a new session's challenge): Allow waits for them
+  var preparing: Int { j["preparing"].int ?? 0 }
+  var created: Date? { j["created"].string?.isoDate }
+  var expires: Date? { j["expires"].string?.isoDate }
   var callLine: String {
     let c = j["call"]
     guard let path = c["path"].text else { return "(no API call recorded)" }

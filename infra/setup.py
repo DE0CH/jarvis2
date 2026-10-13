@@ -50,7 +50,7 @@ both). Values never print.
                                        a request in the Inbox of the Jarvis 2 app (docs/API.md "Requests"): Deyao
                                        reviews what would be signed and allows it with Face ID, or denies it. The
                                        router records it as from "Claude (setup session)"; --why is required
-  infra/setup.py request batch --file FILE --summary TEXT
+  infra/setup.py request batch (--file FILE | --item INTENT,key=value,…) --summary TEXT
                                        several requests as ONE Inbox entry (allowed together under one Face ID, or
                                        denied together): FILE is a JSON list of items, each {"intent": …} plus that
                                        intent's fields (repo/add, repo/remove, grant, unlock, add-store, new-session,
@@ -426,6 +426,18 @@ def main():
         raise SystemExit(__doc__)
 
 
+def parse_item(spec):
+    """--item INTENT,key=value,…: one batch item (numbers become numbers, true/false booleans, a|b lists)"""
+    parts = spec.split(",")
+    item = {"intent": parts[0]}
+    for kv in parts[1:]:
+        if "=" not in kv:
+            raise SystemExit(f"--item {spec}: {kv!r} is not key=value")
+        k, v = kv.split("=", 1)
+        item[k] = int(v) if v.isdigit() else {"true": True, "false": False}.get(v, v.split("|") if "|" in v else v)
+    return item
+
+
 def opt(args, name, default=None):
     """--name VALUE out of args (args is changed)"""
     if name in args:
@@ -444,9 +456,12 @@ def file_request(args):
     if args[:1] == ["batch"]:
         rest = args[1:]
         f, summary = opt(rest, "--file"), opt(rest, "--summary")
-        if not f or not summary or rest:
-            raise SystemExit("request batch --file FILE --summary TEXT")
-        items = json.load(open(os.path.expanduser(f)))
+        inline = []
+        while "--item" in rest:
+            inline.append(parse_item(opt(rest, "--item")))
+        if (not f and not inline) or not summary or rest:
+            raise SystemExit("request batch (--file FILE | --item INTENT,key=value,…) --summary TEXT")
+        items = json.load(open(os.path.expanduser(f))) if f else inline
         if not isinstance(items, list):
             raise SystemExit("FILE must hold a JSON list of items")
         return call("POST", "/setup/requests/batch", {"summary": summary, "items": items})

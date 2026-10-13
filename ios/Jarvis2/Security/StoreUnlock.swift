@@ -6,11 +6,11 @@ import Foundation
 @MainActor
 enum StoreUnlock {
   @discardableResult
-  static func signAndUnlock(payload: String?, stores: [String], reason: String, for forNonce: String?) async throws -> Data? {
+  static func signAndUnlock(payload: String?, stores: [String], reason: String, for forNonce: String?, auth: PhoneAuth? = nil) async throws -> Data? {
     var begins: [UnlockBegin] = []
     for n in stores { begins.append(try await RouterClient.shared.unlockBegin(n, for: forNonce)) }
     let es = begins.map(\.e)
-    let out = try await offMain { try PhoneKeys.shared.signAndShares(payload, es: es, reason: reason) }
+    let out = try await offMain { try PhoneKeys.shared.signAndShares(payload, es: es, reason: reason, auth: auth) }
     for (b, x) in zip(begins, out.shares) {
       try await RouterClient.shared.unlockFinish(b, share: try CoreCrypto.sealShare(x, to: b.t))
     }

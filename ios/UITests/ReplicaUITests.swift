@@ -273,6 +273,27 @@ final class ReplicaUITests: JarvisUITestCase {
     XCTAssertEqual(relay("inbox-session:\(sid):archive"), "ok", "the session filed another")
     if inboxReview("session-allow") { inboxAllowed("session", button: "secure-grant-allow") }
 
+    // ---- a batch from the session: two grants under one summary, one Inbox entry, both allowed with ONE Face ID ----
+    XCTAssertEqual(relay("inbox-batch:\(sid)"), "ok", "the session filed a batch")
+    tabRoot("Inbox")
+    if wait(prefixed("batch-review-"), 90, "the session's batch in the Inbox") {
+      shot("inbox-batch")
+      prefixed("batch-review-").tap()
+      if arrives(el("batch-allow"), 30, "the batch page") {
+        XCTAssertTrue(said(el("batch-summary")).contains("replica-the-session-asks-for-two-grants"), "the session's summary: \(said(el("batch-summary")))")
+        XCTAssertTrue(said(el("batch-caller")).contains("session"), "the caller is the session: \(said(el("batch-caller")))")
+        let until = Date().addingTimeInterval(60)
+        while !el("batch-allow").isEnabled && Date() < until { sleep(1) }
+        if el("batch-item-signed-1").exists { el("batch-item-signed-1").tap(); sleep(1) }
+        shot("batch-review")
+        faceIDMatches()
+        el("batch-allow").tap()
+        XCTAssertTrue(gone(el("batch-allow"), 120), "both grants signed under one Face ID: the page closes")
+        XCTAssertTrue(gone(prefixed("batch-review-"), 60), "the batch is off the Inbox")
+        shot("batch-allowed")
+      }
+    }
+
     // ---- grants: a 5-minute scheduler grant, then forget it ----
     sessionsList()
     if wait(el("srow-\(sid)"), 30, "the session") { el("srow-\(sid)").tap() }

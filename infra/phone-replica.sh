@@ -14,6 +14,7 @@
 #   repo-check  …and none left after the app removed it
 #   inbox-setup-add / inbox-setup-remove   infra/setup.py request add-repo / remove-repo for the throwaway repo
 #   inbox-session:<sid>:<holder>           jarvis2-request grant <holder> run inside that session's machine (flyctl exec)
+#   inbox-batch:<sid>                      jarvis2-request batch (two grants, one summary) inside that session's machine
 #   session-file:<sid>:<name>              the image attached on New session is on that session's machine (flyctl exec:
 #                                          the machine's hash-checked copy, or the harness's ~/uploads copy)
 #   done        the end
@@ -169,6 +170,15 @@ while :; do
       if [ -n "$m" ] && FLY_API_TOKEN="$JARVIS2_FLY_TOKEN" flyctl machine exec "$m" -a jarvis2-sessions \
            "/usr/local/bin/jarvis2-request grant $holder --minutes 5 --why replica-the-session-asks-for-$holder" >> "$LOGS/inbox.log" 2>&1; then answer ok
       else answer "session request failed (machine ${m:-none}): $(tail -2 "$LOGS/inbox.log" 2>/dev/null)"; fi ;;
+    inbox-batch:*) # a batch from the session (two grants, one summary): the app allows both under one Face ID
+      sid=${msg#inbox-batch:}; : > "$LOGS/inbox.log"; m=""
+      for _ in $(seq 1 18); do
+        m=$(python3 "$ROOT/infra/setup.py" sessions 2>>"$LOGS/inbox.log" | awk -v s="$sid" '$1 == s && $2 != "-" {print $2}')
+        [ -n "$m" ] && break; sleep 5
+      done
+      if [ -n "$m" ] && FLY_API_TOKEN="$JARVIS2_FLY_TOKEN" flyctl machine exec "$m" -a jarvis2-sessions \
+           "/usr/local/bin/jarvis2-request batch --summary replica-the-session-asks-for-two-grants --item grant,holder=scheduler,minutes=5 --item grant,holder=remote,minutes=5" >> "$LOGS/inbox.log" 2>&1; then answer ok
+      else answer "session batch failed (machine ${m:-none}): $(tail -2 "$LOGS/inbox.log" 2>/dev/null)"; fi ;;
     session-file:*) # the machine keeps an attachment only when its bytes match the cert (and the core attested it)
       IFS=: read -r _ sid name <<<"$msg"; : > "$LOGS/inbox.log"; m=""; found=""
       if [[ ! "$name" =~ ^[A-Za-z0-9._-]+$ ]]; then answer "bad name"; continue; fi

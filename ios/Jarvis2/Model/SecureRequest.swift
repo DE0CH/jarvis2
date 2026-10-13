@@ -21,6 +21,8 @@ enum SecureRequest: Identifiable, Equatable, Hashable {
   case grant(GrantAsk, inbox: String? = nil)
   case unlock(session: String, label: String, inbox: String? = nil)
   case repoKey(action: String, repo: String, sensitive: Bool, inbox: String? = nil)
+  /// a batch from the Inbox (router/batches.go): its items on one page, allowed under one Face ID
+  case batch(id: String)
 
   var id: String {
     switch self {
@@ -29,18 +31,19 @@ enum SecureRequest: Identifiable, Equatable, Hashable {
     case .grant(let g, _): "grant-\(g.session)-\(g.holder)-\(g.kind)"
     case .unlock(let s, _, _): "unlock-\(s)"
     case .repoKey(let a, let r, _, _): "repo-\(a)-\(r)"
+    case .batch(let b): "batch-\(b)"
     }
   }
   var inboxId: String? {
     switch self {
-    case .newSession: nil
+    case .newSession, .batch: nil
     case .approval(_, let i), .grant(_, let i), .unlock(_, _, let i), .repoKey(_, _, _, let i): i
     }
   }
   /// what this page acts on, in the Inbox's option names: compared with the request's own (SignedAction.mismatch)
   var options: [String: Any] {
     switch self {
-    case .newSession: return [:]
+    case .newSession, .batch: return [:]
     case .approval(let a, _): return ["approvalId": a]
     case .grant(let g, _):
       var o: [String: Any] = ["sessionId": g.session, "holder": g.holder, "grantKind": g.kind]

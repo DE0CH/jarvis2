@@ -42,6 +42,17 @@ enum KeyError: LocalizedError {
   }
 }
 
+/// One Face ID for several uses (a batch from the Inbox: every item signed under one Face ID). On an iPhone it is an
+/// LAContext that has evaluated Face ID once; every Enclave key use given it runs on that context, so the Secure
+/// Enclave asks for no second Face ID (the keys stay .biometryCurrentSet: a context evaluated for a face enrolled after
+/// pairing doesn't open them). On the simulator it records that the stand-in check passed. Each item is still signed
+/// exactly as alone; only the Face ID is shared. Dropped (invalidated) when the batch is done.
+final class PhoneAuth: @unchecked Sendable {
+  let context: LAContext?
+  init(context: LAContext?) { self.context = context }
+  func invalidate() { context?.invalidate() }
+}
+
 final class PhoneKeys: @unchecked Sendable {
   static let shared = PhoneKeys()
   var usesEnclave: Bool {
@@ -154,7 +165,37 @@ final class PhoneKeys: @unchecked Sendable {
     return try softDevice().signature(for: Data(text.utf8)).derRepresentation
   }
 
-  // ---- uses (one Face ID each on a real iPhone) ----
+  /// ONE Face ID for a batch of uses (blocking: call it off the main thread). The returned PhoneAuth goes to every
+  /// sign/share call of the batch.
+  func authorize(reason: String) throws -> PhoneAuth {
+    if usesEnclave {
+      let ctx = LAContext()
+      ctx.localizedReason = reason
+      let sem = DispatchSemaphore(value: 0)
+      nonisolated(unsafe) var err: Error?
+      ctx.evaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, localizedReason: reason) { ok, error in
+        if !ok { err = error ?? LAError(.authenticationFailed) }
+        sem.signal()
+      }
+      sem.wait()
+      if let err { throw err }
+      return PhoneAuth(context: ctx)
+    }
+    try simulatorFaceID(reason)
+    return PhoneAuth(context: nil)
+  }
+  /// the context a key use runs on: the batch's (already authenticated) or a fresh one that asks for Face ID
+  private func context(_ auth: PhoneAuth?, _ reason: String) -> LAContext {
+    if let c = auth?.context { return c }
+    let ctx = LAContext(); ctx.localizedReason = reason
+    return ctx
+  }
+  /// the simulator's stand-in check, unless the batch's Face ID already passed
+  private func simulatorCheck(_ auth: PhoneAuth?, _ reason: String) throws {
+    if auth == nil { try simulatorFaceID(reason) }
+  }
+
+  // ---- uses (one Face ID each on a real iPhone, unless a batch's PhoneAuth is given) ----
   /// a key use that fails for any reason but Face ID itself (a cancel, a mismatch) means the Enclave key is gone
   private func guarded<T>(_ body: () throws -> T) throws -> T {
     do { return try body() }
@@ -163,34 +204,34 @@ final class PhoneKeys: @unchecked Sendable {
     catch { if usesEnclave { throw KeyError.invalidated(errText(error)) } else { throw error } }
   }
   /// DER signature over exactly `payload`'s bytes
-  func sign(_ payload: String, reason: String) throws -> Data { try guarded { try signRaw(payload, reason: reason) } }
-  private func signRaw(_ payload: String, reason: String) throws -> Data {
+  func sign(_ payload: String, reason: String, auth: PhoneAuth? = nil) throws -> Data { try guarded { try signRaw(payload, reason: reason, auth: auth) } }
+  private func signRaw(_ payload: String, reason: String, auth: PhoneAuth?) throws -> Data {
     _ = try signingPublic()
     if usesEnclave {
-      let ctx = LAContext(); ctx.localizedReason = reason
+      let ctx = context(auth, reason)
       let k = try SecureEnclave.P256.Signing.PrivateKey(dataRepresentation: Keychain.get("signing-se")!, authenticationContext: ctx)
       return try k.signature(for: Data(payload.utf8)).derRepresentation
     }
-    try simulatorFaceID(reason)
+    try simulatorCheck(auth, reason)
     return try softSigning().signature(for: Data(payload.utf8)).derRepresentation
   }
   /// a signature over `payload` and this phone's share x(p·E), under ONE Face ID: both Enclave keys use the same
   /// LAContext, which the first use authenticates (a deploy key: the phone approves the request and opens the
   /// token store for it)
-  func signAndShare(_ payload: String, e: String, reason: String) throws -> (signature: Data, share: Data) { try guarded { try signAndShareRaw(payload, e: e, reason: reason) } }
-  private func signAndShareRaw(_ payload: String, e: String, reason: String) throws -> (signature: Data, share: Data) {
+  func signAndShare(_ payload: String, e: String, reason: String, auth: PhoneAuth? = nil) throws -> (signature: Data, share: Data) { try guarded { try signAndShareRaw(payload, e: e, reason: reason, auth: auth) } }
+  private func signAndShareRaw(_ payload: String, e: String, reason: String, auth: PhoneAuth?) throws -> (signature: Data, share: Data) {
     _ = try signingPublic(); _ = try agreementPublic()
     guard let eb = Data(base64Encoded: e) else { throw TrustError.badSignature("the store's key") }
     let pub = try P256.KeyAgreement.PublicKey(x963Representation: eb)
     if usesEnclave {
-      let ctx = LAContext(); ctx.localizedReason = reason
+      let ctx = context(auth, reason)
       let s = try SecureEnclave.P256.Signing.PrivateKey(dataRepresentation: Keychain.get("signing-se")!, authenticationContext: ctx)
       let sig = try s.signature(for: Data(payload.utf8)).derRepresentation
       let a = try SecureEnclave.P256.KeyAgreement.PrivateKey(dataRepresentation: Keychain.get("agreement-se")!, authenticationContext: ctx)
       let secret = try a.sharedSecretFromKeyAgreement(with: pub)
       return (sig, secret.withUnsafeBytes { Data($0) })
     }
-    try simulatorFaceID(reason)
+    try simulatorCheck(auth, reason)
     let sig = try softSigning().signature(for: Data(payload.utf8)).derRepresentation
     let secret = try softAgreement().sharedSecretFromKeyAgreement(with: pub)
     return (sig, secret.withUnsafeBytes { Data($0) })
@@ -198,15 +239,15 @@ final class PhoneKeys: @unchecked Sendable {
   /// an optional signature over `payload` and this phone's share x(p·E) for each store key in `es`, under ONE Face
   /// ID (one LAContext for every Enclave use): New session's Start signs the approval and opens the session's locked
   /// stores at once; the unlock review page opens several stores at once
-  func signAndShares(_ payload: String?, es: [String], reason: String) throws -> (signature: Data?, shares: [Data]) { try guarded { try signAndSharesRaw(payload, es: es, reason: reason) } }
-  private func signAndSharesRaw(_ payload: String?, es: [String], reason: String) throws -> (signature: Data?, shares: [Data]) {
+  func signAndShares(_ payload: String?, es: [String], reason: String, auth: PhoneAuth? = nil) throws -> (signature: Data?, shares: [Data]) { try guarded { try signAndSharesRaw(payload, es: es, reason: reason, auth: auth) } }
+  private func signAndSharesRaw(_ payload: String?, es: [String], reason: String, auth: PhoneAuth?) throws -> (signature: Data?, shares: [Data]) {
     _ = try signingPublic(); _ = try agreementPublic()
     let pubs = try es.map { e -> P256.KeyAgreement.PublicKey in
       guard let eb = Data(base64Encoded: e) else { throw TrustError.badSignature("the store's key") }
       return try P256.KeyAgreement.PublicKey(x963Representation: eb)
     }
     if usesEnclave {
-      let ctx = LAContext(); ctx.localizedReason = reason
+      let ctx = context(auth, reason)
       var sig: Data?
       if let payload {
         let k = try SecureEnclave.P256.Signing.PrivateKey(dataRepresentation: Keychain.get("signing-se")!, authenticationContext: ctx)
@@ -219,7 +260,7 @@ final class PhoneKeys: @unchecked Sendable {
       }
       return (sig, shares)
     }
-    try simulatorFaceID(reason)
+    try simulatorCheck(auth, reason)
     let sig = try payload.map { try softSigning().signature(for: Data($0.utf8)).derRepresentation }
     let shares = try pubs.map { try softAgreement().sharedSecretFromKeyAgreement(with: $0).withUnsafeBytes { Data($0) } }
     return (sig, shares)

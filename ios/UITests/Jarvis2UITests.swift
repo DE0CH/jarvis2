@@ -77,6 +77,42 @@ final class Jarvis2UITests: JarvisUITestCase {
     XCTAssertTrue(gone(prefixed("srow-"), 30), "[\(tag)] the rejected session is gone from the list")
   }
 
+  /// a batch of two deploy keys filed by the web page: the Inbox lists it once; its page shows the summary (unverified)
+  /// and each item's "What you sign"; Deny all drops both, Allow all adds both under one Face ID
+  func inboxBatch(deny: Bool) {
+    let names = deny ? ["batch-denied-a", "batch-denied-b"] : ["batch-one", "batch-two"]
+    let req: [String: Any] = ["summary": deny ? "Two repos for a test (deny this)" : "Two repos for the batch test",
+                              "items": names.map { ["intent": "repo/add", "repo": "DE0CH/\($0)", "explanation": "item \($0)"] }]
+    let (code, out) = routerRaw("POST", "api/requests/batch", body: try? JSONSerialization.data(withJSONObject: req), headers: ["Content-Type": "application/json"])
+    XCTAssertEqual(code, 200, "[\(tag)] the web page's batch: \(String(decoding: out, as: UTF8.self))")
+    tabRoot("Inbox")
+    guard wait(prefixed("batch-review-"), 60, "the batch in the Inbox") else { return }
+    XCTAssertFalse(prefixed("request-review-").exists, "[\(tag)] the batch's items aren't listed on their own")
+    shot(deny ? "inbox-batch" : "inbox-batch-2")
+    prefixed("batch-review-").tap()
+    guard arrives(el("batch-allow"), 30, "the batch page") else { return }
+    XCTAssertTrue(said(el("batch-summary")).contains("Two repos"), "[\(tag)] the caller's summary: \(said(el("batch-summary")))")
+    XCTAssertTrue(el("batch-item-1").exists && el("batch-item-2").exists, "[\(tag)] both items listed")
+    let until = Date().addingTimeInterval(30)
+    while !el("batch-allow").isEnabled && Date() < until { usleep(500_000) }
+    XCTAssertTrue(el("batch-allow").isEnabled, "[\(tag)] every item read and checked")
+    if el("batch-item-signed-1").exists { el("batch-item-signed-1").tap(); sleep(1) }
+    shot(deny ? "batch-review" : "batch-review-2")
+    if deny {
+      if scrolledTo(el("batch-deny")) { el("batch-deny").tap() }
+      XCTAssertTrue(gone(el("batch-allow"), 30), "[\(tag)] Deny all closes the page")
+      XCTAssertTrue(gone(prefixed("batch-review-"), 30), "[\(tag)] the batch is off the Inbox")
+      return
+    }
+    el("batch-allow").tap()
+    XCTAssertTrue(gone(el("batch-allow"), 90), "[\(tag)] Allow all signs both and closes the page")
+    XCTAssertTrue(gone(prefixed("batch-review-"), 30), "[\(tag)] the batch is off the Inbox")
+    openRepos()
+    XCTAssertTrue(wait(el("repo-key-batch-one"), 60, "the first batch repo listed") && wait(el("repo-key-batch-two"), 30, "the second batch repo listed"),
+                  "[\(tag)] both deploy keys made from one Face ID")
+    shot("batch-repos")
+  }
+
   func testWalkthrough() {
     continueAfterFailure = true
     tag = env["JARVIS2_APPEARANCE"] ?? "run"
@@ -375,6 +411,11 @@ final class Jarvis2UITests: JarvisUITestCase {
         XCTAssertTrue(gone(el("repo-key-china-train"), 60), "[\(tag)] the repo is off the list after remove")
       }
     }
+
+    // ---- a batch (router/batches.go): filed as the web page files it, one Inbox entry with the caller's summary and
+    // each item's signed details; the first is denied whole, the second allowed whole under one Face ID
+    inboxBatch(deny: true)
+    inboxBatch(deny: false)
 
     // ---- tasks: make one from the hello template (its line's approval opens by itself), run it, stop the run, schedule it
     tab("Tasks")

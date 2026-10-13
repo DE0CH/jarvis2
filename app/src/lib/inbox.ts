@@ -63,6 +63,8 @@ export function inboxCall(it: InboxItem): string {
 }
 
 export const denyRequest = (it: InboxItem) => api("DELETE", `api/requests/${it.id}`);
+/** Deny a whole batch: its requests leave, its approvals are rejected */
+export const denyBatch = (id: string) => api("DELETE", `api/requests/batches/${id}`);
 
 /** the web page has no shell: what would open a secure page files an Inbox request instead (Face ID on the phone) */
 export async function fileFromWeb(kind: string, o: Record<string, unknown>): Promise<boolean> {

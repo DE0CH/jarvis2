@@ -33,6 +33,8 @@ final class AppModel {
   var sessions: [Session] = []
   var approvals: [Approval] = []
   var inbox: [InboxItem] = []
+  /// batches (router/batches.go): several Inbox items filed together, reviewed on one page under one Face ID
+  var inboxBatches: [InboxBatch] = []
   var coreUp = false
   var budget: JSON = .null
   var fly: JSON = .null
@@ -73,7 +75,14 @@ final class AppModel {
   var showSetup = false
   var signedOut = false
   var harnessHidden: Set<String> { Set(policy.values.flatMap { $0 }) }
-  var inboxCount: Int { inbox.count }
+  /// the Inbox's entries: each batch counts once
+  var inboxCount: Int { inboxLoose.count + inboxBatches.count }
+  /// the items in no listed batch
+  var inboxLoose: [InboxItem] {
+    let ids = Set(inboxBatches.map(\.id))
+    return inbox.filter { $0.batch.map { !ids.contains($0) } ?? true }
+  }
+  func batchItems(_ b: InboxBatch) -> [InboxItem] { b.items.compactMap { id in inbox.first { $0.id == id } } }
 
   @ObservationIgnored private var pollTask: Task<Void, Never>?
   @ObservationIgnored private var fastUntil = Date.distantPast
@@ -150,6 +159,7 @@ final class AppModel {
       sessions = j["sessions"].array.map(Session.init)
       approvals = j["approvals"].array.map(Approval.init)
       inbox = j["inbox"].array.map(InboxItem.init)
+      inboxBatches = j["inboxBatches"].array.map(InboxBatch.init)
       coreUp = j["core"]["up"].bool == true
       budget = j["budget"]
       fly = j["fly"]

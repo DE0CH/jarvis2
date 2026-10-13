@@ -15,13 +15,14 @@ this session as the caller, from the machine's key) and the reason given here, a
                   [--size small|medium|large] [--harness claude] [--request-id ID] --why TEXT
                                     propose a NEW session: it appears in the Inbox like the app's New session and starts
                                     only when Deyao approves it with Face ID (no attachments; at most 3 waiting)
-  jarvis2-request batch --file FILE --summary TEXT
+  jarvis2-request batch (--file FILE | --item ITEM…) --summary TEXT
                                     several of the above as ONE Inbox entry, allowed together under one Face ID (or
                                     denied together). FILE: a JSON list of items, each {"intent": …} plus that
                                     intent's fields: {"intent":"repo/add","repo":"OWNER/NAME"},
                                     {"intent":"grant","holder":"terminal","minutes":5}, {"intent":"unlock"},
                                     {"intent":"add-store","store":"gmail"},
                                     {"intent":"new-session","label":…,"prompt":…,"stores":[…],"repos":…};
+                                    or --item INTENT,key=value,… once per item (e.g. --item grant,holder=status,minutes=5);
                                     an item may carry its own "explanation"; --summary (required) says what the
                                     whole batch is for. At most 20 items; a batch counts as one of the 3 waiting
                                     proposals. Every item is checked first: one bad item and nothing is filed
@@ -48,6 +49,18 @@ def call(method, path, body=None):
         except Exception:
             msg = b[:300]
         raise SystemExit(f"{method} {path}: HTTP {e.code}: {msg}")
+
+
+def parse_item(spec):
+    """--item INTENT,key=value,…: one batch item (numbers become numbers, true/false booleans, a|b lists)"""
+    parts = spec.split(",")
+    item = {"intent": parts[0]}
+    for kv in parts[1:]:
+        if "=" not in kv:
+            raise SystemExit(f"--item {spec}: {kv!r} is not key=value")
+        k, v = kv.split("=", 1)
+        item[k] = int(v) if v.isdigit() else {"true": True, "false": False}.get(v, v.split("|") if "|" in v else v)
+    return item
 
 
 def opt(args, name):
@@ -87,10 +100,16 @@ def main():
     if args[0] == "batch":
         rest = args[1:]
         f, summary = opt(rest, "--file"), opt(rest, "--summary")
-        if not f or not summary or rest:
-            raise SystemExit("batch --file FILE --summary TEXT (FILE: a JSON list of items, see --help)")
-        with open(f) as fh:
-            items = json.load(fh)
+        inline = []
+        while "--item" in rest:
+            inline.append(parse_item(opt(rest, "--item")))
+        if (not f and not inline) or not summary or rest:
+            raise SystemExit("batch (--file FILE | --item INTENT,key=value,…) --summary TEXT (see --help)")
+        if f:
+            with open(f) as fh:
+                items = json.load(fh)
+        else:
+            items = inline
         if not isinstance(items, list):
             raise SystemExit("FILE must hold a JSON list of items")
         out = call("POST", "/api/requests/batch", {"summary": summary, "items": items})

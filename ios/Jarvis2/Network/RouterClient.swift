@@ -318,5 +318,15 @@ final class RouterClient: NSObject, ASWebAuthenticationPresentationContextProvid
     return InboxItem(j: JSON.parse(data))
   }
   func inboxDeny(_ id: String) async throws { try await call("DELETE", "api/requests/\(id)") }
+  /// one batch with its items (GET api/requests/batches/:id); nil when it is gone
+  func inboxBatch(_ id: String) async throws -> (batch: InboxBatch, items: [InboxItem])? {
+    let (status, data) = try await raw("GET", "api/requests/batches/\(id)")
+    if status == 404 { return nil }
+    guard status == 200 else { throw Self.failure("GET", "api/requests/batches/\(id)", status, data) }
+    let j = JSON.parse(data)
+    return (InboxBatch(j: j["batch"]), j["items"].array.map(InboxItem.init))
+  }
+  /// Deny the whole batch: its requests leave, its approvals are rejected
+  func inboxDenyBatch(_ id: String) async throws { try await call("DELETE", "api/requests/batches/\(id)") }
   func inboxDone(_ id: String) async { _ = try? await raw("POST", "api/requests/\(id)/done") }
 }

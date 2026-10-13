@@ -227,6 +227,11 @@ extension AppModel {
                     until: { m in !m.inbox.contains { $0.id == it.id } })
   }
 
+  func denyBatch(_ b: InboxBatch) async {
+    await pendUntil("b:" + b.id, "Denying…", 30, action: { try await RouterClient.shared.inboxDenyBatch(b.id) },
+                    until: { m in !m.inboxBatches.contains { $0.id == b.id } })
+  }
+
   // ---- tasks ----
   /// wait for the approval the router made for this line and open it
   func openApproval(for session: String?, kind: String? = nil) async {

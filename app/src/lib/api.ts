@@ -173,10 +173,18 @@ export type InboxItem = {
   session?: string; sessionName?: string; caller: { kind: string; session?: string }; callerText: string;
   call: { method: string; path: string; args?: Record<string, unknown> }; explanation: string; created: string; expires?: string;
   options?: Record<string, string>; open: { kind: string; options: Record<string, unknown> };
+  batch?: string; // router/batches.go: filed in this batch
+};
+// several Inbox items a caller filed together (router/batches.go): one entry, allowed together on the phone under one
+// Face ID, denied together here or there. `summary` is the caller's words (unverified).
+export type InboxBatch = {
+  id: string; summary: string; caller: { kind: string; session?: string }; callerText: string;
+  call: { method: string; path: string; args?: Record<string, unknown> }; created: string; expires: string;
+  items: string[]; preparing: number;
 };
 export type CoreStatus = { up: boolean; signingKey?: string; agreementKey?: string };
 export type State = {
-  sessions: Session[]; approvals: Approval[]; core: CoreStatus; inbox?: InboxItem[];
+  sessions: Session[]; approvals: Approval[]; core: CoreStatus; inbox?: InboxItem[]; inboxBatches?: InboxBatch[];
   budget?: Budget | null; fly?: FlyView | null; flyApp?: string; repos?: RepoEntry[]; leases?: Lease[];
   loadError?: string | null; // client-side: the last api/state fetch failed
   loaded?: boolean; // client-side: api/state has answered at least once

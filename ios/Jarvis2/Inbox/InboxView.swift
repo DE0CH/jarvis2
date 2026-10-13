@@ -11,9 +11,18 @@ struct InboxView: View {
   var body: some View {
     NavigationStack {
       List {
-        if !model.inbox.isEmpty {
+        if !model.inboxBatches.isEmpty {
           Section {
-            ForEach(model.inbox) { it in InboxRow(it: it) }
+            ForEach(model.inboxBatches) { b in BatchRow(b: b) }
+          } header: {
+            Text("Batches")
+          } footer: {
+            Text("One Face ID allows every item of a batch.")
+          }
+        }
+        if !model.inboxLoose.isEmpty {
+          Section {
+            ForEach(model.inboxLoose) { it in InboxRow(it: it) }
           } header: {
             Text("Requests")
           } footer: {
@@ -22,7 +31,7 @@ struct InboxView: View {
         }
       }
       .overlay {
-        if model.inbox.isEmpty {
+        if model.inboxCount == 0 {
           ContentUnavailableView("Nothing waiting for you", systemImage: "tray", description: Text("Requests from sessions, the web page and Claude show up here."))
             .accessibilityIdentifier("inbox-empty")
         }
@@ -79,17 +88,7 @@ private struct InboxRow: View {
     ["repo-key": "Repo key", "grant": "Grant", "unlock": "Unlock", "new-session": "New session", "resume-upgrade": "Resume", "add-store": "Add a store"][it.kind] ?? it.kind
   }
   /// the list's title: the core action (or the phone grant) the entry leads to, a fixed name per kind
-  private var action: String {
-    let p = it.params
-    switch it.kind {
-    case "repo-key": return p["action"].string == "remove" ? "Remove deploy key" : "Add deploy key"
-    case "grant": return (p["days"].int ?? 0) > 0 ? "Standing rule" : "Grant"
-    case "unlock": return "Unlock stores"
-    case "add-store": return "Add a store"
-    case "resume-upgrade": return "Resume on the latest image"
-    default: return it.j["options"]["restore"].text != nil ? "Restore" : "New session"
-    }
-  }
+  private var action: String { it.actionTitle }
   /// what it is about, as values (repo, store, feature, session, length): the router's record, unverified
   private var details: [String] {
     let p = it.params, who = it.sessionName ?? it.session
@@ -106,4 +105,44 @@ private struct InboxRow: View {
       return [who].compactMap { $0 }
     }
   }
+}
+
+/// a batch: one entry, its summary (the caller's words), its items' actions; Review opens the batch page
+private struct BatchRow: View {
+  @Environment(AppModel.self) private var model
+  let b: InboxBatch
+
+  var body: some View {
+    Button(action: review) {
+      VStack(alignment: .leading, spacing: 4) {
+        HStack(alignment: .firstTextBaseline) {
+          Text("\(b.items.count + b.preparing) requests").font(.headline).foregroundStyle(Color.primary).accessibilityIdentifier("batch-title-\(b.id)")
+          Spacer()
+          if let p = model.pending["b:" + b.id] { StatusPill(text: p, color: .orange, spinning: true) } else { StatusPill(text: "Batch", color: .blue) }
+        }
+        let names = model.batchItems(b).map(\.actionTitle)
+        if !names.isEmpty { Text(names.joined(separator: " · ")).font(.subheadline).foregroundStyle(Color.primary).lineLimit(3) }
+        HStack(spacing: 12) {
+          Label(b.callerText, systemImage: "person")
+          if let c = b.created { Label(Fmt.ago(c), systemImage: "clock") }
+          if let e = b.expires { Label(Fmt.when(e), systemImage: "hourglass") }
+        }
+        .font(.footnote).foregroundStyle(Color.secondary).labelStyle(.titleAndIcon)
+        if !b.summary.isEmpty {
+          Text("“\(b.summary)”").font(.subheadline).italic().foregroundStyle(Color.secondary).lineLimit(3)
+            .accessibilityIdentifier("batch-summary-\(b.id)")
+        }
+      }
+    }
+    .accessibilityIdentifier("batch-review-\(b.id)")
+    .swipeActions {
+      Button("Deny all", role: .destructive) { Task { await model.denyBatch(b) } }
+    }
+    .contextMenu {
+      Button("Review", systemImage: "faceid", action: review)
+      Button("Deny all", systemImage: "xmark", role: .destructive) { Task { await model.denyBatch(b) } }
+    }
+  }
+
+  private func review() { model.present(.batch(id: b.id)) { [model] ok in if ok { model.settle(60) } } }
 }

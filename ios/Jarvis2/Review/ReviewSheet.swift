@@ -14,6 +14,7 @@ struct ReviewSheet: View {
       case .grant(let g, let inbox): GrantReviewView(ask: g, inbox: inbox, request: request)
       case .unlock(let s, let label, let inbox): UnlockReviewView(sessionId: s, label: label, inbox: inbox, request: request)
       case .repoKey(let a, let r, let sens, let inbox): RepoKeyView(action: a, repo: r, sensitiveAsked: sens, inbox: inbox, request: request)
+      case .batch(let id): BatchReviewView(batchId: id)
       }
     }
     .interactiveDismissDisabled(false)
