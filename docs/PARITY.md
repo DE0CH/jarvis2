@@ -58,7 +58,7 @@ snapshots, live transcripts, task results).
 - Content stores: present (`router/content.go`; DECISIONS 132-133): Jarvis 1's `claude-records/.content/<name>/` folders, used in place with the router's Storage Box creds; the app's Content tab (web) manages them; New session (web and iPhone) and task fields pick them, signed in the line's config (`content`); `content-sync` on the machine goes through the local proxy to `/m/api/sessions/:id/content…`, only for the cert's stores, each downloaded file with the core's attestation. Drop tokens: missing.
 
 ## Account and apps
-- Re-login: present (Settings → Claude account in the web page and the app: the CLI's sign-in page, paste the code; `POST /api/claude-login/start|code`). Usage quota: present (the router reads it with its own pair). Device pairing for OpenClaw/Paseo apps: present (`router/devices.go`; "Device pairing" below); the apps still name jarvis.deyaochen.com until their one-line change.
+- Re-login: present (Settings → Claude account in the web page and the app: the CLI's sign-in page, paste the code; `POST /api/claude-login/start|code`). Usage quota: present (the router reads it with its own pair). Device pairing for OpenClaw/Paseo apps: present (`router/devices.go`; "Device pairing" below); both apps name this host (DECISIONS 158).
 - Dashboard (app/DECISIONS.md 23–38): Sessions (live status, auto-pause/idle switches, resume prompt, destroy with the changes check, transcript, Discord link, needsGrant one-tap, permission mode, copy id), Grants (secure page, phone-signed), Terminal, Remote (with copy), per-session wakeups/crons, **Search** (conversations of both Jarvises, iCloud files), Previous (restore/tail/remove/delete), Tasks, Schedules, Stores, Repos, Settings (usage, Fly spend, core keys with copy), New session (one-shot, auto-pause, repos, API proxy, permission mode), banners, "Also on Fly": present. Paired apps (Settings, web), Content (web tab; iPhone Settings → Content without uploads), lease pills, first-prompt attachments, the per-tab transcript filter on Sessions/Previous: missing.
 
 ## Harnesses and image
@@ -97,6 +97,6 @@ Jarvis 2 answers the apps itself (`router/devices.go`), as Jarvis 1 did: `GET /a
 `openclaw-de0ch://paired?…` / `paseo-de0ch://paired?…`. `GET /api/remotes` and `POST /api/sessions/:id/start` sit behind the
 path-scoped Access app "Jarvis 2 devices" (Deyao's email, or any service token; `ACCESS_DEVICES_AUD`), and the router admits
 a service token only when its client id is a paired device's. The same token passes the session hosts' Access
-(`<id>-s.deyaochen.com`). Settings → Paired apps lists and removes them. The forks still call jarvis.deyaochen.com: the
-switch is one constant each (DE0CH/openclaw `apps/ios/Sources/Jarvis/JarvisModels.swift` `JarvisConfig.baseURL`, DE0CH/paseo
-`packages/app/app.config.js` `jarvis.url`), made when Jarvis 1 retires, then each app pairs once more (RUNBOOK "Paired apps").
+(`<id>-s.deyaochen.com`). Settings → Paired apps lists and removes them. Both forks name jarvis2.deyaochen.com
+(DE0CH/openclaw `apps/ios/Sources/Jarvis/JarvisModels.swift` `JarvisConfig.baseURL`, DE0CH/paseo `packages/app/app.config.js`
+`jarvis.url`; 2026-10-13, DECISIONS 158): each app pairs once with Jarvis 2 (RUNBOOK "Paired apps").

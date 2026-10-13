@@ -1039,3 +1039,10 @@ Deyao: several actions approved together with ONE Face ID; the caller groups the
      the reboot WARP installed by the unit, the node Ready on 10.254.254.1, every pod Running, Flux fetching GitHub,
      a new GHCR image pulled and a pod reaching api.github.com.
 
+158. **The apps' server URL moved to Jarvis 2 now, not at retirement** (Deyao, 2026-10-13: "make sure Jarvis 2 runs fully
+     without Jarvis 1"; supersedes 139). OpenClaw and Paseo name jarvis2.deyaochen.com from their next TestFlight build;
+     Deyao pairs each once. They no longer see Jarvis 1's OpenClaw/OpenCode sessions (Jarvis 1 is frozen). Paseo's CI
+     e2e token is a Jarvis 1 device: Jarvis 2 admits only devices paired through `/api/devices/pair` (Deyao's Access
+     login), and the setup session can't pair one (giving it that would hand it every OpenClaw gateway token), so the
+     fork's simulator test skips its Jarvis checks (a warning) until a paired token is in its secrets. Change: a
+     setup-signed device registration for a CI token, or Deyao pairs a "Paseo CI" device once.

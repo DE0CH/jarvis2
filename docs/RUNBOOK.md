@@ -403,9 +403,11 @@ paths `/api/remotes`, `/api/sessions/*/start`; audience `ACCESS_DEVICES_AUD` in 
 token through to those two paths and the router admits only paired ones. Check from outside: a service token that isn't
 a paired app gets the router's 403 `{"error":"Access login required"}` on `/api/remotes` (not Cloudflare's login page).
 The apps call `JarvisConfig.baseURL` (DE0CH/openclaw `apps/ios/Sources/Jarvis/JarvisModels.swift`) and `jarvis.url`
-(DE0CH/paseo `packages/app/app.config.js`); while they name jarvis.deyaochen.com they pair with Jarvis 1. Moving them
-is that one constant per fork and a TestFlight build (claude-env skills `openclaw-ios`, `paseo-ios`), then one pairing
-per app.
+(DE0CH/paseo `packages/app/app.config.js`): both name jarvis2.deyaochen.com (TestFlight builds through claude-env skills
+`openclaw-ios`, `paseo-ios`). Deyao pairs each app once: OpenClaw: Settings → Gateway → Jarvis → Sign In with Jarvis;
+Paseo: Settings → Jarvis → Pair; each opens the Access sign-in sheet for this host. Paseo's CI simulator test runs its
+Jarvis checks only with a paired device token (`JARVIS_E2E_CLIENT_ID/SECRET` in the fork's secrets); while the old
+Jarvis 1 token is there, it only installs and launches the app.
 
 ## The box's network: IPv6-only, IPv4 out through WARP
 
