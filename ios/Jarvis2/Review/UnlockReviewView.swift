@@ -15,6 +15,8 @@ struct UnlockReviewView: View {
   /// the session as its core-signed cert names it (audit finding 4)
   @State private var ident: LineIdentity?
   @State private var certNonce: String?
+  /// keys sessions wrote into the locked stores (shown before Face ID; the unlock refuses one not shown)
+  @State private var writes: [SessionWrite] = []
   @State private var scoped = false
   @State private var signed: [SignedFact]?
   @State private var loadError: String?
@@ -36,6 +38,7 @@ struct UnlockReviewView: View {
           }
         }
         Section("Stores (signed cert)") { StoreLines(stores: certStores) }
+        SessionWritesSection(writes: writes)
         Section {
           if let failure { ErrorRow(text: failure, id: "secure-error") }
           SigningFooter()
@@ -78,8 +81,9 @@ struct UnlockReviewView: View {
       certNonce = scoped ? c.nonce : nil
       certStores = (c.stores ?? []).filter { $0 != StoreView.coreStore }
       let l = certStores.filter { n in doc.stores.contains { $0.name == n && !$0.unlocked && !$0.empty } }
+      writes = await SessionWrites.load(l)
       locked = l
-      signed = SignedAction.unlock(stores: l, session: id, scoped: scoped)
+      signed = SignedAction.unlock(stores: l, session: id, scoped: scoped) + SessionWrites.fact(writes)
     } catch { loadError = errText(error) }
   }
   private func allow() async {
@@ -87,7 +91,7 @@ struct UnlockReviewView: View {
     failure = nil
     do {
       busy = "Unlocking…"
-      try await StoreUnlock.signAndUnlock(payload: nil, stores: locked, reason: "Unlock \(locked.joined(separator: ", "))", for: certNonce)
+      try await StoreUnlock.signAndUnlock(payload: nil, stores: locked, reason: "Unlock \(locked.joined(separator: ", "))", for: certNonce, shown: writes)
       model.secureCompleted(true)
     } catch { busy = nil; failure = errText(error) }
   }

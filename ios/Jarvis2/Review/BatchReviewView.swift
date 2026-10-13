@@ -48,9 +48,11 @@ enum BatchPrepare {
       facts.append(.init(id: "restore-router", label: "Restores (router's words)", value: rs, style: .code))
     }
     let doc = try await RouterClient.shared.storesDoc()
-    let want: [String] = rv.kind == .addStore ? [rv.addedStore ?? ""] : rv.kind == .newSession ? rv.stores : []
+    // a resume on a new image or mode brings the line's stores as they are now (as ApprovalView)
+    let want: [String] = rv.kind == .addStore ? [rv.addedStore ?? ""] : (rv.kind == .newSession || rv.kind == .resumeUpgrade) ? rv.stores : []
     let toUnlock = want.filter { n in doc.stores.contains { $0.name == n && !$0.unlocked && !$0.empty } }
-    facts += SignedAction.alsoUnlocks(toUnlock, scoped: true)
+    let writes = await SessionWrites.load(toUnlock)
+    facts += SignedAction.alsoUnlocks(toUnlock, scoped: true) + SessionWrites.fact(writes)
     let payload = x.challenge.payload, nonce = rv.challenge.nonce
     return BatchPrepared(facts: facts) { auth in
       let reason = "Approve"
@@ -58,7 +60,7 @@ enum BatchPrepare {
       if toUnlock.isEmpty {
         sig = try await offMain { try PhoneKeys.shared.sign(payload, reason: reason, auth: auth) }
       } else {
-        guard let s = try await StoreUnlock.signAndUnlock(payload: payload, stores: toUnlock, reason: reason, for: nonce, auth: auth) else { throw TrustError.stale("signature") }
+        guard let s = try await StoreUnlock.signAndUnlock(payload: payload, stores: toUnlock, reason: reason, for: nonce, shown: writes, auth: auth) else { throw TrustError.stale("signature") }
         sig = s
       }
       let ans = try await RouterClient.shared.respond(approvalId, signature: sig)
@@ -111,8 +113,9 @@ enum BatchPrepare {
     let nonce = scoped ? c.nonce : nil
     let certStores = (c.stores ?? []).filter { $0 != StoreView.coreStore }
     let locked = certStores.filter { n in doc.stores.contains { $0.name == n && !$0.unlocked && !$0.empty } }
-    return BatchPrepared(facts: SignedAction.unlock(stores: locked, session: id, scoped: scoped), refusal: locked.isEmpty ? "Nothing locked" : nil) { auth in
-      try await StoreUnlock.signAndUnlock(payload: nil, stores: locked, reason: "Unlock \(locked.joined(separator: ", "))", for: nonce, auth: auth)
+    let writes = await SessionWrites.load(locked)
+    return BatchPrepared(facts: SignedAction.unlock(stores: locked, session: id, scoped: scoped) + SessionWrites.fact(writes), refusal: locked.isEmpty ? "Nothing locked" : nil) { auth in
+      try await StoreUnlock.signAndUnlock(payload: nil, stores: locked, reason: "Unlock \(locked.joined(separator: ", "))", for: nonce, shown: writes, auth: auth)
     }
   }
 

@@ -33,6 +33,8 @@ struct NewSessionView: View {
   @State private var images: [PickedImage] = []
   @State private var contentStores: [RouterClient.ContentStoreDTO] = []
   @State private var content: Set<String> = []
+  /// the router's store rows (each key's writer): the keys sessions wrote into the stores Start unlocks are shown
+  @State private var storeRows: [StoreRowDTO] = []
 
   static let defaultRepo = "DE0CH/claude-env"
   private var hidden: Set<String> { model.harnessHidden }
@@ -51,6 +53,7 @@ struct NewSessionView: View {
       AttachmentsSection(images: $images, disabled: busy != nil)
       storesSection
       harnessStoresSection
+      SessionWritesSection(writes: SessionWrites.from(storeRows, stores: toUnlock))
       harnessSection
       reposSection
       contentSection
@@ -252,6 +255,7 @@ struct NewSessionView: View {
     } catch { if !loaded { loadError = errText(error) } }
     if model.models.isEmpty { await model.loadLists() }
     contentStores = (try? await RouterClient.shared.contentStores()) ?? []
+    storeRows = (try? await RouterClient.shared.storeRows()) ?? []
     pickModel()
     defaultRepo()
   }
@@ -301,7 +305,8 @@ struct NewSessionView: View {
       let locked = r.stores.filter { n in now.contains { $0.name == n && !$0.unlocked && !$0.empty } }
       busy = "Signing…"
       let reason = "Start \"\(title.isEmpty ? "New session" : title)\"" + (locked.isEmpty ? "" : " and unlock \(locked.joined(separator: ", "))")
-      guard let sig = try await StoreUnlock.signAndUnlock(payload: a.challenge.payload, stores: locked, reason: reason, for: r.challenge.nonce) else {
+      guard let sig = try await StoreUnlock.signAndUnlock(payload: a.challenge.payload, stores: locked, reason: reason, for: r.challenge.nonce,
+                                                          shown: SessionWrites.from(storeRows, stores: locked)) else {
         throw TrustError.stale("signature")
       }
       busy = "Starting…"

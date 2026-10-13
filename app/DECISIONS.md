@@ -276,7 +276,21 @@ fixes, 34–40 carried over from the old app and still true, 41–43 the web pag
     session wrote); each text has an inline Edit (a text box with Save / Cancel, Saving… and the router's error under
     it, "Saved" for a moment; saving an empty text removes it) that `PUT`s `api/stores/{store}/docs`. Keys with none
     show "no explanation yet"; a store whose key names aren't known says so. New session's store picker shows the same
-    read-only and compact (key and explanation on one line, at most two lines). The iOS app doesn't show them yet.
+    read-only and compact (key and explanation on one line, at most two lines). The iOS app: 68.
+68. **Stores of keys in the iOS app** (core/keys.go; Deyao, 2026-10-13). Settings → Stores keeps one row per store (pills, the
+    number of keys, Unlock); tapping the row opens the store's page: its about text and its keys (name in mono, how long
+    ago it was written, "Written by session <title>" in orange for a key a session wrote, its explanation), each text
+    with the inline Edit of 67 (`PUT api/stores/{store}/docs`). A key a session wrote is also always in view on the
+    store's row (orange, with the session's title). Every page that unlocks (the Stores row, New session's Start, an approval,
+    the unlock review, a batch item) shows the session-written keys of the stores it opens ("Written by a session",
+    from `GET api/stores` keyInfo) and the Face ID prompt names them; the unlock then refuses any key the core's signed
+    unlock_begin names as machine-written that the page didn't show (StoreUnlock), so a value a session chose is never
+    released unseen. Setup-written keys are checked against keys/setup.pub per key; anything but setup, machine or core
+    is refused. A resume on a new image or mode (resume-upgrade) also unlocks the line's locked stores for that
+    challenge under its one Face ID, as New session does. Recover lays each store's key backups (keys/<store>/<key>.json)
+    over its whole-store backup by time (a deleted key leaves; a store only key backups name comes back sensitive) and
+    claims with the `keys` bundle when the core's identity says so; Settings → Encrypted backup counts and checks key
+    backups too. Until the held core is live the app also speaks the earlier whole-store formats (each branch marked).
 
 ## Unfinished / known gaps
 

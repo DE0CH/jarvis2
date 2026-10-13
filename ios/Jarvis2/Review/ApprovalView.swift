@@ -18,6 +18,8 @@ struct ApprovalView: View {
   @State private var attest: ImageAttestation?
   @State private var harnessStores: [String] = []
   @State private var toUnlock: [String] = []
+  /// keys sessions wrote into the stores it unlocks (shown before Face ID; the unlock refuses one not shown)
+  @State private var writes: [SessionWrite] = []
   @State private var scoped = false
   /// sensitive stores: the core's signed store list's marks joined with the challenge's (a newer core drops the latter)
   @State private var sens: [String] = []
@@ -98,6 +100,7 @@ struct ApprovalView: View {
           }
           if r.kind == .other { LabeledContent("The challenge", value: r.challenge.request.kind) }
         }
+        SessionWritesSection(writes: writes)
         Section {
           if !toUnlock.isEmpty {
             LabeledContent {
@@ -153,13 +156,15 @@ struct ApprovalView: View {
       if rv.kind == .newSession || rv.kind == .resumeUpgrade { attest = try await ImageAttestation.check(image: rv.image, sig: x.imageSig) }
       harnessStores = PinnedPolicy.stores(rv.harness, router: model.policy)
       let doc = try await RouterClient.shared.storesDoc()
-      let want: [String] = rv.kind == .addStore ? [rv.addedStore ?? ""] : rv.kind == .newSession ? rv.stores : []
+      // a resume on a new image or mode already asks for Face ID: it brings the line's stores as they are now too
+      let want: [String] = rv.kind == .addStore ? [rv.addedStore ?? ""] : (rv.kind == .newSession || rv.kind == .resumeUpgrade) ? rv.stores : []
       sens = Array(Set(rv.sensitive + doc.stores.filter(\.sensitive).map(\.name)))
       scoped = true  // every core takes unlocks for one session (the flag is going away)
       // only with a core that unlocks for one session (an older core's unlocks would stay open to every session)
       toUnlock = scoped ? want.filter { n in doc.stores.contains { $0.name == n && !$0.unlocked && !$0.empty } } : []
+      writes = await SessionWrites.load(toUnlock)
       r = rv; a = x
-      signed = SignedAction.approval(rv, of: id) + SignedAction.alsoUnlocks(toUnlock, scoped: scoped)
+      signed = SignedAction.approval(rv, of: id) + SignedAction.alsoUnlocks(toUnlock, scoped: scoped) + SessionWrites.fact(writes)
     } catch { loadError = errText(error) }
   }
   private func approve() async {
@@ -172,7 +177,7 @@ struct ApprovalView: View {
       if toUnlock.isEmpty {
         sig = try await offMain { try PhoneKeys.shared.sign(payload, reason: reason) }
       } else {
-        guard let s = try await StoreUnlock.signAndUnlock(payload: payload, stores: toUnlock, reason: reason, for: r.challenge.nonce) else { throw TrustError.stale("signature") }
+        guard let s = try await StoreUnlock.signAndUnlock(payload: payload, stores: toUnlock, reason: reason, for: r.challenge.nonce, shown: writes) else { throw TrustError.stale("signature") }
         sig = s
       }
       busy = "Approving…"
