@@ -139,3 +139,54 @@ extension CoreSetup {
     return try e.encode(B(blobs: blobs, flyToken: fly, notSensitive: rest.filter { !$0.sensitive }.map(\.name), owners: owners))
   }
 }
+
+// ---- the offline copy (Settings → Encrypted backup) ---------------------------------------------------------------
+// The objects exactly as the router served them, each signature checked against keys/setup.pub like Recover does, and
+// saved as ONE file: {format "jarvis2-backup-export", version 1, bucket, fetchedAt, setupKey, setupKeySource, objects}.
+// Nothing is opened here and no kit is needed: tools/decrypt-backup.py opens the file offline with the kit (it checks
+// the signatures again, against the file's setup key and keys/setup.pub).
+extension CoreSetup {
+  /// one object's check: nil problem = signed by the setup key and naming its own store
+  struct BackupCheck: Equatable, Identifiable { let key: String; let problem: String?; var id: String { key } }
+  static let exportFormat = "jarvis2-backup-export", exportVersion = 1
+
+  /// the same per-object checks as readBackups, minus opening: signed, the setup key's, the doc names its own key
+  static func checkSignatures(_ objects: [BackupObject], setupKey: String) -> [BackupCheck] {
+    var seen = Set<String>()
+    return objects.map { o in
+      guard let s = try? JSONDecoder().decode(Signed.self, from: Data(o.body.utf8)) else { return BackupCheck(key: o.key, problem: "Not a signed document") }
+      guard CoreCrypto.valid(Data(s.doc.utf8), sig: s.sig, by: setupKey) else { return BackupCheck(key: o.key, problem: "Not signed by the setup key") }
+      let doc = (try? JSONDecoder().decode(MarkerDoc.self, from: Data(s.doc.utf8)))
+      if let n = name(of: o.key, prefix: "stores/") {
+        guard doc?.kind == "store-backup", doc?.name == n else { return BackupCheck(key: o.key, problem: "Names another store") }
+        guard seen.insert(n).inserted else { return BackupCheck(key: o.key, problem: "Comes twice") }
+      } else if let n = name(of: o.key, prefix: "sensitive/") {
+        guard doc?.kind == "store-sensitive", doc?.name == n else { return BackupCheck(key: o.key, problem: "Names another store") }
+      } else {
+        return BackupCheck(key: o.key, problem: "Not a store backup")
+      }
+      return BackupCheck(key: o.key, problem: nil)
+    }
+  }
+
+  /// the file's bytes (sorted keys, slashes as they are; each body unchanged)
+  static func exportFile(bucket: String, objects: [BackupObject], setupKey: String, setupKeySource: String, fetchedAt: Date) throws -> Data {
+    struct O: Encodable { let key: String; let body: String }
+    struct F: Encodable {
+      let format = CoreSetup.exportFormat; let version = CoreSetup.exportVersion
+      let bucket: String; let fetchedAt: String; let setupKey: String; let setupKeySource: String; let objects: [O]
+    }
+    let iso = ISO8601DateFormatter()
+    iso.formatOptions = [.withInternetDateTime]
+    let e = JSONEncoder(); e.outputFormatting = [.sortedKeys, .withoutEscapingSlashes, .prettyPrinted]
+    return try e.encode(F(bucket: bucket, fetchedAt: iso.string(from: fetchedAt), setupKey: setupKey, setupKeySource: setupKeySource,
+                          objects: objects.map { O(key: $0.key, body: $0.body) }))
+  }
+
+  /// jarvis2-backup-2026-10-13-1015.json (UTC)
+  static func exportName(_ at: Date) -> String {
+    let f = DateFormatter()
+    f.locale = Locale(identifier: "en_US_POSIX"); f.timeZone = TimeZone(identifier: "UTC"); f.dateFormat = "yyyy-MM-dd-HHmm"
+    return "jarvis2-backup-\(f.string(from: at)).json"
+  }
+}

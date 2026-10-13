@@ -237,7 +237,8 @@ versioned bucket `jarvis2-backup-de0ch`, `body` its text unchanged — `stores/<
 `sensitive/<name>.json` = a signed `{"kind":"store-sensitive","name","at"}` marker. The router reads them with its
 own read credential (router env `BACKUP_READ_ACCESS_KEY/SECRET_KEY`; `BACKUP_ENDPOINT`, `BACKUP_REGION`,
 `BACKUP_BUCKET` default to the production bucket) and answers 503 without it, 502 when the bucket refuses. The app
-checks each `sig` against `keys/setup.pub` (from GitHub) and opens each backup with the master key from the kit.
+checks each `sig` against `keys/setup.pub` (from GitHub) and opens each backup with the master key from the kit. Settings → Encrypted backup saves the same answer, checked but unopened, as one file for
+`tools/decrypt-backup.py` (RUNBOOK "Offline copy of the stores").
 
 Unlocks for one session (DESIGN "Carried secrets"): `unlock/begin {store, for}` with `for` = the nonce of the challenge
 (New session's Start, an approval of a new line, an add-store) or of the session's cert (Unlock…) → the begin doc

@@ -1,8 +1,8 @@
 // Settings: the Claude account (Jarvis 1 holds it) and its usage, Stores, Repos and Machines, the Fly spend against the
-// cap, and Jarvis 2 itself with Reset or recover.
+// cap, and Jarvis 2 itself with Reset or recover and the encrypted backup (an offline copy of the stores).
 import SwiftUI
 
-enum SettingsRoute: Hashable { case stores, repos, addRepo, machines }
+enum SettingsRoute: Hashable { case stores, repos, addRepo, machines, backup }
 
 struct SettingsView: View {
   @Environment(AppModel.self) private var model
@@ -32,6 +32,8 @@ struct SettingsView: View {
         Section {
           LabeledContent("Core", value: model.coreUp ? "Running" : "Not answering")
           Button("Reset or recover…", systemImage: "key.horizontal") { model.showSetup = true }.accessibilityIdentifier("open-setup")
+          NavigationLink(value: SettingsRoute.backup) { Label("Encrypted backup", systemImage: "arrow.down.doc") }
+            .accessibilityIdentifier("open-backup")
         } header: { Text("Jarvis 2") } footer: {
           Text("Either pairs this iPhone again.")
         }
@@ -44,6 +46,7 @@ struct SettingsView: View {
         case .repos: ReposView(path: $path)
         case .addRepo: AddRepoView(path: $path)
         case .machines: MachinesView()
+        case .backup: BackupView()
         }
       }
     }

@@ -266,6 +266,12 @@ final class RouterClient: NSObject, ASWebAuthenticationPresentationContextProvid
     struct B: Decodable { let objects: [CoreSetup.BackupObject] }
     return try await json("GET", "api/backups", as: B.self).objects
   }
+  /// the same with the bucket's name, for the offline copy (Settings → Encrypted backup)
+  func backupDump() async throws -> (bucket: String, objects: [CoreSetup.BackupObject]) {
+    struct B: Decodable { let bucket: String?; let objects: [CoreSetup.BackupObject] }
+    let b = try await json("GET", "api/backups", as: B.self)
+    return (b.bucket ?? "", b.objects)
+  }
 
   // ---- approvals ----
   /// an approval with its signed challenge (checked by Checks.review against the pinned core key)

@@ -247,6 +247,15 @@ fixes, 34–40 carried over from the old app and still true, 41–43 the web pag
 63. **Dialogs** keep the HIG title ("Destroy “X”?") with a short fixed message; a destroy lists what it would lose one
     line per repo ("repo · 2 uncommitted · 1 unpushed"). Toasts are short fixed words ("Grant saved", "Copied").
 
+## The offline copy (2026-10-13)
+
+64. **Settings → Encrypted backup** is its own page under "Jarvis 2" (beside Reset or recover…): one button, Download
+    encrypted backup, which shows "Reading the backups…" until the file exists (nothing optimistic), then the facts as
+    rows (Bucket, Fetched, Stores, Sensitive markers, Checked against keys/setup.pub, Valid n of n or Not valid with
+    each failing object and its problem in red) and the File section (Name, Size, Save file…, a `ShareLink`, so Save to
+    Files, AirDrop and the rest come from the system share sheet). A failure is an inline error row, never an alert. No
+    kit, no Face ID: the page reads and checks only public, sealed data.
+
 ## Unfinished / known gaps
 
 - Free text (prompt, title) reaches the machine signed only with a core that vouches (the held core doesn't).

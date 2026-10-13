@@ -3,7 +3,8 @@ import XCTest
 /// Walks the native Jarvis 2 app on a simulator against the REAL core (fakefly build) and router running on the CI runner,
 /// with the backups on a local S3 stand-in, keeping a screenshot of every step. ios.yml runs it once per appearance
 /// (light, then dark), each against a fresh, empty core and router and a reset simulator keychain:
-/// Reset or recover (an old kit refused; Recover with the public TEST kit) → stores (create, unlock) → New session (the
+/// Reset or recover (an old kit refused; Recover with the public TEST kit) → stores (create, unlock) → the encrypted
+/// backup (download, checked, share sheet) → New session (the
 /// one page; Start also opens the locked harness store) → grants (a 10-minute grant and a standing rule on the Face ID
 /// review, one denied, one forgotten) → schedules → terminal (the router's page in a WebView) → pause → transcript →
 /// resume with a prompt (signed, shown on the approval) → permission mode → resume with the latest image → destroy →
@@ -125,6 +126,10 @@ final class Jarvis2UITests: JarvisUITestCase {
     wait(el("lock-default"), 30, "default unlocked (the core's signed unlocked list)")
     shot("stores-unlocked")
     back()
+
+    // ---- the offline copy: Settings → Encrypted backup (the stand-in bucket's six stores, every signature checked;
+    // nothing opened, no kit asked for), then the share sheet
+    downloadBackup(stores: 6)
 
     // ---- an image on a session made outside the app: the approval checks the router's copy against the signed hash
     webSessionWithImage()

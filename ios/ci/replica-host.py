@@ -7,12 +7,15 @@ the UI test (ReplicaUITests) on 127.0.0.1:18300.
   GET /relay?msg=M          M to the setup session (infra/phone-replica.sh) through the piping relay; its answer back
   GET /log?msg=M            a line in this helper's log
   GET /memwarn              the simulator's memory warning (Debug → Simulate Memory Warning)
+  GET /backup-open?kit=K    the app's saved encrypted backup (its tmp/backups/*.json) opened offline with this run's
+                            throwaway kit by tools/decrypt-backup.py (checked against keys/setup.pub): "ok <store>,…"
+                            (a sensitive store ends in *; no values), or why not
 
   (transitions.yml runs it too, with RELAY_URL "-": no relay there)
 
   replica-host.py UDID RELAY_URL     (RELAY_URL: https://ppng.io/<random>; /req and /resp under it)
 """
-import http.server, subprocess, sys, threading, time, urllib.parse, urllib.request
+import glob, http.server, json, os, subprocess, sys, tempfile, threading, time, urllib.parse, urllib.request
 
 UDID, RELAY = sys.argv[1], sys.argv[2].rstrip("/")
 state = {"until": 0.0, "fail": False}
@@ -44,6 +47,26 @@ def relay(msg):
     return urllib.request.urlopen(RELAY + "/resp", timeout=900).read().decode()
 
 
+REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+
+def backup_open(kit):
+    data = subprocess.run(["xcrun", "simctl", "get_app_container", UDID, "dev.de0ch.jarvis2", "data"],
+                          capture_output=True, text=True).stdout.strip()
+    files = sorted(glob.glob(os.path.join(data, "tmp", "backups", "jarvis2-backup-*.json")), key=os.path.getmtime)
+    if not files:
+        return f"no saved backup in {data}/tmp/backups"
+    out = os.path.join(tempfile.mkdtemp(), "plain.json")
+    p = subprocess.run([sys.executable, os.path.join(REPO, "tools", "decrypt-backup.py"), files[-1], "--kit-file", "-",
+                        "--setup-pub", os.path.join(REPO, "keys", "setup.pub"), "--out", out], input=kit, capture_output=True, text=True)
+    if p.returncode != 0:
+        return f"decrypt-backup exit {p.returncode}: {p.stderr.strip()[-400:]}"
+    with open(out) as f:
+        stores = json.load(f)["stores"]
+    os.remove(out)
+    return "ok " + ",".join(n + ("*" if s["sensitive"] else "") for n, s in sorted(stores.items()))
+
+
 class H(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
         u = urllib.parse.urlparse(self.path)
@@ -64,6 +87,12 @@ class H(http.server.BaseHTTPRequestHandler):
             print(f"relay ← {len(out)} chars", flush=True)
         elif u.path == "/memwarn":
             subprocess.run(["xcrun", "simctl", "spawn", UDID, "notifyutil", "-p", "com.apple.UIKit.SimulatorMemoryWarning"], check=False)
+        elif u.path == "/backup-open":
+            try:
+                out = backup_open(q.get("kit", ""))
+            except Exception as e:
+                out = f"backup-open failed: {e}"
+            print(f"backup-open → {out[:200]}", flush=True)
         elif u.path == "/log":
             print(q.get("msg", ""), flush=True)
         else:

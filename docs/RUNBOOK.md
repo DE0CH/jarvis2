@@ -92,6 +92,34 @@ to the old master key. Old backup versions stay in the versioned bucket, sealed 
 unlocking ahead (each Start unlocks what its session needs, for that session only); Deyao adds his repos again in
 Settings → Repos (the repos' stores aren't backed up, below).
 
+### Offline copy of the stores (Deyao, whenever he wants one)
+
+A copy of the encrypted store backups that Deyao keeps himself and opens with his kit on his Mac, with no network:
+
+1. **Download it in the app**: Settings → Encrypted backup → Download encrypted backup. The app reads every backup
+   through the router (`GET /api/backups`), checks each signature against `keys/setup.pub` from GitHub as Recover does
+   (any that fail are listed in red), and makes ONE file, `jarvis2-backup-<yyyy-mm-dd-hhmm>.json` (UTC): the objects
+   exactly as served, the bucket, the fetch time and the setup public key. Save file… opens the share sheet (Save to
+   Files, AirDrop to the Mac). The app never asks for the kit and never opens a backup; the file is as safe as the
+   bucket itself (everything in it is sealed to the master key), and only the kit opens it.
+2. **Decrypt it offline** with `tools/decrypt-backup.py` from a clone of DE0CH/jarvis2 (Python 3.9+ and
+   `cryptography`; set up once, while online: `python3 -m venv ~/.jarvis2-venv && ~/.jarvis2-venv/bin/pip install
+   cryptography`):
+
+       ~/.jarvis2-venv/bin/python tools/decrypt-backup.py ~/Downloads/jarvis2-backup-2026-10-13-1015.json --setup-pub keys/setup.pub
+
+   It asks for the kit without echoing it (or `--kit-file FILE`, or `--kit-file -` on stdin; never as an argument, so
+   it stays out of the shell history), checks every signature against the file's setup key AND `keys/setup.pub`
+   (they must be the same key), opens every store, and writes `jarvis2-stores-<date>.json` (mode 0600; `--out PATH`,
+   a path ending in `/` = one `<store>.json` per store in a 0700 directory; never over an existing file without
+   `--force`). Values reach the terminal only with `--stdout`. A failed check stops it before anything is written
+   (`--skip-bad` leaves the bad objects out and lists them). It also takes the router's raw `/api/backups` answer and a
+   single `stores/<name>.json` from the bucket (an older version, for example; both need `--setup-pub`), and a
+   version-1 kit's master part.
+3. **Keeping it**: the encrypted file can sit anywhere the backups could (Files, iCloud Drive, a USB stick); it is
+   only as current as its fetch time. The decrypted `jarvis2-stores-*.json` is every secret in the clear: open it,
+   use what's needed, and delete it; never put it in a synced folder (iCloud Drive, Dropbox).
+
 ### Carried secrets (DESIGN "Carried secrets")
 
 Stores stay locked: a Start's Face ID unlocks them for that session only, the core locks them again once its machine has

@@ -157,6 +157,35 @@ class JarvisUITestCase: XCTestCase {
     while !e.exists && n < max { app.swipeDown(velocity: .slow); n += 1 }
     return e.exists
   }
+  /// Settings → Encrypted backup: download (the signatures checked, nothing opened), then Save file… opens the system
+  /// share sheet, which is closed again. Returns whether every signature was valid; `stores` = how many stores the
+  /// page should count.
+  @discardableResult func downloadBackup(stores: Int? = nil) -> Bool {
+    tabRoot("Settings")
+    scrolledTo(el("open-backup"))
+    guard wait(el("open-backup"), 15, "Settings → Encrypted backup") else { return false }
+    el("open-backup").tap()
+    guard arrives(el("backup-download"), 15, "the encrypted backup page") else { return false }
+    shot("backup")
+    el("backup-download").tap()
+    let valid = el("backup-valid"), invalid = el("backup-invalid")
+    let until = Date().addingTimeInterval(60)
+    while !valid.exists && !invalid.exists && !el("backup-error").exists && Date() < until { usleep(300_000) }
+    if el("backup-error").exists { XCTFail("[\(tag)] the backup download failed: \(el("backup-error").label)") }
+    XCTAssertTrue(valid.exists, "[\(tag)] every backup signature is valid (\(invalid.exists ? said(invalid) : "no answer"))")
+    if let stores { XCTAssertTrue(said(el("backup-stores")).contains("\(stores)"), "[\(tag)] the page counts \(stores) stores: \(said(el("backup-stores")))") }
+    shot("backup-checked")
+    if scrolledTo(el("backup-share")) {
+      el("backup-share").tap()
+      sleep(3)
+      shot("backup-share-sheet", checkBlank: false)
+      let close = app.buttons.matching(NSPredicate(format: "label == 'Close' OR identifier == 'Close'")).firstMatch
+      if close.waitForExistence(timeout: 10) { close.tap() } else { app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.08)).tap() }
+      XCTAssertTrue(el("backup-share").waitForExistence(timeout: 20) && el("backup-share").isHittable, "[\(tag)] the share sheet closes")
+    } else { XCTFail("[\(tag)] no Save file… after the download") }
+    back()
+    return valid.exists
+  }
   func isOn(_ e: XCUIElement) -> Bool { (e.value as? String) == "1" || e.isSelected }
 
   // ---- the router on the runner (the test reads payloads; the app checks signatures) ----

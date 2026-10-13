@@ -563,3 +563,27 @@ session setting (`Checks.configKeys`) if a session should keep its screen from t
     A too-big session image therefore also holds back a router or core pin in the same run, which is louder than Jarvis
     1's (it skipped only the session pin). Change: split the check into its own job if that blocks deploys.
 
+## An offline copy of the stores, 2026-10-13
+
+Deyao (2026-10-13): "build a thing that allows me to download a copy of the encrypted key store so I can use the master
+key to decrypt it offline"; the download in the iPhone app, the decryptor a command-line script.
+
+103. **The app's file is the backups exactly as served**, not re-encoded: `{format: "jarvis2-backup-export", version 1,
+    bucket, fetchedAt, setupKey, setupKeySource, objects: [{key, body}]}`, each `body` the bucket object's text
+    unchanged, so the decryptor checks the setup key's signature over the very bytes `infra/setup.py` signed. The app
+    checks every signature (the same checks as Recover minus opening) and still lets Deyao save a file with a failed
+    one, listed in red: it is still only ciphertext, and the decryptor refuses it again. It keeps only the latest copy
+    in its temporary folder (complete file protection); the share sheet is the way out. No router or core change.
+104. **The decryptor is Python with `cryptography`** (`tools/decrypt-backup.py`), not a Go binary: it reuses the exact
+    primitives `infra/setup.py` seals with, is one readable file Deyao can audit on the Mac, and needs no build or
+    release pipeline; the cost is a one-time `pip install cryptography` (in a venv) while online. It trusts the setup key
+    inside the file only together with `--setup-pub` (a file whose key and signatures were both swapped would pass on its
+    own, so the RUNBOOK command always passes `keys/setup.pub` from a clone). The kit is read from a file, stdin or a
+    no-echo prompt, never argv. Output is mode 0600, never over an existing file, values on the terminal only with
+    `--stdout`. Change: a static Go binary if Deyao would rather not keep Python on the Mac.
+105. **Tested with the public TEST master key only**: `tools/decrypt_backup_test.py` seals with `infra/setup.py`'s own
+    `backup`/`mark_sensitive_backup` and a throwaway setup key, and reads a committed vector
+    (`tools/testdata/backup-export-v1.json`) so a later format change must keep reading v1 files; `ios.yml`'s interop job
+    decrypts the file the app's Swift code made from the router's stand-in bucket; the phone replica downloads the copy
+    in the Release build and the runner opens the saved file with that run's throwaway kit. The production master key
+    is never used (no session has it).

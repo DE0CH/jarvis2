@@ -1,0 +1,26 @@
+{
+ "bucket": "jarvis2-backup-vector",
+ "fetchedAt": "2026-10-13T10:00:00Z",
+ "format": "jarvis2-backup-export",
+ "objects": [
+  {
+   "body": "{\"doc\": \"{\\\"kind\\\": \\\"store-sensitive\\\", \\\"name\\\": \\\"marked\\\", \\\"at\\\": 1791852071}\", \"sig\": \"MEUCIQD3/CmeqKoDQTX8skZz0RRDsNR7b/B9pPWG8aw5uEhSxAIgdly2J7PjZD7IaCix0d7j+8JlylQxlW6WEU/uWnAG+jk=\"}",
+   "key": "sensitive/marked.json"
+  },
+  {
+   "body": "{\"doc\": \"{\\\"kind\\\": \\\"store-backup\\\", \\\"name\\\": \\\"core\\\", \\\"sensitive\\\": true, \\\"sealed\\\": {\\\"e\\\": \\\"BHrS2at2hhzOI4T/ewgFHECio20uHEyn/EXIAMQ/hbltwlm9gfe+MqzljWCGsimzpPfPoEwZaCrXpB2ufLTQZyk=\\\", \\\"data\\\": \\\"b6oq7rZ63mJP1RXCfawjFMt2c8+Htaxn0NFKXVxzlCnTh7ahttDxO02b6BYSRZBkPxmuEx56eozDfTk=\\\"}, \\\"at\\\": 1791852071}\", \"sig\": \"MEUCIQDV8darUkIlKqeCsDUelpaBJfuByQMAn1Jx/XA7x7VK7AIgcGFKYYKMoG6t4bCuh4myAW+rkiUvRozmyWpmDDOYfWA=\"}",
+   "key": "stores/core.json"
+  },
+  {
+   "body": "{\"doc\": \"{\\\"kind\\\": \\\"store-backup\\\", \\\"name\\\": \\\"default\\\", \\\"sensitive\\\": false, \\\"sealed\\\": {\\\"e\\\": \\\"BM1HwuEpwGQcitcQYixUy+VyRCCsRiPX8V7WqZVNJ+f3EqfpO0/Jb0f2gNI+VmCfx5mOkBzD3cGuSQPWf294aOY=\\\", \\\"data\\\": \\\"tdm+oYM2l6mTIUNIeWPEM+EWCq8aREOdCQw2hOlyg1dG2O7Ihy3U7MD6k4WvPNjfxWN1RFKi0LcfjFs/3D5arVlvywD7V0Myiq+K5P1qzOB2C9LymmW7Vqk+7Lq1TUph\\\"}, \\\"at\\\": 1791852071}\", \"sig\": \"MEQCIC7gpeS3dY+QgTfXCmRmmq0k/Ql94+JzXvni2dcyW1R6AiAe4CirvZ/4rzx2pU8wyspEKQ9JnbtObEY4OprzYztd1g==\"}",
+   "key": "stores/default.json"
+  },
+  {
+   "body": "{\"doc\": \"{\\\"kind\\\": \\\"store-backup\\\", \\\"name\\\": \\\"marked\\\", \\\"sensitive\\\": false, \\\"sealed\\\": {\\\"e\\\": \\\"BBR3RCWYJ0UjXuM8JIeghgOjq80JmDlmBoMAX+xLeDZpx+HXpiZ1MWrZCoRxgMrCdUfxcJpLQ3E5FLSWAiR8GTI=\\\", \\\"data\\\": \\\"Xy/eRLF3mdrIBkEer2J3oitW55pSs0fU619ikezJY1DzsXzxfoQ=\\\"}, \\\"at\\\": 1791852071}\", \"sig\": \"MEYCIQC5kXK609Qjd0NaXGQUS4716sbeFDxzQd+veQpJJoIUgAIhAMcl1ZYAsxHojBu/cQ49qfGlsj0hwjSjyrcisiOL7TcT\"}",
+   "key": "stores/marked.json"
+  }
+ ],
+ "setupKey": "BGiy9Pw7HQyrXo1dhzYfdiPlQ9TQLbcusDEAYnJALxDr0ep3mqldFZ/bD8+f2ag8O4K1B9KhxWTFLY0cG6qKpME=",
+ "setupKeySource": "a throwaway setup key (tools/decrypt_backup_test.py make-vector)",
+ "version": 1
+}

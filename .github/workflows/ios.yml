@@ -5,7 +5,7 @@ name: ios
 # a passing phone replica of the same app (ios/Jarvis2, ios/project.yml, policy/: what ships; tests may differ).
 on:
   push:
-    paths: [ios/**, core/**, router/**, tasks/**, infra/setup.py, e2e/testdata/**, policy/**, .github/workflows/ios.yml]
+    paths: [ios/**, core/**, router/**, tasks/**, infra/setup.py, e2e/testdata/**, policy/**, tools/**, .github/workflows/ios.yml]
   workflow_dispatch:
     inputs:
       only:
@@ -63,7 +63,22 @@ jobs:
         run: |
           W="$RUNNER_TEMP/w"
           INTEROP_CORE=http://127.0.0.1:8090 INTEROP_ROUTER=http://127.0.0.1:18080 INTEROP_KEYS="$W/keys" INTEROP_BACKUPS="$W/backups.json" \
-          INTEROP_MASTER_PEM="$GITHUB_WORKSPACE/e2e/testdata/master-test.pem" swift run -c release Interop
+          INTEROP_MASTER_PEM="$GITHUB_WORKSPACE/e2e/testdata/master-test.pem" INTEROP_EXPORT_OUT="$RUNNER_TEMP/export.json" swift run -c release Interop
+      - name: the offline decryptor (tools/decrypt-backup.py) on the file the app's code made, and its own tests
+        run: |
+          W="$RUNNER_TEMP/w"
+          python3 -m venv "$RUNNER_TEMP/venv" && . "$RUNNER_TEMP/venv/bin/activate" && pip install -q cryptography
+          python3 tools/decrypt_backup_test.py
+          kit="jarvis2-kit:2:$(openssl pkcs8 -topk8 -nocrypt -in e2e/testdata/master-test.pem -outform DER | base64 | tr -d '\n')"
+          printf '%s' "$kit" | python3 tools/decrypt-backup.py "$RUNNER_TEMP/export.json" --kit-file - --setup-pub "$W/keys/setup.pub" --out "$RUNNER_TEMP/plain.json"
+          python3 - "$RUNNER_TEMP/plain.json" <<'PY'
+          import json, os, stat, sys
+          d = json.load(open(sys.argv[1]))["stores"]
+          assert stat.S_IMODE(os.stat(sys.argv[1]).st_mode) == 0o600
+          assert d["default"]["values"] == {"GITHUB_TOKEN": "ci-dummy", "OTHER": "x"} and not d["default"]["sensitive"], d["default"]
+          assert d["marked"]["sensitive"] and d["core"]["sensitive"] and d["gmail"]["sensitive"]
+          print("ok   the offline copy opens with the test kit:", sorted(d))
+          PY
       - if: always()
         run: cat "$RUNNER_TEMP/w/core.log" "$RUNNER_TEMP/w/router.log" || true
 

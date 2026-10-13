@@ -162,6 +162,14 @@ final class ReplicaUITests: JarvisUITestCase {
     XCTAssertTrue(gone(el("lock-rh-plain"), 30), "rh-plain locked again")
     back()
 
+    // ---- the offline copy: Settings → Encrypted backup (checked, never opened), then the runner opens the saved file
+    // with this run's kit (tools/decrypt-backup.py, offline, keys/setup.pub) and finds the stores the setup session wrote
+    if downloadBackup() {
+      let opened = host("backup-open?kit=" + (kit.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? ""), timeout: 60)
+      note("backup-open", opened)
+      XCTAssertTrue(opened.hasPrefix("ok ") && opened.contains("rh-plain,") && opened.contains("rh-secret*"), "the saved file opens offline with the kit: \(opened)")
+    }
+
     // ---- new session: one page, its stores (and the harness's) unlocked with Face ID, running on Fly ----
     try must(openNewSession())
     scrolledTo(el("secure-store-rh-plain"), max: 4)

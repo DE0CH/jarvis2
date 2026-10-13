@@ -9,7 +9,7 @@
 // signed by another key, a second claim, a forged phone signature, a wrong share, a wipe by another key.
 // Configuration (env): INTEROP_CORE, INTEROP_ROUTER (its /api/backups reads the stand-in bucket jarvis2-backup-ci),
 // INTEROP_KEYS (the dir with box.pub + setup.pub), INTEROP_BACKUPS (standin.py's dump: {bucket: [{key, body}]}),
-// INTEROP_MASTER_PEM (e2e/testdata/master-test.pem).
+// INTEROP_MASTER_PEM (e2e/testdata/master-test.pem), INTEROP_EXPORT_OUT (optional: where the offline copy's file goes).
 #if canImport(CryptoKit)
 import CryptoKit
 #else
@@ -95,6 +95,25 @@ check(throwsErr { _ = try CoreSetup.readBackups(served, master: fresh, setupKey:
 check(throwsErr { _ = try CoreSetup.readBackups(served + [served[0]], master: master, setupKey: setupKey) }, "a backup served twice is refused")
 let nocore = try? CoreSetup.readBackups(dumps["jarvis2-backup-nocore"] ?? [], master: master, setupKey: setupKey)
 check(nocore?.map(\.name) == ["default"] && (try? CoreSetup.bundle(nocore ?? [])) != nil, "backups without the core store still make a bundle (the token comes later)")
+
+// ---- the offline copy (Settings → Encrypted backup): checked, never opened; tools/decrypt-backup.py opens the file (ios.yml)
+let exportChecks = CoreSetup.checkSignatures(served, setupKey: setupKey)
+check(exportChecks.count == served.count && exportChecks.allSatisfy { $0.problem == nil }, "the offline copy: every served object is signed by the setup key")
+let tamperedChecks = CoreSetup.checkSignatures(dumps["jarvis2-backup-tampered"] ?? [], setupKey: setupKey)
+check(tamperedChecks.filter { $0.problem != nil }.map(\.key) == ["stores/default.json"], "…and names the one that isn't (\(tamperedChecks.filter { $0.problem != nil }.map(\.key)))")
+if let s0 = served.first(where: { $0.key.hasPrefix("stores/") }) {
+  check(CoreSetup.checkSignatures(served + [s0], setupKey: setupKey).last?.problem == "Comes twice", "…a store served twice")
+  let moved = CoreSetup.BackupObject(key: "stores/elsewhere.json", body: s0.body)
+  check(CoreSetup.checkSignatures([moved], setupKey: setupKey).first?.problem == "Names another store", "…a backup under another store's key")
+}
+let exportAt = Date()
+let exported = try! CoreSetup.exportFile(bucket: "jarvis2-backup-ci", objects: served, setupKey: setupKey, setupKeySource: "interop", fetchedAt: exportAt)
+struct ExportBack: Decodable { let format: String; let version: Int; let bucket: String; let fetchedAt: String; let setupKey: String; let objects: [CoreSetup.BackupObject] }
+let back = try? JSONDecoder().decode(ExportBack.self, from: exported)
+check(back?.format == "jarvis2-backup-export" && back?.version == 1 && back?.setupKey == setupKey && back?.objects.map { $0.key + $0.body } == served.map { $0.key + $0.body },
+      "the file holds the objects exactly as served, with the setup key")
+check(CoreSetup.exportName(exportAt).hasPrefix("jarvis2-backup-") && CoreSetup.exportName(exportAt).hasSuffix(".json"), "the file's name (\(CoreSetup.exportName(exportAt)))")
+if let out = env["INTEROP_EXPORT_OUT"] { try! exported.write(to: URL(fileURLWithPath: out)) }
 
 // ---- Recover: the claim, signed with the kit's master key ----
 let phoneSigning = P256.Signing.PrivateKey(), phoneAgreement = P256.KeyAgreement.PrivateKey()

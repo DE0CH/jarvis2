@@ -57,7 +57,9 @@ jobs:
           EMAIL: ${{ inputs.email }}
           REPO: ${{ inputs.repo }}
         run: |
-          nohup python3 ios/ci/replica-host.py "$SIM_UDID" "$RELAY" > out/host.log 2>&1 &
+          # the host opens the app's saved encrypted backup with tools/decrypt-backup.py (needs cryptography)
+          python3 -m venv "$RUNNER_TEMP/venv" && "$RUNNER_TEMP/venv/bin/pip" install -q cryptography
+          nohup "$RUNNER_TEMP/venv/bin/python" ios/ci/replica-host.py "$SIM_UDID" "$RELAY" > out/host.log 2>&1 &
           sleep 1
           nohup xcrun simctl io "$SIM_UDID" recordVideo --codec=h264 --force out/replica.mp4 > out/video.log 2>&1 &
           VP=$!
