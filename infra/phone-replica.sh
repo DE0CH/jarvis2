@@ -143,11 +143,11 @@ fill_stores() {
     export JARVIS2_NOT_SENSITIVE=rh-plain
     $S pin-master
     $S create rh-plain
-    $S write rh-plain RH_PLAIN
-    $S write rh-secret RH_SECRET
-    $S write claude CLAUDE_ACCOUNT_UUID
-    $S write tunnel CF_ACCESS_CLIENT_ID CF_ACCESS_CLIENT_SECRET
-    $S write github-deploy-keys GITHUB_DEPLOY_KEYS_TOKEN=file:$W/deploy-keys.tok
+    $S write rh-plain RH_PLAIN --explain 'RH_PLAIN=replica test value (not secret)'
+    $S write rh-secret RH_SECRET --explain 'RH_SECRET=replica test value in a sensitive store'
+    $S write claude CLAUDE_ACCOUNT_UUID --explain 'CLAUDE_ACCOUNT_UUID=replica dummy Claude account id'
+    $S write tunnel CF_ACCESS_CLIENT_ID CF_ACCESS_CLIENT_SECRET --explain 'CF_ACCESS_CLIENT_ID=replica dummy tunnel id' --explain 'CF_ACCESS_CLIENT_SECRET=replica dummy tunnel secret'
+    $S write github-deploy-keys GITHUB_DEPLOY_KEYS_TOKEN=file:$W/deploy-keys.tok --explain 'GITHUB_DEPLOY_KEYS_TOKEN=7-day PAT for the replica throwaway repo only (deploy keys)'
     $S backup-core $W/fly.tok
     $S stores"
 }

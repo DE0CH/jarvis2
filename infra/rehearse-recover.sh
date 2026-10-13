@@ -92,12 +92,12 @@ export JARVIS2_NOT_SENSITIVE=rh-plain,rh-marked
 $S pin-master # a throwaway box and bucket: its own Reset is the one to trust
 $S create rh-plain
 $S create rh-marked
-$S write rh-plain RH_PLAIN
-$S write rh-secret RH_SECRET
-$S write rh-marked RH_MARKED
+$S write rh-plain RH_PLAIN --explain 'RH_PLAIN=rehearsal test value'
+$S write rh-secret RH_SECRET --explain 'RH_SECRET=rehearsal test value'
+$S write rh-marked RH_MARKED --explain 'RH_MARKED=rehearsal test value'
 $S mark-sensitive rh-marked
-$S write claude CLAUDE_ACCOUNT_UUID
-$S write tunnel CF_ACCESS_CLIENT_ID CF_ACCESS_CLIENT_SECRET
+$S write claude CLAUDE_ACCOUNT_UUID --explain 'CLAUDE_ACCOUNT_UUID=rehearsal test value'
+$S write tunnel CF_ACCESS_CLIENT_ID CF_ACCESS_CLIENT_SECRET --explain 'CF_ACCESS_CLIENT_ID=rehearsal dummy tunnel id' --explain 'CF_ACCESS_CLIENT_SECRET=rehearsal dummy tunnel secret'
 $S backup-core "$W/fly.tok"
 $S stores
 python3 - "$W/expect.json" <<'PY'
