@@ -4,7 +4,7 @@
 // Parameters are not secret (they travel unsigned in the machine's config): secrets belong in a store.
 import { useEffect, useState } from "react";
 import { View } from "react-native";
-import { api, CORE_STORE, harnessStoreSet, type TaskField, type TaskOption } from "../lib/api";
+import { api, CORE_STORE, DEPLOY_KEY_TOKEN_STORE, harnessStoreSet, type TaskField, type TaskOption } from "../lib/api";
 import { useStore, loadTasks, loadStores, toast } from "../lib/store";
 import { openApprovalFor } from "../lib/tasks";
 import { BadgeList, Button, CheckboxCards, Lbl, Muted, P, RadioCards, Row, Rows, Spinner, Switch, TextArea, TextField } from "../ui/kit";
@@ -49,7 +49,7 @@ export function TaskEdit({ spec }: { spec: TaskEditSpec }) {
     : <><P size={2} color="red" mt={3}>Template not in tasks/.</P><Rows mt={2}><Row label="Template" mono>{inst?.template || spec.template || ""}</Row></Rows></>}</Page>;
   // options: the template's own, or the core's stores / the sizes / the models
   const optionsOf = (f: TaskField): TaskOption[] =>
-    f.optionsFrom === "stores" ? stores.items.filter((s) => s.name !== CORE_STORE && !hidden.has(s.name)).map((s) => ({ value: s.name, label: s.name, sub: [s.sensitive ? "sensitive" : "", s.empty ? "empty" : "", s.unlocked ? "" : "locked"].filter(Boolean).join(" · ") || undefined }))
+    f.optionsFrom === "stores" ? stores.items.filter((s) => s.name !== CORE_STORE && s.name !== DEPLOY_KEY_TOKEN_STORE && !hidden.has(s.name)).map((s) => ({ value: s.name, label: s.name, sub: [s.sensitive ? "sensitive" : "", s.empty ? "empty" : "", s.unlocked ? "" : "locked"].filter(Boolean).join(" · ") || undefined }))
     : f.optionsFrom === "content" ? contentList.map((c) => ({ value: c.name, label: c.name, sub: `${c.files} file${c.files === 1 ? "" : "s"}` }))
     : f.optionsFrom === "sizes" ? sizes.map((s) => ({ value: s.id, label: s.id, sub: s.label }))
     : f.optionsFrom === "models" ? models.map((m) => ({ value: m.id, label: m.label || m.id }))

@@ -272,7 +272,8 @@ shouldnt unlock the whole infra [store] for that one task."
     add-store / downgrade. No `GITHUB_TOKEN` is used for cloning any more (a plain `GITHUB_TOKEN` in a store is just an
     env var).
 65. **New session pre-selects a picked repo's store** when it isn't sensitive; a sensitive one (github-jarvis2) is
-    ticked on the secure page, as every sensitive store.
+    ticked on the secure page, as every sensitive store. The web page adds a picked repo's store either way and marks a
+    sensitive one (161).
 66. **The production core is held, not restarted** (`jarvis2/core-pin: hold` on the core Deployment; `images.yml` builds
     the core image but doesn't pin it while the annotation is there). A restart would empty the core and only Deyao's
     Recover brings the stores back, so the deploy-key core waits for his go: remove the annotation (a commit), run the
@@ -1154,3 +1155,21 @@ Deyao: several actions approved together with ONE Face ID; the caller groups the
      live core (sha-06ab2452f8ad: whole stores; marked "until the held core is live"); the core waits for Deyao's go (a
      new core is a Recover, and it destroys the earlier core's sessions once paused, 69). Before that, the router's
      bucket credential gets PutObject on `keys/*` (infra/backup-read-key.py policies).
+
+161. **The web page picks any store, sensitive ones included** (Deyao, 2026-10-13: "make it so that I can select
+     secret stores on web"). *Why it was restricted*: the design kept the choice of a sensitive store with Deyao
+     himself on the phone's secure page (DESIGN "Sensitive stores"), since the web page is served by the router and
+     is not trusted: a compromised router or page could slip a sensitive store into a request it files. *Lifted*: the
+     web page's New session lists every store (each sensitive one with a red "sensitive" badge, never pre-picked; an
+     amber "Sensitive" row names every sensitive store the session would get, a picked repo's and the harness's
+     included), and picking a repo now adds its store even when that is sensitive (`github-jarvis2`). The task form
+     (`optionsFrom: stores`) already offered them. The router never refused a sensitive store from the web, so nothing
+     changed there (test `TestWebRequestTakesSensitiveStores`). *What still protects a sensitive store*: the web only
+     files a request; nothing starts until Deyao's Face ID on the iPhone, whose review page lists the stores from the
+     core-signed challenge, marks each sensitive one (the core's signed store list and the challenge's own marks, never
+     the router's word) and shows the orange "Sensitive" warning before Face ID; the store's unlock still happens only
+     under that Face ID, for that session only; and a sensitive line still takes only a phone grant. Never offered on
+     the web, as before: the core's own store (`core`), the deploy-key token's store (`github-deploy-keys`, the router
+     refuses it too) and a harness's stores (they come with the harness). The Restore and Jarvis 1 import flows take
+     their stores from the record / the import form and never filtered sensitivity; the web page has no add-store (a
+     session asks for one with `jarvis2-request add-store`). The iPhone app needed no change.

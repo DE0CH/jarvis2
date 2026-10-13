@@ -251,8 +251,9 @@ failing.
 Sensitivity lives in the core and only grows: `create_store` makes the only non-sensitive stores (besides
 a Recover), `mark_sensitive` takes one out of the set for good, a store the core never created is sensitive.
 The core marks sensitive stores in every challenge it signs, so the phone learns them from the core, never
-from the router: a sensitive store is never pre-selected by the normal-mode UI or the web, is chosen by Deyao
-himself on the secure page, and any approval that includes one shows an obvious warning before Face ID.
+from the router: a sensitive store is never pre-selected, may be picked on the secure page or proposed by the web
+page (DECISIONS 161; the web only files a request), and any approval that includes one marks it and shows an
+obvious warning before Face ID.
 Which stores a harness brings is the router's business (`policy/stores.json`); the app hides them.
 
 ## Unlocking a store (split key agreement)

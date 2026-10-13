@@ -1,11 +1,12 @@
-// New session on the WEB page: the form only files a pending request (POST api/sessions) with non-sensitive
-// stores; the approval happens in the app. In the app New session is one page in the shell (lib/sessions.ts,
+// New session on the WEB page: the form only files a pending request (POST api/sessions) with any stores,
+// sensitive ones included (Deyao, 2026-10-13; docs/DECISIONS.md 161); the approval happens in the app, whose review
+// page marks each sensitive store from the core-signed store list before Face ID. In the app New session is one page in the shell (lib/sessions.ts,
 // Shell/SecurePages.swift SecureNewSession), where everything is chosen and Start signs it.
 // Images (docs/DECISIONS.md 94-95): picked or pasted here, uploaded to the router (api/uploads) before the request; the
 // signed config names each one's sha256 + size, and the machine takes only those bytes.
 import { useEffect, useRef, useState } from "react";
 import { Image, Platform, Pressable, View } from "react-native";
-import { api, newId, uploadFile, CORE_STORE, harnessStoreSet } from "../lib/api";
+import { api, newId, uploadFile, CORE_STORE, DEPLOY_KEY_TOKEN_STORE, harnessStoreSet } from "../lib/api";
 import { useStore, loadStores, refresh, settle, toast, failed } from "../lib/store";
 
 import { BadgeList, Button, CheckboxCards, Flex, Lbl, Muted, P, Pill, RadioCards, Row, Rows, Segmented, Spinner, Text, TextArea, TextField } from "../ui/kit";
@@ -66,13 +67,14 @@ const fmtSize = (n: number) => (n < 1024 ? `${n} B` : n < 1 << 20 ? `${(n / 1024
 export function NewSession() {
   const SIZES = useStore((s) => s.sizes), MODELS = useStore((s) => s.models), stores = useStore((s) => s.stores);
   useEffect(() => { loadStores(); }, []);
-  // the normal-mode form never lists sensitive stores (those are only picked on the secure page), nor the
-  // core's own store (it never goes to a session)
+  // every store is offered, sensitive ones marked (never pre-picked); not the core's own store (it never goes to a
+  // session), the deploy-key token's store (only a deploy-key call opens it), nor a harness's (they come with it)
   const hidden = harnessStoreSet(useStore((s) => s.policy));
-  const plain = stores.items.filter((s) => !s.sensitive && s.name !== CORE_STORE && !hidden.has(s.name));
+  const plain = stores.items.filter((s) => s.name !== CORE_STORE && s.name !== DEPLOY_KEY_TOKEN_STORE && !hidden.has(s.name));
+  const isSensitive = (n: string) => stores.items.some((s) => s.name === n && s.sensitive);
   const [picked, setPicked] = useState<string[]>([]);
   const touched = useRef(false);
-  useEffect(() => { if (!touched.current) setPicked(plain.some((s) => s.name === "default") ? ["default"] : []); }, [plain.map((s) => s.name).join(",")]);
+  useEffect(() => { if (!touched.current) setPicked(plain.some((s) => s.name === "default" && !s.sensitive) ? ["default"] : []); }, [plain.map((s) => s.name).join(",")]);
   const [perm, setPerm] = useState("bypass"), [model, setModel] = useState(""), [size, setSize] = useState("medium"), [harness, setHarness] = useState("claude");
   // the models of the chosen harness (the router swaps a model of another harness for that harness's default)
   const models = MODELS.filter((m) => (m.harness || "claude") === harness);
@@ -82,7 +84,7 @@ export function NewSession() {
   const [mode, setMode] = useState("session"), [autoPause, setAutoPause] = useState<string[]>(["on"]);
   const oneShot = mode === "oneshot";
   // repos from Settings → Repos, each with its deploy key in its own store (github-<repo>): picking a repo also
-  // picks its store when that is not sensitive (a sensitive one, e.g. github-jarvis2, only on the secure page)
+  // picks its store, sensitive or not (a sensitive one, e.g. github-jarvis2, joins the warning below)
   const repoList = useStore((s) => s.state.repos) || [];
   const [repos, setRepos] = useState<string[]>([]), [apiProxy, setApiProxy] = useState<string[]>([]);
   // DE0CH/claude-env comes pre-selected once the repo list is in (Deyao, 2026-10-12), as in the iPhone app
@@ -119,6 +121,10 @@ export function NewSession() {
   const done = useDone();
   // one create per form: the router answers a repeat of this id with the first create
   const requestId = useRef(newId());
+  const repoStores = (rs: typeof repoList) => rs.map((r) => r.store).filter((n) => plain.some((s) => s.name === n));
+  // every sensitive store the session would get: picked, a picked repo's, or brought by the harness
+  const harnessStores = useStore((s) => s.policy)[harness] || [];
+  const sensitivePicked = [...new Set([...picked, ...repoStores(repoList.filter((r) => repos.includes(r.name))), ...harnessStores])].filter(isSensitive).sort();
   const canStart = !busy && (picked.length > 0) && !(oneShot && !prompt.trim());
   async function upload(): Promise<{ uploadId: string; files: { name: string }[] } | undefined> {
     if (!images.length) return undefined;
@@ -136,7 +142,7 @@ export function NewSession() {
   async function start() {
     if (!canStart) return;
     const chosen = repoList.filter((r) => repos.includes(r.name));
-    const withRepos = [...new Set([...picked, ...chosen.map((r) => r.store).filter((n) => plain.some((s) => s.name === n))])];
+    const withRepos = [...new Set([...picked, ...repoStores(chosen)])];
     const body = { requestId: requestId.current, label: label.trim(), prompt: prompt.trim(), model, permissionMode: perm, size, harness, stores: withRepos, oneShot, autoPause: !oneShot && autoPause.includes("on"),
       repos: chosen.map((r) => r.url).join(","), apiProxy: apiProxy.includes("on"), ...(content.length ? { content } : {}) };
     try {
@@ -159,9 +165,10 @@ export function NewSession() {
       <Lbl>Session title (optional)</Lbl>
       <TextField id="ns-title" autoComplete="off" autoCorrect={false} autoCapitalize="sentences" placeholder="e.g. refactor billing module" value={label} onChangeText={setLabel} />
       <Lbl>Secret stores</Lbl>
-      <Muted style={{ marginBottom: 8 }}>Sensitive stores can only be picked in the app.</Muted>
-      {plain.length ? <CheckboxCards id="ns-stores" value={picked} onChange={(v) => { touched.current = true; setPicked(v); }} options={plain.map((s) => ({ value: s.name, title: s.name, sub: <><P size={1} color="gray">{[s.empty ? "empty" : "", s.unlocked ? "" : "locked"].filter(Boolean).join(" · ") || "unlocked"}</P><StoreDocs store={s} /></> }))} />
-        : stores.loaded ? <Muted>No (non-sensitive) stores.</Muted>
+      {plain.length ? <CheckboxCards id="ns-stores" value={picked} onChange={(v) => { touched.current = true; setPicked(v); }} options={plain.map((s) => ({ value: s.name, title: s.name, sub: <>
+          <Flex gap={1} align="center" wrap>{s.sensitive && <Pill kind="bad">sensitive</Pill>}<P size={1} color="gray">{[s.empty ? "empty" : "", s.unlocked ? "" : "locked"].filter(Boolean).join(" · ") || "unlocked"}</P></Flex>
+          <StoreDocs store={s} /></> }))} />
+        : stores.loaded ? <Muted>No stores.</Muted>
         : stores.err ? <Muted>{"Could not list the stores: " + stores.err}</Muted>
         : <Flex gap={2} align="center"><Spinner /><Muted>Loading stores…</Muted></Flex>}
       <>
@@ -176,8 +183,8 @@ export function NewSession() {
       {repoList.length ? <CheckboxCards id="ns-repo" value={repos} onChange={setRepos} options={repoList.map((r) => ({ value: r.name, title: r.repo, sub: r.store }))} />
         : <Muted>No repos (Settings → Repos).</Muted>}
       {!!repoList.length && !repos.length && <Muted mt={1}>No repo: an empty workspace.</Muted>}
-      {repoList.some((r) => repos.includes(r.name) && !plain.some((s) => s.name === r.store)) && <Rows mt={2} id="ns-repo-sensitive">
-        <Row label="Pick in the app"><BadgeList color="amber" items={repoList.filter((r) => repos.includes(r.name) && !plain.some((s) => s.name === r.store)).map((r) => r.store)} /></Row></Rows>}
+      {sensitivePicked.length > 0 && <Rows mt={2} id="ns-sensitive-warning">
+        <Row label="Sensitive"><BadgeList color="amber" items={sensitivePicked} /></Row></Rows>}
       <Lbl>Content stores</Lbl>
       {contentList === null ? <Flex gap={2} align="center"><Spinner /><Muted>Loading content stores…</Muted></Flex>
         : contentList.length ? <CheckboxCards id="ns-content" value={content} onChange={setContent} options={contentList.map((c) => ({ value: c.name, title: c.name, sub: `${c.files} file${c.files === 1 ? "" : "s"} · ~/content/${c.name}` }))} />

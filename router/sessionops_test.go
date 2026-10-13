@@ -508,3 +508,36 @@ func addGrant(r *Router, session, holder, kind string) {
 		d.Grants[id] = &StoredGrant{ID: id, Session: session, Holder: holder, Kind: kind, Ends: time.Now().Add(5 * time.Minute), Doc: &Doc{Payload: "{}"}}
 	})
 }
+
+// TestWebRequestTakesSensitiveStores: the web page proposes any store, sensitive ones included (Deyao, 2026-10-13;
+// docs/DECISIONS.md 161): the request becomes an approval holding them, filed as the web's, for the phone to review;
+// the core's own store and the deploy-key token's store are still refused.
+func TestWebRequestTakesSensitiveStores(t *testing.T) {
+	rg, _ := newOpsRig(t)
+	r := rg.r
+	code, out := appDo(t, r, "POST", "/api/sessions", `{"requestId":"web-sens","harness":"claude","stores":["default","identity","github-jarvis2"]}`)
+	if code != 200 || out["id"] == nil {
+		t.Fatalf("%d %v", code, out)
+	}
+	id := out["id"].(string)
+	waitFor(t, "approval", func() bool {
+		var ok bool
+		r.st.Do(func(d *persisted) {
+			for _, a := range d.Approvals {
+				ok = ok || (a.Session == id && a.Kind == "new-session" && a.Origin != nil && a.Origin.Caller.Kind == "web")
+			}
+		})
+		return ok
+	})
+	r.st.Do(func(d *persisted) {
+		s := d.Sessions[id]
+		if s == nil || !containsString(s.Stores, "identity") || !containsString(s.Stores, "github-jarvis2") {
+			t.Fatalf("the sensitive stores didn't reach the request: %+v", s)
+		}
+	})
+	for _, bad := range []string{flyStore, deployKeyTokenStore} {
+		if code, out := appDo(t, r, "POST", "/api/sessions", `{"requestId":"web-`+bad+`","harness":"claude","stores":["`+bad+`"]}`); code == 200 {
+			t.Fatalf("store %s was accepted: %v", bad, out)
+		}
+	}
+}

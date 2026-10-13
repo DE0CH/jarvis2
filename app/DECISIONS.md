@@ -130,8 +130,8 @@ fixes, 34–40 carried over from the old app and still true, 41–43 the web pag
 
 ## Carried over (still true)
 
-34. **Sensitive stores** are never pre-selected; picking one shows an amber warning; any approval whose signed challenge
-    marks one says so.
+34. **Sensitive stores** are never pre-selected; picking one shows an amber warning (the web page: a red "sensitive"
+    badge on the store and an amber "Sensitive" row); any approval whose signed challenge marks one says so.
 35. **The recovery kit** is one string, `jarvis2-kit:2:<master key>` (base64 PKCS#8 DER of the P-256 private key);
     whitespace ignored; a version-1 kit is refused in plain words. The master key exists only in the setup page's memory
     and in the kit; a pasted kit is forgotten on leaving the page and 10 minutes after pasting; Copy is local-only and
@@ -154,7 +154,7 @@ fixes, 34–40 carried over from the old app and still true, 41–43 the web pag
 
 41. **Web only**: no iOS build, no shell bridge; the `.native.*` files, the React Native extension and the Radix-to-Swift
     generator are gone.
-42. It can view everything, request a new session (non-sensitive stores), reject approvals, pause, resume and destroy;
+42. It can view everything, request a new session (any stores, sensitive ones badged; docs/DECISIONS.md 161), reject approvals, pause, resume and destroy;
     where the app would open a review, it files an Inbox request ("approve it in the Jarvis 2 app").
 43. `web.yml` typechecks and exports it; the router serves the export at `/`.
 

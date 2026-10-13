@@ -269,6 +269,8 @@ export const holderTitle = (h: string) => HOLDERS[h]?.title || h;
 // the store named `core` holds the core's own Fly token: it never shows for sessions (the core keeps it out of
 // its store list; the filter is only a second guard)
 export const CORE_STORE = "core";
+// the deploy-key token's store: only a phone-approved deploy-key call opens it, never a session (router withHarnessStores)
+export const DEPLOY_KEY_TOKEN_STORE = "github-deploy-keys";
 /** the stores a session (or a record) was given, without the ones its harness brought */
 export const storesOf = (m: Session, p: Policy = {}) => {
   const all = m.stores && m.stores.length ? m.stores : (m.environment || "").split(",").filter(Boolean);
