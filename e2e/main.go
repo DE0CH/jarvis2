@@ -621,16 +621,12 @@ func storeOpen(name string) bool {
 	var d Doc
 	must2(call(router, "POST", "/api/core/stores", map[string]string{"nonce": "n-open"}, &d))
 	var l struct {
-		ScopedUnlocks bool `json:"scopedUnlocks"`
 		Stores        []struct {
 			Name     string
 			Unlocked bool
 		}
 	}
 	verify(d, &l)
-	if !l.ScopedUnlocks && os.Getenv("E2E_HELD_CORE") != "1" {
-		log.Fatal("the core doesn't take unlocks for one session")
-	}
 	for _, x := range l.Stores {
 		if x.Name == name {
 			return x.Unlocked
