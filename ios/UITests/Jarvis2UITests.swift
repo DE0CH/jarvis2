@@ -216,6 +216,21 @@ final class Jarvis2UITests: JarvisUITestCase {
     el("unlock-default").tap()
     wait(el("lock-default"), 30, "default unlocked (the core's signed unlocked list)")
     shot("stores-unlocked")
+    // a store's own page: its keys (the core's names and writers; never values) and its about text, edited in place
+    el("store-open-default").tap()
+    if arrives(el("key-default-OTHER"), 20, "default's keys") {
+      XCTAssertTrue(el("key-default-GITHUB_TOKEN").exists, "[\(tag)] every key of default is listed")
+      XCTAssertFalse(el("key-writer-default-OTHER").exists, "[\(tag)] a recovered key isn't shown as a session's")
+      el("store-about-default-edit").tap()
+      let field = el("store-about-default-field")
+      if wait(field, 10, "the about text box") {
+        focusAndType(field, "everyday keys")
+        el("store-about-default-save").tap()
+        XCTAssertTrue(wait(el("store-about-default-saved"), 15, "Saved") && said(el("store-about-default")).contains("everyday keys"), "[\(tag)] the about text is saved: \(said(el("store-about-default")))")
+      }
+      shot("store-detail")
+      back()
+    }
     back()
 
     // ---- the offline copy: Settings → Encrypted backup (the stand-in bucket's six stores, every signature checked;

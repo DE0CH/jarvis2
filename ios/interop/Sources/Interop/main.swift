@@ -3,7 +3,10 @@
 // code seeded, ios/ci/standin.py): the core's identity and signed state (empty, then set up), the recovery kit
 // string (round trip, the old version refused), reading + checking + decrypting the backups with the kit's master
 // key, Recover itself (the claim), the signed store list (sensitivity), create / mark sensitive, split-key unlock,
-// approvals (new session, add a store, resume on the latest image), grants (the session cert, the draft checks),
+// key backups laid over the whole-store backups (setup- and session-written, deleted, older), per-key writers on
+// unlock (a setup-signed key written through the router unlocks; a key sealed under another name doesn't; a session's
+// write is shown or refused), approvals (new session, add a store, resume on the latest image), grants (the session
+// cert, the draft checks),
 // the Fly token sealed to the core, and Reset's wipe at the end — and the refusals: a box signature by another key,
 // a state not signed by the core, a tampered backup, a wrong master key, a claim for another core or bundle or
 // signed by another key, a second claim, a forged phone signature, a wrong share, a wipe by another key.
@@ -26,14 +29,17 @@ let core = need("INTEROP_CORE")
 let keysDir = need("INTEROP_KEYS")
 let boxKey = try! String(contentsOfFile: keysDir + "/box.pub", encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines)
 let setupKey = try! String(contentsOfFile: keysDir + "/setup.pub", encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines)
+/// the setup session's private key (standin.py writes it next to keys/): signs the keys written as the setup session
+let setupSigner = try! P256.Signing.PrivateKey(pemRepresentation: try! String(contentsOfFile: keysDir + "/../setup-key.pem", encoding: .utf8))
+let phoneSigningForTests = P256.Signing.PrivateKey().publicKey.x963Representation.base64EncodedString()
 var failures = 0
 setvbuf(stdout, nil, _IOLBF, 0)
 func check(_ ok: Bool, _ what: String) { print((ok ? "ok   " : "FAIL ") + what); if !ok { failures += 1 } }
 func throwsErr(_ fn: () throws -> Void) -> Bool { do { try fn(); return false } catch { return true } }
 
-func call(_ path: String, _ body: Any? = nil, base: String = core) -> (Int, Data) {
+func call(_ path: String, _ body: Any? = nil, base: String = core, method: String = "POST") -> (Int, Data) {
   var r = URLRequest(url: URL(string: base + path)!)
-  if let body { r.httpBody = try! JSONSerialization.data(withJSONObject: body); r.httpMethod = "POST"; r.setValue("application/json", forHTTPHeaderField: "Content-Type") }
+  if let body { r.httpBody = try! JSONSerialization.data(withJSONObject: body); r.httpMethod = method; r.setValue("application/json", forHTTPHeaderField: "Content-Type") }
   let sem = DispatchSemaphore(value: 0)
   nonisolated(unsafe) var out: (Int, Data) = (0, Data())
   URLSession.shared.dataTask(with: r) { d, resp, _ in out = ((resp as? HTTPURLResponse)?.statusCode ?? 0, d ?? Data()); sem.signal() }.resume()
@@ -94,7 +100,52 @@ check(throwsErr { _ = try CoreSetup.readBackups(dumps["jarvis2-backup-tampered"]
 check(throwsErr { _ = try CoreSetup.readBackups(served, master: fresh, setupKey: setupKey) }, "another master key doesn't open the backups")
 check(throwsErr { _ = try CoreSetup.readBackups(served + [served[0]], master: master, setupKey: setupKey) }, "a backup served twice is refused")
 let nocore = try? CoreSetup.readBackups(dumps["jarvis2-backup-nocore"] ?? [], master: master, setupKey: setupKey)
-check(nocore?.map(\.name) == ["default"] && (try? CoreSetup.bundle(nocore ?? [])) != nil, "backups without the core store still make a bundle (the token comes later)")
+check(nocore?.map(\.name) == ["default"] && (try? CoreSetup.keysBundle(nocore ?? [], storeKey: master.publicKey)) != nil, "backups without the core store still make a bundle (the token comes later)")
+
+// ---- key backups (keys/<store>/<key>.json, router/storedocs.go) laid over the whole-store ones ----
+let keyObjs = dumps["jarvis2-backup-keys"] ?? []
+check(keyObjs.count == 5, "the stand-in key backups (\(keyObjs.map(\.key)))")
+let merged: [RecoveredStore]
+do { merged = try CoreSetup.readBackups(served + keyObjs, master: kitMaster, setupKey: setupKey, boxKey: boxKey) } catch { print("FAIL reading the key backups: \(error)"); exit(1) }
+let mDefault = merged.first { $0.name == "default" }
+check(mDefault?.values == ["OTHER": "y", "SESSION_KEY": "from-a-session"], "a later key backup replaces its key, a deleted one removes it, an older one is ignored (\(mDefault?.values.keys.sorted() ?? []))")
+check(mDefault?.sensitive == false, "…and the store keeps its whole-store backup's sensitivity")
+check(merged.first { $0.name == "keyed-only" }.map { $0.values == ["API_KEY": "k1"] && $0.sensitive } == true, "a store only key backups name comes back, sensitive")
+check(throwsErr { _ = try CoreSetup.readBackups(served + keyObjs, master: kitMaster, setupKey: setupKey) }, "a session-written key backup isn't taken without the box key to check its core")
+check(throwsErr { _ = try CoreSetup.readBackups(served + keyObjs, master: kitMaster, setupKey: setupKey, boxKey: setupKey) }, "…nor with a core another key vouched for")
+check(throwsErr { _ = try CoreSetup.readBackups(served + keyObjs, master: fresh, setupKey: setupKey, boxKey: boxKey) }, "another master key doesn't open the key backups")
+check(throwsErr { _ = try CoreSetup.readBackups(served + keyObjs + [keyObjs[0]], master: kitMaster, setupKey: setupKey, boxKey: boxKey) }, "a key backup served twice is refused")
+/// one key backup's JSON, changed
+func alter(_ o: CoreSetup.BackupObject, key: String? = nil, _ fn: (inout [String: Any]) -> Void) -> CoreSetup.BackupObject {
+  var j = (try? JSONSerialization.jsonObject(with: Data(o.body.utf8))) as? [String: Any] ?? [:]
+  fn(&j)
+  return CoreSetup.BackupObject(key: key ?? o.key, body: String(decoding: try! JSONSerialization.data(withJSONObject: j), as: UTF8.self))
+}
+let setupObj = keyObjs.first { $0.key == "keys/default/OTHER.json" }!, machineObj = keyObjs.first { $0.key == "keys/default/SESSION_KEY.json" }!
+check(!throwsErr { _ = try CoreSetup.checkKeyBackup(setupObj, setupKey: setupKey, boxKey: boxKey) } && !throwsErr { _ = try CoreSetup.checkKeyBackup(machineObj, setupKey: setupKey, boxKey: boxKey) },
+      "a setup-written and a session-written key backup check")
+let refusals: [(String, CoreSetup.BackupObject)] = [
+  ("moved to another key", CoreSetup.BackupObject(key: "keys/default/ELSEWHERE.json", body: setupObj.body)),
+  ("moved to another store", CoreSetup.BackupObject(key: "keys/gmail/OTHER.json", body: setupObj.body)),
+  ("naming another key", alter(setupObj) { $0["key"] = "ELSEWHERE" }),
+  ("another sealed value", alter(setupObj) { $0["sealed"] = (try? JSONSerialization.jsonObject(with: Data(machineObj.body.utf8)) as? [String: Any])?["sealed"] }),
+  ("its hash changed", alter(setupObj) { $0["backupSha256"] = String(repeating: "0", count: 64) }),
+  ("signed by another key", alter(setupObj) { $0["writer"] = ["by": "setup", "sig": (try! P256.Signing.PrivateKey().signature(for: Data("x".utf8))).derRepresentation.base64EncodedString()] }),
+  ("a setup writer passed off as a machine", alter(setupObj) { var w = $0["writer"] as! [String: Any]; w["by"] = "machine"; w["cert"] = ((try? JSONSerialization.jsonObject(with: Data(machineObj.body.utf8)) as? [String: Any])?["writer"] as? [String: Any])?["cert"]; $0["writer"] = w }),
+  ("a machine cert another core signed", alter(machineObj) { var c = $0["core"] as! [String: Any]; c["signingKey"] = phoneSigningForTests; $0["core"] = c }),
+  ("an unknown writer", alter(setupObj) { var w = $0["writer"] as! [String: Any]; w["by"] = "core"; $0["writer"] = w }),
+  ("a delete that carries a value", alter(setupObj) { $0["deleted"] = true }),
+]
+for (what, o) in refusals {
+  check(throwsErr { _ = try CoreSetup.checkKeyBackup(o, setupKey: setupKey, boxKey: boxKey) }, "a key backup \(what) is refused")
+}
+let movedOpen: Bool = {
+  // the sealed value of OTHER under SESSION_KEY's name (re-signed would still fail: the associated data is the name)
+  do { _ = try CoreCrypto.open((try JSONSerialization.jsonObject(with: Data(setupObj.body.utf8)) as! [String: Any])["sealed"] as! [String: String], with: kitMaster.agreement, info: CoreCrypto.backupInfo, aad: CoreCrypto.keyAAD(store: "default", key: "SESSION_KEY")); return true } catch { return false }
+}()
+check(!movedOpen, "a key's sealed value doesn't open under another key's name")
+let keyChecks = CoreSetup.checkSignatures(served + keyObjs, setupKey: setupKey, boxKey: boxKey)
+check(keyChecks.allSatisfy { $0.problem == nil }, "the offline copy checks key backups too (\(keyChecks.filter { $0.problem != nil }.map { "\($0.key): \($0.problem!)" }))")
 
 // ---- the offline copy (Settings → Encrypted backup): checked, never opened; tools/decrypt-backup.py opens the file (ios.yml)
 let exportChecks = CoreSetup.checkSignatures(served, setupKey: setupKey)
@@ -123,8 +174,11 @@ let (sks, skd) = call("/store-key", ["phone": phone.agreementKey])
 let recoverStoreKey = (try? CoreCrypto.storeKey(doc(skd), coreKey: coreKeys.signingKey, phone: phone.agreementKey)) ?? ""
 check(sks == 200 && !recoverStoreKey.isEmpty, "an empty core signs the store key for this phone (HTTP \(sks))")
 check(throwsErr { _ = try CoreCrypto.storeKey(doc(skd), coreKey: coreKeys.signingKey, phone: coreKeys.agreementKey) }, "…and the app refuses one for another phone")
-let bundle = try! CoreSetup.blobsBundle(stores, storeKey: recoverStoreKey)
-check(!String(decoding: bundle, as: UTF8.self).contains("FLY_API_TOKEN"), "the blobs bundle carries no store's values in the clear (the Fly token goes as flyToken)")
+check(id0.takesKeys, "the core's identity says it takes stores of keys (bundle \(id0.bundle ?? "none"))")
+let bundle = try! CoreSetup.keysBundle(merged, storeKey: recoverStoreKey)
+let bundleText = String(decoding: bundle, as: UTF8.self)
+check(!bundleText.contains("FLY_API_TOKEN") && !bundleText.contains("from-a-session") && bundleText.contains(#""format":"keys""#), "the keys bundle carries no value in the clear (the Fly token goes as flyToken)")
+check(call("/claim", try! CoreSetup.claim(core: coreKeys, phone: phone, master: kitMaster, bundle: try! CoreSetup.blobsBundle(stores, storeKey: recoverStoreKey))).0 == 400, "the core refuses a bundle in the format from before keys.go")
 func claim(_ body: [String: Any]) -> (Int, Data) { call("/claim", body) }
 var bad = try! CoreSetup.claim(core: coreKeys, phone: phone, master: kitMaster, bundle: bundle)
 bad["masterSig"] = try! fresh.sign(bad["statement"] as! String)
@@ -139,9 +193,9 @@ check(call("/wipe", try! CoreSetup.wipe(core: coreKeys, master: kitMaster)).0 ==
 let (rs, rb) = claim(try! CoreSetup.claim(core: coreKeys, phone: phone, master: kitMaster, bundle: bundle))
 check(rs == 200, "the core is set up (HTTP \(rs) \(String(decoding: rb.prefix(200), as: UTF8.self)))")
 let rec = try? CoreCrypto.decode(doc(rb), by: coreKeys.signingKey, as: KindDoc.self, what: "claimed")
-check(rec?.kind == "claimed" && rec?.stores == 5, "the answer is the core's signed 'claimed' (5 stores, the core's own excluded)")
+check(rec?.kind == "claimed" && rec?.stores == 6, "the answer is the core's signed 'claimed' (6 stores, the core's own excluded)")
 check(claim(try! CoreSetup.claim(core: coreKeys, phone: phone, master: kitMaster, bundle: bundle)).0 == 409, "a second claim is refused")
-check(claim(try! CoreSetup.claim(core: coreKeys, phone: phone, master: fresh, bundle: try! CoreSetup.blobsBundle([], storeKey: recoverStoreKey))).0 == 409, "…and a Reset's claim with a new key too")
+check(claim(try! CoreSetup.claim(core: coreKeys, phone: phone, master: fresh, bundle: try! CoreSetup.keysBundle([], storeKey: recoverStoreKey))).0 == 409, "…and a Reset's claim with a new key too")
 let st1 = (try? CoreSetup.check(identity(), boxKey: boxKey))?.state
 check(st1 != nil && CoreSetup.status(st1!, myMaster: kitMaster.publicKey, myPhone: phone) == .mine, "the core's state now names this master key and this phone (mine)")
 check(st1 != nil && CoreSetup.status(st1!, myMaster: fresh.publicKey, myPhone: phone) == .foreign, "…a phone with another master key sees it as foreign")
@@ -158,8 +212,8 @@ func list() -> [StoreView] {
   return d.stores
 }
 var l = list()
-check(l.map(\.name) == ["claude-login", "default", "github-deploy-keys", "gmail", "marked"], "the core lists every store but its own")
-check(l.filter(\.sensitive).map(\.name) == ["github-deploy-keys", "gmail", "marked"], "sensitivity in the core's list")
+check(l.map(\.name) == ["claude-login", "default", "github-deploy-keys", "gmail", "keyed-only", "marked"], "the core lists every store but its own")
+check(l.filter(\.sensitive).map(\.name) == ["github-deploy-keys", "gmail", "keyed-only", "marked"], "sensitivity in the core's list")
 check(throwsErr { _ = try CoreCrypto.verified(SignedDoc(payload: "{}", sig: doc(call("/stores", ["nonce": "x"]).1).sig), by: coreKey, what: "x") }, "an altered payload is refused")
 check(call("/stores/create", ["name": "notes"]).0 == 200, "create a store")
 check(call("/stores/create", ["name": "notes"]).0 == 409, "…once")
@@ -169,32 +223,118 @@ let mk = try? CoreCrypto.decode(doc(call("/stores/mark-sensitive", ["name": "not
 check(mk?.kind == "marked-sensitive" && mk?.name == "notes", "mark sensitive")
 check(call("/stores/mark-sensitive", ["name": "notes"]).0 == 409, "…one way")
 
-// ---- split-key unlock ----
-func unlock(_ store: String, share: (UnlockBegin) throws -> Data) -> (Int, Data) {
-  let b = try! CoreCrypto.decode(doc(call("/unlock/begin", ["store": store]).1), by: coreKey, as: UnlockBegin.self, what: "unlock-begin")
-  check(b.kind == "unlock-begin" && b.store == store, "unlock-begin for \(store) is signed")
-  return call("/unlock/finish", ["pending": b.pending, "share": try! CoreCrypto.sealShare(try! share(b), to: b.t)])
+// ---- split-key unlock: one share per key, each key's writer checked ----
+func begin(_ store: String, for f: String? = nil) -> (Int, UnlockBegin?) {
+  var body: [String: Any] = ["store": store]
+  if let f { body["for"] = f }
+  let (s, d) = call("/unlock/begin", body)
+  return (s, s == 200 ? try? CoreCrypto.decode(doc(d), by: coreKey, as: UnlockBegin.self, what: "unlock-begin") : nil)
 }
-let realShare: (UnlockBegin) throws -> Data = { b in
-  try phoneAgreement.sharedSecretFromKeyAgreement(with: P256.KeyAgreement.PublicKey(x963Representation: Data(base64Encoded: b.e)!)).withUnsafeBytes { Data($0) }
+func shareOf(_ e: String) -> Data {
+  try! phoneAgreement.sharedSecretFromKeyAgreement(with: P256.KeyAgreement.PublicKey(x963Representation: Data(base64Encoded: e)!)).withUnsafeBytes { Data($0) }
 }
-let (us, ub) = unlock("default", share: realShare)
-check(us == 200, "the core opens the recovered store with the phone's sealed share (HTTP \(us))")
+/// unlock_finish as RouterClient.unlockFinish sends it: {pending, shares: {KEY: share sealed to T}}
+func finish(_ b: UnlockBegin, share: (String) -> Data = shareOf) -> (Int, Data) {
+  var m: [String: Any] = [:]
+  for k in b.keys ?? [] { m[k.key] = try! CoreCrypto.sealShare(share(k.e), to: b.t) }
+  return call("/unlock/finish", ["pending": b.pending, "shares": m])
+}
+func unlock(_ store: String, share: @escaping (String) -> Data = shareOf) -> (Int, Data) {
+  let (s, b) = begin(store)
+  guard let b else { return (s, Data()) }
+  check(b.kind == "unlock-begin" && b.store == store && b.keys?.isEmpty == false && b.e == nil, "unlock-begin for \(store) is signed and names its keys (\(b.keys?.map(\.key) ?? []))")
+  return finish(b, share: share)
+}
+let (dbs, db) = begin("default")
+check(dbs == 200 && db?.keys?.map(\.key) == ["OTHER", "SESSION_KEY"] && db?.keys?.allSatisfy { $0.writer.by == "core" } == true && db?.version?.isEmpty == false,
+      "a recovered store's keys are the core's to vouch for (\(db?.keys?.map { "\($0.key):\($0.writer.by)" } ?? []))")
+check(db.map { x in !throwsErr { try Checks.unlockKeys(x, setupKey: setupKey) } } == true, "…and the app takes them")
+let (us, ub) = db.map { finish($0) } ?? (0, Data())
+check(us == 200, "the core opens every key of the recovered store with the phone's sealed shares (HTTP \(us) \(String(decoding: ub.prefix(160), as: UTF8.self)))")
 let u = try? CoreCrypto.decode(doc(ub), by: coreKey, as: KindDoc.self, what: "unlocked")
 check(u?.kind == "unlocked" && u?.store == "default", "unlocked answer is signed")
 check(unlock("gmail") { _ in Data((0..<32).map { _ in UInt8.random(in: 0...255) }) }.0 != 200, "a wrong share doesn't open a store")
+check(begin("notes").0 == 404, "an empty store can't be unlocked")
+if let gb = begin("gmail").1 {
+  check(call("/unlock/finish", ["pending": gb.pending, "shares": [String: Any]()]).0 == 400, "an unlock without a share for each key is refused")
+}
+
+// a key written as the setup session through the router (infra/setup.py write): the backup first, then the core; the
+// phone checks the setup key's signature over the writer text before it gives its share
+let sk0 = recoverStoreKey
+func setupWrite(_ store: String, _ key: String, _ value: String, signer: P256.Signing.PrivateKey = setupSigner) -> [String: Any] {
+  let x = try! CoreCrypto.wrapKey(store: store, key: key, value: Data(value.utf8), storeKey: sk0)
+  let bk = try! CoreCrypto.seal(Data(value.utf8), to: kitMaster.publicKey, info: CoreCrypto.backupInfo, aad: CoreCrypto.keyAAD(store: store, key: key))
+  let bsha = CoreCrypto.sha256hex(Data("\(bk["e"]!)\n\(bk["data"]!)".utf8))
+  let text = Checks.writerText(store: store, key: key, e: x.wrapped.e, dataSha256: CoreCrypto.sha256hex(Data(x.data.utf8)), backupSha256: bsha)
+  return ["wrapped": ["e": x.wrapped.e, "wrapped": x.wrapped.wrapped], "data": x.data, "backup": bk, "backupSha256": bsha,
+          "sig": try! signer.signature(for: Data(text.utf8)).derRepresentation.base64EncodedString(), "explanation": "what \(key) is for"]
+}
+let rbaseW = need("INTEROP_ROUTER")
+let (ws0, wd0) = call("/setup/stores/default/keys/WRITTEN", setupWrite("default", "WRITTEN", "w1"), base: rbaseW)
+check(ws0 == 200, "the setup session writes one key through the router (HTTP \(ws0) \(String(decoding: wd0.prefix(200), as: UTF8.self)))")
+let (wbs, wb) = begin("default")
+let wk = wb?.keys?.first { $0.key == "WRITTEN" }
+check(wbs == 200 && wk?.writer.by == "setup" && wk?.writer.sig != nil && wk?.backupSha256.count == 64 && wb?.keys?.count == 3,
+      "unlock-begin names the written key, its setup writer with the signature and its backup hash")
+check(wb.map { x in !throwsErr { try Checks.unlockKeys(x, setupKey: setupKey) } } == true, "…the app checks the setup key's signature over it")
+check(wb.map { x in throwsErr { try Checks.unlockKeys(x, setupKey: phoneSigningForTests) } } == true, "…and refuses it against another key")
+check(wb.map { finish($0).0 } == 200, "…and the store opens with it")
+struct ServedRows: Decodable { struct R: Decodable { let name: String; let about: String?; let keyInfo: [K]?; let keysFrom: String? }; struct K: Decodable { let name: String; let explanation: String?; let writer: W? }; struct W: Decodable { let by: String }; let stores: [R] }
+let rows = try? JSONDecoder().decode(ServedRows.self, from: call("/api/stores", base: rbaseW).1)
+let rdef = rows?.stores.first { $0.name == "default" }
+check(rdef?.keysFrom == "core" && rdef?.keyInfo?.first { $0.name == "WRITTEN" }.map { $0.explanation == "what WRITTEN is for" && $0.writer?.by == "setup" } == true,
+      "GET /api/stores lists the key with its explanation and writer")
+let docsStatus = call("/api/stores/default/docs", ["about": "everyday keys", "keys": ["WRITTEN": "", "OTHER": "the other one"]], base: rbaseW, method: "PUT").0
+let rdef2 = (try? JSONDecoder().decode(ServedRows.self, from: call("/api/stores", base: rbaseW).1))?.stores.first { $0.name == "default" }
+check(docsStatus == 200 && rdef2?.about == "everyday keys" && rdef2?.keyInfo?.first { $0.name == "OTHER" }?.explanation == "the other one"
+      && (rdef2?.keyInfo?.first { $0.name == "WRITTEN" }?.explanation ?? "") == "", "PUT /api/stores/{store}/docs sets the about text and an explanation; \"\" removes one")
+// its backup is in the bucket, and a Recover would lay it over the store
+struct ServedAgain: Decodable { let objects: [CoreSetup.BackupObject] }
+let servedNow = (try? JSONDecoder().decode(ServedAgain.self, from: call("/api/backups", base: rbaseW).1))?.objects ?? []
+let wObj = servedNow.first { $0.key == "keys/default/WRITTEN.json" }
+check(wObj.map { x in !throwsErr { _ = try CoreSetup.checkKeyBackup(x, setupKey: setupKey, boxKey: boxKey) } } == true, "the router wrote the key's backup first (keys/default/WRITTEN.json) and it checks")
+check((try? CoreSetup.readBackups(servedNow, master: kitMaster, setupKey: setupKey, boxKey: boxKey))?.first { $0.name == "default" }?.values["WRITTEN"] == "w1",
+      "…and opens with the kit, laid over the store's whole-store backup")
+
+// a key sealed under another name (store or key) doesn't decrypt: the core refuses the whole unlock
+func coreWrite(_ store: String, _ key: String, sealedAs: (String, String), signer: P256.Signing.PrivateKey = setupSigner) -> Int {
+  let x = try! CoreCrypto.wrapKey(store: sealedAs.0, key: sealedAs.1, value: Data("v".utf8), storeKey: sk0)
+  let text = Checks.writerText(store: store, key: key, e: x.wrapped.e, dataSha256: CoreCrypto.sha256hex(Data(x.data.utf8)), backupSha256: "")
+  return call("/stores/write-key", ["store": store, "key": key, "wrapped": ["e": x.wrapped.e, "wrapped": x.wrapped.wrapped], "data": x.data,
+                                    "writer": "setup", "sig": try! signer.signature(for: Data(text.utf8)).derRepresentation.base64EncodedString()]).0
+}
+check(coreWrite("moved", "A", sealedAs: ("moved", "B")) == 200 && unlock("moved").0 == 403, "a key sealed under another key's name doesn't decrypt")
+check(coreWrite("moved2", "A", sealedAs: ("default", "A")) == 200 && unlock("moved2").0 == 403, "…nor one sealed under another store's name")
+check(coreWrite("forged", "A", sealedAs: ("forged", "A"), signer: P256.Signing.PrivateKey()) == 200, "the core passes on a setup writer's signature unchecked")
+check(begin("forged").1.map { x in throwsErr { try Checks.unlockKeys(x, setupKey: setupKey) } } == true, "…and the app refuses a key the setup key didn't sign")
+
+// a key a session's machine wrote: shown on the page or refused before Face ID (the core checked the machine itself)
+func synthetic(_ w: StoreWriter, key: String = "S") -> UnlockBegin {
+  UnlockBegin(kind: "unlock-begin", pending: "p", store: "default", t: "", forNonce: nil,
+              keys: [KeyBegin(key: key, e: "E", writer: w, dataSha256: "d")])
+}
+let mb = synthetic(StoreWriter(by: "machine", machine: "fake000042", line: "fake000042"))
+check(!throwsErr { try Checks.unlockKeys(mb, setupKey: nil) }, "a key a session's machine wrote is taken (the core checked its signature)…")
+check(Checks.unseen([mb], shown: []) == [SessionWrite(store: "default", key: "S", line: "fake000042")], "…but one the page didn't show is refused")
+check(Checks.unseen([mb], shown: [SessionWrite(store: "default", key: "S", line: "fake000042", label: "T")]).isEmpty, "…and one it showed goes through")
+check(!Checks.unseen([mb], shown: [SessionWrite(store: "default", key: "S", line: "other-line")]).isEmpty, "…not when the page named another session")
+check(throwsErr { try Checks.unlockKeys(synthetic(StoreWriter(by: "machine")), setupKey: nil) }, "a machine writer the core doesn't name is refused")
+check(throwsErr { try Checks.unlockKeys(synthetic(StoreWriter(by: "router")), setupKey: nil) }, "an unknown writer is refused")
+check(throwsErr { try Checks.unlockKeys(UnlockBegin(kind: "unlock-begin", pending: "p", store: "x", t: "", forNonce: nil, keys: []), setupKey: nil) }, "an unlock of no keys is refused")
+
 let n2 = CoreCrypto.nonce()
 let ul = try? CoreCrypto.decode(doc(call("/unlocked", ["nonce": n2]).1), by: coreKey, as: UnlockedDoc.self, what: "unlocked list")
-check(ul?.nonce == n2 && ul?.unlocked.map(\.id) == [u?.id ?? "?"], "unlocked list is signed, fresh and complete")
+check(ul?.nonce == n2 && ul?.unlocked.allSatisfy({ $0.store == "default" }) == true && ul?.unlocked.contains { $0.id == u?.id } == true, "unlocked list is signed, fresh and complete")
 
 // ---- an unlock for one session (a Start's challenge, a waiting session's cert): signed with what it is for, read
 // only by that cert's pull, never shown as open to every session ----
 let sdoc = try! CoreCrypto.decode(doc(call("/stores", ["nonce": CoreCrypto.nonce()]).1), by: coreKey, as: StoresDoc.self, what: "stores")
 check(sdoc.kind == "stores", "the core's signed store list")
 let forN = String(repeating: "ab", count: 32)
-let sb = try! CoreCrypto.decode(doc(call("/unlock/begin", ["store": "gmail", "for": forN]).1), by: coreKey, as: UnlockBegin.self, what: "unlock-begin for one session")
+let sb = begin("gmail", for: forN).1!
 check(sb.kind == "unlock-begin" && sb.forNonce == forN, "unlock-begin names the one session it is for (signed)")
-let (ss, sd) = call("/unlock/finish", ["pending": sb.pending, "share": try! CoreCrypto.sealShare(try! realShare(sb), to: sb.t)])
+let (ss, sd) = finish(sb)
 let su = try? CoreCrypto.decode(doc(sd), by: coreKey, as: KindDoc.self, what: "unlocked")
 check(ss == 200 && su?.kind == "unlocked", "the core opens it for that session")
 check(list().first { $0.name == "gmail" }?.unlocked == false, "…and the store list doesn't show it as open to every session")
@@ -377,21 +517,26 @@ if a4s == 200, c4s == 200, let sc4 = try? Checks.cert(doc(c4d), coreKey: coreKey
 // ---- deploy keys: a repo added and removed, each approved by the phone (the core's fake GitHub in CI) ----
 /// the begin body the app sends (RouterClient.deployKeyBegin): the store and title it names, and for an add the key
 /// pair it made, the private half's store wrapped to the store key
-func keyBegin(_ action: String, _ repo: String, sensitive: Bool) -> ([String: Any], (publicKey: String, blob: StoreBlob)?) {
+func keyBegin(_ action: String, _ repo: String, sensitive: Bool) -> ([String: Any], DeployKeySent?) {
   let store = Checks.repoStore(repo), title = "jarvis2 " + store
   var body: [String: Any] = ["action": action, "repo": repo, "sensitive": sensitive, "store": store, "title": title]
   guard action == "add" else { return (body, nil) }
   let kp = try! OpenSSH.ed25519(comment: title)
-  let blob = try! CoreCrypto.wrapStore(name: store, values: OpenSSH.storeValues(repo: repo, privateKeyFile: kp.privateKeyFile), storeKey: recoverStoreKey)
+  let keys = try! CoreCrypto.wrapKeys(store: store, values: OpenSSH.storeValues(repo: repo, privateKeyFile: kp.privateKeyFile), storeKey: recoverStoreKey)
   body["publicKey"] = kp.publicKey
-  body["blob"] = blob.json
-  return (body, (publicKey: kp.publicKey, blob: blob))
+  body["keys"] = keys.map(\.json)
+  return (body, DeployKeySent(publicKey: kp.publicKey, keys: keys))
+}
+/// the token key's writer, as RouterClient checks it
+func tokenWriterOK(_ b: DeployKeyBegin) -> Bool {
+  guard let k = b.tokenKey, let w = b.tokenWriter, w.by != "machine" else { return false }
+  return !throwsErr { try Checks.keyWriter(w, store: b.tokenStore, key: k, e: b.e, dataSha256: b.tokenDataSha256 ?? "", backupSha256: b.tokenBackupSha256 ?? "", setupKey: setupKey) }
 }
 func deployKey(_ action: String, _ repo: String, sensitive: Bool = false, signer: P256.Signing.PrivateKey? = nil, base: String = core, prefix: String = "/deploy-keys") -> (Int, DeployKeyBegin?, Data) {
   let (body, sent) = keyBegin(action, repo, sensitive: sensitive)
   let (bs, bd) = call(prefix + "/begin", body, base: base)
   guard bs == 200, let d = try? JSONDecoder().decode(SignedDoc.self, from: bd) else { return (bs, nil, bd) }
-  guard let b = try? Checks.deployKeyBegin(d, coreKey: coreKey, action: action, repo: repo, sensitive: sensitive, sent: sent) else { return (0, nil, bd) }
+  guard let b = try? Checks.deployKeyBegin(d, coreKey: coreKey, action: action, repo: repo, sensitive: sensitive, sent: sent), tokenWriterOK(b) else { return (0, nil, bd) }
   let sig = try! (signer ?? phoneSigning).signature(for: Data(d.payload.utf8)).derRepresentation.base64EncodedString()
   let x = try! phoneAgreement.sharedSecretFromKeyAgreement(with: P256.KeyAgreement.PublicKey(x963Representation: Data(base64Encoded: b.e)!)).withUnsafeBytes { Data($0) }
   let (fs, fd) = call(prefix + "/finish", ["pending": b.pending, "signature": sig, "share": try! CoreCrypto.sealShare(x, to: b.t)], base: base)
@@ -439,21 +584,35 @@ if let vb = FileManager.default.contents(atPath: "testdata/openssh-ed25519.json"
 }
 let kp = try! OpenSSH.ed25519(comment: "jarvis2 github-r2-app")
 let skNow = try! CoreCrypto.storeKey(doc(call("/store-key", ["phone": phone.agreementKey]).1), coreKey: coreKey, phone: phone.agreementKey)
-let appBlob = try! CoreCrypto.wrapStore(name: "github-r2-app", values: OpenSSH.storeValues(repo: "DE0CH/r2-app", privateKeyFile: kp.privateKeyFile), storeKey: skNow)
+let appKeys = try! CoreCrypto.wrapKeys(store: "github-r2-app", values: OpenSSH.storeValues(repo: "DE0CH/r2-app", privateKeyFile: kp.privateKeyFile), storeKey: skNow)
+check(appKeys.map(\.key) == ["GITHUB_DEPLOY_KEY_DE0CH_R2_APP", "GITHUB_DEPLOY_REPO_DE0CH_R2_APP"], "a repo's store is two keys, each sealed on its own")
 let (abStatus, abd) = call("/deploy-keys/begin", ["action": "add", "repo": "DE0CH/r2-app", "sensitive": false, "store": "github-r2-app",
-                                             "title": "jarvis2 github-r2-app", "publicKey": kp.publicKey, "blob": appBlob.json])
-let abeg = abStatus == 200 ? try? Checks.deployKeyBegin(doc(abd), coreKey: coreKey, action: "add", repo: "DE0CH/r2-app", sensitive: false, sent: (kp.publicKey, appBlob)) : nil
-check(abeg != nil, "the core's begin names the app's public key and blob (HTTP \(abStatus))")
-let otherBlob = try! CoreCrypto.wrapStore(name: "github-r2-app", values: ["X": "y"], storeKey: skNow)
-check(abStatus == 200 && throwsErr { _ = try Checks.deployKeyBegin(doc(abd), coreKey: coreKey, action: "add", repo: "DE0CH/r2-app", sensitive: false, sent: (kp.publicKey, otherBlob)) }, "…the page refuses a begin naming another blob")
+                                             "title": "jarvis2 github-r2-app", "publicKey": kp.publicKey, "keys": appKeys.map(\.json)])
+let abeg = abStatus == 200 ? try? Checks.deployKeyBegin(doc(abd), coreKey: coreKey, action: "add", repo: "DE0CH/r2-app", sensitive: false, sent: DeployKeySent(publicKey: kp.publicKey, keys: appKeys)) : nil
+check(abeg != nil && abeg?.keys?.count == 2 && abeg?.tokenKey == "GITHUB_DEPLOY_KEYS_TOKEN", "the core's begin names the app's public key and each key it sent (HTTP \(abStatus))")
+check(abeg.map(tokenWriterOK) == true && abeg?.tokenWriter?.by == "core", "…and who wrote the GitHub token (the core: a Recover's key)")
+let otherKeys = try! CoreCrypto.wrapKeys(store: "github-r2-app", values: ["X": "y"], storeKey: skNow)
+check(abStatus == 200 && throwsErr { _ = try Checks.deployKeyBegin(doc(abd), coreKey: coreKey, action: "add", repo: "DE0CH/r2-app", sensitive: false, sent: DeployKeySent(publicKey: kp.publicKey, keys: otherKeys)) }, "…the page refuses a begin naming other keys")
+let movedKeys = [appKeys[0], KeyEntry(store: "github-r2-app", key: "GITHUB_DEPLOY_REPO_DE0CH_R2_APP", wrapped: appKeys[0].wrapped, data: appKeys[0].data)]
+check(abStatus == 200 && throwsErr { _ = try Checks.deployKeyBegin(doc(abd), coreKey: coreKey, action: "add", repo: "DE0CH/r2-app", sensitive: false, sent: DeployKeySent(publicKey: kp.publicKey, keys: movedKeys)) }, "…or a key under another name")
 if let b = abeg {
   let sig = try! phoneSigning.signature(for: Data(doc(abd).payload.utf8)).derRepresentation.base64EncodedString()
-  let x = try! phoneAgreement.sharedSecretFromKeyAgreement(with: P256.KeyAgreement.PublicKey(x963Representation: Data(base64Encoded: b.e)!)).withUnsafeBytes { Data($0) }
-  let (afs, afd) = call("/deploy-keys/finish", ["pending": b.pending, "signature": sig, "share": try! CoreCrypto.sealShare(x, to: b.t)])
+  let (afs, afd) = call("/deploy-keys/finish", ["pending": b.pending, "signature": sig, "share": try! CoreCrypto.sealShare(shareOf(b.e), to: b.t)])
   let a = try? Checks.deployKeyAnswer(doc(afd), coreKey: coreKey, begin: b)
   check(afs == 200 && a?.kind == "deploy-key-added" && a?.publicKey == kp.publicKey && a?.store == "github-r2-app", "the core added the app's key (HTTP \(afs))")
-  check(unlock("github-r2-app", share: realShare).0 == 200, "…and the app-wrapped store opens with the phone's share")
+  check(unlock("github-r2-app").0 == 200, "…and the app-wrapped keys open with the phone's shares")
 }
+// the store's keys sealed under another key's name: the core keeps them as sent, and they don't open
+let swapped = [KeyEntry(store: "github-r2-swap", key: "GITHUB_DEPLOY_KEY_DE0CH_R2_SWAP", wrapped: appKeys[1].wrapped, data: appKeys[1].data),
+               KeyEntry(store: "github-r2-swap", key: "GITHUB_DEPLOY_REPO_DE0CH_R2_SWAP", wrapped: appKeys[0].wrapped, data: appKeys[0].data)]
+let kp2 = try! OpenSSH.ed25519(comment: "jarvis2 github-r2-swap")
+let (sws, swd) = call("/deploy-keys/begin", ["action": "add", "repo": "DE0CH/r2-swap", "sensitive": false, "store": "github-r2-swap",
+                                       "title": "jarvis2 github-r2-swap", "publicKey": kp2.publicKey, "keys": swapped.map(\.json)])
+if sws == 200, let b = try? Checks.deployKeyBegin(doc(swd), coreKey: coreKey, action: "add", repo: "DE0CH/r2-swap", sensitive: false, sent: DeployKeySent(publicKey: kp2.publicKey, keys: swapped)) {
+  let sig = try! phoneSigning.signature(for: Data(doc(swd).payload.utf8)).derRepresentation.base64EncodedString()
+  _ = call("/deploy-keys/finish", ["pending": b.pending, "signature": sig, "share": try! CoreCrypto.sealShare(shareOf(b.e), to: b.t)])
+  check(unlock("github-r2-swap").0 == 403, "a deploy key's values moved to another store or key don't decrypt")
+} else { check(false, "a deploy key's values moved to another store or key don't decrypt (begin HTTP \(sws))") }
 
 let rbase = need("INTEROP_ROUTER")
 struct ReposDTO: Decodable { struct R: Decodable { let name: String; let repo: String; let store: String; let sensitive: Bool? }; let repos: [R] }
