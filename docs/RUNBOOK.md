@@ -428,6 +428,9 @@ per app.
 - End to end on real Fly with a software phone and the public TEST master key: `infra/e2e.sh` (a local core
   and router, a throwaway WireGuard peer, the session image; set `E2E_SESSION_IMAGE` to a pinned tag). It sets its
   own core up and never touches the production core.
+  `E2E_ONLY=drain` (with its own `E2E_PEER`/`E2E_PORT` when another run is going) checks a rollout's drain instead of
+  the rest: SIGTERM to the router while the first session's pause waits for its snapshot → reads served, new actions
+  503, the pause ends `paused`, the router exits.
 
 ### Rehearsing Recover on a real box
 
