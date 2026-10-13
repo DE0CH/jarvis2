@@ -10,10 +10,11 @@
 //   sensitive/<name>.json {doc, sig}: doc = {"kind":"store-sensitive","name","at"} — the store is sensitive
 //                         whatever its backup says
 //   keys/<store>/<key>.json {kind "key-backup", store, key, deleted, sealed {e,data} | null, backupSha256, e,
-//                         dataSha256, writer {by "setup"|"machine", sig, cert?}, core (the core's identity), explanation,
-//                         at (RFC 3339)}: one key, written after the whole-store backups (router/storedocs.go). Its writer
-//                         signed Checks.writerText (backupSha256 = sha256(sealed.e + "\n" + sealed.data)): the setup key,
-//                         or a machine whose cert a core signed whose identity the box key signed. Sealed to the master
+//                         dataSha256, writer {by "setup"|"machine"|"restore", sig, cert?, receipt?}, core (the core's
+//                         identity), explanation, at (RFC 3339)}: one key, written after the whole-store backups
+//                         (router/storedocs.go, storerestore.go). Its writer signed Checks.writerText (backupSha256 =
+//                         sha256(sealed.e + "\n" + sealed.data)): the setup key, or a machine whose cert a core signed whose
+//                         identity the box key signed; or a phone-approved restore, whose receipt that core signed. Sealed to the master
 //                         key (info "jarvis2/backup", "<store>\n<key>" as associated data) → the value's raw bytes.
 // (infra/setup.py writes the first two; the router the key backups.) So the router can't read, change or forge a
 // backup; it can only withhold one or serve an older signed version. A store is its whole-store backup with every
@@ -66,13 +67,19 @@ enum CoreSetup {
   struct BackupDoc: Decodable { let kind: String; let name: String; let sensitive: Bool; let sealed: [String: String]; var at: Double? = nil }
   /// keys/<store>/<key>.json (router/storedocs.go)
   struct KeyBackup: Decodable {
-    struct Writer: Decodable { let by: String; let sig: String; var cert: SignedDoc? = nil }
+    /// setup: sig; machine: sig + cert; restore: the core's signed receipt (a phone-approved restore, core/history.go)
+    struct Writer: Decodable { let by: String; var sig: String? = nil; var cert: SignedDoc? = nil; var receipt: SignedDoc? = nil }
     let kind: String; let store: String; let key: String; let deleted: Bool
     var sealed: [String: String]? = nil
     let backupSha256: String; let e: String; let dataSha256: String
     let writer: Writer
     var core: Identity? = nil
     let at: String
+  }
+  /// a restore's receipt (core/history.go "store-restore-approved"): each key put back with its hashes, each removed
+  struct RestoreReceipt: Decodable {
+    struct Put: Decodable { let key: String; let e: String; let dataSha256: String; let backupSha256: String }
+    let kind: String; let store: String; var put: [Put]? = nil; var remove: [String]? = nil
   }
   /// a machine's cert, as far as a key backup needs it: the machine's signing key
   struct CertMachine: Decodable {
@@ -158,16 +165,34 @@ enum CoreSetup {
             CoreCrypto.sha256hex(Data("\(se)\n\(sd)".utf8)) == b.backupSha256 else { throw TrustError.backup("\(o.key)'s hash isn't of its sealed value.") }
     }
     let text = Data(Checks.writerText(store: store, key: key, e: b.e, dataSha256: b.dataSha256, backupSha256: b.backupSha256).utf8)
-    switch b.writer.by {
-    case "setup":
-      guard CoreCrypto.valid(text, sig: b.writer.sig, by: setupKey) else { throw TrustError.backup("\(o.key) isn't signed by the setup key.") }
-    case "machine":
-      guard let boxKey, let id = b.core, let cert = b.writer.cert else { throw TrustError.backup("\(o.key)'s session writer can't be checked.") }
+    /// the core the object names, vouched for by the box key
+    func vouchedCore(_ what: String) throws -> PublicKeys {
+      guard let boxKey, let id = b.core else { throw TrustError.backup("\(o.key)'s \(what) can't be checked.") }
       let k = PublicKeys(signingKey: id.signingKey, agreementKey: id.agreementKey)
       guard CoreCrypto.identityVouched(k, boxSig: id.boxSig, boxKey: boxKey) else { throw TrustError.backup("\(o.key) names a core the box key didn't vouch for.") }
+      return k
+    }
+    let sig = b.writer.sig ?? ""
+    switch b.writer.by {
+    case "setup":
+      guard CoreCrypto.valid(text, sig: sig, by: setupKey) else { throw TrustError.backup("\(o.key) isn't signed by the setup key.") }
+    case "restore":
+      // a phone-approved restore: the core's signed receipt names this key put back (its hashes) or removed
+      let k = try vouchedCore("restore")
+      guard let rd = b.writer.receipt, let r = try? CoreCrypto.decode(rd, by: k.signingKey, as: RestoreReceipt.self, what: "the restore receipt"),
+            r.kind == "store-restore-approved", r.store == store else { throw TrustError.backup("\(o.key)'s restore receipt isn't that core's.") }
+      if b.deleted {
+        guard (r.remove ?? []).contains(key) else { throw TrustError.backup("\(o.key)'s restore receipt doesn't remove it.") }
+      } else {
+        guard (r.put ?? []).contains(where: { $0.key == key && $0.e == b.e && $0.dataSha256 == b.dataSha256 && $0.backupSha256 == b.backupSha256 })
+        else { throw TrustError.backup("\(o.key)'s restore receipt doesn't name this value.") }
+      }
+    case "machine":
+      guard let cert = b.writer.cert else { throw TrustError.backup("\(o.key)'s session writer can't be checked.") }
+      let k = try vouchedCore("session writer")
       guard let c = try? CoreCrypto.decode(cert, by: k.signingKey, as: CertMachine.self, what: "the writer's cert"),
             c.kind == "succession-cert", let m = c.machine else { throw TrustError.backup("\(o.key)'s machine cert isn't that core's.") }
-      guard CoreCrypto.valid(text, sig: b.writer.sig, by: m.signingKey) else { throw TrustError.backup("\(o.key) isn't signed by the machine its cert names.") }
+      guard CoreCrypto.valid(text, sig: sig, by: m.signingKey) else { throw TrustError.backup("\(o.key) isn't signed by the machine its cert names.") }
     default:
       throw TrustError.backup("\(o.key) was written by \(b.writer.by).")
     }

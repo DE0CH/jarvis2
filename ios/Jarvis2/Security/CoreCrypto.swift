@@ -4,8 +4,10 @@
 //   - public keys are base64 of the 65-byte uncompressed X9.63 point;
 //   - Sealed {e, data}: ephemeral P-256 e, x(e·R) → HKDF-SHA256(salt empty, info, 32 bytes) → AES-256-GCM
 //     combined (nonce‖ct‖tag). Infos: "jarvis2/unlock-share" (the phone's share x(p·E) to the core's one-off
-//     key T), "jarvis2/claim" (the claim's bundle to the core), "jarvis2/backup" (a store backup to the
-//     master key, the store's name as associated data).
+//     key T), "jarvis2/claim" (the claim's bundle to the core), "jarvis2/backup" (a backup to the master key: a
+//     key's with "<store>\n<key>" as associated data, an older whole-store backup's with the store's name).
+//   - a store is a set of keys (core/keys.go): each value under its own data key ("<store>\n<key>" as associated
+//     data), the data key wrapped to the store key P + K ("jarvis2/store-data-key").
 // The core's identity: "jarvis2-core-identity <signingKey> <agreementKey>", signed by the box key (keys/box.pub),
 // which the app checks itself before it trusts a core.
 #if canImport(CryptoKit)

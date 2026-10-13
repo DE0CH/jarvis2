@@ -16,7 +16,8 @@ S3 stand-in (rclone serve s3), seeded in exactly infra/setup.py's format by infr
                                                   OTHER rewritten (setup), GITHUB_TOKEN deleted, OLD older than the
                                                   store's backup (ignored), SESSION_KEY written by a session's machine (a
                                                   stand-in core identity signed by the box key, a cert it signed, the
-                                                  machine's signature), and keyed-only's API_KEY (a store no whole-store
+                                                  machine's signature), RESTORED put back by a
+                                                  phone-approved restore (a receipt that core signed), and keyed-only's API_KEY (a store no whole-store
                                                   backup names)
                         and DIR/backups.json: every bucket's objects as the router serves them ({bucket: [{key, body}]})
 Nothing secret: every key here is made for one run, and the master key is the public test pair.
@@ -140,6 +141,10 @@ def key_backups(d, setup, s3, master, setup_pem, dump):
         w = {"by": "setup", "sig": sign(setup_key, text), "cert": None}
         if writer == "machine":
             w = {"by": "machine", "sig": sign(machine, text), "cert": cert_doc}
+        if writer == "restore":  # a phone-approved restore: the core's signed receipt (router/storerestore.go)
+            rc = json.dumps({"kind": "store-restore-approved", "pending": "p", "store": store, "to": 3, "remove": [],
+                             "put": [{"key": key, "e": e, "dataSha256": dsha, "backupSha256": bsha}]})
+            w = {"by": "restore", "receipt": {"payload": rc, "sig": sign(core_sig, rc)}}
         obj = {"kind": "key-backup", "store": store, "key": key, "deleted": value is None, "sealed": sealed, "backupSha256": bsha,
                "e": e, "dataSha256": dsha, "writer": w, "core": identity, "explanation": f"what {key} is for", "at": iso(at)}
         s3.put_object(Bucket=name, Key=f"keys/{store}/{key}.json", Body=json.dumps(obj).encode())
@@ -148,6 +153,7 @@ def key_backups(d, setup, s3, master, setup_pem, dump):
     put("default", "GITHUB_TOKEN", None, now + 60)
     put("default", "OLD", "stale", now - 3600)
     put("default", "SESSION_KEY", "from-a-session", now + 120, writer="machine")
+    put("default", "RESTORED", "r1", now + 90, writer="restore")
     put("keyed-only", "API_KEY", "k1", now + 60)
     dump[name] = [{"key": o["Key"], "body": s3.get_object(Bucket=name, Key=o["Key"])["Body"].read().decode()}
                   for o in s3.list_objects_v2(Bucket=name, Prefix="keys/").get("Contents", [])]

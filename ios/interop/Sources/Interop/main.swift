@@ -104,11 +104,11 @@ check(nocore?.map(\.name) == ["default"] && (try? CoreSetup.keysBundle(nocore ??
 
 // ---- key backups (keys/<store>/<key>.json, router/storedocs.go) laid over the whole-store ones ----
 let keyObjs = dumps["jarvis2-backup-keys"] ?? []
-check(keyObjs.count == 5, "the stand-in key backups (\(keyObjs.map(\.key)))")
+check(keyObjs.count == 6, "the stand-in key backups (\(keyObjs.map(\.key)))")
 let merged: [RecoveredStore]
 do { merged = try CoreSetup.readBackups(served + keyObjs, master: kitMaster, setupKey: setupKey, boxKey: boxKey) } catch { print("FAIL reading the key backups: \(error)"); exit(1) }
 let mDefault = merged.first { $0.name == "default" }
-check(mDefault?.values == ["OTHER": "y", "SESSION_KEY": "from-a-session"], "a later key backup replaces its key, a deleted one removes it, an older one is ignored (\(mDefault?.values.keys.sorted() ?? []))")
+check(mDefault?.values == ["OTHER": "y", "RESTORED": "r1", "SESSION_KEY": "from-a-session"], "a later key backup replaces its key, a deleted one removes it, an older one is ignored (\(mDefault?.values.keys.sorted() ?? []))")
 check(mDefault?.sensitive == false, "…and the store keeps its whole-store backup's sensitivity")
 check(merged.first { $0.name == "keyed-only" }.map { $0.values == ["API_KEY": "k1"] && $0.sensitive } == true, "a store only key backups name comes back, sensitive")
 check(throwsErr { _ = try CoreSetup.readBackups(served + keyObjs, master: kitMaster, setupKey: setupKey) }, "a session-written key backup isn't taken without the box key to check its core")
@@ -122,8 +122,10 @@ func alter(_ o: CoreSetup.BackupObject, key: String? = nil, _ fn: (inout [String
   return CoreSetup.BackupObject(key: key ?? o.key, body: String(decoding: try! JSONSerialization.data(withJSONObject: j), as: UTF8.self))
 }
 let setupObj = keyObjs.first { $0.key == "keys/default/OTHER.json" }!, machineObj = keyObjs.first { $0.key == "keys/default/SESSION_KEY.json" }!
+let restoreObj = keyObjs.first { $0.key == "keys/default/RESTORED.json" }!
 check(!throwsErr { _ = try CoreSetup.checkKeyBackup(setupObj, setupKey: setupKey, boxKey: boxKey) } && !throwsErr { _ = try CoreSetup.checkKeyBackup(machineObj, setupKey: setupKey, boxKey: boxKey) },
       "a setup-written and a session-written key backup check")
+check(!throwsErr { _ = try CoreSetup.checkKeyBackup(restoreObj, setupKey: setupKey, boxKey: boxKey) }, "…and one a phone-approved restore put back (the core's receipt)")
 let refusals: [(String, CoreSetup.BackupObject)] = [
   ("moved to another key", CoreSetup.BackupObject(key: "keys/default/ELSEWHERE.json", body: setupObj.body)),
   ("moved to another store", CoreSetup.BackupObject(key: "keys/gmail/OTHER.json", body: setupObj.body)),
@@ -133,6 +135,8 @@ let refusals: [(String, CoreSetup.BackupObject)] = [
   ("signed by another key", alter(setupObj) { $0["writer"] = ["by": "setup", "sig": (try! P256.Signing.PrivateKey().signature(for: Data("x".utf8))).derRepresentation.base64EncodedString()] }),
   ("a setup writer passed off as a machine", alter(setupObj) { var w = $0["writer"] as! [String: Any]; w["by"] = "machine"; w["cert"] = ((try? JSONSerialization.jsonObject(with: Data(machineObj.body.utf8)) as? [String: Any])?["writer"] as? [String: Any])?["cert"]; $0["writer"] = w }),
   ("a machine cert another core signed", alter(machineObj) { var c = $0["core"] as! [String: Any]; c["signingKey"] = phoneSigningForTests; $0["core"] = c }),
+  ("a restore receipt naming another value", alter(restoreObj) { $0["e"] = (try? JSONSerialization.jsonObject(with: Data(setupObj.body.utf8)) as? [String: Any])?["e"] }),
+  ("a restore receipt passed off as a delete", alter(restoreObj) { $0["deleted"] = true; $0["sealed"] = NSNull(); $0["e"] = ""; $0["dataSha256"] = ""; $0["backupSha256"] = "" }),
   ("an unknown writer", alter(setupObj) { var w = $0["writer"] as! [String: Any]; w["by"] = "core"; $0["writer"] = w }),
   ("a delete that carries a value", alter(setupObj) { $0["deleted"] = true }),
 ]
@@ -246,7 +250,7 @@ func unlock(_ store: String, share: @escaping (String) -> Data = shareOf) -> (In
   return finish(b, share: share)
 }
 let (dbs, db) = begin("default")
-check(dbs == 200 && db?.keys?.map(\.key) == ["OTHER", "SESSION_KEY"] && db?.keys?.allSatisfy { $0.writer.by == "core" } == true && db?.version?.isEmpty == false,
+check(dbs == 200 && db?.keys?.map(\.key) == ["OTHER", "RESTORED", "SESSION_KEY"] && db?.keys?.allSatisfy { $0.writer.by == "core" } == true && db?.version?.isEmpty == false,
       "a recovered store's keys are the core's to vouch for (\(db?.keys?.map { "\($0.key):\($0.writer.by)" } ?? []))")
 check(db.map { x in !throwsErr { try Checks.unlockKeys(x, setupKey: setupKey) } } == true, "…and the app takes them")
 let (us, ub) = db.map { finish($0) } ?? (0, Data())
@@ -275,7 +279,7 @@ let (ws0, wd0) = call("/setup/stores/default/keys/WRITTEN", setupWrite("default"
 check(ws0 == 200, "the setup session writes one key through the router (HTTP \(ws0) \(String(decoding: wd0.prefix(200), as: UTF8.self)))")
 let (wbs, wb) = begin("default")
 let wk = wb?.keys?.first { $0.key == "WRITTEN" }
-check(wbs == 200 && wk?.writer.by == "setup" && wk?.writer.sig != nil && wk?.backupSha256.count == 64 && wb?.keys?.count == 3,
+check(wbs == 200 && wk?.writer.by == "setup" && wk?.writer.sig != nil && wk?.backupSha256.count == 64 && wb?.keys?.count == 4,
       "unlock-begin names the written key, its setup writer with the signature and its backup hash")
 check(wb.map { x in !throwsErr { try Checks.unlockKeys(x, setupKey: setupKey) } } == true, "…the app checks the setup key's signature over it")
 check(wb.map { x in throwsErr { try Checks.unlockKeys(x, setupKey: phoneSigningForTests) } } == true, "…and refuses it against another key")
