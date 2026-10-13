@@ -65,7 +65,8 @@ snapshots, live transcripts, task results).
 - Claude: present. OpenCode + Paseo, OpenClaw + claw-code: present (policy: opencode brings `openrouter` + `tunnel`, openclaw brings `claude` + `tunnel`; `GET /api/models[?harness=]`; the harness is signed in the cert's options). `harness-send`: present (holder `scheduler`). API proxy: present.
 - Session image: Jarvis 2 builds all of it. The base (tools, harnesses, entrypoint, supervisor, workspace layer, api-proxy,
   content-sync, pull-secrets) is `session-image/base/`, carried over from Jarvis 1's `selfhost/session-image/` (DECISIONS 100-102);
-  Jarvis 1's image is no longer used.
+  Jarvis 1's image is no longer used. Fork pins (Jarvis 1's `fork-pin.yml`): present (`.github/workflows/fork-pin.yml`; the
+  forks run it on every build, DECISIONS 153).
 - Workspace layer: to verify. on-start hooks: present.
 - Peer-message delivery: present (`r.Deliver`, router/peer.go; Jarvis 1's lib/peer.js run through the `scheduler` grant).
 - Session-facing API (`$JARVIS_URL`): present — the machine's local proxy signs to `/m/api`; pull-secrets and changes answered on the machine; notify-idle and self-retire on the router; watches and leases on the router.
