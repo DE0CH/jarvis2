@@ -132,7 +132,8 @@ func sshFingerprint(pub string) string {
 	return "SHA256:" + base64.RawStdEncoding.EncodeToString(sum[:])
 }
 
-func (r *Router) applyKeyAnswer(a keyAnswer) error {
+// proof: the core's signed answer (outcomes.go: what vouches for "approved" to a session that asked for the key)
+func (r *Router) applyKeyAnswer(a keyAnswer, proof *Doc) error {
 	if a.Fingerprint == "" {
 		a.Fingerprint = sshFingerprint(a.PublicKey)
 	}
@@ -144,7 +145,7 @@ func (r *Router) applyKeyAnswer(a keyAnswer) error {
 	// a pending request for the same thing is answered too (inbox.go)
 	r.dropRequests(func(q *InboxRequest) bool {
 		return q.Kind == requestKindRepo && strings.EqualFold(q.Params.Repo, repo) && (q.Params.Action == "add") == (a.Kind == "deploy-key-added")
-	})
+	}, outcomeApproved, proof)
 	return r.updateRepos(func(rs []RepoEntry) []RepoEntry {
 		out := []RepoEntry{}
 		for _, e := range rs {
@@ -231,7 +232,7 @@ func (r *Router) relayDeployKey(w http.ResponseWriter, path string, body []byte,
 	if finish && status == 200 && json.Unmarshal(b, &d) == nil {
 		var a keyAnswer
 		if d.Decode(&a) == nil && (a.Kind == "deploy-key-added" || a.Kind == "deploy-key-removed") {
-			if err := r.applyKeyAnswer(a); err != nil {
+			if err := r.applyKeyAnswer(a, &d); err != nil {
 				log.Printf("repos: %v", err)
 			}
 		}

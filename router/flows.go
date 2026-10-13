@@ -531,7 +531,12 @@ func (r *Router) Respond(id, signature string) (*Doc, string, error) {
 		return nil, "", err
 	}
 	r.logInputs(extra.Entry)
-	r.st.Do(func(d *persisted) { delete(d.Approvals, id) })
+	r.st.Do(func(d *persisted) {
+		delete(d.Approvals, id)
+		if a.Kind == "new-session" { // outcomes.go: the core's approval, by the phone, of exactly the proposal
+			noteOutcome(d, a.Origin, a.Kind, a.Session, outcomeApproved, 0, ans)
+		}
+	})
 	go func() {
 		defer done()
 		r.startAndCertify(a.Session, ans)
@@ -569,7 +574,10 @@ func (r *Router) respondAddStore(a *Approval, signature string) (*Doc, string, e
 		}
 	})
 	if cur == nil {
-		r.st.Do(func(d *persisted) { delete(d.Approvals, a.ID) })
+		r.st.Do(func(d *persisted) {
+			delete(d.Approvals, a.ID)
+			noteOutcome(d, a.Origin, a.Kind, a.Session, outcomeDropped, 0, nil)
+		})
 		return nil, "", fmt.Errorf("the session no longer runs on the machine this store was asked for")
 	}
 	store := a.Options["store"]
@@ -584,7 +592,10 @@ func (r *Router) respondAddStore(a *Approval, signature string) (*Doc, string, e
 		var ce *CoreError
 		if errors.As(err, &ce) && ce.Status == 409 && containsString(have, store) {
 			// this very challenge was answered before (the same store asked for twice from one cert): it is in already
-			r.st.Do(func(d *persisted) { delete(d.Approvals, a.ID) })
+			r.st.Do(func(d *persisted) {
+				delete(d.Approvals, a.ID)
+				noteOutcome(d, a.Origin, a.Kind, a.Session, outcomeApproved, 0, cur)
+			})
 			return cur, a.Session, nil
 		}
 		return nil, "", err
@@ -617,6 +628,7 @@ func (r *Router) respondAddStore(a *Approval, signature string) (*Doc, string, e
 	}
 	r.st.Do(func(d *persisted) {
 		delete(d.Approvals, a.ID)
+		noteOutcome(d, a.Origin, a.Kind, a.Session, outcomeApproved, 0, ans) // the machine's new cert names the store
 		d.Certs[a.Machine] = ans
 		if s := d.Sessions[a.Session]; s != nil {
 			s.Cert, s.Stores = ans, c.Stores
@@ -645,11 +657,17 @@ func containsAll(have, want []string) bool {
 	return true
 }
 
-func (r *Router) Reject(id string) error {
+func (r *Router) Reject(id string) error { return r.RejectAs(id, outcomeDenied) }
+
+// RejectAs: Reject, telling a requesting session the outcome (denied, or lapsed when it expired; outcomes.go)
+func (r *Router) RejectAs(id, outcome string) error {
 	var a *Approval
 	r.st.Do(func(d *persisted) {
 		a = d.Approvals[id]
 		delete(d.Approvals, id)
+		if a != nil {
+			noteOutcome(d, a.Origin, a.Kind, a.Session, outcome, 0, nil)
+		}
 	})
 	if a == nil {
 		return fmt.Errorf("no such approval")

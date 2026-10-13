@@ -99,7 +99,7 @@ func callNoWhy(pattern string) string {
 }
 
 // fileCall: an API-call request into the Inbox → {id, duplicate, expires}
-func (r *Router) fileCall(w http.ResponseWriter, c Caller, path string, b []byte) {
+func (r *Router) fileCall(w http.ResponseWriter, c Caller, path string, b []byte, signed *SignedRequest) {
 	var in callIn
 	if err := json.Unmarshal(b, &in); err != nil {
 		writeJSON(w, 400, map[string]string{"error": "bad JSON: " + err.Error()})
@@ -143,7 +143,7 @@ func (r *Router) fileCall(w http.ResponseWriter, c Caller, path string, b []byte
 	if p.Body != "" {
 		args["body"] = p.Body
 	}
-	q, dup, err := r.FileRequest(requestKindCall, p, in.Explanation, Origin{Caller: c, Call: APICall{Method: "POST", Path: path, Args: args}})
+	q, dup, err := r.FileRequest(requestKindCall, p, in.Explanation, Origin{Caller: c, Call: APICall{Method: "POST", Path: path, Args: args}, Signed: signed})
 	if err != nil {
 		writeRequestErr(w, err)
 		return
@@ -173,6 +173,19 @@ func (r *Router) ApproveCall(id string, approver *http.Request) (*CallResult, er
 	if q == nil {
 		return nil, errNoRequest
 	}
+	defer func() { // outcomes.go: the requesting session is told (its result stays readable for inboxTTL)
+		r.st.Do(func(d *persisted) {
+			x := d.CallResults[q.ID]
+			if x == nil {
+				return
+			}
+			if x.State == "done" {
+				noteOutcome(d, &q.Origin, q.Kind, q.ID, outcomeApproved, x.Status, nil)
+			} else {
+				noteOutcome(d, &q.Origin, q.Kind, q.ID, outcomeFailed, 0, nil)
+			}
+		})
+	}()
 	res := &CallResult{ID: q.ID, Caller: q.Origin.Caller, Method: q.Params.Method, Path: q.Params.Path, ApprovedBy: appCaller(approver).Kind, At: time.Now().UTC()}
 	if !running {
 		res.State, res.Error = "failed", "the requesting session no longer runs"

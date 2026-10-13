@@ -25,7 +25,7 @@ func TestStoreKeysListed(t *testing.T) {
 	}))
 	defer core.Close()
 	r.core = &CoreClient{base: core.URL, http: http.DefaultClient}
-	r.applyKeyAnswer(keyAnswer{Kind: "deploy-key-added", Repo: "DE0CH/claude-env"})
+	r.applyKeyAnswer(keyAnswer{Kind: "deploy-key-added", Repo: "DE0CH/claude-env"}, nil)
 
 	// recorded through the setup route (NoAccess router without a setup key: no signature needed in tests)
 	if code, out := appDo(t, r, "POST", "/setup/store-keys", `{"name":"default","keys":["OPENROUTER_API","EXA_API","EXA_API"]}`); code != 200 {

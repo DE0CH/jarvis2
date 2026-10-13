@@ -103,6 +103,9 @@ var deliveredMu sync.Mutex
 
 // notReplayed: records the delivery, or refuses a repeat of one already made (wakeup, cron); other kinds pass
 func notReplayed(d Delivery, now time.Time) error {
+	if d.Kind == "request-outcome" && d.Request != nil {
+		return outcomeNotReplayed(d, now)
+	}
 	if (d.Kind != "wakeup" && d.Kind != "cron" && d.Kind != "watch" && d.Kind != "watch-fail") || d.Request == nil {
 		return nil
 	}
@@ -184,10 +187,12 @@ type Delivery struct {
 	// a lease (leases.go): the device (a lease name), and whether Deyao had taken it over (and interrupted this
 	// session); a granted lease also carries this session's own signed acquire request (its prompt) and the lease's
 	// length in Minutes
-	Device      string     `json:"device,omitempty"`
-	Handover    bool       `json:"handover,omitempty"`
-	Interrupted bool       `json:"interrupted,omitempty"`
-	Attest      *SignedDoc `json:"attest"`
+	Device      string `json:"device,omitempty"`
+	Handover    bool   `json:"handover,omitempty"`
+	Interrupted bool   `json:"interrupted,omitempty"`
+	// request-outcome (outcomes.go): the decided items of this session's own filing (Request)
+	Outcomes []OutcomeItem `json:"outcomes,omitempty"`
+	Attest   *SignedDoc    `json:"attest"`
 }
 
 // ownRequestBody: the body of a request one of this line's machines signed (a wakeup or cron it asked for)
@@ -243,6 +248,8 @@ func deliveryText(d Delivery, keys []string) (text string, attested []byte, err 
 		return fmt.Sprintf("[recurring wakeup %q — run %d] %s", name, max(1, d.Run), prompt), body, nil
 	case "continue":
 		return "continue", []byte("continue"), nil
+	case "request-outcome":
+		return outcomeText(d, keys)
 	case "watch", "watch-fail":
 		w, body, err := ownWatch(d.Request, keys)
 		if err != nil {

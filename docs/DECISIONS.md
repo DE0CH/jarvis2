@@ -1046,3 +1046,40 @@ Deyao: several actions approved together with ONE Face ID; the caller groups the
      login), and the setup session can't pair one (giving it that would hand it every OpenClaw gateway token), so the
      fork's simulator test skips its Jarvis checks (a warning) until a paired token is in its secrets. Change: a
      setup-signed device registration for a CI token, or Deyao pairs a "Paseo CI" device once.
+
+## A session hears what became of its Inbox requests, 2026-10-13
+
+159. **The requesting session is told every decision on what it filed** (Deyao, 2026-10-13: "Approving an Inbox
+     request should send a message or something to notify the session that requested it"; `router/outcomes.go`,
+     `machine/outcomes.go`). Approved, denied, lapsed (10 minutes), dropped (left without a decision) or failed (an
+     approved API call that couldn't run), per item, for everything a session files on its machine key (requests,
+     add-store, new-session proposals, batches, the actions' filings incl. API calls). Claude's choices:
+     *Built like the lease wake*: a delivery kind `request-outcome` whose text the machine builds from the session's
+     own signed filing (kept by the router exactly as signed, as for wakeups) and image texts; the router names only
+     the outcome word, an id (`[a-z0-9-]`), an HTTP status and a proof per item; the core attests the delivery over
+     a canonical record of exactly those; each item is taken once (the delivered file in the snapshot).
+     *What vouches for "approved"*: whatever signed trace the approval leaves, checked by the machine, which refuses
+     the whole delivery when it doesn't check out: the phone-signed grant for this line (grant; the holder's name to
+     key mapping is the router's, so the text says "a grant for this session", not which feature), this machine's new
+     core-signed cert naming the store (add-store), the core's approval by the phone of a new line whose config has the
+     proposal's label and prompt (new-session; the new session's id is the router's, a format value), the core's signed
+     deploy-key answer for the repo (repo add/remove). An **unlock** (the core's unlock answer names no session) and an
+     **API call** (approved with Deyao's Access login, no signature) leave nothing signed: the router's word, and the
+     text says "this is Jarvis's report".
+     *What vouches for denied / lapsed / dropped / failed*: nothing can: they are non-events (Deny is Deyao's Access
+     login; a lapse is a clock). The router's word, as a fixed word whose text says so. The harm of a false one is
+     bounded: the session doesn't use something it could have, or files again (Deyao sees it again). A false
+     "approved" is the one that matters, and that is the one the machine checks where it can.
+     *Never Deyao's words*: no note, no free text; a batch's summary in the text is the session's own (signed).
+     *Paused session*: no boot. The outcomes wait in the router's state (at most 100 per session) and go in once it
+     runs again (the tick delivers only to a started session). Change: a wakeup-style start, if Deyao wants a paused
+     session woken by a decision; not chosen because a decision rarely needs action before the session's own next start,
+     and a boot costs a machine for a message.
+     *A batch is one message*: its items go together once all are decided, or 30 s after the newest decision (an item
+     filed as a duplicate into another batch, or never decided, doesn't hold the rest back).
+     *Older images*: a machine that answers "unknown delivery kind" is given up on at once (its outcomes stay
+     listed); `jarvis2-request outcomes` / `wait ID` read the router's record (`GET /m/api/requests/outcomes`), the
+     session's own choice to read, like `lease.py status`.
+     *The app's "done"*: `POST /api/requests/:id/done` (Deyao's Access login) is what says an unlock went through, so
+     an unlock's "approved" rests on it. A grant or deploy key is told from the signed answer when it is stored, before
+     the app's done arrives.

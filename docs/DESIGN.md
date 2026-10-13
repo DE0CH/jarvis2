@@ -386,6 +386,15 @@ covers changes; a batch is only the router's grouping. Any kind may be in a batc
 denied or allowed alone); it goes after 10 minutes like any request; an item that fails is shown failed while the
 others stand, and Retry reads it again and asks for another Face ID.
 
+**Outcomes** (Deyao, 2026-10-13): when an item a session filed is decided (approved, denied, lapsed after 10 minutes,
+dropped without a decision, or failed after approval), the requesting session is told by a delivery the machine checks,
+like a lease wake: the text is built in the image from the session's own signed filing (what was asked) and image
+texts for the outcome; the router names only the outcome word, an id, a status number and a proof per item. An
+approval that leaves a signed trace must carry it and the machine checks it (the phone's grant, the machine's new
+core-signed cert, the core's phone approval of the proposal, the core's deploy-key answer); an unlock, an API call and
+every non-approval are the router's word and the text says so (docs/DECISIONS.md 159). Deyao's own words never travel.
+A batch is told once, all items together; a paused session hears at its next start (nothing boots it for this).
+
 ## Machine side (in the image)
 
 Boot makes the machine's keys and waits. `jarvis2-init` (run by the core through Fly, no arguments) prints the
@@ -431,6 +440,7 @@ Deyao handing a feature a shell, and the session's own allow list is the session
 | The Claude login | (d) Anthropic: the router hands the pair over `/m/claude-login` (machine-signed, only to a cert with the store `claude`), and the machine writes it only when Anthropic's profile endpoint names the account the store vouches for (`CLAUDE_ACCOUNT_UUID`; on a resume whose carried store predates it, the account in the snapshot's `~/.claude.json`); taken at boot, kept in step by a long poll with the router's refresh protocol (`machine/claudelogin.go`, `router/claudelogin.go`); no router write, no grant |
 | Wakeups, crons | (c) the session's own signed request + the core's attestation; the line records what it delivered (in the snapshot): a wakeup once, a cron once per run and at most every half period |
 | The watchdog's nudge, "continue" after a re-login, "upgraded" after an Upgrade | the image: texts built into it; the router picks when, never what (numbers, or a size: small, medium or large) |
+| An Inbox request's outcome | (c) the session's own signed filing + image texts; per item the router names an outcome word, an id, a status number, and a proof the machine checks for approvals (phone grant, core-signed cert or approval, core key answer); the core attests it; each item once |
 | An added store | (a) the new cert, phone-approved |
 | The OpenClaw runtime | (d) the GitHub release, pinned by sha256 in the image |
 | Jarvis 1's restore-snapshot (would fetch unsigned state from the Storage Box when a store holds its credentials) | removed from the image |

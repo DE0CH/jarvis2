@@ -52,6 +52,11 @@ type APICall struct {
 type Origin struct {
 	Caller Caller  `json:"caller"`
 	Call   APICall `json:"call"`
+	// outcomes.go: a session's filing exactly as its machine signed it, and the item's index in it (a batch), so the
+	// decision can be delivered into the session built from its own request
+	Signed *SignedRequest `json:"signed,omitempty"`
+	Item   int            `json:"item,omitempty"`
+	Batch  string         `json:"batch,omitempty"`
 }
 
 type RequestParams struct {
@@ -253,7 +258,8 @@ func pruneRequests(d *persisted, now time.Time) {
 		d.Inbox = map[string]*InboxRequest{}
 	}
 	for id, q := range d.Inbox {
-		gone := !now.Before(q.Expires)
+		lapsed := !now.Before(q.Expires)
+		gone := false
 		if q.Kind == requestKindCall { // the actions end with the session's run (actions.go)
 			gone = gone || !callerRunning(d, q.Origin.Caller)
 		}
@@ -261,18 +267,27 @@ func pruneRequests(d *persisted, now time.Time) {
 			s := d.Sessions[q.Params.Session]
 			gone = gone || s == nil || s.State == "destroyed"
 		}
-		if gone {
+		if lapsed || gone {
 			delete(d.Inbox, id)
+			oc := outcomeDropped
+			if lapsed {
+				oc = outcomeLapsed
+			}
+			noteOutcome(d, &q.Origin, q.Kind, q.ID, oc, 0, nil)
 		}
 	}
 }
 
-// dropRequests: requests that were done (by any path: a repo added from Settings answers a pending request too)
-func (r *Router) dropRequests(match func(q *InboxRequest) bool) {
+// dropRequests: requests that were done (by any path: a repo added from Settings answers a pending request too), with
+// what the requesting session is told (outcomes.go; "" = nothing) and what vouches for it
+func (r *Router) dropRequests(match func(q *InboxRequest) bool, outcome string, proof *Doc) {
 	r.st.Do(func(d *persisted) {
 		for id, q := range d.Inbox {
 			if match(q) {
 				delete(d.Inbox, id)
+				if outcome != "" {
+					noteOutcome(d, &q.Origin, q.Kind, q.ID, outcome, 0, proof)
+				}
 			}
 		}
 	})
@@ -477,7 +492,7 @@ func (r *Router) expireApprovals(now time.Time) {
 		}
 	})
 	for _, id := range old {
-		if err := r.Reject(id); err == nil {
+		if err := r.RejectAs(id, outcomeLapsed); err == nil {
 			log.Printf("inbox: approval %s expired after %s", id, inboxTTL)
 		}
 	}
@@ -499,6 +514,7 @@ func (r *Router) DenyRequest(id string) error {
 		if q, ok := d.Inbox[id]; ok {
 			delete(d.Inbox, id)
 			found = true
+			noteOutcome(d, &q.Origin, q.Kind, q.ID, outcomeDenied, 0, nil)
 			if q.Kind == requestKindCall { // the caller reads that it was denied
 				pruneCallResults(d, time.Now().UTC())
 				d.CallResults[id] = &CallResult{ID: id, Caller: q.Origin.Caller, Method: q.Params.Method, Path: q.Params.Path, State: "denied", At: time.Now().UTC()}
@@ -580,7 +596,7 @@ func writeRequestErr(w http.ResponseWriter, err error) {
 }
 
 // fileIntent: one intent endpoint call → 200 {id, duplicate, expires} or 202 {approval} for add-store
-func (r *Router) fileIntent(w http.ResponseWriter, method, path, intent string, c Caller, body []byte) {
+func (r *Router) fileIntent(w http.ResponseWriter, method, path, intent string, c Caller, body []byte, signed *SignedRequest) {
 	var in requestIn
 	if len(body) > 0 {
 		if err := json.Unmarshal(body, &in); err != nil {
@@ -602,7 +618,7 @@ func (r *Router) fileIntent(w http.ResponseWriter, method, path, intent string, 
 		writeRequestErr(w, &badRequest{err.Error()})
 		return
 	}
-	q, dup, err := r.FileRequest(kind, np, in.Explanation, Origin{Caller: c, Call: APICall{Method: method, Path: path, Args: callArgs(kind, np)}})
+	q, dup, err := r.FileRequest(kind, np, in.Explanation, Origin{Caller: c, Call: APICall{Method: method, Path: path, Args: callArgs(kind, np)}, Signed: signed})
 	if err != nil {
 		writeRequestErr(w, err)
 		return
@@ -635,7 +651,7 @@ func (r *Router) registerInbox(app appRoute, m machineRoute, public publicRoute)
 	// by itself when it is answered.
 	app("POST /api/requests/{id}/done", func(w http.ResponseWriter, req *http.Request) {
 		id := req.PathValue("id")
-		r.dropRequests(func(q *InboxRequest) bool { return q.ID == id })
+		r.dropRequests(func(q *InboxRequest) bool { return q.ID == id }, outcomeApproved, nil)
 		writeJSON(w, 200, map[string]bool{"ok": true})
 	})
 	// approve an API-call request (apicalls.go): the call runs now as Deyao (this request's Access login)
@@ -653,13 +669,13 @@ func (r *Router) registerInbox(app appRoute, m machineRoute, public publicRoute)
 	})
 	// batches (batches.go): several items filed together, reviewed on one page under one Face ID
 	app("POST /api/requests/batch", func(w http.ResponseWriter, req *http.Request) {
-		r.serveFileBatch(w, appCaller(req), req.Method, req.URL.Path, readBody(req))
+		r.serveFileBatch(w, appCaller(req), req.Method, req.URL.Path, readBody(req), nil)
 	})
 	app("GET /api/requests/batches/{id}", func(w http.ResponseWriter, req *http.Request) { r.serveBatch(w, req.PathValue("id"), nil) })
 	app("DELETE /api/requests/batches/{id}", func(w http.ResponseWriter, req *http.Request) { r.serveDenyBatch(w, req.PathValue("id")) })
 	for intent := range intents {
 		app("POST /api/requests/"+intent, func(w http.ResponseWriter, req *http.Request) {
-			r.fileIntent(w, req.Method, req.URL.Path, intent, appCaller(req), readBody(req))
+			r.fileIntent(w, req.Method, req.URL.Path, intent, appCaller(req), readBody(req), nil)
 		})
 	}
 
@@ -704,14 +720,14 @@ func (r *Router) registerInbox(app appRoute, m machineRoute, public publicRoute)
 		writeJSON(w, 200, map[string]any{"repos": r.Repos()})
 	}))
 	public("POST /setup/requests/batch", setupOnly(func(w http.ResponseWriter, req *http.Request, b []byte) {
-		r.serveFileBatch(w, Caller{Kind: "setup"}, req.Method, req.URL.Path, b)
+		r.serveFileBatch(w, Caller{Kind: "setup"}, req.Method, req.URL.Path, b, nil)
 	}))
 	public("GET /setup/requests/batches/{id}", setupOnly(func(w http.ResponseWriter, req *http.Request, _ []byte) {
 		r.serveBatch(w, req.PathValue("id"), nil)
 	}))
 	for intent := range intents {
 		public("POST /setup/requests/"+intent, setupOnly(func(w http.ResponseWriter, req *http.Request, b []byte) {
-			r.fileIntent(w, req.Method, req.URL.Path, intent, Caller{Kind: "setup"}, b)
+			r.fileIntent(w, req.Method, req.URL.Path, intent, Caller{Kind: "setup"}, b, nil)
 		}))
 	}
 
@@ -737,14 +753,14 @@ func (r *Router) registerInbox(app appRoute, m machineRoute, public publicRoute)
 		writeJSON(w, 200, map[string]any{"requests": mine, "batches": r.InboxBatches(&c)})
 	}))
 	m("POST /m/api/requests/batch", own(func(w http.ResponseWriter, req *http.Request, sid string, b []byte) {
-		r.serveFileBatch(w, Caller{Kind: "session", Session: sid}, req.Method, strings.TrimPrefix(req.URL.Path, "/m"), b)
+		r.serveFileBatch(w, Caller{Kind: "session", Session: sid}, req.Method, strings.TrimPrefix(req.URL.Path, "/m"), b, signedRequestOf(req, req.Header.Get("X-Machine"), b))
 	}))
 	m("GET /m/api/requests/batches/{id}", own(func(w http.ResponseWriter, req *http.Request, sid string, _ []byte) {
 		r.serveBatch(w, req.PathValue("id"), &Caller{Kind: "session", Session: sid})
 	}))
 	for intent := range intents {
 		m("POST /m/api/requests/"+intent, own(func(w http.ResponseWriter, req *http.Request, sid string, b []byte) {
-			r.fileIntent(w, req.Method, strings.TrimPrefix(req.URL.Path, "/m"), intent, Caller{Kind: "session", Session: sid}, b)
+			r.fileIntent(w, req.Method, strings.TrimPrefix(req.URL.Path, "/m"), intent, Caller{Kind: "session", Session: sid}, b, signedRequestOf(req, req.Header.Get("X-Machine"), b))
 		}))
 	}
 	// one more store for this session: the router's add-store approval, with the caller's explanation
@@ -762,7 +778,8 @@ func (r *Router) registerInbox(app appRoute, m machineRoute, public publicRoute)
 				machine = s.MachineID
 			}
 		})
-		o := Origin{Caller: Caller{Kind: "session", Session: sid}, Call: APICall{Method: "POST", Path: "/api/requests/add-store", Args: map[string]any{"store": in.Store}}}
+		o := Origin{Caller: Caller{Kind: "session", Session: sid}, Call: APICall{Method: "POST", Path: "/api/requests/add-store", Args: map[string]any{"store": in.Store}},
+			Signed: signedRequestOf(req, req.Header.Get("X-Machine"), b)}
 		if err := r.AddStoreFrom(machine, in.Store, o, expl, ""); err != nil {
 			writeErr(w, err)
 			return
@@ -779,6 +796,6 @@ func init() {
 		}
 	})
 	onDestroy = append(onDestroy, func(r *Router, s Session) {
-		r.dropRequests(func(q *InboxRequest) bool { return q.Params.Session == s.ID })
+		r.dropRequests(func(q *InboxRequest) bool { return q.Params.Session == s.ID }, outcomeDropped, nil)
 	})
 }

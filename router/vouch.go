@@ -272,7 +272,9 @@ type Delivery struct {
 	Device      string `json:"device,omitempty"`
 	Handover    bool   `json:"handover,omitempty"`
 	Interrupted bool   `json:"interrupted,omitempty"`
-	Attest      *Doc   `json:"attest"`
+	// outcomes.go: request-outcome — the decided items of the session's own filing (Request)
+	Outcomes []OutcomeItem `json:"outcomes,omitempty"`
+	Attest   *Doc          `json:"attest"`
 }
 
 type DeliveryResult struct {
@@ -309,6 +311,12 @@ func attested(d Delivery) ([]byte, string, error) {
 		return b, "session-signed:" + d.Request.Machine, err
 	case "continue":
 		return []byte("continue"), "image-text", nil
+	case "request-outcome":
+		b, err := outcomeAttested(d)
+		if err != nil {
+			return nil, "", err
+		}
+		return b, "session-signed:" + d.Request.Machine, nil
 	case "lease-granted", "lease-taken", "lease-back":
 		if !leaseNameRE.MatchString(d.Device) {
 			return nil, "", errors.New("lease: not a device name")
@@ -340,7 +348,22 @@ var errNotVouched = errors.New("this wasn't asked for by the session itself (no 
 // deliverVouched: resume the session when it is paused, wait for it, then hand the machine the delivery with the
 // core's attestation and wait for its answer
 func (r *Router) deliverVouched(sid string, d Delivery) error {
+	return r.deliverVouchedOpts(sid, d, true)
+}
+
+// deliverVouchedRunning: only into a running session (errSkip otherwise): nothing is started for it (outcomes.go)
+func (r *Router) deliverVouchedRunning(sid string, d Delivery) error {
+	return r.deliverVouchedOpts(sid, d, false)
+}
+
+func (r *Router) deliverVouchedOpts(sid string, d Delivery, boot bool) error {
 	state, _ := r.sessionState(sid)
+	if !boot && state != "started" {
+		if state == "" {
+			return errNoSession
+		}
+		return fmt.Errorf("%w: the session is %s", errSkip, state)
+	}
 	switch state {
 	case "":
 		return errNoSession

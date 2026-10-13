@@ -210,6 +210,7 @@ func (r *Router) AddGrant(session string, doc *Doc) (*StoredGrant, error) {
 		for id, q := range d.Inbox { // a pending request for this feature is answered (inbox.go)
 			if q.Kind == requestKindGrant && q.Params.Session == session && q.Params.Holder == holder {
 				delete(d.Inbox, id)
+				noteOutcome(d, &q.Origin, q.Kind, q.ID, outcomeApproved, 0, doc) // the phone-signed grant vouches
 			}
 		}
 	})

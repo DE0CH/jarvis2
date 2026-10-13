@@ -111,7 +111,7 @@ func (r *Router) registerSessionAPI(app appRoute, m machineRoute) {
 	// the app's New session, so nothing starts until Deyao approves the core's succession from null with Face ID; the
 	// approval names the proposing session and carries its reason. No attachments (uploads are the app's).
 	own("POST /m/api/sessions", func(w http.ResponseWriter, req *http.Request, sid string, b []byte) {
-		r.proposeSession(w, Caller{Kind: "session", Session: sid}, sid, b)
+		r.proposeSession(w, Caller{Kind: "session", Session: sid}, sid, b, signedRequestOf(req, req.Header.Get("X-Machine"), b))
 	})
 	own("/m/api/", func(w http.ResponseWriter, req *http.Request, sid string, _ []byte) {
 		writeJSON(w, 404, map[string]string{"error": fmt.Sprintf("Jarvis 2 doesn't serve %s %s", req.Method, strings.TrimPrefix(req.URL.Path, "/m"))})
@@ -319,13 +319,16 @@ func (r *Router) postNotifyIdle(w http.ResponseWriter, sid string, body []byte) 
 // the app's New session, so nothing starts until Deyao approves the core's succession from null with Face ID; the
 // approval names the caller and carries its reason. No attachments (uploads are the app's). prefix keeps the
 // caller's request ids apart from the app's and every other caller's.
-func (r *Router) proposeSession(w http.ResponseWriter, c Caller, prefix string, b []byte) {
+func (r *Router) proposeSession(w http.ResponseWriter, c Caller, prefix string, b []byte, signed *SignedRequest) {
 	var in proposalIn
 	if err := json.Unmarshal(b, &in); err != nil {
 		writeJSON(w, 400, map[string]string{"error": "bad JSON: " + err.Error()})
 		return
 	}
 	ns, err := r.checkProposal(c, prefix, in, true)
+	if err == nil {
+		ns.Origin.Signed = signed
+	}
 	if err != nil {
 		writeRequestErr(w, err)
 		return

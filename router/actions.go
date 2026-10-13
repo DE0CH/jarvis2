@@ -110,22 +110,22 @@ func (r *Router) registerActions(m machineRoute) {
 		writeJSON(w, 200, map[string]bool{"ok": true})
 	})
 	act("POST /m/api/actions/sessions", func(w http.ResponseWriter, req *http.Request, c Caller, b []byte) {
-		r.proposeSession(w, c, "actions-"+c.Session, b)
+		r.proposeSession(w, c, "actions-"+c.Session, b, signedRequestOf(req, req.Header.Get("X-Machine"), b))
 	})
 	act("POST /m/api/actions/requests/batch", func(w http.ResponseWriter, req *http.Request, c Caller, b []byte) {
-		r.serveFileBatch(w, c, req.Method, path(req), b)
+		r.serveFileBatch(w, c, req.Method, path(req), b, signedRequestOf(req, req.Header.Get("X-Machine"), b))
 	})
 	act("POST /m/api/actions/requests/batches/{id}/deny", func(w http.ResponseWriter, req *http.Request, _ Caller, _ []byte) {
 		r.serveDenyBatch(w, req.PathValue("id"))
 	})
 	for intent := range intents {
 		act("POST /m/api/actions/requests/"+intent, func(w http.ResponseWriter, req *http.Request, c Caller, b []byte) {
-			r.fileIntent(w, req.Method, path(req), intent, c, b)
+			r.fileIntent(w, req.Method, path(req), intent, c, b, signedRequestOf(req, req.Header.Get("X-Machine"), b))
 		})
 	}
 	// any app API call (apicalls.go): filed for Deyao's approval; its result read back by the same session
 	act("POST /m/api/actions/requests/call", func(w http.ResponseWriter, req *http.Request, c Caller, b []byte) {
-		r.fileCall(w, c, path(req), b)
+		r.fileCall(w, c, path(req), b, signedRequestOf(req, req.Header.Get("X-Machine"), b))
 	})
 	act("GET /m/api/actions/requests/call/{id}", func(w http.ResponseWriter, req *http.Request, c Caller, _ []byte) {
 		r.serveCallResult(w, c, req.PathValue("id"))

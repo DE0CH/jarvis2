@@ -254,6 +254,28 @@ leaves the batch); a batch with nothing left goes. The app's batch page signs th
 and shows each one's result; one that failed (the others went through and left the Inbox) is read again and signed on
 Retry, with another Face ID.
 
+### Outcomes (`router/outcomes.go`, `machine/outcomes.go`)
+
+When an item a **session** filed (through `/m/api/requests/…`, `/m/api/sessions`, `/m/api/requests/batch` or the
+`/m/api/actions/…` equivalents, incl. `requests/call`) is decided, the router tells that session with a delivery
+(`/m/commands`, kind `request-outcome`, as wakeups and lease wakes are delivered). The outcome is one word:
+`approved`, `denied` (Deny, Deny all, the actions' deny), `lapsed` (10 minutes without an answer), `dropped` (it left
+without a decision: the session paused with an API call pending, the session it was about went away, an add-store
+whose machine is gone) or `failed` (an approved API call that couldn't run). The delivery carries the session's own
+signed filing, and per item `{item /* index in a batch, 0 otherwise */, outcome, ref /* the Inbox id; for add-store the
+session's id; for new-session the new session's id */, status? /* an approved API call's HTTP status */, proof?}`. The
+machine builds the text from its own filing and image texts, and checks the proof of an approval: the phone-signed
+grant (grant), the machine's new core-signed cert naming the store (add-store), the core's approval by the phone with
+the proposal's label and prompt (new-session), the core's signed key answer (repo add/remove); unlock and API calls
+carry none and say they are Jarvis's report. A batch's items go together, once every item is decided or 30 s after the
+last decision. A paused session is not started for it: the outcomes wait and go in at its next start; a destroyed
+session's go with it. The core attests each delivery over `{request: <filing sig>, items: [{item, outcome, ref, status,
+proof: sha256(payload "\n" sig)}]}` (origin `session-signed:<machine>`).
+
+| Call | Does |
+|---|---|
+| `GET /m/api/requests/outcomes` | this session's recorded outcomes, newest first: `{outcomes: [{ref, batch?, item, kind, outcome, status?, at, delivered?, error?}]}` (`jarvis2-request outcomes`, `jarvis2-request wait ID`) |
+
 The app never takes the title from the router: the list renders it from `kind` + `params` (`src/lib/inbox.ts`), and
 the review page renders "What you sign (exact)" from the signed content (`Shell/SignedAction.swift`). The shell checks
 that the item's `open.options` equal its own page's (repo, action, session, feature, length) and says so when not.

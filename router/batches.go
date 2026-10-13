@@ -212,6 +212,7 @@ func (r *Router) DenyBatch(id string) error {
 		for qid, q := range d.Inbox {
 			if q.Batch == id {
 				delete(d.Inbox, qid)
+				noteOutcome(d, &q.Origin, q.Kind, q.ID, outcomeDenied, 0, nil)
 			}
 		}
 		for aid, a := range d.Approvals {
@@ -260,6 +261,9 @@ type batchItem struct {
 	j1   J1ImportIn
 	expl string
 	args map[string]any
+	// outcomes.go: the batch as the session's machine signed it, and this item's index in it
+	signed *SignedRequest
+	index  int
 }
 
 // BatchResult: what filing one item did
@@ -361,7 +365,7 @@ func (r *Router) checkBatchItem(c Caller, raw json.RawMessage) (*batchItem, erro
 // FileBatch: every item checked first (any bad item: nothing is filed, 400 naming it), then filed in order. An item
 // that fails while being filed (the core refused a challenge) is reported and the rest stand; when none stands, the
 // batch is dropped. A request already waiting outside any batch joins this one; one in another batch stays there.
-func (r *Router) FileBatch(c Caller, method, path string, body []byte) (int, map[string]any) {
+func (r *Router) FileBatch(c Caller, method, path string, body []byte, signed *SignedRequest) (int, map[string]any) {
 	var in batchIn
 	if err := json.Unmarshal(body, &in); err != nil {
 		return 400, map[string]any{"error": "bad JSON: " + err.Error()}
@@ -426,7 +430,8 @@ func (r *Router) FileBatch(c Caller, method, path string, body []byte) (int, map
 	}
 	results := []BatchResult{}
 	entries := []BatchEntry{}
-	for _, it := range items {
+	for i, it := range items {
+		it.signed, it.index = signed, i
 		res, entry := r.fileBatchItem(c, method, path, b, it)
 		results = append(results, res)
 		if entry != nil {
@@ -451,7 +456,7 @@ func mustJSON(v any) []byte { b, _ := json.Marshal(v); return b }
 
 func (r *Router) fileBatchItem(c Caller, method, path string, b *Batch, it *batchItem) (BatchResult, *BatchEntry) {
 	res := BatchResult{Intent: it.intent}
-	o := Origin{Caller: c, Call: APICall{Method: method, Path: path, Args: it.args}}
+	o := Origin{Caller: c, Call: APICall{Method: method, Path: path, Args: it.args}, Signed: it.signed, Item: it.index, Batch: b.ID}
 	switch {
 	case it.kind != "":
 		q := &InboxRequest{ID: "q" + randID(), Kind: it.kind, Params: it.p, Origin: o, Explanation: it.expl, Created: b.Created,
@@ -492,6 +497,7 @@ func (r *Router) fileBatchItem(c Caller, method, path string, b *Batch, it *batc
 			ns := it.ns
 			ns.Origin.Call = o.Call
 			ns.Origin.Call.Path = path
+			ns.Origin.Signed, ns.Origin.Item, ns.Origin.Batch = o.Signed, o.Item, o.Batch
 			ns.Batch = b.ID
 			sid, err = r.CreateSession(ns)
 		} else {
@@ -528,8 +534,8 @@ func (r *Router) fileBatchItem(c Caller, method, path string, b *Batch, it *batc
 
 // ---- routes ------------------------------------------------------------------------------------------------
 
-func (r *Router) serveFileBatch(w http.ResponseWriter, c Caller, method, path string, body []byte) {
-	code, out := r.FileBatch(c, method, path, body)
+func (r *Router) serveFileBatch(w http.ResponseWriter, c Caller, method, path string, body []byte, signed *SignedRequest) {
+	code, out := r.FileBatch(c, method, path, body, signed)
 	writeJSON(w, code, out)
 }
 

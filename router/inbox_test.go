@@ -102,7 +102,7 @@ func TestInboxFromEachCaller(t *testing.T) {
 		t.Fatal(code)
 	}
 	inboxDo(t, r, "POST", "/api/requests/"+byKind["grant "].ID+"/done", "", true)
-	r.applyKeyAnswer(keyAnswer{Kind: "deploy-key-added", Repo: "DE0CH/claude-env"})
+	r.applyKeyAnswer(keyAnswer{Kind: "deploy-key-added", Repo: "DE0CH/claude-env"}, nil)
 	if items := r.Inbox(); len(items) != 1 || items[0].Kind != "repo-key" || items[0].Params.Action != "remove" {
 		t.Fatalf("%+v", items)
 	}

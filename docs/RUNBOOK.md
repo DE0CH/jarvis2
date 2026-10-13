@@ -198,6 +198,13 @@ grant, unlock, add-store, new-session, jarvis1-import); at most 20 items; every 
   prompt goes in a `--file` item). A batch counts as one of the session's 3 waiting proposals.
 - `infra/setup.py requests` / `jarvis2-request list` show the batches (`b…` ids) after the loose requests.
 
+**The outcome comes back by itself** (Deyao, 2026-10-13): once Deyao decides an item a session filed, that session gets
+a message from Jarvis, `[Inbox outcome] … APPROVED / DENIED / LAPSED / DROPPED / FAILED: …` (a batch in one message,
+numbered like its items), with what was checked (the phone's grant, the new cert naming the store, the new session's
+id). No polling needed; a paused session hears at its next start. `jarvis2-request outcomes` lists them;
+`jarvis2-request wait ID` blocks on one (exit 0 approved). An outcome that wasn't delivered shows `not delivered: …` in
+`outcomes` (e.g. an image from before outcomes); the router logs `[outcome]` lines.
+
 ### Emptying the core without its kit
 
 A set-up core ends from the app only with the kit it was set up with (Reset or Recover asks for it). Without that
