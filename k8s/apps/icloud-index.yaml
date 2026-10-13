@@ -45,8 +45,6 @@ spec:
             # the copy on the Storage Box is age-encrypted to this key (its private half, BACKUP_AGE_KEY, is only in this
             # pod's SOPS part): the index is identity-level (Deyao, 2026-10-13)
             - { name: BACKUP_AGE_RECIPIENT, value: "age1y8ujp2vpp4hdkny6gllpa3tffns7zkyulghvcr4d0rsd03w8t4pqxky6kn" }
-            # the one-time import from Jarvis 1 is a plain .gz; the first encrypted backup deletes it. Remove this line then.
-            - { name: SEED_PLAIN_OK, value: "1" }
             - { name: BACKUP_INTERVAL_H, value: "168" }  # weekly: a backup stages an 8 GB copy (+ its gzip) in /data/tmp
             - { name: WORK_DIR, value: /data/work }
             - { name: TMPDIR, value: /data/tmp }
