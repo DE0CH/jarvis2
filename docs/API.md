@@ -533,7 +533,7 @@ never reaches the session. A failed delivery backs off and after 5 attempts the 
 ```
 watch view = { name, prompt, failPrompt, interval, maxSeconds, armedAt, armedAtIso, expiresAtIso, nextCheckIso, runs,
                lastExit /* null before the first run or when the runner failed */, lastRunIso, lastError /* the last stderr
-               line, or why it couldn't run */, lastOutput /* the start of stdout */, outcome /* "" | met | gave-up */ }
+               line, why it couldn't run, or why the delivery failed ("delivery: …") */, lastOutput /* the start of stdout */, outcome /* "" | met | gave-up */ }
 ```
 
 | Call | Does |

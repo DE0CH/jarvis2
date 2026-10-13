@@ -123,7 +123,7 @@ func TestWatchLifecycle(t *testing.T) {
 	r.watchTick(time.Now())
 	watchWG.Wait()
 	ws, _ = r.ListWatches("sA")
-	if len(ws) != 1 || ws[0]["outcome"] != "met" {
+	if len(ws) != 1 || ws[0]["outcome"] != "met" || !strings.HasPrefix(ws[0]["lastError"].(string), "delivery: ") {
 		t.Fatalf("%v", ws)
 	}
 	// cancel
