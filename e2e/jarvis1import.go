@@ -115,7 +115,9 @@ func jarvis1ImportStep(p *phone) {
 		log.Fatal("E2E_JARVIS1_ADDR isn't set (infra/e2e.sh sets it with the router's JARVIS1_PAUSED_URL)")
 	}
 	serveJarvis1(u)
-	must2(call(router, "POST", "/api/jarvis1/paused/"+e2eJ1ID+"/prepare", nil, nil))
+	if s, b := call(router, "POST", "/api/jarvis1/paused/"+e2eJ1ID+"/prepare", nil, nil); s != 202 {
+		log.Fatalf("prepare: HTTP %d %s", s, b)
+	}
 	var st struct {
 		Prepare struct{ State, Error, Sha256 string }
 		Sha256  string

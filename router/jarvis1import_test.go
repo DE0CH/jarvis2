@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
@@ -258,5 +259,25 @@ func TestSnapshotUploadStreamsAndChecksTheSignature(t *testing.T) {
 	h.ServeHTTP(w, q)
 	if w.Code != 401 {
 		t.Fatalf("unknown machine: %d", w.Code)
+	}
+}
+
+// Apache redirects a collection asked for without its trailing slash; Go's client would follow the 301 as a GET
+func TestPropfindKeepsTheDirectorySlash(t *testing.T) {
+	var got []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		got = append(got, req.Method+" "+req.URL.Path)
+		if !strings.HasSuffix(req.URL.Path, "/") {
+			http.Redirect(w, req, req.URL.Path+"/", 301)
+			return
+		}
+		w.WriteHeader(207)
+		w.Write([]byte(`<?xml version="1.0"?><D:multistatus xmlns:D="DAV:"><D:response><D:href>/a/b/</D:href><D:propstat><D:prop><D:resourcetype><D:collection/></D:resourcetype></D:prop></D:propstat></D:response>` +
+			`<D:response><D:href>/a/b/f.txt</D:href><D:propstat><D:prop><D:resourcetype/><D:getcontentlength>3</D:getcontentlength></D:prop></D:propstat></D:response></D:multistatus>`))
+	}))
+	defer srv.Close()
+	ls, err := newStorageBox(srv.URL, "u", "p").List("a/b")
+	if err != nil || ls["f.txt"] != 3 || len(got) != 1 || got[0] != "PROPFIND /a/b/" {
+		t.Fatalf("%v %v %v", ls, err, got)
 	}
 }

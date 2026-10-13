@@ -49,7 +49,9 @@ func davURL(base, p string) string {
 
 func (b *StorageBox) do(method, p string, body io.Reader, size int64, hdr map[string]string) (*http.Response, error) {
 	u := davURL(b.base, p)
-	if (method == "DELETE" && strings.HasSuffix(p, "/")) || method == "MKCOL" {
+	// a directory keeps its trailing "/": Apache answers a collection without it with a 301, which Go's client follows
+	// as a GET (an HTML listing instead of a multistatus)
+	if ((method == "DELETE" || method == "PROPFIND") && strings.HasSuffix(p, "/")) || method == "MKCOL" {
 		u += "/"
 	}
 	req, err := http.NewRequest(method, u, body)
