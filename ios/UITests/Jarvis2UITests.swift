@@ -87,6 +87,51 @@ final class Jarvis2UITests: JarvisUITestCase {
     XCTAssertTrue(gone(prefixed("srow-"), 30), "[\(tag)] the rejected session is gone from the list")
   }
 
+  /// a single request in the Inbox (a grant asked for the session, as a session's jarvis2-request files it), denied each
+  /// way the app offers: the review page's Deny (top left), the page's "Deny request", and a swipe on the row. Each time
+  /// the item leaves the Inbox and the router has dropped it (Deyao, 2026-10-13: the page's Deny only closed the page)
+  func inboxDenySingle(_ sid: String) {
+    func file(_ holder: String) -> String? {
+      let req: [String: Any] = ["session": sid, "holder": holder, "minutes": 2, "explanation": "deny test (\(holder))"]
+      let (code, out) = routerRaw("POST", "api/requests/grant", body: try? JSONSerialization.data(withJSONObject: req), headers: ["Content-Type": "application/json"])
+      XCTAssertEqual(code, 200, "[\(tag)] grant request for \(holder): \(String(decoding: out, as: UTF8.self))")
+      return (try? JSONSerialization.jsonObject(with: out) as? [String: Any])?["id"] as? String
+    }
+    func droppedOnRouter(_ id: String, _ how: String) {
+      let until = Date().addingTimeInterval(20)
+      var code = 0
+      repeat { (code, _) = routerRaw("GET", "api/requests/\(id)"); if code == 404 { break }; usleep(500_000) } while Date() < until
+      XCTAssertEqual(code, 404, "[\(tag)] \(how): the router dropped the request")
+    }
+    for way in ["toolbar", "button", "swipe"] {
+      guard let id = file(["toolbar": "status", "button": "archive", "swipe": "remote"][way]!) else { continue }
+      tabRoot("Inbox")
+      let row = el("request-review-\(id)")
+      guard wait(row, 60, "the grant request in the Inbox (\(way))") else { continue }
+      switch way {
+      case "swipe":
+        row.swipeLeft()
+        let b = app.buttons["Deny"].firstMatch
+        if wait(b, 10, "the row's swipe Deny") { b.tap() }
+      default:
+        row.tap()
+        guard arrives(el("signed-feature"), 30, "the grant review from the Inbox (\(way))") else { continue }
+        if way == "toolbar" {
+          XCTAssertTrue(el("secure-back").label.contains("Deny"), "[\(tag)] the page's Deny")
+          shot("inbox-grant-review")
+          el("secure-back").tap()
+        } else {
+          if scrolledTo(el("request-deny")) { el("request-deny").tap() }
+        }
+        XCTAssertTrue(gone(el("signed-feature"), 30), "[\(tag)] Deny (\(way)) closes the page")
+      }
+      XCTAssertTrue(gone(row, 30), "[\(tag)] Deny (\(way)): the request leaves the Inbox")
+      XCTAssertFalse(app.alerts.firstMatch.exists, "[\(tag)] Deny (\(way)) raised no error")
+      droppedOnRouter(id, "Deny (\(way))")
+    }
+    shot("inbox-denied")
+  }
+
   /// a batch of two deploy keys filed by the web page: the Inbox lists it once; its page shows the summary (unverified)
   /// and each item's "What you sign"; Deny all drops both, Allow all adds both under one Face ID
   func inboxBatch(deny: Bool) {
@@ -275,6 +320,13 @@ final class Jarvis2UITests: JarvisUITestCase {
         shot("grants-forgot")
       }
       back()
+    }
+
+    // ---- a single Inbox request for this session, denied from the page and from the row; then back to its page
+    inboxDenySingle(sid)
+    tab("Sessions")
+    if !el("schedules-\(sid)").waitForExistence(timeout: 5), wait(el("srow-\(sid)"), 20, "the session row after the Inbox") {
+      el("srow-\(sid)").tap()
     }
 
     // ---- schedules: a wakeup in an hour and a daily cron

@@ -74,7 +74,7 @@ struct RequestReviewSection: View {
   }
   private func deny() async {
     denying = true
-    do { try await RouterClient.shared.inboxDeny(inboxId); model.secureCompleted(true) }
+    do { try await RouterClient.shared.inboxDeny(inboxId); model.secureCompleted(false) }
     catch { denying = false; self.error = errText(error) }
   }
 }

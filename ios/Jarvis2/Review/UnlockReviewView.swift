@@ -25,6 +25,7 @@ struct UnlockReviewView: View {
     Form {
       if let inbox { RequestReviewSection(inboxId: inbox, signed: signed, request: request) }
       if let loadError { Section { ErrorRow(text: loadError, id: "secure-error") } }
+      if loadError != nil, let failure { Section { ErrorRow(text: failure, id: "secure-deny-error") } }
       else if let locked {
         if inbox == nil { SignedFactsSection(facts: signed) }
         Section("Session (as signed)") {
@@ -44,13 +45,25 @@ struct UnlockReviewView: View {
     .navigationTitle("Unlock stores")
     .navigationBarTitleDisplayMode(.inline)
     .toolbar {
-      ToolbarItem(placement: .cancellationAction) { Button("Deny") { dismiss() }.disabled(busy != nil).accessibilityIdentifier("secure-back") }
+      ToolbarItem(placement: .cancellationAction) { Button("Deny") { deny() }.disabled(busy != nil).accessibilityIdentifier("secure-back") }
       ToolbarItem(placement: .confirmationAction) {
         Button(busy ?? "Allow") { Task { await allow() } }.disabled((locked ?? []).isEmpty || busy != nil).accessibilityIdentifier("secure-unlock-allow")
       }
     }
     .interactiveDismissDisabled(busy != nil)
     .task { await load() }
+  }
+
+  /// Deny: opened from the Inbox, the request is dropped (the session that asked hears "denied") and the page closes;
+  /// opened from the app itself, nothing was asked for, so the page just closes. An error stays on the page.
+  private func deny() {
+    guard let inbox else { dismiss(); return }
+    Task {
+      failure = nil
+      busy = "Denying…"
+      do { try await RouterClient.shared.inboxDeny(inbox); model.secureCompleted(false) }
+      catch { busy = nil; failure = errText(error) }
+    }
   }
 
   private func load() async {
