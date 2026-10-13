@@ -40,6 +40,10 @@ spec:
             # JARVIS2_SETUP_KEY in Jarvis 1's default store)
             - { name: SETUP_KEY, value: "BEhYIkmGeCkg7D8vdKhRe8b00asMI8a9EyXNW41eBbIphkf6lZmy/c9FsRlqoXLD5JyRZgVOxLzM7OBv47Uy2Ms=" }
             - { name: ACCESS_SETUP_AUD, value: fdd80d914f37f8f73409c3e44c11282cffefa5e20663d2d9de50bb087159ee89 }
+            # Jarvis 1 reading the Claude login (router/claudelogin.go /peer/*): the Access app jarvis2.deyaochen.com/peer
+            # and the one service token it admits, jarvis1-claude-login (infra/cloudflare.py --peer); neither is secret
+            - { name: ACCESS_PEER_AUD, value: 0ede1ae31fb19bf1cbd58a9b86bf4237d67b62bacecd7ce704c16e760fba4fb6 }
+            - { name: JARVIS1_LOGIN_CLIENT_ID, value: "4825630869d1df65df6e8205338f80d9.access" }
           # the router's non-sensitive secrets (lobster's token, Storage Box keys, …): k8s/secrets/router.enc.yaml,
           # and the backup bucket's read credential (it serves the locked backups to the app's Recover):
           # k8s/secrets/router-backup.enc.yaml, and the repo picker's GITHUB_READ_TOKEN: k8s/secrets/router-github.enc.yaml

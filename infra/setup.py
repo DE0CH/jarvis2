@@ -24,6 +24,12 @@ both). Values never print.
                                        --not-sensitive
   infra/setup.py backup-core FILE      the core's Fly token, FLY_API_TOKEN from FILE (infra/fly-token.sh):
                                        sent to the core sealed to its key, and backed up as the `core` store
+  infra/setup.py claude-login          the Claude login the router holds (no secrets): mode, account, expiry, refresh
+                                       state, participants of the refresh protocol
+  infra/setup.py claude-login own|follow
+                                       who refreshes it: own = this router (the only refresher), follow = mirror
+                                       Jarvis 1's pair (Jarvis 1 refreshes). Never `own` while Jarvis 1 still
+                                       refreshes (docs/RUNBOOK.md "The Claude login")
   infra/setup.py repos                 the router's repo list (repo, store, key fingerprint)
   infra/setup.py sessions              the router's sessions: id, current machine, state, title
   infra/setup.py resume SESSION        resume a paused session unattended: same image, no prompt, no Face ID
@@ -368,6 +374,11 @@ def main():
         call("POST", "/setup/fly-token", {"sealed": seal_to(me["agreementKey"], json.dumps(tok).encode(), "jarvis2/fly-token")})
         backup("core", tok, True, me["master"])
         print("ok: the core has its Fly token, and the core store's backup is written")
+    elif cmd == "claude-login":
+        if args:
+            print(json.dumps(call("POST", "/setup/claude-login/mode", {"mode": args[0]}), indent=1))
+        else:
+            print(json.dumps(call("GET", "/setup/claude-login"), indent=1))
     elif cmd == "repos":
         for r in call("GET", "/setup/repos")["repos"]:
             print(r["repo"], r["store"], r.get("fingerprint") or "no key yet", "sensitive" if r.get("sensitive") else "")

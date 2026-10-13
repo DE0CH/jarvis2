@@ -1,10 +1,17 @@
 package main
 
-// The Claude login is Jarvis 1's (Deyao, 2026-10-09): one OAuth pair shared by both Jarvises. Claude rotates
-// the refresh token on every refresh, so a copy goes stale; Jarvis 1 keeps the pair that expires latest. A
-// session with the `claude` store (JARVIS1_CREDENTIALS_ID/SECRET, an Access service token that reaches only
-// jarvis.deyaochen.com/api/credentials) takes the pair at boot, pushes its own refreshed copy back, and takes
-// Jarvis 1's when that is newer than its own, as Jarvis 1's sessions do.
+// The Claude login: one OAuth pair shared by every Claude session, kept and refreshed by the router
+// (router/claudelogin.go; Jarvis 1 reads it from there too). A session whose cert names the store `claude` takes
+// the pair at boot over the signed /m channel and keeps in step for the machine's life (credsSync, its own
+// process): a long poll that answers with a newer pair, or with "a refresh is coming" — then credsSync takes
+// the CLI's own refresh lock (~/.claude/.oauth_refresh.lock, lessons/74) until the new pair is written, so a
+// claude process that gets a 401 in between waits and adopts it instead of burning its refresh token.
+//
+// The router is not trusted to pick the account (DESIGN "Inputs to a machine": the login decides whose Claude
+// app reaches this session through Remote Control). So every pair is checked before it is written: Anthropic's
+// profile endpoint (a trusted provider over TLS) must name the account the store vouches for
+// (CLAUDE_ACCOUNT_UUID, written by the setup session; else the account in the ~/.claude.json the predecessor's
+// signed snapshot restored). A pair for any other account is refused; the router can only withhold the login.
 
 import (
 	"bytes"
@@ -17,56 +24,25 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"syscall"
 	"time"
 )
 
 var (
-	jarvis1Credentials = "https://jarvis.deyaochen.com/api/credentials" // tests point it elsewhere
-	credsSyncEvery     = 30 * time.Second
+	profileURL    = "https://api.anthropic.com/api/oauth/profile" // the store may name a stand-in (the end-to-end test)
+	credsPollWait = 50 * time.Second
+	credsRetry    = 10 * time.Second
+	lockHoldMax   = 45 * time.Second // a lock held for a refresh that never answered is released (the CLI's own stale limit is 60 s)
 )
 
-type sharedLogin struct {
+type routerLogin struct {
 	Credentials string `json:"credentials"`
 	Account     string `json:"account"`
 	ExpiresAt   int64  `json:"expiresAt"`
-}
-
-func jarvis1Call(method string, body []byte) ([]byte, error) {
-	id, sec := os.Getenv("JARVIS1_CREDENTIALS_ID"), os.Getenv("JARVIS1_CREDENTIALS_SECRET")
-	if id == "" || sec == "" {
-		return nil, errors.New("no JARVIS1_CREDENTIALS_ID/SECRET")
-	}
-	req, _ := http.NewRequest(method, jarvis1Credentials, bytes.NewReader(body))
-	req.Header.Set("CF-Access-Client-Id", id)
-	req.Header.Set("CF-Access-Client-Secret", sec)
-	req.Header.Set("User-Agent", "jarvis2-machine/1") // Cloudflare refuses some default user agents
-	if body != nil {
-		req.Header.Set("Content-Type", "application/json")
-	}
-	resp, err := (&http.Client{Timeout: 30 * time.Second}).Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	out, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-	if resp.StatusCode != 200 {
-		return nil, fmt.Errorf("Jarvis 1 answered %d", resp.StatusCode) // the body may hold nothing useful; never log it
-	}
-	return out, nil
-}
-
-func fetchSharedLogin() (sharedLogin, error) {
-	var l sharedLogin
-	raw, err := jarvis1Call("GET", nil)
-	if err == nil {
-		err = json.Unmarshal(raw, &l)
-	}
-	if err == nil && l.Credentials == "" {
-		err = errors.New("no credentials in the answer")
-	}
-	return l, err
+	Gen         int64  `json:"gen"`
+	Preparing   bool   `json:"preparing"`
 }
 
 func credsPath() string {
@@ -84,64 +60,144 @@ func expiresAt(raw []byte) int64 {
 	return d.O.ExpiresAt
 }
 
-// sessionClaudeLogin: a session's first Claude login, at boot, before the harness starts (Deyao, 2026-10-11:
-// a new session logs in by itself, no grant, no Face ID). With the `claude` store in the cert, the machine takes
-// Jarvis 1's pair over the store's Access-confined token (a trusted provider over an authenticated channel,
-// DESIGN "Inputs to a machine" (d); never router input), keeps a pair already here that expires later (a
-// resumed snapshot's), and starts credsSync for the machine's life. Returns Jarvis 1's account record
-// (~/.claude.json oauthAccount + userID) for CLAUDE_ACCOUNT, "" when there is none.
-func sessionClaudeLogin(secrets map[string]string) string {
-	id, sec := secrets["JARVIS1_CREDENTIALS_ID"], secrets["JARVIS1_CREDENTIALS_SECRET"]
-	if id == "" || sec == "" {
+func accessToken(raw []byte) string {
+	var d struct {
+		O struct {
+			AccessToken string `json:"accessToken"`
+		} `json:"claudeAiOauth"`
+	}
+	json.Unmarshal(raw, &d)
+	return d.O.AccessToken
+}
+
+func recordAccount(account string) string {
+	var d struct {
+		O struct {
+			UUID string `json:"accountUuid"`
+		} `json:"oauthAccount"`
+	}
+	json.Unmarshal([]byte(account), &d)
+	return d.O.UUID
+}
+
+// expectedAccount: the Claude account this machine accepts a login for — the store's CLAUDE_ACCOUNT_UUID, else the
+// account recorded in ~/.claude.json (restored from the predecessor's signed snapshot); "" = none, no login
+func expectedAccount(secrets map[string]string) string {
+	if a := strings.TrimSpace(secrets["CLAUDE_ACCOUNT_UUID"]); a != "" {
+		return a
+	}
+	home, _ := os.UserHomeDir()
+	b, _ := os.ReadFile(filepath.Join(home, ".claude.json"))
+	return recordAccount(string(b))
+}
+
+// pairAccount: the account Anthropic says the pair's access token belongs to
+func pairAccount(creds []byte) (string, error) {
+	tok := accessToken(creds)
+	if tok == "" {
+		return "", errors.New("the pair has no access token")
+	}
+	req, _ := http.NewRequest("GET", profileURL, nil)
+	req.Header.Set("Authorization", "Bearer "+tok)
+	req.Header.Set("anthropic-beta", "oauth-2025-04-20")
+	req.Header.Set("User-Agent", "jarvis2-machine/1")
+	resp, err := (&http.Client{Timeout: 20 * time.Second}).Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	b, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if resp.StatusCode != 200 {
+		return "", fmt.Errorf("profile: HTTP %d", resp.StatusCode)
+	}
+	var p struct {
+		Account struct {
+			UUID string `json:"uuid"`
+		} `json:"account"`
+	}
+	if json.Unmarshal(b, &p) != nil || p.Account.UUID == "" {
+		return "", errors.New("profile: no account")
+	}
+	return p.Account.UUID, nil
+}
+
+func checkPair(creds []byte, want string) error {
+	got, err := pairAccount(creds)
+	if err != nil {
+		return fmt.Errorf("checking the pair's account: %w", err)
+	}
+	if got != want {
+		return errors.New("the router's pair belongs to another Claude account than this session's store vouches for: refused")
+	}
+	return nil
+}
+
+func fetchLogin(c *client, have, ack int64, wait time.Duration) (routerLogin, error) {
+	var l routerLogin
+	err := c.json("GET", fmt.Sprintf("/m/claude-login?have=%d&ack=%d&wait=%d", have, ack, int(wait.Seconds())), nil, &l)
+	return l, err
+}
+
+// sessionClaudeLogin: a session's first Claude login, at boot, before the harness starts (Deyao, 2026-10-11: a new
+// session logs in by itself, no grant, no Face ID). Returns the account record (~/.claude.json oauthAccount) for
+// CLAUDE_ACCOUNT, "" when there is none.
+func sessionClaudeLogin(c *client, secrets map[string]string, stores []string) string {
+	if !slices.Contains(stores, "claude") {
 		return ""
 	}
-	os.Setenv("JARVIS1_CREDENTIALS_ID", id)
-	os.Setenv("JARVIS1_CREDENTIALS_SECRET", sec)
-	if u := secrets["JARVIS1_CREDENTIALS_URL"]; strings.HasPrefix(u, "https://") {
-		// another credentials endpoint, from the store itself (vouched like its token): the end-to-end test's
-		// stand-in for Jarvis 1, which must never reach the real one
-		jarvis1Credentials = u
+	if u := secrets["CLAUDE_PROFILE_URL"]; strings.HasPrefix(u, "https://") {
+		profileURL = u // a stand-in named by the store itself (vouched like the rest of it): the end-to-end test's
+	}
+	want := expectedAccount(secrets)
+	if want == "" {
+		log.Printf("claude login: no account to check the router's pair against (the store claude has no CLAUDE_ACCOUNT_UUID): no login")
+		return ""
 	}
 	var account string
-	var l sharedLogin
 	var err error
 	for i := 0; i < 3; i++ { // a short retry: the harness starts right after, logged in or not (credsSync catches up)
-		if l, err = fetchSharedLogin(); err == nil {
-			break
+		var l routerLogin
+		if l, err = fetchLogin(c, 0, 0, 0); err == nil && l.Credentials == "" {
+			err = errors.New("the router holds no Claude login")
+		}
+		if err == nil {
+			if err = checkPair([]byte(l.Credentials), want); err == nil {
+				if recordAccount(l.Account) == want {
+					account = l.Account
+				}
+				switch took, werr := takeIfLater([]byte(l.Credentials)); {
+				case werr != nil:
+					log.Printf("claude login: writing the credentials file: %v", werr)
+				case took:
+					log.Printf("claude login: took the router's pair at boot")
+				default:
+					log.Printf("claude login: the pair here expires as late or later; kept")
+				}
+				break
+			}
 		}
 		time.Sleep(2 * time.Second)
 	}
 	if err != nil {
-		log.Printf("claude login: Jarvis 1's pair at boot: %v (credsSync keeps trying)", err)
-	} else {
-		account = l.Account
-		switch took, err := takeIfLater([]byte(l.Credentials)); {
-		case err != nil:
-			log.Printf("claude login: writing the credentials file: %v", err)
-		case took:
-			log.Printf("claude login: took Jarvis 1's pair at boot")
-		default:
-			log.Printf("claude login: the pair here expires as late or later; kept")
-		}
+		log.Printf("claude login: at boot: %v (credsSync keeps trying)", err)
 	}
-	startCredsSync(id, sec)
+	startCredsSync(want)
 	return account
 }
 
 // startCredsSync: credsSync in its own process (`jarvis2-machine creds-sync`) for the machine's life; a var so
 // tests don't start one
-var startCredsSync = func(id, sec string) {
+var startCredsSync = func(want string) {
 	cmd := exec.Command("/proc/self/exe", "creds-sync")
 	home, _ := os.UserHomeDir()
-	cmd.Env = []string{"HOME=" + home, "PATH=" + os.Getenv("PATH"), "JARVIS1_CREDENTIALS_ID=" + id, "JARVIS1_CREDENTIALS_SECRET=" + sec,
-		"JARVIS1_CREDENTIALS_URL=" + jarvis1Credentials}
+	cmd.Env = []string{"HOME=" + home, "PATH=" + os.Getenv("PATH"), "CLAUDE_ACCOUNT_UUID=" + want, "CLAUDE_PROFILE_URL=" + profileURL}
 	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true} // outlives the exec into Jarvis 1's entrypoint
 	if err := cmd.Start(); err != nil {
 		log.Printf("claude login: credsSync: %v", err)
 		return
 	}
-	log.Printf("claude login: credsSync running (every 30 s, with Jarvis 1)")
+	log.Printf("claude login: credsSync running (long poll on the router)")
 }
 
 // takeIfLater: write the pair unless the file here already expires as late or later; atomic, 0600
@@ -163,35 +219,141 @@ func takeIfLater(creds []byte) (bool, error) {
 	return true, os.Rename(tmp, credsPath())
 }
 
-// credsSync: every 30 s, push this machine's pair when it changed, and take Jarvis 1's when it expires later
+// ---- the CLI's refresh lock (Jarvis 1's LOCK_PY / UNLOCK_PY, lib/claudelogin.js) ----------------------------------
+
+func lockDir() string { return filepath.Join(filepath.Dir(credsPath()), ".oauth_refresh.lock") }
+func lockMark() string {
+	return filepath.Join(filepath.Dir(credsPath()), ".jarvis-refresh-lock")
+}
+
+type lockMarker struct {
+	Ino   uint64 `json:"ino"`
+	Mtime int64  `json:"mtime"`
+}
+
+func lockID(fi os.FileInfo) lockMarker {
+	m := lockMarker{Mtime: fi.ModTime().UnixNano()}
+	if st, ok := fi.Sys().(*syscall.Stat_t); ok {
+		m.Ino = st.Ino
+	}
+	return m
+}
+
+// releaseLock: removes the lock only while it is still the one this machine made (a lock the CLI re-took after
+// ours went stale has another inode or mtime)
+func releaseLock() {
+	b, err := os.ReadFile(lockMark())
+	if err != nil {
+		return
+	}
+	var m lockMarker
+	json.Unmarshal(b, &m)
+	if fi, err := os.Stat(lockDir()); err == nil && lockID(fi) == m {
+		os.Remove(lockDir())
+	}
+	os.Remove(lockMark())
+}
+
+// takeLock: "locked", or "busy" (a claude process is refreshing right now)
+func takeLock() string {
+	releaseLock() // one left from an earlier run that never got its pair
+	os.MkdirAll(filepath.Dir(lockDir()), 0o700)
+	if err := os.Mkdir(lockDir(), 0o700); err != nil {
+		return "busy"
+	}
+	fi, err := os.Stat(lockDir())
+	if err != nil {
+		return "busy"
+	}
+	b, _ := json.Marshal(lockID(fi))
+	os.WriteFile(lockMark(), b, 0o600)
+	return "locked"
+}
+
+// ---- credsSync ------------------------------------------------------------------------------------------------------
+
+// credsSync: the machine's side of the router's login protocol, for the machine's life
 func credsSync() {
-	if u := os.Getenv("JARVIS1_CREDENTIALS_URL"); strings.HasPrefix(u, "https://") {
-		jarvis1Credentials = u // what boot used (sessionClaudeLogin)
+	want := os.Getenv("CLAUDE_ACCOUNT_UUID")
+	if u := os.Getenv("CLAUDE_PROFILE_URL"); strings.HasPrefix(u, "https://") {
+		profileURL = u
 	}
-	var pushed []byte
-	for ; ; time.Sleep(credsSyncEvery) {
-		local, err := os.ReadFile(credsPath())
-		if err != nil {
-			continue
-		}
-		if !bytes.Equal(local, pushed) {
-			body, _ := json.Marshal(map[string]string{"credentials": string(local)})
-			if _, err := jarvis1Call("POST", body); err != nil {
-				log.Printf("claude login: push failed: %v", err)
-			} else {
-				pushed = local
-			}
-		}
-		l, err := fetchSharedLogin()
-		if err != nil {
-			log.Printf("claude login: fetch failed: %v", err)
-			continue
-		}
-		if max(l.ExpiresAt, expiresAt([]byte(l.Credentials))) > expiresAt(local) {
-			if took, err := takeIfLater([]byte(l.Credentials)); err == nil && took {
-				pushed = []byte(l.Credentials)
-				log.Printf("claude login: took Jarvis 1's newer pair")
-			}
+	c, err := newClient()
+	if err != nil || want == "" {
+		log.Printf("claude login: credsSync can't run (%v, account %q)", err, want)
+		return
+	}
+	s := &syncer{c: c, want: want}
+	for {
+		if err := s.step(); err != nil {
+			log.Printf("claude login: %v", err)
+			time.Sleep(credsRetry)
 		}
 	}
+}
+
+type syncer struct {
+	c        *client
+	want     string
+	pushed   []byte    // the content last pushed or taken
+	refused  int64     // expiry of a pair refused by the account check: not asked for again
+	lockGen  int64     // the router's refresh this machine holds the CLI lock for (0: none)
+	lockedAt time.Time // when it took it
+}
+
+func (s *syncer) release() {
+	if s.lockGen != 0 {
+		releaseLock()
+		s.lockGen = 0
+	}
+}
+
+// step: push this machine's own newer pair (its claude refreshed by itself), then one long poll and its answer
+func (s *syncer) step() error {
+	local, _ := os.ReadFile(credsPath())
+	if s.lockGen != 0 && time.Since(s.lockedAt) > lockHoldMax {
+		log.Printf("claude login: no pair %s after the refresh notice: lock released", lockHoldMax)
+		s.release()
+	}
+	if len(local) > 0 && !bytes.Equal(local, s.pushed) && s.lockGen == 0 {
+		var out map[string]any
+		if err := s.c.json("POST", "/m/claude-login", map[string]string{"credentials": string(local)}, &out); err != nil {
+			log.Printf("claude login: push: %v", err)
+		}
+		s.pushed = local
+	}
+	have := max(expiresAt(local), s.refused)
+	l, err := fetchLogin(s.c, have, s.lockGen, credsPollWait)
+	if err != nil {
+		return fmt.Errorf("poll: %w", err)
+	}
+	switch {
+	case l.Credentials != "" && l.ExpiresAt > have:
+		if err := checkPair([]byte(l.Credentials), s.want); err != nil {
+			s.release()
+			s.refused = l.ExpiresAt
+			return err
+		}
+		took, err := takeIfLater([]byte(l.Credentials))
+		s.release() // after the write: a claude process waiting on the lock re-reads the file and adopts the pair
+		if err != nil {
+			return fmt.Errorf("writing the credentials file: %w", err)
+		}
+		if took {
+			s.pushed = []byte(l.Credentials)
+			log.Printf("claude login: took the router's newer pair")
+		}
+	case l.Preparing && l.Gen != s.lockGen:
+		s.release()
+		if took := takeLock(); took == "locked" {
+			s.lockGen, s.lockedAt = l.Gen, time.Now()
+		} else {
+			// a claude process is refreshing right now (no marker of ours: release() leaves its lock alone);
+			// acknowledge anyway so the router doesn't wait for us
+			s.lockGen, s.lockedAt = l.Gen, time.Now()
+		}
+	case !l.Preparing && s.lockGen != 0:
+		s.release() // the refresh is over (failed): the pair here stays
+	}
+	return nil
 }

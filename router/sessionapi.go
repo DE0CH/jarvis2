@@ -9,33 +9,21 @@ package main
 // retiring itself.
 // Transcript search and the iCloud index: the box's own services (searchsvc.go). Device leases: leases.go; content
 // stores: content.go.
-// Forwarded to Jarvis 1 (its own services, which Deyao lets Jarvis 2 sessions use "like Jarvis 1"): the shared Claude
-// login, with the
-// Access service token JARVIS1_SERVICES_ID/SECRET (the cf-tunnel Worker confines it to those paths) and the header
-// X-Jarvis2-Session naming the calling session. The pull-secrets and changes calls never reach the router:
-// the machine answers them itself (it holds its secrets and its repos).
+// The shared Claude login (`/api/credentials`): claudelogin.go. Nothing is forwarded to Jarvis 1. The pull-secrets and
+// changes calls never reach the router: the machine answers them itself (it holds its secrets and its repos).
 
 import (
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
-	"os"
 	"strings"
 	"time"
 )
 
-// jarvis1Routes: the Jarvis 1 paths a Jarvis 2 session may reach (method + Go mux path under /api)
-var jarvis1Routes = []string{
-	"GET /api/credentials", "POST /api/credentials",
-}
-
 // maxProposedSessions: new sessions one session may have waiting for Deyao's approval at a time
 const maxProposedSessions = 3
-
-var jarvis1Client = &http.Client{Timeout: 5 * time.Minute}
 
 // auto-pause (autopilot.go) leaves a session running when a wakeup or cron fires within 10 minutes
 func init() {
@@ -181,9 +169,6 @@ func (r *Router) registerSessionAPI(app appRoute, m machineRoute) {
 	// watches run a script on Jarvis with the session's store secrets; Jarvis 2 doesn't (docs/PARITY.md)
 	own("/m/api/sessions/{id}/watches", notInJarvis2("conditional wakeups (watches) aren't in Jarvis 2"))
 	own("/m/api/sessions/{id}/watches/{name}", notInJarvis2("conditional wakeups (watches) aren't in Jarvis 2"))
-	for _, p := range jarvis1Routes {
-		own(strings.Replace(p, " /api/", " /m/api/", 1), r.forwardJarvis1)
-	}
 	own("/m/api/", func(w http.ResponseWriter, req *http.Request, sid string, _ []byte) {
 		writeJSON(w, 404, map[string]string{"error": fmt.Sprintf("Jarvis 2 doesn't serve %s %s", req.Method, strings.TrimPrefix(req.URL.Path, "/m"))})
 	})
@@ -390,50 +375,4 @@ func (r *Router) postNotifyIdle(w http.ResponseWriter, sid string, body []byte) 
 		return
 	}
 	writeJSON(w, 200, map[string]any{"ok": true, "notifyIdle": onOff(!on)})
-}
-
-// forwardJarvis1: the request to Jarvis 1 unchanged (path, query, body, content type) with the services token;
-// nothing of the machine's own headers goes along
-func (r *Router) forwardJarvis1(w http.ResponseWriter, req *http.Request, sid string, body []byte) {
-	id, sec := os.Getenv("JARVIS1_SERVICES_ID"), os.Getenv("JARVIS1_SERVICES_SECRET")
-	if id == "" || sec == "" {
-		writeJSON(w, 503, map[string]string{"error": "the router has no JARVIS1_SERVICES_ID/SECRET: Jarvis 1's services aren't reachable"})
-		return
-	}
-	base := strings.TrimSuffix(env("JARVIS1_URL", "https://jarvis.deyaochen.com"), "/")
-	u := base + strings.TrimPrefix(req.URL.EscapedPath(), "/m")
-	if req.URL.RawQuery != "" {
-		u += "?" + req.URL.RawQuery
-	}
-	var rd io.Reader
-	if len(body) > 0 {
-		rd = strings.NewReader(string(body))
-	}
-	out, _ := http.NewRequestWithContext(req.Context(), req.Method, u, rd)
-	out.Header.Set("CF-Access-Client-Id", id)
-	out.Header.Set("CF-Access-Client-Secret", sec)
-	out.Header.Set("User-Agent", "jarvis2-router/1") // Cloudflare 1010-blocks some default user agents
-	if sid != "" {
-		out.Header.Set("X-Jarvis2-Session", sid)
-	}
-	for _, h := range []string{"Content-Type", "Accept", "Range"} {
-		if v := req.Header.Get(h); v != "" {
-			out.Header.Set(h, v)
-		}
-	}
-	resp, err := jarvis1Client.Do(out)
-	if err != nil {
-		writeJSON(w, 502, map[string]string{"error": "Jarvis 1 unreachable: " + err.Error()})
-		return
-	}
-	defer resp.Body.Close()
-	for _, h := range []string{"Content-Type", "Content-Length", "Content-Range", "Content-Disposition"} {
-		if v := resp.Header.Get(h); v != "" {
-			w.Header().Set(h, v)
-		}
-	}
-	w.WriteHeader(resp.StatusCode)
-	if _, err := io.Copy(w, resp.Body); err != nil {
-		log.Printf("[jarvis1] %s %s: %v", req.Method, u, err)
-	}
 }

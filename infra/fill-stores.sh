@@ -7,7 +7,8 @@
 #                      "Administration: read and write" only (sensitive). The core makes each repo's deploy key with it
 #                      when Deyao adds the repo in the app; the repos' own stores (github-<repo>) are made there, one
 #                      Face ID each, never here. Its line is in the layout file, valued from the file minted below.
-#   claude             JARVIS1_CREDENTIALS_ID/SECRET  Access service token jarvis2-store-claude, rotated
+#   claude             CLAUDE_ACCOUNT_UUID            the Claude account sessions accept the router's login for (not
+#                      secret): the account of the login the router holds (infra/setup.py claude-login)
 #   tunnel             CF_ACCESS_CLIENT_ID/SECRET     Access service token jarvis2-tunnel, rotated
 #   core               FLY_API_TOKEN              a fresh infra/fly-token.sh
 #   default, identity, infra, money, devices, work, jarvis1   Deyao's own stores by kind: the keys are listed in
@@ -24,7 +25,7 @@ GW="${GITHUB_WEB_DIR:-$HOME/workspace/claude-env/.claude/skills/github-web}"
 for v in CLOUDFLARE_API JARVIS2_FLY_TOKEN LOBSTER_TOKEN OPENROUTER_API EXA_API; do
   [ -n "${!v:-}" ] || { echo "missing env $v"; exit 1; }
 done
-trap 'shred -u "$D"/fly.tok "$D"/gh-*.token "$D"/j1creds.* "$D"/j2tunnel.* 2>/dev/null || true' EXIT
+trap 'shred -u "$D"/fly.tok "$D"/gh-*.token "$D"/j2tunnel.* 2>/dev/null || true' EXIT
 
 (cd "$GW" && NODE_PATH="$(npm root -g)" node github_web.js pat-create-all jarvis2-deploy-keys "$D/gh-deploy-keys.token" Administration=write)
 
@@ -44,7 +45,7 @@ assert code("POST", "/repos/DE0CH/jarvis2/git/refs", {"ref": "refs/heads/zz-prob
 print("ok: the deploy-keys PAT manages deploy keys and can't push")
 EOF
 
-# the two Access service tokens: a new client secret, the same client id (policies keep working)
+# the tunnel's Access service token: a new client secret, the same client id (policies keep working)
 python3 - <<'EOF'
 import json, os, urllib.request
 API = "https://api.cloudflare.com/client/v4/accounts/ee3b4deef856baf11e1a67b242438325/access/service_tokens"
@@ -53,7 +54,7 @@ call = lambda m, u: json.load(urllib.request.urlopen(urllib.request.Request(u, m
 toks = {t["name"]: t for t in call("GET", API + "?per_page=200")["result"]}
 os.umask(0o077)
 D = os.path.expanduser("~/.jarvis2")
-for name, f in [("jarvis2-tunnel", "j2tunnel"), ("jarvis2-store-claude", "j1creds")]:
+for name, f in [("jarvis2-tunnel", "j2tunnel")]:
     t = toks[name]
     r = call("POST", f"{API}/{t['id']}/rotate")["result"]
     assert r["client_id"] == t["client_id"]
@@ -62,10 +63,9 @@ for name, f in [("jarvis2-tunnel", "j2tunnel"), ("jarvis2-store-claude", "j1cred
     print(f"ok: {name} rotated")
 EOF
 sleep 5
-# jarvis2-store-claude reaches /api/credentials only; jarvis2-tunnel passes Access (the Worker then confines it)
+# jarvis2-tunnel passes Access (the Worker then confines it)
 c() { curl -s -o /dev/null -w "%{http_code}" -H "CF-Access-Client-Id: $(cat "$D/$1.id")" -H "CF-Access-Client-Secret: $(cat "$D/$1.secret")" "$2"; }
-[ "$(c j1creds https://jarvis.deyaochen.com/api/credentials)" = 200 ] && [ "$(c j1creds https://jarvis.deyaochen.com/api/state)" = 403 ] \
-  && [ "$(c j2tunnel https://tunnel.deyaochen.com/__status/x)" = 403 ] || { echo "a rotated Access token doesn't behave"; exit 1; }
+[ "$(c j2tunnel https://tunnel.deyaochen.com/__status/x)" = 403 ] || { echo "a rotated Access token doesn't behave"; exit 1; }
 
 bash infra/fly-token.sh "$D/fly.tok"
 
@@ -85,7 +85,10 @@ grep -v '^#' "$LAYOUT" | while read -r store keys; do
   $S write "$store" $keys
 done
 $S write openrouter OPENROUTER_API
-$S write claude JARVIS1_CREDENTIALS_ID=file:$D/j1creds.id JARVIS1_CREDENTIALS_SECRET=file:$D/j1creds.secret
+CLAUDE_ACCOUNT_UUID="$($S claude-login | python3 -c 'import json,sys; print(json.load(sys.stdin).get("accountUuid") or "")')"
+[ -n "$CLAUDE_ACCOUNT_UUID" ] || { echo "the router holds no Claude login with an account: Re-login in the app first"; exit 1; }
+export CLAUDE_ACCOUNT_UUID
+$S write claude CLAUDE_ACCOUNT_UUID
 $S write tunnel CF_ACCESS_CLIENT_ID=file:$D/j2tunnel.id CF_ACCESS_CLIENT_SECRET=file:$D/j2tunnel.secret
 $S backup-core "$D/fly.tok"
 $S stores

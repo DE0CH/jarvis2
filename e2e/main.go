@@ -156,10 +156,10 @@ func main() {
 		"blobs": []map[string]any{
 			wrapStore(skey.StoreKey, "e2e", map[string]string{"E2E_SECRET": secret}),
 			wrapStore(skey.StoreKey, "e2e-extra", map[string]string{"E2E_EXTRA": "extra-" + secret}),
-			// the Claude login store: a stand-in for Jarvis 1's credentials endpoint (a fake pair, public), named
-			// in the store itself; the test router never reaches Jarvis 1
-			wrapStore(skey.StoreKey, "claude", map[string]string{"JARVIS1_CREDENTIALS_ID": "e2e-id", "JARVIS1_CREDENTIALS_SECRET": "e2e-secret",
-				"JARVIS1_CREDENTIALS_URL": fakeJarvis1}),
+			// the Claude login store: the account the machine accepts a login for, and a stand-in for Anthropic's
+			// profile endpoint (a public file naming that account), named in the store itself; the router's pair is
+			// a fake one seeded below
+			wrapStore(skey.StoreKey, "claude", map[string]string{"CLAUDE_ACCOUNT_UUID": "e2e-account", "CLAUDE_PROFILE_URL": fakeProfile}),
 		},
 		"notSensitive": []string{"e2e", "claude"},
 	})
@@ -408,7 +408,10 @@ func main() {
 	step("one-shot: once the supervisor marks the prompt done the router destroys it by itself, forcefully, and DMs the work lost")
 	// no stores: a new line with the same stores, options and image as the first session would get the same
 	// challenge nonce (the core derives it from the request), which the core refuses to certify twice
-	// stores [claude]: the machine logs into Claude by itself at boot, with no grant (machine/claudelogin.go)
+	// stores [claude]: the machine logs into Claude by itself at boot, with no grant (machine/claudelogin.go), from
+	// the router's pair (seeded here as Jarvis 1 would push a Re-login: the test router has no Access in front)
+	must2(call(router, "POST", "/peer/claude-login", map[string]any{"credentials": fakePair,
+		"account": `{"oauthAccount":{"accountUuid":"e2e-account","emailAddress":"e2e@example.com"}}`, "relogin": true}, nil))
 	s, b = call(router, "POST", "/api/sessions", map[string]any{"label": "e2e one-shot", "stores": []string{"claude"}, "size": "small", "harness": "claude",
 		"oneShot": true, "prompt": "e2e: nothing to do"}, nil)
 	must(s, b, "create one-shot")
@@ -418,7 +421,7 @@ func main() {
 	os1 := approve(p, a)
 	waitState(os1, "started", 6*time.Minute)
 	om := machineOf(os1)
-	step("a new session's Claude is logged in with no grant: the machine took the pair from the claude store's endpoint at boot")
+	step("a new session's Claude is logged in with no grant: the machine took the router's pair at boot, checked against the store's account")
 	expectOnMachine(om, "grep -c e2e-fake-refresh /home/claude/.claude/.credentials.json; stat -c %a /home/claude/.claude/.credentials.json", "1\n600")
 	expectOnMachine(om, "for p in /proc/[0-9]*; do tr '\\0' ' ' < $p/cmdline 2>/dev/null; echo; done | grep -c '^/proc/self/exe creds-sync $'", "1")
 	if ng, _ := session(os1)["needsGrant"].(string); ng != "" {
@@ -577,8 +580,12 @@ var unlockIDs []string
 
 // unlock: forNonce = the challenge or cert nonce the unlock is for (what the app's Start, add-store and Unlock…
 // send); "" = a standing unlock (the Stores page)
-// fakeJarvis1: the test's Jarvis 1 credentials endpoint (testdata/jarvis1-credentials.json on main: a fake pair)
-const fakeJarvis1 = "https://raw.githubusercontent.com/DE0CH/jarvis2/main/e2e/testdata/jarvis1-credentials.json"
+// fakeProfile: the test's stand-in for Anthropic's profile endpoint (testdata/claude-profile.json on main: the fake
+// account every token belongs to)
+const fakeProfile = "https://raw.githubusercontent.com/DE0CH/jarvis2/main/e2e/testdata/claude-profile.json"
+
+// fakePair: the Claude login the test router holds (a fake pair, public; never refreshed: it expires in 2100)
+const fakePair = `{"claudeAiOauth": {"accessToken": "e2e-fake-access", "refreshToken": "e2e-fake-refresh", "expiresAt": 4102444800000, "scopes": ["user:inference"], "subscriptionType": "max"}}`
 
 func unlock(p *phone, store, forNonce string) {
 	var d Doc

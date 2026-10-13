@@ -309,8 +309,6 @@ func (r *Router) autopilotTick() {
 	storedExp := int64(0)
 	if l, err := r.sharedLogin(); err == nil {
 		storedExp = l.ExpiresAt
-	} else if !errorsIsNoLogin(err) {
-		log.Printf("[login] Jarvis 1's credentials: %v", err)
 	}
 	var acts []pilotAction
 	r.st.Do(func(d *persisted) {

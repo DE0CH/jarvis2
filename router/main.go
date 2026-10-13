@@ -8,7 +8,9 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
 	"strconv"
+	"syscall"
 	"time"
 )
 
@@ -83,5 +85,14 @@ func main() {
 	} else {
 		go func() { log.Fatal(http.ListenAndServe(maddr, r.MachineHandler())) }()
 	}
+	// SIGTERM (a rollout): a Claude login refresh in flight is let finish, so its answer reaches the volume (the old
+	// refresh token is dead the moment the token endpoint answers)
+	go func() {
+		ch := make(chan os.Signal, 1)
+		signal.Notify(ch, syscall.SIGTERM, syscall.SIGINT)
+		<-ch
+		r.loginHub().drain(20 * time.Second)
+		os.Exit(0)
+	}()
 	log.Fatal(http.ListenAndServe(addr, r.Handler()))
 }

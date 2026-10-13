@@ -396,7 +396,7 @@ func TestWriteCredsCmd(t *testing.T) {
 
 func itoa(n int64) string { return strconv.FormatInt(n, 10) }
 
-func TestSharedLogin(t *testing.T) {
+func TestFetchJarvis1Pair(t *testing.T) {
 	var gotID, gotUA string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		gotID, gotUA = req.Header.Get("CF-Access-Client-Id"), req.Header.Get("User-Agent")
@@ -405,16 +405,14 @@ func TestSharedLogin(t *testing.T) {
 	defer srv.Close()
 	old := loginURL
 	loginURL = srv.URL
-	defer func() { loginURL = old; loginCache.pair = sharedPair{} }()
-	loginCache.pair = sharedPair{}
+	defer func() { loginURL = old }()
 	t.Setenv("JARVIS1_CREDENTIALS_ID", "")
-	r := &Router{}
-	if _, err := r.sharedLogin(); !errorsIsNoLogin(err) {
+	if _, err := fetchJarvis1Pair(); !errorsIsNoLogin(err) {
 		t.Fatal("expected no-login error", err)
 	}
 	t.Setenv("JARVIS1_CREDENTIALS_ID", "id1")
 	t.Setenv("JARVIS1_CREDENTIALS_SECRET", "sec")
-	p, err := r.sharedLogin()
+	p, err := fetchJarvis1Pair()
 	if err != nil || p.ExpiresAt != 42 || gotID != "id1" || gotUA == "" {
 		t.Fatalf("%+v %v %q %q", p, err, gotID, gotUA)
 	}

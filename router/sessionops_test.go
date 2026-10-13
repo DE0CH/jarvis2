@@ -501,28 +501,6 @@ func TestReposAndGitHub(t *testing.T) {
 
 func jsonString(v any) string { b, _ := json.Marshal(v); return string(b) }
 
-func TestUsageForwardsToJarvis1(t *testing.T) {
-	r := newTestRouter(t)
-	var got *http.Request
-	j1 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-		got = req
-		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`{"limits":[],"cached":false}`))
-	}))
-	defer j1.Close()
-	t.Setenv("JARVIS1_URL", j1.URL)
-	t.Setenv("JARVIS1_SERVICES_ID", "id")
-	t.Setenv("JARVIS1_SERVICES_SECRET", "sec")
-	code, out := appDo(t, r, "GET", "/api/usage?refresh=1", "")
-	if code != 200 || out["limits"] == nil {
-		t.Fatalf("%d %v", code, out)
-	}
-	if got.URL.Path != "/api/usage" || got.URL.RawQuery != "refresh=1" || got.Header.Get("CF-Access-Client-Id") != "id" ||
-		got.Header.Values("X-Jarvis2-Session") != nil {
-		t.Fatalf("%s %s %v", got.URL.Path, got.URL.RawQuery, got.Header)
-	}
-}
-
 // addGrant: a stored grant as if the phone had signed it (the machine's checks are tested in machine/)
 func addGrant(r *Router, session, holder, kind string) {
 	r.st.Do(func(d *persisted) {

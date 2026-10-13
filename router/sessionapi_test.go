@@ -103,7 +103,7 @@ func TestMachineAPIWakeupsAndCrons(t *testing.T) {
 	}
 }
 
-func TestMachineAPIForwardsToJarvis1(t *testing.T) {
+func TestMachineAPINothingGoesToJarvis1(t *testing.T) {
 	var seen *http.Request
 	var seenBody string
 	j1 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
@@ -122,14 +122,11 @@ func TestMachineAPIForwardsToJarvis1(t *testing.T) {
 	m := newTestMachine(r, "mA")
 	h := r.MachineHandler()
 
-	code, out := m.do(t, h, "POST", "/m/api/credentials", `{"purpose":"x"}`)
-	if code != 201 || out["status"] != "granted" {
-		t.Fatalf("%d %v", code, out)
+	// the Claude login is the router's own (claudelogin.go): a machine without the store claude gets nothing
+	if code, _ := m.do(t, h, "POST", "/m/api/credentials", `{"credentials":"{}"}`); code != 403 || seen != nil {
+		t.Fatalf("%d %v", code, seen)
 	}
-	if seen.URL.Path != "/api/credentials" || seen.Header.Get("CF-Access-Client-Id") != "cid" || seen.Header.Get("X-Jarvis2-Session") != "sA" ||
-		seen.Header.Get("X-Sig") != "" || seenBody != `{"purpose":"x"}` {
-		t.Fatalf("forwarded %s %v %q", seen.URL, seen.Header, seenBody)
-	}
+	_ = seenBody
 	// a session-scoped Jarvis 1 path for another session: refused before forwarding
 	seen = nil
 	if code, _ := m.do(t, h, "GET", "/m/api/sessions/sOther/content", ""); code != 403 || seen != nil {

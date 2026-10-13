@@ -1,7 +1,6 @@
 package main
 
-// Deyao's repo list and the GitHub picker (Jarvis 1's /api/repos, /api/github/repos), and the Claude usage
-// quota (Jarvis 1's /api/usage, forwarded).
+// Deyao's repo list and the GitHub picker (Jarvis 1's /api/repos, /api/github/repos).
 //
 // Every repo on the list is a GitHub repo with its own deploy key (Deyao, 2026-10-10): adding one in the app's
 // Settings asks the core for a deploy key (docs/DESIGN.md "Deploy keys"), which the phone approves with Face ID;
@@ -11,7 +10,6 @@ package main
 // it records an entry only from the core's answer. Sessions clone, pull and push a repo over SSH with its
 // store's key (machine/deploykeys.go); the picker only fills New session's `repos`.
 // The repo list is the router's own (DATA_DIR/repos.json), shown in /api/state `repos`.
-// Usage needs the Claude login, which lives in Jarvis 1: forwarded with the services token.
 
 import (
 	"crypto/sha256"
@@ -352,6 +350,4 @@ func (r *Router) registerRepos(app appRoute) {
 		}
 		writeJSON(w, 200, map[string]any{"repos": repos, "cachedAt": at.UnixMilli(), "configured": configured})
 	})
-	// the Claude usage quota: Jarvis 1 holds the login (query kept: ?refresh=1)
-	app("GET /api/usage", func(w http.ResponseWriter, req *http.Request) { r.forwardJarvis1(w, req, "", nil) })
 }

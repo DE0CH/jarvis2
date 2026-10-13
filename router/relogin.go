@@ -1,14 +1,13 @@
 package main
 
-// Login repair (Jarvis 1's syncClaudeLogin, lib/claudelogin.js). The Claude login is Jarvis 1's: one OAuth pair
-// shared by both Jarvises (machine/claudelogin.go: a session with the store `claude` takes it at boot and keeps in
-// step every 30 s by itself, so the router writes nothing there). This is the router's repair path for a session
-// that still ends up behind (no `claude` store, or a machine from before the self-login, behind past SelfLoginGrace): its credentials file expires before Jarvis 1's pair, or
-// its transcript ends on "Please run /login". The router fetches the pair from Jarvis 1 with the confined
-// Access service token in its env (JARVIS1_CREDENTIALS_ID/SECRET, which reaches only /api/credentials), writes
-// it into ~/.claude/.credentials.json through holder "login" (never replacing a pair that expires later), and
-// for a stuck session delivers "continue". The pair travels only inside the command text; nothing logs that
-// text (router: grants.go; machine: runExec), and no error here carries it.
+// Login repair (Jarvis 1's syncClaudeLogin, lib/claudelogin.js). The stored Claude pair is the router's own
+// (claudelogin.go); a session with the store `claude` takes it and keeps in step by itself (machine/claudelogin.go),
+// so the router writes nothing there. This is the router's repair path for a session that still ends up behind (no
+// `claude` store, or a machine from before the self-login, behind past SelfLoginGrace): its credentials file expires
+// before the stored pair, or its transcript ends on "Please run /login". The router writes the pair into
+// ~/.claude/.credentials.json through holder "login" (never replacing a pair that expires later), and for a stuck
+// session delivers "continue". The pair travels only inside the command text; nothing logs that text (router:
+// grants.go; machine: runExec), and no error here carries it.
 
 import (
 	"encoding/base64"
@@ -20,7 +19,6 @@ import (
 	"net/http"
 	"os"
 	"strings"
-	"sync"
 	"time"
 )
 
@@ -28,28 +26,29 @@ const jarvis1Credentials = "https://jarvis.deyaochen.com/api/credentials"
 
 type sharedPair struct {
 	Credentials string `json:"credentials"`
+	Account     string `json:"account"`
 	ExpiresAt   int64  `json:"expiresAt"`
 }
 
 var (
-	errNoLogin   = errors.New("no JARVIS1_CREDENTIALS_ID/SECRET in the router's env")
-	loginCacheMu sync.Mutex
-	loginCache   struct {
-		pair sharedPair
-		at   time.Time
-	}
-	loginURL = jarvis1Credentials // tests point it elsewhere
+	errNoLogin = errors.New("no JARVIS1_CREDENTIALS_ID/SECRET in the router's env")
+	loginURL   = jarvis1Credentials // tests point it elsewhere
 )
 
 func errorsIsNoLogin(err error) bool { return errors.Is(err, errNoLogin) }
 
-// sharedLogin: Jarvis 1's pair, cached for a minute
+// sharedLogin: the stored pair (claudelogin.go)
 func (r *Router) sharedLogin() (sharedPair, error) {
-	loginCacheMu.Lock()
-	defer loginCacheMu.Unlock()
-	if loginCache.pair.Credentials != "" && time.Since(loginCache.at) < time.Minute {
-		return loginCache.pair, nil
+	cur := r.loginHub().current()
+	if cur.Credentials == "" {
+		return sharedPair{}, errNoPair
 	}
+	return sharedPair{Credentials: cur.Credentials, Account: cur.Account, ExpiresAt: cur.ExpiresAt}, nil
+}
+
+// fetchJarvis1Pair: Jarvis 1's pair (GET /api/credentials with the confined token JARVIS1_CREDENTIALS_ID/SECRET),
+// for follow mode only (claudelogin.go loginLoop)
+func fetchJarvis1Pair() (sharedPair, error) {
 	id, sec := os.Getenv("JARVIS1_CREDENTIALS_ID"), os.Getenv("JARVIS1_CREDENTIALS_SECRET")
 	if id == "" || sec == "" {
 		return sharedPair{}, errNoLogin
@@ -74,18 +73,7 @@ func (r *Router) sharedLogin() (sharedPair, error) {
 	if p.ExpiresAt == 0 {
 		p.ExpiresAt = credsExpiry(p.Credentials)
 	}
-	loginCache.pair, loginCache.at = p, time.Now()
 	return p, nil
-}
-
-func credsExpiry(raw string) int64 {
-	var d struct {
-		O struct {
-			ExpiresAt int64 `json:"expiresAt"`
-		} `json:"claudeAiOauth"`
-	}
-	json.Unmarshal([]byte(raw), &d)
-	return d.O.ExpiresAt
 }
 
 // writeCredsPy: Jarvis 1's WRITE_PY, reading the pair from stdin: replace the file unless it already expires
@@ -128,7 +116,7 @@ func (r *Router) repairLogin(a pilotAction) {
 		return
 	}
 	if strings.Contains(out, "written") {
-		log.Printf("[login] %s (%s): copied Jarvis 1's Claude credentials in", a.Session, a.Name)
+		log.Printf("[login] %s (%s): copied the stored Claude credentials in", a.Session, a.Name)
 	}
 	if a.Repair == "" {
 		return

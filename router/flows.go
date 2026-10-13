@@ -37,6 +37,9 @@ type Router struct {
 	setupMu   sync.Mutex
 	setupSeen map[string]time.Time
 
+	login     *loginHub // claudelogin.go: the Claude login
+	loginOnce sync.Once
+
 	muxOnce               sync.Once
 	publicMux, machineMux *http.ServeMux
 }

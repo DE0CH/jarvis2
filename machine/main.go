@@ -332,8 +332,8 @@ func prepare() error {
 		}
 		runTask(c, t, secrets, certMode(cert)) // task.go: the template instead of a harness; never returns
 	}
-	// 6. the Claude login (claudelogin.go): Jarvis 1's shared pair, taken by the machine itself, kept in step
-	if account := sessionClaudeLogin(secrets); account != "" && secrets["CLAUDE_ACCOUNT"] == "" {
+	// 6. the Claude login (claudelogin.go): the router's shared pair, checked against the store's account, kept in step
+	if account := sessionClaudeLogin(c, secrets, cert.Stores); account != "" && secrets["CLAUDE_ACCOUNT"] == "" {
 		secrets = maps.Clone(secrets)
 		secrets["CLAUDE_ACCOUNT"] = account // Jarvis 1's entrypoint merges it into ~/.claude.json
 	}

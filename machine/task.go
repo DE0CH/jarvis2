@@ -280,17 +280,30 @@ func pruneLogs(dir string) {
 	}
 }
 
-// claudeLoginForPrompt: a prompt task needs a Claude login: Jarvis 1's shared pair (store `claude`), else the
-// store's CLAUDE_CREDENTIALS. Returns what was written, to push a refreshed pair back afterwards.
+// claudeLoginForPrompt: a prompt task needs a Claude login: the router's shared pair (store `claude`, checked
+// against the store's account like a session's, claudelogin.go), else the store's CLAUDE_CREDENTIALS. Returns what
+// was written, to push a refreshed pair back afterwards.
 func claudeLoginForPrompt(secrets map[string]string) []byte {
 	var creds []byte
-	if secrets["JARVIS1_CREDENTIALS_ID"] != "" {
-		os.Setenv("JARVIS1_CREDENTIALS_ID", secrets["JARVIS1_CREDENTIALS_ID"])
-		os.Setenv("JARVIS1_CREDENTIALS_SECRET", secrets["JARVIS1_CREDENTIALS_SECRET"])
-		if l, err := fetchSharedLogin(); err == nil {
+	if want := expectedAccount(secrets); want != "" {
+		if u := secrets["CLAUDE_PROFILE_URL"]; strings.HasPrefix(u, "https://") {
+			profileURL = u
+		}
+		c, err := newClient()
+		var l routerLogin
+		if err == nil {
+			l, err = fetchLogin(c, 0, 0, 0)
+		}
+		if err == nil && l.Credentials == "" {
+			err = errors.New("the router holds no Claude login")
+		}
+		if err == nil {
+			err = checkPair([]byte(l.Credentials), want)
+		}
+		if err == nil {
 			creds = []byte(l.Credentials)
 			home, _ := os.UserHomeDir()
-			if _, err := os.Stat(filepath.Join(home, ".claude.json")); err != nil && l.Account != "" {
+			if _, err := os.Stat(filepath.Join(home, ".claude.json")); err != nil && recordAccount(l.Account) == want {
 				os.WriteFile(filepath.Join(home, ".claude.json"), []byte(l.Account), 0o600)
 			}
 		} else {
@@ -377,10 +390,14 @@ func doRun(template, run string, secrets map[string]string, mode string) TaskRes
 	if err != nil {
 		res.Error = "could not run: " + err.Error()
 	}
-	if creds != nil { // claude may have refreshed (rotated) the pair: Jarvis 1 keeps the newest
-		if now, err := os.ReadFile(credsPath()); err == nil && !bytes.Equal(now, creds) && secrets["JARVIS1_CREDENTIALS_ID"] != "" {
-			body, _ := json.Marshal(map[string]string{"credentials": string(now)})
-			if _, err := jarvis1Call("POST", body); err != nil {
+	if creds != nil { // claude may have refreshed (rotated) the pair: the router keeps the newest
+		if now, err := os.ReadFile(credsPath()); err == nil && !bytes.Equal(now, creds) && expectedAccount(secrets) != "" {
+			var out map[string]any
+			c, err := newClient()
+			if err == nil {
+				err = c.json("POST", "/m/claude-login", map[string]string{"credentials": string(now)}, &out)
+			}
+			if err != nil {
 				log.Printf("task: pushing the refreshed Claude login: %v", err)
 			}
 		}

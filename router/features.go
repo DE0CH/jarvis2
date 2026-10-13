@@ -23,18 +23,19 @@ type (
 // registerFeatures: called once from buildHandlers
 func (r *Router) registerFeatures(app appRoute, m machineRoute, public publicRoute) {
 	r.registerAutopilot(app, m)
-	r.registerMemory(app, m)         // memory.go
-	r.registerHarnesses(app)         // harness.go: /api/models
-	r.registerRemote(app, m, public) // remote.go: remote pages, /api/remotes, tunnel proofs
-	r.registerLeases(app, m)         // leases.go: shared-device leases (before sessionapi.go's /m/api/ catch-all)
-	r.registerSessionAPI(app, m)     // sessionapi.go: wakeups, crons, /m/api
-	r.registerArchive(app, m)        // archive.go, restore.go (budget.go needs no routes: /api/state via stateHooks)
-	r.registerSessionOps(app, m)     // sessionops.go, uploads.go, repos.go
-	r.registerTasks(app, m)          // tasks.go: task instances (one-shot session lines), runs, schedules
-	r.registerInbox(app, m, public)  // inbox.go: requests waiting for the phone (the app's Inbox)
-	r.registerVouch(app, m)          // vouch.go: /m/config, /m/restore-cert, deliveries, the input log
-	r.registerMachines(app)          // machines.go: every Fly machine of the app; Destroy for one with no session
-	r.registerContent(app, m)        // content.go: content stores (Storage Box folders) for the app and the sessions
+	r.registerMemory(app, m)              // memory.go
+	r.registerHarnesses(app)              // harness.go: /api/models
+	r.registerRemote(app, m, public)      // remote.go: remote pages, /api/remotes, tunnel proofs
+	r.registerLeases(app, m)              // leases.go: shared-device leases (before sessionapi.go's /m/api/ catch-all)
+	r.registerSessionAPI(app, m)          // sessionapi.go: wakeups, crons, /m/api
+	r.registerArchive(app, m)             // archive.go, restore.go (budget.go needs no routes: /api/state via stateHooks)
+	r.registerSessionOps(app, m)          // sessionops.go, uploads.go, repos.go
+	r.registerTasks(app, m)               // tasks.go: task instances (one-shot session lines), runs, schedules
+	r.registerInbox(app, m, public)       // inbox.go: requests waiting for the phone (the app's Inbox)
+	r.registerVouch(app, m)               // vouch.go: /m/config, /m/restore-cert, deliveries, the input log
+	r.registerMachines(app)               // machines.go: every Fly machine of the app; Destroy for one with no session
+	r.registerContent(app, m)             // content.go: content stores (Storage Box folders) for the app and the sessions
+	r.registerClaudeLogin(app, m, public) // claudelogin.go: the Claude login, its refresh, Re-login, the usage quota
 }
 
 // startFeatures: called once from main after the router is built
@@ -51,6 +52,7 @@ func (r *Router) startFeatures() {
 	go r.inputLogLoop() // vouch.go: the core's input log onto the volume
 	go r.resumeInterrupted()
 	go r.coreChangeLoop() // corechange.go: a new core → the earlier core's paused sessions are destroyed
+	go r.loginLoop()      // claudelogin.go: refresh the Claude login (own) or mirror Jarvis 1's (follow)
 }
 
 // resumeInterrupted: a pause or destroy runs in a goroutine of the router that started it; a router restart (any
