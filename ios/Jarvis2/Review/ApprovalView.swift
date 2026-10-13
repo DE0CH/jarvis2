@@ -130,6 +130,11 @@ struct ApprovalView: View {
         }
       } else {
         Section { ProgressView() }
+        Section {
+          Button(busy == "Rejecting…" ? "Rejecting…" : "Reject", role: .destructive) { Task { await reject() } }
+            .disabled(busy != nil).accessibilityIdentifier("secure-reject")
+          if let failure { ErrorRow(text: failure, id: "secure-reject-error") }
+        } footer: { Text("Approve shows once the page has read and checked the approval.") }
       }
     }
     .navigationTitle(title)
