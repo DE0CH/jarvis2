@@ -260,6 +260,17 @@ check(throwsErr { try Checks.matchesSettings(rC, Checks.Settings(label: "T", pro
       "refused when the router dropped the attachments")
 let chBadA = challenge(["predecessor": NSNull(), "stores": ["default"], "options": ["harness": "claude", "permissionMode": "auto", "config": #"{"v":1,"attachments":[{"name":"x.png","sha256":"\#(hA)","size":1,"path":"/etc"}]}"#], "image": img])
 check(throwsErr { _ = try Checks.review(challenge: chBadA, coreKey: coreKey) }, "an attachment with a field the app can't show is refused")
+// content stores (router/content.go): exactly the ones the page picked, shown as signed
+let confK = #"{"v":1,"prompt":"p","content":["notes","proton-email"]}"#
+let rK = try! Checks.review(challenge: challenge(["predecessor": NSNull(), "stores": ["default"], "options": ["harness": "claude", "permissionMode": "auto", "config": confK], "image": img]), coreKey: coreKey)
+let pickedK = Checks.Settings(label: "", prompt: "p", model: "", repos: [], oneShot: false, apiProxy: false, content: ["proton-email", "notes"])
+check(!throwsErr { try Checks.matchesSettings(rK, pickedK) }, "the signed content stores are the ones the page picked")
+check(SignedAction.value(SignedAction.approval(rK), "content") == "notes\nproton-email", "what you sign lists the content stores")
+var otherK = pickedK; otherK.content = ["notes"]
+check(throwsErr { try Checks.matchesSettings(rK, otherK) }, "refused when the router added a content store")
+check(throwsErr { try Checks.matchesSettings(rC, pickedK) }, "refused when the router dropped the content stores")
+let chBadK = challenge(["predecessor": NSNull(), "stores": ["default"], "options": ["harness": "claude", "permissionMode": "auto", "config": #"{"v":1,"content":["../etc"]}"#], "image": img])
+check(throwsErr { _ = try Checks.review(challenge: chBadK, coreKey: coreKey) }, "a content store name the app can't show is refused")
 let chX = challenge(["predecessor": NSNull(), "stores": ["default"], "options": ["harness": "claude", "permissionMode": "auto", "config": #"{"v":1,"evil":"x"}"#], "image": img])
 check(throwsErr { _ = try Checks.review(challenge: chX, coreKey: coreKey) }, "a setting the app can't show is refused")
 

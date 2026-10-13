@@ -624,3 +624,30 @@ func TestLockedStoreFailsTheStart(t *testing.T) {
 		t.Fatalf("%v", *dms)
 	}
 }
+
+func TestContentFieldsGoToTheLine(t *testing.T) {
+	tm, err := parseTemplate("x", []byte(`{"title":"X","fields":[
+		{"name":"store","type":"select","optionsFrom":"content","required":true},
+		{"name":"more","type":"multiselect","optionsFrom":"content"},
+		{"name":"keystore","type":"select","optionsFrom":"stores"}]}`), []string{"run.py"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tm = withOptions(tm)
+	if _, err := checkParams(tm, map[string]any{"store": "../x"}); err == nil {
+		t.Fatal("a bad content store name passed")
+	}
+	p, err := checkParams(tm, map[string]any{"store": "proton-email", "more": []any{"notes", "proton-email"}, "keystore": "keys"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c := lineContent(tm, p); len(c) != 2 || c[0] != "notes" || c[1] != "proton-email" {
+		t.Fatalf("content %v", c)
+	}
+	if s := lineStores(tm, p); len(s) != 1 || s[0] != "keys" {
+		t.Fatalf("stores %v", s)
+	}
+	if c := lineContent(tm, map[string]any{"store": ""}); c != nil {
+		t.Fatalf("none picked: %v", c)
+	}
+}

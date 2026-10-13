@@ -90,6 +90,7 @@ gone (moved to records); `failed` (with `error`).
 | `GET /term/:id` | The terminal as a web page (`router/web/terminal.html`, one self-contained file: no outside scripts, strict CSP, `no-store`): polls the snapshot above once a second, sends keys and text in order, fits the window to the screen. The iPhone app shows it in a WKWebView and listens on the message handler `jarvis2`: `{action: "grant", holder: "terminal"}` (open the app's Face ID grant review) and `{action: "signin"}` (the Access login expired); it calls `window.jarvis2Refresh()` once the grant is signed or the login renewed. In a plain browser the grant button files `POST /api/requests/grant` (minutes 10) and an expired login reloads the page once. The id must be `[A-Za-z0-9-]` (else 404). |
 | `GET /api/sessions/:id/tail` | A paused session's conversation end, from its snapshot: `{title, sessionId, messages: [{role, text, at}]}` (409 while it runs, 404 without a snapshot). |
 | `GET /api/state` (extra fields) | `budget`: `{month, spentUsd, capUsd, warnUsd, warned, capped, cappedAt, ratePerHour, perMonth, running, volumes, sampledAt}` or null; `fly`: `{apps, app, machines, volumes, other: [{kind, app, id, name, state, region, created, detail}], error, checkedAt}` ("Also on Fly": machines in app jarvis2-sessions that are no running session of the router's, and volumes); `flyApp`. |
+| `GET /api/state` (`browserbaseBudget`) | `{month, capUsd, warnUsd, overUsd, parts: {time, proxyMb, proxyBytes, total}, usage: {count, minutes, proxyMb, proxyBytes}, warned, capped, sampledAt}` or null (`router/bbbudget.go`: the month re-priced from Browserbase's session list every 10 min; one DM at the warn line, one at the cap; nothing is blocked). |
 | `GET /api/machines` | The Machines tab (`router/machines.go`): every machine in Fly app jarvis2-sessions, live from Fly with the read-only `FLY_READ_TOKEN`, newest first: `{app, machines: [{id, name, state, region, size /* small\|medium\|large or "" */, guest, image, created, updated, sessionId /* "" = no session */, current /* the session's machine now; false = an earlier one */, routerUrl /* its JARVIS2_URL */, test /* routerUrl isn't jarvis2-box's */, noDestroy /* why Destroy isn't offered, "" = it is */, attention /* why it stands out (stopped, failed, stuck, no session), "" = it doesn't */}], orgs: [{org, via /* "fly" \| "Jarvis 1" */, error, checkedAt, apps: [{app, label /* "Jarvis 2 sessions"…, "" = an app no Jarvis uses */, own /* jarvis2-sessions */, status, error, machines: [same fields; other apps: no session/router, noDestroy "read-only", otherSession /* a Jarvis 1 session id */], volumes: [{id, name, state, region, sizeGb, attachedTo, created, attention}]}]}], attention /* how many things stand out */, configError, checkedAt}`. Every org Deyao has (`router/flyorgs.go`): jarvis2-370 and kamyee read from Fly with READ-ONLY org tokens (`FLY_ORG_READ_TOKENS`), personal from Jarvis 1's sanitized `GET /api/fly/machines` (the confined services token; no Fly token for personal: it would read Jarvis 1's session secrets in their Fly env). An org that can't be read comes back with `error`. 502 `{error}` when jarvis2-sessions can't be listed. |
 | `POST /api/machines/:id/destroy` | Destroy a machine that belongs to NO session, re-checked on a fresh Fly list: the router never started it (no session mapping, Started entry or cert) and it is at least 15 minutes old (a Start's machine exists before the router records it). The router asks the core's `kill` (the call a pause makes; the core alone holds a destroying Fly token). → `{ok, id}`; 409 `{error}` for a session machine or a too-new one; 400 for an unknown id; the core's signed error when the kill fails. |
 | `GET /api/records` | Destroyed sessions `{records: [...]}`; each has `archive: {dir, title, transcripts, artifacts, signer, snapshotAt, last}` when it was archived, `archiveError`, `restored: [{sessionId, at}]`. |
@@ -100,7 +101,8 @@ gone (moved to records); `failed` (with `error`).
 | `POST /api/sessions/:id/auto-pause` | Body `{on}` (Jarvis 1's `{enabled}` works too) → `{ok, autoPause: "on" | "off"}`; restarts the idle countdown. |
 | `POST /api/sessions/:id/notify-idle` | Body `{on}` → `{ok, notifyIdle}`: mutes only the idle DM; "needs you", dead and downgrade DMs still come. |
 | `GET /api/sessions/:id/remote` | OpenCode/OpenClaw only (400 otherwise; 409 unless `started`): `{webUrl, harness, pairUrl, relay}` (opencode: the Paseo app's pairing link) or `{webUrl /* …#token= */, harness, url /* wss://<id>-s.deyaochen.com */, token}` (openclaw: the gateway token). Read in the machine as holder `remote` (a grant, standing rule or allow-list entry); refused → 403 `{error, needsGrant: "remote"}`; front end not up → 503 `{error}`. Cached 1 min per machine. `webUrl` = `https://<session id>-s.deyaochen.com/` (suffix: router env `SESSION_TUNNEL_SUFFIX`). |
-| `GET /api/remotes?harness=openclaw\|opencode` | Jarvis 1's shape: `{sessions: [{id, title, state, model, + url, token, webUrl (openclaw) \| pairUrl (opencode), or error (+ needsGrant)}]}`; secrets only for a started session. Also admits one Access service token: client id `JARVIS2_REMOTES_CLIENT_ID` (JWT `common_name`), audience the app's or `ACCESS_REMOTES_AUD`. |
+| `GET /api/remotes?harness=openclaw\|opencode` | Jarvis 1's shape: `{sessions: [{id, title, state, model, + url, token, webUrl (openclaw) \| pairUrl (opencode), or error (+ needsGrant)}]}`; secrets only for a started session. Deyao, or a paired app's Access service token ("Paired apps" below). |
+| `POST /api/sessions/:id/start` | The paired apps' Start of a paused session (Jarvis 1's call): a resume on the same image, no phone step → 202 `{ok}`. Deyao or a paired app. |
 | `POST /api/sessions/:id/permission-mode` | Body `{mode: "auto" | "bypass"}`. Running → 202 `{started, inPlace}`: Jarvis 1's `set-permission-mode` under the `terminal` holder (claude relaunches `--resume` in the new mode; nothing else restarts); a refusal sets `needsGrant: "terminal"`. Paused → 200 `{nextStart: true}`. Same mode → `{unchanged: true}`. |
 | `POST /api/sessions/:id/restart` | Body `{env?, rollback?: {dropFromMarker}, prompt?, size?, model?, apiProxy?}` → 202. Pause (if running) + resume on the same image. `env`: `{NAME: value}` patch kept for later starts (`""`/null removes); names that look like secrets (TOKEN, SECRET, PASSWORD, API_KEY, `_KEY`, `_API`, AUTH, …) or Jarvis's own (`JARVIS*_`, `SESSION_`, `CLAUDE_`, `ANTHROPIC_`, `CF_ACCESS_`, `LOBSTER_`, `FLY_`, `LD_`, PATH, HOME…) → 400: secrets come only from stores. `rollback`: the next machine, after verifying the paused snapshot, drops every conversation-transcript line from the first containing the marker (env `JARVIS2_ROLLBACK` + `JARVIS2_ROLLBACK_PRED` = the paused machine; ignored by any other start). |
 | `POST /api/sessions/:id/env` | Jarvis 1's shape `{env}` = a restart with only `env`. |
@@ -571,6 +573,47 @@ watch view = { name, prompt, failPrompt, interval, maxSeconds, armedAt, armedAtI
 The runner (`POST http://watch.jarvis2-edge.svc.cluster.local:8095/run {script, name, timeout}` →
 `{exit, stdout, stderr, timedOut, ms}`, router env `WATCH_URL`): a check gets PATH, HOME and TMPDIR (a throwaway
 directory), LANG and WATCH_NAME; bash, curl, python3, git, openssl, jq; 90 s; stdout capped at 16 KB.
+
+## Content stores (`router/content.go`)
+
+Named folders of files on the Storage Box, `claude-records/.content/<name>/` (Jarvis 1's, used in place), read and
+written with the router's own Storage Box credentials. A name is `[a-z0-9]([a-z0-9-]{0,40}[a-z0-9])?`; a file path is
+relative, `/`-separated, with no empty, `.` or `..` segment; a file is at most 25 MB.
+
+| Path | Does |
+|---|---|
+| `GET /api/content[?fresh=1]` | `{stores: [{name, files, bytes}]}` (cached a minute; `fresh=1` walks the box). |
+| `POST /api/content` | Body `{name}` → `{ok, name}`; 409 when it exists. |
+| `DELETE /api/content/:name` | The store and every file in it. |
+| `GET /api/content/:name/files` | `{name, files: [{path, size, modified}]}`, sorted by path; 404 for no store. |
+| `GET /api/content/:name/file?path=` | The bytes (`application/octet-stream`). Jarvis 1's `x-content-path` header works in place of `path`. |
+| `POST /api/content/:name/file?path=` | The raw body becomes that file (parent folders made) → `{path, size}`. |
+| `DELETE /api/content/:name/file?path=` | The file, then the folders it leaves empty. |
+
+A session's content stores are the cert's (`options.config.content`, signed with the line: New session's `content: [name…]`,
+or a task's `optionsFrom: "content"` fields); `POST /api/sessions` refuses a name with no store. On the machine,
+`SESSION_CONTENT` names them and the base image's `content-sync` (pull at every start, `push`, `status`) calls Jarvis 1's
+session paths through the local proxy:
+
+| Path (machine-signed, `/m/api/…`) | Does |
+|---|---|
+| `GET /m/api/sessions/:id/content` | `{ok, stores: {name: [{path, size, modified}]}}` for the cert's stores (a deleted store: `[]`). |
+| `GET /m/api/sessions/:id/content/:name/file?path=` | The bytes, with header `X-Jarvis2-Attest`: the core's input-log entry (machine, `content`, origin `router`, sha256); the machine's proxy refuses the file (502) without a matching one. |
+| `PUT` / `DELETE /m/api/sessions/:id/content/:name/file?path=` | Write or delete a file of one of the cert's stores; 403 for any other store. |
+
+## Paired apps (`router/devices.go`)
+
+Deyao's builds of the OpenClaw and Paseo apps pair once and then list and start sessions without a login of their own.
+
+| Path | Does |
+|---|---|
+| `GET /api/devices/pair?state=&name=&model=&app=openclaw\|paseo` | Deyao's own Access login only (the app opens it in the system sign-in sheet). Mints one Access service token for that device (`CF_DEVICE_TOKENS_API`) → `302 openclaw-de0ch://paired?state&id&clientId&clientSecret` (or `paseo-de0ch://…`); an error comes back the same way as `error` + `status` (429 within 30 s of the last pairing). `state` is `[A-Za-z0-9_-]{16,64}`. |
+| `GET /api/devices` | `{devices: [{id, name, model, app, createdAt, lastSeenAt}]}` (no token ids). |
+| `DELETE /api/devices/:id` | Deletes its service token at Cloudflare and forgets it. |
+
+`/api/remotes` and `/api/sessions/:id/start` are behind the Access app "Jarvis 2 devices" (`ACCESS_DEVICES_AUD`), which admits
+Deyao's email or any service token of the account; the router then admits a token only when its client id (the JWT's
+`common_name`) is a paired device's.
 
 ## Session-facing API (`/m/api/*`)
 

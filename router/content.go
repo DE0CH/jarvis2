@@ -14,7 +14,7 @@ package main
 //   - Each file a machine downloads carries the core's attestation (input "content", origin "router", its sha256):
 //     the machine's proxy refuses a file without it, so every content file a machine took is in the input log. The
 //     bytes are the router's word (the Storage Box is the router's storage): a content store is data the session
-//     reads, as it reads the web, kept in ~/content (never the cwd, never run). DECISIONS 100.
+//     reads, as it reads the web, kept in ~/content (never the cwd, never run). DECISIONS 132-133.
 //
 // The box is Apache mod_dav: PROPFIND with Depth infinity is refused, so a store is walked one level at a time.
 

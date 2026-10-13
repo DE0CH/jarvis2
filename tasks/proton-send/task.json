@@ -1,0 +1,36 @@
+{
+  "title": "Send a Proton email (private)",
+  "description": "Logs into a Proton account handed off by a session (account.json in a content store) and sends one email whose recipient, subject and body are AES-encrypted files (Encrypt to a content store). Decrypts in memory, sends the body as HTML text, prints only sent/failed. No AI ever sees the key or the inputs.",
+  "run": "run.py",
+  "stores": [
+    "default"
+  ],
+  "timeoutSeconds": 900,
+  "size": "medium",
+  "fields": [
+    {
+      "name": "account",
+      "label": "Account store",
+      "type": "select",
+      "optionsFrom": "content",
+      "required": true,
+      "help": "Content store holding account.json (username + password), written by the signup session (proton_after.py --handoff)."
+    },
+    {
+      "name": "inputs",
+      "label": "Inputs store",
+      "type": "select",
+      "optionsFrom": "content",
+      "required": true,
+      "help": "Content store holding the encrypted address.txt (recipient), subject.txt and content.txt (plain-text body)."
+    },
+    {
+      "name": "keystore",
+      "label": "Key store",
+      "type": "select",
+      "optionsFrom": "stores",
+      "required": true,
+      "help": "The store holding the AES_KEY the inputs were encrypted with."
+    }
+  ]
+}

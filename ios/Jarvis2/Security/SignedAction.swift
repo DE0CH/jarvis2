@@ -57,6 +57,7 @@ enum SignedAction {
       if !s("label").isEmpty { f.append(.init(id: "title", label: "Title", value: s("label"))) }
       if !s("prompt").isEmpty { f.append(.init(id: "prompt", label: "First prompt", value: s("prompt"))) }
       if let repos = c["repos"] as? [String], !repos.isEmpty { f.append(.init(id: "repos", label: "Repos", value: list(repos), style: .code)) }
+      if let cs = Checks.content(c), !cs.isEmpty { f.append(.init(id: "content", label: "Content stores", value: list(cs), style: .code)) }
       if !s("model").isEmpty { f.append(.init(id: "model", label: "Model", value: s("model"))) }
       if (c["oneShot"] as? Bool) == true { f.append(.init(id: "one-shot", label: "One-shot", value: "Yes")) }
       if (c["apiProxy"] as? Bool) == true { f.append(.init(id: "api-proxy", label: "API proxy log", value: "Yes")) }

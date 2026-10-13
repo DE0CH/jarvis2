@@ -72,6 +72,35 @@ export async function uploadFile(uploadId: string, name: string, body: Blob): Pr
   return JSON.parse(text) as Uploaded;
 }
 
+// a content store's file (router/content.go): uploaded as it is (raw bytes), downloaded through the browser
+export async function uploadContent(store: string, path: string, body: Blob): Promise<{ path: string; size: number }> {
+  const p = `api/content/${encodeURIComponent(store)}/file?path=${encodeURIComponent(path)}`;
+  let r: Response;
+  for (;;) {
+    try { r = await fetch(url(p), { ...fetchInit, method: "POST", body, headers: { ...(await authHeaders()), "Content-Type": "application/octet-stream" } }); }
+    catch (e) { throw networkError("POST", p, e); }
+    if ((await checkRefused(r)) === "ok") break;
+  }
+  const text = await r.text().catch(() => "");
+  if (!r.ok) throw httpError("POST", p, r.status, text);
+  return JSON.parse(text);
+}
+export async function downloadContent(store: string, path: string): Promise<void> {
+  const p = `api/content/${encodeURIComponent(store)}/file?path=${encodeURIComponent(path)}`;
+  let r: Response;
+  for (;;) {
+    try { r = await fetch(url(p), { ...fetchInit, headers: await authHeaders() }); }
+    catch (e) { throw networkError("GET", p, e); }
+    if ((await checkRefused(r)) === "ok") break;
+  }
+  if (!r.ok) throw httpError("GET", p, r.status, await r.text().catch(() => ""));
+  const href = URL.createObjectURL(await r.blob());
+  const a = document.createElement("a");
+  a.href = href; a.download = path.split("/").pop() || "file";
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(href), 10000);
+}
+
 // ---- the router's shapes (docs/API.md) ----
 export type SessionState = "starting" | "approval" | "initialising" | "started" | "pausing" | "paused" | "resuming" | "destroying" | "failed";
 export type LeaseEntry = { sid: string; human?: boolean; purpose: string; description: string; describedAt?: number; note?: string; since?: number; expiresAt?: number | null; expiresInSeconds?: number | null };
@@ -85,7 +114,7 @@ export type Refusal = { kind: "fallback" | "refusal"; at?: string; from?: string
 export type Session = {
   id: string; machineId?: string | null; released?: boolean; name?: string; state: SessionState | string; status?: string | null;
   created?: string; region?: string; environment?: string; harness?: string; label?: string; model?: string;
-  permissionMode?: string; guest?: string; stores?: string[] | null; size?: string; image?: string; pausedAt?: string | null; error?: string | null; title?: string; destroyedAt?: string;
+  permissionMode?: string; guest?: string; stores?: string[] | null; content?: string[] | null; size?: string; image?: string; pausedAt?: string | null; error?: string | null; title?: string; destroyedAt?: string;
   // live fields (docs/API.md "Sessions"): the machine's report, the autopilot's settings, the schedule
   aiTitle?: string; liveName?: string; userTitle?: string; serverTitle?: string; liveSync?: { at: string; files: Record<string, number>; stored: boolean; error?: string } | null; bgTasks?: number; needsGrant?: string; pauseInMs?: number;
   autoPause?: "on" | "off"; notifyIdle?: "on" | "off"; oneShot?: boolean; oneShotDone?: boolean; authFailed?: boolean;

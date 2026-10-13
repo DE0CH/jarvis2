@@ -44,17 +44,12 @@ every store back from the backups). docs/DESIGN.md "Setting a core up".
 
 ## Later (Deyao, 2026-10-09)
 
-- **Content stores for Jarvis 2 sessions.** (Device leases and watches are the router's own: DECISIONS 113–114.) Jarvis 1 accepts a Jarvis 2 session's identity from
-  the confined `jarvis2-services` token (`X-Jarvis2-Session`), and wakes a queued Jarvis 2 session through a new
-  Jarvis 2 router endpoint behind its own confined token. The router already forwards the paths
-  (`router/sessionapi.go`); add them to the Worker's `CONFINED_TOKENS` when Jarvis 1 accepts them.
-- **Device pairing for Deyao's OpenClaw/Paseo apps** (`/api/remotes`): Jarvis 1's list could include Jarvis 2's,
-  or the apps get Jarvis 2 as a second server.
 - **Before Jarvis 1 retires** (Deyao keeps using Jarvis 1 until Jarvis 2 is ready and polished, then retires it and
   handles the conflicts then): Jarvis 2 must stop depending on it. The Claude login (storage, the only refresher,
   Re-login, the usage quota) is the router's (DECISIONS 115-121; Jarvis 1 follows it through `/peer/claude-login`).
   Jarvis 1's paused sessions move with the Jarvis 1 import (RUNBOOK "Importing a paused Jarvis 1 session"; Jarvis 1's
-  records stay on the Storage Box). Today it still uses Jarvis 1 for the Browserbase budget DM. Each moves into Jarvis 2 (or a service of its own) at
-  retirement, and the confined Jarvis 1 tokens go away; the router's `JARVIS1_CREDENTIALS_ID/SECRET` are used only in
+  records stay on the Storage Box). Content stores, the paired OpenClaw/Paseo apps, the Browserbase budget DM and the
+  Machines tab's org personal are the router's own (DECISIONS 132-139); the apps' server URL moves to this host at
+  retirement (PARITY "Device pairing"). The confined Jarvis 1 tokens go away; the router's `JARVIS1_CREDENTIALS_ID/SECRET` are used only in
   the login's `follow` mode (before the cutover) and go with it.
 

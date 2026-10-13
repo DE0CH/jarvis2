@@ -1,4 +1,4 @@
-# Feature parity with Jarvis 1 (inventory, updated 2026-10-10)
+# Feature parity with Jarvis 1 (inventory, updated 2026-10-13)
 
 Deyao asked for full parity with Jarvis 1. This lists every Jarvis 1 feature against Jarvis 2. J1 = claude-env
 `selfhost/` (line numbers in `jarvis/server.js` unless named). Dependencies: SB Storage Box creds, FX arbitrary
@@ -10,7 +10,6 @@ Facts: the router has no Fly token (it calls the core's start/kill/certify). Its
 a standing rule or its own allow list — DESIGN.md "Grants") and what the machine sends by itself (status reports,
 snapshots, live transcripts, task results).
 
-Deferred by Deyao (PLAN.md "Later"): content stores, device pairing for the OpenClaw/Paseo apps.
 
 ## Session lifecycle
 - **Create** (FT, AT): present. Idempotent `requestId`: present (a repeat answers the session it made). Lifecycle lock: 409 and `busy {kind, since}` in `/api/state`.
@@ -35,14 +34,14 @@ Deferred by Deyao (PLAN.md "Later"): content stores, device pairing for the Open
 - Live terminal: present (`router/terminal.go`, holder `terminal`; the app draws tmux's capture, app/DECISIONS 27).
 - **App title sync (AT)**: present. The machine reads the Claude app's title of its Remote Control entry with its own Claude login and reports it (`/m/status {appTitle}`, `machine/apptitle.go`); it names the card, the Discord channel and the archive folder first (Jarvis 1's pickTitle: app title → CLI-pinned name → label → AI title), is kept while paused, and a resume without a label passes it as `SESSION_RESUME_TITLE`. Not ported: Jarvis 1's rename-back of a fresh Remote Control entry after a Start (`keepAppTitle`; DECISIONS 39).
 - Remote page for opencode/openclaw: present (`GET /api/sessions/:id/remote`, `router/remote.go`, holder `remote`).
-- `/api/remotes?harness=`: present on the router. Deyao's OpenClaw/Paseo apps don't see it yet (device pairing, deferred).
+- `/api/remotes?harness=` and `POST /api/sessions/:id/start`: present (`router/devices.go`), for Deyao and his paired OpenClaw/Paseo apps ("Device pairing" below).
 - Per-session tunnel origin (CFA): present — harnesses opencode/openclaw bring the store `tunnel` (Access service token `jarvis2-tunnel`); the machine fetches a proof for its own session id (`GET /m/tunnel-proof`); the cf-tunnel Worker confines the token to `AGENT jarvis2` with that proof (claude-env `cf-tunnel/wrangler.toml` `CONFINED_TOKENS`). A paused Jarvis 2 session's link gives the Worker's bare 503 (its Unpause page is for Jarvis 1 ids only).
 
 ## Automatic behaviour
 - Auto-pause, Escape-cancel of a stale prompt (holder `status`), "needs you"/idle/dead DMs (+ `notify-idle` mute), model-downgrade DM (holder `status`), stall nudge, one-shot destroy: present (`router/autopilot.go`, `router/oneshot.go`). Refused commands set `needsGrant`.
 - Claude credential refresh: present (`router/claudelogin.go`): the router keeps the one shared pair on its volume and is its only refresher (mode `own`; `follow` mirrors Jarvis 1 until the cutover), with lessons/74's refresh lock as a long-poll protocol that every session machine with the store `claude` and Jarvis 1 take part in. Login repair + "continue": present (holder `login`, for a session without it).
 - Fly budget cap and "Also on Fly": present (`router/budget.go`, read-only `FLY_READ_TOKEN`).
-- Browserbase budget DM: stays in Jarvis 1.
+- Browserbase budget DM: present (`router/bbbudget.go`, Jarvis 1's lib/bbbudget.js: the month re-priced from the session list, one DM at USD 8 and one at USD 10 overage; `BROWSERBASE_API_KEY` in the router's SOPS part `browserbase`; `/api/state` `browserbaseBudget`).
 - Discord channel per session (DT, SB): present (`router/discord.go`, lobster, category "Jarvis 2"), named by the title above and renamed as it changes (2 edits per 10 min), exported to `claude-records/<date> <title>/discord/` and deleted on destroy. Topic has no Remote Control link.
 - **Live transcript sync to SB**: present. The machine sends changed transcripts every 5 min (`machine/livesync.go`); the router writes `claude-records/.live/<session id>/` with its own creds, so transcript search indexes running Jarvis 2 sessions; removed on destroy. No grant (the machine pushes; DECISIONS 38).
 
@@ -50,16 +49,16 @@ Deferred by Deyao (PLAN.md "Later"): content stores, device pairing for the Open
 - Wakeups, crons: present (router/schedule.go; Jarvis 1's shapes, under `/api` and `/m/api`; delivery through the `scheduler` grant).
 - Watches: present (`router/watches.go`, Jarvis 1's shapes): the check runs on the box's watch runner (`services/watch`, no secrets, public internet only), so a paused session's watch still fires; delivery is the session's own signed request, and the machine re-runs the check for the context. A check can't use a store's secret (DECISIONS 114).
 - Device leases (iphone, mac, wechat-phone): present in the router (`router/leases.go`, Jarvis 1's rules and shapes; wake messages are machine-checked deliveries; DECISIONS 113). Jarvis 1's lease table is separate until the cutover.
-- Tasks + schedules: present on the router (`router/tasks.go`, `machine/task.go`, templates in `tasks/`; DECISIONS 32–37) and in the app (Tasks and Schedules tabs, app/DECISIONS 35). Jarvis 1's templates aren't ported (many need content stores).
+- Tasks + schedules: present on the router (`router/tasks.go`, `machine/task.go`, templates in `tasks/`; DECISIONS 32–37) and in the app (Tasks and Schedules tabs, app/DECISIONS 35). Jarvis 1's content templates are ported (`tasks/encrypt-to-content`, `paraphrase-to-content`, `proton-send`: content fields `optionsFrom: "content"`, key store `optionsFrom: "stores"`); `new-session` isn't (a new line needs the phone; a session proposes one instead). Jarvis 1's instances and schedules (all three schedules disabled) aren't recreated: each instance is a new line approved on the phone, and no Jarvis 2 store holds their `AES_KEY` yet (DECISIONS 134).
 
 ## Stores, repos, content
 - Store editor in the app: partial — the shell's Stores page creates, unlocks, locks and marks stores sensitive; values are written only by the setup session (`infra/setup.py`). Copy keys between stores: missing (design question 12).
 - Multi-store merge conflict file: unverified. Repo picker: present (`router/repos.go`, the app's Settings → Repos). Repo delivery: replaced by per-repo deploy keys (SSH).
-- Content stores: deferred. Drop tokens: missing.
+- Content stores: present (`router/content.go`; DECISIONS 132-133): Jarvis 1's `claude-records/.content/<name>/` folders, used in place with the router's Storage Box creds; the app's Content tab (web) manages them; New session (web and iPhone) and task fields pick them, signed in the line's config (`content`); `content-sync` on the machine goes through the local proxy to `/m/api/sessions/:id/content…`, only for the cert's stores, each downloaded file with the core's attestation. Drop tokens: missing.
 
 ## Account and apps
-- Re-login: present (Settings → Claude account in the web page and the app: the CLI's sign-in page, paste the code; `POST /api/claude-login/start|code`); Jarvis 1's Settings Re-login also lands here. Usage quota: present (the router reads it with its own pair). Device pairing for OpenClaw/Paseo apps: deferred.
-- Dashboard (app/DECISIONS.md 23–38): Sessions (live status, auto-pause/idle switches, resume prompt, destroy with the changes check, transcript, Discord link, needsGrant one-tap, permission mode, copy id), Grants (secure page, phone-signed), Terminal, Remote (with copy), per-session wakeups/crons, **Search** (conversations of both Jarvises, iCloud files), Previous (restore/tail/remove/delete), Tasks, Schedules, Stores, Repos, Settings (usage, Fly spend, core keys with copy), New session (one-shot, auto-pause, repos, API proxy, permission mode), banners, "Also on Fly": present. Devices (lease admin), Content, lease pills, first-prompt attachments, the per-tab transcript filter on Sessions/Previous: missing.
+- Re-login: present (Settings → Claude account in the web page and the app: the CLI's sign-in page, paste the code; `POST /api/claude-login/start|code`); Jarvis 1's Settings Re-login also lands here. Usage quota: present (the router reads it with its own pair). Device pairing for OpenClaw/Paseo apps: present (`router/devices.go`; "Device pairing" below); the apps still name jarvis.deyaochen.com until their one-line change.
+- Dashboard (app/DECISIONS.md 23–38): Sessions (live status, auto-pause/idle switches, resume prompt, destroy with the changes check, transcript, Discord link, needsGrant one-tap, permission mode, copy id), Grants (secure page, phone-signed), Terminal, Remote (with copy), per-session wakeups/crons, **Search** (conversations of both Jarvises, iCloud files), Previous (restore/tail/remove/delete), Tasks, Schedules, Stores, Repos, Settings (usage, Fly spend, core keys with copy), New session (one-shot, auto-pause, repos, API proxy, permission mode), banners, "Also on Fly": present. Paired apps (Settings, web), Content (web; not in the iPhone app yet), lease pills, first-prompt attachments, the per-tab transcript filter on Sessions/Previous: missing.
 
 ## Harnesses and image
 - Claude: present. OpenCode + Paseo, OpenClaw + claw-code: present (policy: opencode brings `openrouter` + `tunnel`, openclaw brings `claude` + `tunnel`; `GET /api/models[?harness=]`; the harness is signed in the cert's options). `harness-send`: present (holder `scheduler`). API proxy: present.
@@ -84,19 +83,18 @@ Deferred by Deyao (PLAN.md "Later"): content stores, device pairing for the Open
 10. Which options are signed: answered — the harness and the permission mode (DECISIONS 30); size, model, one-shot, auto-pause, API proxy unsigned.
 11. Arbitrary env injection: non-secret names only (DECISIONS 31).
 12. Store authoring in the app (the app as trusted writer), copy between stores: open.
-13. Attachments without SB on machines: answered (router-staged uploads); content stores deferred.
-14. Device pairing for OpenClaw/Paseo: deferred ("Device pairing" below).
+13. Attachments and content without SB on machines: answered (router-staged uploads; content through the router, DECISIONS 132).
+14. Device pairing for OpenClaw/Paseo: answered (Jarvis 2 pairs them itself; DECISIONS 135-136).
 15. A machine reporting "busy" forever defeats auto-pause and the budget: open (the budget cap still pauses it).
 
-## Device pairing for OpenClaw/Paseo (deferred)
+## Device pairing for OpenClaw/Paseo
 
-Jarvis 1 mints one Access service token per paired app (`CF_DEVICE_TOKENS_API`); the apps then call only
-`jarvis.deyaochen.com` (`/api/devices/pair`, `/api/remotes`, Start) and reach `<id>-s.deyaochen.com` with that
-token. The Jarvis 2 router can't mint tokens and shouldn't. Smallest design, no app change: Jarvis 1's
-`/api/remotes` appends Jarvis 2's list, fetched from `jarvis2.deyaochen.com/api/remotes` with one service token
-(`jarvis2-remotes`: router env `JARVIS2_REMOTES_CLIENT_ID` = its client id; Access admits it on a path-scoped app
-`jarvis2.deyaochen.com/api/remotes`, audience in router env `ACCESS_REMOTES_AUD`, policies Deyao's email + that token).
-The apps' own device tokens already reach Jarvis 2 session hosts. Costs: a Jarvis 1 change; Jarvis 1 then holds a
-token that reads every Jarvis 2 session's gateway token / pair link (as far as the `remote` grants allow); Start of a
-paused Jarvis 2 session from the Paseo app stays Jarvis 1-only. The alternative is a second server in each app,
-paired with Jarvis 2, which needs app work and a token story of its own.
+Jarvis 2 answers the apps itself (`router/devices.go`), as Jarvis 1 did: `GET /api/devices/pair?state&name&model&app=openclaw|paseo`
+(Deyao's Access login in the app's sign-in sheet) mints one Access service token per app with the Cloudflare token
+`jarvis2-device-tokens` (Access: Service Tokens read/write only; router SOPS part `devices`) and answers
+`openclaw-de0ch://paired?…` / `paseo-de0ch://paired?…`. `GET /api/remotes` and `POST /api/sessions/:id/start` sit behind the
+path-scoped Access app "Jarvis 2 devices" (Deyao's email, or any service token; `ACCESS_DEVICES_AUD`), and the router admits
+a service token only when its client id is a paired device's. The same token passes the session hosts' Access
+(`<id>-s.deyaochen.com`). Settings → Paired apps lists and removes them. The forks still call jarvis.deyaochen.com: the
+switch is one constant each (DE0CH/openclaw `apps/ios/Sources/Jarvis/JarvisModels.swift` `JarvisConfig.baseURL`, DE0CH/paseo
+`packages/app/app.config.js` `jarvis.url`), made when Jarvis 1 retires, then each app pairs once more (RUNBOOK "Paired apps").

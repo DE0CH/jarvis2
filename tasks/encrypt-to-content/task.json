@@ -1,0 +1,38 @@
+{
+  "title": "Encrypt to a content store",
+  "description": "Encrypts the text with AES_KEY from the store you pick (AES-256-GCM) and saves it as a file in a content store.",
+  "run": "run.py",
+  "timeoutSeconds": 300,
+  "size": "small",
+  "fields": [
+    {
+      "name": "filename",
+      "label": "File name",
+      "type": "text",
+      "required": true,
+      "placeholder": "e.g. A.txt",
+      "help": "Path inside the store; an existing file with that name is replaced."
+    },
+    {
+      "name": "text",
+      "label": "Text",
+      "type": "textarea",
+      "required": true
+    },
+    {
+      "name": "store",
+      "label": "Content store",
+      "type": "select",
+      "optionsFrom": "content",
+      "required": true
+    },
+    {
+      "name": "keystore",
+      "label": "Key store",
+      "type": "select",
+      "optionsFrom": "stores",
+      "required": true,
+      "help": "The store holding AES_KEY (it joins the task's stores); the run fails if it has none."
+    }
+  ]
+}

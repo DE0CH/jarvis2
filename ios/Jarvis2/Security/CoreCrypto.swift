@@ -221,12 +221,13 @@ enum Checks {
 
   /// the keys a session's settings may have (machine/vouch.go SessionConfig) and a one-time input (OnceInputs);
   /// a challenge with anything else is refused: the phone must show all that it signs
-  static let configKeys: Set<String> = ["v", "label", "prompt", "model", "repos", "oneShot", "apiProxy", "attachments", "restore", "task"]
+  static let configKeys: Set<String> = ["v", "label", "prompt", "model", "repos", "content", "oneShot", "apiProxy", "attachments", "restore", "task"]
   static let onceKeys: Set<String> = ["prompt", "rollback"]
 
   static func checkKnown(_ r: Reviewed) throws {
     if let c = r.config, !Set(c.keys).isSubset(of: configKeys) { throw TrustError.mismatch("settings this app can't show") }
     if let c = r.config, attachments(c) == nil { throw TrustError.mismatch("attachments this app can't show") }
+    if let c = r.config, content(c) == nil { throw TrustError.mismatch("content stores this app can't show") }
     if let o = r.once, !Set(o.keys).isSubset(of: onceKeys) { throw TrustError.mismatch("one-time inputs this app can't show") }
     if r.challenge.request.options.config?.isEmpty == false && r.config == nil { throw TrustError.mismatch("settings that aren't a JSON object") }
     if r.challenge.request.options.once?.isEmpty == false && r.once == nil { throw TrustError.mismatch("one-time inputs that aren't a JSON object") }
@@ -265,12 +266,22 @@ enum Checks {
     return out
   }
 
+  /// the signed config's content stores (router/content.go: ~/content/<name>/ on the machine), as signed (nil: not a
+  /// list of store names)
+  static func content(_ c: [String: Any]) -> [String]? {
+    guard let v = c["content"] else { return [] }
+    guard let list = v as? [String] else { return nil }
+    for n in list where n.range(of: "^[a-z0-9]([a-z0-9-]{0,40}[a-z0-9])?$", options: .regularExpression) == nil { return nil }
+    return list
+  }
+
   /// what the New session page chose besides stores, harness and mode: with a core that vouches, the signed settings
   /// must be exactly these (nil = not checked: an older caller). No restore or task from this page; attachments only
   /// the ones this phone uploaded, each with the hash and size of its own bytes, in order.
   struct Settings {
     var label: String; var prompt: String; var model: String; var repos: [String]; var oneShot: Bool; var apiProxy: Bool
     var attachments: [Attachment] = []
+    var content: [String] = []
   }
 
   static func matchesSettings(_ r: Reviewed, _ s: Settings) throws {
@@ -286,6 +297,7 @@ enum Checks {
     guard ((c["oneShot"] as? Bool) ?? false) == s.oneShot else { throw TrustError.mismatch("one-shot") }
     guard ((c["apiProxy"] as? Bool) ?? false) == s.apiProxy else { throw TrustError.mismatch("API proxy") }
     guard attachments(c) == s.attachments else { throw TrustError.mismatch("attachments") }
+    guard content(c) == s.content.sorted() else { throw TrustError.mismatch("content stores") }
     for k in ["restore", "task"] where c[k] != nil { throw TrustError.mismatch(k) }
     guard r.once == nil else { throw TrustError.mismatch("one-time inputs") }
   }

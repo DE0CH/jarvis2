@@ -10,6 +10,7 @@ import { openApprovalFor } from "../lib/tasks";
 import { BadgeList, Button, CheckboxCards, Lbl, Muted, P, RadioCards, Row, Rows, Spinner, Switch, TextArea, TextField } from "../ui/kit";
 import { BtnLabel, useBusy } from "../ui/bits";
 import { Page, closePage, openPage } from "../ui/page";
+import { loadContentStores, type ContentStore } from "../views/Content";
 
 export type TaskEditSpec = { template?: string; id?: string };
 const initial = (f: TaskField, v: unknown): any => {
@@ -36,6 +37,8 @@ export function TaskEdit({ spec }: { spec: TaskEditSpec }) {
   const data = useStore((s) => s.tasks.data), stores = useStore((s) => s.stores), sizes = useStore((s) => s.sizes), models = useStore((s) => s.models);
   const hidden = harnessStoreSet(useStore((s) => s.policy));
   useEffect(() => { loadStores(); }, []);
+  const [contentList, setContentList] = useState<ContentStore[]>([]); // content stores (optionsFrom "content")
+  useEffect(() => { loadContentStores().then(setContentList, () => {}); }, []);
   const inst = spec.id ? data.instances.find((i) => i.id === spec.id) : undefined;
   const t = data.templates.find((x) => x.name === (inst ? inst.template : spec.template));
   const [name, setName] = useState(inst ? inst.name : t ? t.title : "");
@@ -47,10 +50,11 @@ export function TaskEdit({ spec }: { spec: TaskEditSpec }) {
   // options: the template's own, or the core's stores / the sizes / the models
   const optionsOf = (f: TaskField): TaskOption[] =>
     f.optionsFrom === "stores" ? stores.items.filter((s) => s.name !== CORE_STORE && !hidden.has(s.name)).map((s) => ({ value: s.name, label: s.name, sub: [s.sensitive ? "sensitive" : "", s.empty ? "empty" : "", s.unlocked ? "" : "locked"].filter(Boolean).join(" · ") || undefined }))
+    : f.optionsFrom === "content" ? contentList.map((c) => ({ value: c.name, label: c.name, sub: `${c.files} file${c.files === 1 ? "" : "s"}` }))
     : f.optionsFrom === "sizes" ? sizes.map((s) => ({ value: s.id, label: s.id, sub: s.label }))
     : f.optionsFrom === "models" ? models.map((m) => ({ value: m.id, label: m.label || m.id }))
     : (f.options || []).map(norm);
-  const storeField = (f: TaskField) => f.optionsFrom === "stores";
+  const storeField = (f: TaskField) => f.optionsFrom === "stores" || f.optionsFrom === "content";
   const save = () => guard(async () => {
     setErr("");
     if (!name.trim()) { setErr("A name is required."); return; }

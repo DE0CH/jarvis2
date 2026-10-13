@@ -10,6 +10,7 @@ import { hasShell, requestSecure } from "../lib/shell";
 import { Badge, Box, Button, Card, Flex, Heading, Muted, P, Pill, Progress, Row, Rows, TextField } from "../ui/kit";
 import { Cards } from "../ui/cards";
 import { ReposCard } from "./Repos";
+import { PairedAppsCard } from "./PairedApps";
 
 const open = (u: string) => Linking.openURL(u).catch((e) => failed(e, "Could not open the link: "));
 
@@ -175,6 +176,7 @@ export function Settings() {
       <UsageCard />
       <ReposCard />
       <FlyCard />
+      <PairedAppsCard />
       <Card data={{ settings: "setup" }}>
         <Heading size={3} mb={1}>Jarvis 2</Heading>
         <Rows><Row label="Core" id="core-status">{core.up ? <Pill kind="ok">running</Pill> : <Pill kind="bad">not answering</Pill>}</Row></Rows>

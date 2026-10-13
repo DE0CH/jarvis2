@@ -263,10 +263,16 @@ fixes, 34–40 carried over from the old app and still true, 41–43 the web pag
     what it waits to do) and the last five events; Take over / Hand back (a note in the dialog) and Force return, each
     two-phase (the card changes when /api/state shows it). Session cards carry lease pills ("holds iphone", "#2 for
     mac"). No Face ID: moving a lease reaches no secret. The iOS app has neither yet.
+66. **Content stores** (docs/DECISIONS.md 132-133): the web page's Content tab (`views/Content.tsx`, a store's files on its
+    own page `pages/ContentStore.tsx`: upload from a file picker into an optional folder, download, delete, delete the
+    store with its name typed) and a Content stores picker on New session in both apps (checkbox cards; the iPhone's
+    Start refuses a challenge whose signed `content` isn't exactly the picked set, and the review rows list them).
+    Task forms list content stores for `optionsFrom: "content"` fields. Settings → Paired apps (web,
+    `views/PairedApps.tsx`) lists Deyao's paired OpenClaw/Paseo apps with Remove.
 
 ## Unfinished / known gaps
 
 - Free text (prompt, title) reaches the machine signed only with a core that vouches (the held core doesn't).
-- Content stores are not in either app yet; devices and lease pills are in the web page only (65); attachments are images only (no other files).
+- Content stores: the web page has the Content tab and both apps pick them on New session (66); the iPhone app has no Content tab yet. Devices and lease pills are in the web page only (65); attachments are images only (no other files).
 - After a reinstall that loses the Keychain, the phone's keys and device key are new: an already-recovered core refuses a
   second claim; restart the core (a new, empty core) and Recover.

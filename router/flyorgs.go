@@ -9,7 +9,7 @@ package main
 //     (`fly tokens create readonly`);
 //   - org personal: FLY_PERSONAL_READ_TOKEN (part `flypersonal`, infra/fly-personal-read-token.sh): the personal org
 //     token attenuated to read on that org (caveat Organization mask "r"). It reads every machine's config in the org,
-//     env included, and Jarvis 1's session machines carry their stores in their Fly env: the trade-off is DECISIONS 108.
+//     env included, and Jarvis 1's session machines carry their stores in their Fly env: the trade-off is DECISIONS 138.
 // Only the fields below leave this file: env never does.
 
 import (

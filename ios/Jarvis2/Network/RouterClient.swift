@@ -148,6 +148,11 @@ final class RouterClient: NSObject, ASWebAuthenticationPresentationContextProvid
 
   // ---- the core, relayed: every answer checked against the pinned core key ----
   func stores() async throws -> [StoreView] { try await storesDoc().stores }
+
+  /// the content stores (router/content.go): name, file count, bytes
+  struct ContentStoreDTO: Decodable, Identifiable, Hashable { let name: String; let files: Int; let bytes: Int; var id: String { name } }
+  private struct ContentList: Decodable { let stores: [ContentStoreDTO] }
+  func contentStores() async throws -> [ContentStoreDTO] { try await json("GET", "api/content", as: ContentList.self).stores }
   /// the signed list itself (also says whether the core takes unlocks for one session)
   func storesDoc() async throws -> StoresDoc {
     let n = CoreCrypto.nonce()

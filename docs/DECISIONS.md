@@ -786,3 +786,58 @@ tree; Face ID is unavoidable, the approval burden should be small.
 131. **A new core destroys imported lines like any other** (once paused, archived in Previous; Restore is a new line).
      Imports made before a pending core release are destroyed at that release; the import manifest stays on the router's
      volume (`jarvis1-imports/<id>/`) and Jarvis 1's records are only read, so an import can be asked for again.
+
+## Content stores, paired apps, Browserbase and Fly personal leave Jarvis 1, 2026-10-13
+
+Deyao is retiring Jarvis 1 (2026-10-13); these were the last pieces Jarvis 2 took from it besides the login, search, the
+iCloud index and leases (decided while Deyao was away; the safe, reversible default each time).
+
+132. **Content stores: the pick is signed, the router serves the files.** A session's content stores are a field of its
+     config (`content`, `SessionConfig` on both sides and the shell's `Checks`), so the phone approves them with the line
+     and an unattended resume keeps exactly them. The machine holds no Storage Box credential: content-sync's calls go
+     through its local proxy to `/m/api/sessions/:id/content…`, and the router reads and writes Jarvis 1's
+     `claude-records/.content/<name>/` folders in place with its own credentials, only for the stores the calling
+     machine's cert names. Each file a machine downloads carries the core's attestation (input `content`, origin `router`)
+     and the proxy refuses one without it, so every content file a machine took is in the input log. Change: per-store
+     Storage Box sub-accounts in key stores would let the machine fetch directly (DESIGN (d)), at the cost of a store per
+     content store and the Hetzner admin key for each one made.
+133. **The bytes are the router's word.** A content store is shared, mutable data that other sessions and Deyao write, so
+     nothing can sign its contents ahead of time; it is treated like the web a session reads: kept in `~/content/<name>/`
+     (never the cwd, so no CLAUDE.md, hooks or skills load from it; nothing runs it), recorded in the input log. Pushes are
+     the session's own act and need no voucher. A store deleted since the line began reads as empty. Change: sign each
+     push with the line's key and have the reader check it, if a store should only ever hold what sessions wrote.
+134. **Jarvis 1's task templates: the content ones are ported, nothing is scheduled.** `encrypt-to-content`,
+     `paraphrase-to-content` and `proton-send` read and write content stores through the local API (`content.py`) and take
+     `AES_KEY` from a key store picked in a `optionsFrom: "stores"` field (Jarvis 1's `secretKeys` has no Jarvis 2 form: the
+     whole picked store reaches the task, as every store does). `new-session` is not ported: a scheduled new line would
+     need the phone each day; a session proposes one instead (`jarvis2-request new-session`). Jarvis 1's five instances
+     and three schedules (all disabled since 2026-10-04) are not recreated: each instance is a new line approved on the
+     phone, and no Jarvis 2 store holds the `AES_KEY` they use. Change: Deyao makes them from the Tasks tab when he wants
+     them.
+135. **Paired apps: Jarvis 2 mints their tokens itself.** Jarvis 1's design (its `/api/remotes` appending Jarvis 2's list)
+     dies with Jarvis 1, so the router answers pairing as Jarvis 1 did: one Access service token per app, minted with a
+     Cloudflare token that can manage Access service tokens and nothing else (`jarvis2-device-tokens`, router SOPS part
+     `devices`; it can't change an Access app, policy, DNS or Worker). The Access app "Jarvis 2 devices" covers only
+     `/api/remotes` and `/api/sessions/*/start` and admits any service token of the account, and the router admits a token
+     only when its client id is a paired device's; pairing itself needs Deyao's email login. Trade-off: that Cloudflare
+     token can also delete or mint any service token of the account (a broken router could revoke the setup or tunnel
+     tokens, or mint one that passes Access wherever any service token passes: Jarvis 1's apps, the session hosts
+     `<id>-s.deyaochen.com`); the router could already read the session hosts' secrets through the `remote` holder.
+     `JARVIS2_REMOTES_CLIENT_ID` / `ACCESS_REMOTES_AUD` are gone. Change: one shared device token handed to every app
+     (no Cloudflare token on the box, no per-device revoke).
+136. **Start from a paired app is a resume with no phone step** (`POST /api/sessions/:id/start`, 202): the same image and
+     stores (approve_by_dead_machine), as the app's own Resume without a prompt. A resume that needs the phone (a newer
+     image, a store added) is not reachable from these apps.
+137. **The Browserbase DM moves as it is** (`router/bbbudget.go`): the same re-pricing, USD 10 cap and USD 8 warn line
+     (router env), DM only. The month's flags are the router's, so until Jarvis 1 is frozen both Jarvises may send the
+     same DM once each.
+138. **Org personal is read with a read-only token of its own** (`FLY_PERSONAL_READ_TOKEN`, part `flypersonal`): the
+     personal org token attenuated offline to the caveat Organization `{id, mask "r"}` (`infra/fly-personal-read-token.sh`;
+     a check that it lists apps and can't create a machine). Fly has no caveat narrower than read for machine listings,
+     and a read returns each machine's whole config: the router could read the Fly env of Jarvis 1's session machines
+     (their stores) and of KAMYEE's Jarvis 3 sessions in that org. Unavoidable for listing them; today both apps have no
+     machines, and Jarvis 1's go when it is frozen. Only the fields `router/flyorgs.go` copies leave the router. Change:
+     an Apps caveat leaving out `de0ch-claude-sessions` (Jarvis 1's machines then don't show).
+139. **The apps' server URL changes at retirement, not now.** Both forks name jarvis.deyaochen.com in one constant; moving
+     them now would cut Deyao's apps off Jarvis 1's sessions while he still uses it. At the freeze: change the constant,
+     ship each through its TestFlight workflow, pair each app once (RUNBOOK "Paired apps").

@@ -16,6 +16,7 @@ import { Inbox } from "../views/Inbox";
 import { Records } from "../views/Records";
 import { Search } from "../views/Search";
 import { Stores } from "../views/Stores";
+import { Content } from "../views/Content";
 import { Settings } from "../views/Settings";
 import { Tasks } from "../views/Tasks";
 import { TaskSchedules } from "../views/TaskSchedules";
@@ -66,6 +67,7 @@ export default function Dashboard() {
             {tab === "inbox" && <Inbox />}
             {tab === "search" && <Search />}
             {tab === "stores" && <Stores />}
+            {tab === "content" && <Content />}
             {tab === "records" && <Records />}
             {tab === "tasks" && <Tasks />}
             {tab === "schedules" && <TaskSchedules />}

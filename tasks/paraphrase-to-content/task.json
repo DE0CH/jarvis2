@@ -1,0 +1,77 @@
+{
+  "title": "Paraphrase to a content store",
+  "description": "Runs the text through the DE0CH/paraphrase Hugging Face Space (DIPPER 11B or QCPG), encrypts the result with AES_KEY from the store you pick (AES-256-GCM) and saves it as a file in a content store.",
+  "run": "run.py",
+  "stores": [
+    "default"
+  ],
+  "timeoutSeconds": 1800,
+  "size": "small",
+  "fields": [
+    {
+      "name": "filename",
+      "label": "File name",
+      "type": "text",
+      "required": true,
+      "placeholder": "e.g. A.txt",
+      "help": "Path inside the store; an existing file with that name is replaced."
+    },
+    {
+      "name": "text",
+      "label": "Text",
+      "type": "textarea",
+      "required": true
+    },
+    {
+      "name": "store",
+      "label": "Content store",
+      "type": "select",
+      "optionsFrom": "content",
+      "required": true
+    },
+    {
+      "name": "keystore",
+      "label": "Key store",
+      "type": "select",
+      "optionsFrom": "stores",
+      "required": true,
+      "help": "The store holding AES_KEY (it joins the task's stores); the run fails if it has none."
+    },
+    {
+      "name": "model",
+      "label": "Model",
+      "type": "select",
+      "default": "dipper",
+      "options": [
+        {
+          "value": "dipper",
+          "label": "DIPPER (11B, paragraphs)",
+          "sub": "Diversity snaps to steps of 20."
+        },
+        {
+          "value": "qcpg",
+          "label": "QCPG (sentences)",
+          "sub": "Syntactic diversity capped at 80."
+        }
+      ]
+    },
+    {
+      "name": "lexical",
+      "label": "Lexical diversity (0–100)",
+      "type": "number",
+      "default": 90
+    },
+    {
+      "name": "structure",
+      "label": "Order / syntactic diversity (0–100)",
+      "type": "number",
+      "default": 90
+    },
+    {
+      "name": "semantic",
+      "label": "Semantic similarity, QCPG only (0–95)",
+      "type": "number",
+      "default": 80
+    }
+  ]
+}

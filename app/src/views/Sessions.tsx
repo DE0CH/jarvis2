@@ -327,6 +327,7 @@ export function Sessions() {
                 </Flex>}</Aligned>
                 <Rows id={"session-rows-" + m.id}>
                   <Row label="Stores"><BadgeList items={own} /></Row>
+                  {!!m.content?.length && <Row label="Content"><BadgeList items={m.content} /></Row>}
                   <Row label="Harness">{HARNESS[m.harness || ""] || m.harness || "—"}</Row>
                   <Row label="Model">{modelName || "—"}</Row>
                   <Row label="Machine">{[REGION[m.region || ""] || m.region, m.guest, m.state === "started" && m.memory && m.memory.totalMb > 0 ? `${gb(m.memory.availMb)} of ${gb(m.memory.totalMb)} GB free` : ""].filter(Boolean).join(" · ") || "—"}</Row>

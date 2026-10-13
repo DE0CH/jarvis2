@@ -201,9 +201,8 @@ on the box with the age key the box got in user-data. Four Secrets, each rewritt
 - `infra/router-secrets.py KEY[=SRC]…` → `k8s/secrets/router.enc.yaml`:
   `LOBSTER_TOKEN STORAGEBOX_HOST STORAGEBOX_USER STORAGEBOX_PASSWORD FLY_READ_TOKEN=file:~/.jarvis2/fly-read.tok
   JARVIS1_CREDENTIALS_ID=file:… JARVIS1_CREDENTIALS_SECRET=file:… JARVIS1_SERVICES_ID=file:… JARVIS1_SERVICES_SECRET=file:…
-  JARVIS2_TUNNEL_KEY=file:… JARVIS2_REMOTES_CLIENT_ID=…` (`JARVIS2_TUNNEL_KEY`: the tunnel proof key, the same value as the cf-tunnel Worker's
-  secret `JARVIS2_TUNNEL_KEY` — without it no OpenCode/OpenClaw web UI; `JARVIS2_REMOTES_CLIENT_ID`: optional, the
-  client id of the service token that may read `/api/remotes`)
+  JARVIS2_TUNNEL_KEY=file:…` (`JARVIS2_TUNNEL_KEY`: the tunnel proof key, the same value as the cf-tunnel Worker's
+  secret `JARVIS2_TUNNEL_KEY` — without it no OpenCode/OpenClaw web UI)
   (`JARVIS1_CREDENTIALS_ID/SECRET` = `jarvis2-claude-credentials`, used only while the Claude login is in mode `follow`;
   (`jarvis2-claude-credentials` and `jarvis2-services` are Jarvis 1 Access service tokens that claude-env's cf-tunnel
   Worker confines to their own paths, `CONFINED_TOKENS`) (the read-only Fly token: `infra/fly-read-token.sh`).
@@ -221,9 +220,18 @@ on the box with the age key the box got in user-data. Four Secrets, each rewritt
 
 - `infra/router-secrets.py --part flyorgs FLY_ORG_READ_TOKENS=file:…` → `k8s/secrets/router-flyorgs.enc.yaml`: the
   Machines view's other orgs, JSON `{"jarvis2-370": "<token>", "kamyee": "<token>"}`, each `fly tokens create readonly -o <org>`
-  (named "Jarvis 2 Machines tab (read-only)"; revoke with `fly tokens list -o <org>` + `fly tokens revoke`). Never one for
-  org personal: a read token returns Jarvis 1's session machines' env, their secrets included (Jarvis 1 relays a
-  sanitized list instead).
+  (named "Jarvis 2 Machines tab (read-only)"; revoke with `fly tokens list -o <org>` + `fly tokens revoke`).
+- `infra/router-secrets.py --part flypersonal FLY_PERSONAL_READ_TOKEN=file:…` → `k8s/secrets/router-flypersonal.enc.yaml`:
+  org personal for the Machines view. `FLY_PERSONAL_ORG_TOKEN=<an org token of personal> infra/fly-personal-read-token.sh OUT`
+  attenuates it offline to Organization read (it checks the result lists apps and can't create a machine). It reads every
+  machine's config in personal, env included (DECISIONS 138); it dies only with the token it was made from.
+- `infra/router-secrets.py --part browserbase BROWSERBASE_API_KEY` → `k8s/secrets/router-browserbase.enc.yaml`: the
+  Browserbase spend DM (`router/bbbudget.go`; cap and warn line are `BROWSERBASE_BUDGET_USD` / `_WARN_USD` in
+  `k8s/apps/router.yaml`).
+- `infra/router-secrets.py --part devices CF_DEVICE_TOKENS_API=file:…` → `k8s/secrets/router-devices.enc.yaml`: the
+  Cloudflare token `jarvis2-device-tokens` (Access: Service Tokens read + write on the account, nothing else; minted with
+  claude-env's `cloudflare-dash` skill, `cf_token.js jarvis2-device-tokens OUT a1c0fec57cf94af79479a6d827fa518c
+  91f7ce32fa614d73b7e1fc8f0e78582b`), with which the router mints and deletes the paired apps' tokens.
 
 The box's services have their own parts (Secrets in jarvis2-edge):
 
@@ -351,6 +359,27 @@ check always exits 2 with "not found" is usually missing a secret, which a check
 watch runner is the Deployment `watch` in `jarvis2-edge` (`services/watch`, pinned by the `services` workflow); it
 holds no state, so a restart only delays the due checks. When it is down every check counts as "not yet" (the
 router logs `the watch runner is unreachable`) and nothing is delivered until it is back.
+
+## Content stores
+
+Jarvis 1's folders `claude-records/.content/<name>/` on the Storage Box, used in place (`router/content.go`, API "Content
+stores"). Deyao manages them in the web page's Content tab; a session picks them in New session (web or the iPhone app)
+and gets each in `~/content/<name>/` at every start (`content-sync pull` in the base image's entrypoint);
+`content-sync status` / `content-sync push <name>` from inside the session. Nothing on the machine holds Storage Box
+credentials. A task picks them with a field `optionsFrom: "content"` (`tasks/encrypt-to-content`, `paraphrase-to-content`,
+`proton-send`; their key store is a field `optionsFrom: "stores"` whose store holds `AES_KEY`).
+
+## Paired apps (OpenClaw, Paseo)
+
+Deyao's OpenClaw and Paseo apps pair with `GET /api/devices/pair` (his Access login) and get their own Access service token;
+Settings → Paired apps (web) lists and removes them. The Access app "Jarvis 2 devices" (`infra/cloudflare.py --devices`;
+paths `/api/remotes`, `/api/sessions/*/start`; audience `ACCESS_DEVICES_AUD` in `k8s/apps/router.yaml`) lets any service
+token through to those two paths and the router admits only paired ones. Check from outside: a service token that isn't
+a paired app gets the router's 403 `{"error":"Access login required"}` on `/api/remotes` (not Cloudflare's login page).
+The apps call `JarvisConfig.baseURL` (DE0CH/openclaw `apps/ios/Sources/Jarvis/JarvisModels.swift`) and `jarvis.url`
+(DE0CH/paseo `packages/app/app.config.js`); while they name jarvis.deyaochen.com they pair with Jarvis 1. Moving them
+is that one constant per fork and a TestFlight build (claude-env skills `openclaw-ios`, `paseo-ios`), then one pairing
+per app.
 
 ## Rebuilding the box
 

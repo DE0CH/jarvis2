@@ -31,6 +31,8 @@ struct NewSessionView: View {
   @State private var busy: String?
   @State private var failure: String?
   @State private var images: [PickedImage] = []
+  @State private var contentStores: [RouterClient.ContentStoreDTO] = []
+  @State private var content: Set<String> = []
 
   static let defaultRepo = "DE0CH/claude-env"
   private var hidden: Set<String> { model.harnessHidden }
@@ -51,6 +53,7 @@ struct NewSessionView: View {
       harnessStoresSection
       harnessSection
       reposSection
+      contentSection
       modeSection
       optionsSection
       startSection
@@ -155,6 +158,19 @@ struct NewSessionView: View {
     }
   }
 
+  /// content stores (router/content.go): each pulled into ~/content/<name>/ at every start; signed with the session
+  @ViewBuilder private var contentSection: some View {
+    if !contentStores.isEmpty {
+      Section {
+        ForEach(contentStores) { c in
+          CheckRow(on: content.contains(c.name), id: "ns-content-\(c.name)", action: { if content.contains(c.name) { content.remove(c.name) } else { content.insert(c.name) } }) {
+            VStack(alignment: .leading) { Text(c.name); Text("\(c.files) file\(c.files == 1 ? "" : "s") · ~/content/\(c.name)").font(.footnote).foregroundStyle(Color.secondary) }
+          }
+        }
+      } header: { Text("Content stores") }
+    }
+  }
+
   @ViewBuilder private var modeSection: some View {
     Section("Permission mode") {
       CheckRow(on: perm == "auto", id: "secure-mode-auto", action: { perm = "auto" }) {
@@ -235,6 +251,7 @@ struct NewSessionView: View {
       loaded = true
     } catch { if !loaded { loadError = errText(error) } }
     if model.models.isEmpty { await model.loadLists() }
+    contentStores = (try? await RouterClient.shared.contentStores()) ?? []
     pickModel()
     defaultRepo()
   }
@@ -251,6 +268,7 @@ struct NewSessionView: View {
       var body: [String: Any] = ["requestId": rid, "stores": want, "harness": harness, "permissionMode": perm, "label": title,
                                  "prompt": trimmedPrompt, "model": modelId, "size": size, "oneShot": oneShot,
                                  "autoPause": !oneShot && autoPause, "repos": chosen.map(\.url).joined(separator: ","), "apiProxy": apiProxy]
+      if !content.isEmpty { body["content"] = content.sorted() }
       if !attached.isEmpty { body["attachments"] = ["uploadId": rid, "files": attached.map { ["name": $0.name] }] }
       busy = "Requesting…"
       try await RouterClient.shared.call("POST", "api/sessions", body)
@@ -277,7 +295,7 @@ struct NewSessionView: View {
                                        sensitive: signedList.stores.filter(\.sensitive).map(\.name))
       // …and, with a core that vouches, exactly these settings: the cert carries them to the machine (DESIGN "Inputs")
       try Checks.matchesSettings(r, .init(label: title, prompt: trimmedPrompt, model: modelId, repos: chosen.map(\.url), oneShot: oneShot, apiProxy: apiProxy,
-                                              attachments: attached))
+                                              attachments: attached, content: content.sorted()))
       // the stores the challenge carries that are locked now (fresh from the core): opened under the same Face ID
       let now = try await RouterClient.shared.stores()
       let locked = r.stores.filter { n in now.contains { $0.name == n && !$0.unlocked && !$0.empty } }

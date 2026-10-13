@@ -11,6 +11,7 @@ import { useStore, loadStores, refresh, settle, toast, failed } from "../lib/sto
 import { BadgeList, Button, CheckboxCards, Flex, Lbl, Muted, Pill, RadioCards, Row, Rows, Segmented, Spinner, Text, TextArea, TextField } from "../ui/kit";
 import { BtnLabel } from "../ui/bits";
 import { Page, useDone } from "../ui/page";
+import { loadContentStores, type ContentStore } from "../views/Content";
 
 // what the router's safeName makes of a file name (router/uploads.go): a basename, whitespace → "_"
 const safeName = (raw: string) => {
@@ -91,6 +92,9 @@ export function NewSession() {
     const r = repoList.find((x) => x.repo.toLowerCase() === "de0ch/claude-env");
     if (r) setRepos((cur) => (cur.includes(r.name) ? cur : [...cur, r.name]));
   }, [repoList.length]);
+  // content stores (router/content.go): pulled into ~/content/<name>/ at every start, signed with the session
+  const [contentList, setContentList] = useState<ContentStore[] | null>(null), [content, setContent] = useState<string[]>([]);
+  useEffect(() => { loadContentStores().then(setContentList, () => setContentList([])); }, []);
   const [busy, setBusy] = useState<string | null>(null);
   const [images, setImages] = useState<Picked[]>([]);
   useEffect(() => () => images.forEach((i) => URL.revokeObjectURL(i.preview)), []); // eslint-disable-line react-hooks/exhaustive-deps
@@ -133,7 +137,7 @@ export function NewSession() {
     const chosen = repoList.filter((r) => repos.includes(r.name));
     const withRepos = [...new Set([...picked, ...chosen.map((r) => r.store).filter((n) => plain.some((s) => s.name === n))])];
     const body = { requestId: requestId.current, label: label.trim(), prompt: prompt.trim(), model, permissionMode: perm, size, harness, stores: withRepos, oneShot, autoPause: !oneShot && autoPause.includes("on"),
-      repos: chosen.map((r) => r.url).join(","), apiProxy: apiProxy.includes("on") };
+      repos: chosen.map((r) => r.url).join(","), apiProxy: apiProxy.includes("on"), ...(content.length ? { content } : {}) };
     try {
       const attachments = await upload();
       setBusy("Starting…");
@@ -173,6 +177,10 @@ export function NewSession() {
       {!!repoList.length && !repos.length && <Muted mt={1}>No repo: an empty workspace.</Muted>}
       {repoList.some((r) => repos.includes(r.name) && !plain.some((s) => s.name === r.store)) && <Rows mt={2} id="ns-repo-sensitive">
         <Row label="Pick in the app"><BadgeList color="amber" items={repoList.filter((r) => repos.includes(r.name) && !plain.some((s) => s.name === r.store)).map((r) => r.store)} /></Row></Rows>}
+      <Lbl>Content stores</Lbl>
+      {contentList === null ? <Flex gap={2} align="center"><Spinner /><Muted>Loading content stores…</Muted></Flex>
+        : contentList.length ? <CheckboxCards id="ns-content" value={content} onChange={setContent} options={contentList.map((c) => ({ value: c.name, title: c.name, sub: `${c.files} file${c.files === 1 ? "" : "s"} · ~/content/${c.name}` }))} />
+        : <Muted>No content stores (the Content tab).</Muted>}
       <Lbl>Permission mode</Lbl>
       <RadioCards id="ns-perm" value={perm} onChange={setPerm} options={[
         { value: "auto", title: "Auto", sub: "Auto-approve safe actions; the permission classifier gates the rest." },
