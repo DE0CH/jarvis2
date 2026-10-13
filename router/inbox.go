@@ -650,7 +650,7 @@ func (r *Router) registerInbox(app appRoute, m machineRoute, public publicRoute)
 		out := []map[string]any{}
 		r.st.Do(func(d *persisted) {
 			for _, s := range d.Sessions {
-				v := map[string]any{"id": s.ID, "machineId": s.MachineID, "state": s.State, "title": sessionTitle(*s)}
+				v := map[string]any{"id": s.ID, "machineId": s.MachineID, "state": s.State, "title": sessionTitle(*s), "image": s.Image, "stores": s.Stores}
 				// the autopilot's view (no secrets): what the machine last reported and the stall watchdog's clock
 				if l := s.Live; l != nil {
 					v["lastReport"], v["nudgeAt"], v["nudgeError"], v["needsGrant"] = l.LastReport, l.NudgeAt, l.NudgeError, l.NeedsGrant

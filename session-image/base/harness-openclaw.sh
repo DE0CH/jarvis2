@@ -189,9 +189,6 @@ send_first_prompt &
 inbox_loop &
 one_shot_watch &
 transcript_loop &
-if [ -x /usr/local/bin/sync-live-transcripts ]; then
-  nohup /usr/local/bin/sync-live-transcripts >> "$STATE/live-sync.log" 2>&1 &
-fi
 # An in-place permission-mode switch (set-permission-mode kills the tmux session): restart the gateway
 # (run_gateway rewrites the config before it starts again) and bring the pane back; then keep the machine
 # alive for as long as Jarvis wants it.

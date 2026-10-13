@@ -21,6 +21,7 @@ type Config struct {
 	SessionImage    string            // the image new sessions get (a tag; resume pins what Fly reported)
 	SessionImageSig string            // CI's signature over it (images.yml; keys/ci.pub)
 	ImageSigs       map[string]string // every earlier CI-pinned session image → its signature (SESSION_IMAGE_SIGS_FILE)
+	ImageOrder      []string          // the same images in pin order (the file's line order)
 	Region          string            // Fly region for session machines
 	MachineURL      string            // how machines reach the router (JARVIS2_URL on the machine): its Fly private-network address
 	AccessTeam      string            // e.g. de0ch.cloudflareaccess.com
@@ -48,6 +49,7 @@ func main() {
 		SessionImage:    env("SESSION_IMAGE", "ghcr.io/de0ch/jarvis2-session:latest"),
 		SessionImageSig: os.Getenv("SESSION_IMAGE_SIG"),
 		ImageSigs:       loadImageSigs(os.Getenv("SESSION_IMAGE_SIGS_FILE")),
+		ImageOrder:      loadImageOrder(os.Getenv("SESSION_IMAGE_SIGS_FILE")),
 		Region:          env("FLY_REGION", "lhr"),
 		MachineURL:      os.Getenv("MACHINE_URL"),
 		AccessTeam:      env("ACCESS_TEAM", "de0ch.cloudflareaccess.com"),

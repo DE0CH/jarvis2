@@ -61,7 +61,7 @@ type flyAppView struct {
 
 type flyOrgView struct {
 	Org       string       `json:"org"`
-	Via       string       `json:"via"` // "fly" (read directly) or "Jarvis 1" (its relay)
+	Via       string       `json:"via"` // "fly": read directly with a read-only token
 	Error     string       `json:"error"`
 	CheckedAt string       `json:"checkedAt"`
 	Apps      []flyAppView `json:"apps"`

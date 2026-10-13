@@ -396,28 +396,6 @@ func TestWriteCredsCmd(t *testing.T) {
 
 func itoa(n int64) string { return strconv.FormatInt(n, 10) }
 
-func TestFetchJarvis1Pair(t *testing.T) {
-	var gotID, gotUA string
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-		gotID, gotUA = req.Header.Get("CF-Access-Client-Id"), req.Header.Get("User-Agent")
-		w.Write([]byte(`{"credentials":"{\"claudeAiOauth\":{\"expiresAt\":42}}","account":"x"}`))
-	}))
-	defer srv.Close()
-	old := loginURL
-	loginURL = srv.URL
-	defer func() { loginURL = old }()
-	t.Setenv("JARVIS1_CREDENTIALS_ID", "")
-	if _, err := fetchJarvis1Pair(); !errorsIsNoLogin(err) {
-		t.Fatal("expected no-login error", err)
-	}
-	t.Setenv("JARVIS1_CREDENTIALS_ID", "id1")
-	t.Setenv("JARVIS1_CREDENTIALS_SECRET", "sec")
-	p, err := fetchJarvis1Pair()
-	if err != nil || p.ExpiresAt != 42 || gotID != "id1" || gotUA == "" {
-		t.Fatalf("%+v %v %q %q", p, err, gotID, gotUA)
-	}
-}
-
 func TestToggleRoutesAndView(t *testing.T) {
 	st, err := LoadState(t.TempDir())
 	if err != nil {

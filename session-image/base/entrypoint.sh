@@ -17,17 +17,9 @@
 #   SESSION_ONE_SHOT        "1" = one-shot: claude exits once SESSION_PROMPT is done and Jarvis
 #                           archives + destroys the machine (see one_shot_watch in the supervisor)
 #   SESSION_MODEL           model id (default claude-opus-5-5, see session-supervisor.sh)
-# Fly itself sets FLY_MACHINE_ID. If the environment carries KUBE_SERVER + KUBE_TOKEN (+ KUBE_CA),
-# a kubeconfig is written so the session can drive the controller cluster with kubectl.
-#
-# Boots are NOT all fresh: a paused session has NO machine — before releasing it Jarvis
-# snapshots the transcript(s), ~/.claude.json, ~/workspace and ~/artifacts to
-# claude-records/.paused/<session id>/ on the Storage Box (jarvis/lib/archive.js), and Start
-# creates a new machine with SESSION_ID = that id; this script restores the snapshot so
-# session-supervisor.sh can `claude --resume` the same conversation with the working tree exactly
-# as it was (a first machine has no SESSION_ID: its FLY_MACHINE_ID is the session id). The same
-# path restores a DESTROYED session: Jarvis seeds such a snapshot for a brand-new machine from
-# the session's archive before its first start (transcripts + artifacts, no workspace/claude.json).
+# Fly itself sets FLY_MACHINE_ID. jarvis2-machine runs first (machine/main.go): it restores the predecessor's signed
+# snapshot (transcripts placed under the project, ~/.claude.json, ~/workspace, ~/artifacts), pulls the secrets and
+# sets the env, then execs this script; session-supervisor.sh then `claude --resume`s the newest transcript.
 set -uo pipefail
 HOME=/home/claude; cd "$HOME"
 # ~/artifacts: anything the session puts (or symlinks) here is archived to the Storage Box by
@@ -37,7 +29,6 @@ mkdir -p "$HOME/.claude" "$HOME/workspace" "$HOME/artifacts"
 # --- environment secrets ---------------------------------------------------
 # Written shell-quoted so values with spaces/quotes/newlines (Fly tokens, PEM certs) survive
 # `. ~/.secrets`. The old KEY=VALUE format silently dropped any value containing a space.
-# First, because the pause-snapshot restore below needs the STORAGEBOX_* creds.
 if [ -n "${SESSION_SECRETS_JSON:-}" ]; then
   python3 - <<'PY'
 import json,os,shlex
@@ -64,35 +55,12 @@ if [ -n "${SESSION_SECRET_CONFLICTS:-}" ]; then
   echo "[entrypoint] WARN secret-store key conflicts across the selected stores (value chosen at random): see $CONFLICTS_FILE"
 fi
 
-# --- restore the pause snapshot (if this machine was paused) -----------------
-# claude-records/.paused/<session id>/ holds what Jarvis snapshotted at pause time (or seeded
-# for a Previous-restore): ~/.claude.json (fetched before the machineID merge below, so the same
-# Remote Control identity is kept), the transcripts (staged in $RESTORE_DIR, placed under the project
-# slug once the working dir is known, further down), ~/workspace, ~/artifacts, the harness state.
-# /usr/local/bin/restore-snapshot does the fetching. Two ways to run it:
-#   - the session's own secrets carry the Storage Box creds: run it here, now;
-#   - they do not (a trimmed store; SESSION_RESTORE_VIA_JARVIS=1 from Jarvis): the JARVIS
-#     runs it through Fly exec with the creds as exec-time environment only, right after the start —
-#     wait for its ~/.restore-done marker (up to 5 min; a fresh machine gets "none" within seconds).
-# Any failure => fresh session.
-RESTORE_DIR="$HOME/.paused-restore"; rm -rf "$RESTORE_DIR"; rm -f "$HOME/.restore-done"
-if [ -n "${STORAGEBOX_HOST:-}" ] && [ -n "${STORAGEBOX_USER:-}" ] && [ -n "${STORAGEBOX_PASSWORD:-}" ]; then
-  /usr/local/bin/restore-snapshot || echo "[entrypoint] WARN restore-snapshot exited $?"
-elif [ "${SESSION_RESTORE_VIA_JARVIS:-}" = 1 ]; then
-  echo "[entrypoint] no Storage Box creds in this session; waiting for Jarvis's restore step"
-  for _ in $(seq 1 150); do [ -e "$HOME/.restore-done" ] && break; sleep 2; done
-  if [ -e "$HOME/.restore-done" ]; then echo "[entrypoint] jarvis restore step: $(cat "$HOME/.restore-done")"
-  else echo "[entrypoint] WARN Jarvis's restore step never reported; continuing as a fresh session"; fi
-else
-  echo "[entrypoint] no Storage Box creds and no jarvis restore flagged; fresh session"
-fi
-
 # --- Claude auth -----------------------------------------------------------
 if [ -n "${CLAUDE_CREDENTIALS:-}" ]; then
   printf '%s' "$CLAUDE_CREDENTIALS" > "$HOME/.claude/.credentials.json"
   chmod 600 "$HOME/.claude/.credentials.json"
 fi
-# machineID: reuse the one in ~/.claude.json when it was restored from a pause snapshot (same
+# machineID: reuse the one in ~/.claude.json when it was restored from the predecessor's snapshot (same
 # Remote Control identity in the Claude app instead of a new target); mint a fresh one on a
 # brand-new machine. Existing ~/.claude.json fields (projects trust, etc.) are preserved, then
 # the account + fixed flags are merged on top.
@@ -111,36 +79,11 @@ existing.update({"machineID":mid,"hasCompletedOnboarding":True,"hasUsedRemoteCon
 json.dump(existing,open(p,"w"))
 PY
 
-# --- kubeconfig for the controller cluster ----------------------------------
-if [ -n "${KUBE_SERVER:-}" ] && [ -n "${KUBE_TOKEN:-}" ]; then
-  mkdir -p "$HOME/.kube"; umask 077
-  if [ -n "${KUBE_CA:-}" ]; then printf '%s\n' "$KUBE_CA" > "$HOME/.kube/ca.crt"; CA_LINE="    certificate-authority: $HOME/.kube/ca.crt"
-  else CA_LINE="    insecure-skip-tls-verify: true"; fi
-  cat > "$HOME/.kube/config" <<EOF
-apiVersion: v1
-kind: Config
-clusters:
-- name: controller
-  cluster:
-    server: $KUBE_SERVER
-$CA_LINE
-users:
-- name: claude-admin
-  user:
-    token: $KUBE_TOKEN
-contexts:
-- name: controller
-  context: {cluster: controller, user: claude-admin}
-current-context: controller
-EOF
-  umask 022
-fi
-
 # --- repos -----------------------------------------------------------------
 # Repos come from JARVIS as git bundles (Jarvis fetches them with its own GitHub token, so a
 # session needs none unless it wants to push):
 #   - a hand-off session (no Jarvis access): Jarvis's in-machine step has already put them in
-#     ~/.jarvis-delivery/repos/<name>.bundle (before ~/.restore-done, which the wait above covers);
+#     ~/.jarvis-delivery/repos/<name>.bundle;
 #   - any other session: GET $JARVIS_URL/api/sessions/<id>/repos/<name>/bundle with its session token.
 # origin then points at the real URL: pushing works when the session's store has a GITHUB_TOKEN.
 DELIVERY="$HOME/.jarvis-delivery"
@@ -197,19 +140,6 @@ mapfile -t DIRS < <(find "$HOME/workspace" -mindepth 1 -maxdepth 1 -type d 2>/de
 # its ancestors, so generate a workspace-level layer that links to every repo's own
 # (see workspace-layer.sh). Regenerated on every boot, including resumes.
 [ "$WD" = "$HOME/workspace" ] && [ "${#DIRS[@]}" -gt 1 ] && /usr/local/bin/workspace-layer.sh "$WD"
-
-# --- place restored transcripts where claude looks for them ------------------
-# ~/.claude/projects/<cwd slug>/<id>.jsonl — session-supervisor.sh then starts
-# `claude --resume <newest id>`. The first-prompt marker is set so the supervisor does not type
-# SESSION_PROMPT into the resumed conversation again.
-if compgen -G "$RESTORE_DIR/*.jsonl" >/dev/null 2>&1; then
-  PDIR="$HOME/.claude/projects/$(printf '%s' "$WD" | sed 's#[^A-Za-z0-9]#-#g')"
-  mkdir -p "$PDIR"
-  mv "$RESTORE_DIR"/*.jsonl "$PDIR"/
-  touch "$HOME/.claude/.first-prompt-sent"
-  echo "[entrypoint] resume ready: $(ls "$PDIR"/*.jsonl | wc -l) transcript(s) in $PDIR"
-fi
-rm -rf "$RESTORE_DIR"
 
 # --- per-session start hooks --------------------------------------------------
 # Background servers a session started (a tunnel page, a watcher) die when Jarvis pauses the machine.

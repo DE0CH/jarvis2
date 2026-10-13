@@ -130,7 +130,7 @@ PY
 fill_stores() {
   local rnd; rnd=$(python3 -c "import secrets;print(secrets.token_hex(6))")
   local S="python3 $ROOT/infra/setup.py"
-  RH_PLAIN="plain-$rnd" RH_SECRET="secret-$rnd" JARVIS1_CREDENTIALS_ID="claude-id-$rnd" JARVIS1_CREDENTIALS_SECRET="claude-secret-$rnd" \
+  RH_PLAIN="plain-$rnd" RH_SECRET="secret-$rnd" CLAUDE_ACCOUNT_UUID="claude-acct-$rnd" \
   CF_ACCESS_CLIENT_ID="tunnel-id-$rnd" CF_ACCESS_CLIENT_SECRET="tunnel-secret-$rnd" bash -c "
     set -e
     export JARVIS2_NOT_SENSITIVE=rh-plain
@@ -138,7 +138,7 @@ fill_stores() {
     $S create rh-plain
     $S write rh-plain RH_PLAIN
     $S write rh-secret RH_SECRET
-    $S write claude JARVIS1_CREDENTIALS_ID JARVIS1_CREDENTIALS_SECRET
+    $S write claude CLAUDE_ACCOUNT_UUID
     $S write tunnel CF_ACCESS_CLIENT_ID CF_ACCESS_CLIENT_SECRET
     $S write github-deploy-keys GITHUB_DEPLOY_KEYS_TOKEN=file:$W/deploy-keys.tok
     $S backup-core $W/fly.tok

@@ -120,6 +120,8 @@ func main() {
 		log.Fatal(err)
 	}
 	master := parseKey(pemb)
+	serveStandIns()        // nojarvis1.go: search, the watch runner and the Storage Box, stood in for
+	go blackholeMachines() // nojarvis1.go: Jarvis 1 out of every session machine's reach
 	sk, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	ak, _ := ecdh.P256().GenerateKey(rand.Reader)
 	p := &phone{sk, ak}
@@ -233,6 +235,10 @@ func main() {
 	// its settings from the router as before the input guard (machine/legacy.go); the run ends after that check
 	held := os.Getenv("E2E_HELD_CORE") == "1"
 	newBody := map[string]any{"label": "e2e test", "stores": []string{"e2e"}, "size": "small", "harness": "claude"}
+	if !held && os.Getenv("E2E_ONLY") != "drain" {
+		contentSetupStep(secret) // nojarvis1.go
+		newBody["content"] = []string{"e2e-content"}
+	}
 	if held {
 		newBody["prompt"], newBody["repos"] = "e2e held-core prompt", "https://github.com/DE0CH/jarvis2.git"
 	}
@@ -265,6 +271,8 @@ func main() {
 		drainStep(id)
 		return
 	}
+
+	servicesStep(id, m1, secret) // nojarvis1.go
 
 	step("grants: no shell without one; a phone grant opens it; the session's own allow list too")
 	s, b = call(router, "POST", "/api/sessions/"+id+"/exec", map[string]any{"cmd": "echo hi"}, nil)
@@ -441,6 +449,7 @@ func main() {
 	if ng, _ := session(os1)["needsGrant"].(string); ng != "" {
 		log.Fatalf("a new session with the claude store asks for a grant: %q", ng)
 	}
+	loginRefreshStep(om) // nojarvis1.go
 	// a repo with an uncommitted file and no upstream, then the supervisor's marker (no Claude login here, so
 	// claude never finishes a prompt by itself)
 	expectOnMachine(om, "su - claude -c 'mkdir -p ~/workspace/lost && cd ~/workspace/lost && git init -q && echo x > f && echo ok'", "ok")
@@ -508,7 +517,8 @@ func main() {
 
 	step("no store was left unlocked; the unlocked list is signed and empty")
 	expectNoUnlocks("at the end")
-	log.Printf("E2E PASSED (machines %s → %s → %s)", m1, m2, m3)
+	checkNoJarvis1("at the end") // nojarvis1.go
+	log.Printf("E2E PASSED with Jarvis 1 unreachable (machines %s → %s → %s)", m1, m2, m3)
 }
 
 func must2(s int, b []byte) { must(s, b, "request") }
@@ -644,7 +654,7 @@ func storeOpen(name string) bool {
 	var d Doc
 	must2(call(router, "POST", "/api/core/stores", map[string]string{"nonce": "n-open"}, &d))
 	var l struct {
-		Stores        []struct {
+		Stores []struct {
 			Name     string
 			Unlocked bool
 		}

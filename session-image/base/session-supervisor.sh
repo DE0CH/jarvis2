@@ -290,18 +290,8 @@ fi
 start
 send_first_prompt &
 one_shot_watch &
-# Credentials write-back: claude rotates the OAuth refresh token when it refreshes; push the
-# new pair to Jarvis so sessions created later don't inherit a dead one (see the script).
-if [ -x /usr/local/bin/push-claude-credentials ]; then
-  nohup /usr/local/bin/push-claude-credentials >/dev/null 2>&1 &
-  echo "[supervisor] credentials write-back running (-> ${JARVIS_URL:-jarvis default})"
-fi
-# Live transcript sync: keeps claude-records/.live/<machine id>/ current so the transcript search
-# index covers this session while it is still running (see the script).
-if [ -x /usr/local/bin/sync-live-transcripts ]; then
-  nohup /usr/local/bin/sync-live-transcripts >> "$HOME/.claude/live-sync.log" 2>&1 &
-  echo "[supervisor] live transcript sync running"
-fi
+# The Claude login (pushing a pair claude refreshed by itself, taking the router's) and the live transcript copy
+# are jarvis2-machine's (machine/claudelogin.go, the agent's live sync): nothing here.
 while true; do
   # Liveness by a token present in every launch form (--model is always passed; the
   # supervisor/push-creds processes don't contain it).

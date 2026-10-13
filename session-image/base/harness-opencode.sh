@@ -230,9 +230,6 @@ send_first_prompt &
 inbox_loop &
 one_shot_watch &
 shim_loop &
-if [ -x /usr/local/bin/sync-live-transcripts ]; then
-  nohup /usr/local/bin/sync-live-transcripts >> "$STATE/live-sync.log" 2>&1 &
-fi
 # An in-place permission-mode switch (set-permission-mode kills the tmux session): rewrite the
 # OpenCode config and restart the daemon so its agents pick the new mode up; then keep the
 # machine alive for as long as Jarvis wants it.

@@ -61,7 +61,7 @@ const (
 	certPath    = dir + "/cert.json"
 	bootedPath  = dir + "/booted"      // written once the boot is done (cert, snapshot, secrets, repos): the harness starts next
 	clientPath  = dir + "/client.json" // the router URL + this machine's id, for later commands
-	jarvis1     = "/usr/local/bin/entrypoint.sh"
+	baseEntry   = "/usr/local/bin/entrypoint.sh"
 )
 
 var b64 = base64.StdEncoding
@@ -358,7 +358,7 @@ func prepare() error {
 		env = append(env, fetchAttachments(c, coreKey, v.Config.Attachments)...) // attachments.go: hash-checked against the cert
 	}
 	log.Printf("starting the harness")
-	return syscall.Exec(jarvis1, []string{jarvis1}, env)
+	return syscall.Exec(baseEntry, []string{baseEntry}, env)
 }
 
 func ownKeys() (map[string]string, error) {

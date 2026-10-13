@@ -13,5 +13,5 @@ grep -v '^#' "$LAYOUT" | while read -r store keys; do
   $S keys "$store" $keys
 done
 $S keys openrouter OPENROUTER_API
-$S keys claude JARVIS1_CREDENTIALS_ID JARVIS1_CREDENTIALS_SECRET
+$S keys claude CLAUDE_ACCOUNT_UUID
 $S keys tunnel CF_ACCESS_CLIENT_ID CF_ACCESS_CLIENT_SECRET

@@ -11,31 +11,17 @@ package main
 
 import (
 	"encoding/base64"
-	"encoding/json"
 	"errors"
-	"fmt"
-	"io"
 	"log"
-	"net/http"
-	"os"
 	"strings"
 	"time"
 )
-
-const jarvis1Credentials = "https://jarvis.deyaochen.com/api/credentials"
 
 type sharedPair struct {
 	Credentials string `json:"credentials"`
 	Account     string `json:"account"`
 	ExpiresAt   int64  `json:"expiresAt"`
 }
-
-var (
-	errNoLogin = errors.New("no JARVIS1_CREDENTIALS_ID/SECRET in the router's env")
-	loginURL   = jarvis1Credentials // tests point it elsewhere
-)
-
-func errorsIsNoLogin(err error) bool { return errors.Is(err, errNoLogin) }
 
 // sharedLogin: the stored pair (claudelogin.go)
 func (r *Router) sharedLogin() (sharedPair, error) {
@@ -44,36 +30,6 @@ func (r *Router) sharedLogin() (sharedPair, error) {
 		return sharedPair{}, errNoPair
 	}
 	return sharedPair{Credentials: cur.Credentials, Account: cur.Account, ExpiresAt: cur.ExpiresAt}, nil
-}
-
-// fetchJarvis1Pair: Jarvis 1's pair (GET /api/credentials with the confined token JARVIS1_CREDENTIALS_ID/SECRET),
-// for follow mode only (claudelogin.go loginLoop)
-func fetchJarvis1Pair() (sharedPair, error) {
-	id, sec := os.Getenv("JARVIS1_CREDENTIALS_ID"), os.Getenv("JARVIS1_CREDENTIALS_SECRET")
-	if id == "" || sec == "" {
-		return sharedPair{}, errNoLogin
-	}
-	req, _ := http.NewRequest("GET", loginURL, nil)
-	req.Header.Set("CF-Access-Client-Id", id)
-	req.Header.Set("CF-Access-Client-Secret", sec)
-	req.Header.Set("User-Agent", "jarvis2-router/1") // Cloudflare refuses some default user agents
-	resp, err := (&http.Client{Timeout: 30 * time.Second}).Do(req)
-	if err != nil {
-		return sharedPair{}, err
-	}
-	defer resp.Body.Close()
-	b, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-	if resp.StatusCode != 200 {
-		return sharedPair{}, fmt.Errorf("Jarvis 1 answered %d", resp.StatusCode) // never the body
-	}
-	var p sharedPair
-	if json.Unmarshal(b, &p) != nil || p.Credentials == "" {
-		return sharedPair{}, errors.New("no credentials in Jarvis 1's answer")
-	}
-	if p.ExpiresAt == 0 {
-		p.ExpiresAt = credsExpiry(p.Credentials)
-	}
-	return p, nil
 }
 
 // writeCredsPy: Jarvis 1's WRITE_PY, reading the pair from stdin: replace the file unless it already expires

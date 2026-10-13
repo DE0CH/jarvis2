@@ -21,12 +21,8 @@ USER root
 # Only vouched inputs shape a machine (docs/DESIGN.md "Inputs to a machine"):
 #  - the image's own ENV, recorded here, is the env jarvis2-machine keeps (everything the machine's config adds
 #    besides the core's key and the router's address is dropped at boot: machine/vouch.go cleanEnv);
-#  - the base's restore-snapshot (Jarvis 1's) would fetch unsigned state from the Storage Box whenever a store holds its
-#    credentials: here it does nothing (the predecessor's state comes only from the snapshot the cert names);
 #  - the OpenClaw runtime bundle is pinned by sha256, not only by URL.
-RUN mkdir -p /opt/jarvis2 && env | grep -Ev '^(HOSTNAME|HOME|PWD|OLDPWD|SHLVL|_|TERM|USER|LOGNAME|SHELL)=' | sort > /opt/jarvis2/image.env \
- && printf '#!/bin/sh\necho "[restore-snapshot] Jarvis 2: nothing to do (jarvis2-machine restores only the snapshot the cert names)"\nexit 0\n' > /usr/local/bin/restore-snapshot \
- && chmod 755 /usr/local/bin/restore-snapshot
+RUN mkdir -p /opt/jarvis2 && env | grep -Ev '^(HOSTNAME|HOME|PWD|OLDPWD|SHLVL|_|TERM|USER|LOGNAME|SHELL)=' | sort > /opt/jarvis2/image.env
 COPY session-image/openclaw-runtime.json /opt/jarvis2/openclaw-runtime.json
 COPY --chmod=755 session-image/bin/openclaw /usr/local/bin/openclaw
 # the one command the core runs through Fly (core/fly.go initPath): no arguments; it prints this machine's

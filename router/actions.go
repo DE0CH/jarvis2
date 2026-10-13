@@ -26,7 +26,7 @@ func (r *Router) registerActions(handle func(string, http.Handler)) {
 		out := []map[string]any{}
 		r.st.Do(func(d *persisted) {
 			for _, s := range d.Sessions {
-				v := map[string]any{"id": s.ID, "machineId": s.MachineID, "state": s.State, "title": sessionTitle(*s), "error": s.Error}
+				v := map[string]any{"id": s.ID, "machineId": s.MachineID, "state": s.State, "title": sessionTitle(*s), "error": s.Error, "image": s.Image}
 				if l := s.Live; l != nil && l.Reg != nil {
 					v["status"] = l.Reg.Status
 				}

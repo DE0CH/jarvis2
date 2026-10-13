@@ -3,15 +3,13 @@ package main
 // The Claude login: one OAuth pair shared by every Claude session (Jarvis 1's lib/oauth.js, lib/claudelogin.js,
 // /api/credentials, /api/usage and its Re-login, moved here; docs/DECISIONS.md 115-121). The router keeps the pair on its
 // volume (claude-login.json, 0600) and is its ONLY refresher. A refresh revokes the previous access token at once,
-// so two refreshers break each other: the file's `mode` says whether this router refreshes ("own") or mirrors
-// Jarvis 1's pair ("follow", Jarvis 1 refreshing) — the cutover is one signed setup call (POST
-// /setup/claude-login/mode), after Jarvis 1 has become a follower that reads the pair from here.
+// so there is one refresher: this router. Jarvis 1, while it still runs, only follows (reads the pair from here).
 //
 // Who takes the pair, all with the same long poll (GET …/claude-login?have=&ack=&wait=):
 //   - a session machine whose cert names the store `claude` (/m/claude-login, signed with its machine key;
 //     machine/claudelogin.go checks every pair against the account in its store before writing it);
-//   - Jarvis 1 for its own sessions (/peer/claude-login, behind a path-scoped Access app that admits one service
-//     token, JARVIS1_LOGIN_CLIENT_ID).
+//   - Jarvis 1, while it still runs, for its own sessions (/peer/claude-login, behind a path-scoped Access app that
+//     admits one service token, JARVIS1_LOGIN_CLIENT_ID). Jarvis 2 never calls Jarvis 1.
 // The refresh protocol keeps lessons/74's guarantee (a session that gets a 401 mid-refresh waits for the new pair
 // instead of burning its refresh token): before refreshing, the router answers every waiting poll with
 // {preparing, gen}; each participant takes the CLI's refresh lock (~/.claude/.oauth_refresh.lock) and polls again
@@ -21,7 +19,7 @@ package main
 //
 // Pushes (a participant whose claude refreshed by itself, e.g. while the router was down): newer expiresAt wins,
 // and the pair's account must be the stored one (checked with Anthropic's profile endpoint), except for a
-// Re-login (Deyao's own action, in the app or through Jarvis 1's Settings).
+// Re-login (Deyao's own action in the app).
 
 import (
 	"bytes"
@@ -69,7 +67,6 @@ const (
 )
 
 var (
-	errNotOwner  = errors.New("Jarvis 1 refreshes the Claude login (this router follows it)")
 	errNoPair    = errors.New("no Claude login stored: Re-login")
 	errNotNewer  = errors.New("not newer than the stored pair")
 	errOtherAcct = errors.New("the pair belongs to another Claude account than the stored one")
@@ -93,7 +90,6 @@ type pendingLogin struct {
 type loginFile struct {
 	Credentials string        `json:"credentials,omitempty"` // ~/.claude/.credentials.json
 	Account     string        `json:"account,omitempty"`     // ~/.claude.json's {oauthAccount, userID}
-	Mode        string        `json:"mode"`                  // follow | own
 	Source      string        `json:"source,omitempty"`      // where the stored pair came from
 	UpdatedAt   time.Time     `json:"updatedAt"`
 	RefreshedAt time.Time     `json:"refreshedAt"`
@@ -124,9 +120,6 @@ func newLoginHub(dir string) *loginHub {
 		if err := json.Unmarshal(b, &h.f); err != nil {
 			log.Printf("[login] %s unreadable: %v", h.path, err)
 		}
-	}
-	if h.f.Mode != "own" {
-		h.f.Mode = "follow"
 	}
 	return h
 }
@@ -346,13 +339,12 @@ type loginView struct {
 	Credentials string
 	Account     string
 	ExpiresAt   int64
-	Mode        string
 }
 
 func (h *loginHub) current() loginView {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	return loginView{h.f.Credentials, h.f.Account, credsExpiry(h.f.Credentials), h.f.Mode}
+	return loginView{h.f.Credentials, h.f.Account, credsExpiry(h.f.Credentials)}
 }
 
 // offer: a pair from somewhere (a push, Jarvis 1, a Re-login). Stored only when it expires later than the stored
@@ -405,7 +397,6 @@ type loginAnswer struct {
 	ExpiresAt   int64  `json:"expiresAt"`
 	Gen         int64  `json:"gen"`
 	Preparing   bool   `json:"preparing"`
-	Mode        string `json:"mode"`
 }
 
 // poll: answers at once when the stored pair expires later than `have`, when a refresh is being prepared that the
@@ -422,7 +413,7 @@ func (h *loginHub) poll(ctx context.Context, who string, have, ack int64, wait t
 			h.broadcastLocked()
 		}
 		exp := credsExpiry(h.f.Credentials)
-		a := loginAnswer{Account: h.f.Account, ExpiresAt: exp, Gen: h.gen, Preparing: h.preparing, Mode: h.f.Mode}
+		a := loginAnswer{Account: h.f.Account, ExpiresAt: exp, Gen: h.gen, Preparing: h.preparing}
 		newer := exp > have && h.f.Credentials != ""
 		if newer {
 			a.Credentials = h.f.Credentials
@@ -445,15 +436,11 @@ func (h *loginHub) poll(ctx context.Context, who string, have, ack int64, wait t
 
 // ---- the refresh --------------------------------------------------------------------------------------------------
 
-// refresh: the router's own refresh (mode own only), when less than loginFreshMargin is left or forced
+// refresh: the router's own refresh, when less than loginFreshMargin is left or forced
 func (h *loginHub) refresh(force bool) (bool, error) {
 	h.refreshMu.Lock()
 	defer h.refreshMu.Unlock()
 	h.mu.Lock()
-	if h.f.Mode != "own" {
-		h.mu.Unlock()
-		return false, errNotOwner
-	}
 	creds := h.f.Credentials
 	if creds == "" {
 		h.mu.Unlock()
@@ -558,25 +545,6 @@ func (h *loginHub) drain(d time.Duration) {
 	case <-done:
 	case <-time.After(d):
 	}
-}
-
-func (h *loginHub) setMode(mode string) error {
-	if mode != "own" && mode != "follow" {
-		return errors.New("mode is own or follow")
-	}
-	h.refreshMu.Lock()
-	defer h.refreshMu.Unlock()
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	old := h.f.Mode
-	h.f.Mode = mode
-	if err := h.save(); err != nil {
-		h.f.Mode = old
-		return err
-	}
-	h.broadcastLocked()
-	log.Printf("[login] mode %s → %s", old, mode)
-	return nil
 }
 
 // ---- Re-login (the CLI's manual OAuth flow: the browser shows "code#state", Deyao pastes it) -----------------
@@ -825,7 +793,7 @@ func (h *loginHub) status() map[string]any {
 		}
 	}
 	sort.Slice(parts, func(i, j int) bool { return parts[i]["id"].(string) < parts[j]["id"].(string) })
-	out := map[string]any{"mode": h.f.Mode, "hasLogin": h.f.Credentials != "", "expiresAt": nullIfZero(exp),
+	out := map[string]any{"hasLogin": h.f.Credentials != "", "expiresAt": nullIfZero(exp),
 		"expired": exp != 0 && exp < time.Now().UnixMilli(), "email": accountEmail(h.f.Account), "accountUuid": accountUUID(h.f.Account), "source": h.f.Source,
 		"updatedAt": nullIfZeroTime(h.f.UpdatedAt), "refreshedAt": nullIfZeroTime(h.f.RefreshedAt), "participants": parts,
 		"loginInProgress": h.f.Pending != nil && time.Since(h.f.Pending.At) < loginPendingTTL, "preparing": h.preparing}
@@ -855,52 +823,14 @@ func nullIfZeroTime(t time.Time) any {
 
 // ---- loops ----------------------------------------------------------------------------------------------------------
 
-// loginLoop: own → refresh when due (every minute); follow → mirror Jarvis 1's pair (every 30 s)
+// loginLoop: refresh when due (checked every minute)
 func (r *Router) loginLoop() {
 	h := r.loginHub()
-	for i := 0; ; i++ {
-		if h.current().Mode == "own" {
-			if i%2 == 0 {
-				if _, err := h.refresh(false); err != nil && !errors.Is(err, errNotOwner) && !errors.Is(err, errNoPair) {
-					log.Printf("[login] %v", err)
-				}
-			}
-		} else if p, err := fetchJarvis1Pair(); err == nil {
-			if _, err := h.offer(p.Credentials, p.Account, "jarvis1", true, false); err != nil && !errors.Is(err, errNotNewer) {
-				log.Printf("[login] Jarvis 1's pair: %v", err)
-			}
-		} else if !errorsIsNoLogin(err) {
-			log.Printf("[login] Jarvis 1's pair: %v", err)
+	for {
+		if _, err := h.refresh(false); err != nil && !errors.Is(err, errNoPair) {
+			log.Printf("[login] %v", err)
 		}
-		time.Sleep(30 * time.Second)
-	}
-}
-
-// pushToJarvis1: in follow mode a pushed pair (a session's own refresh killed Jarvis 1's copy) or a Re-login
-// also goes to Jarvis 1, which refreshes then
-func pushToJarvis1(credentials, account string) {
-	id, sec := os.Getenv("JARVIS1_CREDENTIALS_ID"), os.Getenv("JARVIS1_CREDENTIALS_SECRET")
-	if id == "" || sec == "" {
-		return
-	}
-	body := map[string]string{"credentials": credentials}
-	if account != "" {
-		body["account"] = account
-	}
-	b, _ := json.Marshal(body)
-	req, _ := http.NewRequest("POST", loginURL, bytes.NewReader(b))
-	req.Header.Set("CF-Access-Client-Id", id)
-	req.Header.Set("CF-Access-Client-Secret", sec)
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("User-Agent", "jarvis2-router/1")
-	resp, err := loginHTTP.Do(req)
-	if err != nil {
-		log.Printf("[login] pushing to Jarvis 1: %v", err)
-		return
-	}
-	resp.Body.Close()
-	if resp.StatusCode != 200 {
-		log.Printf("[login] pushing to Jarvis 1: HTTP %d", resp.StatusCode)
+		time.Sleep(time.Minute)
 	}
 }
 
@@ -970,9 +900,6 @@ func (r *Router) pushAnswer(w http.ResponseWriter, h *loginHub, body []byte, sou
 		writeJSON(w, status, map[string]string{"error": err.Error()})
 		return
 	}
-	if stored && h.current().Mode == "follow" && source != "jarvis1" {
-		go pushToJarvis1(creds, account)
-	}
 	writeJSON(w, 200, map[string]any{"stored": stored, "expiresAt": credsExpiry(creds)})
 }
 
@@ -998,7 +925,7 @@ func (r *Router) registerClaudeLogin(app appRoute, m machineRoute, public public
 	}
 	m("GET /m/claude-login", machinePoll)
 	m("POST /m/claude-login", machinePush)
-	// Jarvis 1's session scripts (push-claude-credentials, through the machine's $JARVIS_URL proxy)
+	// session images from before 2026-10-13 (their push-claude-credentials, through the machine's $JARVIS_URL proxy)
 	m("GET /m/api/credentials", func(w http.ResponseWriter, req *http.Request, machine string, _ []byte) {
 		if _, ok := r.machineHasClaude(machine); !ok {
 			writeJSON(w, 403, map[string]string{"error": "this machine's cert doesn't name the store claude"})
@@ -1033,7 +960,7 @@ func (r *Router) registerClaudeLogin(app appRoute, m machineRoute, public public
 		ok, err := h.refresh(true)
 		if err != nil {
 			status := 502
-			if errors.Is(err, errNotOwner) || errors.Is(err, errNoPair) {
+			if errors.Is(err, errNoPair) {
 				status = 409
 			}
 			writeJSON(w, status, map[string]any{"error": err.Error(), "needLogin": errors.Is(err, errNoPair) || strings.Contains(err.Error(), "Re-login")})
@@ -1060,9 +987,6 @@ func (r *Router) registerClaudeLogin(app appRoute, m machineRoute, public public
 			return
 		}
 		cur := h.current()
-		if cur.Mode == "follow" {
-			go pushToJarvis1(cur.Credentials, cur.Account)
-		}
 		go r.resumeStuckLogins()
 		writeJSON(w, 200, map[string]any{"ok": true, "email": email, "expiresAt": cur.ExpiresAt})
 	})
@@ -1071,7 +995,7 @@ func (r *Router) registerClaudeLogin(app appRoute, m machineRoute, public public
 		writeJSON(w, status, body)
 	})
 
-	// ---- the setup session: the cutover switch and the status ----
+	// ---- the setup session: the status ----
 	setupSigned := func(fn func(w http.ResponseWriter, req *http.Request, body []byte)) http.Handler {
 		return r.requireSetup(func(w http.ResponseWriter, req *http.Request) {
 			b, _ := io.ReadAll(io.LimitReader(req.Body, 1<<20))
@@ -1083,17 +1007,6 @@ func (r *Router) registerClaudeLogin(app appRoute, m machineRoute, public public
 		})
 	}
 	public("GET /setup/claude-login", setupSigned(func(w http.ResponseWriter, req *http.Request, _ []byte) { writeJSON(w, 200, h.status()) }))
-	public("POST /setup/claude-login/mode", setupSigned(func(w http.ResponseWriter, req *http.Request, body []byte) {
-		var b struct {
-			Mode string `json:"mode"`
-		}
-		json.Unmarshal(body, &b)
-		if err := h.setMode(b.Mode); err != nil {
-			writeJSON(w, 400, map[string]string{"error": err.Error()})
-			return
-		}
-		writeJSON(w, 200, h.status())
-	}))
 }
 
 // requireClient: exactly one Access service token (its client id = the JWT's common_name) on a path-scoped Access

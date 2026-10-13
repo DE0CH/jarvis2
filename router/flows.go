@@ -12,6 +12,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -354,6 +355,58 @@ func loadImageSigs(path string) map[string]string {
 	return out
 }
 
+// loadImageOrder: the images of session-image-sigs.txt in line order (images.yml appends each pin)
+func loadImageOrder(path string) []string {
+	if path == "" {
+		return nil
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	var out []string
+	for _, l := range strings.Split(string(b), "\n") {
+		if f := strings.Fields(l); len(f) == 2 {
+			out = append(out, f[0])
+		}
+	}
+	return out
+}
+
+// firstRouterLoginImage: the first pinned session image whose machine takes the Claude login from the router
+// (machine/claudelogin.go, 2026-10-13 01:39). Every earlier image fetched it from Jarvis 1 with the store claude's
+// JARVIS1_CREDENTIALS_*, which no longer exist: such a line resumes on the newest image (the phone approves).
+const firstRouterLoginImage = ":sha-c5427052a542@"
+
+// legacyLoginImage: image (ref@digest) is a pin older than firstRouterLoginImage, by its digest's place in the pin
+// order. Unknown when the order is missing or lacks the marker (a test router): false. A digest the order doesn't
+// list at all is an image from before the list began: legacy.
+func legacyLoginImage(image string, order []string) bool {
+	digest := func(s string) string {
+		if i := strings.LastIndex(s, "@"); i >= 0 {
+			return s[i+1:]
+		}
+		return s
+	}
+	mark := -1
+	for i, o := range order {
+		if strings.Contains(o, firstRouterLoginImage) {
+			mark = i
+			break
+		}
+	}
+	if mark < 0 || image == "" {
+		return false
+	}
+	d := digest(image)
+	for i, o := range order {
+		if digest(o) == d {
+			return i < mark
+		}
+	}
+	return true
+}
+
 // ---- new session ------------------------------------------------------------------------------------
 
 // CreateSession → the session's id. A requestId already on a session answers that session (idempotent).
@@ -577,6 +630,10 @@ func (r *Router) Resume(id string, upgrade bool) error {
 	go func() {
 		defer unlock()
 		image := s.Image // the same image, pinned by digest
+		if !upgrade && slices.Contains(s.Stores, "claude") && legacyLoginImage(s.Image, r.cfg.ImageOrder) {
+			upgrade = true // its machine would fetch the Claude login from Jarvis 1: the newest image instead
+			log.Printf("session %s: resume on the newest image (its image %s predates the router's Claude login)", id, s.Image)
+		}
 		if upgrade {
 			image = r.cfg.SessionImage
 		}

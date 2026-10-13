@@ -48,9 +48,7 @@ if (!TUNNEL_ID && !process.env.TUNNEL_WORKER_URL) {
 }
 const WORKER_URL = process.env.TUNNEL_WORKER_URL ||
   `wss://${TUNNEL_HOST}/__agent/${TUNNEL_ID}`;
-const PUBLIC_URL = TUNNEL_ID === "jarvis"
-  ? "https://jarvis.deyaochen.com/"
-  : `https://${TUNNEL_ID}-s.deyaochen.com/`;
+const PUBLIC_URL = `https://${TUNNEL_ID}-s.deyaochen.com/`;
 const TARGET = process.env.TUNNEL_TARGET || "http://127.0.0.1:8899";
 const AGENT_SECRET = process.env.TUNNEL_AGENT_SECRET; // optional
 const ACCESS_ID = process.env.CF_ACCESS_CLIENT_ID;

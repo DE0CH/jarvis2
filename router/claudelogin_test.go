@@ -89,11 +89,7 @@ const acct1 = `{"oauthAccount":{"accountUuid":"acct-1","emailAddress":"acct-1@ex
 
 func ownRouter(t *testing.T) (*Router, *loginHub) {
 	r := newTestRouter(t)
-	h := r.loginHub()
-	if err := h.setMode("own"); err != nil {
-		t.Fatal(err)
-	}
-	return r, h
+	return r, r.loginHub()
 }
 
 func TestLoginOfferNewerWinsAndAccount(t *testing.T) {
@@ -122,7 +118,7 @@ func TestLoginOfferNewerWinsAndAccount(t *testing.T) {
 		t.Fatalf("%v %v", err, fi)
 	}
 	h2 := newLoginHub(strings.TrimSuffix(h.path, "/claude-login.json"))
-	if c := h2.current(); c.ExpiresAt != now+3000 || c.Mode != "own" {
+	if c := h2.current(); c.ExpiresAt != now+3000 {
 		t.Fatalf("%+v", c)
 	}
 	if h.offer("{}", "", "push", false, false); h.current().ExpiresAt != now+3000 {
@@ -186,11 +182,6 @@ func TestLoginRefreshProtocol(t *testing.T) {
 	// not due again
 	if ok, _ := h.refresh(false); ok {
 		t.Fatal("refreshed a fresh pair")
-	}
-	// follow mode never refreshes
-	h.setMode("follow")
-	if _, err := h.refresh(true); err != errNotOwner {
-		t.Fatal("follow mode refreshed", err)
 	}
 }
 
@@ -275,7 +266,7 @@ func TestLoginRelogin(t *testing.T) {
 	}
 	// status and usage, with no secret in either
 	code, st := appDo(t, r, "GET", "/api/claude-login", "")
-	if code != 200 || st["email"] != "acct-1@example.com" || st["mode"] != "own" || strings.Contains(fmt.Sprint(st), "at-new") {
+	if code != 200 || st["email"] != "acct-1@example.com" || strings.Contains(fmt.Sprint(st), "at-new") {
 		t.Fatal(code, st)
 	}
 	code, us := appDo(t, r, "GET", "/api/usage", "")
@@ -323,13 +314,13 @@ func TestLoginMachineRoutes(t *testing.T) {
 }
 
 // the peer route (Jarvis 1): the same poll; a Re-login pushed from Jarvis 1 may switch the account
-func TestLoginPeerAndMode(t *testing.T) {
+func TestLoginPeer(t *testing.T) {
 	f := newFakeAnthropic(t)
 	r, h := ownRouter(t)
 	exp := time.Now().Add(8 * time.Hour).UnixMilli()
 	h.offer(pairOf("a", exp), acct1, "seed", true, false)
 	code, out := appDo(t, r, "GET", "/peer/claude-login?have=0", "")
-	if code != 200 || !strings.Contains(out["credentials"].(string), "at-a") || out["mode"] != "own" {
+	if code != 200 || !strings.Contains(out["credentials"].(string), "at-a") {
 		t.Fatal(code, out)
 	}
 	f.accounts["z"] = "acct-2"
@@ -341,59 +332,13 @@ func TestLoginPeerAndMode(t *testing.T) {
 	if code, out := appDo(t, r, "POST", "/peer/claude-login", string(b)); code != 200 || out["stored"] != true || accountUUID(h.current().Account) != "acct-2" {
 		t.Fatal("a Re-login through Jarvis 1 wins", code, out)
 	}
-	// the mode switch is the setup session's (signed): a router with Access refuses anyone else
+	// the setup status is the setup session's (signed): a router with Access refuses anyone else
 	r2 := NewRouter(Config{DataDir: t.TempDir(), AppAUD: "a", SetupAUD: "s"}, r.st, nil, Policy{})
-	if code, _ := appDo(t, r2, "POST", "/setup/claude-login/mode", `{"mode":"own"}`); code != 403 {
+	if code, _ := appDo(t, r2, "GET", "/setup/claude-login", ""); code != 403 {
 		t.Fatal(code)
 	}
 	if code, _ := appDo(t, r2, "GET", "/peer/claude-login", ""); code != 503 && code != 403 {
 		t.Fatal(code)
-	}
-}
-
-// follow mode: Jarvis 1's pair is mirrored; a session's push also goes to Jarvis 1
-func TestLoginFollowMirrorsJarvis1(t *testing.T) {
-	newFakeAnthropic(t)
-	exp := time.Now().Add(8 * time.Hour).UnixMilli()
-	var pushed atomic.Int32
-	j1 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-		if req.Method == "POST" {
-			pushed.Add(1)
-			w.Write([]byte(`{"stored":true}`))
-			return
-		}
-		json.NewEncoder(w).Encode(map[string]any{"credentials": pairOf("j1", exp), "account": acct1, "expiresAt": exp})
-	}))
-	defer j1.Close()
-	old := loginURL
-	loginURL = j1.URL
-	defer func() { loginURL = old }()
-	t.Setenv("JARVIS1_CREDENTIALS_ID", "id")
-	t.Setenv("JARVIS1_CREDENTIALS_SECRET", "sec")
-	r := newTestRouter(t)
-	h := r.loginHub()
-	if h.current().Mode != "follow" {
-		t.Fatal("a new router follows Jarvis 1")
-	}
-	p, err := fetchJarvis1Pair()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if ok, err := h.offer(p.Credentials, p.Account, "jarvis1", true, false); !ok || err != nil {
-		t.Fatal(ok, err)
-	}
-	addSession(r, "sA", "started", "mA", false)
-	r.st.Do(func(d *persisted) { d.Sessions["sA"].Stores = []string{"claude"} })
-	ma := newTestMachine(r, "mA")
-	b, _ := json.Marshal(map[string]string{"credentials": pairOf("j1x", exp+1)})
-	if code, out := ma.do(t, r.MachineHandler(), "POST", "/m/claude-login", string(b)); code != 200 || out["stored"] != true {
-		t.Fatal(code, out)
-	}
-	for i := 0; i < 100 && pushed.Load() == 0; i++ {
-		time.Sleep(10 * time.Millisecond)
-	}
-	if pushed.Load() != 1 {
-		t.Fatal("the push didn't reach Jarvis 1")
 	}
 }
 

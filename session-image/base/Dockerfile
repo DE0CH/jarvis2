@@ -27,7 +27,7 @@ RUN curl -fsSL https://rclone.org/install.sh | bash
 # Node.js 22
 RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
  && apt-get install -y nodejs && rm -rf /var/lib/apt/lists/*
-# kubectl (a kubeconfig is written by entrypoint.sh when the secrets carry KUBE_SERVER + KUBE_TOKEN)
+# kubectl
 RUN curl -fsSL -o /usr/local/bin/kubectl "https://dl.k8s.io/release/v1.33.4/bin/linux/amd64/kubectl" \
  && chmod +x /usr/local/bin/kubectl
 # cloudflared (quick tunnels: a temporary public https URL to a local port) + versitygw (an S3 gateway on a local dir)
@@ -145,12 +145,9 @@ RUN pip3 install --no-cache-dir --break-system-packages asyncvnc "camoufox[geoip
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
 COPY session-supervisor.sh /usr/local/bin/session-supervisor.sh
 COPY workspace-layer.sh /usr/local/bin/workspace-layer.sh
-COPY push-claude-credentials /usr/local/bin/push-claude-credentials
 COPY pull-secrets /usr/local/bin/pull-secrets
 COPY content-sync /usr/local/bin/content-sync
 COPY set-permission-mode /usr/local/bin/set-permission-mode
-COPY sync-live-transcripts /usr/local/bin/sync-live-transcripts
-COPY restore-snapshot /usr/local/bin/restore-snapshot
 # The OpenRouter harness (an OpenRouter model): OpenCode is the agent, the Paseo daemon drives it and is the
 # remote control (its app over its relay + a web UI published through the cf-tunnel agent, cf-tunnel-agent.js).
 # harness-opencode.sh is its supervisor; `ws` is global.
@@ -182,7 +179,7 @@ COPY openclaw-claw-harness /usr/local/lib/openclaw-claw-harness
 COPY harness-openclaw.sh /usr/local/bin/harness-openclaw.sh
 COPY openclaw-transcript /usr/local/bin/openclaw-transcript
 RUN chmod +x /usr/local/bin/harness-openclaw.sh /usr/local/bin/openclaw-transcript /usr/local/bin/openclaw
-RUN chmod +x /usr/local/bin/entrypoint.sh /usr/local/bin/session-supervisor.sh /usr/local/bin/workspace-layer.sh /usr/local/bin/push-claude-credentials /usr/local/bin/pull-secrets /usr/local/bin/content-sync /usr/local/bin/set-permission-mode /usr/local/bin/sync-live-transcripts /usr/local/bin/restore-snapshot
+RUN chmod +x /usr/local/bin/entrypoint.sh /usr/local/bin/session-supervisor.sh /usr/local/bin/workspace-layer.sh /usr/local/bin/pull-secrets /usr/local/bin/content-sync /usr/local/bin/set-permission-mode
 USER claude
 WORKDIR /home/claude
 # Native claude binary for the claude user.
