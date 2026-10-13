@@ -20,7 +20,12 @@ both). Values never print.
                                        backup, to the master key the core was set up with; the router backs it up first
                                        (keys/<store>/<key>.json) and asks the phone to refresh the running sessions that
                                        hold the store. A key name that has no explanation yet needs --explain
+                                       With the live core from before stores were made of keys (it replaces the whole
+                                       store with exactly the keys given), a write that leaves out any key name recorded
+                                       for the store is REFUSED (here and by the router) unless --replace
   infra/setup.py delete NAME KEY…      delete these keys of a store (the backup keeps their earlier versions)
+  infra/setup.py versions NAME         the store's earlier versions the core keeps (number, time, what made it, key
+                                       names), from the core's signed list; put one back with `request restore`
   infra/setup.py docs NAME [--about TEXT] [KEY=TEXT…]
                                        what a store and its keys are for (shown in the app, the web page, `jarvis2 stores
                                        --keys`); KEY= with no text removes one
@@ -54,6 +59,7 @@ both). Values never print.
   infra/setup.py request remove-repo OWNER/NAME --why TEXT
   infra/setup.py request grant SESSION HOLDER [--minutes N | --days N] --why TEXT
   infra/setup.py request unlock SESSION --why TEXT
+  infra/setup.py request restore STORE VERSION --why TEXT
                                        a request in the Inbox of the Jarvis 2 app (docs/API.md "Requests"): Deyao
                                        reviews what would be signed and allows it with Face ID, or denies it. The
                                        router records it as from "Claude (setup session)"; --why is required
@@ -352,6 +358,15 @@ def store_list():
     return {s["name"]: s for s in json.loads(d["payload"])["stores"]}
 
 
+def recorded_keys(name):
+    """the key names the router lists for a store (the core's own list, or the names recorded for a core before
+    stores were made of keys); None when none are known"""
+    for st in call("GET", "/setup/stores/keys")["stores"]:
+        if st["name"] == name:
+            return st["keys"]
+    return None
+
+
 def value(spec):
     key, _, src = spec.partition("=")
     src = src or key
@@ -424,6 +439,8 @@ def main():
             k, _, t = args[i + 1].partition("=")
             explain[k] = t
             del args[i:i + 2]
+        replace = "--replace" in args
+        args = [a for a in args if a != "--replace"]
         name, vals = args[0], dict(value(a) for a in args[1:])
         me = set_up()
         want_sensitive = name not in NOT_SENSITIVE
@@ -434,6 +451,9 @@ def main():
             mark_sensitive_backup(name)
             print(f"note: {name} existed as not sensitive; marked sensitive before writing", file=sys.stderr)
         if me["keys"]:
+            if replace:
+                raise SystemExit("--replace means nothing here: this core writes keys one by one and never drops one; "
+                                 "remove a key with `infra/setup.py delete`")
             for k in sorted(vals):
                 out = call("POST", f"/setup/stores/{name}/keys/{k}", key_write(name, k, vals[k], me, explain.get(k, "")))
                 print(f"ok: {name}: {k} written (backed up first); refresh asked of {len(out.get('refreshAsked') or [])} running session(s)")
@@ -442,15 +462,34 @@ def main():
             if explain:
                 call("POST", "/setup/store-docs", {"store": name, "keys": explain})
             return
-        # a core from before stores were made of keys (until the held core is live): the whole store at once
+        # a core from before stores were made of keys (until the held core is live): the whole store at once, which
+        # REPLACES it — so never with fewer keys than it is recorded to hold, unless --replace (2026-10-13: a write
+        # of 2 keys wiped 24)
+        recorded = recorded_keys(name)
+        missing = sorted(set(recorded or ()) - set(vals))
+        if missing and not replace:
+            raise SystemExit(f"REFUSED: this core replaces the whole store {name}, and these {len(missing)} recorded key(s) "
+                             f"aren't in this write: {', '.join(missing)}. Write every key (or, to drop them on purpose, add --replace).")
         b = blob(name, vals, me["phone"]["agreementKey"], me["agreementKey"])
-        d = call("POST", "/setup/stores/write", {"store": b})
+        d = call("POST", "/setup/stores/write", {"store": b, "keys": sorted(vals), "replace": replace})
         sens = json.loads(d["payload"])["sensitive"]
         if want_sensitive and not sens:
             raise SystemExit(f"the core still calls {name} not sensitive after the write: no backup made")
         backup(name, vals, sens, me["master"])
         call("POST", "/setup/store-keys", {"name": name, "keys": sorted(vals)})
         print(f"ok: store {name} written with {len(vals)} keys (sensitive={sens}), backed up, key names recorded")
+    elif cmd == "versions":
+        me = identity()
+        d = call("POST", "/setup/stores/versions", {"store": args[0], "nonce": "setup-" + str(int(time.time()))})
+        if not _verify(me["signingKey"], d["payload"].encode(), d["sig"]):
+            raise SystemExit("the versions aren't signed by the core")
+        v = json.loads(d["payload"])
+        for x in v["versions"]:
+            c = x["cause"]
+            what = c["kind"] + (f" {c['key']}" if c.get("key") else "") + (f" by {c['writer']['by']}" if c.get("writer") else "") + \
+                (f" of version {c['from']}" if c.get("from") else "")
+            cur = " (current)" if x["version"] == v["current"] else ""
+            print(f"{x['seq']}{cur} {x['at']} {what}: {len(x['keys'])} keys: {' '.join(k['name'] for k in x['keys'])}")
     elif cmd == "mark-sensitive":
         set_up()
         call("POST", "/setup/stores/mark-sensitive", {"name": args[0]})
@@ -562,6 +601,8 @@ def file_request(args):
         elif minutes:
             body["minutes"] = int(minutes)
         return call("POST", "/setup/requests/grant", body)
+    if kind == "restore" and len(rest) == 2 and rest[1].isdigit():
+        return call("POST", "/setup/requests/restore", {"store": rest[0], "seq": int(rest[1]), "explanation": why})
     if kind == "unlock" and len(rest) == 1:
         return call("POST", "/setup/requests/unlock", {"session": rest[0], "explanation": why})
     raise SystemExit(f"unknown request: {' '.join(args)} (see infra/setup.py without arguments)")
