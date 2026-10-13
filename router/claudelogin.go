@@ -1103,7 +1103,7 @@ func (r *Router) requireClient(aud, clientID string) func(http.HandlerFunc) http
 		return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 			if !r.cfg.NoAccess {
 				if aud == "" || clientID == "" {
-					writeJSON(w, 503, map[string]string{"error": "the router has no ACCESS_PEER_AUD / JARVIS1_LOGIN_CLIENT_ID"})
+					writeJSON(w, 503, map[string]string{"error": "the router has no Access audience / client id for this path"})
 					return
 				}
 				c, err := r.access().verify(req.Header.Get("Cf-Access-Jwt-Assertion"), aud)

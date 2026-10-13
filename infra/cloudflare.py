@@ -15,11 +15,18 @@ The apps' audiences are not secret: they are in k8s/apps/router.yaml (the script
                                OUT, mode 600) and the Access app jarvis2.deyaochen.com/peer admitting only it; prints
                                the app's audience and the token's client id (k8s/apps/router.yaml ACCESS_PEER_AUD,
                                JARVIS1_LOGIN_CLIENT_ID; neither is secret)
+  infra/cloudflare.py --actions OUT
+                               the actions key (router/actions.go /actions/*): the service token jarvis2-actions
+                               (kept unless ROTATE=1; a new one's JARVIS2_ACTIONS_ID/SECRET go to OUT, mode 600, for the
+                               `default` store) and the Access app jarvis2.deyaochen.com/actions admitting only it;
+                               prints the app's audience and the token's client id (k8s/apps/router.yaml
+                               ACCESS_ACTIONS_AUD, ACTIONS_CLIENT_ID; neither is secret)
 Access apps (created Access first, then DNS, so the hostname is never reachable ungated):
   "Jarvis 2"        jarvis2.deyaochen.com         Deyao's email only (the app + web page)
   "Jarvis 2 setup"  jarvis2.deyaochen.com/setup   service token jarvis2-setup only (the setup session)
   "HK news stream"  hknews.deyaochen.com          Deyao's email only (k8s/apps/news.yaml, on the same tunnel)
   "Jarvis 2 peer"   jarvis2.deyaochen.com/peer    service token jarvis1-claude-login only (Jarvis 1 reads the Claude login)
+  "Jarvis 2 actions" jarvis2.deyaochen.com/actions service token jarvis2-actions only (the default store's safe actions)
 Session machines don't come through Cloudflare at all (Fly's private network, docs/API.md).
 
 A rehearsal box (infra/rehearse-recover.sh) gets its own of each, never production's:
@@ -118,6 +125,22 @@ def peer(out):
     print(f"ok (k8s/apps/router.yaml): ACCESS_PEER_AUD={aud} JARVIS1_LOGIN_CLIENT_ID={tok['client_id']}")
 
 
+def actions(out):
+    """the actions key's service token (minted with CLOUDFLARE_API, which the scoped token can't), then its app"""
+    big = os.environ["CLOUDFLARE_API"]
+    toks = call("GET", f"/accounts/{ACCOUNT}/access/service_tokens", token=big)
+    tok = next((t for t in toks if t["name"] == "jarvis2-actions"), None)
+    if tok and os.environ.get("ROTATE"):
+        tok = {"id": tok["id"]} | call("POST", f"/accounts/{ACCOUNT}/access/service_tokens/{tok['id']}/rotate", token=big)
+        write_out(out, {"JARVIS2_ACTIONS_ID": tok["client_id"], "JARVIS2_ACTIONS_SECRET": tok["client_secret"]})
+    elif not tok:
+        tok = call("POST", f"/accounts/{ACCOUNT}/access/service_tokens", {"name": "jarvis2-actions", "duration": "8760h"}, token=big)
+        write_out(out, {"JARVIS2_ACTIONS_ID": tok["client_id"], "JARVIS2_ACTIONS_SECRET": tok["client_secret"]})
+    aud = access_app("Jarvis 2 actions", HOST + "/actions", {
+        "name": "actions key", "decision": "non_identity", "include": [{"service_token": {"token_id": tok["id"]}}]})
+    print(f"ok (k8s/apps/router.yaml): ACCESS_ACTIONS_AUD={aud} ACTIONS_CLIENT_ID={tok['client_id']}")
+
+
 def write_out(out, vals):
     fd = os.open(out, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "w") as f:
@@ -169,6 +192,8 @@ def main():
         return news()
     if sys.argv[1:2] == ["--peer"]:
         return peer(sys.argv[2])
+    if sys.argv[1:2] == ["--actions"]:
+        return actions(sys.argv[2])
     if os.environ.get("REHEARSAL"):
         return rehearsal(os.environ["REHEARSAL"], sys.argv[1])
     out = sys.argv[1]

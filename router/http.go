@@ -92,6 +92,7 @@ func (r *Router) buildHandlers() {
 	}
 	r.registerFeatures(app, m, mux.Handle)
 	r.registerStoreKeys(app, m, mux) // storekeys.go: every store's key names
+	r.registerActions(mux.Handle)    // actions.go: the actions key (default store)
 	// the router's own health, for an operator with no way into the box: secret NAMES present, image, core up
 	mux.Handle("GET /setup/status", r.requireSetup(func(w http.ResponseWriter, req *http.Request) {
 		if err := r.checkSetupSig(req.Method, req.URL.Path, req.Header.Get("X-Setup-Time"), req.Header.Get("X-Setup-Sig"), nil); err != nil {

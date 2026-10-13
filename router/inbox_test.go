@@ -244,12 +244,30 @@ func TestSetupSessionsAndRequests(t *testing.T) {
 	}
 }
 
-// the setup session resumes a paused session unattended (no prompt, same image); a session that isn't paused is refused
-func TestSetupResumesAPausedSession(t *testing.T) {
+// the actions key (default store): resume only a paused session, deny an Inbox item, propose a session and file a
+// request — each named as the actions key's in the Inbox
+func TestActionsKey(t *testing.T) {
 	r := newTestRouter(t)
 	addSession(r, "sR", "started", "mR", false)
-	if code, out := inboxDo(t, r, "POST", "/setup/sessions/sR/resume", "", false); code == 200 {
+	if code, out := inboxDo(t, r, "POST", "/actions/sessions/sR/resume", "", false); code == 200 {
 		t.Fatalf("a running session was resumed: %d %v", code, out)
+	}
+	if code, out := inboxDo(t, r, "GET", "/actions/sessions", "", false); code != 200 || len(out["sessions"].([]any)) != 1 {
+		t.Fatalf("%d %v", code, out)
+	}
+	code, out := inboxDo(t, r, "POST", "/actions/requests/unlock", `{"session": "sR", "explanation": "it waits for a store"}`, false)
+	if code != 200 {
+		t.Fatalf("%d %v", code, out)
+	}
+	id := out["id"].(string)
+	if it, _ := r.InboxItem(id); it.CallerText != "the actions key (default store)" {
+		t.Fatalf("%+v", it)
+	}
+	if code, out := inboxDo(t, r, "POST", "/actions/requests/"+id+"/deny", "", false); code != 200 || len(r.Inbox()) != 0 {
+		t.Fatalf("not denied: %d %v", code, out)
+	}
+	if code, out := inboxDo(t, r, "POST", "/actions/sessions", `{"label": "x", "explanation": "a test"}`, false); code != 400 {
+		t.Fatalf("a proposal with no prompt: %d %v", code, out)
 	}
 }
 

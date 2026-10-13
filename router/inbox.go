@@ -38,7 +38,7 @@ const (
 
 // Caller: who called, from the credential the call carried
 type Caller struct {
-	Kind    string `json:"kind"`              // web | app | session | setup | router
+	Kind    string `json:"kind"`              // web | app | session | setup | actions | router
 	Session string `json:"session,omitempty"` // kind session: the calling machine's session
 }
 
@@ -289,6 +289,8 @@ func callerText(d *persisted, c Caller) string {
 		return "the Jarvis 2 app"
 	case "setup":
 		return "Claude (setup session)"
+	case "actions":
+		return "the actions key (default store)"
 	case "session":
 		title := c.Session
 		if s := d.Sessions[c.Session]; s != nil {
@@ -653,18 +655,6 @@ func (r *Router) registerInbox(app appRoute, m machineRoute, public publicRoute)
 			}
 		})
 		writeJSON(w, 200, map[string]any{"sessions": out})
-	}))
-	// an unattended resume (DESIGN "Resume, nothing changed"): same image, no prompt, no option changes, so the core
-	// answers approve_by_dead_machine and nothing reaches the phone; a line whose permission mode changed still gets
-	// its approval in the Inbox, as from the app
-	public("POST /setup/sessions/{id}/resume", setupOnly(func(w http.ResponseWriter, req *http.Request, _ []byte) {
-		id := req.PathValue("id")
-		r.noteOrigin(id, Origin{Caller: Caller{Kind: "setup"}, Call: APICall{Method: "POST", Path: req.URL.Path, Args: map[string]any{"upgrade": false}}})
-		if err := r.Resume(id, false); err != nil {
-			writeErr(w, err)
-			return
-		}
-		writeJSON(w, 200, map[string]bool{"ok": true})
 	}))
 	public("GET /setup/repos", setupOnly(func(w http.ResponseWriter, req *http.Request, _ []byte) {
 		writeJSON(w, 200, map[string]any{"repos": r.Repos()})

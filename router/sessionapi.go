@@ -111,60 +111,7 @@ func (r *Router) registerSessionAPI(app appRoute, m machineRoute) {
 	// the app's New session, so nothing starts until Deyao approves the core's succession from null with Face ID; the
 	// approval names the proposing session and carries its reason. No attachments (uploads are the app's).
 	own("POST /m/api/sessions", func(w http.ResponseWriter, req *http.Request, sid string, b []byte) {
-		var in struct {
-			NewSession
-			Explanation string `json:"explanation"`
-		}
-		if err := json.Unmarshal(b, &in); err != nil {
-			writeJSON(w, 400, map[string]string{"error": "bad JSON: " + err.Error()})
-			return
-		}
-		expl, err := cleanExplanation(in.Explanation, true)
-		if err != nil {
-			writeJSON(w, 400, map[string]string{"error": err.Error()})
-			return
-		}
-		if in.Attachments != nil {
-			writeJSON(w, 400, map[string]string{"error": "a session can't attach files to a new session: put them where the new session can fetch them"})
-			return
-		}
-		if strings.TrimSpace(in.Prompt) == "" {
-			writeJSON(w, 400, map[string]string{"error": "prompt is required"})
-			return
-		}
-		waiting := 0
-		r.st.Do(func(d *persisted) {
-			for _, a := range d.Approvals {
-				if a.Kind == "new-session" && a.Origin != nil && a.Origin.Caller.Kind == "session" && a.Origin.Caller.Session == sid {
-					waiting++
-				}
-			}
-		})
-		if waiting >= maxProposedSessions {
-			writeJSON(w, 429, map[string]string{"error": fmt.Sprintf("%d proposed sessions already wait for Deyao", waiting)})
-			return
-		}
-		if in.RequestID == "" {
-			in.RequestID = randID()
-		}
-		in.RequestID = sid + ":" + in.RequestID // a session's ids never meet the app's or another session's
-		args := map[string]any{"label": in.Label, "harness": in.Harness, "stores": in.Stores, "model": in.Model, "permissionMode": in.PermissionMode,
-			"size": in.Size, "prompt": fmt.Sprintf("(%d characters)", len([]rune(in.Prompt)))}
-		if len(in.Content) > 0 {
-			args["content"] = in.Content
-		}
-		if in.Repos != "" {
-			args["repos"] = in.Repos
-		}
-		ns := in.NewSession
-		ns.Origin = &Origin{Caller: Caller{Kind: "session", Session: sid}, Call: APICall{Method: "POST", Path: "/api/sessions", Args: args}}
-		ns.Explanation = expl
-		id, err := r.CreateSession(ns)
-		if err != nil {
-			scheduleErr(w, err)
-			return
-		}
-		writeJSON(w, 200, map[string]any{"id": id, "requestId": strings.TrimPrefix(ns.RequestID, sid+":"), "approval": true})
+		r.proposeSession(w, Caller{Kind: "session", Session: sid}, sid, b)
 	})
 	own("/m/api/", func(w http.ResponseWriter, req *http.Request, sid string, _ []byte) {
 		writeJSON(w, 404, map[string]string{"error": fmt.Sprintf("Jarvis 2 doesn't serve %s %s", req.Method, strings.TrimPrefix(req.URL.Path, "/m"))})
@@ -366,4 +313,65 @@ func (r *Router) postNotifyIdle(w http.ResponseWriter, sid string, body []byte) 
 		return
 	}
 	writeJSON(w, 200, map[string]any{"ok": true, "notifyIdle": onOff(!on)})
+}
+
+// proposeSession: a caller that isn't Deyao (a session, the actions key) proposes a new session — the same line as
+// the app's New session, so nothing starts until Deyao approves the core's succession from null with Face ID; the
+// approval names the caller and carries its reason. No attachments (uploads are the app's). prefix keeps the
+// caller's request ids apart from the app's and every other caller's.
+func (r *Router) proposeSession(w http.ResponseWriter, c Caller, prefix string, b []byte) {
+	var in struct {
+		NewSession
+		Explanation string `json:"explanation"`
+	}
+	if err := json.Unmarshal(b, &in); err != nil {
+		writeJSON(w, 400, map[string]string{"error": "bad JSON: " + err.Error()})
+		return
+	}
+	expl, err := cleanExplanation(in.Explanation, true)
+	if err != nil {
+		writeJSON(w, 400, map[string]string{"error": err.Error()})
+		return
+	}
+	if in.Attachments != nil {
+		writeJSON(w, 400, map[string]string{"error": "a new session proposed here can't carry attachments: put them where the new session can fetch them"})
+		return
+	}
+	if strings.TrimSpace(in.Prompt) == "" {
+		writeJSON(w, 400, map[string]string{"error": "prompt is required"})
+		return
+	}
+	waiting := 0
+	r.st.Do(func(d *persisted) {
+		for _, a := range d.Approvals {
+			if a.Kind == "new-session" && a.Origin != nil && a.Origin.Caller == c {
+				waiting++
+			}
+		}
+	})
+	if waiting >= maxProposedSessions {
+		writeJSON(w, 429, map[string]string{"error": fmt.Sprintf("%d proposed sessions already wait for Deyao", waiting)})
+		return
+	}
+	if in.RequestID == "" {
+		in.RequestID = randID()
+	}
+	in.RequestID = prefix + ":" + in.RequestID
+	args := map[string]any{"label": in.Label, "harness": in.Harness, "stores": in.Stores, "model": in.Model, "permissionMode": in.PermissionMode,
+		"size": in.Size, "prompt": fmt.Sprintf("(%d characters)", len([]rune(in.Prompt)))}
+	if len(in.Content) > 0 {
+		args["content"] = in.Content
+	}
+	if in.Repos != "" {
+		args["repos"] = in.Repos
+	}
+	ns := in.NewSession
+	ns.Origin = &Origin{Caller: c, Call: APICall{Method: "POST", Path: "/api/sessions", Args: args}}
+	ns.Explanation = expl
+	id, err := r.CreateSession(ns)
+	if err != nil {
+		scheduleErr(w, err)
+		return
+	}
+	writeJSON(w, 200, map[string]any{"id": id, "requestId": strings.TrimPrefix(ns.RequestID, prefix+":"), "approval": true})
 }

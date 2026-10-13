@@ -16,6 +16,7 @@ that come from the core are relayed as the core's signed error document `{payloa
 |---|---|---|
 | `/api/*`, `/` (web page) | Deyao's app / browser | Access app `jarvis2.deyaochen.com`, Deyao's email only. The iPhone app sends the Access token in the `cf-access-token` header (got once from `/api/auth/start`). The router also verifies the `Cf-Access-Jwt-Assertion` header itself. |
 | `/setup/*` | the trusted setup session | Access app `jarvis2.deyaochen.com/setup`, service token `jarvis2-setup` only (kept in Jarvis 1's `default` store, never on a machine). The router then checks the setup key's signature on each call (below). |
+| `/actions/*` | anyone holding the actions key (`default` store) | Access app `jarvis2.deyaochen.com/actions`, service token `jarvis2-actions` only; the router checks the JWT's audience and client id (below, "Actions"). |
 | `/m/*` | session machines | Not on the public hostname at all: the router serves `/m` on a second port (8081) that only Fly's private network reaches (the box is a WireGuard peer of org `jarvis2-370`). The router checks the machine's own signature on each request. |
 
 ## App sign-in
@@ -191,7 +192,6 @@ item = { id, kind: "repo-key" | "grant" | "unlock" | "new-session" | "resume-upg
 | `GET /setup/requests`, `GET /m/api/requests` | the same list for Claude; a session sees only its own |
 | `GET /setup/repos` | the router's repo list (`infra/setup.py repos`) |
 | `GET /setup/sessions` | `{sessions: [{id, machineId, state, title}]}` (`infra/setup.py sessions`; the phone replica finds a session's machine here) |
-| `POST /setup/sessions/:id/resume` | An unattended resume of a paused session (`infra/setup.py resume`): same image, no prompt, no option changes, so the core answers `approve_by_dead_machine` and the phone is not asked (DESIGN "Resume, nothing changed"). A line whose permission mode differs from its cert still gets its `resume-upgrade` approval. 4xx when the session isn't paused |
 
 The app never takes the title from the router: the list renders it from `kind` + `params` (`src/lib/inbox.ts`), and
 the review page renders "What you sign (exact)" from the signed content (`Shell/SignedAction.swift`). The shell checks
@@ -284,6 +284,25 @@ base64(combined)}` → `unlock/finish {pending, share}`.
   base64) for that phone agreement key P. Open, also on an empty core: what the app wraps a data key to (one-off e,
   HKDF-SHA256 of x(e·storeKey) with info `"jarvis2/store-data-key"`, AES-256-GCM nonce‖ciphertext), since CryptoKit
   can't add points: a deploy key's store, and every store of a Recover's bundle (`claim`, above).
+
+## Actions (`/actions/*`, `router/actions.go`)
+
+The actions key (Deyao, 2026-10-13): the Access app `jarvis2.deyaochen.com/actions` admits one service token,
+`jarvis2-actions` (`infra/cloudflare.py --actions`), whose id and secret are `JARVIS2_ACTIONS_ID/SECRET` in the
+`default` store. The router checks the Access JWT's audience (`ACCESS_ACTIONS_AUD`) and client id
+(`ACTIONS_CLIENT_ID`). Only actions that need no signature from Deyao and reach no secret: anyone with the key could
+already message any session. Client: claude-env `scripts/jarvis2-actions.py`. Inbox entries name the caller "the
+actions key (default store)".
+
+| Route | What |
+|---|---|
+| `GET /actions/sessions` | `{sessions: [{id, machineId, state, title, error, status?, needsGrant?}]}` |
+| `GET /actions/requests` | The Inbox, as `GET /api/requests` |
+| `POST /actions/sessions/:id/resume` | Resume a paused session: same image, no prompt, no option changes, so the core answers `approve_by_dead_machine` and the phone isn't asked. A line whose permission mode differs from its cert still gets its `resume-upgrade` approval. 4xx when not paused |
+| `POST /actions/sessions/:id/pause` | As the app's pause |
+| `POST /actions/requests/:id/deny` | An Inbox request leaves; an approval is rejected as the app's Deny |
+| `POST /actions/sessions` | Propose a new session (body as `POST /m/api/sessions`, `explanation` required): a `new-session` approval in the Inbox; at most 3 wait |
+| `POST /actions/requests/{repo/add,repo/remove,grant,unlock}` | As `/setup/requests/*`: an Inbox request |
 
 ## Setup (`/setup/*`)
 
