@@ -146,7 +146,7 @@ jobs:
               rec=$!
               touch "$RUNNER_TEMP/try-start"
               rm -rf result-$a.xcresult
-              (cd ios && TEST_RUNNER_JARVIS2_APPEARANCE=$a TEST_RUNNER_JARVIS2_KIT="$kit" \
+              (cd ios && TEST_RUNNER_JARVIS2_APPEARANCE=$a TEST_RUNNER_JARVIS2_KIT="$kit" TEST_RUNNER_JARVIS2_SETUP_KEY="$(cat "$W/setup-key.pem")" \
                 xcodebuild test-without-building -project Jarvis2.xcodeproj -scheme Jarvis2 \
                 -only-testing:Jarvis2UITests/Jarvis2UITests/testWalkthrough \
                 -destination "id=$SIM_UDID" -derivedDataPath ../dd \

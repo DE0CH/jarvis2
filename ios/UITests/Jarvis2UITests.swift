@@ -1,3 +1,4 @@
+import CryptoKit
 import XCTest
 
 /// Walks the native Jarvis 2 app on a simulator against the REAL core (fakefly build) and router running on the CI runner,
@@ -611,6 +612,17 @@ extension Jarvis2UITests {
     let (s, d) = routerRaw(method, path, body: body.map { Data($0.utf8) }, headers: ["Content-Type": "application/json"])
     return (s, (try? JSONSerialization.jsonObject(with: d) as? [String: Any]) ?? [:])
   }
+  func sig(_ k: P256.Signing.PrivateKey, _ text: String) -> String {
+    (try? k.signature(for: Data(text.utf8)).derRepresentation.base64EncodedString()) ?? ""
+  }
+  /// a /setup call as infra/setup.py signs it: "<METHOD> <path> <unix time> <sha256hex body>"
+  func setupCall(_ k: P256.Signing.PrivateKey, _ method: String, _ path: String, _ body: [String: Any]) -> (Int, Data) {
+    let raw = (try? JSONSerialization.data(withJSONObject: body)) ?? Data()
+    let t = String(Int(Date().timeIntervalSince1970))
+    let sum = SHA256.hash(data: raw).map { String(format: "%02x", $0) }.joined()
+    return routerRaw(method, String(path.dropFirst()), body: raw,
+                     headers: ["Content-Type": "application/json", "X-Setup-Time": t, "X-Setup-Sig": sig(k, "\(method) \(path) \(t) \(sum)")])
+  }
   func storeKeyNames(_ store: String) -> [String] {
     let (_, j) = routerJSON("GET", "api/stores")
     return ((j["stores"] as? [[String: Any]]) ?? []).first { $0["name"] as? String == store }?["keys"] as? [String] ?? []
@@ -621,7 +633,13 @@ extension Jarvis2UITests {
   /// core/history.go: no kit, the phone's signature over the core's begin document and its share of the key.
   func restoreStore() {
     let key = "OTHER"
-    XCTAssertEqual(routerJSON("POST", "setup/stores/default/keys/\(key)", #"{"delete":true,"sig":"c2ln"}"#).0, 200, "[\(tag)] \(key) deleted as the setup session")
+    // the walkthrough's router checks the setup key (SETUP_KEY): the stand-in's private half comes in TEST_RUNNER_JARVIS2_SETUP_KEY
+    guard let pem = env["JARVIS2_SETUP_KEY"], let sk = try? P256.Signing.PrivateKey(pemRepresentation: pem) else {
+      XCTFail("[\(tag)] no setup key for the restore step (TEST_RUNNER_JARVIS2_SETUP_KEY)"); return
+    }
+    let (ds, db) = setupCall(sk, "POST", "/setup/stores/default/keys/\(key)",
+                             ["delete": true, "sig": sig(sk, "jarvis2-store-key\ndefault\n\(key)\n\n\n")])
+    XCTAssertEqual(ds, 200, "[\(tag)] \(key) deleted as the setup session: \(String(decoding: db.prefix(200), as: UTF8.self))")
     XCTAssertFalse(storeKeyNames("default").contains(key), "[\(tag)] \(key) is gone from default")
     let (_, v) = routerJSON("POST", "api/core/stores/versions", #"{"store":"default","nonce":"0123456789abcdef"}"#)
     let versions = ((v["payload"] as? String).flatMap { try? JSONSerialization.jsonObject(with: Data($0.utf8)) as? [String: Any] })?["versions"] as? [[String: Any]] ?? []
