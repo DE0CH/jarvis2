@@ -1,7 +1,7 @@
 {
   "claw": {
-    "url": "https://github.com/DE0CH/claw-code/releases/download/de0ch-1730d0846c02/claw-linux-x86_64",
-    "sha": "1730d0846c02e8b7e76173b8584df5769eabc069",
-    "sha256": "73e0a40906e2ae8dd87a474c2bed92a144cd08d0067da07ee617e85555d3a1e7"
+    "url": "https://github.com/DE0CH/claw-code/releases/download/de0ch-d072033e832e/claw-linux-x86_64",
+    "sha": "d072033e832eb099bbd90a9ed95a518fcc1edb71",
+    "sha256": "81553f69fbd442073c71c42a8fcfcb0faa19968235f279f832fb7990154186d8"
   }
 }
