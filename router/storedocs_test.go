@@ -283,6 +283,17 @@ func TestTheSetupSessionWritesAKey(t *testing.T) {
 	if c.writes[0]["writer"] != "setup" || c.writes[0]["cert"] != nil {
 		t.Fatalf("core got %v", c.writes[0])
 	}
+	// the deploy-key token (RUNBOOK: setup.py write github-deploy-keys …; the replica writes its throwaway PAT): the
+	// setup session writes it, as the core allows; never the core's own store
+	if code, out := appDo(t, r, "POST", "/setup/stores/github-deploy-keys/keys/GITHUB_DEPLOY_KEYS_TOKEN", writeBody("the PAT")); code != 200 {
+		t.Fatalf("the setup session's deploy-key token write: %d %v", code, out)
+	}
+	if c.writes[1]["store"] != "github-deploy-keys" || c.writes[1]["writer"] != "setup" {
+		t.Fatalf("core got %v", c.writes[1])
+	}
+	if code, _ := appDo(t, r, "POST", "/setup/stores/core/keys/FLY_API_TOKEN", writeBody("x")); code != 403 {
+		t.Fatal("the core's own store was written key by key")
+	}
 	if code, out := appDo(t, r, "GET", "/setup/store-key", ""); code != 200 || out["identity"] == nil || out["storeKey"] == nil {
 		t.Fatalf("%d %v", code, out)
 	}

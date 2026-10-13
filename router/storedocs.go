@@ -353,7 +353,9 @@ func (r *Router) WriteKey(writer, machine, store, key string, in keyWriteIn) (ma
 	if !storeNameOK(store) || !keyNameRE.MatchString(key) {
 		return nil, &badRequest{"store: lower-case letters, digits and -; key: letters, digits and _"}
 	}
-	if store == flyStore || store == deployKeyTokenStore {
+	// the core's own store never; the deploy-key token store only by the setup session (the core refuses a machine's
+	// write there too: its keys otherwise come only from a phone-approved deploy-key call)
+	if store == flyStore || (store == deployKeyTokenStore && writer != "setup") {
 		return nil, &forbidden{fmt.Sprintf("store %s isn't written this way", store)}
 	}
 	expl, err := cleanDoc(in.Explanation)
