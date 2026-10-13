@@ -8,8 +8,9 @@ import { Image, Platform, Pressable, View } from "react-native";
 import { api, newId, uploadFile, CORE_STORE, harnessStoreSet } from "../lib/api";
 import { useStore, loadStores, refresh, settle, toast, failed } from "../lib/store";
 
-import { BadgeList, Button, CheckboxCards, Flex, Lbl, Muted, Pill, RadioCards, Row, Rows, Segmented, Spinner, Text, TextArea, TextField } from "../ui/kit";
+import { BadgeList, Button, CheckboxCards, Flex, Lbl, Muted, P, Pill, RadioCards, Row, Rows, Segmented, Spinner, Text, TextArea, TextField } from "../ui/kit";
 import { BtnLabel } from "../ui/bits";
+import { StoreDocs } from "../ui/storedocs";
 import { Page, useDone } from "../ui/page";
 import { loadContentStores, type ContentStore } from "../views/Content";
 
@@ -159,7 +160,7 @@ export function NewSession() {
       <TextField id="ns-title" autoComplete="off" autoCorrect={false} autoCapitalize="sentences" placeholder="e.g. refactor billing module" value={label} onChangeText={setLabel} />
       <Lbl>Secret stores</Lbl>
       <Muted style={{ marginBottom: 8 }}>Sensitive stores can only be picked in the app.</Muted>
-      {plain.length ? <CheckboxCards id="ns-stores" value={picked} onChange={(v) => { touched.current = true; setPicked(v); }} options={plain.map((s) => ({ value: s.name, title: s.name, sub: [s.empty ? "empty" : "", s.unlocked ? "" : "locked"].filter(Boolean).join(" · ") || "unlocked" }))} />
+      {plain.length ? <CheckboxCards id="ns-stores" value={picked} onChange={(v) => { touched.current = true; setPicked(v); }} options={plain.map((s) => ({ value: s.name, title: s.name, sub: <><P size={1} color="gray">{[s.empty ? "empty" : "", s.unlocked ? "" : "locked"].filter(Boolean).join(" · ") || "unlocked"}</P><StoreDocs store={s} /></> }))} />
         : stores.loaded ? <Muted>No (non-sensitive) stores.</Muted>
         : stores.err ? <Muted>{"Could not list the stores: " + stores.err}</Muted>
         : <Flex gap={2} align="center"><Spinner /><Muted>Loading stores…</Muted></Flex>}

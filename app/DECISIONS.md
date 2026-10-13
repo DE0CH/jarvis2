@@ -270,6 +270,13 @@ fixes, 34–40 carried over from the old app and still true, 41–43 the web pag
     Task forms list content stores for `optionsFrom: "content"` fields. Settings → Paired apps (web,
     `views/PairedApps.tsx`; iPhone `Settings/ContentView.swift`) lists Deyao's paired OpenClaw/Paseo apps with Remove. In
     the iPhone app Content and Paired apps are Settings rows, not tabs (the tab bar is full).
+67. **What each store and key is for** (web page, `ui/storedocs.tsx`; Deyao, 2026-10-13): the store list comes from
+    `GET api/stores` (the core's signed list plus each key, its writer and its explanation). The Stores tab shows each
+    store's about text and every key (name in mono, explanation, "Written by session" + the session's title for a key a
+    session wrote); each text has an inline Edit (a text box with Save / Cancel, Saving… and the router's error under
+    it, "Saved" for a moment; saving an empty text removes it) that `PUT`s `api/stores/{store}/docs`. Keys with none
+    show "no explanation yet"; a store whose key names aren't known says so. New session's store picker shows the same
+    read-only and compact (key and explanation on one line, at most two lines). The iOS app doesn't show them yet.
 
 ## Unfinished / known gaps
 

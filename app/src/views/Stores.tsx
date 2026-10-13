@@ -1,12 +1,13 @@
-// The core's secret stores (POST api/core/stores), shown as listed. Unlocking, locking and marking a
-// store sensitive happen on the shell's secure page, which checks the core's signatures itself; the web
-// page only shows the list.
+// The core's secret stores (GET api/stores), shown as listed with what each store and key is for (editable in
+// place: ui/storedocs.tsx). Unlocking, locking and marking a store sensitive happen on the shell's secure page, which
+// checks the core's signatures itself; the web page only shows the list.
 import { useEffect } from "react";
 import { useStore, loadStores, refresh } from "../lib/store";
 import { hasShell, requestSecure } from "../lib/shell";
 import { Button, Card, Flex, Heading, Muted, P, Pill, Spinner } from "../ui/kit";
 import { Cards } from "../ui/cards";
 import { CORE_STORE, harnessStoreSet } from "../lib/api";
+import { StoreDocs } from "../ui/storedocs";
 
 export function Stores() {
   const r = useStore((s) => s.stores);
@@ -26,8 +27,9 @@ export function Stores() {
             <Card key={s.name} data={{ store: s.name }}>
               <Flex justify="space-between" align="flex-start" gap={2} mb={1}>
                 <Heading size={3} style={{ flex: 1 }}>{s.name}</Heading>
-                <Flex gap={1} wrap justify="flex-end">{s.sensitive && <Pill kind="bad">sensitive</Pill>}{s.unlocked ? <Pill kind="ok">unlocked</Pill> : <Pill kind="dim">locked</Pill>}{s.empty && <Pill kind="dim">empty</Pill>}{harness.has(s.name) && <Pill kind="info">harness</Pill>}</Flex>
+                <Flex gap={1} wrap justify="flex-end" style={{ flexShrink: 1 }}>{s.sensitive && <Pill kind="bad">sensitive</Pill>}{s.unlocked ? <Pill kind="ok">unlocked</Pill> : <Pill kind="dim">locked</Pill>}{s.empty && <Pill kind="dim">empty</Pill>}{harness.has(s.name) && <Pill kind="info">harness</Pill>}{s.keysFrom === "recorded" && <Pill kind="dim">recorded</Pill>}</Flex>
               </Flex>
+              <StoreDocs store={s} edit />
             </Card>
           ))}
         </Cards>}

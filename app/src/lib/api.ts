@@ -191,9 +191,16 @@ export type State = {
   loaded?: boolean; // client-side: api/state has answered at least once
 };
 export type Choice = { id: string; label: string; harness?: string };
-// a store as the core lists it (payload of POST api/core/stores). Read here only for display and
-// pre-selection; the shell verifies the core's signature before anything is signed.
-export type CoreStore = { name: string; sensitive: boolean; empty: boolean; unlocked: boolean };
+// a store as the router lists it (GET api/stores: the core's signed list, with each key, who wrote it and what the
+// store and each key are for, router/storedocs.go). Read here only for display and pre-selection; the shell verifies
+// the core's signature before anything is signed.
+export type KeyWriter = { by: "setup" | "machine" | "core"; machine?: string; line?: string; session?: string; sessionLabel?: string };
+export type StoreKey = { name: string; explanation: string; at?: string; writer?: KeyWriter };
+export type CoreStore = {
+  name: string; sensitive: boolean; empty: boolean; unlocked: boolean; about?: string; version?: string;
+  keys?: StoreKey[] | null; // null: not known (a core from before key lists, with no recorded names)
+  keysFrom?: "core" | "recorded" | "";
+};
 // which stores each harness brings (GET api/policy): the router adds them to a session, so the app
 // doesn't offer them in pickers or list them in summaries
 export type Policy = Record<string, string[]>;
@@ -205,12 +212,14 @@ export async function loadPolicy(): Promise<Policy> {
 }
 export const harnessStoreSet = (p: Policy) => new Set(Object.values(p).flat());
 
-/** the core's store list, unverified (the web page and the normal-mode UI only show it) */
+/** the store list with keys and explanations, unverified (the web page and the normal-mode UI only show it) */
 export async function coreStores(): Promise<CoreStore[]> {
-  const d = await api<SignedDoc>("POST", "api/core/stores", { nonce: newId() });
-  const p = JSON.parse(d.payload);
-  if (p.kind !== "stores") throw new Error("the core's store list has the wrong kind");
-  return p.stores || [];
+  const d = await api<{ stores?: CoreStore[] }>("GET", "api/stores");
+  return d.stores || [];
+}
+/** what a store and its keys are for: `about` (omitted = unchanged), key explanations ("" removes one) */
+export async function putStoreDocs(store: string, docs: { about?: string; keys?: Record<string, string> }): Promise<void> {
+  await api("PUT", "api/stores/" + encodeURIComponent(store) + "/docs", docs);
 }
 
 /** what a challenge asks for, read for display only (the shell checks it before signing) */

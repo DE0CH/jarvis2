@@ -223,7 +223,7 @@ function ChoiceCard({ on, onPress, children, check, id, data }: { on: boolean; o
 }
 export type Choice = { value: string; title: ReactNode; sub?: ReactNode };
 export function ChoiceText({ title, sub }: { title: ReactNode; sub?: ReactNode }) {
-  return <><P size={2} weight="medium">{title}</P>{sub ? <P size={1} color="gray">{sub}</P> : null}</>;
+  return <><P size={2} weight="medium">{title}</P>{sub ? (typeof sub === "string" || typeof sub === "number" ? <P size={1} color="gray">{sub}</P> : <View style={{ marginTop: 4 }}>{sub}</View>) : null}</>;
 }
 export function RadioCards({ value, onChange, options, id }: { value: string; onChange: (v: string) => void; options: Choice[]; id?: string }) {
   // each option is `<id>-<value>` too (the UI tests tap them)
