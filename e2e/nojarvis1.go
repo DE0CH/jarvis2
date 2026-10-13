@@ -150,7 +150,7 @@ func serveStandIns() {
 		go func() { log.Fatal(http.ListenAndServe(a, mux)) }()
 	}
 	if a := os.Getenv("E2E_DAV_ADDR"); a != "" {
-		d := &fakeDAV{files: map[string][]byte{}, dirs: map[string]bool{"/": true}}
+		d := &fakeDAV{files: map[string][]byte{}, mods: map[string]time.Time{}, dirs: map[string]bool{"/": true}}
 		go func() { log.Fatal(http.ListenAndServeTLS(a, os.Getenv("E2E_DAV_CERT"), os.Getenv("E2E_DAV_KEY"), d)) }()
 	}
 }
@@ -160,6 +160,7 @@ func serveStandIns() {
 type fakeDAV struct {
 	mu    sync.Mutex
 	files map[string][]byte
+	mods  map[string]time.Time // each file's PUT time: its getlastmodified (content-sync compares listings)
 	dirs  map[string]bool
 }
 
@@ -189,6 +190,7 @@ func (d *fakeDAV) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	case "PUT":
 		b, _ := io.ReadAll(req.Body)
 		d.files[clean] = b
+		d.mods[clean] = time.Now().UTC()
 		parents(clean)
 		w.WriteHeader(201)
 	case "GET", "HEAD":
@@ -206,6 +208,7 @@ func (d *fakeDAV) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		found := false
 		if _, ok := d.files[clean]; ok {
 			delete(d.files, clean)
+			delete(d.mods, clean)
 			found = true
 		}
 		for f := range d.files {
@@ -235,31 +238,32 @@ func (d *fakeDAV) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 			href string
 			dir  bool
 			size int
+			mod  time.Time
 		}
 		es := []entry{}
 		if isFile {
-			es = append(es, entry{clean, false, len(d.files[clean])})
+			es = append(es, entry{clean, false, len(d.files[clean]), d.mods[clean]})
 		} else {
-			es = append(es, entry{dirKey, true, 0})
+			es = append(es, entry{dirKey, true, 0, time.Time{}})
 			if req.Header.Get("Depth") == "1" {
 				seen := map[string]bool{}
 				for k := range d.dirs {
 					if rest, ok := strings.CutPrefix(k, dirKey); ok && rest != "" && strings.Count(strings.TrimSuffix(rest, "/"), "/") == 0 && !seen[k] {
 						seen[k] = true
-						es = append(es, entry{k, true, 0})
+						es = append(es, entry{k, true, 0, time.Time{}})
 					}
 				}
 				for f, b := range d.files {
 					if rest, ok := strings.CutPrefix(f, dirKey); ok && !strings.Contains(rest, "/") {
-						es = append(es, entry{f, false, len(b)})
+						es = append(es, entry{f, false, len(b), d.mods[f]})
 					}
 				}
 			}
 		}
 		var out bytes.Buffer
 		out.WriteString(`<?xml version="1.0" encoding="utf-8"?><D:multistatus xmlns:D="DAV:">`)
-		mod := time.Now().UTC().Format(http.TimeFormat)
 		for _, e := range es {
+			mod := e.mod.UTC().Format(http.TimeFormat)
 			var href bytes.Buffer
 			xml.EscapeText(&href, []byte(e.href))
 			rt := ""
@@ -339,7 +343,9 @@ func servicesStep(id, m, secret string) {
 	}
 	// content: the session pulled the store at boot (SESSION_CONTENT); a push from the session reaches the store
 	expectOnMachine(m, "cat /home/claude/content/e2e-content/hello.txt", "content-"+secret)
-	expectOnMachine(m, "su - claude -c 'echo back-"+secret+" > ~/content/e2e-content/back.txt && content-sync push e2e-content >/dev/null && echo ok'", "ok")
+	// (the harness's env, as jarvis2-machine sets it: a Fly exec's shell has none of it)
+	env := "SESSION_CONTENT=e2e-content JARVIS_URL=http://127.0.0.1:7171 SESSION_API_TOKEN=jarvis2-local-proxy SESSION_ID=" + id
+	expectOnMachine(m, "su - claude -c 'echo back-"+secret+" > ~/content/e2e-content/back.txt && "+env+" content-sync push e2e-content 2>&1 | tail -1'", "e2e-content: pushed 1 new, 0 changed, 0 deleted")
 	s, b := callRaw("GET", "/api/content/e2e-content/file?path=back.txt", nil)
 	if s != 200 || strings.TrimSpace(string(b)) != "back-"+secret {
 		log.Fatalf("the session's push didn't reach the content store: %d %q", s, b)
