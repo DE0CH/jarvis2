@@ -9,7 +9,8 @@
 # OPENROUTER_API. Image pinned by its linux/amd64 digest by .github/workflows/services.yml.
 apiVersion: v1
 kind: PersistentVolumeClaim
-metadata: { name: search-data, namespace: jarvis2-edge }
+# never pruned by Flux: a commit that drops this file by mistake must not delete the index (2026-10-13: one did)
+metadata: { name: search-data, namespace: jarvis2-edge, annotations: { kustomize.toolkit.fluxcd.io/prune: disabled } }
 spec:
   accessModes: [ReadWriteOnce]
   resources: { requests: { storage: 8Gi } }

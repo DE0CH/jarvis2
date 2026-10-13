@@ -13,7 +13,8 @@
 # ICLOUD_RCLONE_CONF, the saved iCloud login; a new login = write that part again, the pod picks it up by itself).
 apiVersion: v1
 kind: PersistentVolumeClaim
-metadata: { name: icloud-index-data, namespace: jarvis2-edge }
+# never pruned by Flux: a commit that drops this file by mistake must not delete the index (2026-10-13: one did)
+metadata: { name: icloud-index-data, namespace: jarvis2-edge, annotations: { kustomize.toolkit.fluxcd.io/prune: disabled } }
 spec:
   accessModes: [ReadWriteOnce]
   resources: { requests: { storage: 20Gi } }
