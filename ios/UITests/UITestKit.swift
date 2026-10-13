@@ -147,6 +147,13 @@ class JarvisUITestCase: XCTestCase {
   /// element nor any descendant has keyboard focus", walkthrough run 38347022232), then type
   func focusAndType(_ e: XCUIElement, _ text: String) {
     for _ in 1...4 {
+      // left under the navigation bar by the scroll up (ns-title at y 27 in run 38358382751): drag the form down a
+      // little, never a full swipe (one at the top pulls the sheet away)
+      if e.exists && e.frame.minY < 140 {
+        let a = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.45)), b = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.6))
+        a.press(forDuration: 0.1, thenDragTo: b)
+        sleep(1)
+      }
       if e.isHittable { e.tap() }
       if (e.value(forKey: "hasKeyboardFocus") as? Bool) == true { break }
       sleep(1)
