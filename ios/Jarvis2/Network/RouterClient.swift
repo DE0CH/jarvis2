@@ -293,6 +293,36 @@ final class RouterClient: NSObject, ASWebAuthenticationPresentationContextProvid
   }
 
   // ---- what each store and key is for (router/storedocs.go): names, writers, explanations; never values ----
+  // ---- a store's earlier versions and putting one back (core/history.go, router/storerestore.go) ----
+  /// the core's signed list of a store's kept versions (checked: the core's key, this call's nonce, this store)
+  func storeVersions(_ store: String) async throws -> StoreVersionsDoc {
+    let n = CoreCrypto.nonce()
+    let d = try CoreCrypto.decode(try await json("POST", "api/core/stores/versions", ["store": store, "nonce": n], as: SignedDoc.self), by: try CoreTrust.key(),
+                                  as: StoreVersionsDoc.self, what: "the store's versions")
+    guard d.kind == "store-versions", d.nonce == n, d.store == store else { throw TrustError.stale("versions of \(store)") }
+    return d
+  }
+  /// the core's signed begin document of putting version `seq` back, checked (each key put back has a writer the phone
+  /// accepts); the payload is what the phone signs
+  func restoreBegin(_ store: String, seq: Int) async throws -> (doc: SignedDoc, begin: RestoreBegin) {
+    let doc = try await json("POST", "api/core/stores/restore/begin", ["store": store, "seq": seq], as: SignedDoc.self)
+    let b = try CoreCrypto.decode(doc, by: try CoreTrust.key(), as: RestoreBegin.self, what: "the restore")
+    try Checks.restoreBegin(b, store: store, seq: seq, setupKey: try await setupKeyIfNeeded(b.put.map { Optional($0.writer) }))
+    return (doc, b)
+  }
+  /// the phone's signature over the begin document and its share of every key put back (in `b.es` order): the router
+  /// writes the core's backups, then the core commits; the committed answer is checked
+  func restoreFinish(_ b: RestoreBegin, signature: Data, shares: [Data]) async throws -> RestoreDone {
+    guard shares.count == b.put.count else { throw TrustError.stale("restore of \(b.store)") }
+    var m: [String: Any] = [:]
+    for (p, x) in zip(b.put, shares) { m[p.key] = try CoreCrypto.sealShare(x, to: b.t) }
+    struct Out: Decodable { let restored: SignedDoc }
+    let out = try await json("POST", "api/stores/restore/finish", ["pending": b.pending, "signature": signature.base64EncodedString(), "shares": m], as: Out.self)
+    let d = try CoreCrypto.decode(out.restored, by: try CoreTrust.key(), as: RestoreDone.self, what: "the restored answer")
+    try Checks.restoreDone(d, begin: b)
+    return d
+  }
+
   func storeRows() async throws -> [StoreRowDTO] {
     struct L: Decodable { let stores: [StoreRowDTO] }
     return try await json("GET", "api/stores", as: L.self).stores

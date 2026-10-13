@@ -178,7 +178,7 @@ enum SignedAction {
   /// the keys of the page's own options that must equal the request's (so the request shown is the one this page
   /// acts on); "" = they match
   static func mismatch(page: [String: Any], request: [String: Any]) -> String {
-    for k in ["approvalId", "action", "repo", "sessionId", "holder", "grantKind", "minutes"] {
+    for k in ["approvalId", "action", "repo", "sessionId", "holder", "grantKind", "minutes", "store", "seq"] {
       let a = page[k].map { "\($0)" } ?? "", b = request[k].map { "\($0)" } ?? ""
       if k == "repo" ? a.lowercased() != b.lowercased() : a != b { return k }
     }

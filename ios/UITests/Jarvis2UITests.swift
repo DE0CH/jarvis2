@@ -229,6 +229,7 @@ final class Jarvis2UITests: JarvisUITestCase {
         XCTAssertTrue(wait(el("store-about-default-saved"), 15, "Saved") && said(el("store-about-default")).contains("everyday keys"), "[\(tag)] the about text is saved: \(said(el("store-about-default")))")
       }
       shot("store-detail")
+      restoreStore()
       back()
     }
     back()
@@ -571,5 +572,47 @@ final class Jarvis2UITests: JarvisUITestCase {
       }
     }
     app.terminate()
+  }
+}
+
+extension Jarvis2UITests {
+  /// the router's JSON (the test reads payloads; the app checks signatures)
+  func routerJSON(_ method: String, _ path: String, _ body: String? = nil) -> (Int, [String: Any]) {
+    let (s, d) = routerRaw(method, path, body: body.map { Data($0.utf8) }, headers: ["Content-Type": "application/json"])
+    return (s, (try? JSONSerialization.jsonObject(with: d) as? [String: Any]) ?? [:])
+  }
+  func storeKeyNames(_ store: String) -> [String] {
+    let (_, j) = routerJSON("GET", "api/stores")
+    return ((j["stores"] as? [[String: Any]]) ?? []).first { $0["name"] as? String == store }?["keys"] as? [String] ?? []
+  }
+
+  /// On default's page: a key deleted behind the app's back (as the setup session), then Versions → the version before
+  /// the delete → Restore… → the review names the key put back → Restore (Face ID: a software key here) → it is back.
+  /// core/history.go: no kit, the phone's signature over the core's begin document and its share of the key.
+  func restoreStore() {
+    let key = "OTHER"
+    XCTAssertEqual(routerJSON("POST", "setup/stores/default/keys/\(key)", #"{"delete":true,"sig":"c2ln"}"#).0, 200, "[\(tag)] \(key) deleted as the setup session")
+    XCTAssertFalse(storeKeyNames("default").contains(key), "[\(tag)] \(key) is gone from default")
+    let (_, v) = routerJSON("POST", "api/core/stores/versions", #"{"store":"default","nonce":"0123456789abcdef"}"#)
+    let versions = ((v["payload"] as? String).flatMap { try? JSONSerialization.jsonObject(with: Data($0.utf8)) as? [String: Any] })?["versions"] as? [[String: Any]] ?? []
+    guard versions.count >= 2, let seq = versions[1]["seq"] as? Int else { XCTFail("[\(tag)] the core lists the version before the delete: \(versions.count)"); return }
+    let link = el("store-versions-default")
+    guard scrolledTo(link) else { XCTFail("[\(tag)] Versions on the store's page"); return }
+    link.tap()
+    let restore = el("version-restore-\(seq)")
+    guard arrives(restore, 20, "the version before the delete") else { return }
+    shot("store-versions")
+    restore.tap()
+    let allow = el("secure-restore-allow")
+    guard arrives(allow, 20, "the restore review") else { return }
+    XCTAssertTrue(wait(el("restore-put-\(key)"), 10, "the key put back"), "[\(tag)] the review names \(key) as put back (from the core's signed begin)")
+    shot("restore-review")
+    allow.tap()
+    var restored = false
+    for _ in 0..<30 where !restored { restored = storeKeyNames("default").contains(key); if !restored { sleep(1) } }
+    XCTAssertTrue(restored, "[\(tag)] \(key) is back in default after the restore")
+    XCTAssertFalse(allow.waitForExistence(timeout: 5) && allow.isHittable, "[\(tag)] the review closed")
+    shot("store-restored")
+    back()
   }
 }

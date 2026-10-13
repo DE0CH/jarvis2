@@ -198,6 +198,12 @@ struct StoreDetailView: View {
         } header: { Text("Keys") } footer: {
           Text("Names and who wrote each key; never values.")
         }
+        if !store.hasPrefix("github-") || store == "github-deploy-keys" {
+          Section {
+            NavigationLink { StoreVersionsView(store: store) } label: { Label("Versions", systemImage: "clock.arrow.circlepath") }
+              .accessibilityIdentifier("store-versions-\(store)")
+          } footer: { Text("Earlier versions the core keeps. Restore puts one back with Face ID.") }
+        }
       } else if error == nil {
         ProgressView()
       }

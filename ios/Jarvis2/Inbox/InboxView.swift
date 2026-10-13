@@ -99,7 +99,7 @@ private struct InboxRow: View {
   }
 
   private var kindName: String {
-    ["repo-key": "Repo key", "grant": "Grant", "unlock": "Unlock", "new-session": "New session", "resume-upgrade": "Resume", "add-store": "Add a store", "api-call": "API call"][it.kind] ?? it.kind
+    ["repo-key": "Repo key", "grant": "Grant", "unlock": "Unlock", "new-session": "New session", "resume-upgrade": "Resume", "add-store": "Add a store", "api-call": "API call", "restore": "Restore store"][it.kind] ?? it.kind
   }
   /// the list's title: the core action (or the phone grant) the entry leads to, a fixed name per kind
   private var action: String { it.actionTitle }
@@ -115,6 +115,7 @@ private struct InboxRow: View {
       return [Holder.title(p["holder"].string ?? ""), who, d > 0 ? "\(d) d" : "\(p["minutes"].int ?? 10) min"].compactMap { $0 }
     case "add-store": return [it.j["options"]["store"].string, who].compactMap { $0 }
     case "api-call": return [callTarget, p["body"].string].compactMap { $0 }
+    case "restore": return [p["store"].string, p["seq"].int.map { "Version \($0)" }].compactMap { $0 }
     default:
       if let r = it.j["options"]["restore"].text { return [r] }
       return [who].compactMap { $0 }

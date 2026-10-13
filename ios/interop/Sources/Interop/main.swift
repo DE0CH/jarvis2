@@ -301,6 +301,64 @@ check(wObj.map { x in !throwsErr { _ = try CoreSetup.checkKeyBackup(x, setupKey:
 check((try? CoreSetup.readBackups(servedNow, master: kitMaster, setupKey: setupKey, boxKey: boxKey))?.first { $0.name == "default" }?.values["WRITTEN"] == "w1",
       "…and opens with the kit, laid over the store's whole-store backup")
 
+// ---- restore: a store put back to an earlier version (core/history.go, router/storerestore.go): the phone signs the
+// core's begin document and shares the keys put back; no kit. The core's backups (writer "restore") check at Recover.
+func setupDelete(_ store: String, _ key: String) -> [String: Any] {
+  let text = Checks.writerText(store: store, key: key, e: "", dataSha256: "", backupSha256: "")
+  return ["delete": true, "sig": try! setupSigner.signature(for: Data(text.utf8)).derRepresentation.base64EncodedString()]
+}
+func versionsOf(_ store: String) -> StoreVersionsDoc? {
+  try? CoreCrypto.decode(doc(call("/api/core/stores/versions", ["store": store, "nonce": "n-v"], base: rbaseW).1), by: coreKey, as: StoreVersionsDoc.self, what: "versions")
+}
+func restoreBeginDoc(_ store: String, _ seq: Int) -> (SignedDoc, RestoreBegin?) {
+  let (s, d) = call("/api/core/stores/restore/begin", ["store": store, "seq": seq], base: rbaseW)
+  guard s == 200 else { return (SignedDoc(payload: "", sig: ""), nil) }
+  let sd = doc(d)
+  return (sd, try? CoreCrypto.decode(sd, by: coreKey, as: RestoreBegin.self, what: "restore begin"))
+}
+func restoreFinish(_ b: RestoreBegin, _ d: SignedDoc, signer: P256.Signing.PrivateKey) -> (Int, Data) {
+  var m: [String: Any] = [:]
+  for p in b.put { m[p.key] = try! CoreCrypto.sealShare(shareOf(p.e), to: b.t) }
+  return call("/api/stores/restore/finish", ["pending": b.pending, "signature": try! signer.signature(for: Data(d.payload.utf8)).derRepresentation.base64EncodedString(),
+                                             "shares": m], base: rbaseW)
+}
+let v0 = versionsOf("default"), withWritten = v0?.versions.first
+check(withWritten?.cause.kind == "write" && withWritten?.cause.key == "WRITTEN" && withWritten?.version == v0?.current && (v0?.versions.count ?? 0) >= 2,
+      "the core's signed versions of a store, newest first (the write of WRITTEN is current)")
+let wseq = withWritten?.seq ?? 0
+check(call("/setup/stores/default/keys/WRITTEN", setupDelete("default", "WRITTEN"), base: rbaseW).0 == 200, "WRITTEN deleted as the setup session")
+var (rsdoc, rsb) = restoreBeginDoc("default", wseq)
+check(rsb?.put.map(\.key) == ["WRITTEN"] && rsb?.remove == [] && rsb?.put.first?.writer.by == "setup"
+      && rsb.map { x in !throwsErr { try Checks.restoreBegin(x, store: "default", seq: wseq, setupKey: setupKey) } } == true,
+      "restore-begin names exactly the key put back; the app checks its setup writer")
+check(rsb.map { x in throwsErr { try Checks.restoreBegin(x, store: "default", seq: wseq, setupKey: phoneSigningForTests) } } == true, "…and refuses it against another setup key")
+check(rsb.map { x in throwsErr { try Checks.restoreBegin(x, store: "default", seq: wseq + 1, setupKey: setupKey) } } == true, "…and a begin for another version")
+check(rsb.map { restoreFinish($0, rsdoc, signer: P256.Signing.PrivateKey()).0 } != 200, "a restore signed by another key is refused")
+check(rsb.map { restoreFinish($0, rsdoc, signer: phoneSigning).0 } != 200, "…and its begin is spent")
+check(begin("default").1?.keys?.contains { $0.key == "WRITTEN" } == false, "…so nothing was restored")
+(rsdoc, rsb) = restoreBeginDoc("default", wseq)
+let (rfs, rfd) = rsb.map { restoreFinish($0, rsdoc, signer: phoneSigning) } ?? (0, Data())
+struct RestoredOut: Decodable { let restored: SignedDoc }
+let rdone = (try? JSONDecoder().decode(RestoredOut.self, from: rfd)).flatMap { try? CoreCrypto.decode($0.restored, by: coreKey, as: RestoreDone.self, what: "restored") }
+check(rfs == 200 && rdone != nil && rsb.map { x in !throwsErr { try Checks.restoreDone(rdone!, begin: x) } } == true,
+      "the phone's signature and shares put the version back; the committed answer is this restore's (HTTP \(rfs) \(String(decoding: rfd.prefix(160), as: UTF8.self)))")
+check(versionsOf("default")?.current == withWritten?.version && versionsOf("default")?.versions.first?.cause.kind == "restore", "…the store is that version again, as a new version")
+let (rws, rwb) = begin("default")
+check(rws == 200 && rwb?.keys?.first { $0.key == "WRITTEN" }?.writer.by == "setup" && rwb.map { finish($0).0 } == 200, "…WRITTEN is back with its own writer, and the store opens")
+let servedRestored = (try? JSONDecoder().decode(ServedAgain.self, from: call("/api/backups", base: rbaseW).1))?.objects ?? []
+let rsObj = servedRestored.first { $0.key == "keys/default/WRITTEN.json" }
+check(rsObj.map { x in !throwsErr { _ = try CoreSetup.checkKeyBackup(x, setupKey: setupKey, boxKey: boxKey) } } == true && rsObj?.body.contains("\"restore\"") == true,
+      "the router wrote the core's backup of WRITTEN (writer restore) and the app checks it")
+check((try? CoreSetup.readBackups(servedRestored, master: kitMaster, setupKey: setupKey, boxKey: boxKey))?.first { $0.name == "default" }?.values["WRITTEN"] == "w1",
+      "…and a Recover brings WRITTEN back with the kit")
+if let rsObj {
+  check(throwsErr { _ = try CoreSetup.checkKeyBackup(rsObj, setupKey: setupKey, boxKey: setupKey) }, "…not with a core another key vouched for")
+  check(throwsErr { _ = try CoreSetup.checkKeyBackup(alter(rsObj) { $0["backupSha256"] = String(repeating: "0", count: 64) }, setupKey: setupKey, boxKey: boxKey) },
+        "…nor with another value than its receipt names")
+  check(throwsErr { _ = try CoreSetup.checkKeyBackup(alter(rsObj, key: "keys/default/OTHER.json") { $0["key"] = "OTHER" }, setupKey: setupKey, boxKey: boxKey) },
+        "…nor moved to a key its receipt doesn't put back")
+}
+
 // a key sealed under another name (store or key) doesn't decrypt: the core refuses the whole unlock
 func coreWrite(_ store: String, _ key: String, sealedAs: (String, String), signer: P256.Signing.PrivateKey = setupSigner) -> Int {
   let x = try! CoreCrypto.wrapKey(store: sealedAs.0, key: sealedAs.1, value: Data("v".utf8), storeKey: sk0)

@@ -23,6 +23,8 @@ enum SecureRequest: Identifiable, Equatable, Hashable {
   case repoKey(action: String, repo: String, sensitive: Bool, inbox: String? = nil)
   /// a batch from the Inbox (router/batches.go): its items on one page, allowed under one Face ID
   case batch(id: String)
+  /// a store put back to an earlier version (core/history.go)
+  case restore(store: String, seq: Int, inbox: String? = nil)
 
   var id: String {
     switch self {
@@ -32,12 +34,13 @@ enum SecureRequest: Identifiable, Equatable, Hashable {
     case .unlock(let s, _, _): "unlock-\(s)"
     case .repoKey(let a, let r, _, _): "repo-\(a)-\(r)"
     case .batch(let b): "batch-\(b)"
+    case .restore(let st, let q, _): "restore-\(st)-\(q)"
     }
   }
   var inboxId: String? {
     switch self {
     case .newSession, .batch: nil
-    case .approval(_, let i), .grant(_, let i), .unlock(_, _, let i), .repoKey(_, _, _, let i): i
+    case .approval(_, let i), .grant(_, let i), .unlock(_, _, let i), .repoKey(_, _, _, let i), .restore(_, _, let i): i
     }
   }
   /// what this page acts on, in the Inbox's option names: compared with the request's own (SignedAction.mismatch)
@@ -51,6 +54,7 @@ enum SecureRequest: Identifiable, Equatable, Hashable {
       return o
     case .unlock(let s, _, _): return ["sessionId": s]
     case .repoKey(let a, let r, _, _): return ["action": a, "repo": r]
+    case .restore(let st, let q, _): return ["store": st, "seq": q]
     }
   }
 
@@ -72,6 +76,9 @@ enum SecureRequest: Identifiable, Equatable, Hashable {
     case "repo-key":
       guard let r = o["repo"].text else { return nil }
       return .repoKey(action: o["action"].string == "remove" ? "remove" : "add", repo: r, sensitive: o["sensitive"].bool == true, inbox: it.id)
+    case "restore":
+      guard let st = o["store"].text, let q = o["seq"].int, q > 0 else { return nil }
+      return .restore(store: st, seq: q, inbox: it.id)
     default:
       return nil
     }
