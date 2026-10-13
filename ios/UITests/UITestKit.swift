@@ -174,17 +174,28 @@ class JarvisUITestCase: XCTestCase {
     if el("backup-error").exists { XCTFail("[\(tag)] the backup download failed: \(el("backup-error").label)") }
     XCTAssertTrue(valid.exists, "[\(tag)] every backup signature is valid (\(invalid.exists ? said(invalid) : "no answer"))")
     if let stores { XCTAssertTrue(said(el("backup-stores")).contains("\(stores)"), "[\(tag)] the page counts \(stores) stores: \(said(el("backup-stores")))") }
+    let ok = valid.exists
     shot("backup-checked")
     if scrolledTo(el("backup-share")) {
-      el("backup-share").tap()
-      sleep(3)
+      // the system share sheet (UIActivityViewController): its list, its close button or the Save to Files action
+      let sheet = [app.otherElements["ActivityListView"], app.buttons["Close"], app.buttons["close"],
+                   app.cells.matching(NSPredicate(format: "label CONTAINS 'Save to Files'")).firstMatch,
+                   app.buttons.matching(NSPredicate(format: "label CONTAINS 'Save to Files'")).firstMatch]
+      var up = false
+      for _ in 0..<2 where !up {
+        el("backup-share").tap()
+        let until = Date().addingTimeInterval(15)
+        while !up && Date() < until { up = sheet.contains { $0.exists }; if !up { usleep(500_000) } }
+      }
       shot("backup-share-sheet", checkBlank: false)
-      let close = app.buttons.matching(NSPredicate(format: "label == 'Close' OR identifier == 'Close'")).firstMatch
-      if close.waitForExistence(timeout: 10) { close.tap() } else { app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.08)).tap() }
+      if !up { note("share-sheet-tree", app.debugDescription) }
+      XCTAssertTrue(up, "[\(tag)] Save file… opens the share sheet")
+      let close = app.buttons.matching(NSPredicate(format: "label == 'Close' OR identifier == 'Close' OR label == 'close'")).firstMatch
+      if close.exists { close.tap() } else if up { app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.08)).tap() }
       XCTAssertTrue(el("backup-share").waitForExistence(timeout: 20) && el("backup-share").isHittable, "[\(tag)] the share sheet closes")
     } else { XCTFail("[\(tag)] no Save file… after the download") }
     back()
-    return valid.exists
+    return ok
   }
   func isOn(_ e: XCUIElement) -> Bool { (e.value as? String) == "1" || e.isSelected }
 
