@@ -38,7 +38,7 @@ func blackholeMachines() {
 	want := "http://" + os.Getenv("E2E_PEER") + "._peer.internal:8081"
 	line := ""
 	for _, h := range jarvis1Hosts {
-		line += "0.0.0.0 " + h + "\n"
+		line += "0.0.0.0 " + h + "\n:: " + h + "\n" // both families: a v6 lookup must not fall through to DNS
 	}
 	cmd := fmt.Sprintf("grep -q '%s' /etc/hosts || printf '%%s' '%s' >> /etc/hosts; test -e /run/jarvis2/booted && echo after || echo before", jarvis1Hosts[0], line)
 	for {
@@ -81,7 +81,7 @@ func expectBlackholed(m string) {
 		w := blackholed.m[m]
 		blackholed.Unlock()
 		if w != "" {
-			expectOnMachine(m, "getent hosts "+jarvis1Hosts[0]+" | awk '{print $1}'", "0.0.0.0")
+			expectOnMachine(m, "getent ahosts "+jarvis1Hosts[0]+" | awk '{print $1}' | LC_ALL=C sort -u | paste -sd' '", "0.0.0.0 ::")
 			return
 		}
 		time.Sleep(time.Second)

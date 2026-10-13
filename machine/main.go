@@ -39,6 +39,7 @@ import (
 	"io"
 	"log"
 	"maps"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -357,8 +358,25 @@ func prepare() error {
 	if firstMachine && len(v.Config.Attachments) > 0 {
 		env = append(env, fetchAttachments(c, coreKey, v.Config.Attachments)...) // attachments.go: hash-checked against the cert
 	}
+	waitAPIProxy(15 * time.Second) // the entrypoint's first calls ($JARVIS_URL: content-sync pull) need it up
 	log.Printf("starting the harness")
 	return syscall.Exec(baseEntry, []string{baseEntry}, env)
+}
+
+// waitAPIProxy: the agent starts the local Jarvis API once bootedPath exists (agent(), polled every second); the
+// harness's entrypoint calls it at once (content-sync pull), so wait until it accepts connections (at most d)
+func waitAPIProxy(d time.Duration) {
+	addr := os.Getenv("JARVIS2_API_ADDR")
+	if addr == "" {
+		addr = apiProxyAddr
+	}
+	for end := time.Now().Add(d); time.Now().Before(end); time.Sleep(200 * time.Millisecond) {
+		if conn, err := net.DialTimeout("tcp", addr, time.Second); err == nil {
+			conn.Close()
+			return
+		}
+	}
+	log.Printf("the local Jarvis API on %s isn't up after %s: starting the harness anyway", addr, d)
 }
 
 func ownKeys() (map[string]string, error) {
