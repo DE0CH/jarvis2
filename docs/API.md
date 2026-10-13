@@ -352,6 +352,7 @@ against `SETUP_KEY` (`k8s/apps/router.yaml`), within ±2 min, each signature onc
 | `GET /setup/core-cert` | (the router's own) `{statement, masterSig}` of the claim it kept for the running core (matched by the core's signing key from `/identity`); 404 when none. A core claimed before the router kept claims (the running core until its release) is asked for its own `/core-cert`. |
 | `GET /setup/stores/keys` | (the router's own) the store list with key names, as `GET /api/stores` |
 | `GET /setup/jarvis1/paused[/{id}]`, `POST /setup/jarvis1/paused/{id}/prepare\|import` | (the router's own) as `/api/jarvis1/…` (Jarvis 1 import, above); the import's caller is `setup`. `infra/setup.py jarvis1 …` |
+| `POST /setup/sessions/{id}/pause` | (the router's own) cancels the session's wakeups and crons, then pauses it (202; the snapshot if its machine answers within the wait, else none). `infra/setup.py pause` |
 | `POST /setup/store-keys` | (the router's own) `{name, keys: [names] \| null}` → `{ok}`: records a store's key names (env-var style, ≤ 128 chars, de-duplicated and sorted); `null` forgets them. No values. `infra/setup.py write` sends it after every write; `infra/setup.py keys NAME KEY…` and `infra/store-keys.sh` (every store, from the layout file) record names alone. |
 
 `GET /setup/status` — the router's health: the names of its secrets that are set (values never), the session

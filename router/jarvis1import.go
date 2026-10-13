@@ -632,6 +632,22 @@ func (r *Router) registerJarvis1Import(app appRoute, m machineRoute, public publ
 	public("POST /setup/jarvis1/paused/{id}/import", setupOnly(func(w http.ResponseWriter, req *http.Request, b []byte) {
 		importIt(w, req, req.PathValue("id"), Caller{Kind: "setup"}, b)
 	}))
+	// stopping a session from the setup session (2026-10-13: Deyao stopped the imported sessions): pause it (its
+	// snapshot if the machine answers, else none) and cancel its wakeups and crons, so nothing resumes it by itself
+	public("POST /setup/sessions/{id}/pause", setupOnly(func(w http.ResponseWriter, req *http.Request, _ []byte) {
+		id := req.PathValue("id")
+		cancelled, _ := r.CancelWakeups(id, nil, true)
+		crons, _ := r.ListCrons(id)
+		for _, c := range crons {
+			r.CancelCron(id, c.Name)
+			cancelled = append(cancelled, "cron "+c.Name)
+		}
+		if err := r.Pause(id); err != nil {
+			writeJSON(w, 400, map[string]any{"error": err.Error(), "cancelled": cancelled})
+			return
+		}
+		writeJSON(w, 202, map[string]any{"ok": true, "phase": "pausing", "cancelled": cancelled})
+	}))
 	// the importing line's first machine (its manifest is served at /m/restore-snapshot, restore.go)
 	m("GET /m/import-file/{name}", func(w http.ResponseWriter, req *http.Request, machine string, _ []byte) {
 		r.serveImportFile(w, machine, req.PathValue("name"))

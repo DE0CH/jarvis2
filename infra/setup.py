@@ -34,6 +34,7 @@ both). Values never print.
   infra/setup.py sessions              the router's sessions: id, current machine, state, title
   infra/setup.py lease take-over|hand-back DEVICE [--note TEXT]
                                        for Deyao: take a shared device over (agents refused) or hand it back
+  infra/setup.py pause SESSION         cancel its wakeups and crons, then pause it (its snapshot if the machine answers)
   infra/setup.py requests              what waits in the phone's Inbox (requests and approvals)
   infra/setup.py jarvis1               Jarvis 1's paused sessions (its index) and each one's import state here
   infra/setup.py jarvis1 prepare ID… [--wait]
@@ -400,6 +401,9 @@ def main():
         act, dev = args[0], args[1]
         note = opt(args, "--note")
         print(json.dumps(call("POST", f"/setup/leases/{dev}/{act}", {"note": note} if note is not None else {}), indent=1))
+    elif cmd == "pause":
+        # pause (the snapshot if the machine answers) and cancel its wakeups and crons first
+        print(json.dumps(call("POST", "/setup/sessions/" + args[0] + "/pause", {})))
     elif cmd == "requests":
         for q in call("GET", "/setup/requests")["requests"]:
             c = q.get("call") or {}
