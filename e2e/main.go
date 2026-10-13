@@ -587,15 +587,15 @@ func randBytes(n int) []byte {
 
 var unlockIDs []string
 
-// unlock: forNonce = the challenge or cert nonce the unlock is for (what the app's Start, add-store and Unlock…
-// send); "" = a standing unlock (the Stores page)
-// fakeProfile: the test's stand-in for Anthropic's profile endpoint (testdata/claude-profile.json on main: the fake
-// account every token belongs to)
-const fakeProfile = "https://raw.githubusercontent.com/DE0CH/jarvis2/main/e2e/testdata/claude-profile.json"
+// fakeProfile: the test's stand-in for Anthropic's profile endpoint (testdata/claude-profile.json on main, through
+// jsDelivr: raw.githubusercontent.com answers 404 to a request with a bearer token, which the machine always sends)
+const fakeProfile = "https://cdn.jsdelivr.net/gh/DE0CH/jarvis2@main/e2e/testdata/claude-profile.json"
 
 // fakePair: the Claude login the test router holds (a fake pair, public; never refreshed: it expires in 2100)
 const fakePair = `{"claudeAiOauth": {"accessToken": "e2e-fake-access", "refreshToken": "e2e-fake-refresh", "expiresAt": 4102444800000, "scopes": ["user:inference"], "subscriptionType": "max"}}`
 
+// unlock: forNonce = the challenge or cert nonce the unlock is for (what the app's Start, add-store and Unlock…
+// send); "" = a standing unlock (the Stores page)
 func unlock(p *phone, store, forNonce string) {
 	var d Doc
 	must2(call(router, "POST", "/api/core/unlock/begin", map[string]string{"store": store, "for": forNonce}, &d))
