@@ -29,12 +29,12 @@ spec:
       securityContext: { fsGroup: 65532 }
       containers:
         - name: router
-          image: ghcr.io/de0ch/jarvis2-router:sha-d2a61b1a2f6f@sha256:b8149bd453966b9794022643ef05985660a07e1a585a1de2cdaee6d85bf245d3
+          image: ghcr.io/de0ch/jarvis2-router:sha-556fd923d2ca@sha256:5579699e0200fa2a5ebc39bdd6a5b7a1637e8340e0aaa29501129a67d2489494
           ports: [{ containerPort: 8080 }]
           env:
-            - { name: SESSION_IMAGE, value: "ghcr.io/de0ch/jarvis2-session:sha-d2a61b1a2f6f@sha256:7249ede4e937ac823c9387dee9601866526234ebcea879fc3adff50f06f05e01" }
+            - { name: SESSION_IMAGE, value: "ghcr.io/de0ch/jarvis2-session:sha-556fd923d2ca@sha256:a343b6d1b737730c99c87778db07759ac26a17ca47eea4ea792ee589e0f3ce03" }
             # the CI key's signature over "jarvis2-session-image <SESSION_IMAGE>" (images.yml, keys/ci.pub): the phone checks it
-            - { name: SESSION_IMAGE_SIG, value: "MEQCIHzHQcqN8XeY6T1o3XxhJX6vHrDuKUYeaptOMmnm7LXdAiB1ZD79vtAH7sHFeTAVXwGwANXsJiooqUc+uaeQrrp0MQ==" }
+            - { name: SESSION_IMAGE_SIG, value: "MEUCIQCFkdTYgxg8hsPkhw9IRRVPVFKke0NI1zDxb2Q3VWV3qgIgQRM0cl21inB9Eew3ZScjjnU5GXISwqqdOmj6c3PC0kA=" }
             # every earlier CI-pinned session image with its signature (k8s/apps/session-image-sigs.txt, images.yml)
             - { name: SESSION_IMAGE_SIGS_FILE, value: /sigs/session-image-sigs.txt }
             - { name: FLY_REGION, value: lhr }
