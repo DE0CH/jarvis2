@@ -80,7 +80,8 @@ session a router crash left mid-action comes back `failed` with `error` "the …
 | `GET /api/state` | `{sessions, approvals, core: {up, signingKey, agreementKey}}` |
 | `GET /api/sizes` | `{sizes: [{id, label}]}` (small / medium / large) |
 | `GET /api/models` | `?harness=` optional → `{models: [{id, label, harness}], default, defaults: {<harness>: id}, harnesses: {<harness>: {label, detail}}}` — Jarvis 1's list (Claude, OpenRouter via OpenCode, Claude via OpenClaw), only harnesses the policy has. In `POST /api/sessions` an empty model or one of another harness becomes the harness's default; an unknown one is refused (400). |
-| `GET /api/stores` | Every store and the key NAMES it holds (never a value): `{stores: [{name, sensitive, empty, unlocked, keys /* sorted names, or null when not recorded */, keysFrom /* "setup" \| "deploy-key" \| "empty" \| "" */, keysAt?}], signed /* the core's signed list it was built from */}`. The list, sensitivity, empty and unlocked are the core's (`POST /stores`); the names come from the router's own record (`store-keys.json` in its data volume), written by the setup session (`POST /setup/store-keys`, sent by every `infra/setup.py write`), or, for a repo's store, follow from the repo (`GITHUB_DEPLOY_KEY_<SLUG>`, `GITHUB_DEPLOY_REPO_<SLUG>`). Only stores in the core are listed. Same answer at `GET /m/stores` and `GET /setup/stores/keys`. |
+| `GET /api/stores` | Every store, its keys and what each is for (never a value): `{stores: [{name, sensitive, empty, unlocked, about, version, keys: [{name, explanation, at, writer: {by /* setup \| machine \| core */, machine, line, session, sessionLabel}}] /* null: not known */, keysFrom /* "core" \| "recorded" \| "" */}], signed /* the core's signed list it was built from */}`. The list, sensitivity, empty, unlocked, the key names, who wrote each key and when are the core's (`POST /stores`; a machine writer's line is named with its session here); `about` and each `explanation` are the router's own record (`store-docs.json`). A core from before stores were made of keys lists no keys: then the names the setup session recorded (`POST /setup/store-keys`) or a repo store's two (`keysFrom: "recorded"`, until the held core is live). Same answer at `GET /m/stores` and `GET /setup/stores/keys`. |
+| `PUT /api/stores/{store}/docs` | `{about?, keys?: {KEY: text}}` → `{ok}`: what the store and its keys are for (plain text, ≤ 2000 characters each; `""` removes a key's explanation). Shown on the web page, in the app and by `jarvis2 stores --keys`. |
 | `GET /api/policy` | `{harnesses: {<harness>: {stores: […]}}}` — the stores each harness brings (the router adds them; the app hides them) |
 | `POST /api/sessions` | Body `{requestId, label, prompt, model, permissionMode, size, harness, stores: [], oneShot, autoPause, apiProxy, attachments: {uploadId, files: [{name}]}}` (`apiProxy`: `SESSION_API_PROXY=1`, claude through Jarvis 1's api-proxy.js; `attachments`: files staged by `POST /api/uploads`, bound to this session) (`oneShot`: the machine gets `SESSION_ONE_SHOT=1` and the session is destroyed when its prompt is done; `autoPause` defaults to true, false for one-shot; both show in the approval's `options`). The router adds the harness's stores and asks the core for a challenge (`succession(null, …)`, before any machine); the approval (kind `new-session`) appears at once. Answers `{id, requestId}`; a repeat with a `requestId` already on a session answers that session and makes nothing. |
 | `POST /api/sessions/:id/pause` | The machine snapshots itself (signed), then the core kills it. |
@@ -285,8 +286,9 @@ that the item's `open.options` equal its own page's (repo, action, session, feat
 When the core can't be reached at all (its pod restarting, e.g. after a wipe) every one of these answers 503
 `{error: "the core isn't running", coreDown: true}`; the app waits or shows it as a plain note.
 Pass-through to the core's own endpoints, answers unchanged (signed): `GET identity`, `POST stores {nonce}`,
-`POST stores/create {name}`, `POST stores/mark-sensitive {name}`, `POST stores/write {store}`, `POST unlock/begin
-{store, for?}`, `POST unlock/finish {pending, share}`, `POST lock {id}`, `POST unlocked {nonce}`, `POST store-key {phone}`, and
+`POST stores/create {name}`, `POST stores/mark-sensitive {name}`, `POST unlock/begin
+{store, for?}`, `POST unlock/finish {pending, shares}` (an unlock for one running session's cert also makes its machine
+pull again: `refresh-secrets`), `POST lock {id}`, `POST unlocked {nonce}`, `POST store-key {phone}`, and
 — only from the app's device login (the `cf-access-token` header; 403 otherwise) — `POST claim {statement,
 masterSig, bundle}` and `POST wipe {statement, masterSig}`. Formats: `docs/DESIGN.md`, `core/core.go`, the app's
 `Shell/CoreSetup.swift`, and the reference client `e2e/main.go`. A claim the core accepts is kept by the router
@@ -329,11 +331,15 @@ carries `for`; only the cert with that nonce reads the store, its first pull tha
 unused one lapses after 30 min. No `for` = a standing unlock (the Stores page), open to every session until locked. The
 signed `stores` list's `unlocked` means standing only; `unlocked` rows carry `for` ("" = standing). `for` that isn't a 64-hex nonce: 400.
 
-Unlock, phone side: verify `unlock/begin`'s doc (kind `unlock-begin`, fields `pending, store, e, t, for`); Face
-ID → Enclave key agreement of the phone's agreement key with `e` → the 32-byte x-coordinate; seal it to `t`:
-ephemeral P-256 key `r`, `x' = x(r·t)`, key = HKDF-SHA256(ikm `x'`, salt empty, info `"jarvis2/unlock-share"`,
-32 bytes), AES-256-GCM combined (`nonce‖ciphertext‖tag`) → `share = {e: base64(r.pub x963), data:
-base64(combined)}` → `unlock/finish {pending, share}`.
+Unlock, phone side: verify `unlock/begin`'s doc (kind `unlock-begin`, fields `pending, store, t, for, version, keys:
+[{key, e, writer, dataSha256, backupSha256, at}]`) and every key's writer (`setup`: the setup key's signature over
+`"jarvis2-store-key\n" store \n key \n e \n dataSha256 \n backupSha256`; `machine`: the core checked it, the app shows
+which session wrote the key; `core`); one Face ID → for every key, Enclave key agreement of the phone's agreement key
+with its `e` → the 32-byte x-coordinate, sealed to `t`: ephemeral P-256 key `r`, `x' = x(r·t)`, key =
+HKDF-SHA256(ikm `x'`, salt empty, info `"jarvis2/unlock-share"`, 32 bytes), AES-256-GCM combined
+(`nonce‖ciphertext‖tag`) → `{e: base64(r.pub x963), data: base64(combined)}` → `unlock/finish {pending, shares: {KEY:
+share}}` (one share for each key the begin named). A core from before stores were made of keys (until the held core is
+live): one `e` and `writer` per store, `unlock/finish {pending, share}`.
 
 ## Deploy keys (the core: `deploy-keys/*`, `core/deploykeys.go`)
 
@@ -409,7 +415,10 @@ against `SETUP_KEY` (`k8s/apps/router.yaml`), within ±2 min, each signature onc
 | `GET /setup/identity` | `/identity` |
 | `POST /setup/stores` | `/stores` |
 | `POST /setup/stores/create` | `/stores/create` |
-| `POST /setup/stores/write` | `/stores/write` |
+| `POST /setup/stores/write` | `/stores/write`: a core from before stores were made of keys only (until the held core is live) |
+| `POST /setup/stores/{store}/keys/{key}` | (the router's own, then `/stores/write-key`) one key written or deleted by the setup session, as `POST /m/stores/{store}/keys/{key}` with the setup key's signature over `WriterText`; its first key of a name the core doesn't have makes that store, sensitive. `infra/setup.py write\|delete` |
+| `GET /setup/store-key` | (the router's own) as `GET /m/store-key` |
+| `POST /setup/store-docs` | (the router's own) `{store, about?, keys: {KEY: text}}` → `{ok}`: as `PUT /api/stores/{store}/docs`. `infra/setup.py docs` |
 | `POST /setup/stores/mark-sensitive` | `/stores/mark-sensitive` |
 | `POST /setup/fly-token` | `/fly-token {sealed}`: `{"FLY_API_TOKEN"}` sealed to the core's agreement key (HKDF info `"jarvis2/fly-token"`) → the core's signed `{"kind":"fly-token-set"}`; 409 while the core is empty |
 | `GET /setup/core-cert` | (the router's own) `{statement, masterSig}` of the claim it kept for the running core (matched by the core's signing key from `/identity`); 404 when none. A core claimed before the router kept claims (the running core until its release) is asked for its own `/core-cert`. |
@@ -417,7 +426,7 @@ against `SETUP_KEY` (`k8s/apps/router.yaml`), within ±2 min, each signature onc
 | `GET /setup/jarvis1/paused[/{id}]`, `POST /setup/jarvis1/paused/{id}/prepare\|import` | (the router's own) as `/api/jarvis1/…` (Jarvis 1 import, above); the import's caller is `setup`. `infra/setup.py jarvis1 …` |
 | `POST /setup/sessions/{id}/pause` | (the router's own) cancels the session's wakeups and crons, then pauses it (202; the snapshot if its machine answers within the wait, else none). `infra/setup.py pause` |
 | `POST /setup/sessions/{id}/resume`, `POST /setup/sessions/{id}/restart` | (the router's own) the actions' resume (same image, no prompt) and the app's Restart (pause + that resume); wakeups and crons stay armed. A Claude line on an image from before the router's login gets a `resume-upgrade` approval instead (DECISIONS 151). 202. `infra/setup.py resume|restart` |
-| `POST /setup/store-keys` | (the router's own) `{name, keys: [names] \| null}` → `{ok}`: records a store's key names (env-var style, ≤ 128 chars, de-duplicated and sorted); `null` forgets them. No values. `infra/setup.py write` sends it after every write; `infra/setup.py keys NAME KEY…` and `infra/store-keys.sh` (every store, from the layout file) record names alone. |
+| `POST /setup/store-keys` | (the router's own) `{name, keys: [names] \| null}` → `{ok}`: a core from before stores were made of keys (until the held core is live): records a store's key names; `null` forgets them. No values. `infra/setup.py keys NAME KEY…` and `infra/store-keys.sh`. |
 
 `GET /setup/status` — the router's health: the names of its secrets that are set (values never), the session
 image, whether the core answers, and `githubRepos` — `{total, private}` repos the picker's `GITHUB_READ_TOKEN`
@@ -465,10 +474,12 @@ off.
 | `POST /m/snapshot` | Upload this machine's snapshot (same format), streamed: the router writes the body to its volume while hashing it and checks `X-Sig` against that hash after (up to 32 GB; a machine the router doesn't know is refused before a byte is read). With header `X-Snapshot-None` and no body: nothing to snapshot (the machine is still booting; its agent answers every snapshot command from the first second of its life), and the waiting pause or destroy goes on at once. A pause or destroy doesn't ask a machine that never got past boot (no `/m/status` from it) at all. |
 | `GET /m/restore-snapshot` | A restoring session's first machine only: the archived snapshot, same format, signed by the OLD machine named in `JARVIS2_RESTORE_CERT`; for a Jarvis 1 import, the import manifest (JSON). 404 otherwise. Streamed to disk by the machine. |
 | `GET /m/import-file/{name}` | A Jarvis 1 import's first machine only: one file the manifest lists, streamed from the Storage Box with `Content-Length` = the manifest's size (the machine checks size and sha256). 404 for any other name or machine. |
-| `POST /m/pull-secrets` | The router adds this machine's cert and the line's carried secrets (`snapshots/<machine>.carry`, else its predecessor's) and relays to the core; answers the core's signed `secrets` doc (sealed to the machine's key; its `carry` field, the next blob, is kept by the router). 423 `store X is locked` when no unlock is open to the cert and the blob doesn't hold the store. |
-| `GET /m/commands` | Long poll (≤ 50 s): `{commands: ["snapshot"]}` or `{commands: []}`. `"free"` (an Upgrade, before its snapshot): the agent SIGSTOPs the harness and SIGKILLs every other process of the session user but itself, and writes their list to `~/artifacts/jarvis2-upgrade-freed.txt` (`machine/memory.go`; ignored while booting or frozen). |
+| `POST /m/pull-secrets` | The router adds this machine's cert and the line's carried secrets (`snapshots/<machine>.carry`, else its predecessor's) and relays to the core; answers the core's signed `secrets` doc (sealed to the machine's key; its `carry` field, the next blob, is kept by the router; `stale`: stores whose values are behind a write, for which the router files a refresh: an unlock request for this session). 423 `store X is locked` when no unlock is open to the cert and the blob doesn't hold the store. |
+| `GET /m/commands` | Long poll (≤ 50 s): `{commands: ["snapshot"]}` or `{commands: []}`. `"refresh-secrets"` (an unlock for this machine's cert went through): the agent pulls again with its newest cert and rewrites `~/.secrets` (ignored while booting). `"free"` (an Upgrade, before its snapshot): the agent SIGSTOPs the harness and SIGKILLs every other process of the session user but itself, and writes their list to `~/artifacts/jarvis2-upgrade-freed.txt` (`machine/memory.go`; ignored while booting or frozen). |
 | `POST /m/memory` | Body `{totalKb, availKb, oomKills, psiFull60, top: [{rssKb, comm}]}` (≤ 10 processes): the machine's RAM, every 10 s once booted (`machine/memory.go`), for the starvation watch (`router/memory.go`). 400 for a malformed sample. |
-| `GET /m/stores` | Every store (all of them, not only this session's) with its key names, as `GET /api/stores`, so the session knows which one to ask for. `jarvis2 stores [--json]` prints it, checks the list against the core's signature and marks this session's own stores. |
+| `GET /m/stores` | Every store (all of them, not only this session's) with its keys and what each is for, as `GET /api/stores`, so the session knows which one to ask for. `jarvis2 stores [--keys \| --json]` prints it, checks the list and the key names against the core's signature and marks this session's own stores. |
+| `GET /m/store-key` | `{identity, storeKey}`: the core's identity (keys, box signature, its signed state naming the master key and the phone) and its signed `store-key` for that phone — what a writer seals to. The machine checks both against its core key. |
+| `POST /m/stores/{store}/keys/{key}` | A running session writes or deletes one key, no approval (`jarvis2 put-key STORE KEY [--explain TEXT] < value`, `jarvis2 delete-key`): `{delete, wrapped: {e, wrapped}, data, backup: {e, data}, backupSha256, sig, explanation}` — the value sealed to the store key (AAD `store\nkey`), its backup sealed to the master key (HKDF info `"jarvis2/backup"`, the same AAD), `backupSha256 = sha256(backup.e + "\n" + backup.data)`, `sig` this machine's signature over `WriterText`. The router writes the backup first (`keys/<store>/<key>.json`), then the key into the core with the machine's newest cert (`/stores/write-key`, writer `machine`), keeps the explanation (required for a key name with none yet), and files a refresh for every running session holding the store. → `{ok, receipt /* the core's key-written doc */, refreshAsked: [session ids]}`. 400 malformed, missing explanation or backup; 403 the core or deploy-key token store, or a session that isn't running; the core's own refusals as they are (e.g. 403 a repo's deploy-key store, 404 no such store). |
 | `POST /m/add-store` | Body `{store}`: asks Deyao (an `add-store` approval) to add one store to this session. With a reason: `POST /m/api/requests/add-store` (Requests). |
 | `POST /m/downgrade` | Body `{stores, newEncryptionKey, newSigningKey}` → `{challenge}`, which the machine signs with its OLD key. |
 | `POST /m/downgrade/finish` | Body `{challenge, signature}` → core `approve/by-old-key` → `{cert}`; from now on the router knows the machine by its new key. |

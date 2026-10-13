@@ -326,7 +326,7 @@ for unattended resumes he chose "the session carries its secrets" (DESIGN "Carri
     stores, image, options); before, it only needed the store left unlocked. Change: leave sensitive stores out of
     the blob, so a sensitive session's resume waits for an Unlock… each time.
 73. **A resume gets the values its line last pulled**; an unlock open to the cert wins (fresh values). A store
-    rewritten while a session is paused reaches it at its next pull with an unlock for it.
+    written since reaches it only with a new unlock, which the router asks the phone for (160).
 74. **Approvals made outside the app also unlock under their one Face ID** (the web page's new session, a restore, a
     task's first line, an add-store), for that session only, as New session does; a resume on a new image or mode
     unlocks nothing (it carries its secrets). With a core that predates scoped unlocks (the held core) these pages
@@ -1091,3 +1091,66 @@ Deyao: several actions approved together with ONE Face ID; the caller groups the
      *The app's "done"*: `POST /api/requests/:id/done` (Deyao's Access login) is what says an unlock went through, so
      an unlock's "approved" rests on it. A grant or deploy key is told from the signed answer when it is stored, before
      the app's done arrives.
+
+160. **A store is a set of keys; any running session writes one key with no approval; a written key reaches a session
+     only through the phone** (Deyao, 2026-10-13: "make sure that writing one key by name is allowed, and it doesn't
+     just overwrite the whole key store (with the public half of the key)"; "any session with a valid machine key, this
+     is part of the api endpoints they can use, and since writing a key is perfectly safe (has backup, so can't
+     overwrite, and also can't read), no approval is needed"; "pulling keys for newly written keys require my approval
+     on iphone"; the explanations of each key surfaced on the web and iPhone portal, kept in Jarvis 2).
+     *What happened*: after the add-store race (154) the YYC session was restarted (a phone-approved resume to bypass);
+     `yyc` had gained keys since its last unlock (`YYC_CLUSTER_SSH_KEY` and others, written by another session with
+     `store-put.py`, which rewrote the whole store from its own copy), and the resumed session came back with the old
+     copy until an unlock. That is not the race: the core can't open a rewritten store without the phone's share (the
+     data key is wrapped to P + K), so the carried copy (73) was the only thing it could give. What was wrong is that
+     nothing said the copy was behind, and that writing one key meant reading and rewriting the whole store (a writer
+     with an older copy writes old values back).
+     *The design* (DESIGN "Writing stores and their backups"): each key is sealed on its own to the store key P + K
+     (the public half: anyone can seal, only phone + core open), with the store's and key's names as associated data;
+     `write_key` replaces one key and never reads or touches the others. A running session writes with `jarvis2
+     put-key` (`POST /m/stores/{store}/keys/{key}`), the setup session with `infra/setup.py write`. The router writes
+     the key's backup first (versioned bucket, `keys/<store>/<key>.json`, sealed to the master key) and only then the
+     key into the core. Every pull reports the stores whose values are behind (each store's version: a hash of its
+     keys' names, E and data hashes, recorded with every unlock and carried copy); after a write, and after any pull
+     that comes back behind (a resume), the router files an unlock request for each running session holding the store
+     (one batch); the phone's unlock for a running machine's cert makes the router send it `refresh-secrets`, and the
+     machine pulls the store as it is now. What each key is for is the router's record (`store-docs.json`), required
+     for a new key name, shown in the app, the web page and `jarvis2 stores --keys`, and carried in each key backup.
+     *Security reasoning*:
+     - Reading: unchanged. A written value is sealed to P + K; only the phone's share plus the core's key open it, and
+       the core gives a value only to a cert the phone approved for that store, from an unlock the phone made or the
+       line's carried copy. Writing reveals nothing to the writer it didn't already have.
+     - Integrity of what sessions get: a session can now put a value Deyao didn't choose under a key name (e.g. its own
+       API key in place of the real one, to see what other sessions send). It reaches no other session without the
+       phone: running sessions keep their copy until a refresh unlock (Face ID), a resumed session the same, and a new
+       session gets it only through its Start's unlock. Each unlock_begin names every key's writer, signed by the core:
+       for a machine writer the core checked the signature itself with the signing key in that machine's newest cert
+       (a live machine it certified), so the router can't claim a session wrote something it didn't, nor forge a
+       write as a session; the phone shows which session wrote which key before Face ID. The setup writer's signature
+       is passed on and checked by the phone against keys/setup.pub, as before.
+     - Overwriting: the bucket is versioned and the router's credential may only add versions under `keys/` (no
+       delete, no policy); every write's backup is written before the core takes the key, so every earlier value
+       stays recoverable (Deyao's "has backup, so can't overwrite"). A write to the core with no backup is refused by
+       the router; the core can't check the backup (it can't read the value), so the backup's hash is in what the
+       writer signs, and the app checks it at Recover.
+     - Where machines may not write: the `core` store (the core's Fly token: nobody), `github-deploy-keys` and every
+       repo's deploy-key store (their keys come only from a phone-approved deploy-key call; a session overwriting
+       `GITHUB_DEPLOY_REPO_*` could otherwise steer which repo a store belongs to at the next Recover), and a store
+       that doesn't exist (making stores, and their sensitivity, stays with the setup writer and `create_store`).
+     - Recover: a session-written key's backup carries the machine's signature, its core-signed cert and that core's
+       identity (signed by the box key), so the app checks the chain box key → core → cert → machine → value; a
+       setup-written key carries the setup signature; both cover the backup's hash. A store's whole-store backup (from
+       before keys) is the base and its key backups written after it are applied.
+     - The core still doesn't decide (154): write_key is one operation that does exactly its job or refuses; the
+       refresh is the router's choice, and only an unlock (the phone) changes what a session holds.
+     *Restart*: correct behaviour, not part of the race: a resume can't carry anything newer than what the phone last
+     released. Now it isn't silent: the resumed session's first pull reports the store behind and the phone is asked.
+     A resume that already asks for Face ID (new image or mode) also unlocks the line's stores under that Face ID (the
+     app), so it brings the stores as they are now with no second ask.
+     *Not chosen*: letting the writer hand the core the new data key so sessions update with no Face ID — the core
+     would then read stores without the phone (Deyao kept the phone rule); refreshing on a schedule (a store written
+     reaches sessions only when Deyao says).
+     *Deploy*: router, machine (session image), app (TestFlight) and web go live with the push and still work with the
+     live core (sha-06ab2452f8ad: whole stores; marked "until the held core is live"); the core waits for Deyao's go (a
+     new core is a Recover, and it destroys the earlier core's sessions once paused, 69). Before that, the router's
+     bucket credential gets PutObject on `keys/*` (infra/backup-read-key.py policies).

@@ -289,12 +289,15 @@ After a box rebuild, re-run all of them (the age key is new).
 The router's only way into the bucket; Deyao never sees it. It is the Hetzner S3 credential `jarvis2-backup-read`
 in project "Cloud Code" (2827255), which also holds `de0ch-claude-6fdff6`. S3 credentials are project-wide, so
 bucket policies narrow this one (principal `arn:aws:iam:::user/p2827255:<access key>`): on `jarvis2-backup-de0ch` a
-Deny of every write, delete, delete-version, ACL, tagging, policy, versioning, lifecycle, CORS, website, logging,
-notification, replication, object-lock and public-access-block change (27 actions, listed one by one: Hetzner
+Deny of every delete, delete-version, ACL, tagging, policy, versioning, lifecycle, CORS, website, logging,
+notification, replication, object-lock and public-access-block change (26 actions, listed one by one: Hetzner
 ignores `NotAction`, and refuses a policy naming `PutEncryptionConfiguration` or `PutBucketOwnershipControls` with
-ServiceUnavailable); on `de0ch-claude-6fdff6` a Deny of `s3:*`. Tested (throwaway names only): list, get, list
-versions and get policy work; put, copy, delete (plain, by version, multi), policy, versioning, lifecycle and ACL
-changes are refused, and everything on the other bucket. A Ceph quirk seen with an earlier credential: a plain
+ServiceUnavailable); on `de0ch-claude-6fdff6` a Deny of `s3:*`. `PutObject` is allowed (`backup-read-key.py
+allow-put`): the router adds each written key's backup (`keys/<store>/<key>.json`); the bucket is versioned, so a put
+only adds a version (no prefix limit: Hetzner has no `NotResource` either; a version the router puts elsewhere is no
+more than withholding, since every backup is checked against its writer's signature). Tested (throwaway names only):
+list, get, list versions, get policy and put work; delete (plain, by version, multi), policy, versioning, lifecycle and
+ACL changes are refused, and everything on the other bucket. A Ceph quirk seen with an earlier credential: a plain
 delete (no version id) of an existing object may add a delete marker; that hides a backup but loses nothing (the
 bucket is versioned), and the admin key removes the marker.
 

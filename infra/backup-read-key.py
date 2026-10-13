@@ -13,6 +13,9 @@ The admin key HETZNER_S3_* does the bucket policies and the cleanup. The new key
   backup-read-key.py policies    the new access key replaces the old one as the principal in both bucket policies
                                  (jarvis2-backup-de0ch: Deny of 27 changing actions; de0ch-claude-6fdff6: Deny s3:*);
                                  the old access key is kept in ~/.jarvis2/backup-read.old for delete-old
+  backup-read-key.py allow-put   the key may add object versions to the backup bucket (s3:PutObject leaves its Deny):
+                                 the router writes each key's backup as the key is written (router/storedocs.go);
+                                 delete, version, policy, lifecycle and ACL changes stay refused (DECISIONS 160)
   backup-read-key.py test        what the new key may do (wait ~1 min after `policies`: a multi-delete went through
                                  once seconds after a policy write); throwaway names only, cleaned up by the admin key
   backup-read-key.py delete-old  delete the old credential in the Console (its row's ⋯ → Delete → OK)
@@ -146,6 +149,21 @@ def policies():
         print(f"ok: {b} {sid}: the principal is the new key, the old one is gone")
 
 
+def allow_put():
+    s3 = admin()
+    j = json.loads(s3.get_bucket_policy(Bucket=B)["Policy"])
+    st = j["Statement"][0]
+    acts = st["Action"] if isinstance(st["Action"], list) else [st["Action"]]
+    if "s3:PutObject" not in acts:
+        print("ok: the key may already add versions"); return
+    assert any(a in acts for a in ("s3:DeleteObject", "s3:DeleteObjectVersion")), "the Deny doesn't look like ours"
+    st["Action"] = [a for a in acts if a != "s3:PutObject"]
+    s3.put_bucket_policy(Bucket=B, Policy=json.dumps(j))
+    back = json.loads(s3.get_bucket_policy(Bucket=B)["Policy"])["Statement"][0]["Action"]
+    assert "s3:PutObject" not in back and "s3:DeleteObjectVersion" in back
+    print(f"ok: {B}: the read key may add versions (PutObject); {len(back)} actions still denied")
+
+
 def test():
     from botocore.exceptions import ClientError
     s3, adm = client(*newkey()), admin()
@@ -166,8 +184,7 @@ def test():
     check("get stores/default.json", "allowed", lambda: s3.get_object(Bucket=B, Key="stores/default.json")["Body"].read())
     check("list versions", "allowed", lambda: s3.list_object_versions(Bucket=B, MaxKeys=5))
     check("get the bucket policy", "allowed", lambda: s3.get_bucket_policy(Bucket=B))
-    check("put", "refused", lambda: s3.put_object(Bucket=B, Key=t, Body=b"x"))
-    check("copy", "refused", lambda: s3.copy_object(Bucket=B, Key=t + "-copy", CopySource={"Bucket": B, "Key": "stores/default.json"}))
+    check("put (a new version: key backups, DECISIONS 160)", "allowed", lambda: s3.put_object(Bucket=B, Key=t, Body=b"x"))
     check("plain delete", "refused", lambda: s3.delete_object(Bucket=B, Key=t + "-real"))
     check("delete a version", "refused", lambda: s3.delete_object(Bucket=B, Key=t + "-real", VersionId=vid))
     check("multi delete", "refused", lambda: s3.delete_objects(Bucket=B, Delete={"Objects": [{"Key": t + "-real"}]}))
@@ -194,7 +211,7 @@ def test():
             adm.delete_object(Bucket=b, Key=x["Key"], VersionId=x["VersionId"])
     if not all(ok for _, _, ok in rows):
         raise SystemExit("some checks failed (a policy write takes up to a minute to reach every gateway: re-run)")
-    print("ok: reads only, on the backup bucket only")
+    print("ok: reads and new versions only, on the backup bucket only")
 
 
 def delete_old():
@@ -229,7 +246,7 @@ def install():
 
 
 if __name__ == "__main__":
-    cmds = {"login": login, "generate": generate, "policies": policies, "test": test, "delete-old": delete_old, "install": install}
+    cmds = {"login": login, "generate": generate, "policies": policies, "allow-put": allow_put, "test": test, "delete-old": delete_old, "install": install}
     if len(sys.argv) != 2 or sys.argv[1] not in cmds:
         raise SystemExit(__doc__)
     cmds[sys.argv[1]]()
