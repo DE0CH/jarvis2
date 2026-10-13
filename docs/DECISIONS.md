@@ -1028,7 +1028,7 @@ Deyao: several actions approved together with ONE Face ID; the caller groups the
      in an IPv4-only pod, so its edge connection goes through WARP too) until it's back; nothing is lost, it reconnects. Tested on throwaway boxes in project runners: curl -4
      api.github.com, git ls-remote, GHCR pulls, Flux, the core through the tunnel, the router through the WireGuard
      peer, a reboot.
-157. **The production box converts in place, with Deyao's go** (`infra/convert-ipv6.sh`): shutdown → the primary IPv4
+157. **The production box keeps its IPv4 (Deyao, 2026-10-13: "no need", a primary IP was free again); if it is ever converted, it converts in place** (`infra/convert-ipv6.sh`): shutdown → the primary IPv4
      unassigned (Hetzner allows it only while the server is off) and deleted → a single-use rescue boot with a
      throwaway SSH key writes `warp-host.sh` and a oneshot unit (before k3s) onto the disk → reboot. The disk keeps the
      box key, age key, Secrets and Flux state, so nothing is re-minted (a rebuild would need every router-secrets part

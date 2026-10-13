@@ -418,7 +418,7 @@ is down: jarvis2.deyaochen.com unreachable (tunnel down), Flux "failed to checko
 peer. There is no way in to look; WARP reconnects by itself (warp-svc, always on), and a box git can't fix is
 rebuilt. The same WARP steps for every other Hetzner server Claude makes: claude-env `scripts/hetzner-warp.sh`.
 
-### Converting a box that still has its IPv4 (production, once, with Deyao's go)
+### Converting a box that still has its IPv4 (not planned: production keeps its IPv4, Deyao 2026-10-13)
 
 `CONFIRM=yes infra/convert-ipv6.sh` (env `HETZNER_JARVIS2_MOCK_API`, plus `JARVIS2_SETUP_ACCESS_ID/SECRET` for the
 wait): graceful shutdown, the primary IPv4 unassigned and deleted, a single-use rescue boot (throwaway SSH key, over
