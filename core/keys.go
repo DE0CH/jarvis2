@@ -170,6 +170,7 @@ func (c *Core) WriteKey(in WriteKeyInput) (SignedDoc, error) {
 	} else {
 		keys[in.Key] = &KeyEntry{Store: in.Store, Key: in.Key, Wrapped: in.Wrapped, Data: in.Data, Writer: &w, At: now, BackupSha256: in.BackupSha256}
 	}
+	c.record(in.Store, VersionCause{Kind: map[bool]string{true: "delete", false: "write"}[in.Delete], Key: in.Key, Writer: &w})
 	c.logf("store %s: key %s %s by %s %s", in.Store, in.Key, map[bool]string{true: "deleted", false: "written"}[in.Delete], w.By, w.Machine)
 	sum := ""
 	if in.Data != "" {

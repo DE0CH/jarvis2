@@ -246,6 +246,7 @@ func (c *Core) DeployKeyFinish(pending string, share Sealed, sig string) (Signed
 		delete(c.notSensitive, p.store)
 		delete(c.unlocked, p.store)
 		delete(c.repoOwner, p.store)
+		c.forget(p.store)
 		c.logf("deploy key: %s removed (%d key(s) deleted on GitHub), store %s deleted", p.repo, removed, p.store)
 		return c.sign(map[string]any{"kind": "deploy-key-removed", "pending": pending, "repo": p.repo, "store": p.store, "deleted": removed})
 	}
@@ -277,6 +278,7 @@ func (c *Core) DeployKeyFinish(pending string, share Sealed, sig string) (Signed
 	} else if !existed {
 		c.notSensitive[p.store] = true
 	}
+	c.record(p.store, VersionCause{Kind: "deploy-key"})
 	c.logf("deploy key: %s added (GitHub key %d, %d earlier deleted), store %s (sensitive=%v)", p.repo, k.ID, removed, p.store, !c.notSensitive[p.store])
 	return c.sign(map[string]any{"kind": "deploy-key-added", "pending": pending, "repo": p.repo, "store": p.store,
 		"sensitive": !c.notSensitive[p.store], "title": title, "publicKey": p.publicKey, "keyId": k.ID})

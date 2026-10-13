@@ -186,6 +186,11 @@ type Core struct {
 	// add that wrote the store, or by a Recover from the bundle's owners (the app reads them from the stores)
 	repoOwner map[string]string
 
+	// history.go: each store's last historyMax versions, its version counter, and pending restores
+	history    map[string][]*storeVersionRec
+	historySeq map[string]int
+	restores   map[string]*pendingRestore
+
 	carryKey []byte // carry.go: the AES key of the sessions' carried secrets; made at start, never leaves the core
 
 	fly    Fly
@@ -406,6 +411,10 @@ func (c *Core) Claim(statement, masterSig string, bundle Sealed) (SignedDoc, err
 			c.notSensitive[n] = true
 		}
 	}
+	c.history, c.historySeq = nil, nil
+	for _, n := range sortedKeys(c.stores) {
+		c.record(n, VersionCause{Kind: "recover"})
+	}
 	if token != "" {
 		c.fly.Configure(token)
 	}
@@ -508,6 +517,7 @@ func (c *Core) CreateStore(name string) (SignedDoc, error) {
 		return SignedDoc{}, fail(409, "store %s exists", name)
 	}
 	c.stores[name], c.notSensitive[name] = map[string]*KeyEntry{}, true
+	c.record(name, VersionCause{Kind: "created"})
 	c.logf("store %s created (empty, not sensitive)", name)
 	return c.sign(map[string]any{"kind": "store-created", "name": name})
 }

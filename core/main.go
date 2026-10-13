@@ -126,6 +126,24 @@ func Handler(c *Core) http.Handler {
 		return c.WriteKey(in)
 	})
 
+	// ---- versions and restore (history.go): the phone signs the begin document and shares the keys put back ----
+	h("POST /stores/versions", func(r *http.Request, b body) (any, error) { return c.Versions(str(b, "store"), str(b, "nonce")) })
+	h("POST /stores/restore/begin", func(r *http.Request, b body) (any, error) {
+		var seq int
+		if json.Unmarshal(b["seq"], &seq) != nil {
+			return nil, fail(400, "seq: the version to put back")
+		}
+		return c.RestoreBegin(str(b, "store"), seq)
+	})
+	h("POST /stores/restore/finish", func(r *http.Request, b body) (any, error) {
+		shares := map[string]Sealed{}
+		if len(b["shares"]) != 0 && json.Unmarshal(b["shares"], &shares) != nil {
+			return nil, fail(400, "shares: {key: sealed share}")
+		}
+		return c.RestoreFinish(str(b, "pending"), str(b, "signature"), shares)
+	})
+	h("POST /stores/restore/commit", func(r *http.Request, b body) (any, error) { return c.RestoreCommit(str(b, "pending")) })
+
 	// ---- machines ----
 	h("POST /start", func(r *http.Request, b body) (any, error) {
 		var sr StartRequest
