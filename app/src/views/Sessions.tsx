@@ -243,16 +243,17 @@ function MemAlert({ m, busy }: { m: Session; busy: string | null }) {
   );
 }
 const gb = (mb: number) => (mb / 1024).toFixed(1);
-// a feature the machine turned away: one tap to allow it for 10 minutes, or a standing rule
+// a feature the machine refused without a grant (needs Deyao's approval): one tap to allow it for 10 minutes, or a standing rule
 function NeedsGrant({ m }: { m: Session }) {
   if (!m.needsGrant) return null;
   const h = m.needsGrant, title = sessionTitle(m);
   return (
     <Callout color="amber" mt={2} data={{ needsGrant: h }}>
-      <P size={2} weight="bold" color="amber">Feature turned away</P>
+      <P size={2} weight="bold" color="amber">Needs your approval</P>
       <Rows id={"needs-grant-" + m.id}>
         <Row label="Feature" id={"needs-grant-feature-" + m.id}>{holderTitle(h)}</Row>
         {!!HOLDERS[h]?.sub && <Row label="Does">{HOLDERS[h].sub}</Row>}
+        <Row label="Why">The session holds a sensitive store, so Jarvis can't do this without your approval.</Row>
       </Rows>
       <Flex gap={2} mt={2} wrap>
         <Button size={1} id={"grant-" + m.id} onPress={() => requestGrant(m.id, title, { holder: h, kind: "grant", minutes: 10 })}>Allow 10 min</Button>

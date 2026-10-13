@@ -80,11 +80,12 @@ private struct SessionDetailList: View {
         Section {
           LabeledContent("Feature", value: Holder.title(h)).accessibilityIdentifier("turned-away-\(m.id)")
           LabeledContent("Allows", value: Holder.sub(h))
+          LabeledContent("Why", value: "The session holds a sensitive store, so Jarvis can't do this without your approval.")
           Button("Allow for 10 minutes", systemImage: "checkmark.shield") { model.requestGrant(m.id, m.title, holder: h) }
             .accessibilityIdentifier("grant-\(m.id)")
           Button("Make a standing rule", systemImage: "calendar.badge.clock") { model.requestGrant(m.id, m.title, holder: h, rule: true) }
             .accessibilityIdentifier("rule-\(m.id)")
-        } header: { Label("Turned away", systemImage: "hand.raised") }
+        } header: { Label("Needs your approval", systemImage: "hand.raised") }
       }
       if let lock = m.lockedStore {
         Section {

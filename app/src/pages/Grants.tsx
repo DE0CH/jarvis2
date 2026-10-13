@@ -42,10 +42,11 @@ export function GrantsPage({ spec }: { spec: GrantsSpec }) {
     <Page title="Grants" id="grants-page">
       <Rows mt={2}><Row label="Session" id="grants-session">{title}</Row></Rows>
       {!!m?.needsGrant && <Card mt={4} data={{ needsGrant: m.needsGrant }}>
-        <Heading size={3} mb={1}>Feature turned away</Heading>
+        <Heading size={3} mb={1}>Needs your approval</Heading>
         <Rows>
           <Row label="Feature" id="grants-needs-feature">{holderTitle(m.needsGrant)}</Row>
           {!!HOLDERS[m.needsGrant]?.sub && <Row label="Does">{HOLDERS[m.needsGrant].sub}</Row>}
+          <Row label="Why">The session holds a sensitive store, so Jarvis can't do this without your approval.</Row>
         </Rows>
         <Flex gap={2} mt={3} wrap>
           <Button id="grant-quick" onPress={() => make("grant", m.needsGrant)}>Allow 10 min</Button>

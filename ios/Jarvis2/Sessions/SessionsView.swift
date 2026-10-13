@@ -141,7 +141,7 @@ struct SessionRow: View {
       if let lock = m.lockedStore {
         HStack(spacing: 6) { StatusPill(text: "Locked store", color: .orange); Text(lock).font(.footnote.monospaced()) }
       } else if let g = m.needsGrant {
-        HStack(spacing: 6) { StatusPill(text: "Turned away", color: .orange); Text(Holder.title(g)).font(.footnote) }
+        HStack(spacing: 6) { StatusPill(text: "Needs approval", color: .orange); Text(Holder.title(g)).font(.footnote) }
       }
     }
     .padding(.vertical, 2)

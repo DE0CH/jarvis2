@@ -20,9 +20,10 @@ struct GrantsView: View {
       if let h = model.session(sessionId)?.needsGrant {
         Section {
           LabeledContent("Feature", value: Holder.title(h))
+          LabeledContent("Why", value: "The session holds a sensitive store, so Jarvis can't do this without your approval.")
           Button("Allow for 10 minutes") { make(h, rule: false) }.accessibilityIdentifier("grant-quick")
           Button("Make a standing rule") { make(h, rule: true) }.accessibilityIdentifier("grant-rule")
-        } header: { Label("Turned away", systemImage: "hand.raised") }
+        } header: { Label("Needs your approval", systemImage: "hand.raised") }
       }
       Section("In force") {
         if let error { ErrorRow(text: error) }
