@@ -21,12 +21,16 @@ The apps' audiences are not secret: they are in k8s/apps/router.yaml (the script
                                `default` store) and the Access app jarvis2.deyaochen.com/actions admitting only it;
                                prints the app's audience and the token's client id (k8s/apps/router.yaml
                                ACCESS_ACTIONS_AUD, ACTIONS_CLIENT_ID; neither is secret)
+  infra/cloudflare.py --devices  only the paired apps' Access app (CF_JARVIS2_INFRA_TOKEN); prints its audience
 Access apps (created Access first, then DNS, so the hostname is never reachable ungated):
   "Jarvis 2"        jarvis2.deyaochen.com         Deyao's email only (the app + web page)
   "Jarvis 2 setup"  jarvis2.deyaochen.com/setup   service token jarvis2-setup only (the setup session)
   "HK news stream"  hknews.deyaochen.com          Deyao's email only (k8s/apps/news.yaml, on the same tunnel)
   "Jarvis 2 peer"   jarvis2.deyaochen.com/peer    service token jarvis1-claude-login only (Jarvis 1 reads the Claude login)
   "Jarvis 2 actions" jarvis2.deyaochen.com/actions service token jarvis2-actions only (the default store's safe actions)
+  "Jarvis 2 devices" jarvis2.deyaochen.com/api/remotes and /api/sessions/*/start: Deyao's email, or ANY service token
+                    of the account (Deyao's paired OpenClaw/Paseo apps); the router admits a token only when it is a
+                    paired device's (router/devices.go). Audience: ACCESS_DEVICES_AUD in k8s/apps/router.yaml
 Session machines don't come through Cloudflare at all (Fly's private network, docs/API.md).
 
 A rehearsal box (infra/rehearse-recover.sh) gets its own of each, never production's:
@@ -123,6 +127,27 @@ def peer(out):
     aud = access_app("Jarvis 2 peer", HOST + "/peer", {
         "name": "Jarvis 1", "decision": "non_identity", "include": [{"service_token": {"token_id": tok["id"]}}]})
     print(f"ok (k8s/apps/router.yaml): ACCESS_PEER_AUD={aud} JARVIS1_LOGIN_CLIENT_ID={tok['client_id']}")
+DEVICE_PATHS = ["/api/remotes", "/api/sessions/*/start"]
+
+
+def devices():
+    """the paired apps' Access app: only the paths they call, Deyao's email or any service token (the router narrows
+    the tokens to its paired devices)"""
+    uris = [HOST + p for p in DEVICE_PATHS]
+    apps = call("GET", f"/accounts/{ACCOUNT}/access/apps")
+    app = next((a for a in apps if a.get("name") == "Jarvis 2 devices"), None)
+    body = {"name": "Jarvis 2 devices", "domain": uris[0], "type": "self_hosted", "session_duration": "24h",
+            "destinations": [{"type": "public", "uri": u} for u in uris],
+            "app_launcher_visible": False, "auto_redirect_to_identity": False}
+    app = call("PUT" if app else "POST", f"/accounts/{ACCOUNT}/access/apps" + (f"/{app['id']}" if app else ""), body)
+    for p in call("GET", f"/accounts/{ACCOUNT}/access/apps/{app['id']}/policies"):
+        call("DELETE", f"/accounts/{ACCOUNT}/access/apps/{app['id']}/policies/{p['id']}")
+    call("POST", f"/accounts/{ACCOUNT}/access/apps/{app['id']}/policies",
+         {"name": "Deyao", "decision": "allow", "include": [{"email": {"email": EMAIL}}], "precedence": 1})
+    call("POST", f"/accounts/{ACCOUNT}/access/apps/{app['id']}/policies",
+         {"name": "paired apps (the router checks the device)", "decision": "non_identity",
+          "include": [{"any_valid_service_token": {}}], "precedence": 2})
+    print(f"ok: Access app 'Jarvis 2 devices' on {', '.join(uris)}; ACCESS_DEVICES_AUD={app['aud']}")
 
 
 def actions(out):
@@ -194,6 +219,8 @@ def main():
         return peer(sys.argv[2])
     if sys.argv[1:2] == ["--actions"]:
         return actions(sys.argv[2])
+    if sys.argv[1:] == ["--devices"]:
+        return devices()
     if os.environ.get("REHEARSAL"):
         return rehearsal(os.environ["REHEARSAL"], sys.argv[1])
     out = sys.argv[1]
@@ -225,6 +252,7 @@ def main():
     access_app("HK news stream", NEWS_HOST, {"name": "Deyao", "decision": "allow", "include": [{"email": {"email": EMAIL}}]})
     tid, vals["TUNNEL_TOKEN"] = tunnel_and_dns(HOST, "jarvis2", [(NEWS_HOST, NEWS_ORIGIN)])
     dns(NEWS_HOST, tid, "jarvis2")
+    devices()
 
     write_out(out, vals)
     print(f"ok: tunnel {tid}, Access apps + setup service token ready; values in {out}")

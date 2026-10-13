@@ -17,8 +17,8 @@ spec:
   strategy: { type: Recreate }
   selector: { matchLabels: { app: router } }
   template:
-    # secrets-rev(-backup|-github|-flyorgs): bumped by infra/router-secrets.py so a changed Secret restarts the pod (envFrom is read at start)
-    metadata: { labels: { app: router }, annotations: { jarvis2/secrets-rev: "043246abae2f", jarvis2/secrets-rev-backup: "cc2fe4a5bfde", jarvis2/secrets-rev-github: "5d4b8b75a9b6", jarvis2/secrets-rev-flyorgs: "1a0800b2e3d3" } }
+    # secrets-rev(-backup|-github|-flyorgs|-flypersonal|-browserbase|-devices): bumped by infra/router-secrets.py so a changed Secret restarts the pod (envFrom is read at start)
+    metadata: { labels: { app: router }, annotations: { jarvis2/secrets-rev: "043246abae2f", jarvis2/secrets-rev-backup: "cc2fe4a5bfde", jarvis2/secrets-rev-github: "5d4b8b75a9b6", jarvis2/secrets-rev-flyorgs: "1a0800b2e3d3", jarvis2/secrets-rev-flypersonal: "30529653e40d", jarvis2/secrets-rev-browserbase: "06b3d7b5626f", jarvis2/secrets-rev-devices: "a572b6d9c54e" } }
     spec:
       automountServiceAccountToken: false
       enableServiceLinks: false
@@ -50,12 +50,18 @@ spec:
             # jarvis2-actions, whose id/secret are JARVIS2_ACTIONS_ID/SECRET in the default store (infra/cloudflare.py --actions)
             - { name: ACCESS_ACTIONS_AUD, value: c389372c2fe29d78e7601d44601596420dac27c96153ee0b9d9151403173067f }
             - { name: ACTIONS_CLIENT_ID, value: "0809a8cc5787fc705c0dad4f954b7246.access" }
+            # Access app "Jarvis 2 devices" (/api/remotes, /api/sessions/*/start; infra/cloudflare.py --devices): Deyao's
+            # paired OpenClaw/Paseo apps (router/devices.go)
+            - { name: ACCESS_DEVICES_AUD, value: 84f7faa757a2c8d49667a3e18bfd9af7d924732de682c501388a78d5e7e85a25 }
+            # the Browserbase spend DM (router/bbbudget.go): overage above the plan fee, USD (Deyao, 2026-10-01)
+            - { name: BROWSERBASE_BUDGET_USD, value: "10" }
+            - { name: BROWSERBASE_BUDGET_WARN_USD, value: "8" }
           # the router's non-sensitive secrets (lobster's token, Storage Box keys, …): k8s/secrets/router.enc.yaml,
           # and the backup bucket's read credential (it serves the locked backups to the app's Recover):
           # k8s/secrets/router-backup.enc.yaml, and the repo picker's GITHUB_READ_TOKEN: k8s/secrets/router-github.enc.yaml
           # — all SOPS-encrypted to the box's age key (infra/router-secrets.py). router-secrets-github stays LAST: with a
           # key in several envFrom sources the last one wins, and the default part still holds an old GITHUB_READ_TOKEN
-          envFrom: [{ secretRef: { name: router-secrets, optional: true } }, { secretRef: { name: router-secrets-backup, optional: true } }, { secretRef: { name: router-secrets-github, optional: true } }, { secretRef: { name: router-secrets-flyorgs, optional: true } }]
+          envFrom: [{ secretRef: { name: router-secrets, optional: true } }, { secretRef: { name: router-secrets-backup, optional: true } }, { secretRef: { name: router-secrets-github, optional: true } }, { secretRef: { name: router-secrets-flyorgs, optional: true } }, { secretRef: { name: router-secrets-flypersonal, optional: true } }, { secretRef: { name: router-secrets-browserbase, optional: true } }, { secretRef: { name: router-secrets-devices, optional: true } }]
           volumeMounts: [{ name: data, mountPath: /data }, { name: wg, mountPath: /wg, readOnly: true }, { name: sigs, mountPath: /sigs, readOnly: true }]
           resources: { requests: { cpu: 20m, memory: 64Mi }, limits: { memory: 1Gi } }
           securityContext: { runAsNonRoot: true, runAsUser: 65532, runAsGroup: 65532, allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: { drop: [ALL] }, seccompProfile: { type: RuntimeDefault } }

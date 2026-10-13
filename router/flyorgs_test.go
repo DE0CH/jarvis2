@@ -60,27 +60,16 @@ func rawM(id, state, created string) map[string]any {
 func TestFlyOrgsOverviewEveryOrgReadOnly(t *testing.T) {
 	now := time.Now().UTC()
 	old := now.Add(-48 * time.Hour).Format(time.RFC3339)
-	srv, seen := fakeFlyOrgs(t, map[string]string{"jarvis2-370": "tok-j2", "kamyee": "tok-k"},
-		map[string][]string{"jarvis2-370": {"jarvis2-sessions", "zz-stray"}, "kamyee": {"kamyee-jarvis3-sessions"}},
-		map[string][]map[string]any{"zz-stray": {rawM("st1", "started", old)}, "kamyee-jarvis3-sessions": {rawM("k1", "stopped", old), rawM("k2", "started", old)}},
+	srv, seen := fakeFlyOrgs(t, map[string]string{"jarvis2-370": "tok-j2", "kamyee": "tok-k", "personal": "tok-p"},
+		map[string][]string{"jarvis2-370": {"jarvis2-sessions", "zz-stray"}, "kamyee": {"kamyee-jarvis3-sessions"}, "personal": {"de0ch-claude-sessions"}},
+		map[string][]map[string]any{"zz-stray": {rawM("st1", "started", old)}, "kamyee-jarvis3-sessions": {rawM("k1", "stopped", old), rawM("k2", "started", old)},
+			"de0ch-claude-sessions": {rawM("p1", "started", old), rawM("p2", "stopped", old)}},
 		map[string][]map[string]any{"zz-stray": {{"id": "vol_1", "state": "created", "size_gb": 1, "created_at": old}}})
-	j1 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-		if req.Header.Get("CF-Access-Client-Id") != "svc" || req.URL.Path != "/api/fly/machines" {
-			w.WriteHeader(403)
-			return
-		}
-		w.Write([]byte(`{"orgs":[{"org":"personal","error":null,"checkedAt":"x","apps":[{"app":"de0ch-claude-sessions","label":"Jarvis 1 sessions","status":"deployed","error":null,"volumes":[],
-		  "machines":[{"id":"p1","name":"s-x","state":"started","region":"arn","size":"medium","guest":"4×shared · 4 GB","image":"i","created":"c","updated":"u","sessionId":"p1","attention":null},
-		              {"id":"p2","name":"","state":"stopped","region":"arn","size":"","guest":"","image":"i","created":"c","updated":"u","sessionId":null,"attention":"Stopped: x"}]}]}]}`))
-	}))
-	defer j1.Close()
-	oldBase, oldJ1 := flyAPIBase, jarvis1FlyURL
-	defer func() { flyAPIBase, jarvis1FlyURL = oldBase, oldJ1 }()
+	oldBase := flyAPIBase
+	defer func() { flyAPIBase = oldBase }()
 	flyAPIBase = srv.URL
-	jarvis1FlyURL = func() string { return j1.URL + "/api/fly/machines" }
 	t.Setenv("FLY_ORG_READ_TOKENS", `{"jarvis2-370":"tok-j2","kamyee":"tok-k"}`)
-	t.Setenv("JARVIS1_SERVICES_ID", "svc")
-	t.Setenv("JARVIS1_SERVICES_SECRET", "sec")
+	t.Setenv("FLY_PERSONAL_READ_TOKEN", "tok-p")
 
 	r := newTestRouter(t)
 	addSession(r, "s1", "running", "m-cur", false)
@@ -89,7 +78,7 @@ func TestFlyOrgsOverviewEveryOrgReadOnly(t *testing.T) {
 	if cerr != "" {
 		t.Fatal(cerr)
 	}
-	if len(orgs) != 3 || orgs[0].Org != "jarvis2-370" || orgs[1].Org != "kamyee" || orgs[2].Org != "personal" || orgs[2].Via != "Jarvis 1" {
+	if len(orgs) != 3 || orgs[0].Org != "jarvis2-370" || orgs[1].Org != "kamyee" || orgs[2].Org != "personal" || orgs[2].Via != "fly" {
 		t.Fatalf("orgs %+v", orgs)
 	}
 	j2 := orgs[0]
@@ -112,7 +101,11 @@ func TestFlyOrgsOverviewEveryOrgReadOnly(t *testing.T) {
 		t.Fatalf("kamyee %+v", att)
 	}
 	p := orgs[2].Apps[0]
-	if p.Own || len(p.Machines) != 2 || p.Machines[0].OtherSession != "p1" || p.Machines[1].Attention == "" || p.Machines[0].NoDestroy == "" {
+	pa := map[string]string{}
+	for _, m := range p.Machines {
+		pa[m.ID] = m.Attention
+	}
+	if p.Own || p.Label != "Jarvis 1 sessions" || len(p.Machines) != 2 || pa["p1"] != "" || !strings.HasPrefix(pa["p2"], "Stopped") || p.Machines[0].NoDestroy == "" {
 		t.Fatalf("personal %+v", p)
 	}
 	// own: m-orphan stopped (1) · stray machine + volume (2) · k1 (1) · p2 (1)
@@ -125,7 +118,8 @@ func TestFlyOrgsOverviewEveryOrgReadOnly(t *testing.T) {
 	}
 	// each org is read with its own token, and never with another org's
 	for _, s := range *seen {
-		if strings.Contains(s, "kamyee-jarvis3-sessions") && !strings.HasSuffix(s, "tok-k") {
+		if (strings.Contains(s, "kamyee-jarvis3-sessions") && !strings.HasSuffix(s, "tok-k")) ||
+			(strings.Contains(s, "de0ch-claude-sessions") && !strings.HasSuffix(s, "tok-p")) {
 			t.Fatalf("wrong token: %s", s)
 		}
 	}
@@ -138,7 +132,7 @@ func TestFlyOrgsOverviewFailuresAreShown(t *testing.T) {
 	defer func() { flyAPIBase = oldBase }()
 	flyAPIBase = srv.URL
 	t.Setenv("FLY_ORG_READ_TOKENS", `{"kamyee":"wrong"}`)
-	t.Setenv("JARVIS1_SERVICES_ID", "")
+	t.Setenv("FLY_PERSONAL_READ_TOKEN", "")
 	r := newTestRouter(t)
 	orgs, _ := r.flyOrgsOverview(nil, now)
 	if len(orgs) != 3 {
@@ -150,7 +144,7 @@ func TestFlyOrgsOverviewFailuresAreShown(t *testing.T) {
 	if !strings.Contains(orgs[1].Error, "403") {
 		t.Fatalf("kamyee %+v", orgs[1])
 	}
-	if orgs[2].Org != "personal" || !strings.Contains(orgs[2].Error, "JARVIS1_SERVICES") {
+	if orgs[2].Org != "personal" || !strings.Contains(orgs[2].Error, "FLY_PERSONAL_READ_TOKEN") {
 		t.Fatalf("personal %+v", orgs[2])
 	}
 	t.Setenv("FLY_ORG_READ_TOKENS", "{bad")

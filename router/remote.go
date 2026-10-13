@@ -17,8 +17,7 @@ package main
 // sent by agent.js as x-agent-secret), so one session can't take over another's tunnel id: proof = hex
 // HMAC-SHA256(key, "jarvis2-tunnel:" + id).
 //
-// GET /api/remotes also admits one Access service token besides Deyao (JARVIS2_REMOTES_CLIENT_ID): the client
-// that lists Jarvis 2 sessions for Deyao's OpenClaw and Paseo apps (docs/PARITY.md, "Device pairing").
+// GET /api/remotes also admits Deyao's paired OpenClaw and Paseo apps (devices.go).
 
 import (
 	"crypto/hmac"
@@ -155,8 +154,7 @@ func (r *Router) registerRemote(app appRoute, m machineRoute, public publicRoute
 		}
 		writeJSON(w, status, info)
 	})
-	// Deyao, or the remotes client (an Access service token named by JARVIS2_REMOTES_CLIENT_ID)
-	public("GET /api/remotes", r.requireDeyaoOrClient(os.Getenv("JARVIS2_REMOTES_CLIENT_ID"), r.remotes))
+	// GET /api/remotes: devices.go (Deyao, or a paired OpenClaw/Paseo app)
 	// the machine's proof for registering its own session's tunnel id (boot: TUNNEL_AGENT_SECRET)
 	m("GET /m/tunnel-proof", func(w http.ResponseWriter, req *http.Request, machine string, _ []byte) {
 		sid, err := r.machineSession(machine)
@@ -233,39 +231,4 @@ func (r *Router) remotes(w http.ResponseWriter, req *http.Request) {
 	wg.Wait()
 	w.Header().Set("Cache-Control", "no-store")
 	writeJSON(w, 200, map[string]any{"sessions": out})
-}
-
-// requireDeyaoOrClient: Deyao's own Access login, or exactly one Access service token (its client id, the JWT's
-// common_name), audience the Jarvis 2 app or, when set, ACCESS_REMOTES_AUD (a path-scoped Access app)
-func (r *Router) requireDeyaoOrClient(clientID string, fn http.HandlerFunc) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-		if !r.cfg.NoAccess && !r.accessOK(req.Header.Get("Cf-Access-Jwt-Assertion"), clientID) {
-			writeJSON(w, 403, map[string]string{"error": "Access login required"})
-			return
-		}
-		fn(w, req)
-	})
-}
-
-func (r *Router) accessOK(tok, clientID string) bool {
-	for _, aud := range []string{r.cfg.AppAUD, os.Getenv("ACCESS_REMOTES_AUD")} {
-		if aud == "" {
-			continue
-		}
-		c, err := r.access().verify(tok, aud)
-		if err != nil {
-			continue
-		}
-		if claimsAdmit(c, r.cfg.AllowedEmail, clientID) {
-			return true
-		}
-	}
-	return false
-}
-
-func claimsAdmit(c *accessClaims, email, clientID string) bool {
-	if c.Email != "" {
-		return strings.EqualFold(c.Email, email)
-	}
-	return clientID != "" && c.CommonName == clientID
 }

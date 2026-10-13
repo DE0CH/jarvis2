@@ -4,13 +4,13 @@ package main
 // besides jarvis2-sessions (machines.go: sessions, Destroy), every app in every org Deyao has, read-only, grouped
 // org → app, each machine and volume with why it stands out (a possible leak), if it does.
 //
-// Where each org comes from:
-//   - an org in FLY_ORG_READ_TOKENS ({"<org slug>": "<token>"}, router-secrets part `flyorgs`): Fly directly, with
-//     that org's READ-ONLY token (`fly tokens create readonly`) — jarvis2-370 and kamyee. They can change nothing.
-//   - org personal (Jarvis 1's): Jarvis 1's sanitized list (GET /api/fly/machines, the confined services token
-//     JARVIS1_SERVICES_ID/SECRET). The router holds no token for personal on purpose: a Fly read token returns each
-//     machine's whole config, and every Jarvis 1 session machine carries its secrets in its Fly env.
-// A Fly read token also returns env for the orgs read directly; only the fields below leave this file.
+// Where each org comes from: Fly directly, with that org's READ-ONLY token. They can change nothing.
+//   - an org in FLY_ORG_READ_TOKENS ({"<org slug>": "<token>"}, router-secrets part `flyorgs`): jarvis2-370 and kamyee
+//     (`fly tokens create readonly`);
+//   - org personal: FLY_PERSONAL_READ_TOKEN (part `flypersonal`, infra/fly-personal-read-token.sh): the personal org
+//     token attenuated to read on that org (caveat Organization mask "r"). It reads every machine's config in the org,
+//     env included, and Jarvis 1's session machines carry their stores in their Fly env: the trade-off is DECISIONS 108.
+// Only the fields below leave this file: env never does.
 
 import (
 	"encoding/json"
@@ -115,11 +115,19 @@ func otherMachineView(m flyMachineDetail, app string, now time.Time) machineView
 func flyOrgTokens() (map[string]string, error) {
 	raw := os.Getenv("FLY_ORG_READ_TOKENS")
 	if raw == "" {
-		return map[string]string{}, nil
+		raw = "{}"
 	}
 	m := map[string]string{}
 	if err := json.Unmarshal([]byte(raw), &m); err != nil {
-		return map[string]string{}, fmt.Errorf("FLY_ORG_READ_TOKENS is not valid JSON")
+		m = map[string]string{}
+		err = fmt.Errorf("FLY_ORG_READ_TOKENS is not valid JSON")
+		if t := os.Getenv("FLY_PERSONAL_READ_TOKEN"); t != "" {
+			m["personal"] = t
+		}
+		return m, err
+	}
+	if t := os.Getenv("FLY_PERSONAL_READ_TOKEN"); t != "" {
+		m["personal"] = t
 	}
 	return m, nil
 }
@@ -224,89 +232,8 @@ func sortApps(as []flyAppView) {
 	})
 }
 
-// jarvis1FlyURL: Jarvis 1's sanitized list of its own org
-var jarvis1FlyURL = func() string {
-	return strings.TrimSuffix(env("JARVIS1_URL", "https://jarvis.deyaochen.com"), "/") + "/api/fly/machines"
-}
-
-// jarvis1FlyOrgs: org personal from Jarvis 1's relay (via "Jarvis 1"). Without the services token, or when Jarvis 1
-// doesn't answer, one org entry saying so (never silently nothing).
-func jarvis1FlyOrgs(now time.Time) []flyOrgView {
-	fail := func(msg string) []flyOrgView {
-		return []flyOrgView{{Org: "personal", Via: "Jarvis 1", Error: msg, CheckedAt: now.UTC().Format(time.RFC3339), Apps: []flyAppView{}}}
-	}
-	id, sec := os.Getenv("JARVIS1_SERVICES_ID"), os.Getenv("JARVIS1_SERVICES_SECRET")
-	if id == "" || sec == "" {
-		return fail("the router has no JARVIS1_SERVICES_ID/SECRET: Jarvis 1's list isn't reachable")
-	}
-	req, _ := http.NewRequest("GET", jarvis1FlyURL(), nil)
-	req.Header.Set("CF-Access-Client-Id", id)
-	req.Header.Set("CF-Access-Client-Secret", sec)
-	req.Header.Set("User-Agent", "jarvis2-router/1")
-	resp, err := flyOrgHTTP.Do(req)
-	if err != nil {
-		return fail("Jarvis 1 unreachable: " + err.Error())
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != 200 {
-		b, _ := io.ReadAll(io.LimitReader(resp.Body, 200))
-		return fail(fmt.Sprintf("Jarvis 1: HTTP %d %s", resp.StatusCode, strings.TrimSpace(string(b))))
-	}
-	var body struct {
-		Orgs []struct {
-			Org       string  `json:"org"`
-			Error     *string `json:"error"`
-			CheckedAt string  `json:"checkedAt"`
-			Apps      []struct {
-				App      string  `json:"app"`
-				Label    string  `json:"label"`
-				Status   string  `json:"status"`
-				Error    *string `json:"error"`
-				Machines []struct {
-					ID, Name, State, Region, Size, Guest, Image, Created, Updated string
-					SessionID                                                     *string `json:"sessionId"`
-					Attention                                                     *string `json:"attention"`
-				} `json:"machines"`
-				Volumes []flyVolumeView `json:"volumes"`
-			} `json:"apps"`
-		} `json:"orgs"`
-	}
-	if err := json.NewDecoder(io.LimitReader(resp.Body, 4<<20)).Decode(&body); err != nil {
-		return fail("Jarvis 1: unreadable answer: " + err.Error())
-	}
-	str := func(p *string) string {
-		if p == nil {
-			return ""
-		}
-		return *p
-	}
-	out := []flyOrgView{}
-	for _, o := range body.Orgs {
-		ov := flyOrgView{Org: o.Org, Via: "Jarvis 1", Error: str(o.Error), CheckedAt: o.CheckedAt, Apps: []flyAppView{}}
-		for _, a := range o.Apps {
-			av := flyAppView{App: a.App, Label: a.Label, Status: a.Status, Error: str(a.Error), Machines: []machineView{}, Volumes: a.Volumes}
-			if av.Volumes == nil {
-				av.Volumes = []flyVolumeView{}
-			}
-			for _, m := range a.Machines {
-				v := machineView{ID: m.ID, Name: m.Name, State: m.State, Region: m.Region, Size: m.Size, Guest: m.Guest, Image: m.Image,
-					Created: m.Created, Updated: m.Updated, Attention: str(m.Attention), NoDestroy: "it is not in " + sessionsApp + ": read-only here"}
-				if sid := str(m.SessionID); sid != "" {
-					v.OtherSession = sid // a Jarvis 1 session's: shown, never linked
-				}
-				av.Machines = append(av.Machines, v)
-			}
-			ov.Apps = append(ov.Apps, av)
-		}
-		out = append(out, ov)
-	}
-	if len(out) == 0 {
-		return fail("Jarvis 1 listed no org")
-	}
-	return out
-}
-
-// flyOrgsOverview: every org, the router's own first, then the read-only ones by name, then Jarvis 1's
+// flyOrgsOverview: every org, the router's own first, then the read-only ones by name (personal among them), and
+// personal with an error when the router has no token for it
 // ownMs: jarvis2-sessions as the caller just listed it (FLY_READ_TOKEN)
 func (r *Router) flyOrgsOverview(ownMs []flyMachineDetail, now time.Time) (orgs []flyOrgView, configErr string) {
 	toks, err := flyOrgTokens()
@@ -316,14 +243,14 @@ func (r *Router) flyOrgsOverview(ownMs []flyMachineDetail, now time.Time) (orgs 
 	own := func() ([]machineView, error) { return r.machinesView(ownMs, now), nil }
 	names := []string{}
 	for org := range toks {
-		if org != ownFlyOrg && org != "personal" {
+		if org != ownFlyOrg {
 			names = append(names, org)
 		}
 	}
 	sort.Strings(names)
-	results := make([]flyOrgView, len(names)+2)
+	results := make([]flyOrgView, len(names)+1)
 	var wg sync.WaitGroup
-	wg.Add(len(names) + 2)
+	wg.Add(len(names) + 1)
 	go func() {
 		defer wg.Done()
 		if t := toks[ownFlyOrg]; t != "" {
@@ -343,10 +270,12 @@ func (r *Router) flyOrgsOverview(ownMs []flyMachineDetail, now time.Time) (orgs 
 	for i, org := range names {
 		go func(i int, org string) { defer wg.Done(); results[i+1] = scanFlyOrg(org, toks[org], nil, now) }(i, org)
 	}
-	var j1 []flyOrgView
-	go func() { defer wg.Done(); j1 = jarvis1FlyOrgs(now) }()
 	wg.Wait()
-	orgs = append(results[:len(names)+1], j1...)
+	orgs = results
+	if toks["personal"] == "" {
+		orgs = append(orgs, flyOrgView{Org: "personal", Via: "fly", CheckedAt: now.UTC().Format(time.RFC3339), Apps: []flyAppView{},
+			Error: "no read-only token for org personal (FLY_PERSONAL_READ_TOKEN)"})
+	}
 	return orgs, configErr
 }
 

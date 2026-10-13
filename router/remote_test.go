@@ -210,22 +210,6 @@ func TestTunnelProof(t *testing.T) {
 	}
 }
 
-func TestClaimsAdmit(t *testing.T) {
-	me := "chendeyao000@gmail.com"
-	if !claimsAdmit(&accessClaims{Email: "ChenDeyao000@gmail.com"}, me, "") {
-		t.Fatal("Deyao")
-	}
-	if claimsAdmit(&accessClaims{Email: "x@y.z"}, me, "cid.access") {
-		t.Fatal("someone else")
-	}
-	if !claimsAdmit(&accessClaims{CommonName: "cid.access"}, me, "cid.access") {
-		t.Fatal("the remotes client")
-	}
-	if claimsAdmit(&accessClaims{CommonName: "other.access"}, me, "cid.access") || claimsAdmit(&accessClaims{CommonName: ""}, me, "") {
-		t.Fatal("another service token")
-	}
-}
-
 func TestRemoteHolderExists(t *testing.T) {
 	r := newTestRouter(t)
 	pub, err := r.HolderPublicKeys()

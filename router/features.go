@@ -37,6 +37,7 @@ func (r *Router) registerFeatures(app appRoute, m machineRoute, public publicRou
 	r.registerMachines(app)               // machines.go: every Fly machine of the app; Destroy for one with no session
 	r.registerContent(app, m)             // content.go: content stores (Storage Box folders) for the app and the sessions
 	r.registerClaudeLogin(app, m, public) // claudelogin.go: the Claude login, its refresh, Re-login, the usage quota
+	r.registerDevices(app, public)        // devices.go: pairing Deyao's OpenClaw/Paseo apps, /api/remotes, Start
 }
 
 // startFeatures: called once from main after the router is built
@@ -48,6 +49,7 @@ func (r *Router) startFeatures() {
 	go r.watchLoop()    // watches.go: run due checks on the watch runner, deliver met / given-up watches
 	go r.archiveLoop()  // archive.go: restore files tidied
 	go r.budgetLoop()   // budget.go: the Fly budget cap
+	go r.bbBudgetLoop() // bbbudget.go: the Browserbase spend DM
 	go r.uploadsLoop()  // uploads.go: stale attachments
 	go r.inboxLoop()    // inbox.go: requests and approvals go after 10 min
 	go r.tasksLoop()    // tasks.go: daily schedules, runs, pausing finished task lines
