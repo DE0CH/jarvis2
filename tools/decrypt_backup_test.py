@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """tools/decrypt-backup.py against backups sealed and signed by infra/setup.py's own code (backup, mark_sensitive_backup,
-key_write for the per-key backups, laid out as router/storedocs.go WriteKey puts them) with the public TEST master key (e2e/testdata/master-test.pem) and a throwaway setup key, plus the committed vector
+key_write for the per-key backups, laid out as router/storedocs.go WriteKey puts them, and the objects the router
+wrote before the kernel) with the public TEST master key (e2e/testdata/master-test.pem) and a throwaway setup key, plus the committed vector
 tools/testdata/backup-export-v1.json. Offline: python3 tools/decrypt_backup_test.py (needs `cryptography`).
 The production master key is never used (no session has it)."""
 import base64, datetime, hashlib, importlib.util, io, json, os, stat, subprocess, sys, tempfile, unittest
@@ -67,22 +68,33 @@ def seed(signer=None, only=None):
     return bucket
 
 
-# ---- per-key backups (keys/<store>/<key>.json, as router/storedocs.go WriteKey puts them) ---------------------------
+# ---- per-key backups (keys/<store>/<key>.json, as router/storedocs.go WriteKey and router/storerestore.go put them) --
+#
+# The kernel's router names secrets' identity (kernel.Identity, box-signed IdentityText "jarvis2-secrets-identity …");
+# legacy=True builds the objects the router wrote before the kernel (the old core's identity, a session's write signed
+# by its machine key under a core-signed succession cert), which stay in the versioned bucket and must still read.
 
 BOX = ec.generate_private_key(ec.SECP256R1())
 CORE_SIG = ec.generate_private_key(ec.SECP256R1())
 CORE_AGR = ec.generate_private_key(ec.SECP256R1())
 PHONE_AGR = ec.generate_private_key(ec.SECP256R1())
 MACHINE = ec.generate_private_key(ec.SECP256R1())
-ME = {"phone": {"agreementKey": pub(PHONE_AGR)}, "agreementKey": pub(CORE_AGR), "master": pub(MASTER)}
+ME = {"phone": {"agreementKey": pub(PHONE_AGR)}, "agreementKey": pub(CORE_AGR), "master": pub(MASTER),
+      "storeKey": S._b64pt(*S._add(S._pt(pub(PHONE_AGR)), S._pt(pub(CORE_AGR))))}
 
 
 def sign(k, text):
     return base64.b64encode(k.sign(text.encode() if isinstance(text, str) else text, ec.ECDSA(hashes.SHA256()))).decode()
 
 
+def secrets_identity(box=None, role="secrets"):
+    """kernel.Identity as GET /identity answers it for secrets (the box key's signature over IdentityText)"""
+    return {"role": role, "signingKey": pub(CORE_SIG), "agreementKey": pub(CORE_AGR),
+            "boxSig": sign(box or BOX, f"jarvis2-{role}-identity {pub(CORE_SIG)} {pub(CORE_AGR)}")}
+
+
 def core_identity(box=None):
-    """core.Identity as GET /identity answers it (the box key's signature over the core's keys)"""
+    """the old core.Identity (legacy objects): the box key's signature over the core's keys, its signed state"""
     state = json.dumps({"kind": "core-state", "master": pub(MASTER), "phone": None})
     return {"signingKey": pub(CORE_SIG), "agreementKey": pub(CORE_AGR),
             "boxSig": sign(box or BOX, f"jarvis2-core-identity {pub(CORE_SIG)} {pub(CORE_AGR)}"),
@@ -98,31 +110,44 @@ def at(unix):
     return datetime.datetime.fromtimestamp(unix, datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def key_backup(store, key, value, when, by="setup", explanation="", signer=None, cert=None, identity=None):
+def key_backup(store, key, value, when, by="setup", explanation="", signer=None, cert=None, identity=None, legacy=False):
     """keys/<store>/<key>.json: infra/setup.py key_write's request (value None = a delete), then the router's object.
-    by "machine": the same sealing, signed by the machine key with its core-signed cert (machine/putkey.go)"""
+    by "machine" / "router": the same sealing, the router's word (the kernel); legacy by "machine": signed by the
+    machine key with its core-signed cert (the old machine/putkey.go)"""
     os.environ["JARVIS2_SETUP_KEY"] = pem(signer if by == "setup" and signer else SETUP)
     req = S.key_write(store, key, value, ME, explanation)
     os.environ["JARVIS2_SETUP_KEY"] = pem(SETUP)
     e = (req.get("wrapped") or {}).get("e", "")
     data = req.get("data", "")
     bsha = req.get("backupSha256", "")
-    if by == "machine":
-        req["sig"] = sign(signer or MACHINE, S.writer_text(store, key, e, data, bsha))
-    return {"kind": "key-backup", "store": store, "key": key, "deleted": value is None, "sealed": req.get("backup"),
-            "backupSha256": bsha, "e": e, "dataSha256": hashlib.sha256(data.encode()).hexdigest() if data else "",
-            "writer": {"by": by, "sig": req["sig"], "cert": (cert or machine_cert()) if by == "machine" else None},
-            "core": identity or core_identity(), "explanation": explanation, "at": at(when)}
+    if by == "setup":
+        writer = {"by": "setup", "sig": req["sig"], "machine": ""}
+    elif legacy:
+        writer = {"by": by, "sig": sign(signer or MACHINE, S.writer_text(store, key, e, data, bsha)), "cert": cert or machine_cert()}
+    else:
+        writer = {"by": by, "sig": "", "machine": "m-1" if by == "machine" else ""}
+    o = {"kind": "key-backup", "store": store, "key": key, "deleted": value is None, "sealed": req.get("backup"),
+         "backupSha256": bsha, "e": e, "dataSha256": hashlib.sha256(data.encode()).hexdigest() if data else "",
+         "writer": writer, "explanation": explanation, "at": at(when)}
+    if legacy:
+        o["core"] = identity or core_identity()
+    else:
+        o["secrets"] = identity or secrets_identity()
+    return o
 
 
 PHONE_SIG = ec.generate_private_key(ec.SECP256R1())
 
 
-def restore_backups(store, put, remove, when, phone=None, core=None, tamper=None):
-    """keys/<store>/<key>.json as router/storerestore.go writes them after a phone-approved restore: the core's backups
-    (sealed to the master key, core/history.go sealBackup) and its signed receipt carrying the phone-signed begin"""
-    state = json.dumps({"kind": "core-state", "master": pub(MASTER), "phone": {"signingKey": pub(PHONE_SIG), "agreementKey": pub(PHONE_AGR)}})
-    ident = dict(core_identity(), state={"payload": state, "sig": sign(CORE_SIG, state)})
+def restore_backups(store, put, remove, when, phone=None, core=None, tamper=None, legacy=False, identity=None):
+    """keys/<store>/<key>.json as router/storerestore.go writes them after a phone-approved restore: secrets' backups
+    (sealed to the master key, secrets/history.go) and its signed receipt carrying the phone-signed begin. legacy: the
+    old core's objects, which also carry the core's signed state naming the phone"""
+    if legacy:
+        state = json.dumps({"kind": "core-state", "master": pub(MASTER), "phone": {"signingKey": pub(PHONE_SIG), "agreementKey": pub(PHONE_AGR)}})
+        ident = dict(core_identity(), state={"payload": state, "sig": sign(CORE_SIG, state)})
+    else:
+        ident = identity or secrets_identity()
     begin = json.dumps({"kind": "store-restore-begin", "pending": "p1", "store": store})
     rows, sealed = [], {}
     for k, v in put.items():
@@ -136,14 +161,15 @@ def restore_backups(store, put, remove, when, phone=None, core=None, tamper=None
         tamper(r)
     rp = json.dumps(r)
     receipt = {"payload": rp, "sig": sign(core or CORE_SIG, rp)}
+    part = "core" if legacy else "secrets"
     out = []
     for x in rows:
         out.append({"kind": "key-backup", "store": store, "key": x["key"], "deleted": False, "sealed": sealed[x["key"]],
                     "backupSha256": x["backupSha256"], "e": x["e"], "dataSha256": x["dataSha256"],
-                    "writer": {"by": "restore", "receipt": receipt}, "core": ident, "explanation": "", "at": at(when)})
+                    "writer": {"by": "restore", "receipt": receipt}, part: ident, "explanation": "", "at": at(when)})
     for k in remove:
         out.append({"kind": "key-backup", "store": store, "key": k, "deleted": True, "sealed": None, "backupSha256": "", "e": "",
-                    "dataSha256": "", "writer": {"by": "restore", "receipt": receipt}, "core": ident, "explanation": "", "at": at(when)})
+                    "dataSha256": "", "writer": {"by": "restore", "receipt": receipt}, part: ident, "explanation": "", "at": at(when)})
     return out
 
 
@@ -362,9 +388,33 @@ class T(unittest.TestCase):
         self.assertEqual(json.loads(stdout)["stores"]["fresh"]["values"], {"ONLY": "o"})
 
     def test_machine_written_key(self):
+        """the kernel's router: a session's write names its machine, the router's word (as the app's Recover takes it);
+        the router's own write (the Claude login) likewise. Neither needs the setup or the box key."""
         b = seed()
         t = self.base_at(b, "default")
-        b = add_keys(b, key_backup("default", "SESSION_KEY", "from a session", t + 5, by="machine", explanation="Written by a session"))
+        b = add_keys(b, key_backup("default", "SESSION_KEY", "from a session", t + 5, by="machine", explanation="Written by a session"),
+                     key_backup("claude", "CLAUDE_CREDENTIALS", "{}", t + 5, by="router", explanation="The Claude login"))
+        st = self.opened(b)
+        self.assertEqual(st["default"]["values"]["SESSION_KEY"], "from a session")
+        self.assertEqual(st["default"]["explanations"], {"SESSION_KEY": "Written by a session"})
+        self.assertEqual(st["claude"]["values"], {"CLAUDE_CREDENTIALS": "{}"})
+        # a machine write naming no machine is refused
+        o = key_backup("default", "X", "v", t + 6, by="machine")
+        o["writer"]["machine"] = ""
+        code, _, err = self.run_tool(self.file(export(add_keys(b, o)), "nomachine.json"), "--kit-file", self.kitfile(), "--stdout")
+        self.assertEqual(code, 1)
+        self.assertIn("keys/default/X.json: names no session machine", err)
+        # a single machine-written object on its own needs no setup key
+        one = os.path.join(self.dir, "one.json")
+        put(one, b["keys/default/SESSION_KEY.json"])
+        code, stdout, err = self.run_tool(one, "--kit-file", self.kitfile(), "--stdout")
+        self.assertEqual(code, 0, err)
+
+    def test_legacy_machine_written_key(self):
+        """objects the router wrote before the kernel: the old core's identity and the machine's cert"""
+        b = seed()
+        t = self.base_at(b, "default")
+        b = add_keys(b, key_backup("default", "SESSION_KEY", "from a session", t + 5, by="machine", explanation="Written by a session", legacy=True))
         f = self.file(export(b))
         code, _, err = self.run_tool(f, "--kit-file", self.kitfile(), "--stdout")
         self.assertEqual(code, 1, "no box key: a session-written key can't be checked")
@@ -385,36 +435,42 @@ class T(unittest.TestCase):
         self.assertIn("box key isn't", err)
         # every link of the chain: another box, a cert from another core, a signature by another machine
         fake_core = ec.generate_private_key(ec.SECP256R1())
-        for o, want in ((key_backup("default", "X", "v", t + 6, by="machine", identity=core_identity(box=OTHER)), "its core's identity isn't signed"),
-                        (key_backup("default", "X", "v", t + 6, by="machine", cert=machine_cert(core=fake_core)), "the machine's cert isn't signed by its core"),
-                        (key_backup("default", "X", "v", t + 6, by="machine", signer=OTHER), "isn't signed by the key in the machine's cert")):
+        for o, want in ((key_backup("default", "X", "v", t + 6, by="machine", identity=core_identity(box=OTHER), legacy=True), "its core's identity isn't signed"),
+                        (key_backup("default", "X", "v", t + 6, by="machine", cert=machine_cert(core=fake_core), legacy=True), "the machine's cert isn't signed by its core"),
+                        (key_backup("default", "X", "v", t + 6, by="machine", signer=OTHER, legacy=True), "isn't signed by the key in the machine's cert")):
             code, _, err = self.run_tool(self.file(export(add_keys(b, o)), "chain.json"), "--kit-file", self.kitfile(), "--stdout",
                                          "--box-pub", self.box_pub())
             self.assertEqual(code, 1, want)
             self.assertIn("keys/default/X.json: " + want, err)
 
     def test_restore_written_keys(self):
-        """a phone-approved restore (core/history.go): its keys come back at Recover, its removals remove"""
+        """a phone-approved restore (secrets/history.go): its keys come back at Recover, its removals remove"""
         b = seed()
         t = self.base_at(b, "default")
         wiped = add_keys(b, key_backup("default", "GITHUB_TOKEN", None, t + 5), key_backup("default", "OTHER", None, t + 5),
                          key_backup("default", "STRAY", "written by mistake", t + 5))
         self.assertEqual(self.opened(wiped)["default"]["values"], {"STRAY": "written by mistake"})
-        restored = add_keys(wiped, *restore_backups("default", {"GITHUB_TOKEN": "t-1", "OTHER": "x y\nz"}, ["STRAY"], t + 10))
-        code, _, err = self.run_tool(self.file(export(restored)), "--kit-file", self.kitfile(), "--stdout")
-        self.assertEqual(code, 1, "no box key: a restore can't be checked")
-        self.assertIn("pass --box-pub", err)
-        st = self.opened(restored, "--box-pub", self.box_pub())
-        self.assertEqual(st["default"]["values"], {"GITHUB_TOKEN": "t-1", "OTHER": "x y\nz"})
         fake = ec.generate_private_key(ec.SECP256R1())
-        for objs, want in ((restore_backups("default", {"GITHUB_TOKEN": "v"}, [], t + 10, phone=fake), "isn't signed by the phone"),
-                           (restore_backups("default", {"GITHUB_TOKEN": "v"}, [], t + 10, core=fake), "receipt isn't signed by its core"),
-                           (restore_backups("default", {"GITHUB_TOKEN": "v"}, [], t + 10, tamper=lambda r: r.update(store="other")), "names another store"),
-                           (restore_backups("default", {"GITHUB_TOKEN": "v"}, [], t + 10, tamper=lambda r: r["put"][0].update(backupSha256="0" * 64)), "another value")):
-            code, _, err = self.run_tool(self.file(export(add_keys(wiped, *objs)), "bad.json"), "--kit-file", self.kitfile(), "--stdout",
-                                         "--box-pub", self.box_pub())
-            self.assertEqual(code, 1, want)
-            self.assertIn(want, err)
+        for legacy, part in ((False, "secrets"), (True, "core")):
+            restored = add_keys(wiped, *restore_backups("default", {"GITHUB_TOKEN": "t-1", "OTHER": "x y\nz"}, ["STRAY"], t + 10, legacy=legacy))
+            code, _, err = self.run_tool(self.file(export(restored)), "--kit-file", self.kitfile(), "--stdout")
+            self.assertEqual(code, 1, "no box key: a restore can't be checked")
+            self.assertIn("pass --box-pub", err)
+            st = self.opened(restored, "--box-pub", self.box_pub())
+            self.assertEqual(st["default"]["values"], {"GITHUB_TOKEN": "t-1", "OTHER": "x y\nz"}, part)
+            cases = [(restore_backups("default", {"GITHUB_TOKEN": "v"}, [], t + 10, core=fake, legacy=legacy), f"receipt isn't signed by its {part}"),
+                     (restore_backups("default", {"GITHUB_TOKEN": "v"}, [], t + 10, tamper=lambda r: r.update(store="other"), legacy=legacy), "names another store"),
+                     (restore_backups("default", {"GITHUB_TOKEN": "v"}, [], t + 10, tamper=lambda r: r["put"][0].update(backupSha256="0" * 64), legacy=legacy), "another value")]
+            if legacy:  # the old core's object names the phone (its state): its signature is checked here
+                cases.append((restore_backups("default", {"GITHUB_TOKEN": "v"}, [], t + 10, phone=fake, legacy=True), "isn't signed by the phone"))
+            else:  # secrets' identity must be the box key's, and secrets'
+                cases.append((restore_backups("default", {"GITHUB_TOKEN": "v"}, [], t + 10, identity=secrets_identity(box=OTHER)), "its secrets' identity isn't signed"))
+                cases.append((restore_backups("default", {"GITHUB_TOKEN": "v"}, [], t + 10, identity=secrets_identity(role="spawner")), "not secrets'"))
+            for objs, want in cases:
+                code, _, err = self.run_tool(self.file(export(add_keys(wiped, *objs)), "bad.json"), "--kit-file", self.kitfile(), "--stdout",
+                                             "--box-pub", self.box_pub())
+                self.assertEqual(code, 1, want)
+                self.assertIn(want, err)
 
     def test_deleted_key(self):
         b = seed()

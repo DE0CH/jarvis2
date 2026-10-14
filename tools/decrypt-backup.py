@@ -16,19 +16,22 @@ bucket), and a single `keys/<store>/<key>.json` object. Those carry no setup or 
 The bucket holds three kinds of object (docs/DESIGN.md "Writing stores and their backups"):
   stores/<name>.json     an older whole-store backup, {doc, sig} signed by the setup key; `at` in unix seconds
   sensitive/<name>.json  a sensitivity marker, signed by the setup key
-  keys/<store>/<key>.json  one key's backup, written by the router before the key reaches the core:
+  keys/<store>/<key>.json  one key's backup, written by the router before the key reaches secrets:
       {kind "key-backup", store, key, deleted, sealed {e, data} | null, backupSha256, e, dataSha256,
-       writer {by "setup"|"machine", sig, cert?} | {by "restore", receipt}, core {signingKey, agreementKey, boxSig, state, bundle},
-       explanation, at (RFC3339)}
-    Checks: backupSha256 = hex sha256(sealed.e + "\n" + sealed.data) (a delete: no sealed value, empty hashes); the
-    writer's signature over WriterText = "jarvis2-store-key\n{store}\n{key}\n{e}\n{dataSha256}\n{backupSha256}":
-    writer "setup" = the setup key; writer "machine" = the signing key in writer.cert ({payload, sig}, a succession
-    cert signed by core.signingKey), the core's identity "jarvis2-core-identity {signingKey} {agreementKey}" signed by
-    the box key (core.boxSig); writer "restore" (a phone-approved restore, core/history.go) = {by, receipt}: the core's
-    signed receipt (kind store-restore-approved, the same core identity) names this key's e, dataSha256 and
-    backupSha256 (or lists it as removed), and carries the restore's begin document with the phone's signature over it,
-    the phone being the one in the core's signed state. Without a box key (--box-pub or the file's boxKey) a key
-    written by a session or a restore fails its check.
+       writer {by "setup", sig} | {by "machine", machine} | {by "router"} | {by "restore", receipt},
+       secrets {role "secrets", signingKey, agreementKey, boxSig}, explanation, at (RFC3339)}
+    Checks: backupSha256 = hex sha256(sealed.e + "\n" + sealed.data) (a delete: no sealed value, empty hashes); writer
+    "setup" = the setup key's signature over WriterText = "jarvis2-store-key\n{store}\n{key}\n{e}\n{dataSha256}\n
+    {backupSha256}"; writer "machine" (a session, by its machine id) and "router" (the router's own write, the Claude
+    login) are the router's word, as the app's Recover takes them; writer "restore" (a phone-approved restore, kernel
+    secrets/history.go) = secrets' signed receipt (kind store-restore-approved) naming this key's e, dataSha256 and
+    backupSha256 (or listing it as removed), secrets' identity "jarvis2-secrets-identity {signingKey} {agreementKey}"
+    signed by the box key (secrets.boxSig). Without a box key (--box-pub or the file's boxKey) a restored key fails
+    its check.
+    Older objects still in the bucket (written before the kernel) are read too: they name the old core instead,
+    core {signingKey, agreementKey, boxSig, state, bundle} ("jarvis2-core-identity …"), a session's write carries
+    writer {by "machine", sig, cert} (the machine key's signature over WriterText, its succession cert signed by the
+    core), and a restore's phone signature over the begin document is checked against the phone in the core's state.
 
 The kit (`jarvis2-kit:2:<master private key>`; a version-1 kit's master part works too) is read from --kit-file, from
 stdin with `--kit-file -`, or asked for without echo when stdin is a terminal. Never pass it as an argument: it would
@@ -200,7 +203,7 @@ def key_path(key):
 
 
 def writer_text(store, key, e, data_sha, backup_sha):
-    """core.WriterText: what a key's writer signs"""
+    """secrets.WriterText: what a key's writer signs"""
     return f"jarvis2-store-key\n{store}\n{key}\n{e}\n{data_sha}\n{backup_sha}".encode()
 
 
@@ -218,48 +221,65 @@ def parse_at(at):
     return dt.timestamp()
 
 
-def core_of(d, box_keys):
-    """(the core's signing key, None) when the object's core identity is signed by the box key, else (None, why)"""
-    c = d.get("core")
-    if not isinstance(c, dict) or not all(isinstance(c.get(k), str) for k in ("signingKey", "agreementKey", "boxSig")):
-        return None, "carries no core identity"
-    ident = f"jarvis2-core-identity {c['signingKey']} {c['agreementKey']}".encode()
+def signer_of(d, box_keys):
+    """(the signing key of the part that wrote the object, its kind, None) when the box key signed its identity, else
+    (None, None, why). Kernel objects name secrets ({role "secrets", signingKey, agreementKey, boxSig}, IdentityText
+    "jarvis2-secrets-identity {signingKey} {agreementKey}"); older objects still in the bucket name the old core
+    ({signingKey, agreementKey, boxSig, state, bundle}, "jarvis2-core-identity {signingKey} {agreementKey}")."""
+    if isinstance(d.get("secrets"), dict):
+        c, part = d["secrets"], "secrets"
+        if c.get("role") not in (None, "", "secrets"):
+            return None, None, f"names a {c.get('role')!r} identity, not secrets'"
+    elif isinstance(d.get("core"), dict):
+        c, part = d["core"], "core"
+    else:
+        return None, None, "carries no secrets identity"
+    if not all(isinstance(c.get(k), str) for k in ("signingKey", "agreementKey", "boxSig")):
+        return None, None, f"its {part} identity is incomplete"
+    ident = f"jarvis2-{part}-identity {c['signingKey']} {c['agreementKey']}".encode()
+    whose = "secrets'" if part == "secrets" else "core's"
     bad = [label for label, pub in box_keys if not valid(pub, ident, c["boxSig"])]
     if bad:
-        return None, "its core's identity isn't signed by " + " / ".join(bad)
+        return None, None, f"its {whose} identity isn't signed by " + " / ".join(bad)
     try:
-        return load_pub(c["signingKey"], "the core's signing key"), None
+        return load_pub(c["signingKey"], f"the {whose} signing key"), part, None
     except Usage:
-        return None, "its core's signing key isn't a P-256 key"
+        return None, None, f"its {whose} signing key isn't a P-256 key"
 
 
 def check_restore_writer(d, store, key, w, box_keys):
-    """writer "restore": the core's signed receipt of a phone-approved restore (core/history.go) names this key's
-    backup, and the phone the core was set up with signed the restore's begin document"""
+    """writer "restore": the signed receipt of a phone-approved restore (kernel secrets/history.go; older objects: the
+    old core's core/history.go) names this key's backup. Secrets checked the phone's signature over the restore's begin
+    document before it signed the receipt; an old core's object also carries the core's signed state, so the phone's
+    signature is checked here against the phone named in it."""
     if not box_keys:
         return "is written by a restore: pass --box-pub keys/box.pub to check it"
-    core_pub, why = core_of(d, box_keys)
+    signer, part, why = signer_of(d, box_keys)
     if why:
         return why
     rc = w.get("receipt")
     if not isinstance(rc, dict) or not isinstance(rc.get("payload"), str) or not isinstance(rc.get("sig"), str):
-        return "a restore without the core's receipt"
-    if not valid(core_pub, rc["payload"].encode(), rc["sig"]):
-        return "the restore's receipt isn't signed by its core"
-    st = (d.get("core") or {}).get("state")
+        return f"a restore without {part}'s receipt"
+    if not valid(signer, rc["payload"].encode(), rc["sig"]):
+        return f"the restore's receipt isn't signed by its {part}"
     try:
-        if not valid(core_pub, st["payload"].encode(), st["sig"]):
-            return "its core's state isn't signed by the core"
-        phone = load_pub(json.loads(st["payload"])["phone"]["signingKey"], "the phone's signing key")
         r = json.loads(rc["payload"])
         begin = json.loads(r["begin"])
-    except (ValueError, KeyError, TypeError, Usage):
-        return "the restore's receipt or its core's state isn't readable"
+    except (ValueError, KeyError, TypeError):
+        return "the restore's receipt isn't readable"
     if r.get("kind") != "store-restore-approved" or r.get("store") != store or begin.get("kind") != "store-restore-begin" or \
             begin.get("pending") != r.get("pending") or begin.get("store") != store:
         return "the restore's receipt names another store or restore"
-    if not isinstance(r.get("phoneSig"), str) or not valid(phone, r["begin"].encode(), r["phoneSig"]):
-        return "the restore isn't signed by the phone its core was set up with"
+    if part == "core":
+        st = d["core"].get("state")
+        try:
+            if not valid(signer, st["payload"].encode(), st["sig"]):
+                return "its core's state isn't signed by the core"
+            phone = load_pub(json.loads(st["payload"])["phone"]["signingKey"], "the phone's signing key")
+        except (ValueError, KeyError, TypeError, Usage):
+            return "its core's state isn't readable"
+        if not isinstance(r.get("phoneSig"), str) or not valid(phone, r["begin"].encode(), r["phoneSig"]):
+            return "the restore isn't signed by the phone its core was set up with"
     if d.get("deleted"):
         return None if key in (r.get("remove") or []) else "the restore's receipt doesn't remove this key"
     for x in r.get("put") or []:
@@ -271,28 +291,38 @@ def check_restore_writer(d, store, key, w, box_keys):
 
 
 def check_key_writer(d, store, key, setup_keys, box_keys):
-    """None when the writer's signature checks, else why not"""
+    """None when the writer checks, else why not. setup: the setup key's signature over WriterText; restore: the
+    receipt (check_restore_writer); router (the Claude login) and machine (a session's write, naming its machine id):
+    the router's word, as the app's Recover takes them (writing secrets is protected only by the router); an older
+    machine write that carries the old core's succession cert has the machine key's signature checked too."""
     w = d.get("writer")
-    if isinstance(w, dict) and w.get("by") == "restore":
-        return check_restore_writer(d, store, key, w, box_keys)
-    if not isinstance(w, dict) or not isinstance(w.get("sig"), str):
+    if not isinstance(w, dict):
         return "names no writer"
+    by = w.get("by")
+    if by == "restore":
+        return check_restore_writer(d, store, key, w, box_keys)
     text = writer_text(store, key, d.get("e") or "", d.get("dataSha256") or "", d.get("backupSha256") or "")
-    if w.get("by") == "setup":
+    if by == "setup":
+        if not isinstance(w.get("sig"), str) or not w["sig"]:
+            return "a setup write without its signature"
         if not setup_keys:
             return "is written by the setup session: pass --setup-pub keys/setup.pub"
         bad = [label for label, pub in setup_keys if not valid(pub, text, w["sig"])]
         return ("isn't signed by " + " / ".join(bad)) if bad else None
-    if w.get("by") != "machine":
+    if by == "router":
+        return None
+    if by != "machine":
         return "names an unknown writer"
+    cert = w.get("cert")
+    if cert is None:  # the kernel's router: the machine id, the router's word
+        return None if isinstance(w.get("machine"), str) and w["machine"] else "names no session machine as its writer"
     if not box_keys:
         return "is written by a session: pass --box-pub keys/box.pub to check it"
-    core_pub, why = core_of(d, box_keys)
+    core_pub, _, why = signer_of(d, box_keys)
     if why:
         return why
-    cert = w.get("cert")
     if not isinstance(cert, dict) or not isinstance(cert.get("payload"), str) or not isinstance(cert.get("sig"), str):
-        return "a session's write without the machine's cert"
+        return "a session's write with an unreadable machine cert"
     if not valid(core_pub, cert["payload"].encode(), cert["sig"]):
         return "the machine's cert isn't signed by its core"
     try:
@@ -302,7 +332,7 @@ def check_key_writer(d, store, key, setup_keys, box_keys):
         return "the machine's cert names no signing key"
     if cp.get("kind") != "succession-cert":
         return "the machine's cert isn't a succession cert"
-    if not valid(mkey, text, w["sig"]):
+    if not isinstance(w.get("sig"), str) or not valid(mkey, text, w["sig"]):
         return "isn't signed by the key in the machine's cert"
     return None
 
@@ -421,7 +451,7 @@ def check_and_open(objs, setup_keys, master, box_keys=()):
             continue
         stores[n] = {"sensitive": bool(d.get("sensitive")) or n in marked, "at": d.get("at"), "values": values, "explanations": {}}
     # key backups, oldest first, onto each store's whole-store backup (a store with only key backups starts empty;
-    # the core makes a store sensitive on its first key, so such a store is sensitive)
+    # secrets makes a store sensitive on its first key, so such a store is sensitive)
     opened = []
     for key, kp, d in keyobjs:
         try:
@@ -472,7 +502,7 @@ def main(argv=None):
     p.add_argument("--kit-file", metavar="KIT", help="a file holding the recovery kit; - = stdin (default: asked for, no echo)")
     p.add_argument("--setup-pub", metavar="PATH", help="keys/setup.pub from a clone of DE0CH/jarvis2: must be the file's setup key too")
     p.add_argument("--box-pub", metavar="PATH", help="keys/box.pub from a clone of DE0CH/jarvis2: checks keys written by sessions "
-                   "(their core's identity); must be the file's box key too, when it names one")
+                   "(secrets' identity); must be the file's box key too, when it names one")
     p.add_argument("--out", metavar="PATH", help="where the plaintext goes (default ./jarvis2-stores-<date>.json; a path ending in / = one file per store)")
     p.add_argument("--stdout", action="store_true", help="print the plaintext stores (JSON) to stdout instead of writing a file")
     p.add_argument("--force", action="store_true", help="replace an existing output file")
@@ -557,11 +587,11 @@ def main(argv=None):
 
 
 def session_written(o):
-    """a keys/ object whose writer is a session (needs no setup key)"""
+    """a keys/ object whose writer isn't the setup session (needs no setup key)"""
     if key_path(o["key"]) is None:
         return False
     try:
-        return json.loads(o["body"])["writer"]["by"] in ("machine", "restore")
+        return json.loads(o["body"])["writer"]["by"] in ("machine", "restore", "router")
     except Exception:
         return False
 
