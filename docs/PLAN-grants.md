@@ -10,20 +10,31 @@ Status: plan only. Nothing here is built. Sources: DESIGN "Target design" (docs/
 - **D6.** Grants signed by a machine follow the same steps as phone grants (notary challenge, logged). A phone-signed grant (the start grant) says which other signers the guard accepts, and for which text types.
 
 
-**Decided 2026-10-14 (Deyao), supersedes `pending` everywhere below:** each New session gets its own logical **source
-machine** with a fresh random id (`source-<32 hex>`: 128 random bits, so it can't clash with a Fly id). The phone binds the start and secrets grants to it and signs the succession challenge naming it as the
-predecessor. A source counts as killed from birth, with no snapshot; certify's one-successor-per-predecessor rule
-uses it up. Grants reach the first machine by an ordinary exchange through the cert whose predecessor is that source. No `pending` field, no special exchange form. A burn is an ordinary succession onto the fixed machine **`sink`**: the old machine is used up as usual, and
-the signer refuses any succession whose predecessor is `sink`, so nothing continues an ended session (`sink` is neither
-a Fly id nor a source). The burn cert and the null image go. Sessions are paths from one of many sources into the one sink. **Structure, not branches:** the signer keeps one machine table and one
-succession path with the same two rules for everything: a predecessor must be killed and unused (using it marks it
-used), and a target must be a known machine. A source is a row inserted killed and unused (no snapshot, no keys), so it
-gets exactly one successor; the sink is one permanent row that is never killed, so nothing succeeds it, and as a target
-it binds no keys, so any number of machines succeed into it. No "new line" or "burn" branches, no burn-cert kind, no
-null image: a new session is a succession from a source, an ended one a succession into the sink. One cert per real
-machine follows from Start being single-shot. Also decided: a `grants` branch (§4); terminal grants at most
-10 minutes (Q9); a secrets grant covers every key of its stores, current and future, whoever writes them (Q5: secrets
-are not code and the model never reads them, so a written key can't be a prompt injection).
+**Decided 2026-10-14 (Deyao): the machine model. It supersedes §1-§2 wherever they differ** (the `pending` binding,
+burns, burn certs, the null image, `Predecessor == nil` for a new line, kill statements, Fly in the succession signer).
+
+- **Everything signed is a grant** (signed text); signers differ only in the key: `phone` (Secure Enclave, Face ID),
+  `machine` (the key a machine makes at boot), `spawner` (its own key; it alone holds the Fly token and signs what Fly
+  tells it), `succession` (its own key; it signs only by exchange). The **notary** is not a signer: it is the time and
+  order under every signed statement (each carries a challenge). **Secrets** signs no grants: it turns a valid secrets
+  grant into values sealed to the grant's machine.
+- **A machine row** is one shape: id, image and everything Fly knows of it, plus keys when it runs. Kinds, by structure
+  (not by code paths):
+  - `source-<32 hex>`: dormant, no keys, created by the **phone** at New session (the image Deyao approves). The start
+    and secrets grants are bound to it under the same Face ID.
+  - a running machine: keys, created by the **spawner** (spawn = start on Fly from a dormant row's image, read its keys).
+  - `sink-<id>`: dormant, no keys, created by the **spawner** when it kills `<id>` (spawn = stop it on Fly, take its
+    snapshot hash). Killing is a spawn.
+  - `sink`: the one end; nothing leaves it.
+- **Every path alternates** `source-x → M1 → sink-M1 → M2 → sink-M2 → … → sink`. A new session, a resume and the end
+  are the same step under the same two rules: a predecessor is used once (each dormant row wakes into one successor),
+  and the successor runs the image its dormant predecessor holds. A dormant row exists only because the phone or the
+  spawner signed it, so there is no "killed" flag and no new-line or burn branch.
+- **One operation each:** phone — create sources, sign grants; spawner — spawn; succession — exchange (a grant bound to
+  A onto A's successor, marking A used); notary — challenge.
+- **Also decided:** a `grants` branch (§4); terminal grants at most 10 minutes (Q9); a secrets grant covers every key of
+  its stores, current and future, whoever writes them (Q5: secrets are not code and the model never reads them, so a
+  written key can't be a prompt injection).
 
 ---
 
