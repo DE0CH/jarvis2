@@ -1,7 +1,7 @@
 package main
 
 // Tasks (Jarvis 1's lib/tasks.js, DECISIONS 29 and 32-37): templates instantiated with values into INSTANCES,
-// run on a click or on a daily SCHEDULE. In Jarvis 2 an instance is a session LINE:
+// run on a click or on a daily SCHEDULE. In Jarvis 2 an instance is a session:
 //
 //   template  tasks/<name>/task.json + its files, in this repo. Baked into the session image
 //             (/opt/jarvis2/tasks) and the router image (/tasks, for the forms). task.json: {title, description?,
@@ -9,18 +9,20 @@ package main
 //             stores? [...], timeoutSeconds? (600), size? ("small"), fields: [{name, label?, type
 //             (text|textarea|number|select|multiselect|checkbox), required?, default?, options?, optionsFrom?
 //             (stores|content|sizes|models), help?, placeholder?}]}. A (multi)select with optionsFrom "stores" adds
-//             the picked store(s) to the line; with "content", the picked content store(s) (content.go: signed in the
-//             line's config, so the task's machine may read and write them through the router).
+//             the picked store(s) to the session; with "content", the picked content store(s) (content.go: in the
+//             source's settings, so the task's machine may read and write them through the router).
 //   instance  {id, template, name, params, size, stores, session}: a new session whose harness is
-//             "task:<template>" (signed in the cert's options), approved ONCE on the phone like any new session.
-//   run       a resume of that line (approve_by_dead_machine: same stores, options and image, no phone) whose
-//             machine runs the template instead of a harness (machine/task.go), reports the result to
-//             /m/task-result, and is paused again (snapshot kept: ~/workspace/task-state survives runs).
+//             "task:<template>" and whose settings carry the instance and its parameters (`task`), approved ONCE on
+//             the phone like any new session.
+//   run       a resume of that session (a spawn from its paused source: same stores, settings and image, no phone)
+//             whose machine runs the template instead of a harness (machine/task.go), reports the result to
+//             /m/task-result, and is paused again (snapshot kept: ~/workspace/task-state survives runs). The run's id
+//             and trigger reach the machine in GET /m/config (taskRun, taskTrigger).
 //   schedule  {id, instance, time "HH:MM", tz, enabled, since}: the router's own daily tick starts a run.
 //
-// No delivery and no grant is involved: the code that runs is fixed by the cert (image digest + harness), so a
-// line holding a sensitive store runs unattended too. Parameters are not secret (they travel in the machine's
-// unsigned env as TASK_PARAMS / PARAM_<FIELD>); secrets come only from the line's stores.
+// No delivery and no grant beyond the main one is involved: the code that runs is fixed by the source (image digest +
+// harness), so a session holding a sensitive store runs unattended too. Parameters are not secret; secrets come only
+// from the session's stores.
 
 import (
 	"encoding/json"

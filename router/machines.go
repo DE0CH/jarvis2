@@ -28,7 +28,7 @@ import (
 // JARVIS2_URL is a test router's (infra/e2e.sh, a rehearsal box)
 const productionRouterHost = "jarvis2-box._peer.internal"
 
-// a machine younger than this may be a Start in flight (the core creates it before the router records it)
+// a machine younger than this may be a Start in flight (the spawner creates it before the router records it)
 const orphanMinAge = 15 * time.Minute
 
 type flyMachineDetail struct {

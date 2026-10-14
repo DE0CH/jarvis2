@@ -5,7 +5,7 @@ package main
 // until he reviews it on the phone. A caller calls an intent endpoint (`…/requests/repo/add` and so on) with its
 // arguments and its own explanation; the router keeps the request with who called (worked out from the caller's
 // credential, never from what it says about itself) and the exact call. The phone opens the shell's secure page
-// for it, which renders what the core (or the phone's grant) will actually do from the signed content, and signs
+// for it, which renders what the kernel will actually do from the signed content, and signs
 // only that. Nothing here can approve anything: a request is a pointer to a secure page, and Deny just drops it.
 //
 // The approvals the router holds (new session, a resume out of a new source, and the add-ons to a running machine:

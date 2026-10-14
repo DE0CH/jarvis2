@@ -335,7 +335,7 @@ func (r *Router) checkBatchItem(c Caller, raw json.RawMessage) (*batchItem, erro
 }
 
 // FileBatch: every item checked first (any bad item: nothing is filed, 400 naming it), then filed in order. An item
-// that fails while being filed (the core refused a challenge) is reported and the rest stand; when none stands, the
+// that fails while being filed (a kernel part refused, a session stopped running) is reported and the rest stand; when none stands, the
 // batch is dropped. A request already waiting outside any batch joins this one; one in another batch stays there.
 func (r *Router) FileBatch(c Caller, method, path string, body []byte, filing string) (int, map[string]any) {
 	var in batchIn

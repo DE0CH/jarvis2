@@ -1,7 +1,7 @@
 package main
 
 // The router's policy (policy/stores.json, baked into its image): which stores each harness brings. The router
-// adds them to a session's stores; the app hides them. The core knows nothing about it.
+// adds them to a session's stores; the app hides them. The kernel knows nothing about it.
 
 import (
 	"encoding/json"
@@ -9,7 +9,7 @@ import (
 	"os"
 )
 
-// flyStore: the store whose contents are the core's Fly token (core.FlyStore) — never a session's
+// flyStore: the old core's own store's name, reserved by secrets (ReservedStore) — never a session's
 const flyStore = "core"
 
 type Policy struct {

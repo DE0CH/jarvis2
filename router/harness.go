@@ -1,8 +1,8 @@
 package main
 
 // The harnesses and their models (Jarvis 1's MODELS / HARNESSES in selfhost/jarvis/server.js). A model belongs to
-// one harness: the New-session request carries both; the harness is signed (the cert's options, SESSION_HARNESS on
-// the machine), the model is not (SESSION_MODEL in the machine env, read by the harness script):
+// one harness: the New-session request carries both, and both are start settings in the source the phone signs
+// (settings `harness`, `model`; the guard hands them to the harness script):
 //   claude    Claude Code on the Claude subscription (`claude --model <id>`), the Claude app
 //   opencode  OpenCode on OpenRouter (`openrouter/<slug>`), driven by a Paseo daemon: the Paseo app + web UI
 //   openclaw  claw-code inside an OpenClaw gateway (`openclaw/<Claude model id>`), Claude subscription: the

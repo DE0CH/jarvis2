@@ -3,11 +3,11 @@ package main
 // Deyao's repo list and the GitHub picker (Jarvis 1's /api/repos, /api/github/repos).
 //
 // Every repo on the list is a GitHub repo with its own deploy key (Deyao, 2026-10-10): adding one in the app's
-// Settings asks the core for a deploy key (docs/DESIGN.md "Deploy keys"), which the phone approves with Face ID;
-// the core makes the key pair, adds the public half to the repo on GitHub and keeps the private half in the
+// Settings asks secrets for a deploy key (docs/DESIGN.md "Deploy keys"), which the phone approves with Face ID;
+// secrets makes the key pair, adds the public half to the repo on GitHub and keeps the private half in the
 // store github-<repo>. Removing one deletes both, the same way. The router only relays: it holds no GitHub
 // token that can push or manage keys (the picker lists repos with GITHUB_READ_TOKEN, metadata read only), and
-// it records an entry only from the core's answer. Sessions clone, pull and push a repo over SSH with its
+// it records an entry only from secrets' answer. Sessions clone, pull and push a repo over SSH with its
 // store's key (machine/deploykeys.go); the picker only fills New session's `repos`.
 // The repo list is the router's own (DATA_DIR/repos.json), shown in /api/state `repos`.
 
@@ -27,7 +27,7 @@ import (
 )
 
 // RepoEntry: a repo on the list. Repo, URL and Store follow from the GitHub name; Sensitive, Fingerprint and
-// KeyAt come from the core's answer when its deploy key was made.
+// KeyAt come from secrets' answer when its deploy key was made.
 type RepoEntry struct {
 	Name        string `json:"name"`  // the clone's directory in ~/workspace
 	URL         string `json:"url"`   // https://github.com/<owner>/<name>.git
@@ -49,7 +49,7 @@ func parseGitHubRepo(s string) string {
 	return m[1] + "/" + m[2]
 }
 
-// repoStore: the core's RepoStore (core/deploykeys.go) — github-<name> for DE0CH's repos, else
+// repoStore: secrets' RepoStore (core/kernel/secrets/deploykeys.go) — github-<name> for DE0CH's repos, else
 // github-<owner>-<name>, lower case, anything outside [a-z0-9-] as "-"
 func repoStore(repo string) string {
 	owner, name, _ := strings.Cut(strings.ToLower(repo), "/")
@@ -112,13 +112,13 @@ func (r *Router) updateRepos(fn func([]RepoEntry) []RepoEntry) error {
 	return os.Rename(tmp, r.reposPath())
 }
 
-// keyAnswer: the core's answer to a finished deploy-key request, applied to the list
+// keyAnswer: secrets' answer to a finished deploy-key request, applied to the list
 type keyAnswer struct {
 	Kind        string `json:"kind"` // deploy-key-added | deploy-key-removed
 	Repo        string `json:"repo"`
 	Sensitive   bool   `json:"sensitive"`
 	Fingerprint string `json:"fingerprint"`
-	PublicKey   string `json:"publicKey"` // the core from R2 answers the key, not its fingerprint
+	PublicKey   string `json:"publicKey"` // secrets answers the key, not its fingerprint
 }
 
 // sshFingerprint: "SHA256:<base64>" of an "ssh-ed25519 <base64 wire>" line ("" when it isn't one)
@@ -132,14 +132,14 @@ func sshFingerprint(pub string) string {
 	return "SHA256:" + base64.RawStdEncoding.EncodeToString(sum[:])
 }
 
-// proof: the core's signed answer (outcomes.go: what vouches for "approved" to a session that asked for the key)
+// proof: secrets' signed answer (kept for the log)
 func (r *Router) applyKeyAnswer(a keyAnswer, proof *Doc) error {
 	if a.Fingerprint == "" {
 		a.Fingerprint = sshFingerprint(a.PublicKey)
 	}
 	repo := parseGitHubRepo(a.Repo)
 	if repo == "" {
-		return fmt.Errorf("the core's answer names no GitHub repo")
+		return fmt.Errorf("secrets' answer names no GitHub repo")
 	}
 	same := func(e RepoEntry) bool { return strings.EqualFold(e.Repo, repo) }
 	// a pending request for the same thing is answered too (inbox.go)
@@ -170,7 +170,7 @@ func init() {
 	})
 }
 
-// ---- deploy keys: the core's two calls, relayed; the list follows the core's signed answer ----------------
+// ---- deploy keys: secrets' two calls, relayed; the list follows secrets' signed answer ----------------
 
 func (r *Router) registerDeployKeys(app appRoute) {
 	app("POST /api/repos/key/begin", func(w http.ResponseWriter, req *http.Request) {
@@ -178,13 +178,12 @@ func (r *Router) registerDeployKeys(app appRoute) {
 			Action    string `json:"action"`
 			Repo      string `json:"repo"`
 			Sensitive bool   `json:"sensitive"`
-			// the app's key pair (R2): its store name and key title, the public key, and the store's keys holding the
-			// private half (keys: core/keys.go; blob: a core from before keys.go, until the held core is live)
+			// the app's key pair: its store name and key title, the public key, and the store's keys holding the
+			// private half (keys: core/kernel/secrets/keys.go)
 			Store     string          `json:"store,omitempty"`
 			Title     string          `json:"title,omitempty"`
 			PublicKey string          `json:"publicKey,omitempty"`
 			Keys      json.RawMessage `json:"keys,omitempty"`
-			Blob      json.RawMessage `json:"blob,omitempty"`
 		}
 		json.NewDecoder(io.LimitReader(req.Body, 1<<20)).Decode(&in)
 		repo := parseGitHubRepo(in.Repo)
@@ -197,9 +196,6 @@ func (r *Router) registerDeployKeys(app appRoute) {
 			body["store"], body["title"], body["publicKey"] = in.Store, in.Title, in.PublicKey
 			if len(in.Keys) > 0 {
 				body["keys"] = in.Keys
-			}
-			if len(in.Blob) > 0 {
-				body["blob"] = in.Blob
 			}
 		}
 		b, _ := json.Marshal(body)

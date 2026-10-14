@@ -621,7 +621,7 @@ func (r *Router) requireDeyao(fn http.HandlerFunc) http.Handler {
 	})
 }
 
-// requireSetup: the setup session's Access service token (app jarvis2.deyaochen.com/setup); the core then
+// requireSetup: the setup session's Access service token (app jarvis2.deyaochen.com/setup); the router then
 // checks the setup key's own signature, so this gate only keeps strangers away from the code
 func (r *Router) requireSetup(fn http.HandlerFunc) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
@@ -636,7 +636,7 @@ func (r *Router) requireSetup(fn http.HandlerFunc) http.Handler {
 }
 
 // requireMachine: no Access here — this listener is reachable only over Fly's private network; every
-// request must be signed by a machine the core started
+// request must be signed by a machine the spawner started
 func (r *Router) requireMachine(fn func(w http.ResponseWriter, req *http.Request, machine string, body []byte)) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		body, err := io.ReadAll(io.LimitReader(req.Body, 4<<30))

@@ -26,7 +26,7 @@ import (
 )
 
 // errDraining: the router is updating. It is an errBusy too, so every automatic caller that already backs off a
-// busy session (schedule.go, vouch.go, tasks.go, watches) treats it as "try again later", not as a failure.
+// busy session (schedule.go, commands.go, tasks.go, watches) treats it as "try again later", not as a failure.
 var errDraining error = drainingErr{}
 
 type drainingErr struct{}

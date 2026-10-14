@@ -3,8 +3,8 @@ package main
 // API-call requests (Deyao, 2026-10-13): a session's actions (actions.go) may ask for ANY app API call — one of the
 // routes only Deyao's Access login reaches — to be run as Deyao. The request waits in the Inbox (kind "api-call")
 // with its method, path and body; Deyao approves it from the app or the web page (no Face ID for the approval: a
-// step that needs the core's signature, such as the terminal grant behind a switch to bypass, still asks for its own
-// Face ID afterwards). The router then runs the call through its own public mux carrying the approver's own Access
+// step that needs the phone's signature, such as a terminal or a new session, files its own approval and asks for its
+// own Face ID afterwards). The router then runs the call through its own public mux carrying the approver's own Access
 // login (so the route's requireDeyao checks Deyao himself), and keeps the outcome for inboxTTL; the requesting
 // session reads it back (GET /m/api/actions/requests/call/{id}).
 //

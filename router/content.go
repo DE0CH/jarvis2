@@ -653,7 +653,7 @@ func (r *Router) registerContent(app appRoute, m machineRoute) {
 				return
 			}
 			if files == nil {
-				files = []ContentFile{} // a store deleted since the line began: empty
+				files = []ContentFile{} // a store deleted since the session began: empty
 			}
 			stores[n] = files
 		}

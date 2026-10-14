@@ -6,7 +6,7 @@ package main
 // the $/hour of everything accruing in the sessions' app (started machines by their guest size, provisioned
 // volumes) and adds rate × elapsed to a month-to-date total kept in the router's state (a Riemann sum,
 // blind while the router is down, bounded by maxDeltaH per gap). FLY_BUDGET_WARN_USD (default 25) → one DM;
-// FLY_BUDGET_USD (default 30; 0 = off) → pause every running session (r.Pause: snapshot, then the core's
+// FLY_BUDGET_USD (default 30; 0 = off) → pause every running session (r.Pause: snapshot, then the spawner's
 // kill) and DM, and keep pausing anything started while the month stays over the cap.
 //
 // The router has no Fly token that can change anything: FLY_READ_TOKEN is read-only on app jarvis2-sessions
