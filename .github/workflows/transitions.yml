@@ -7,7 +7,7 @@ name: transitions
 on:
   workflow_dispatch:
   push:
-    paths: [ios/Jarvis2/App/**, ios/Jarvis2/Review/**, ios/Jarvis2/Setup/**, ios/UITests/TransitionsUITests.swift, ios/UITests/UITestKit.swift, .github/workflows/transitions.yml]
+    paths: [ios/Jarvis2/App/**, ios/Jarvis2/Review/**, ios/Jarvis2/Setup/**, ios/UITests/TransitionsUITests.swift, ios/UITests/UITestKit.swift, ios/ci/**, .github/workflows/transitions.yml]
 concurrency:
   group: transitions-${{ github.ref }}
   cancel-in-progress: false
