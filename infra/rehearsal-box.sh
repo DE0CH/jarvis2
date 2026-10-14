@@ -18,6 +18,21 @@
 #      HETZNER_S3_*. Optional: REHEARSAL_NAME (the base name, default jarvis2-rehearsal), REHEARSAL_RUN (the run id,
 #      digits; default the unix time), REHEARSAL_REF (the commit Flux applies; default origin/main), SERVER_TYPE (cx23),
 #      REHEARSAL_LOGS, KEEP=1 (no teardown on exit).
+# Testing a branch (e.g. grants, before its merge): REHEARSAL_REF=<the branch's commit>, and the images CI built from it
+# (`gh workflow run images --ref <branch>`: it builds every image and pins none) by tag:
+#      REHEARSAL_ROUTER_IMAGE    the router container's image (instead of the pinned one)
+#      REHEARSAL_SESSION_IMAGE   the router's SESSION_IMAGE (pinned by digest here, infra/image-digest.sh; its CI signature
+#                                stays the pinned image's, so the phone shows it as not a CI build)
+#      REHEARSAL_KERNEL_TAG      the tag of all eight kernel images (ghcr.io/de0ch/jarvis2-<part>:<tag>), and per part
+#                                REHEARSAL_<PART>_IMAGE (NOTARY, NOTARIZER, MOVER, MERGER, IDENTITY_SIGNER, GULLIBLE_SIGNER,
+#                                SPAWNER, SECRETS) for one image of its own
+#      REHEARSAL_PATH            what Flux applies: ./k8s/apps-next when REF has it (the kernel layout before the
+#                                switchover), else ./k8s/apps
+# With the kernel layout (k8s/apps-next, or k8s/apps/kernel after the switchover) the box gets throwaway kernel keys
+# (infra/kernel-keys.py manifest: the eight Secrets in its user-data, the roster as a Flux patch of kernel-roster), a
+# throwaway phone and root key ($W/kernel.json.phone.pem, $W/kernel.json.root.pem, for the test's app side; or
+# REHEARSAL_PHONE_KEY / REHEARSAL_ROOT_KEY: the public keys of an app that holds its own, e.g. the replica's simulator),
+# and the spawner's MACHINE_URL points at the run's peer.
 #
 # One run at a time per base name, and every run's resources are its own: the box, firewall, WireGuard peer, tunnel,
 # hostname, Access apps, service token and bucket are all named NAME = <base>-<run id> (the box also carries the label
@@ -103,14 +118,16 @@ teardown() {
     sleep 5
   done
   FLY_API_TOKEN="$JARVIS2_FLY_TOKEN" flyctl wireguard remove jarvis2-370 "$NAME" >/dev/null 2>&1 && echo "WireGuard peer $NAME removed"
-  # the session machines the rehearsal's cores started (each machine names its core: JARVIS2_CORE_KEY); the
-  # replica's cores are learned from the box itself while it runs (cores file)
+  # the session machines the rehearsal's cores or spawners started (each machine names its core, JARVIS2_CORE_KEY, or
+  # its spawner, JARVIS2_SPAWNER_KEY); the keys are in the cores file (an old core's learned from the box while it runs,
+  # a kernel box's spawner from its throwaway roster)
   if [ -s "$W/cores" ]; then
     FLY_API_TOKEN="$JARVIS2_FLY_TOKEN" flyctl machines list -a jarvis2-sessions --json 2>/dev/null | python3 -c "
 import json,sys
 cores=set(open(sys.argv[1]).read().split())
 for m in json.load(sys.stdin):
-    if (m.get('config',{}).get('env') or {}).get('JARVIS2_CORE_KEY') in cores: print(m['id'])" "$W/cores" | while read -r m; do
+    env = (m.get('config',{}).get('env') or {})
+    if env.get('JARVIS2_CORE_KEY') in cores or env.get('JARVIS2_SPAWNER_KEY') in cores: print(m['id'])" "$W/cores" | while read -r m; do
       FLY_API_TOKEN="$JARVIS2_FLY_TOKEN" flyctl machines destroy -a jarvis2-sessions --force "$m" >/dev/null 2>&1 && echo "Fly machine $m destroyed"
     done
   fi
@@ -176,7 +193,18 @@ PY
   else
     access_env="                    - { name: NO_ACCESS, value: \"1\" }"
   fi
-  # the box's Flux sync: production's ./k8s/apps at commit REF, with the test's router env (no k8s/secrets)
+  # the layout at REF: k8s/apps-next (the kernel before the switchover), else k8s/apps (with k8s/apps/kernel after it)
+  local raw="https://raw.githubusercontent.com/DE0CH/jarvis2/$REF"
+  FLUX_PATH="${REHEARSAL_PATH:-}"
+  if [ -z "$FLUX_PATH" ]; then
+    if curl -sf -o /dev/null "$raw/k8s/apps-next/kustomization.yaml"; then FLUX_PATH=./k8s/apps-next; else FLUX_PATH=./k8s/apps; fi
+  fi
+  KDIR=""   # where the kernel manifests are at REF ("" = no kernel: the old core)
+  for d in "${FLUX_PATH#./}/kernel" k8s/apps-next/kernel; do
+    curl -sf -o /dev/null "$raw/$d/roster.json" && { KDIR="$d"; break; }
+  done
+  echo "Flux applies $FLUX_PATH at $REF${KDIR:+ (the kernel: $KDIR)}"
+  # the box's Flux sync: production's manifests at commit REF, with the test's router env (no k8s/secrets)
   cat > "$W/sync.yaml" <<EOF
 apiVersion: source.toolkit.fluxcd.io/v1
 kind: GitRepository
@@ -194,7 +222,7 @@ spec:
   retryInterval: 30s
   timeout: 5m
   sourceRef: { kind: GitRepository, name: jarvis2 }
-  path: ./k8s/apps
+  path: $FLUX_PATH
   prune: true
   wait: false
   serviceAccountName: flux-applier
@@ -246,18 +274,98 @@ EOF
 EOF
     echo "the core: $REHEARSAL_CORE_IMAGE (not the pinned one)"
   fi
+  # a branch's router and session image (REHEARSAL_ROUTER_IMAGE, REHEARSAL_SESSION_IMAGE)
+  if [ -n "${REHEARSAL_ROUTER_IMAGE:-}" ] || [ -n "${REHEARSAL_SESSION_IMAGE:-}" ]; then
+    {
+      echo "    - target: { kind: Deployment, name: router, namespace: jarvis2-router }"
+      echo "      patch: |"
+      echo "        apiVersion: apps/v1"
+      echo "        kind: Deployment"
+      echo "        metadata: { name: router, namespace: jarvis2-router }"
+      echo "        spec:"
+      echo "          template:"
+      echo "            spec:"
+      echo "              containers:"
+      echo "                - name: router"
+      [ -n "${REHEARSAL_ROUTER_IMAGE:-}" ] && echo "                  image: \"$REHEARSAL_ROUTER_IMAGE\""
+      if [ -n "${REHEARSAL_SESSION_IMAGE:-}" ]; then
+        echo "                  env:"
+        echo "                    - { name: SESSION_IMAGE, value: \"$("$ROOT/infra/image-digest.sh" "$REHEARSAL_SESSION_IMAGE")\" }"
+      fi
+    } >> "$W/sync.yaml"
+    echo "the router: ${REHEARSAL_ROUTER_IMAGE:-pinned}; new sessions: ${REHEARSAL_SESSION_IMAGE:-pinned}"
+  fi
+  # the kernel: throwaway keys and roster, the images (REHEARSAL_KERNEL_TAG / REHEARSAL_<PART>_IMAGE), the spawner's peer
+  if [ -n "$KDIR" ]; then
+    local roster_args=() part var img
+    [ -n "${REHEARSAL_PHONE_KEY:-}" ] && roster_args+=(--phone "$REHEARSAL_PHONE_KEY")
+    [ -n "${REHEARSAL_ROOT_KEY:-}" ] && roster_args+=(--root "$REHEARSAL_ROOT_KEY")
+    python3 "$ROOT/infra/kernel-keys.py" manifest "$W/kernel.json" "${roster_args[@]}"
+    # teardown finds the session machines this run's spawner started by its key (JARVIS2_SPAWNER_KEY)
+    python3 -c "import json,sys;print(json.load(open(sys.argv[1]))['spawner'])" "$W/kernel.json.roster.json" >> "$W/cores"
+    {
+      echo "    - target: { kind: ConfigMap, name: kernel-roster, namespace: jarvis2-core }"
+      echo "      patch: |"
+      echo "        apiVersion: v1"
+      echo "        kind: ConfigMap"
+      echo "        metadata: { name: kernel-roster, namespace: jarvis2-core }"
+      echo "        data:"
+      echo "          roster.json: '$(python3 -c "import json,sys;print(json.dumps(json.load(open(sys.argv[1]))))" "$W/kernel.json.roster.json")'"
+      echo "    - target: { kind: Deployment, name: spawner, namespace: jarvis2-core }"
+      echo "      patch: |"
+      echo "        apiVersion: apps/v1"
+      echo "        kind: Deployment"
+      echo "        metadata: { name: spawner, namespace: jarvis2-core }"
+      echo "        spec:"
+      echo "          template:"
+      echo "            spec:"
+      echo "              containers:"
+      echo "                - name: spawner"
+      echo "                  env:"
+      echo "                    - { name: MACHINE_URL, value: \"http://$NAME._peer.internal:8081\" }"
+    } >> "$W/sync.yaml"
+    for part in notary notarizer mover merger identity-signer gullible-signer spawner secrets; do
+      var="REHEARSAL_$(echo "$part" | tr 'a-z-' 'A-Z_')_IMAGE"
+      img="${!var:-}"
+      [ -z "$img" ] && [ -n "${REHEARSAL_KERNEL_TAG:-}" ] && img="ghcr.io/de0ch/jarvis2-$part:$REHEARSAL_KERNEL_TAG"
+      if [ -z "$img" ]; then
+        if curl -sf "$raw/$KDIR/$part.yaml" | grep -q "jarvis2-$part:sha-000000000000"; then
+          echo "the kernel part $part has no image at $REF: set REHEARSAL_KERNEL_TAG (or $var)"; exit 1
+        fi
+        continue
+      fi
+      {
+        echo "    - target: { kind: Deployment, name: $part, namespace: jarvis2-core }"
+        echo "      patch: |"
+        echo "        apiVersion: apps/v1"
+        echo "        kind: Deployment"
+        echo "        metadata: { name: $part, namespace: jarvis2-core }"
+        echo "        spec:"
+        echo "          template:"
+        echo "            spec:"
+        echo "              containers:"
+        echo "                - name: $part"
+        echo "                  image: \"$img\""
+      } >> "$W/sync.yaml"
+      echo "kernel $part: $img"
+    done
+  fi
   # the router's read-only Fly token (budget cap, Also on Fly, the Machines tab), as production's router has it
   "$ROOT/infra/fly-read-token.sh" "$W/fly-read" >/dev/null
-  (umask 077; FLY_READ_FILE="$W/fly-read" python3 - > "$W/extra.yaml" <<'PY'
+  # the user-data's Secrets: the router's backup read key and Fly read token, and (the kernel) the parts' keys
+  (umask 077; FLY_READ_FILE="$W/fly-read" KERNEL_FILE="${KDIR:+$W/kernel.json}" python3 - > "$W/extra.yaml" <<'PY'
 import json, os
-print(json.dumps({"apiVersion": "v1", "kind": "Secret", "type": "Opaque",
-                  "metadata": {"name": "router-secrets-backup", "namespace": "jarvis2-router"},
-                  "stringData": {"BACKUP_READ_ACCESS_KEY": os.environ["HETZNER_S3_ACCESS_KEY"],
-                                 "BACKUP_READ_SECRET_KEY": os.environ["HETZNER_S3_SECRET_KEY"],
-                                 "FLY_READ_TOKEN": open(os.environ["FLY_READ_FILE"]).read().strip()}}))
+items = [{"apiVersion": "v1", "kind": "Secret", "type": "Opaque",
+          "metadata": {"name": "router-secrets-backup", "namespace": "jarvis2-router"},
+          "stringData": {"BACKUP_READ_ACCESS_KEY": os.environ["HETZNER_S3_ACCESS_KEY"],
+                         "BACKUP_READ_SECRET_KEY": os.environ["HETZNER_S3_SECRET_KEY"],
+                         "FLY_READ_TOKEN": open(os.environ["FLY_READ_FILE"]).read().strip()}}]
+if os.environ.get("KERNEL_FILE"):
+    items += json.load(open(os.environ["KERNEL_FILE"]))["items"]
+print(json.dumps({"apiVersion": "v1", "kind": "List", "items": items}))
 PY
   )
-  rm -f "$W/fly-read"
+  rm -f "$W/fly-read" "$W/kernel.json"
   mkdir -p "$W/keys"; cp "$ROOT/keys/setup.pub" "$W/keys/setup.pub"
   # what setup.py and create.sh's wait need, pointed at the test box
   export JARVIS2_URL="https://$HOST" JARVIS2_BACKUP_BUCKET="$BUCKET" JARVIS2_KEYS_DIR="$W/keys"

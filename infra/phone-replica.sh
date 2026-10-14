@@ -28,6 +28,9 @@
 # github-web skill: the PAT and deleting the repo; GITHUB_WEB_DIR, default ~/workspace/claude-env/.claude/skills/
 # github-web). Optional: REPLICA_REF (the branch the workflow runs from, default main), REHEARSAL_RUN (the run id),
 # KEEP=1.
+# A branch (the kernel layout, k8s/apps-next): REHEARSAL_REF=<its commit> plus the image overrides of
+# infra/rehearsal-box.sh (REHEARSAL_KERNEL_TAG, REHEARSAL_ROUTER_IMAGE, REHEARSAL_SESSION_IMAGE); the box then gets
+# throwaway kernel keys and a roster with a throwaway phone and root key (or REHEARSAL_PHONE_KEY / REHEARSAL_ROOT_KEY).
 # Output: the run's video, screenshots and logs in ~/artifacts/replica/<time>/.
 set -euo pipefail
 MODE=replica
@@ -148,7 +151,7 @@ fill_stores() {
     $S write claude RH_CLAUDE --explain 'RH_CLAUDE=replica dummy value'
     $S write tunnel CF_ACCESS_CLIENT_ID CF_ACCESS_CLIENT_SECRET --explain 'CF_ACCESS_CLIENT_ID=replica dummy tunnel id' --explain 'CF_ACCESS_CLIENT_SECRET=replica dummy tunnel secret'
     $S write github-deploy-keys GITHUB_DEPLOY_KEYS_TOKEN=file:$W/deploy-keys.tok --explain 'GITHUB_DEPLOY_KEYS_TOKEN=7-day PAT for the replica throwaway repo only (deploy keys)'
-    $S backup-core $W/fly.tok
+    $S fly-token $W/fly.tok
     $S stores"
 }
 # a deploy key ever seen on the throwaway repo (watched in the background while the run goes)

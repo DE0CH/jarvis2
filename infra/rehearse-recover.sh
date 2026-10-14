@@ -28,6 +28,9 @@
 # Env: HCLOUD_TOKEN (project runners), JARVIS2_FLY_TOKEN, JARVIS2_SETUP_KEY, CF_JARVIS2_INFRA_TOKEN, CLOUDFLARE_API,
 #      HETZNER_S3_* (the admin key of project Cloud Code). Optional: REHEARSAL_NAME (default jarvis2-rehearsal),
 #      REHEARSAL_REF (the commit Flux applies; default origin/main), SERVER_TYPE (cx23), SKIP_REBUILD=1.
+# A branch (the kernel layout, k8s/apps-next): REHEARSAL_REF=<its commit> plus the image overrides of
+# infra/rehearsal-box.sh (REHEARSAL_KERNEL_TAG, REHEARSAL_ROUTER_IMAGE, REHEARSAL_SESSION_IMAGE); the box then gets
+# throwaway kernel keys and a roster with a throwaway phone and root key (or REHEARSAL_PHONE_KEY / REHEARSAL_ROOT_KEY).
 # Prints no secret. Logs: $REHEARSAL_LOGS (default /tmp/jarvis2-rehearsal-logs).
 set -euo pipefail
 MODE=rehearse
@@ -98,7 +101,7 @@ $S write rh-marked RH_MARKED --explain 'RH_MARKED=rehearsal test value'
 $S mark-sensitive rh-marked
 $S write claude RH_CLAUDE --explain 'RH_CLAUDE=rehearsal test value'
 $S write tunnel CF_ACCESS_CLIENT_ID CF_ACCESS_CLIENT_SECRET --explain 'CF_ACCESS_CLIENT_ID=rehearsal dummy tunnel id' --explain 'CF_ACCESS_CLIENT_SECRET=rehearsal dummy tunnel secret'
-$S backup-core "$W/fly.tok"
+$S fly-token "$W/fly.tok"
 $S stores
 python3 - "$W/expect.json" <<'PY'
 import json, os, sys
