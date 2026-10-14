@@ -632,6 +632,74 @@ any of the line's stores is sensitive, and the **line id** (the line's first mac
   date) or a one-tap button where a feature was turned away builds the whole request; the app's grant review only
   reviews it (Allow with Face ID, or Deny).
 
+## Target design: grants, the notary, the succession signer, secrets and the guard (Deyao, 2026-10-14)
+
+Not built yet; DECISIONS 163 has the why. It replaces the core's succession-cert options, the holders' shell
+grants ("Grants" above), the core's automatic locks and the Claude login's own channel.
+
+**Trust layers.** The router trusts what it verifies itself (Cloudflare Access, API keys, machine signatures). The
+components behind it trust the router through the k8s network, which is secure enough. But nothing that matters rests
+on the router's word alone: a compromised router, a k8s breach and a leaked API key are one and the same problem.
+**Writing secrets is protected only by the router**: no component checks who writes a store key.
+
+**Four components**
+
+| component | its only job |
+|---|---|
+| **Core (notary)** | Issues challenges stamped with its own clock and logs each one: proof that a request went through it, and at what time. |
+| **Succession signer** | Issues succession certs (a phone-approved one, or the dead-machine approval of an unattended resume) and exchanges a grant for one with the identical text bound to the next machine. It never reads a grant's text. |
+| **Secrets** | Holds the stores, the unlocks (the phone's shares), and the signed list of what is unlocked. Takes a `secrets` grant and returns the named stores' values encrypted to the grant's machine and signed. It never locks by itself (no release after a pull, no timer): an unlock ends only with a lock call, and an unlock left open shows on the phone. |
+| **Guard** (the image's entry point, `jarvis2-machine`) | The single process that pulls everything from the API. It checks each grant's signature and challenge and that it is allowed, then acts on the text's `type` and hands the result to whatever needs it. |
+
+**A grant** is a signed document with the fewest fields needed to chain it; the history of all grants and certs is a
+database outside the core (the router's), which the router, the guard and the phone follow through `from`.
+
+| field | |
+|---|---|
+| `kind` | `"grant"` |
+| `signedBy` | `phone`, `machine` or `succession` |
+| `text` | free text. The phone parses it to show Deyao exactly what he signs (known types as a list, unknown JSON pretty-printed, anything else raw), the guard to act on it, secrets to read its store list. The notary and the succession signer never read it. A new type needs a backend and image change only, no app update. |
+| `machine` | `{id, signingKey, encryptionKey}` of the machine it is for |
+| `challenge` | the notary's challenge (`phone` and `machine` grants) |
+| `from` | `succession` only: sha256 of the grant it replaces |
+
+- `phone`: signed by the iPhone; checked against the `phone` key in the machine's succession cert.
+- `machine`: signed by a session machine's key; same steps as a phone grant (notary challenge, logged), only the key
+  differs. Checked against the signer's succession cert, and allowed only when a grant from Deyao certifies that
+  signer for that kind of text (below).
+- `succession`: signed by the succession signer when it exchanges a grant: in goes the old grant and a succession cert
+  whose predecessor is the old grant's `machine`; out comes the same text bound to the new `machine`.
+
+Each grant **certifies a signing service**: a grant Deyao signed (directly, or carried by exchange) names which other
+signers the guard accepts, and for what (e.g. this session's own machines for wakeup and cron prompts, session X for
+peer messages). Everything traces back to the phone.
+
+There is **no revocation**: the router could simply not deliver it. A grant meant to end carries its expiry in its
+text. A one-time grant (a resume prompt, "run this command once") says in its text which session and occasion it is
+for, and the guard decides from that whether it applies.
+
+**A succession cert** shrinks to the chain: `machine` (`id`, image digest, keys), `predecessor` (sha256 of the
+previous cert; none on a new session), `snapshot` (sha256 of the predecessor's signed snapshot), `phone` (the phone's
+key) and `approvedBy` (`phone` | `dead-machine`). Harness, permission mode, config, first prompt and stores move into
+grants.
+
+**Grant types (the text's `type`)**
+
+| type | signed by | what the guard does |
+|---|---|---|
+| `start` | phone | harness, permission mode (fixed for the session's life: it can't be changed), title, model, repos, first prompt; and the signers it certifies (wakeups/crons from its own machines, peer messages from named sessions) |
+| `secrets` | phone | the stores this session gets; the guard presents it to secrets on every pull |
+| `terminal` | phone | any shell command until the expiry in its text: Deyao's fix-anything tool, used rarely. Nothing else uses it: every other need gets its own narrowly scoped type |
+| `command` | phone | one specific command, run once |
+| `prompt` | phone or machine | text typed into the harness: a resume prompt (phone), a wakeup or cron prompt (the session's own machine), a peer message (a session the start grant certifies) |
+
+The Claude login is not a grant: the router writes the pair into the `claude` store (a secret write, protected only by
+the router) and the guard re-pulls the store with its `secrets` grant, so a refresh or a Re-login reaches every running
+session by itself, whatever the account. No login repair, no account check.
+
+Output-only actions need no grant: the machine pushes its own screen capture, status, repo changes and signed
+snapshot; a request to snapshot only makes the machine produce signed output.
+
 ## Open
 
 - Where the core's log lives. Plan: AWS CloudWatch Logs (append-only: no API deletes a single event; only a whole stream/group; the core's credential gets append rights only; free tier 5 GB/month covers it), added AFTER the core is running. Until then the log is local to the core.
