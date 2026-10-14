@@ -2,8 +2,8 @@ package main
 
 // The terminal as a web page (GET /term/{id}): the native iPhone app shows it in a WKWebView (Deyao, 2026-10-11:
 // "just open a web page"), so the app carries no terminal code and WebKit's own process draws it. The page polls the
-// same API the app used (GET/POST api/sessions/{id}/terminal); the machine still runs those commands only under a
-// terminal grant. One self-contained file (inline CSS/JS): nothing is loaded from anywhere else.
+// same API the app used (GET/POST api/sessions/{id}/terminal); typing is shell commands, which run only while a terminal
+// add-on is open (addons.go). One self-contained file (inline CSS/JS): nothing is loaded from anywhere else.
 import (
 	_ "embed"
 	"net/http"

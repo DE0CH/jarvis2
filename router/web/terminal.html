@@ -10,9 +10,9 @@
   (app/src/pages/Terminal.tsx + ui/ansi.ts): one tmux capture at a time, a second after the last answered, drawn
   from its colour escapes; keys and text sent in order, one request at a time; the remote window fitted to this
   screen. The iPhone app shows this page in a web view and listens on the `jarvis2` message handler:
-    {action: "grant", holder: "terminal"}  open the app's own Face ID review for a terminal grant
-    {action: "signin"}                     the Access login expired: sign in again, then call window.jarvis2Refresh()
-  In a plain browser the grant button files an Inbox request instead and an expired login reloads the page once.
+    {action: "terminal"}  open the app's own Face ID review for a terminal (POST api/requests/terminal, then sign its drafts)
+    {action: "signin"}    the Access login expired: sign in again, then call window.jarvis2Refresh()
+  In a plain browser the button files the terminal request in the Inbox instead and an expired login reloads the page once.
 -->
 <style>
   :root { --bg: #0b0d11; --bar: #161a22; --fg: #d4d4d4; --line: #222; --muted: #9aa1ab; --font: 12.5px; --lh: 16px; }
@@ -187,17 +187,16 @@
     if (!sessionStorage.getItem("jarvis2-term-reloaded")) { sessionStorage.setItem("jarvis2-term-reloaded", "1"); location.reload(); return; }
     show("Signed out of Cloudflare Access: reload the page to sign in.", false);
   }
-  // what a refused answer means: "auth" (the Access login), "grant" (the terminal isn't allowed), or the message
+  // what a refused answer means: "auth" (the Access login), "grant" (no terminal is open), or the message
   async function reason(res) {
     const ct = res.headers.get("content-type") || "";
     const text = await res.text().catch(() => "");
     let j = null;
     if (ct.includes("json")) { try { j = JSON.parse(text); } catch (e) {} }
     if ((res.status === 401 || res.status === 403) && (!j || /Access login required/.test(j.error || ""))) return { kind: "auth" };
-    if (j && j.needsGrant) return { kind: "grant" };
+    if (j && j.needsTerminal) return { kind: "grant" };
     let msg = j ? String(j.error || j.message || "") : text.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim().slice(0, 300);
-    if (j && typeof j.payload === "string") { try { const p = JSON.parse(j.payload); if (p.error) msg = "core: " + p.error; } catch (e) {} }
-    if (/grant/i.test(msg)) return { kind: "grant" };
+    if (j && typeof j.payload === "string") { try { const p = JSON.parse(j.payload); if (p.error) msg = p.error; } catch (e) {} }
     return { kind: "error", msg: (msg || "request failed") + " (HTTP " + res.status + ")" };
   }
   async function call(method, path, body) {
@@ -216,7 +215,7 @@
   }
   function failed(r, from) {
     if (r.kind === "auth") signin();
-    else if (r.kind === "grant") show(from === "input" ? "Typing needs a grant." : "This session's terminal needs a grant.", true, from);
+    else if (r.kind === "grant") show(from === "input" ? "Typing needs a terminal (approve one in the app)." : "This session needs a terminal.", true, from);
     else show(r.msg, false, from);
   }
 
@@ -224,13 +223,13 @@
   const allow = allowBtn;
   allow.addEventListener("click", async () => {
     const n = native();
-    if (n) { n.postMessage({ action: "grant", holder: "terminal" }); return; }
+    if (n) { n.postMessage({ action: "terminal" }); return; }
     allow.disabled = true;
     try {
-      const res = await fetch(new URL("api/requests/grant", ROOT).toString(), { method: "POST", credentials: "same-origin",
-        headers: { "Content-Type": "application/json" }, body: JSON.stringify({ session: SID, holder: "terminal", minutes: 10 }) });
+      const res = await fetch(new URL("api/requests/terminal", ROOT).toString(), { method: "POST", credentials: "same-origin",
+        headers: { "Content-Type": "application/json" }, body: JSON.stringify({ session: SID, minutes: 10 }) });
       if (res.ok) show("Sent to the Inbox: approve it in the Jarvis 2 app.", false);
-      else { const r = await reason(res); r.kind === "auth" ? signin() : show(r.msg || "This session's terminal needs a grant.", r.kind === "grant"); }
+      else { const r = await reason(res); r.kind === "auth" ? signin() : show(r.msg || "This session needs a terminal.", r.kind === "grant"); }
     } catch (e) { signin(); }
     allow.disabled = false;
   });
@@ -247,7 +246,7 @@
       clearBanner("view");
       const f = r.data || {};
       const [x, y, w, h, vis] = String(f.cursor || "").split(",").map((v) => parseInt(v, 10));
-      // a pushed picture (f.at) is view only until a grant lets typing through
+      // a pushed picture (f.at) is view only until a terminal lets typing through
       statusEl.textContent = (f.at && !typing ? "view only" : "live") + (w ? " · " + w + "×" + h : "");
       const key = (f.screen || "") + "|" + (f.cursor || "");
       if (key !== lastKey) { lastKey = key; draw(parseScreen(String(f.screen || ""), vis ? [x, y] : null)); }
@@ -259,9 +258,9 @@
     // a login being repaired by the app waits for its jarvis2Refresh; everything else polls on
     if (!(r.kind === "auth" && native())) timer = setTimeout(tick, 1000);
   }
-  // the app calls this after a grant was signed or a sign-in finished
+  // the app calls this after a terminal was approved or a sign-in finished
   window.jarvis2Refresh = () => { clearBanner(); fitted = ""; fit(); tick(); };
-  let typing = false; // the last input or resize went through (a grant is in force)
+  let typing = false; // the last input or resize went through (a terminal is open)
 
   // ---- input strictly in order, one request at a time; text typed meanwhile joins the next ----
   const queue = [];
@@ -326,7 +325,7 @@
     if (k === fitted) return;
     fitted = k;
     clearTimeout(fitTimer);
-    // fitting the window is input too: without a grant the picture keeps the window's own size, quietly
+    // fitting the window is input too: without a terminal the picture keeps the window's own size, quietly
     fitTimer = setTimeout(async () => { const r = await call("POST", "terminal", { cols, rows }); if (r.ok) typing = true; else if (r.kind !== "grant") failed(r, "view"); else fitted = ""; }, 400);
   }
   viewport();
