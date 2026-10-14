@@ -1,5 +1,5 @@
 // New / edit a task: a name plus the template's fields (task.json: text, textarea, number, select, multiselect,
-// checkbox). A (multi)select of stores is filled from the core's store list; the picked stores join the task's
+// checkbox). A (multi)select of stores is filled from secrets' store list; the picked stores join the task's
 // session line, which the iPhone approves when the task is made (they can't change afterwards: make a new task).
 // Parameters are not secret (they travel unsigned in the machine's config): secrets belong in a store.
 import { useEffect, useState } from "react";
@@ -47,7 +47,7 @@ export function TaskEdit({ spec }: { spec: TaskEditSpec }) {
   const [err, setErr] = useState("");
   if (!t) return <Page title="Task">{spec.id && !inst ? <P size={2} color="red" mt={3}>This task no longer exists.</P>
     : <><P size={2} color="red" mt={3}>Template not in tasks/.</P><Rows mt={2}><Row label="Template" mono>{inst?.template || spec.template || ""}</Row></Rows></>}</Page>;
-  // options: the template's own, or the core's stores / the sizes / the models
+  // options: the template's own, or secrets' stores / the sizes / the models
   const optionsOf = (f: TaskField): TaskOption[] =>
     f.optionsFrom === "stores" ? stores.items.filter((s) => s.name !== CORE_STORE && s.name !== DEPLOY_KEY_TOKEN_STORE && !hidden.has(s.name)).map((s) => ({ value: s.name, label: s.name, sub: [s.sensitive ? "sensitive" : "", s.empty ? "empty" : "", s.unlocked ? "" : "locked"].filter(Boolean).join(" · ") || undefined }))
     : f.optionsFrom === "content" ? contentList.map((c) => ({ value: c.name, label: c.name, sub: `${c.files} file${c.files === 1 ? "" : "s"}` }))

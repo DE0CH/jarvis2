@@ -169,7 +169,7 @@ function FlyCard() {
 }
 
 export function Settings() {
-  const core = useStore((s) => s.state.core);
+  const st = useStore((s) => s.state);
   return (
     <Cards>
       <ClaudeCard />
@@ -179,7 +179,10 @@ export function Settings() {
       <PairedAppsCard />
       <Card data={{ settings: "setup" }}>
         <Heading size={3} mb={1}>Jarvis 2</Heading>
-        <Rows><Row label="Core" id="core-status">{core.up ? <Pill kind="ok">running</Pill> : <Pill kind="bad">not answering</Pill>}</Row></Rows>
+        <Rows>
+          <Row label="Secrets" id="secrets-status">{st.secrets.up ? <Pill kind="ok">running</Pill> : <Pill kind="bad">not answering</Pill>}</Row>
+          <Row label="Root grant" id="root-grant-status">{st.rootGrant ? <Pill kind="ok">given</Pill> : <Pill kind="bad">missing</Pill>}</Row>
+        </Rows>
         {hasShell && <>
           <Flex mt={3}><Button id="open-setup" variant="soft" onPress={() => requestSecure("setup", {})}>Reset or recover…</Button></Flex>
         </>}

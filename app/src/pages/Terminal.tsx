@@ -1,8 +1,8 @@
-// Live terminal (Jarvis 1's Terminal page over grants): the harness's tmux pane, one snapshot at a time
-// (GET api/sessions/:id/terminal — the pane the machine pushes itself, no grant; typing goes through the `terminal` holder), keystrokes sent as
+// Live terminal (Jarvis 1's Terminal page): the harness's tmux pane, one snapshot at a time
+// (GET api/sessions/:id/terminal — the pane the machine pushes itself, viewing needs nothing), keystrokes sent as
 // tmux send-keys (POST …/terminal). The screen is drawn as React Native text from the capture's colour
-// escapes (ui/ansi.ts). The machine runs the commands only while the phone allows the terminal (a grant), so
-// the page says when it doesn't and offers the grant page.
+// escapes (ui/ansi.ts). Typing and resizing are shell commands, which the machine runs only while a terminal
+// (an add-on the iPhone approved, 10 minutes at most) is open; the page says when none is and files one.
 //
 // A full-screen page, always dark: close with ✕, Back, or the swipe-back. A change of the screen area
 // (open, rotation, keyboard) resizes the remote tmux window to fit.
@@ -12,7 +12,7 @@ import { RNText } from "../ui/rntext";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { StatusBar } from "expo-status-bar";
 import { api } from "../lib/api";
-import { liveGrant, loadGrants, requestGrant } from "../lib/grants";
+import { needsTerminal, requestTerminal } from "../lib/addons";
 import { useStore } from "../lib/store";
 import { LockedStore } from "../views/Sessions";
 import { ForceScheme } from "../theme";
@@ -46,13 +46,11 @@ export function TerminalPage({ spec }: { spec: TermSpec }) {
   const [err, setErr] = useState<string | null>(null); // the picture failed (the next good picture clears it)
   // typing or resizing was refused: kept until input goes through, so a working view-only picture doesn't hide it
   const [inErr, setInErr] = useState<string | null>(null);
-  const typing = useRef(false); // the last input went through: a grant (or the session's allow list) is in force
-  const [allowed, setAllowed] = useState<boolean | null>(null);
+  const typing = useRef(false); // the last input went through: a terminal is open
+  const [closed, setClosed] = useState(false); // the last input was refused for want of a terminal (needsTerminal)
   const [text, setText] = useState("");
-
-  // does the phone allow the terminal right now? (the session's own allow list may too: the machine decides)
-  const checkGrant = () => loadGrants(id).then((gs) => setAllowed(!!liveGrant(gs, "terminal")), () => setAllowed(null));
-  useEffect(() => { checkGrant(); }, [id]);
+  // a terminal in force on the running machine (the session's addOns)
+  const open = (session?.addOns || []).some((a) => a.kind === "terminal" && Date.parse(a.until) > Date.now());
 
   // input strictly in order, one request at a time (each POST is its own exec); text typed while one is in
   // flight joins the next request
@@ -65,8 +63,8 @@ export function TerminalPage({ spec }: { spec: TermSpec }) {
     try {
       while (q.length) {
         const b = q.shift()!;
-        try { await api("POST", `api/sessions/${id}/terminal`, b); typing.current = true; setInErr(null); }
-        catch (e: any) { typing.current = false; setInErr(e.message); }
+        try { await api("POST", `api/sessions/${id}/terminal`, b); typing.current = true; setInErr(null); setClosed(false); }
+        catch (e: any) { typing.current = false; if (needsTerminal(e)) { setClosed(true); setInErr(null); } else setInErr(e.message); }
       }
     } finally { sending.current = false; }
   }
@@ -81,9 +79,9 @@ export function TerminalPage({ spec }: { spec: TermSpec }) {
     if (k === wanted.current) return;
     wanted.current = k;
     clearTimeout(timer.current);
-    // without a grant the picture keeps the window's own size, quietly (viewing needs no grant)
+    // without a terminal the picture keeps the window's own size, quietly (viewing needs nothing)
     timer.current = setTimeout(() => api("POST", `api/sessions/${id}/terminal`, { cols, rows })
-      .then(() => { typing.current = true; }, (e) => { wanted.current = ""; if (!/grant/i.test(e.message || "")) setInErr(e.message); }), 400);
+      .then(() => { typing.current = true; }, (e) => { wanted.current = ""; if (!needsTerminal(e)) setInErr(e.message); }), 400);
   };
 
   // one snapshot at a time, the next a second after the last answered (an older frame never paints over a newer one)
@@ -92,7 +90,7 @@ export function TerminalPage({ spec }: { spec: TermSpec }) {
     let alive = true, next: any = null;
     const tick = async () => {
       try {
-        // the machine pushes its own pane (`at`): viewing needs no grant (router/terminal.go)
+        // the machine pushes its own pane (`at`): viewing needs no terminal (router/terminal.go)
         const f = await api<{ screen: string; cursor: string; at?: string }>("GET", `api/sessions/${id}/terminal`);
         if (!alive) return;
         setErr(null);
@@ -119,12 +117,12 @@ export function TerminalPage({ spec }: { spec: TermSpec }) {
           <Button variant="soft" color="gray" size={1} onPress={closePage} label="Close" id="term-close">✕</Button>
         </Flex>
         {!!session?.lockedStore && <View style={{ padding: 8 }}><LockedStore m={session} compact /></View>}
-        {!!(err || inErr) && (
+        {!!err && <View nativeID="term-err" style={{ paddingHorizontal: 12, paddingVertical: 8, backgroundColor: "#2a2113" }}><P size={1} style={{ color: "#f1c27d" }}>{err}</P></View>}
+        {!!inErr && <View nativeID="term-in-err" style={{ paddingHorizontal: 12, paddingVertical: 8, backgroundColor: "#2a2113" }}><P size={1} style={{ color: "#f1c27d" }}>{inErr}</P></View>}
+        {(closed || !open) && session?.state === "started" && (
           <View nativeID="term-note" style={{ paddingHorizontal: 12, paddingVertical: 8, backgroundColor: "#2a2113", gap: 6 }}>
-            {/* turned away for want of a grant: one plain line (the machine's refusal says the same in HTTP words); any
-                other error as it came. With no phone grant but the session's own allow list, the screen just works. */}
-            <P size={1} style={{ color: "#f1c27d" }}>{inErr ? (/grant/i.test(inErr) ? "Typing needs a grant." : inErr) : allowed === false || /grant/i.test(err || "") ? "This session's terminal needs a grant." : err}</P>
-            {<Flex gap={2}><Button size={1} id="term-allow" onPress={() => requestGrant(id, spec.title, { holder: "terminal", kind: "grant", minutes: 10 }, () => checkGrant())}>Allow terminal for 10 minutes</Button></Flex>}
+            <P size={1} style={{ color: "#f1c27d" }}>{closed ? "Typing needs a terminal." : "View only: no terminal open."}</P>
+            <Flex gap={2}><Button size={1} id="term-allow" onPress={() => requestTerminal(id)}>Ask the iPhone for 10 minutes</Button></Flex>
           </View>
         )}
         <TermBody>{(kb) => <>

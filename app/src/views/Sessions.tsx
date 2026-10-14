@@ -1,9 +1,9 @@
 import { useRef } from "react";
 import { Linking, View } from "react-native";
-import { api, ago, isTaskLine, challengeRequest, cronEvery, holderTitle, HOLDERS, HARNESS, REGION, sessionTitle, storesOf, when, type Approval, type Lease, type Session, type State } from "../lib/api";
+import { api, ago, isTaskLine, cronEvery, HARNESS, REGION, sessionTitle, storesOf, when, type Approval, type Lease, type Session, type State } from "../lib/api";
 import { useStore, setTab, getStore, pend, refresh, refreshUntil, pendUntil, settle, ask, askText, toast, failed, exclusive, BUSY_LABEL } from "../lib/store";
 import { hasShell, requestSecure } from "../lib/shell";
-import { requestGrant } from "../lib/grants";
+import { requestTerminal } from "../lib/addons";
 import { canCopy, copyText } from "../lib/clipboard";
 import { BadgeList, Box, Button, Callout, CalloutText, Card, Flex, Heading, Lbl, Muted, P, Pill, Quote, Row, Rows } from "../ui/kit";
 import type { AskRow } from "../lib/store";
@@ -89,7 +89,7 @@ export const resumeSession = (id: string) => exclusive("s:" + id, async () => {
   pend("s:" + id, "Resuming…");
   try {
     await api("POST", `api/sessions/${id}/resume`, { upgrade: false, ...(prompt ? { prompt } : {}) });
-    // a resume in another permission mode than the line's cert is a change the iPhone approves (signed)
+    // a resume with a prompt is a new source the iPhone approves (resume-upgrade); without one it just starts
     let a: Approval | undefined;
     await refreshUntil((s) => !!(a = s.approvals.find((x) => x.kind === "resume-upgrade" && x.session === id)) || ["started", "initialising", "failed"].includes(find(s, id)?.state || ""), 120000);
     if (a) review(a);
@@ -158,34 +158,6 @@ export const destroySession = (id: string) => exclusive("s:" + id, async () => {
   } catch (e: any) { failed(e); await refresh(false); }
   finally { pend("s:" + id, null); }
 });
-// Permission mode (signed in the line's cert). Running: switched in place; raising to bypass needs a fresh
-// phone grant for the terminal feature, so a 403 {phoneGrant} opens the grant page and the switch runs again
-// once it is signed. Paused: kept for the next resume, which the iPhone approves.
-export const switchMode = (m: Session, mode: "auto" | "bypass") => exclusive("s:" + m.id, async () => {
-  const title = sessionTitle(m);
-  if (!(await ask({ title: "Switch permission mode?", rows: [
-    { label: "Session", value: title },
-    { label: "Mode", value: mode === "bypass" ? "Bypass (no prompts)" : "Auto (classifier)" },
-    { label: "Applies", value: m.state === "paused" ? "At the next resume" : "Now (Claude relaunches)" },
-    ...(mode === "bypass" ? [{ label: "Approval", value: "On the iPhone" }] : []),
-  ], action: "Switch", danger: mode === "bypass" }))) return;
-  const run = async (): Promise<void> => {
-    pend("s:" + m.id, "Switching mode…");
-    try {
-      const j = await api<any>("POST", `api/sessions/${m.id}/permission-mode`, { mode });
-      if (j.nextStart) { toast("Applies at the next resume.", "ok"); await refresh(false); return; }
-      await refreshUntil((s) => { const x = find(s, m.id); return !!x && x.permissionMode === mode && !serverBusy(x); }, 120000);
-    } catch (e: any) {
-      if (e.status === 403 && e.body?.needsGrant && hasShell) {
-        pend("s:" + m.id, null);
-        requestGrant(m.id, title, { holder: e.body.needsGrant, kind: "grant", minutes: 10 }, (ok) => { if (ok) exclusive("s:" + m.id, run); });
-        return;
-      }
-      failed(e); await refresh(false);
-    } finally { pend("s:" + m.id, null); }
-  };
-  await run();
-});
 // the two switches: two-phase, the menu item shows the router's value
 const toggle = (m: Session, what: "auto-pause" | "notify-idle", on: boolean) =>
   pendUntil("s:" + m.id, on ? "Turning on…" : "Turning off…", () => api("POST", `api/sessions/${m.id}/${what}`, { on }),
@@ -194,13 +166,12 @@ const toggle = (m: Session, what: "auto-pause" | "notify-idle", on: boolean) =>
 function menuItems(m: Session): MenuItem[] {
   const items: MenuItem[] = [];
   const live = !["approval", "destroying"].includes(m.state);
-  if (live) items.push({ label: "Grants…", sub: "Which features may run commands in it", onClick: () => openPage("grants", { id: m.id }) });
+  if (m.state === "started") items.push({ label: "Stores…", sub: "Drop stores, or ask the iPhone for one more", onClick: () => openPage("session-stores", { id: m.id }) });
+  if (m.state === "started" && !(m.addOns || []).some((a) => a.kind === "terminal")) items.push({ label: "Open a terminal", sub: "10 minutes of typing and commands; the iPhone approves", onClick: () => requestTerminal(m.id) });
+  if ((m.commands || []).length) items.push({ label: "Command results…", sub: "Commands approved on the iPhone", onClick: () => openPage("commands", { id: m.id }) });
   if (live) items.push({ label: "Schedules…", sub: "Wakeups and crons", onClick: () => openPage("schedules", { id: m.id }) });
   if (!m.oneShot && live) items.push({ label: "Auto-pause when idle", sub: "Pause after 1 h with nothing running", checked: m.autoPause !== "off", onClick: () => toggle(m, "auto-pause", m.autoPause === "off") });
   if (live) items.push({ label: "Idle notifications", sub: "A Discord DM when it sits idle", checked: m.notifyIdle !== "off", onClick: () => toggle(m, "notify-idle", m.notifyIdle === "off") });
-  if (m.state === "started" || m.state === "paused") items.push(m.permissionMode === "bypass"
-    ? { label: "Switch to auto mode", sub: "Permission prompts gated by the classifier", onClick: () => switchMode(m, "auto") }
-    : { label: "Switch to bypass mode", sub: "No permission prompts; the iPhone allows it", onClick: () => switchMode(m, "bypass") });
   if (m.state === "paused") items.push({ label: "Resume with latest image", sub: "Newest session image; the iPhone approves", onClick: () => upgrade(m.id) });
   if (canCopy) items.push({ label: "Copy session id", sub: m.id, onClick: () => copyText(m.id).then(() => toast("Session id copied", "ok"), (e) => failed(e, "Could not copy: ")) });
   items.push({ label: "Destroy", sub: "Archive transcripts + ~/artifacts, then burn the machine", danger: true, onClick: () => destroySession(m.id) });
@@ -222,11 +193,9 @@ function Schedules({ m }: { m: Session }) {
     <Callout color="blue" variant="surface" mt={2} data={{ schedules: "1" }}>
       {(m.wakeups || []).map((w) => <Box key={"w" + w.name}>
         <Rows><Row label="Wakeup">{w.name}</Row><Row label="At">{when(w.at)}</Row></Rows>
-        <Quote by="Prompt" color="blue" lines={2}>{clip(w.prompt)}</Quote>
       </Box>)}
       {(m.crons || []).map((c) => <Box key={"c" + c.name}>
         <Rows><Row label="Cron">{c.name}</Row><Row label="Repeats">{cronEvery(c.everySeconds)}</Row><Row label="Next">{when(c.nextAt)}</Row></Rows>
-        <Quote by="Prompt" color="blue" lines={2}>{clip(c.prompt)}</Quote>
       </Box>)}
     </Callout>
   );
@@ -248,22 +217,13 @@ function MemAlert({ m, busy }: { m: Session; busy: string | null }) {
   );
 }
 const gb = (mb: number) => (mb / 1024).toFixed(1);
-// a feature the machine refused without a grant (needs Deyao's approval): one tap to allow it for 10 minutes, or a standing rule
-function NeedsGrant({ m }: { m: Session }) {
-  if (!m.needsGrant) return null;
-  const h = m.needsGrant, title = sessionTitle(m);
+// add-ons in force on the running machine (a terminal, a command), each until when
+function AddOns({ m }: { m: Session }) {
+  const live = (m.addOns || []).filter((a) => Date.parse(a.until) > Date.now());
+  if (!live.length) return null;
   return (
-    <Callout color="amber" mt={2} data={{ needsGrant: h }}>
-      <P size={2} weight="bold" color="amber">Needs your approval</P>
-      <Rows id={"needs-grant-" + m.id}>
-        <Row label="Feature" id={"needs-grant-feature-" + m.id}>{holderTitle(h)}</Row>
-        {!!HOLDERS[h]?.sub && <Row label="Does">{HOLDERS[h].sub}</Row>}
-        <Row label="Why">The session holds a sensitive store, so Jarvis can't do this without your approval.</Row>
-      </Rows>
-      <Flex gap={2} mt={2} wrap>
-        <Button size={1} id={"grant-" + m.id} onPress={() => requestGrant(m.id, title, { holder: h, kind: "grant", minutes: 10 })}>Allow 10 min</Button>
-        <Button size={1} variant="soft" id={"rule-" + m.id} onPress={() => requestGrant(m.id, title, { holder: h, kind: "rule" })}>Standing rule</Button>
-      </Flex>
+    <Callout color="blue" variant="surface" mt={2} data={{ addOns: String(live.length) }}>
+      <Rows id={"addons-" + m.id}>{live.map((a) => <Row key={a.id} label={a.kind === "terminal" ? "Terminal" : "Command"}>{"until " + when(a.until)}</Row>)}</Rows>
     </Callout>
   );
 }
@@ -337,7 +297,7 @@ export function Sessions() {
                 </Rows>
                 {!!m.resumePrompt && <Quote by={paused ? "Queued for the next resume" : "Queued prompt"} lines={3}>{clip(m.resumePrompt)}</Quote>}
                 <MemAlert m={m} busy={busy || null} />
-                <NeedsGrant m={m} />
+                <AddOns m={m} />
                 <LockedStore m={m} />
                 <Schedules m={m} />
                 {!!m.error && <P size={2} color="red" mt={1}>{m.error}</P>}

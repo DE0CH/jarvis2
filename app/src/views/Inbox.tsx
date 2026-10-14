@@ -1,6 +1,6 @@
 // The Inbox tab: everything waiting for the phone's Face ID that was asked for elsewhere (a session, the web page,
-// Claude's setup session) — requests (repo keys, grants, unlocks) and the router's approvals (new session, resume on
-// the latest image, add a store), and API calls a session's actions ask to run as Deyao (approved right on the card,
+// Claude's setup session) — requests (repo keys, unlocks, restores) and the router's approvals (new session, resume on
+// the latest image, a terminal, a command, add a store), and API calls a session's actions ask to run as Deyao (approved right on the card,
 // web page or app). Each card: the action as its title (what will be signed, in short), who called
 // which endpoint, and the caller's own reason (their words, unverified). Review opens the shell's secure page,
 // which renders what is signed from the signed content itself; Deny drops it. The web page lists them and can deny.
@@ -12,7 +12,7 @@ import { Box, Button, Card, Flex, Heading, Lbl, Muted, Pill, P, Quote, Row, Rows
 import { PButton } from "../ui/bits";
 import { Cards } from "../ui/cards";
 
-const KIND: Record<string, string> = { "repo-key": "Repo key", grant: "Grant", unlock: "Unlock", "new-session": "New session", "resume-upgrade": "Resume", "add-store": "Add a store", "api-call": "API call", restore: "Restore store" };
+const KIND: Record<string, string> = { "repo-key": "Repo key", terminal: "Terminal", command: "Command", unlock: "Unlock", "new-session": "New session", "resume-upgrade": "Resume", "add-store": "Add a store", "api-call": "API call", restore: "Restore store" };
 
 /** open the entry's secure page; once it went through (or was denied there) the Inbox refreshes */
 export function reviewRequest(it: InboxItem) {
@@ -28,14 +28,13 @@ function BatchCard({ b }: { b: InboxBatch }) {
   return (
     <Card data={{ batch: b.id }}>
       <Flex justify="space-between" align="flex-start" gap={2} mb={1}>
-        <Heading size={3} style={{ flex: 1 }} id={"batch-title-" + b.id}>{`${items.length + b.preparing} requests`}</Heading>
+        <Heading size={3} style={{ flex: 1 }} id={"batch-title-" + b.id}>{`${items.length} requests`}</Heading>
         <Pill kind="info">Batch</Pill>
       </Flex>
       <Rows id={"batch-rows-" + b.id}>
         <Row label="From" id={"batch-from-" + b.id}>{b.callerText}</Row>
         <Row label="Asked">{ago(b.created)}</Row>
         <Row label="Expires">{when(b.expires)}</Row>
-        {b.preparing > 0 && <Row label="Being prepared">{String(b.preparing)}</Row>}
       </Rows>
       {!!b.summary && <Quote by={"Summary (from " + b.callerText + ", unverified)"} color="amber" lines={6} id={"batch-summary-" + b.id}>{b.summary}</Quote>}
       {items.map((it, n) => (

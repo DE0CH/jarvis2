@@ -1,6 +1,6 @@
 // New session on the WEB page: the form only files a pending request (POST api/sessions) with any stores,
 // sensitive ones included (Deyao, 2026-10-13; docs/DECISIONS.md 161); the approval happens in the app, whose review
-// page marks each sensitive store from the core-signed store list before Face ID. In the app New session is one page in the shell (lib/sessions.ts,
+// page marks each sensitive store from the secrets-signed store list before Face ID. In the app New session is one page in the shell (lib/sessions.ts,
 // Shell/SecurePages.swift SecureNewSession), where everything is chosen and Start signs it.
 // Images (docs/DECISIONS.md 94-95): picked or pasted here, uploaded to the router (api/uploads) before the request; the
 // signed config names each one's sha256 + size, and the machine takes only those bytes.
@@ -67,7 +67,7 @@ const fmtSize = (n: number) => (n < 1024 ? `${n} B` : n < 1 << 20 ? `${(n / 1024
 export function NewSession() {
   const SIZES = useStore((s) => s.sizes), MODELS = useStore((s) => s.models), stores = useStore((s) => s.stores);
   useEffect(() => { loadStores(); }, []);
-  // every store is offered, sensitive ones marked (never pre-picked); not the core's own store (it never goes to a
+  // every store is offered, sensitive ones marked (never pre-picked); not the reserved `core` store (it never goes to a
   // session), the deploy-key token's store (only a deploy-key call opens it), nor a harness's (they come with it)
   const hidden = harnessStoreSet(useStore((s) => s.policy));
   const plain = stores.items.filter((s) => s.name !== CORE_STORE && s.name !== DEPLOY_KEY_TOKEN_STORE && !hidden.has(s.name));
@@ -194,6 +194,7 @@ export function NewSession() {
         { value: "auto", title: "Auto", sub: "Auto-approve safe actions; the permission classifier gates the rest." },
         { value: "bypass", title: "Dangerously skip permissions", sub: "No prompts at all (--dangerously-skip-permissions)." },
       ]} />
+      <Muted mt={1}>Fixed for the session's life.</Muted>
       {models.length > 0 && <><Lbl>Model</Lbl>
         <RadioCards id="ns-model" value={model} onChange={setModel} options={models.map((m) => ({ value: m.id, title: m.label || m.id, sub: m.id }))} /></>}
       {!oneShot && <><Lbl>Idle</Lbl>

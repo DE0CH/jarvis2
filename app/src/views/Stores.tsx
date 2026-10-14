@@ -1,6 +1,6 @@
-// The core's secret stores (GET api/stores), shown as listed with what each store and key is for (editable in
+// The secret stores (GET api/stores), shown as listed with what each store and key is for (editable in
 // place: ui/storedocs.tsx). Unlocking, locking and marking a store sensitive happen on the shell's secure page, which
-// checks the core's signatures itself; the web page only shows the list, and each store's earlier versions with a
+// checks secrets' signatures itself; the web page only shows the list, and each store's earlier versions with a
 // "Propose restore" that files an Inbox request (ui/storeversions.tsx).
 import { useEffect } from "react";
 import { useStore, loadStores, refresh } from "../lib/store";

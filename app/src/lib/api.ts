@@ -5,20 +5,20 @@ import { base, fetchInit, authHeaders, checkRefused } from "./auth";
 export const url = (path: string) => base() + path.replace(/^\//, "");
 
 // What a failed request means, in words. The router answers errors as JSON {error}; errors that come
-// from the core arrive as the core's signed error document {payload, sig} (payload {kind:"error", error});
+// from a kernel part arrive as that part's signed error document {payload, sig} (payload {kind:"error", error});
 // the layers in front of it (Cloudflare) answer plain text or HTML, and a dropped connection is only the
 // platform's bare "Load failed" / "Network request failed".
 const STATUS_HINT: Record<number, string> = {
   400: "bad request", 401: "not authorised", 403: "forbidden", 404: "not found", 409: "conflict",
   413: "request too large", 423: "locked", 429: "rate-limited — try again shortly", 500: "router error",
-  502: "bad gateway — the router or the core dropped the request",
+  502: "bad gateway — the router or a kernel part dropped the request",
   503: "unavailable",
   504: "timed out — no response from the router in time",
 };
 export function reasonOf(text: string): string {
   let j: any = null; try { j = JSON.parse(text); } catch {}
   if (j && typeof j === "object") {
-    if (typeof j.payload === "string") { try { const p = JSON.parse(j.payload); if (p && p.error) return "core: " + p.error; } catch {} }
+    if (typeof j.payload === "string") { try { const p = JSON.parse(j.payload); if (p && p.error) return String(p.error); } catch {} }
     return String(j.error || j.message || "");
   }
   return text.replace(/<(script|style)[\s\S]*?<\/\1>/gi, " ").replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim().slice(0, 300);
@@ -27,7 +27,7 @@ export function httpError(method: string, path: string, status: number, text: st
   const reason = reasonOf(text), hint = STATUS_HINT[status] || (status >= 500 ? "server error" : "request failed");
   const e: any = new Error(`${reason || hint} (HTTP ${status}${reason ? " " + hint : ""} · ${method} ${path})`);
   e.status = status;
-  try { e.body = JSON.parse(text); } catch {} // e.g. 403 {needsGrant, phoneGrant}
+  try { e.body = JSON.parse(text); } catch {} // e.g. 403 {needsTerminal}
   return e;
 }
 export function networkError(method: string, path: string, e: any): Error {
@@ -107,23 +107,26 @@ export type LeaseEntry = { sid: string; human?: boolean; purpose: string; descri
 export type LeaseWaiter = { position: number; sid: string; purpose: string; description: string; enqueuedAt: number; interrupted?: boolean };
 export type LeaseEvent = { at: number; kind: string; sid: string; purpose?: string; note?: string; interrupted?: string };
 export type Lease = { name: string; holder: LeaseEntry | null; queue: LeaseWaiter[]; log: LeaseEvent[] };
-export type Watch = { name: string; prompt: string; failPrompt: string; interval: number; maxSeconds: number; armedAtIso: string; expiresAtIso: string; nextCheckIso: string; runs: number; lastExit: number | null; lastRunIso: string | null; lastError: string; lastOutput: string; outcome: string };
-export type Wakeup = { name: string; at: number; atIso?: string; prompt: string };
-export type Cron = { name: string; prompt: string; everySeconds: number; tz?: string; nextAt: number; nextAtIso?: string; until?: number | null; untilIso?: string | null; runs?: number; lastFiredIso?: string | null };
+export type Watch = { name: string; id?: string; interval: number; maxSeconds: number; armedAtIso: string; expiresAtIso: string; nextCheckIso: string; runs: number; lastExit: number | null; lastRunIso: string | null; lastError: string; lastOutput: string; outcome: string };
+export type Wakeup = { name: string; id?: string; at: number; atIso?: string };
+export type Cron = { name: string; id?: string; everySeconds: number; tz?: string; nextAt: number; nextAtIso?: string; until?: number | null; untilIso?: string | null; runs?: number; lastFiredIso?: string | null };
 export type Refusal = { kind: "fallback" | "refusal"; at?: string; from?: string; to?: string; model?: string; category?: string };
 export type Session = {
   id: string; machineId?: string | null; released?: boolean; name?: string; state: SessionState | string; status?: string | null;
   created?: string; region?: string; environment?: string; harness?: string; label?: string; model?: string;
   permissionMode?: string; guest?: string; stores?: string[] | null; content?: string[] | null; size?: string; image?: string; pausedAt?: string | null; error?: string | null; title?: string; destroyedAt?: string;
   // live fields (docs/API.md "Sessions"): the machine's report, the autopilot's settings, the schedule
-  aiTitle?: string; liveName?: string; userTitle?: string; serverTitle?: string; liveSync?: { at: string; files: Record<string, number>; stored: boolean; error?: string } | null; bgTasks?: number; needsGrant?: string; pauseInMs?: number;
+  aiTitle?: string; liveName?: string; userTitle?: string; serverTitle?: string; liveSync?: { at: string; files: Record<string, number>; stored: boolean; error?: string } | null; bgTasks?: number; pauseInMs?: number;
   autoPause?: "on" | "off"; notifyIdle?: "on" | "off"; oneShot?: boolean; oneShotDone?: boolean; authFailed?: boolean;
   credsExpiresAt?: string | number; discordChannel?: string; statusUpdatedAt?: string; lastReport?: string; refusals?: Refusal[];
   wakeups?: Wakeup[]; crons?: Cron[]; watches?: Watch[]; resumePrompt?: string; createRequestId?: string; repos?: string;
-  // a lifecycle action holding the session (others are refused 409) and a permission-mode / restart job
+  // add-ons in force on the running machine (a terminal, a command: docs/API.md "Approvals") and the approved
+  // commands' results, newest last
+  addOns?: AddOn[]; commands?: CommandRun[];
+  // a lifecycle action holding the session (others are refused 409) and a restart / upgrade job
   // what a pause or destroy is waiting on, in plain words (e.g. "waiting for the machine's last snapshot (up to 10 min)")
   waiting?: string;
-  // the store the machine is waiting on at boot (the core answered 423 "store X is locked" to its secrets pull)
+  // a store the machine's last secrets pull listed as locked ("" once a pull serves every store)
   lockedStore?: string;
   busy?: { kind: string; since?: string } | null; wake?: { kind: string; phase: string; error?: string } | null; apiProxy?: "on" | "off";
   // a memory-starvation episode (router, mirrors Jarvis 1's lib/memory.js): why, the memory now, and the size
@@ -145,7 +148,8 @@ export type TailMessage = { role: "user" | "assistant"; text: string; at?: strin
 export type ArchiveInfo = { dir: string; title: string; transcripts: string[]; artifacts: number; signer?: string; snapshotAt?: string; last?: TailMessage | null };
 /** a destroyed session (GET api/records): the session's fields plus where its archive is */
 export type Rec = Session & { destroyedAt: string; archive?: ArchiveInfo | null; archiveError?: string; restored?: { sessionId: string; at: string }[]; live?: { oneShot?: boolean } };
-export type Grant = { id: string; session: string; holder: string; kind: "grant" | "rule"; ends: string };
+export type AddOn = { id: string; kind: "terminal" | "command"; until: string };
+export type CommandRun = { approval: string; cmd: string; code: number; stdout: string; stderr: string; error?: string; at: string };
 export type Budget = { month: string; spentUsd: number; capUsd: number; warnUsd: number; warned: boolean; capped: boolean; cappedAt?: string | null; ratePerHour: number; perMonth: number; running: number; volumes: number; sampledAt?: string | null };
 export type FlyOther = { kind: string; app: string; id: string; name?: string; state?: string; region?: string; created?: string; detail?: string };
 export type FlyView = { apps: number; machines: number; volumes: number; other: FlyOther[]; error?: string | null; checkedAt?: string | null };
@@ -159,17 +163,20 @@ export type FlyAppView = { app: string; label: string; own: boolean; status: str
 export type FlyOrgView = { org: string; via: string; error: string; checkedAt: string; apps: FlyAppView[] };
 export type MachinesOverview = { app: string; org: string; machines: Machine[]; orgs: FlyOrgView[]; attention: number; configError: string; checkedAt: string };
 export type SignedDoc = { payload: string; sig: string };
-export type ApprovalKind = "new-session" | "resume-upgrade" | "add-store";
+export type ApprovalKind = "new-session" | "resume-upgrade" | "terminal" | "command" | "add-store";
+// a draft: the exact succession cert the phone signs (core/kernel/README.md "Formats") and the log notary's challenge
+export type Draft = { payload: string; challenge: SignedDoc };
 export type Approval = {
-  id: string; kind: ApprovalKind; created?: string; session?: string | null; label?: string;
-  challenge: SignedDoc; machine?: string; options?: Record<string, unknown>;
+  id: string; kind: ApprovalKind; created?: string; session?: string | null; label?: string; machine?: string;
+  drafts: Draft[]; options?: Record<string, string>; until?: string; cmd?: string; once?: string; store?: string;
+  explanation?: string; batch?: string;
 };
 // an Inbox entry (router/inbox.go, docs/API.md "Requests"): a request waiting for the phone, or one of the router's
 // approvals. The list's title is rendered here from kind + params (lib/inbox.ts); the review page renders what is
 // signed from the signed content itself.
 export type InboxItem = {
-  id: string; kind: "repo-key" | "grant" | "unlock" | "api-call" | "restore" | ApprovalKind; approval: boolean;
-  params: { action?: "add" | "remove"; repo?: string; sensitive?: boolean; session?: string; holder?: string; minutes?: number; days?: number;
+  id: string; kind: "repo-key" | "unlock" | "api-call" | "restore" | ApprovalKind; approval: boolean;
+  params: { action?: "add" | "remove"; repo?: string; sensitive?: boolean; session?: string;
     method?: string; path?: string; body?: string; contentType?: string; store?: string; seq?: number }; // api-call: the call a session's actions ask to run as Deyao
   session?: string; sessionName?: string; caller: { kind: string; session?: string }; callerText: string;
   call: { method: string; path: string; args?: Record<string, unknown> }; explanation: string; created: string; expires?: string;
@@ -181,20 +188,21 @@ export type InboxItem = {
 export type InboxBatch = {
   id: string; summary: string; caller: { kind: string; session?: string }; callerText: string;
   call: { method: string; path: string; args?: Record<string, unknown> }; created: string; expires: string;
-  items: string[]; preparing: number;
+  items: string[];
 };
-export type CoreStatus = { up: boolean; signingKey?: string; agreementKey?: string };
+// secrets (the kernel part holding the stores), as the router last reached it
+export type SecretsStatus = { up: boolean; signingKey?: string; agreementKey?: string };
 export type State = {
-  sessions: Session[]; approvals: Approval[]; core: CoreStatus; inbox?: InboxItem[]; inboxBatches?: InboxBatch[];
+  sessions: Session[]; approvals: Approval[]; secrets: SecretsStatus; rootGrant?: boolean; inbox?: InboxItem[]; inboxBatches?: InboxBatch[];
   budget?: Budget | null; fly?: FlyView | null; flyApp?: string; repos?: RepoEntry[]; leases?: Lease[];
   loadError?: string | null; // client-side: the last api/state fetch failed
   loaded?: boolean; // client-side: api/state has answered at least once
 };
 export type Choice = { id: string; label: string; harness?: string };
-// a store as the router lists it (GET api/stores: the core's signed list, with each key, who wrote it and what the
-// store and each key are for, router/storedocs.go). Read here only for display and pre-selection; the shell verifies
-// the core's signature before anything is signed.
-export type KeyWriter = { by: "setup" | "machine" | "core"; machine?: string; line?: string; session?: string; sessionLabel?: string };
+// a store as the router lists it (GET api/stores: secrets' signed list, with each key, who wrote it and what the
+// store and each key are for, router/storedocs.go). Read here only for display and pre-selection; the app verifies
+// secrets' signature before anything is signed.
+export type KeyWriter = { by: "setup" | "router" | "machine" | "core"; machine?: string; line?: string; session?: string; sessionLabel?: string };
 export type StoreKey = { name: string; explanation: string; at?: string; writer?: KeyWriter };
 export type CoreStore = {
   name: string; sensitive: boolean; empty: boolean; unlocked: boolean; about?: string; version?: string;
@@ -223,27 +231,33 @@ export async function putStoreDocs(store: string, docs: { about?: string; keys?:
   await api("PUT", "api/stores/" + encodeURIComponent(store) + "/docs", docs);
 }
 
-/** one kept version of a store (core/history.go), as the core's signed list names it — never a value */
+/** one kept version of a store (core/kernel/secrets/history.go), as secrets' signed list names it — never a value */
 export type StoreVersion = {
   seq: number; at: string; version: string;
   cause: { kind: string; key?: string; from?: number; writer?: { by: string; machine?: string; line?: string } };
   keys: { name: string }[];
 };
-/** a store's kept versions, newest first, and which is current: read for display only (the app checks the core's
+/** a store's kept versions, newest first, and which is current: read for display only (the app checks secrets'
  * signature before Deyao signs a restore) */
 export async function storeVersions(store: string): Promise<{ current: string; versions: StoreVersion[] }> {
-  const d = await api<{ payload: string }>("POST", "api/core/stores/versions", { store, nonce: "web-" + Date.now() });
+  const d = await api<{ payload: string }>("POST", "api/secrets/stores/versions", { store, nonce: "web-" + Date.now() });
   const p = JSON.parse(d.payload);
   return { current: p.current || "", versions: p.versions || [] };
 }
 
-/** what a challenge asks for, read for display only (the shell checks it before signing) */
-export function challengeRequest(a: Approval, p: Policy = {}): { stores: string[]; sensitive: string[]; harness: string; addedStore?: string; permissionMode?: string } {
-  try {
-    const r = JSON.parse(a.challenge.payload).request || {};
-    const harness = r.options?.harness || "claude", h = new Set(p[harness] || []);
-    return { stores: (r.stores || []).filter((n: string) => !h.has(n)), sensitive: r.sensitive || [], harness, addedStore: r.addedStore || undefined, permissionMode: r.options?.permissionMode === "bypass" ? "bypass" : "auto" };
-  } catch { return { stores: [], sensitive: [], harness: "?" }; }
+/** the succession cert a draft carries, read for display only (the app checks and renders it itself before signing) */
+export type Cert = { signer?: string; predecessor?: { id: string; image?: string; settings?: Record<string, any>; snapshot?: string };
+  successor?: { id: string; image?: string; settings?: Record<string, any>; snapshot?: string }; allowed?: { only?: string[]; except?: string[] }; conditions?: string[] };
+export function draftCert(a: Approval, n = 0): Cert | null {
+  try { return JSON.parse(a.drafts[n].payload) as Cert; } catch { return null; }
+}
+/** what an approval's first draft asks for (display only): its stores (without the harness's), the source's settings */
+export function approvalRequest(a: Approval, p: Policy = {}): { stores: string[]; harness: string; permissionMode?: string } {
+  const c = draftCert(a);
+  if (!c) return { stores: [], harness: "?" };
+  const st = c.successor?.settings || {}, harness = String(st.harness || "claude"), h = new Set(p[harness] || []);
+  const stores = (c.allowed?.only || []).filter((x) => x.startsWith("store:")).map((x) => x.slice(6)).filter((n) => !h.has(n));
+  return { stores, harness, permissionMode: st.permissionMode ? String(st.permissionMode) : undefined };
 }
 
 export const newId = () => (globalThis.crypto?.randomUUID ? globalThis.crypto.randomUUID() : String(Date.now()) + Math.random().toString(16).slice(2));
@@ -271,18 +285,7 @@ export function when(at: number | string) {
 export function cronEvery(sec: number) {
   return sec === 86400 ? "daily" : sec === 604800 ? "weekly" : sec % 86400 === 0 ? `every ${sec / 86400} d` : sec % 3600 === 0 ? `every ${sec / 3600} h` : `every ${Math.round(sec / 60)} min`;
 }
-// the features that may hold a grant (router/grants.go), in words — the shell's grant page says the same
-export const HOLDERS: Record<string, { title: string; sub: string }> = {
-  terminal: { title: "Terminal", sub: "read the screen and type into the session" },
-  scheduler: { title: "Scheduler", sub: "deliver wakeups and crons as messages" },
-  status: { title: "Status", sub: "read the screen, press Escape on a prompt left waiting" },
-  login: { title: "Login repair", sub: "write fresh Claude credentials and send “continue”" },
-  archive: { title: "Archive check", sub: "list uncommitted work before a destroy" },
-  remote: { title: "Remote page", sub: "read the web UI's link and the pairing offer or gateway token" },
-};
-export const holderTitle = (h: string) => HOLDERS[h]?.title || h;
-// the store named `core` holds the core's own Fly token: it never shows for sessions (the core keeps it out of
-// its store list; the filter is only a second guard)
+// the store named `core` is reserved (the router refuses it for sessions; the filter is only a second guard)
 export const CORE_STORE = "core";
 // the deploy-key token's store: only a phone-approved deploy-key call opens it, never a session (router withHarnessStores)
 export const DEPLOY_KEY_TOKEN_STORE = "github-deploy-keys";

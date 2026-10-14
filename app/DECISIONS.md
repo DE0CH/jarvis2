@@ -200,11 +200,10 @@ fixes, 34–40 carried over from the old app and still true, 41–43 the web pag
     Does rows and two buttons (Allow 10 min, Standing rule); a locked store is "Waiting for unlock" with a Store row.
     The explanatory sentences under each card (what Resume does, auto-pause in words) are gone.
 
-53. **Inbox cards** have a fixed title per kind (Grant, Standing rule, Make deploy key, Unlock stores, New session…)
-    and rows for what the entry is about (Session, Feature, For, Repo, Store, Stores, Mode) and where it came from
+53. **Inbox cards** have a fixed title per kind (Open terminal, Run command, Add store, Make deploy key, Unlock stores,
+    New session…) and rows for what the entry is about (Session, For, Until, Command, Repo, Store, Stores, Mode) and where it came from
     (From, Asked, Expires, Call). The caller's reason is a Quote labelled "Reason (from <caller>, unverified)".
-54. **Grants page**: the session is a row; a turned-away feature and each grant in force are rows (Feature, Does,
-    Ends); the long explanation at the top is gone.
+54. **No grants page** (DESIGN "Target design"): the holders, grants and standing rules are gone. See 70.
 
 55. **New session, Schedules, Settings, Repos**: the session a page is about is a Session row; wakeups and crons are
     cards titled by name with At / Repeats / Next / Time zone / Runs / Until rows and the prompt as a Quote; usage, Fly
@@ -305,6 +304,18 @@ fixes, 34–40 carried over from the old app and still true, 41–43 the web pag
     keys put back under one Face ID; Cancel (Deny from the Inbox). Web: each store card has **Versions** (the same list,
     unverified) with **Propose restore**, which files the Inbox request; the Inbox lists it as "Restore store" with Store
     and Version rows. Walkthrough: a key of default deleted as the setup session, then put back through Versions.
+
+70. **The web page on the kernel's model** (docs/DESIGN.md "Target design", DECISIONS 163; 2026-10-14). The web page
+    signs nothing: an approval's `drafts` are read only to list its stores and the source's permission mode on the Inbox
+    card. Secrets' relays are `api/secrets/*`; Settings shows Secrets (up) and Root grant (given / missing). A running
+    session's card lists the add-ons in force (Terminal / Command, until when); its More menu has **Stores…** (a page:
+    Keep checkboxes + **Drop**, which narrows in place with `api/sessions/:id/narrow`; **Add** picks one more store and
+    files `api/requests/add-store`), **Open a terminal** (files `api/requests/terminal`, 10 minutes, the only length
+    offered) and **Command results…** (the session's `commands`, newest first). Wherever the router answers 403
+    `needsTerminal` (typing in the Terminal page, the Remote page) the page offers the same terminal request. The
+    permission mode is fixed for the session's life: shown (a "skip perms" pill, a hint on New session), never switched.
+    Schedules lists and cancels wakeups and crons only: the session arms them through its guard, which keeps the prompts,
+    so the router has no text to show and the app can't arm one. Batches have no "being prepared" count.
 
 ## Unfinished / known gaps
 

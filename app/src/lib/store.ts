@@ -11,7 +11,7 @@ export const TABS: [Tab, string][] = [["sessions", "Sessions"], ["inbox", "Inbox
 export type TasksState = { loading: boolean; loaded: boolean; data: TasksOverview; err: string | null };
 // what holds a session right now (api/state `busy`), as a button label
 export const BUSY_LABEL: Record<string, string> = { starting: "Starting…", restarting: "Restarting…", pausing: "Pausing…", destroying: "Destroying…", mode: "Switching mode…", upgrading: "Upgrading…" };
-// a list loaded on demand (records, the core's store list), not part of the 15 s poll
+// a list loaded on demand (records, secrets' store list), not part of the 15 s poll
 export type Loaded<T> = { loading: boolean; loaded: boolean; items: T[]; err: string | null };
 export type Toast = { id: number; text: string; kind: "info" | "ok" | "error" };
 // a pending yes/no question, shown as a centered dialog (App renders it); resolve gets the answer.
@@ -28,7 +28,7 @@ type Store = {
 };
 const empty = <T,>(): Loaded<T> => ({ loading: false, loaded: false, items: [], err: null });
 const S: Store = {
-  state: { sessions: [], approvals: [], core: { up: false } },
+  state: { sessions: [], approvals: [], secrets: { up: false } },
   tab: "sessions", pending: new Map(), records: empty(), stores: empty(), machines: empty(), flyOrgs: { orgs: [], attention: 0, configError: "" },
   sizes: [], models: [], refreshing: false, toasts: [], confirm: null, policy: {},
   tasks: { loading: false, loaded: false, data: { templates: [], instances: [], schedules: [] }, err: null },
@@ -121,7 +121,7 @@ let fastUntil = 0;
 const pollState = coalesce(async () => {
   try {
     const st = await api<State>("GET", "api/state");
-    S.state = { sessions: st.sessions || [], approvals: st.approvals || [], core: st.core || { up: false }, budget: st.budget ?? null, fly: st.fly ?? null, flyApp: st.flyApp, repos: st.repos || [], inbox: st.inbox || [], inboxBatches: st.inboxBatches || [], loaded: true, loadError: null };
+    S.state = { sessions: st.sessions || [], approvals: st.approvals || [], secrets: st.secrets || { up: false }, rootGrant: !!st.rootGrant, budget: st.budget ?? null, fly: st.fly ?? null, flyApp: st.flyApp, repos: st.repos || [], leases: st.leases || [], inbox: st.inbox || [], inboxBatches: st.inboxBatches || [], loaded: true, loadError: null };
   } catch (e: any) { S.state = { ...S.state, loadError: e.message }; }
   S.refreshing = false; emit();
   // a session is on its way somewhere: follow it closely

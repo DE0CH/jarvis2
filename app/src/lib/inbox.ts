@@ -3,21 +3,22 @@
 // for it, which shows (1) what will be signed, rendered from the signed content, (2) the API call the router
 // recorded and who made it, (3) the caller's own reason. This file renders the LIST's title from the entry's kind +
 // params (display only: the review page renders its own from what it signs) and files requests from the web page.
-import { api, challengeRequest, holderTitle, type Approval, type InboxItem, type Policy } from "./api";
+import { api, approvalRequest, when, type Approval, type InboxItem, type Policy } from "./api";
 import { refresh, settle, toast } from "./store";
 
-/** the store a repo's deploy key lives in (core/deploykeys.go RepoStore) */
+/** the store a repo's deploy key lives in (core/kernel/secrets/deploykeys.go RepoStore) */
 export function repoStore(repo: string): string {
   const [owner, name] = repo.toLowerCase().split("/");
   const slug = owner === "de0ch" ? name : owner + "-" + name;
   return "github-" + slug.replace(/[^a-z0-9]/g, "-").replace(/^-+|-+$/g, "");
 }
 
-/** the list's title: a fixed name for the core action (or the phone grant) the entry leads to */
+/** the list's title: a fixed name for the action the entry leads to */
 export function inboxTitle(it: InboxItem): string {
   switch (it.kind) {
     case "repo-key": return it.params.action === "remove" ? "Remove deploy key" : "Make deploy key";
-    case "grant": return it.params.days ? "Standing rule" : "Grant";
+    case "terminal": return "Open terminal";
+    case "command": return "Run command";
     case "unlock": return "Unlock stores";
     case "api-call": return "API call";
     case "add-store": return "Add store";
@@ -39,11 +40,6 @@ export function inboxRows(it: InboxItem, approvals: Approval[] = [], policy: Pol
       if (p.action !== "remove") add("access", "Access", "Read + push");
       if (p.sensitive) add("sensitive", "Sensitive", "Yes");
       return rows;
-    case "grant":
-      add("session", "Session", session);
-      add("feature", "Feature", holderTitle(p.holder || ""));
-      add("for", "For", p.days ? `${p.days} d` : `${p.minutes || 10} min`);
-      return rows;
     case "unlock":
       add("session", "Session", session);
       return rows;
@@ -57,11 +53,23 @@ export function inboxRows(it: InboxItem, approvals: Approval[] = [], policy: Pol
       return rows;
   }
   const a = approvals.find((x) => x.id === it.id);
-  const r = a ? challengeRequest(a, policy) : null;
   if (it.options?.restore) add("restore", "From", it.options.restore);
   add("session", "Session", session);
-  if (it.kind === "add-store") add("store", "Store", r?.addedStore || it.options?.store);
-  else if (r) { add("stores", "Stores", r.stores.join(", ") || "None"); add("mode", "Mode", r.permissionMode); }
+  switch (it.kind) {
+    case "terminal":
+      add("for", "For", `${it.options?.minutes || 10} min`);
+      if (a?.until) add("until", "Until", when(a.until));
+      return rows;
+    case "command":
+      add("cmd", "Command", a?.cmd);
+      if (a?.until) add("until", "Until", when(a.until));
+      return rows;
+    case "add-store":
+      add("store", "Store", a?.store || it.options?.store);
+      return rows;
+  }
+  const r = a ? approvalRequest(a, policy) : null;
+  if (r) { add("stores", "Stores", r.stores.join(", ") || "None"); add("mode", "Mode", r.permissionMode); }
   return rows;
 }
 
@@ -74,7 +82,7 @@ export function inboxCall(it: InboxItem): string {
 
 export const denyRequest = (it: InboxItem) => api("DELETE", `api/requests/${it.id}`);
 /** an API call a session's actions asked for (router/apicalls.go): the router runs it now, as Deyao. No Face ID here:
- * a step that needs the core's signature asks for its own afterwards. */
+ * a step that needs a phone signature asks for its own afterwards. */
 export async function approveCall(it: InboxItem) {
   const r = await api<{ ok: boolean; state: string; status: number; error?: string }>("POST", `api/requests/${it.id}/approve`);
   if (r.ok) toast(`Ran ${it.params.method} ${it.params.path}: HTTP ${r.status}`, r.status < 400 ? "ok" : "error");
@@ -87,15 +95,12 @@ export const denyBatch = (id: string) => api("DELETE", `api/requests/batches/${i
 export async function fileFromWeb(kind: string, o: Record<string, unknown>): Promise<boolean> {
   let path = "", body: Record<string, unknown> = {};
   if (kind === "repo-key") { path = `api/requests/repo/${o.action === "remove" ? "remove" : "add"}`; body = { repo: o.repo, sensitive: !!o.sensitive }; }
-  else if (kind === "grant") {
-    path = "api/requests/grant"; body = { session: o.sessionId, holder: o.holder };
-    if (o.grantKind === "rule") body.days = Math.max(1, Math.min(365, Math.round((Date.parse(String(o.until || "")) - Date.now()) / 86400000) || 30));
-    else body.minutes = o.minutes || 10;
-  } else if (kind === "unlock") { path = "api/requests/unlock"; body = { session: o.sessionId }; }
+  else if (kind === "terminal") { path = "api/requests/terminal"; body = { session: o.sessionId, minutes: 10 }; }
+  else if (kind === "unlock") { path = "api/requests/unlock"; body = { session: o.sessionId }; }
   else if (kind === "restore") { path = "api/requests/restore"; body = { store: o.store, seq: o.seq }; }
   else { toast("This needs the Jarvis 2 app on the iPhone.", "info"); return false; }
   try {
-    const r = await api<{ id: string; duplicate: boolean }>("POST", path, body);
+    const r = await api<{ id: string; duplicate?: boolean }>("POST", path, body);
     toast(r.duplicate ? "Already in the Inbox on the iPhone." : "Sent to the Inbox: approve it in the Jarvis 2 app.", "ok");
     refresh(false); settle(5000);
     return true;

@@ -29,7 +29,7 @@ function Banners() {
   return (
     <View nativeID="banners">
       {!!st.loadError && <Callout color="red" mb={3}>{"Can't reach the router: " + st.loadError}</Callout>}
-      {st.loaded && !st.core.up && <Callout color="amber" mb={3} id="banner-core">Core not answering: no create, resume or approve.</Callout>}
+      {st.loaded && !st.secrets.up && <Callout color="amber" mb={3} id="banner-secrets">Secrets not answering: no create, resume or approve.</Callout>}
       {dead.length > 0 && <Callout color="red" mb={3} id="banner-creds">
         <P size={2} weight="bold" color="red">Claude login failed</P>
         <Rows><Row label="Sessions"><BadgeList color="red" items={dead.map(sessionTitle)} /></Row></Rows>

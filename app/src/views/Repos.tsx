@@ -1,5 +1,5 @@
 // Deyao's repos, in Settings (the router's list, GET api/repos / api/state `repos`). Each is a GitHub repo with
-// its own deploy key: Add opens the shell's secure page (kind repo-key), where one Face ID lets the core make an
+// its own deploy key: Add opens the shell's secure page (kind repo-key), where one Face ID lets secrets make an
 // SSH key, put it on the repo as a read/write deploy key and keep the private half in the store github-<repo>;
 // Remove deletes both the same way. Sessions that include a repo's store clone, pull and push it over SSH. The
 // picker lists what the router's read-only GitHub token can see (api/github/repos). On the web: view only.
@@ -82,7 +82,7 @@ function Picker({ onPick, disabled }: { onPick: (r: GhRepo) => void; disabled: b
   );
 }
 
-// the shell's secure page for a repo's key; `done` once the core answered (the list follows the router's poll)
+// the shell's secure page for a repo's key; `done` once secrets answered (the list follows the router's poll)
 function openKeyPage(action: "add" | "remove", repo: string, key: string, after?: () => void) {
   pend(key, action === "add" ? "Adding…" : "Removing…");
   requestSecure("repo-key", { action, repo, sensitive: false }, (r) => {
@@ -96,7 +96,7 @@ function openKeyPage(action: "add" | "remove", repo: string, key: string, after?
 function RepoRow({ x }: { x: RepoEntry }) {
   const stores = useStore((s) => s.stores);
   const store = stores.items.find((s) => s.name === x.store);
-  // the core's store list says whether the key is there (a Recover brings no repo keys back: make it again)
+  // secrets' store list says whether the key is there (a Recover brings no repo keys back: make it again)
   const missing = stores.loaded && !store;
   const sensitive = store ? store.sensitive : !!x.sensitive;
   return (
