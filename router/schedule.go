@@ -1,20 +1,17 @@
 package main
 
-// Wakeups, crons and the resume prompt (Jarvis 1's lib/wakeup.js, lib/cron.js and server.js "scheduled wakeup",
-// "recurring wakeup", "resume prompt"): at a due time the router delivers a prompt into the session as a peer
-// message (peer.go), resuming it first when it is paused. Same request and response shapes as Jarvis 1.
+// Wakeups and crons (Jarvis 1's lib/wakeup.js, lib/cron.js, in the target design's shape: docs/API-grants.md "due").
+// A session arms one through its machine's local API proxy, which keeps the prompt in the guard's records (in the
+// snapshot) and sends the router only an id, a time and a period. At a due time the router sends the machine a
+// content-free due signal {kind, id, run} — resuming the session first when it is paused — and the guard types the
+// text it kept, by its own replay rules. The app can list and cancel them, never arm one: there would be no text on
+// the machine to deliver.
 //
 // They belong to their session (persisted.Schedules, keyed by session id) and end with it: once the session is
 // gone from the list, the tick drops them. A session with pending ones must not be destroyed by an automatic
 // path (PendingSchedule).
-//
-// Delivery runs as the "scheduler" holder (grants.go), so the machine decides: a session approves the scheduler
-// for itself when it arms one (the machine's local API proxy writes its allow list), or Deyao signs a grant or a
-// standing rule. A session holding a sensitive store accepts only a phone grant: its due wakeup DMs Deyao once
-// and stays pending until a grant lets it through.
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -36,46 +33,47 @@ const (
 	cronDefaultEvery   = 24 * 60 * 60
 	cronMaxEvery       = 90 * 24 * 60 * 60
 	cronMaxUntil       = 400 * 24 * time.Hour
-	resumePromptMax    = 4000
+	resumePromptMax    = 4000 // a resume's prompt (in a phone-made source's settings)
 	scheduleTick       = 30 * time.Second
 	scheduleMaxAttempt = 5
 )
 
 var scheduleNameRE = regexp.MustCompile(`^[A-Za-z0-9_-]{1,40}$`)
 
+// textIDRE: the id the guard gave a wakeup, cron or watch when the session armed it (what a due signal names)
+var textIDRE = regexp.MustCompile(`^[0-9a-f]{32}$`)
+
+// errAppArmed: the app can't arm one: the text lives on the machine, put there by the session
+var errAppArmed = &badRequest{"a wakeup, cron or watch is armed by the session itself (its machine keeps the text): the app can list and cancel them"}
+
 type Wakeup struct {
 	Name    string `json:"name"`
-	At      int64  `json:"at"` // ms epoch
-	Prompt  string `json:"prompt"`
+	ID      string `json:"id"`      // the guard's id for its text
+	At      int64  `json:"at"`      // ms epoch
 	ArmedAt int64  `json:"armedAt"` // ms epoch: the arming's identity (compare-and-clear)
-	// Signed: the session's own request that armed it, as its machine signed it (nil = armed from the app): what
-	// vouches for the delivery to a machine whose cert vouches (vouch.go)
-	Signed *SignedRequest `json:"signed,omitempty"`
 }
 
 type Cron struct {
-	Name        string         `json:"name"`
-	Prompt      string         `json:"prompt"`
-	Every       int64          `json:"every"` // seconds
-	TZ          string         `json:"tz"`
-	NextAt      int64          `json:"nextAt"`          // ms epoch
-	Until       *int64         `json:"until,omitempty"` // ms epoch
-	ArmedAt     int64          `json:"armedAt"`
-	Runs        int            `json:"runs"`
-	LastFiredAt *int64         `json:"lastFiredAt,omitempty"`
-	Signed      *SignedRequest `json:"signed,omitempty"` // as Wakeup.Signed
+	Name        string `json:"name"`
+	ID          string `json:"id"`    // the guard's id for its text
+	Every       int64  `json:"every"` // seconds
+	TZ          string `json:"tz"`
+	NextAt      int64  `json:"nextAt"`          // ms epoch
+	Until       *int64 `json:"until,omitempty"` // ms epoch
+	ArmedAt     int64  `json:"armedAt"`
+	Runs        int    `json:"runs"` // run numbers count up from 1 (the due signal's run is Runs+1)
+	LastFiredAt *int64 `json:"lastFiredAt,omitempty"`
 }
 
-// Schedule: one session's wakeups, crons and pending resume prompt
+// Schedule: one session's wakeups, crons and watches
 type Schedule struct {
-	Wakeups      map[string]*Wakeup `json:"wakeups,omitempty"`
-	Crons        map[string]*Cron   `json:"crons,omitempty"`
-	ResumePrompt string             `json:"resumePrompt,omitempty"`
-	Watches      map[string]*Watch  `json:"watches,omitempty"` // watches.go
+	Wakeups map[string]*Wakeup `json:"wakeups,omitempty"`
+	Crons   map[string]*Cron   `json:"crons,omitempty"`
+	Watches map[string]*Watch  `json:"watches,omitempty"` // watches.go
 }
 
 func (s *Schedule) empty() bool {
-	return len(s.Wakeups) == 0 && len(s.Crons) == 0 && s.ResumePrompt == "" && len(s.Watches) == 0
+	return len(s.Wakeups) == 0 && len(s.Crons) == 0 && len(s.Watches) == 0
 }
 
 // sched: the session's schedule, made on demand (callers hold the state lock)
@@ -158,17 +156,26 @@ func wakeupName(v any) (string, error) {
 	return s, nil
 }
 
+// textID: the guard's id in a request (the proxy adds it; the text stays on the machine)
+func textID(b map[string]any) (string, error) {
+	id, _ := b["id"].(string)
+	if !textIDRE.MatchString(id) {
+		return "", bad("id: the machine's id for the text (32 hex); arm through the session's local API")
+	}
+	if _, ok := b["prompt"]; ok {
+		return "", bad("the prompt stays on the machine: the router takes only its id")
+	}
+	return id, nil
+}
+
 func normalizeWakeup(b map[string]any, now time.Time) (*Wakeup, error) {
 	name, err := wakeupName(b["name"])
 	if err != nil {
 		return nil, err
 	}
-	prompt := cleanPrompt(b["prompt"])
-	if prompt == "" {
-		return nil, bad("prompt is required — what the session should do when it wakes")
-	}
-	if len([]rune(prompt)) > scheduleMaxPrompt {
-		return nil, bad("prompt longer than %d characters", scheduleMaxPrompt)
+	id, err := textID(b)
+	if err != nil {
+		return nil, err
 	}
 	ms := now.UnixMilli()
 	var at int64
@@ -191,7 +198,7 @@ func normalizeWakeup(b map[string]any, now time.Time) (*Wakeup, error) {
 	if at-ms > wakeupMaxDelay.Milliseconds() {
 		return nil, bad("the wakeup is more than %d days away", int(wakeupMaxDelay.Hours()/24))
 	}
-	return &Wakeup{Name: name, At: at, Prompt: prompt, ArmedAt: ms}, nil
+	return &Wakeup{Name: name, ID: id, At: at, ArmedAt: ms}, nil
 }
 
 // nextTimeOfDay: the next instant after now whose wall-clock time in loc is hh:mm
@@ -214,12 +221,9 @@ func normalizeCron(b map[string]any, now time.Time) (*Cron, error) {
 	if !scheduleNameRE.MatchString(name) {
 		return nil, bad("name must be 1-40 chars of letters, digits, _ or -")
 	}
-	prompt := cleanPrompt(b["prompt"])
-	if prompt == "" {
-		return nil, bad("prompt is required — what the session should do each time")
-	}
-	if len([]rune(prompt)) > scheduleMaxPrompt {
-		return nil, bad("prompt longer than %d characters", scheduleMaxPrompt)
+	id, err := textID(b)
+	if err != nil {
+		return nil, err
 	}
 	every := int64(cronDefaultEvery)
 	if v, ok := b["everySeconds"]; ok && v != nil {
@@ -271,7 +275,7 @@ func normalizeCron(b map[string]any, now time.Time) (*Cron, error) {
 	default:
 		next = ms + every*1000
 	}
-	c := &Cron{Name: name, Prompt: prompt, Every: every, TZ: tz, NextAt: next, ArmedAt: ms}
+	c := &Cron{Name: name, ID: id, Every: every, TZ: tz, NextAt: next, ArmedAt: ms}
 	if v, ok := b["until"]; ok && v != nil && v != "" {
 		u, ok := parseTime(v)
 		if !ok || u <= next {
@@ -310,11 +314,11 @@ func advanceCron(c *Cron, now time.Time) (int64, bool) {
 func iso(ms int64) string { return time.UnixMilli(ms).UTC().Format("2006-01-02T15:04:05.000Z") }
 
 func wakeupView(w *Wakeup) map[string]any {
-	return map[string]any{"name": w.Name, "at": w.At, "atIso": iso(w.At), "prompt": w.Prompt}
+	return map[string]any{"name": w.Name, "id": w.ID, "at": w.At, "atIso": iso(w.At)}
 }
 
 func cronView(c *Cron) map[string]any {
-	v := map[string]any{"name": c.Name, "prompt": c.Prompt, "everySeconds": c.Every, "tz": c.TZ, "nextAt": c.NextAt,
+	v := map[string]any{"name": c.Name, "id": c.ID, "everySeconds": c.Every, "tz": c.TZ, "nextAt": c.NextAt,
 		"nextAtIso": iso(c.NextAt), "until": nil, "untilIso": nil, "armedAtIso": iso(c.ArmedAt), "runs": c.Runs, "lastFiredIso": nil}
 	if c.TZ == "" {
 		v["tz"] = "UTC"
@@ -328,8 +332,7 @@ func cronView(c *Cron) map[string]any {
 	return v
 }
 
-// scheduleView: a session's wakeups, crons and queued resume prompt in its /api/state view (Jarvis 1 lists
-// them on the card; callers hold the state lock)
+// scheduleView: a session's wakeups, crons and watches in its /api/state view (callers hold the state lock)
 func scheduleView(d *persisted, sid string, v map[string]any) {
 	ws, cs := []map[string]any{}, []map[string]any{}
 	if sc := d.Schedules[sid]; sc != nil {
@@ -338,9 +341,6 @@ func scheduleView(d *persisted, sid string, v map[string]any) {
 		}
 		for _, c := range sortedCrons(sc) {
 			cs = append(cs, cronView(c))
-		}
-		if sc.ResumePrompt != "" {
-			v["resumePrompt"] = sc.ResumePrompt
 		}
 	}
 	v["wakeups"], v["crons"], v["watches"] = ws, cs, watchesViewOf(d, sid)
@@ -412,7 +412,7 @@ func (r *Router) ArmWakeup(sid string, w *Wakeup) error {
 	})
 	if err == nil {
 		schedRun.forget(sid + "/w/" + w.Name)
-		log.Printf("[wakeup] %s %q scheduled for %s: %s", sid, w.Name, iso(w.At), trimTo(w.Prompt, 80))
+		log.Printf("[wakeup] %s %q (%s) scheduled for %s", sid, w.Name, w.ID, iso(w.At))
 	}
 	return err
 }
@@ -473,7 +473,7 @@ func (r *Router) ArmCron(sid string, c *Cron) error {
 	})
 	if err == nil {
 		schedRun.forget(sid + "/c/" + c.Name)
-		log.Printf("[cron] %s armed %q every %ds, next %s: %s", sid, c.Name, c.Every, iso(c.NextAt), trimTo(c.Prompt, 80))
+		log.Printf("[cron] %s armed %q (%s) every %ds, next %s", sid, c.Name, c.ID, c.Every, iso(c.NextAt))
 	}
 	return err
 }
@@ -489,37 +489,6 @@ func (r *Router) CancelCron(sid, name string) error {
 	})
 	schedRun.forget(sid + "/c/" + name)
 	return err
-}
-
-// resumeWithPrompt: the prompt is queued BEFORE the resume starts, so the resume sees it (a vouching core carries it
-// in the successor's cert, which the phone approves); queued after, the resume's goroutine could miss it and the
-// prompt would reach the machine unsigned. A refused resume puts the earlier queued prompt back.
-func (r *Router) resumeWithPrompt(sid string, upgrade bool, prompt string) error {
-	if prompt == "" {
-		return r.Resume(sid, upgrade)
-	}
-	var before string
-	r.st.Do(func(d *persisted) {
-		if sc := d.Schedules[sid]; sc != nil {
-			before = sc.ResumePrompt
-		}
-	})
-	r.SetResumePrompt(sid, prompt)
-	if err := r.Resume(sid, upgrade); err != nil {
-		r.SetResumePrompt(sid, before)
-		return err
-	}
-	return nil
-}
-
-// SetResumePrompt: delivered once the session is started again (resumePromptTick)
-func (r *Router) SetResumePrompt(sid, prompt string) {
-	r.st.Do(func(d *persisted) {
-		if d.Sessions[sid] != nil {
-			sched(d, sid).ResumePrompt = prompt
-		}
-	})
-	schedRun.forget(sid + "/resume")
 }
 
 // PendingSchedule: the session's armed wakeups, crons and watches ("wakeup <name>", "cron <name>", "watch <name>"). Automatic paths
@@ -578,7 +547,6 @@ type scheduler struct {
 type attempt struct {
 	n      int
 	nextAt time.Time
-	dmSent bool // a grant refusal was reported to Deyao (once per arming)
 }
 
 func (s *scheduler) init() {
@@ -617,8 +585,8 @@ func (s *scheduler) release(key string) {
 	s.mu.Unlock()
 }
 
-// failed: record a failed attempt; refused = a grant refusal (never dropped, DM once). Returns (drop, dm).
-func (s *scheduler) failed(key string, refused bool, now time.Time) (drop, dm bool) {
+// failed: record a failed attempt → drop (after scheduleMaxAttempt)
+func (s *scheduler) failed(key string, now time.Time) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	a := s.attempts[key]
@@ -626,26 +594,17 @@ func (s *scheduler) failed(key string, refused bool, now time.Time) (drop, dm bo
 		a = &attempt{}
 		s.attempts[key] = a
 	}
-	if refused {
-		a.nextAt = now.Add(2 * time.Minute)
-		dm = !a.dmSent
-		a.dmSent = true
-		return false, dm
-	}
 	a.n++
 	if a.n >= scheduleMaxAttempt {
 		delete(s.attempts, key)
-		return true, true
+		return true
 	}
 	a.nextAt = now.Add(time.Duration(min(a.n, 4)) * 2 * time.Minute)
-	return false, false
+	return false
 }
 
 // schedRun: the scheduler's in-memory run state (lost on a restart, which only makes due items due again)
 var schedRun scheduler
-
-// errSkip: not an attempt (the session is busy with another action); the next tick tries again
-var errSkip = errors.New("busy")
 
 func (r *Router) scheduleLoop() {
 	for {
@@ -676,13 +635,7 @@ func (r *Router) scheduleTick(now time.Time) {
 			if ss.State == "destroyed" || ss.State == "destroying" {
 				continue
 			}
-			label := ss.Label
-			if label == "" {
-				label = ss.Title
-			}
-			if label == "" {
-				label = sid
-			}
+			label := sessionTitle(*ss)
 			for _, w := range s.Wakeups {
 				if w.At <= now.UnixMilli() {
 					items = append(items, due{sid, "w", w.Name, w.ArmedAt, label})
@@ -693,17 +646,6 @@ func (r *Router) scheduleTick(now time.Time) {
 					items = append(items, due{sid, "c", c.Name, c.ArmedAt, label})
 				}
 			}
-			if s.ResumePrompt != "" {
-				switch ss.State {
-				case "started":
-					items = append(items, due{sid, "resume", "", 0, label})
-				case "paused", "failed":
-					// the start that should have carried it failed or was rejected: it never turns up after
-					// some later, unrelated start
-					log.Printf("[resume-prompt] %s: the session is %s; prompt dropped", sid, ss.State)
-					s.ResumePrompt = ""
-				}
-			}
 			if s.empty() {
 				delete(d.Schedules, sid)
 			}
@@ -711,9 +653,6 @@ func (r *Router) scheduleTick(now time.Time) {
 	})
 	for _, it := range items {
 		key := it.sid + "/" + it.kind + "/" + it.name
-		if it.kind == "resume" {
-			key = it.sid + "/resume"
-		}
 		if !schedRun.claim(key, now) {
 			continue
 		}
@@ -725,12 +664,9 @@ func (r *Router) scheduleTick(now time.Time) {
 			case "w":
 				what = fmt.Sprintf("Scheduled wakeup “%s” for session “%s”", it.name, it.label)
 				err = r.fireWakeup(it.sid, it.name, it.armedAt)
-			case "c":
+			default:
 				what = fmt.Sprintf("Recurring wakeup “%s” for session “%s”", it.name, it.label)
 				err = r.fireCron(it.sid, it.name, it.armedAt)
-			default:
-				what = fmt.Sprintf("The prompt for the resumed session “%s”", it.label)
-				err = r.fireResumePrompt(it.sid)
 			}
 			if err == nil {
 				schedRun.forget(key)
@@ -740,13 +676,9 @@ func (r *Router) scheduleTick(now time.Time) {
 				log.Printf("[schedule] %s: %v — next tick", key, err)
 				return
 			}
-			refused := isGrantRefusal(err)
-			drop, dm := schedRun.failed(key, refused, time.Now())
-			log.Printf("[schedule] %s failed (refused=%v drop=%v): %v", key, refused, drop, err)
-			switch {
-			case refused && dm:
-				r.DM(fmt.Sprintf("%s is due but the session doesn't let the scheduler in (%s). It stays pending; a phone grant for the scheduler lets it through.", what, trimTo(err.Error(), 200)))
-			case drop:
+			drop := schedRun.failed(key, time.Now())
+			log.Printf("[schedule] %s failed (drop=%v): %v", key, drop, err)
+			if drop {
 				r.dropFailed(it.sid, it.kind, it.name, it.armedAt)
 				r.DM(fmt.Sprintf("%s could not be delivered after %d attempts: %s", what, scheduleMaxAttempt, trimTo(err.Error(), 300)))
 			}
@@ -754,7 +686,7 @@ func (r *Router) scheduleTick(now time.Time) {
 	}
 }
 
-// dropFailed: after too many failures a wakeup or resume prompt is dropped; a cron skips this occurrence
+// dropFailed: after too many failures a wakeup is dropped; a cron skips this occurrence
 func (r *Router) dropFailed(sid, kind, name string, armedAt int64) {
 	r.st.Do(func(d *persisted) {
 		s := d.Schedules[sid]
@@ -774,11 +706,12 @@ func (r *Router) dropFailed(sid, kind, name string, armedAt int64) {
 					delete(s.Crons, name)
 				}
 			}
-		default:
-			s.ResumePrompt = ""
 		}
 	})
 }
+
+// deliverDueHook: a seam for tests (commands.go deliverDue)
+var deliverDueHook = func(r *Router, sid string, d Due) error { return r.deliverDue(sid, d) }
 
 func (r *Router) fireWakeup(sid, name string, armedAt int64) error {
 	var w Wakeup
@@ -790,11 +723,7 @@ func (r *Router) fireWakeup(sid, name string, armedAt int64) error {
 	if w.Name == "" || w.ArmedAt != armedAt || w.At > time.Now().UnixMilli() {
 		return nil // cancelled, replaced or already fired
 	}
-	err := errNotVouched
-	if w.Signed != nil { // vouch.go: the session's own signed request, attested by the core
-		err = deliverVouchedHook(r, sid, Delivery{Kind: "wakeup", Request: w.Signed})
-	}
-	if err != nil {
+	if err := deliverDueHook(r, sid, Due{Kind: "wakeup", ID: w.ID}); err != nil {
 		return err
 	}
 	log.Printf("[wakeup] %s %q delivered", sid, name)
@@ -816,11 +745,7 @@ func (r *Router) fireCron(sid, name string, armedAt int64) error {
 	if c.Name == "" || c.ArmedAt != armedAt || c.NextAt > time.Now().UnixMilli() {
 		return nil
 	}
-	err := errNotVouched
-	if c.Signed != nil { // vouch.go: the session's own signed request, attested by the core; no shell needed
-		err = deliverVouchedHook(r, sid, Delivery{Kind: "cron", Request: c.Signed, Run: c.Runs + 1})
-	}
-	if err != nil {
+	if err := deliverDueHook(r, sid, Due{Kind: "cron", ID: c.ID, Run: c.Runs + 1}); err != nil {
 		return err
 	}
 	log.Printf("[cron] %s %q delivered", sid, name)
@@ -841,126 +766,4 @@ func (r *Router) fireCron(sid, name string, armedAt int64) error {
 		cur.NextAt, cur.Runs, cur.LastFiredAt = next, cur.Runs+1, &ms
 	})
 	return nil
-}
-
-func (r *Router) fireResumePrompt(sid string) error {
-	var text string
-	r.st.Do(func(d *persisted) {
-		if s := d.Schedules[sid]; s != nil {
-			text = s.ResumePrompt
-		}
-	})
-	if text == "" {
-		return nil
-	}
-	if err := r.deliverToSession(sid, "deyao", text, ""); err != nil {
-		return err
-	}
-	log.Printf("[resume-prompt] %s delivered", sid)
-	r.st.Do(func(d *persisted) {
-		if s := d.Schedules[sid]; s != nil && s.ResumePrompt == text {
-			s.ResumePrompt = ""
-		}
-	})
-	return nil
-}
-
-// test seams
-var (
-	scheduleWaitStep = 5 * time.Second
-	scheduleWaitMax  = 10 * time.Minute
-	harnessUpMax     = 5 * time.Minute
-)
-
-// deliverToSession: resume the session when it is paused, wait for it, then deliver (after: a shell step that
-// runs in the same exec after the delivery)
-func (r *Router) deliverToSession(sid, from, text, after string) error {
-	state, sensitive := r.sessionState(sid)
-	switch state {
-	case "":
-		return errNoSession
-	case "paused":
-		if sensitive && !r.hasPhoneGrant(sid, "scheduler") {
-			// it would only be refused: don't start a machine for nothing
-			return errors.New("the machine refused or failed: this session holds a sensitive store: only a phone grant opens a shell")
-		}
-		if err := r.Resume(sid, false); err != nil {
-			if errors.Is(err, errBusy) {
-				return errSkip
-			}
-			return err
-		}
-	case "pausing", "destroying", "approval":
-		return fmt.Errorf("%w: the session is %s", errSkip, state)
-	case "failed":
-		return errors.New("the session has failed")
-	}
-	if err := r.waitStarted(sid); err != nil {
-		return err
-	}
-	// the harness may still be booting: retry while nobody is listening yet
-	deadline := time.Now().Add(harnessUpMax)
-	for {
-		err := deliverHookOrPeer(r, sid, from, text, after)
-		if err == nil || !errors.Is(err, errNotUp) || time.Now().After(deadline) {
-			return err
-		}
-		time.Sleep(scheduleWaitStep * 2)
-	}
-}
-
-// deliverVouchedHook: a seam for tests (vouch.go deliverVouched)
-var deliverVouchedHook = func(r *Router, sid string, d Delivery) error { return r.deliverVouched(sid, d) }
-
-// deliverHookOrPeer: a seam for tests
-var deliverHookOrPeer = func(r *Router, sid, from, text, after string) error {
-	return r.deliverPeer(sid, from, text, after)
-}
-
-func (r *Router) waitStarted(sid string) error {
-	deadline := time.Now().Add(scheduleWaitMax)
-	for {
-		state, _ := r.sessionState(sid)
-		switch state {
-		case "started":
-			return nil
-		case "", "paused", "failed", "destroying":
-			var e string
-			r.st.Do(func(d *persisted) {
-				if s := d.Sessions[sid]; s != nil {
-					e = s.Error
-				}
-			})
-			return fmt.Errorf("the session didn't start (state %q %s)", state, e)
-		}
-		if time.Now().After(deadline) {
-			return fmt.Errorf("the session is still %s after %s", state, scheduleWaitMax)
-		}
-		time.Sleep(scheduleWaitStep)
-	}
-}
-
-func (r *Router) sessionState(sid string) (state string, sensitive bool) {
-	r.st.Do(func(d *persisted) {
-		if s := d.Sessions[sid]; s != nil {
-			state = s.State
-			if s.Cert != nil {
-				var c struct {
-					Sensitive bool `json:"sensitive"`
-				}
-				json.Unmarshal([]byte(s.Cert.Payload), &c)
-				sensitive = c.Sensitive
-			}
-		}
-	})
-	return
-}
-
-func (r *Router) hasPhoneGrant(sid, holder string) bool {
-	for _, g := range r.Grants(sid) {
-		if g.Holder == holder && g.Kind == "grant" {
-			return true
-		}
-	}
-	return false
 }

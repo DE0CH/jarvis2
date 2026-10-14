@@ -14,13 +14,14 @@ package main
 //	  restore-<session id>.json     which of the files are this session's (the dir may be shared)
 //	  jarvis2/snapshot.tar.gz       the machine-signed snapshot, as it came from the machine
 //	  jarvis2/snapshot.sig          its signature: the signer's signing key over sha256hex(snapshot)
-//	  jarvis2/cert.json             the signer's core-signed succession cert (names its signing key)
-//	  jarvis2/core-cert.json        the master-signed statement naming the core's key
+//	  jarvis2/spawn.json            the signer's notarized spawn cert (source, M, ⊤) (names its signing key)
+//	  jarvis2/chain.json            the session's whole chain: every notarized cert and grant (docstore.go)
+//	  jarvis2/roster.json           the kernel parts' signing keys as they answered at the archive
 //
 // and adds the session to claude-records/.index/jarvis2-destroyed-sessions.json (Jarvis 1 keeps its own
 // index, .index/destroyed-sessions.json; a separate file keeps each Jarvis's Previous list and purge to its
-// own sessions). A reader verifies jarvis2/: core-cert against the master key → cert against the core key →
-// snapshot against the cert's machine signing key.
+// own sessions). A reader verifies jarvis2/: the spawn cert against the spawner's key (and its notarization) →
+// the snapshot against the cert's machine signing key.
 //
 // Restore (a destroyed session back as a NEW line): see restoreRecord.
 
@@ -134,51 +135,35 @@ func (r *Router) pickArchiveDir(box *StorageBox, s *Session, title string) (stri
 
 // ---- the snapshot to archive ---------------------------------------------------------------------------
 
-// latestSnapshot: the newest snapshot any of the session's machines left on the volume, and that machine's
-// cert (its signing key checks the snapshot)
-func (r *Router) latestSnapshot(sessionID string) (machine string, cert *Doc, at time.Time) {
-	var machines []string
-	certs := map[string]*Doc{}
+// SnapRef: a snapshot on the volume and the machine that signed it
+type SnapRef struct {
+	Sha, Sig, Machine, Spawn string
+	At                       time.Time
+}
+
+// latestSnapshot: the newest snapshot any of the session's machines left on the volume, with its signer (whose spawn
+// cert names the key that checks it)
+func (r *Router) latestSnapshot(sessionID string) SnapRef {
+	var cands []SnapRef
 	r.st.Do(func(d *persisted) {
 		for m, sid := range d.Machines {
-			if sid == sessionID {
-				machines = append(machines, m)
-				certs[m] = d.Certs[m]
+			if st := d.Started[m]; sid == sessionID && st != nil && st.Snapshot != "" {
+				cands = append(cands, SnapRef{Sha: st.Snapshot, Sig: st.SnapshotSig, Machine: m, Spawn: st.Spawn})
 			}
 		}
 	})
-	for _, m := range machines {
-		p := r.st.snapshotPath(m)
-		fi, err := os.Stat(p)
-		if err != nil || certs[m] == nil {
+	var best SnapRef
+	for _, c := range cands {
+		fi, err := os.Stat(r.st.snapshotPath(c.Sha))
+		if err != nil {
 			continue
 		}
-		if _, err := os.Stat(p + ".sig"); err != nil {
-			continue
-		}
-		if machine == "" || fi.ModTime().After(at) {
-			machine, cert, at = m, certs[m], fi.ModTime()
+		if best.Sha == "" || fi.ModTime().After(best.At) {
+			c.At = fi.ModTime()
+			best = c
 		}
 	}
-	return
-}
-
-// ---- destroy: snapshot + kill, then archive ------------------------------------------------------------
-
-// snapshotAndKill: what Pause does to a running machine (flows.go); false (state failed) when the kill fails
-func (r *Router) snapshotAndKill(id, machine string) bool {
-	r.lastSnapshot(id, machine)
-	if _, err := r.killMachine(machine); err != nil { // vouch.go: with the snapshot's hash
-		r.setState(id, "failed", "kill: "+err.Error())
-		return false
-	}
-	now := time.Now().UTC()
-	r.st.Do(func(d *persisted) {
-		if x := d.Sessions[id]; x != nil {
-			x.MachineID, x.PausedAt, x.Status = "", &now, ""
-		}
-	})
-	return true
+	return best
 }
 
 // archive: the session's latest snapshot onto the Storage Box (layout at the top). nil when there is
@@ -188,7 +173,7 @@ func (r *Router) archive(id string) (*ArchiveInfo, error) {
 	if recordsOff() {
 		return nil, nil
 	}
-	if m, _, _ := r.latestSnapshot(id); m == "" {
+	if r.latestSnapshot(id).Sha == "" {
 		log.Printf("session %s: no snapshot to archive", id)
 		return nil, nil
 	}
@@ -218,12 +203,13 @@ func (r *Router) archive(id string) (*ArchiveInfo, error) {
 }
 
 func (r *Router) archiveSnapshot(box *StorageBox, s *Session) (*ArchiveInfo, error) {
-	machine, cert, at := r.latestSnapshot(s.ID)
-	if machine == "" {
+	ref := r.latestSnapshot(s.ID)
+	if ref.Sha == "" {
 		log.Printf("session %s: no snapshot to archive", s.ID)
 		return nil, nil
 	}
-	snap := r.st.snapshotPath(machine)
+	machine, at := ref.Machine, ref.At
+	snap := r.st.snapshotPath(ref.Sha)
 	facts, err := readSnapshotFacts(snap)
 	if err != nil {
 		return nil, fmt.Errorf("reading the snapshot: %w", err)
@@ -248,24 +234,26 @@ func (r *Router) archiveSnapshot(box *StorageBox, s *Session) (*ArchiveInfo, err
 		return nil, err
 	}
 	// the signed snapshot and what verifies it
-	sig, err := os.ReadFile(snap + ".sig")
-	if err != nil {
-		return nil, err
-	}
-	certJSON, _ := json.Marshal(cert)
+	spawn, _ := r.docs.Notarized(ref.Spawn)
+	spawnJSON, _ := json.Marshal(spawn)
 	if err := box.PutFile(dir+"/jarvis2/snapshot.tar.gz", snap); err != nil {
 		return nil, err
 	}
-	if err := box.PutBytes(dir+"/jarvis2/snapshot.sig", []byte(strings.TrimSpace(string(sig)))); err != nil {
+	if err := box.PutBytes(dir+"/jarvis2/snapshot.sig", []byte(ref.Sig)); err != nil {
 		return nil, err
 	}
-	if err := box.PutBytes(dir+"/jarvis2/cert.json", certJSON); err != nil {
+	if err := box.PutBytes(dir+"/jarvis2/spawn.json", spawnJSON); err != nil {
 		return nil, err
 	}
-	if b := r.coreCert(); b != nil {
-		if err := box.PutBytes(dir+"/jarvis2/core-cert.json", b); err != nil {
+	if cv, err := r.chainView(s.ID); err == nil {
+		b, _ := json.Marshal(cv)
+		if err := box.PutBytes(dir+"/jarvis2/chain.json", b); err != nil {
 			return nil, err
 		}
+	}
+	rb, _ := json.Marshal(r.k.Roster())
+	if err := box.PutBytes(dir+"/jarvis2/roster.json", rb); err != nil {
+		return nil, err
 	}
 	info := &ArchiveInfo{Dir: dir, Title: title, Transcripts: up.transcripts, Artifacts: up.artifacts, Signer: machine, SnapshotAt: at.UTC()}
 	if facts.Tail != nil {
@@ -276,7 +264,7 @@ func (r *Router) archiveSnapshot(box *StorageBox, s *Session) (*ArchiveInfo, err
 		"id": s.ID, "jarvis": 2, "title": title, "label": s.Label, "aiTitle": s.Title, "created": s.Created,
 		"destroyedAt": now, "archiveDir": dir, "environment": strings.Join(s.Stores, ","), "stores": s.Stores,
 		"repos": s.Repos, "model": s.Model, "permissionMode": s.PermissionMode, "size": s.Size, "harness": s.Harness,
-		"image": s.Image, "line": certField(cert, "line"), "snapshotMachine": machine, "snapshotAt": info.SnapshotAt,
+		"image": s.Image, "snapshotSha256": ref.Sha, "snapshotMachine": machine, "snapshotAt": info.SnapshotAt,
 		"unresolvedArtifactLinks": up.unresolved,
 	}
 	mb, _ := json.MarshalIndent(meta, "", " ")
@@ -284,7 +272,7 @@ func (r *Router) archiveSnapshot(box *StorageBox, s *Session) (*ArchiveInfo, err
 		return nil, err
 	}
 	man, _ := json.Marshal(map[string]any{"id": s.ID, "archiveDir": dir, "transcripts": up.transcripts, "artifacts": up.artifactNames,
-		"snapshot": "jarvis2/snapshot.tar.gz", "signer": machine})
+		"snapshot": "jarvis2/snapshot.tar.gz", "snapshotSha256": ref.Sha, "signer": machine})
 	if err := box.PutBytes(dir+"/restore-"+s.ID+".json", man); err != nil {
 		return nil, err
 	}
@@ -513,8 +501,8 @@ func parseRepoChanges(text string) []RepoChange {
 	return out
 }
 
-// Changes: a running session's repos (a command under the archive holder's grant), or a paused session's as
-// its last snapshot recorded them
+// Changes: a running session's repos (a command under a terminal add-on, while one is open), or a paused session's
+// as its last snapshot recorded them
 func (r *Router) Changes(id string) map[string]any {
 	var s Session
 	r.st.Do(func(d *persisted) {
@@ -529,7 +517,7 @@ func (r *Router) Changes(id string) map[string]any {
 	case s.ID == "":
 		return no("no such session")
 	case s.MachineID != "" && s.State == "started":
-		res, err := r.Exec(id, "archive", repoChangesSH, 20*time.Second)
+		res, err := r.Shell(id, repoChangesSH, 20*time.Second)
 		if err != nil {
 			return no(err.Error())
 		}
@@ -546,11 +534,11 @@ func (r *Router) snapshotChanges(id string) map[string]any {
 	no := func(reason string) map[string]any {
 		return map[string]any{"checked": false, "reason": reason, "repos": []RepoChange{}}
 	}
-	m, _, _ := r.latestSnapshot(id)
-	if m == "" {
+	ref := r.latestSnapshot(id)
+	if ref.Sha == "" {
 		return no("it has no pause snapshot")
 	}
-	facts, err := readSnapshotFacts(r.st.snapshotPath(m))
+	facts, err := readSnapshotFacts(r.st.snapshotPath(ref.Sha))
 	if err != nil {
 		return no(err.Error())
 	}
@@ -576,11 +564,11 @@ func (r *Router) PausedTail(id string) (*Tail, int, error) {
 	if s.MachineID != "" {
 		return nil, 409, fmt.Errorf("the session is %s, not paused — its pause snapshot (if any) is out of date", s.State)
 	}
-	m, _, _ := r.latestSnapshot(id)
-	if m == "" {
+	ref := r.latestSnapshot(id)
+	if ref.Sha == "" {
 		return nil, 404, errors.New("this session has no pause snapshot")
 	}
-	facts, err := readSnapshotFacts(r.st.snapshotPath(m))
+	facts, err := readSnapshotFacts(r.st.snapshotPath(ref.Sha))
 	if err != nil {
 		return nil, 500, err
 	}
@@ -755,25 +743,6 @@ func (r *Router) registerArchive(app appRoute, m machineRoute) {
 	})
 	m("POST /m/live-transcript", r.liveTranscript) // livesync.go
 	app("POST /api/records", r.indexRecord)        // records.go: an archive already on the Storage Box, by hand
-	m("GET /m/restore-snapshot", func(w http.ResponseWriter, req *http.Request, machine string, _ []byte) {
-		if id := r.importFor(machine); id != "" { // jarvis1import.go: an import's manifest (the cert names its hash)
-			r.serveImportManifest(w, id)
-			return
-		}
-		dir := r.restoreFilesFor(machine)
-		if dir == "" {
-			writeJSON(w, 404, map[string]string{"error": "no restore for this machine"})
-			return
-		}
-		sig, err := os.ReadFile(filepath.Join(dir, "snapshot.sig"))
-		if err != nil {
-			writeJSON(w, 404, map[string]string{"error": "no restore snapshot"})
-			return
-		}
-		w.Header().Set("X-Snapshot-Sig", strings.TrimSpace(string(sig)))
-		w.Header().Set("Content-Type", "application/gzip")
-		http.ServeFile(w, req, filepath.Join(dir, "snapshot.tar.gz"))
-	})
 }
 
 // sha256hex: what a machine signs for a snapshot

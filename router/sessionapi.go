@@ -9,14 +9,14 @@ package main
 // retiring itself.
 // Transcript search and the iCloud index: the box's own services (searchsvc.go). Device leases: leases.go; content
 // stores: content.go.
-// The shared Claude login (`/api/credentials`): claudelogin.go. Nothing is forwarded to Jarvis 1. The pull-secrets and
-// changes calls never reach the router: the machine answers them itself (it holds its secrets and its repos).
+// Nothing is forwarded to Jarvis 1. The secrets and changes calls never reach the router: the machine's proxy answers
+// them itself (it holds its secrets and its repos). The texts of wakeups, crons and watches stay on the machine too:
+// the router gets their ids (schedule.go).
 
 import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -34,11 +34,9 @@ func (r *Router) registerSessionAPI(app appRoute, m machineRoute) {
 	// ---- the app (Deyao) -------------------------------------------------------------------------------
 	app("GET /api/sessions/{id}/wakeup", func(w http.ResponseWriter, req *http.Request) { r.getWakeups(w, req.PathValue("id"), true) })
 	app("GET /api/sessions/{id}/wakeups", func(w http.ResponseWriter, req *http.Request) { r.getWakeups(w, req.PathValue("id"), false) })
-	for _, p := range []string{"POST /api/sessions/{id}/wakeup", "POST /api/sessions/{id}/wakeups"} {
-		app(p, func(w http.ResponseWriter, req *http.Request) {
-			b, _ := io.ReadAll(io.LimitReader(req.Body, 1<<20))
-			r.postWakeup(w, req.PathValue("id"), b, nil)
-		})
+	// arming from the app: there would be no text on the machine to deliver (the session's guard keeps it)
+	for _, p := range []string{"POST /api/sessions/{id}/wakeup", "POST /api/sessions/{id}/wakeups", "POST /api/sessions/{id}/crons"} {
+		app(p, func(w http.ResponseWriter, req *http.Request) { scheduleErr(w, errAppArmed) })
 	}
 	app("DELETE /api/sessions/{id}/wakeup", func(w http.ResponseWriter, req *http.Request) {
 		r.deleteWakeups(w, req.PathValue("id"), req.URL.Query().Get("name"), req.URL.Query().Get("all") == "1")
@@ -47,10 +45,6 @@ func (r *Router) registerSessionAPI(app appRoute, m machineRoute) {
 		r.deleteWakeups(w, req.PathValue("id"), req.PathValue("name"), false)
 	})
 	app("GET /api/sessions/{id}/crons", func(w http.ResponseWriter, req *http.Request) { r.getCrons(w, req.PathValue("id")) })
-	app("POST /api/sessions/{id}/crons", func(w http.ResponseWriter, req *http.Request) {
-		b, _ := io.ReadAll(io.LimitReader(req.Body, 1<<20))
-		r.postCron(w, req.PathValue("id"), b, nil)
-	})
 	app("DELETE /api/sessions/{id}/crons/{name}", func(w http.ResponseWriter, req *http.Request) {
 		r.deleteCron(w, req.PathValue("id"), req.PathValue("name"))
 	})
@@ -74,13 +68,9 @@ func (r *Router) registerSessionAPI(app appRoute, m machineRoute) {
 	}
 	own("GET /m/api/sessions/{id}/wakeup", func(w http.ResponseWriter, req *http.Request, sid string, _ []byte) { r.getWakeups(w, sid, true) })
 	own("GET /m/api/sessions/{id}/wakeups", func(w http.ResponseWriter, req *http.Request, sid string, _ []byte) { r.getWakeups(w, sid, false) })
-	// the session's own request, kept exactly as its machine signed it: what vouches for the delivery (vouch.go)
-	own("POST /m/api/sessions/{id}/wakeup", func(w http.ResponseWriter, req *http.Request, sid string, b []byte) {
-		r.postWakeup(w, sid, b, signedRequestOf(req, req.Header.Get("X-Machine"), b))
-	})
-	own("POST /m/api/sessions/{id}/wakeups", func(w http.ResponseWriter, req *http.Request, sid string, b []byte) {
-		r.postWakeup(w, sid, b, signedRequestOf(req, req.Header.Get("X-Machine"), b))
-	})
+	// armed through the machine's local proxy: the text stays on the machine, the router gets its id
+	own("POST /m/api/sessions/{id}/wakeup", func(w http.ResponseWriter, req *http.Request, sid string, b []byte) { r.postWakeup(w, sid, b) })
+	own("POST /m/api/sessions/{id}/wakeups", func(w http.ResponseWriter, req *http.Request, sid string, b []byte) { r.postWakeup(w, sid, b) })
 	own("DELETE /m/api/sessions/{id}/wakeup", func(w http.ResponseWriter, req *http.Request, sid string, _ []byte) {
 		r.deleteWakeups(w, sid, req.URL.Query().Get("name"), req.URL.Query().Get("all") == "1")
 	})
@@ -88,8 +78,29 @@ func (r *Router) registerSessionAPI(app appRoute, m machineRoute) {
 		r.deleteWakeups(w, sid, req.PathValue("name"), false)
 	})
 	own("GET /m/api/sessions/{id}/crons", func(w http.ResponseWriter, req *http.Request, sid string, _ []byte) { r.getCrons(w, sid) })
-	own("POST /m/api/sessions/{id}/crons", func(w http.ResponseWriter, req *http.Request, sid string, b []byte) {
-		r.postCron(w, sid, b, signedRequestOf(req, req.Header.Get("X-Machine"), b))
+	own("POST /m/api/sessions/{id}/crons", func(w http.ResponseWriter, req *http.Request, sid string, b []byte) { r.postCron(w, sid, b) })
+	// narrowing in place (addons.go): the session drops stores it no longer needs
+	own("POST /m/api/sessions/{id}/narrow", func(w http.ResponseWriter, req *http.Request, sid string, b []byte) {
+		var in struct {
+			Stores []string `json:"stores"`
+		}
+		json.Unmarshal(b, &in)
+		kept, err := r.Narrow(sid, in.Stores)
+		if err != nil {
+			writeErr(w, err)
+			return
+		}
+		writeJSON(w, 200, map[string]any{"ok": true, "stores": kept})
+	})
+	// the results of the commands Deyao approved for this session (addons.go)
+	own("GET /m/api/sessions/{id}/commands", func(w http.ResponseWriter, req *http.Request, sid string, _ []byte) {
+		var out []CommandRun
+		r.st.Do(func(d *persisted) {
+			if s := d.Sessions[sid]; s != nil {
+				out = append(out, s.Commands...)
+			}
+		})
+		writeJSON(w, 200, map[string]any{"commands": orEmptyC(out)})
 	})
 	own("DELETE /m/api/sessions/{id}/crons/{name}", func(w http.ResponseWriter, req *http.Request, sid string, _ []byte) {
 		r.deleteCron(w, sid, req.PathValue("name"))
@@ -107,39 +118,15 @@ func (r *Router) registerSessionAPI(app appRoute, m machineRoute) {
 		}
 		writeJSON(w, 202, map[string]any{"started": true, "phase": "destroying"})
 	})
-	// a session proposes a new session (Deyao, 2026-10-12: "launch a new session through jarvis 2"): the same line as
-	// the app's New session, so nothing starts until Deyao approves the core's succession from null with Face ID; the
-	// approval names the proposing session and carries its reason. No attachments (uploads are the app's).
+	// a session proposes a new session (Deyao, 2026-10-12: "launch a new session through jarvis 2"): the same draft as
+	// the app's New session, so nothing starts until Deyao signs (sink, source-x, P) with Face ID; the approval names
+	// the proposing session and carries its reason. No attachments (uploads are the app's).
 	own("POST /m/api/sessions", func(w http.ResponseWriter, req *http.Request, sid string, b []byte) {
-		r.proposeSession(w, Caller{Kind: "session", Session: sid}, sid, b, signedRequestOf(req, req.Header.Get("X-Machine"), b))
+		r.proposeSession(w, Caller{Kind: "session", Session: sid}, sid, b, filingOf(req))
 	})
 	own("/m/api/", func(w http.ResponseWriter, req *http.Request, sid string, _ []byte) {
 		writeJSON(w, 404, map[string]string{"error": fmt.Sprintf("Jarvis 2 doesn't serve %s %s", req.Method, strings.TrimPrefix(req.URL.Path, "/m"))})
 	})
-}
-
-// the machine-side proxy's address (machine/apiproxy.go) and placeholders for the Access/session-token variables
-// Jarvis 1's scripts insist on before calling; the proxy ignores them (a store's real values override these).
-// Not for OpenCode/OpenClaw: their harness scripts take CF_ACCESS_* as "publish the web UI through the
-// cf-tunnel" and would loop on a placeholder.
-const machineAPIURL = "http://127.0.0.1:7171"
-
-func init() {
-	envHooks = append(envHooks, func(_ *Router, s *Session, e map[string]string) {
-		sessionAPIEnv(e, s.Harness)
-		// cf-tunnel/agent.js would otherwise name the tunnel after Claude's own conversation id, which the
-		// Worker refuses for Jarvis 2 (only s+16 hex, with this session's proof)
-		e["TUNNEL_ID"] = s.ID
-	})
-}
-
-func sessionAPIEnv(e map[string]string, harness string) {
-	e["JARVIS_URL"] = machineAPIURL
-
-	e["SESSION_API_TOKEN"] = "jarvis2-local-proxy"
-	if !harnessSend[harness] {
-		e["CF_ACCESS_CLIENT_ID"], e["CF_ACCESS_CLIENT_SECRET"] = "jarvis2-local-proxy", "jarvis2-local-proxy"
-	}
 }
 
 // cleanResumePrompt: CRLF → LF, trimmed, at most resumePromptMax characters (multi-line kept)
@@ -149,20 +136,6 @@ func cleanResumePrompt(p string) (string, error) {
 		return "", fmt.Errorf("prompt longer than %d characters", resumePromptMax)
 	}
 	return p, nil
-}
-
-// machineSession: the session a machine currently runs (a paused or replaced machine has none)
-func (r *Router) machineSession(machine string) (string, error) {
-	var sid string
-	r.st.Do(func(d *persisted) {
-		if s := d.Sessions[d.Machines[machine]]; s != nil && s.MachineID == machine {
-			sid = s.ID
-		}
-	})
-	if sid == "" {
-		return "", errors.New("this machine isn't a running session")
-	}
-	return sid, nil
 }
 
 func scheduleErr(w http.ResponseWriter, err error) {
@@ -212,7 +185,7 @@ func (r *Router) getWakeups(w http.ResponseWriter, sid string, single bool) {
 	writeJSON(w, 200, map[string]any{"wakeup": first, "wakeups": views})
 }
 
-func (r *Router) postWakeup(w http.ResponseWriter, sid string, body []byte, signed *SignedRequest) {
+func (r *Router) postWakeup(w http.ResponseWriter, sid string, body []byte) {
 	b, err := decodeBody(body)
 	if err != nil {
 		scheduleErr(w, err)
@@ -220,7 +193,6 @@ func (r *Router) postWakeup(w http.ResponseWriter, sid string, body []byte, sign
 	}
 	wu, err := normalizeWakeup(b, time.Now())
 	if err == nil {
-		wu.Signed = signed
 		err = r.ArmWakeup(sid, wu)
 	}
 	if err != nil {
@@ -261,7 +233,7 @@ func (r *Router) getCrons(w http.ResponseWriter, sid string) {
 	writeJSON(w, 200, map[string]any{"crons": views})
 }
 
-func (r *Router) postCron(w http.ResponseWriter, sid string, body []byte, signed *SignedRequest) {
+func (r *Router) postCron(w http.ResponseWriter, sid string, body []byte) {
 	b, err := decodeBody(body)
 	if err != nil {
 		scheduleErr(w, err)
@@ -269,7 +241,6 @@ func (r *Router) postCron(w http.ResponseWriter, sid string, body []byte, signed
 	}
 	c, err := normalizeCron(b, time.Now())
 	if err == nil {
-		c.Signed = signed
 		err = r.ArmCron(sid, c)
 	}
 	if err != nil {
@@ -315,11 +286,11 @@ func (r *Router) postNotifyIdle(w http.ResponseWriter, sid string, body []byte) 
 	writeJSON(w, 200, map[string]any{"ok": true, "notifyIdle": onOff(!on)})
 }
 
-// proposeSession: a caller that isn't Deyao (a session, the actions key) proposes a new session — the same line as
-// the app's New session, so nothing starts until Deyao approves the core's succession from null with Face ID; the
-// approval names the caller and carries its reason. No attachments (uploads are the app's). prefix keeps the
-// caller's request ids apart from the app's and every other caller's.
-func (r *Router) proposeSession(w http.ResponseWriter, c Caller, prefix string, b []byte, signed *SignedRequest) {
+// proposeSession: a caller that isn't Deyao (a session, the actions key) proposes a new session — the same draft as
+// the app's New session, so nothing starts until Deyao signs it with Face ID; the approval names the caller and
+// carries its reason. No attachments (uploads are the app's). prefix keeps the caller's request ids apart from the
+// app's and every other caller's.
+func (r *Router) proposeSession(w http.ResponseWriter, c Caller, prefix string, b []byte, filing string) {
 	var in proposalIn
 	if err := json.Unmarshal(b, &in); err != nil {
 		writeJSON(w, 400, map[string]string{"error": "bad JSON: " + err.Error()})
@@ -327,7 +298,7 @@ func (r *Router) proposeSession(w http.ResponseWriter, c Caller, prefix string, 
 	}
 	ns, err := r.checkProposal(c, prefix, in, true)
 	if err == nil {
-		ns.Origin.Signed = signed
+		ns.Origin.Filing = filing
 	}
 	if err != nil {
 		writeRequestErr(w, err)

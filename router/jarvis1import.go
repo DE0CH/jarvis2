@@ -7,17 +7,16 @@ package main
 // ~/.claude.json (claude.json), ~/workspace and ~/artifacts (workspace.tar.gz, artifacts.tar.gz), an optional harness
 // tarball, the record (session.json: title, model, size, repos, armed wakeups and crons) and manifest.txt, written
 // last (its presence = the snapshot is complete). None of it is signed by anything Jarvis 2 trusts, so an import is a
-// NEW line whose cert vouches for exactly those bytes (DESIGN "Inputs to a machine" (a)):
+// NEW session whose source names exactly those bytes:
 //
 //  1. prepare: the router streams every file once and hashes it, and writes the import manifest
 //     {kind "jarvis1-import", session, files: [{name, sha256, size}]} onto its volume;
-//  2. import: a new session whose config carries restore = {machine: the Jarvis 1 session id (its first machine's
-//     id), sha256: the manifest's sha256}, waiting for the phone like any new session (the app shows "Restores
-//     machine <id>" and the hash, as for a restore of a destroyed Jarvis 2 session). Deyao's Face ID signs that hash,
-//     so it vouches for every byte the manifest lists;
-//  3. the line's first machine fetches the manifest (/m/restore-snapshot), checks its hash against the cert, then
-//     fetches each file through the router (/m/import-file/<name>, streamed from the Storage Box: the machine holds
-//     no Storage Box credential) and refuses any whose sha256 or size differs (machine/jarvis1import.go).
+//  2. import: a new session whose source's snapshot is the manifest's sha256, waiting for the phone like any new
+//     session (the app shows "Restores <the Jarvis 1 session>" beside the hash). Deyao's Face ID signs that hash, so
+//     it vouches for every byte the manifest lists;
+//  3. the session's machine fetches the manifest (GET /m/snapshot, by that hash), then each file through the router
+//     (/m/import-file/<name>, streamed from the Storage Box: the machine holds no Storage Box credential) and refuses
+//     any whose sha256 or size differs (machine/jarvis1import.go).
 //
 // The router's choice of WHICH bytes to hash is its own (as with attachments, decision 78): the phone binds the
 // bytes the router read at prepare time, and the Storage Box (ours, over TLS) is where they came from.
@@ -360,8 +359,12 @@ var j1SizeMap = map[string]string{"small": "small", "medium": "medium", "large":
 // ImportJarvis1: the prepared Jarvis 1 session as a new session waiting for the phone (approval kind new-session,
 // options.restore names it). The same import asked again answers the session it already made (requestId).
 func (r *Router) ImportJarvis1(id string, in J1ImportIn, o Origin) (string, error) {
-	_, sum, rec, err := r.preparedJarvis1(id)
+	mb, sum, rec, err := r.preparedJarvis1(id)
 	if err != nil {
+		return "", err
+	}
+	// the manifest is the snapshot the new source names: GET /m/snapshot serves it by its sha256
+	if err := writeFileAtomic(r.st.snapshotPath(sum), mb); err != nil {
 		return "", err
 	}
 	if len(in.Stores) == 0 {
@@ -417,15 +420,13 @@ func firstNonEmpty(s ...string) string {
 
 // ---- the machine's side: the manifest and the files, only to the importing line's first machine -------------
 
-// importFor: the Jarvis 1 session a machine imports
+// importFor: the Jarvis 1 session a machine imports — while its source names the import's manifest (the session's
+// first machine, or a later one whose predecessor left no snapshot of its own)
 func (r *Router) importFor(machine string) string {
 	var id string
 	r.st.Do(func(d *persisted) {
 		s := d.Sessions[d.Machines[machine]]
-		// the line's first machine, or a successor whose cert names no snapshot (its predecessor left none: the
-		// machine takes the import again, machine/restore.go reimportJarvis1)
-		cert := d.Certs[machine]
-		if s == nil || s.ImportFrom == "" || s.MachineID != machine || (certField(cert, "predecessorId") != "" && certField(cert, "snapshot") != "") {
+		if s == nil || s.ImportFrom == "" || s.MachineID != machine || s.Chain == nil || s.Chain.Source.Snapshot != s.StartSnapshot {
 			return
 		}
 		id = s.ImportFrom
@@ -653,10 +654,9 @@ func (r *Router) registerJarvis1Import(app appRoute, m machineRoute, public publ
 		writeJSON(w, 202, map[string]any{"ok": true, "phase": "pausing", "cancelled": cancelled})
 	}))
 	// resume and restart from the setup session, as the actions key's resume and the app's Restart (no prompt, no option
-	// change): a line on an image from before the router's Claude login gets a resume-upgrade approval instead
-	// (flows.go legacyLoginImage), so the phone decides; wakeups and crons stay armed
+	// change): a spawn from the paused source; wakeups and crons stay armed
 	public("POST /setup/sessions/{id}/resume", setupOnly(func(w http.ResponseWriter, req *http.Request, _ []byte) {
-		if err := r.Resume(req.PathValue("id"), false); err != nil {
+		if err := r.Resume(req.PathValue("id"), ResumeIn{}); err != nil {
 			writeJSON(w, 400, map[string]string{"error": err.Error()})
 			return
 		}
@@ -670,7 +670,7 @@ func (r *Router) registerJarvis1Import(app appRoute, m machineRoute, public publ
 		}
 		writeJSON(w, 202, out)
 	}))
-	// the importing line's first machine (its manifest is served at /m/restore-snapshot, restore.go)
+	// the importing session's machine while its source names the manifest (served at GET /m/snapshot, machineapi.go)
 	m("GET /m/import-file/{name}", func(w http.ResponseWriter, req *http.Request, machine string, _ []byte) {
 		r.serveImportFile(w, machine, req.PathValue("name"))
 	})

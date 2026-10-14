@@ -2,9 +2,9 @@ package main
 
 // Batches (Deyao, 2026-10-13): a caller files several Inbox items at once, with one summary; the Inbox shows them as
 // one entry and the phone reviews them on one page and allows them under ONE Face ID. Nothing about what is signed
-// changes: the app signs each item exactly as it would alone (each approval's own core challenge, each grant's own
-// text, each deploy key's own begin document), using one LAContext that the batch's Face ID authenticated, and sends
-// each signature on its own; the core verifies every item unchanged. A batch is only a grouping the router keeps:
+// changes: the app signs each item exactly as it would alone (each approval's drafts, each deploy key's own begin
+// document), using one LAContext that the batch's Face ID authenticated, and sends each signature on its own; the
+// kernel checks every item unchanged. A batch is only a grouping the router keeps:
 //
 //   - the caller groups (through the API), any item kind; the summary is the caller's words, shown as unverified
 //     above every item's signed details;
@@ -36,11 +36,12 @@ type Batch struct {
 	Filing  bool         `json:"filing,omitempty"` // its items are still being filed: not pruned as empty
 }
 
-// BatchEntry: one filed item. A request is known by its id; an approval by its session (the approval's id exists
-// once the core's challenge is in, a moment after filing for a new session)
+// BatchEntry: one filed item. A request is known by its id; an approval by its id (an add-on) or by its session (a
+// new session, a Jarvis 1 import)
 type BatchEntry struct {
 	Intent      string `json:"intent"`
 	Request     string `json:"request,omitempty"`
+	Approval    string `json:"approval,omitempty"`
 	Session     string `json:"session,omitempty"`
 	ProposesNew bool   `json:"proposesNew,omitempty"` // a new-session proposal (counted toward the 3)
 }
@@ -82,28 +83,6 @@ func approvalDeadline(d *persisted, a *Approval) time.Time {
 	return t
 }
 
-// batchPreparing: the batch's approvals still being made (a new session whose challenge isn't in yet)
-func batchPreparing(d *persisted, b *Batch) int {
-	n := 0
-	for _, e := range b.Entries {
-		if e.Request != "" || e.Session == "" {
-			continue
-		}
-		s := d.Sessions[e.Session]
-		if s == nil || s.State != "approval" {
-			continue
-		}
-		found := false
-		for _, a := range d.Approvals {
-			found = found || (a.Session == e.Session && a.Batch == b.ID)
-		}
-		if !found {
-			n++
-		}
-	}
-	return n
-}
-
 func batchItemCount(d *persisted, id string) int {
 	n := 0
 	for _, q := range d.Inbox {
@@ -126,7 +105,7 @@ func pruneBatches(d *persisted, now time.Time) {
 		if b.Filing {
 			continue
 		}
-		if !now.Before(b.Expires) || (batchItemCount(d, id) == 0 && batchPreparing(d, b) == 0) {
+		if !now.Before(b.Expires) || batchItemCount(d, id) == 0 {
 			delete(d.Batches, id)
 		}
 	}
@@ -141,8 +120,7 @@ type InboxBatch struct {
 	Call       APICall   `json:"call"`
 	Created    time.Time `json:"created"`
 	Expires    time.Time `json:"expires"`
-	Items      []string  `json:"items"`     // the Inbox ids in it now, in the order filed
-	Preparing  int       `json:"preparing"` // approvals still being made: the phone waits for them before Allow all
+	Items      []string  `json:"items"` // the Inbox ids in it now, in the order filed
 }
 
 // InboxBatches: every batch (or only one caller's), newest first
@@ -155,12 +133,13 @@ func (r *Router) InboxBatches(only *Caller) []InboxBatch {
 				continue
 			}
 			ib := InboxBatch{ID: b.ID, Summary: b.Summary, Caller: b.Origin.Caller, CallerText: callerText(d, b.Origin.Caller), Call: b.Origin.Call,
-				Created: b.Created, Expires: b.Expires, Items: []string{}, Preparing: batchPreparing(d, b)}
+				Created: b.Created, Expires: b.Expires, Items: []string{}}
 			// in the order filed: the entries' requests and sessions, then anything adopted
 			seen := map[string]bool{}
 			for _, e := range b.Entries {
 				for _, it := range items {
-					if it.Batch == b.ID && !seen[it.ID] && ((e.Request != "" && it.ID == e.Request) || (e.Request == "" && it.Approval && it.Session == e.Session)) {
+					if it.Batch == b.ID && !seen[it.ID] && ((e.Request != "" && it.ID == e.Request) || (e.Approval != "" && it.ID == e.Approval) ||
+						(e.Request == "" && e.Approval == "" && it.Approval && it.Session == e.Session)) {
 						ib.Items, seen[it.ID] = append(ib.Items, it.ID), true
 					}
 				}
@@ -199,7 +178,7 @@ func (r *Router) InboxBatchFull(id string, only *Caller) (map[string]any, bool) 
 }
 
 // DenyBatch: every request in it leaves, every approval is rejected (a new session disappears, a resume stays
-// paused), and the batch goes; an approval still being made is rejected as it arrives (addApproval)
+// paused, an add-on is dropped), and the batch goes
 func (r *Router) DenyBatch(id string) error {
 	var approvals []string
 	found := false
@@ -212,7 +191,7 @@ func (r *Router) DenyBatch(id string) error {
 		for qid, q := range d.Inbox {
 			if q.Batch == id {
 				delete(d.Inbox, qid)
-				noteOutcome(d, &q.Origin, q.Kind, q.ID, outcomeDenied, 0, nil)
+				noteOutcome(d, &q.Origin, q.Kind, q.ID, outcomeDenied, 0)
 			}
 		}
 		for aid, a := range d.Approvals {
@@ -241,7 +220,7 @@ type batchIn struct {
 // batchItemIn: one item: its intent and that intent's own body (as the single endpoint takes it); explanation is
 // optional here (the batch's summary is required)
 type batchItemIn struct {
-	Intent string `json:"intent"` // repo/add | repo/remove | grant | unlock | add-store | new-session | jarvis1-import
+	Intent string `json:"intent"` // repo/add | repo/remove | unlock | terminal | command | add-store | new-session | jarvis1-import
 	requestIn
 	ID string `json:"id"` // jarvis1-import: the Jarvis 1 session
 }
@@ -252,8 +231,8 @@ type batchItem struct {
 	// requests
 	kind string
 	p    RequestParams
-	// add-store
-	machine, store string
+	// an add-on (terminal, command, add-store)
+	addOn AddOnIn
 	// new-session
 	ns NewSession
 	// jarvis1-import
@@ -261,16 +240,16 @@ type batchItem struct {
 	j1   J1ImportIn
 	expl string
 	args map[string]any
-	// outcomes.go: the batch as the session's machine signed it, and this item's index in it
-	signed *SignedRequest
+	// outcomes.go: the filing id the session's guard gave the batch, and this item's index in it
+	filing string
 	index  int
 }
 
 // BatchResult: what filing one item did
 type BatchResult struct {
 	Intent    string `json:"intent"`
-	ID        string `json:"id,omitempty"`      // a request's id, or a new session's id (its approval follows)
-	Session   string `json:"session,omitempty"` // add-store, new-session, jarvis1-import: the session the approval is for
+	ID        string `json:"id,omitempty"`      // a request's or an add-on approval's id, or a new session's id
+	Session   string `json:"session,omitempty"` // an add-on, new-session, jarvis1-import: the session the approval is for
 	Duplicate bool   `json:"duplicate,omitempty"`
 	Batch     string `json:"batch,omitempty"` // a duplicate already in another batch: that batch
 	Error     string `json:"error,omitempty"`
@@ -307,26 +286,16 @@ func (r *Router) checkBatchItem(c Caller, raw json.RawMessage) (*batchItem, erro
 		return it, nil
 	}
 	switch in.Intent {
-	case "add-store":
-		sid := in.Session
-		if c.Kind == "session" {
-			if sid != "" && sid != c.Session {
-				return nil, &forbidden{fmt.Sprintf("a session may ask only for itself (%s)", c.Session)}
-			}
-			sid = c.Session
+	case "terminal", "command", "add-store":
+		a, err := addOnFrom(in.Intent, c, in.requestIn)
+		if err == nil {
+			a, err = r.checkAddOn(a)
 		}
-		if strings.TrimSpace(in.Store) == "" {
-			return nil, &badRequest{"add-store: store is required"}
+		if err != nil {
+			return nil, err
 		}
-		r.st.Do(func(d *persisted) {
-			if s := d.Sessions[sid]; s != nil && s.State == "started" {
-				it.machine = s.MachineID
-			}
-		})
-		if it.machine == "" {
-			return nil, &badRequest{fmt.Sprintf("add-store: session %q isn't running", sid)}
-		}
-		it.store, it.args = in.Store, map[string]any{"intent": in.Intent, "session": sid, "store": in.Store}
+		it.addOn, it.args = a, addOnArgs(a)
+		it.args["intent"] = in.Intent
 		return it, nil
 	case "new-session":
 		var pin proposalIn
@@ -368,7 +337,7 @@ func (r *Router) checkBatchItem(c Caller, raw json.RawMessage) (*batchItem, erro
 // FileBatch: every item checked first (any bad item: nothing is filed, 400 naming it), then filed in order. An item
 // that fails while being filed (the core refused a challenge) is reported and the rest stand; when none stands, the
 // batch is dropped. A request already waiting outside any batch joins this one; one in another batch stays there.
-func (r *Router) FileBatch(c Caller, method, path string, body []byte, signed *SignedRequest) (int, map[string]any) {
+func (r *Router) FileBatch(c Caller, method, path string, body []byte, filing string) (int, map[string]any) {
 	var in batchIn
 	if err := json.Unmarshal(body, &in); err != nil {
 		return 400, map[string]any{"error": "bad JSON: " + err.Error()}
@@ -434,7 +403,7 @@ func (r *Router) FileBatch(c Caller, method, path string, body []byte, signed *S
 	results := []BatchResult{}
 	entries := []BatchEntry{}
 	for i, it := range items {
-		it.signed, it.index = signed, i
+		it.filing, it.index = filing, i
 		res, entry := r.fileBatchItem(c, method, path, b, it)
 		results = append(results, res)
 		if entry != nil {
@@ -459,7 +428,7 @@ func mustJSON(v any) []byte { b, _ := json.Marshal(v); return b }
 
 func (r *Router) fileBatchItem(c Caller, method, path string, b *Batch, it *batchItem) (BatchResult, *BatchEntry) {
 	res := BatchResult{Intent: it.intent}
-	o := Origin{Caller: c, Call: APICall{Method: method, Path: path, Args: it.args}, Signed: it.signed, Item: it.index, Batch: b.ID}
+	o := Origin{Caller: c, Call: APICall{Method: method, Path: path, Args: it.args}, Filing: it.filing, Item: it.index, Batch: b.ID}
 	switch {
 	case it.kind != "":
 		q := &InboxRequest{ID: "q" + randID(), Kind: it.kind, Params: it.p, Origin: o, Explanation: it.expl, Created: b.Created,
@@ -484,15 +453,16 @@ func (r *Router) fileBatchItem(c Caller, method, path string, b *Batch, it *batc
 			return res, nil
 		}
 		return res, &BatchEntry{Intent: it.intent, Request: q.ID}
-	case it.intent == "add-store":
-		var sid string
-		r.st.Do(func(d *persisted) { sid = d.Machines[it.machine] })
-		res.Session = sid
-		if err := r.AddStoreFrom(it.machine, it.store, o, it.expl, b.ID); err != nil {
+	case it.addOn.Kind != "":
+		res.Session = it.addOn.Session
+		oc := o
+		id, err := r.FileAddOn(it.addOn, &oc, it.expl, b.ID)
+		if err != nil {
 			res.Error = err.Error()
 			return res, nil
 		}
-		return res, &BatchEntry{Intent: it.intent, Session: sid}
+		res.ID = id
+		return res, &BatchEntry{Intent: it.intent, Approval: id, Session: it.addOn.Session}
 	case it.intent == "new-session" || it.intent == "jarvis1-import":
 		var sid string
 		var err error
@@ -500,7 +470,7 @@ func (r *Router) fileBatchItem(c Caller, method, path string, b *Batch, it *batc
 			ns := it.ns
 			ns.Origin.Call = o.Call
 			ns.Origin.Call.Path = path
-			ns.Origin.Signed, ns.Origin.Item, ns.Origin.Batch = o.Signed, o.Item, o.Batch
+			ns.Origin.Filing, ns.Origin.Item, ns.Origin.Batch = o.Filing, o.Item, o.Batch
 			ns.Batch = b.ID
 			sid, err = r.CreateSession(ns)
 		} else {
@@ -537,8 +507,8 @@ func (r *Router) fileBatchItem(c Caller, method, path string, b *Batch, it *batc
 
 // ---- routes ------------------------------------------------------------------------------------------------
 
-func (r *Router) serveFileBatch(w http.ResponseWriter, c Caller, method, path string, body []byte, signed *SignedRequest) {
-	code, out := r.FileBatch(c, method, path, body, signed)
+func (r *Router) serveFileBatch(w http.ResponseWriter, c Caller, method, path string, body []byte, filing string) {
+	code, out := r.FileBatch(c, method, path, body, filing)
 	writeJSON(w, code, out)
 }
 

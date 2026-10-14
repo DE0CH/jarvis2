@@ -73,7 +73,7 @@ type callIn struct {
 func (r *Router) callRoute(method, target string) (string, callRule, error) {
 	u, err := url.Parse(target)
 	if err != nil || u.IsAbs() || u.Host != "" || !strings.HasPrefix(u.Path, "/") {
-		return "", callNo, errors.New("path: an absolute path on the router, e.g. /api/sessions/ID/permission-mode")
+		return "", callNo, errors.New("path: an absolute path on the router, e.g. /api/sessions/ID/pause")
 	}
 	r.handlers()
 	req := httptest.NewRequest(method, u.RequestURI(), nil)
@@ -99,7 +99,7 @@ func callNoWhy(pattern string) string {
 }
 
 // fileCall: an API-call request into the Inbox → {id, duplicate, expires}
-func (r *Router) fileCall(w http.ResponseWriter, c Caller, path string, b []byte, signed *SignedRequest) {
+func (r *Router) fileCall(w http.ResponseWriter, c Caller, path string, b []byte, filing string) {
 	var in callIn
 	if err := json.Unmarshal(b, &in); err != nil {
 		writeJSON(w, 400, map[string]string{"error": "bad JSON: " + err.Error()})
@@ -143,7 +143,7 @@ func (r *Router) fileCall(w http.ResponseWriter, c Caller, path string, b []byte
 	if p.Body != "" {
 		args["body"] = p.Body
 	}
-	q, dup, err := r.FileRequest(requestKindCall, p, in.Explanation, Origin{Caller: c, Call: APICall{Method: "POST", Path: path, Args: args}, Signed: signed})
+	q, dup, err := r.FileRequest(requestKindCall, p, in.Explanation, Origin{Caller: c, Call: APICall{Method: "POST", Path: path, Args: args}, Filing: filing})
 	if err != nil {
 		writeRequestErr(w, err)
 		return
@@ -180,9 +180,9 @@ func (r *Router) ApproveCall(id string, approver *http.Request) (*CallResult, er
 				return
 			}
 			if x.State == "done" {
-				noteOutcome(d, &q.Origin, q.Kind, q.ID, outcomeApproved, x.Status, nil)
+				noteOutcome(d, &q.Origin, q.Kind, q.ID, outcomeApproved, x.Status)
 			} else {
-				noteOutcome(d, &q.Origin, q.Kind, q.ID, outcomeFailed, 0, nil)
+				noteOutcome(d, &q.Origin, q.Kind, q.ID, outcomeFailed, 0)
 			}
 		})
 	}()

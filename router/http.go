@@ -24,6 +24,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/DE0CH/jarvis2/core/kernel"
 )
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
@@ -33,24 +35,33 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 }
 
 func writeErr(w http.ResponseWriter, err error) {
-	var gn *GrantNeeded
-	if errors.As(err, &gn) {
-		writeJSON(w, 403, map[string]any{"error": err.Error(), "needsGrant": gn.Holder, "phoneGrant": gn.Phone})
-		return
-	}
-	var ce *CoreError
-	if errors.As(err, &ce) {
+	var ke *KernelError
+	if errors.As(err, &ke) {
 		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(ce.Status)
-		w.Write(ce.Body) // the core's signed error, unchanged
+		w.WriteHeader(ke.Status)
+		w.Write(ke.Body) // the part's signed error, unchanged
 		return
 	}
 	status := 400
 	switch {
+	case errors.Is(err, errPartDown):
+		writeJSON(w, 503, map[string]any{"error": err.Error(), "kernelDown": true})
+		return
 	case errors.Is(err, errDraining):
 		status = 503 // drain.go: "router updating, try again shortly", shown as is
 	case errors.Is(err, errBusy):
 		status = 409
+	case errors.Is(err, errNoShell):
+		writeJSON(w, 403, map[string]any{"error": err.Error(), "needsTerminal": true})
+		return
+	}
+	var b *badRequest
+	var f *forbidden
+	switch {
+	case errors.As(err, &b):
+		status = 400
+	case errors.As(err, &f):
+		status = 403
 	}
 	writeJSON(w, status, map[string]string{"error": err.Error()})
 }
@@ -71,6 +82,10 @@ func (r *Router) handlers() {
 	r.muxOnce.Do(r.buildHandlers)
 }
 
+// secretsRelays: secrets' endpoints the app calls through the router, unchanged (the phone checks every answer)
+var secretsRelays = []string{"state", "stores", "stores/create", "stores/mark-sensitive", "unlock/begin", "lock", "unlocked", "store-key",
+	"stores/versions"}
+
 func (r *Router) buildHandlers() {
 	mux, mmux := http.NewServeMux(), http.NewServeMux()
 	r.publicMux, r.machineMux = mux, mmux
@@ -82,9 +97,9 @@ func (r *Router) buildHandlers() {
 	m := func(pattern string, fn func(w http.ResponseWriter, req *http.Request, machine string, body []byte)) {
 		mmux.Handle(pattern, r.requireMachine(fn))
 	}
-	// setup: the setup session's Access token AND its key's signature (checked here, by the router: the
-	// core's store calls are open, the router decides who uses them)
-	setup := func(pattern, method, corePath string) {
+	// setup: the setup session's Access token AND its key's signature (checked here, by the router: secrets' store
+	// calls are open, the router decides who uses them)
+	setup := func(pattern, method, part, path string) {
 		mux.Handle(pattern, r.requireSetup(func(w http.ResponseWriter, req *http.Request) {
 			b, _ := io.ReadAll(io.LimitReader(req.Body, 1<<20))
 			if err := r.checkSetupSig(req.Method, req.URL.Path, req.Header.Get("X-Setup-Time"), req.Header.Get("X-Setup-Sig"), b); err != nil {
@@ -94,14 +109,16 @@ func (r *Router) buildHandlers() {
 			if method == "GET" {
 				b = nil
 			}
-			r.relay(w, method, corePath, b)
+			r.relay(w, part, method, path, b)
 		}))
 	}
 	r.registerFeatures(app, m, mux.Handle)
 	r.registerStoreDocs(app, m, mux) // storedocs.go: every store's keys, what they are for, and writing one key
 	r.registerRestore(app, mux)      // storerestore.go: a store's versions and putting one back (phone-signed)
 	r.registerActions(m)             // actions.go: each session's actions, on its machine key
-	// the router's own health, for an operator with no way into the box: secret NAMES present, image, core up
+	r.registerDocs(app)              // docstore.go: kernel documents by ID, chains, the root grant
+	r.registerMachineAPI(m, mmux)    // machineapi.go: the guard's boot, grant, commands, answers, pull, snapshot
+	// the router's own health, for an operator with no way into the box: secret NAMES present, image, parts up
 	mux.Handle("GET /setup/status", r.requireSetup(func(w http.ResponseWriter, req *http.Request) {
 		if err := r.checkSetupSig(req.Method, req.URL.Path, req.Header.Get("X-Setup-Time"), req.Header.Get("X-Setup-Sig"), nil); err != nil {
 			writeJSON(w, 401, map[string]string{"error": err.Error()})
@@ -116,9 +133,11 @@ func (r *Router) buildHandlers() {
 				present = append(present, k)
 			}
 		}
-		_, coreErr := r.core.Key()
-		// what the repo picker's token sees, as counts only: a token with no permission picked lists public repos
-		// only (private 0), the "No match." in Settings → Repos
+		parts := map[string]bool{}
+		for role, key := range r.k.Roster() {
+			parts[role] = key != ""
+		}
+		// what the repo picker's token sees, as counts only
 		gh := map[string]any{}
 		if repos, _, err := r.GitHubRepos(false); err != nil {
 			gh["error"] = err.Error()
@@ -131,7 +150,6 @@ func (r *Router) buildHandlers() {
 			}
 			gh["total"], gh["private"] = len(repos), priv
 		}
-		// the Machines view's orgs, as counts only (flyorgs.go): each org's source and error, apps, machines, flagged
 		flyOrgs := []map[string]any{}
 		ownMs, _ := listFlyMachines()
 		orgs, _ := r.flyOrgsOverview(ownMs, time.Now())
@@ -144,60 +162,78 @@ func (r *Router) buildHandlers() {
 			flyOrgs = append(flyOrgs, map[string]any{"org": o.Org, "via": o.Via, "error": o.Error, "apps": apps, "machines": machines,
 				"attention": flyAttentionCount([]flyOrgView{o})})
 		}
-		writeJSON(w, 200, map[string]any{"secrets": present, "sessionImage": r.cfg.SessionImage, "coreUp": coreErr == nil, "version": os.Getenv("VERSION"), "githubRepos": gh, "flyOrgs": flyOrgs})
+		_, rootErr := r.rootGrant()
+		writeJSON(w, 200, map[string]any{"secrets": present, "sessionImage": r.cfg.SessionImage, "kernel": parts, "rootGrant": rootErr == nil,
+			"version": os.Getenv("VERSION"), "githubRepos": gh, "flyOrgs": flyOrgs})
 	}))
-	setup("GET /setup/identity", "GET", "/identity")
-	setup("POST /setup/stores", "POST", "/stores")
-	setup("POST /setup/stores/create", "POST", "/stores/create")
-	setup("POST /setup/stores/mark-sensitive", "POST", "/stores/mark-sensitive")
-	// the core's Fly token, sealed to the core (after a Reset; a Recover brings it from the backups)
-	setup("POST /setup/fly-token", "POST", "/fly-token")
+	setup("GET /setup/identity", "GET", "secrets", "/identity")
+	setup("POST /setup/stores", "POST", "secrets", "/stores")
+	setup("POST /setup/stores/create", "POST", "secrets", "/stores/create")
+	setup("POST /setup/stores/mark-sensitive", "POST", "secrets", "/stores/mark-sensitive")
+	// the spawner's Fly token, sealed to the spawner
+	setup("POST /setup/fly-token", "POST", "spawner", "/fly-token")
 
-	// ---- setting the core up: Reset and Recover (the app, with the master key) -----------------------------
-	app("GET /api/core/identity", func(w http.ResponseWriter, req *http.Request) { r.relay(w, "GET", "/identity", nil) })
-	// claim and wipe come only from the app's own device login (the cf-access-token header the shell sends),
-	// not from a browser tab
-	device := func(pattern, corePath string) {
-		app(pattern, func(w http.ResponseWriter, req *http.Request) {
-			if !r.cfg.NoAccess && req.Header.Get("cf-access-token") == "" {
-				writeJSON(w, 403, map[string]string{"error": "only the iPhone app sets the core up"})
-				return
+	// ---- setting secrets up: Reset and Recover (the app, with the master key) --------------------------------------
+	app("GET /api/secrets/identity", func(w http.ResponseWriter, req *http.Request) { r.relay(w, "secrets", "GET", "/identity", nil) })
+	app("GET /api/kernel/identities", func(w http.ResponseWriter, req *http.Request) {
+		out := map[string]any{}
+		for role := range kernelParts {
+			if id, err := r.k.Identity(role); err == nil {
+				out[role] = id
+			} else {
+				out[role] = nil
 			}
-			b, _ := io.ReadAll(io.LimitReader(req.Body, 16<<20))
-			r.relay(w, "POST", corePath, b)
-		})
-	}
-	// the claim also carries the app's device-key countersignature (deviceKey, deviceSig over the statement): the
-	// core ignores it; the router keeps it for the setup session (claimdevice.go), which trusts a new master key
-	// only with it
-	app("POST /api/core/claim", func(w http.ResponseWriter, req *http.Request) {
+		}
+		writeJSON(w, 200, out)
+	})
+	// claim and wipe come only from the app's own device login (the cf-access-token header the shell sends)
+	deviceOnly := func(req *http.Request, w http.ResponseWriter) bool {
 		if !r.cfg.NoAccess && req.Header.Get("cf-access-token") == "" {
-			writeJSON(w, 403, map[string]string{"error": "only the iPhone app sets the core up"})
+			writeJSON(w, 403, map[string]string{"error": "only the iPhone app sets secrets up"})
+			return false
+		}
+		return true
+	}
+	// the claim also carries the app's device-key countersignature (deviceKey, deviceSig over the statement): secrets
+	// ignores it; the router keeps it for the setup session (claimdevice.go). Right after a claim the router writes the
+	// Claude login into the store claude (claudelogin.go).
+	app("POST /api/secrets/claim", func(w http.ResponseWriter, req *http.Request) {
+		if !deviceOnly(req, w) {
 			return
 		}
 		b, _ := io.ReadAll(io.LimitReader(req.Body, 16<<20))
 		r.keepClaimDevice(b)
-		status, out, err := r.core.Raw("POST", "/claim", b)
+		var in map[string]json.RawMessage
+		json.Unmarshal(b, &in)
+		fwd, _ := json.Marshal(map[string]json.RawMessage{"statement": in["statement"], "masterSig": in["masterSig"], "bundle": in["bundle"]})
+		status, out, err := r.k.Raw("secrets", "POST", "/claim", fwd)
 		if err != nil {
-			log.Printf("core POST /claim: %v", err)
-			writeJSON(w, 503, map[string]any{"error": "the core isn't running", "coreDown": true})
+			writeJSON(w, 503, map[string]any{"error": err.Error(), "kernelDown": true})
 			return
 		}
 		if status == 200 {
-			r.keepCoreCert(b) // claimdevice.go: the master's signature on this core, kept by the router
+			r.keepSecretsCert(b) // claimdevice.go: the master's signature on this secrets, kept by the router
+			go r.publishLogin("claim")
 		}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(status)
 		w.Write(out)
 	})
-	mux.Handle("GET /setup/core-cert", r.requireSetup(func(w http.ResponseWriter, req *http.Request) {
+	app("POST /api/secrets/wipe", func(w http.ResponseWriter, req *http.Request) {
+		if !deviceOnly(req, w) {
+			return
+		}
+		b, _ := io.ReadAll(io.LimitReader(req.Body, 1<<20))
+		r.relay(w, "secrets", "POST", "/wipe", b)
+	})
+	mux.Handle("GET /setup/secrets-cert", r.requireSetup(func(w http.ResponseWriter, req *http.Request) {
 		if err := r.checkSetupSig(req.Method, req.URL.Path, req.Header.Get("X-Setup-Time"), req.Header.Get("X-Setup-Sig"), nil); err != nil {
 			writeJSON(w, 401, map[string]string{"error": err.Error()})
 			return
 		}
-		b := r.coreCert()
+		b := r.secretsCert()
 		if b == nil {
-			writeJSON(w, 404, map[string]string{"error": "no claim kept for the running core (empty, or claimed elsewhere)"})
+			writeJSON(w, 404, map[string]string{"error": "no claim kept for the running secrets (empty, or claimed elsewhere)"})
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
@@ -206,7 +242,6 @@ func (r *Router) buildHandlers() {
 	mux.Handle("GET /setup/claim-device", r.requireSetup(func(w http.ResponseWriter, req *http.Request) {
 		writeJSON(w, 200, r.claimDevices())
 	}))
-	device("POST /api/core/wipe", "/wipe")
 	r.registerBackups(app)
 	app("GET /api/policy", func(w http.ResponseWriter, req *http.Request) { writeJSON(w, 200, r.policy) })
 
@@ -226,11 +261,12 @@ func (r *Router) buildHandlers() {
 
 	// ---- state ---------------------------------------------------------------------------------------
 	app("GET /api/state", func(w http.ResponseWriter, req *http.Request) {
-		key, err := r.core.Key()
-		coreInfo := map[string]any{"up": err == nil}
+		id, err := r.k.Identity("secrets")
+		secretsInfo := map[string]any{"up": err == nil}
 		if err == nil {
-			coreInfo["signingKey"], coreInfo["agreementKey"] = key["signingKey"], key["agreementKey"]
+			secretsInfo["signingKey"], secretsInfo["agreementKey"] = id.SigningKey, id.AgreementKey
 		}
+		_, rootErr := r.rootGrant()
 		var sessions []map[string]any
 		var approvals []*Approval
 		r.st.Do(func(d *persisted) {
@@ -245,7 +281,7 @@ func (r *Router) buildHandlers() {
 			return sessions[i]["created"].(time.Time).After(sessions[j]["created"].(time.Time))
 		})
 		sort.Slice(approvals, func(i, j int) bool { return approvals[i].Created.Before(approvals[j].Created) })
-		out := map[string]any{"sessions": orEmpty(sessions), "approvals": orEmptyA(approvals), "core": coreInfo}
+		out := map[string]any{"sessions": orEmpty(sessions), "approvals": orEmptyA(approvals), "secrets": secretsInfo, "rootGrant": rootErr == nil}
 		for _, h := range stateHooks {
 			h(r, out)
 		}
@@ -264,69 +300,14 @@ func (r *Router) buildHandlers() {
 		writeJSON(w, 200, map[string]any{"records": recs})
 	})
 
-	// ---- grants (grants.go) and the terminal (terminal.go) ----------------------------------------------
-	app("GET /api/holders", func(w http.ResponseWriter, req *http.Request) {
-		pub, err := r.HolderPublicKeys()
-		if err != nil {
-			writeErr(w, err)
-			return
-		}
-		writeJSON(w, 200, map[string]any{"holders": pub})
-	})
-	app("POST /api/sessions/{id}/grants/draft", func(w http.ResponseWriter, req *http.Request) {
-		var in struct {
-			Holder  string    `json:"holder"`
-			Kind    string    `json:"kind"`
-			Minutes int       `json:"minutes"`
-			Until   time.Time `json:"until"`
-		}
-		json.NewDecoder(io.LimitReader(req.Body, 1<<16)).Decode(&in)
-		text, err := r.DraftGrant(req.PathValue("id"), in.Holder, in.Kind, in.Minutes, in.Until)
-		if err != nil {
-			writeErr(w, err)
-			return
-		}
-		writeJSON(w, 200, map[string]string{"text": text})
-	})
-	app("POST /api/sessions/{id}/grants", func(w http.ResponseWriter, req *http.Request) {
-		var in Doc
-		json.NewDecoder(io.LimitReader(req.Body, 1<<16)).Decode(&in)
-		g, err := r.AddGrant(req.PathValue("id"), &in)
-		if err != nil {
-			writeErr(w, err)
-			return
-		}
-		writeJSON(w, 200, g)
-	})
-	// the line's latest core-signed succession cert: the phone's grant page reads the line, its own key and the
-	// stores from it (the router can't forge it)
-	app("GET /api/sessions/{id}/cert", func(w http.ResponseWriter, req *http.Request) {
-		var c *Doc
-		r.st.Do(func(d *persisted) {
-			if s := d.Sessions[req.PathValue("id")]; s != nil {
-				c = s.Cert
-			}
-		})
-		if c == nil {
-			writeJSON(w, 404, map[string]string{"error": "the session has no certified machine yet"})
-			return
-		}
-		writeJSON(w, 200, c)
-	})
-	app("GET /api/sessions/{id}/grants", func(w http.ResponseWriter, req *http.Request) {
-		writeJSON(w, 200, map[string]any{"grants": r.Grants(req.PathValue("id"))})
-	})
-	app("DELETE /api/grants/{gid}", func(w http.ResponseWriter, req *http.Request) {
-		r.ForgetGrant(req.PathValue("gid"))
-		writeJSON(w, 200, map[string]bool{"ok": true})
-	})
+	// ---- the terminal (terminal.go): a shell command under a terminal add-on (addons.go) -------------------------
 	app("POST /api/sessions/{id}/exec", func(w http.ResponseWriter, req *http.Request) {
 		var in struct {
 			Cmd     string `json:"cmd"`
 			Timeout int    `json:"timeout"`
 		}
 		json.NewDecoder(io.LimitReader(req.Body, 1<<20)).Decode(&in)
-		res, err := r.Exec(req.PathValue("id"), "terminal", in.Cmd, time.Duration(max(5, min(in.Timeout, 600)))*time.Second)
+		res, err := r.Shell(req.PathValue("id"), in.Cmd, time.Duration(max(5, min(in.Timeout, 600)))*time.Second)
 		if err != nil {
 			writeErr(w, err)
 			return
@@ -398,22 +379,16 @@ func (r *Router) buildHandlers() {
 		writeJSON(w, 200, map[string]bool{"ok": true})
 	})
 	app("POST /api/sessions/{id}/resume", func(w http.ResponseWriter, req *http.Request) {
-		var in struct {
-			Upgrade bool   `json:"upgrade"`
-			Prompt  string `json:"prompt"` // delivered once the session is back (schedule.go)
-			ResumeOptions
-		}
+		var in ResumeIn
 		json.NewDecoder(io.LimitReader(req.Body, 1<<16)).Decode(&in)
 		prompt, err := cleanResumePrompt(in.Prompt)
-		if err == nil {
-			err = r.applyResumeOptions(req.PathValue("id"), in.ResumeOptions) // sessionops.go: size, model, apiProxy
-		}
 		if err != nil {
 			writeErr(w, err)
 			return
 		}
+		in.Prompt, in.Rollback = prompt, ""
 		r.noteOrigin(req.PathValue("id"), Origin{Caller: appCaller(req), Call: APICall{Method: "POST", Path: req.URL.Path, Args: map[string]any{"upgrade": in.Upgrade}}})
-		if err := r.resumeWithPrompt(req.PathValue("id"), in.Upgrade, prompt); err != nil {
+		if err := r.Resume(req.PathValue("id"), in); err != nil {
 			writeErr(w, err)
 			return
 		}
@@ -425,6 +400,19 @@ func (r *Router) buildHandlers() {
 			return
 		}
 		writeJSON(w, 200, map[string]bool{"ok": true})
+	})
+	// narrowing in place: the main grant moved along the identity edge to fewer stores (addons.go)
+	app("POST /api/sessions/{id}/narrow", func(w http.ResponseWriter, req *http.Request) {
+		var in struct {
+			Stores []string `json:"stores"`
+		}
+		json.NewDecoder(io.LimitReader(req.Body, 1<<16)).Decode(&in)
+		kept, err := r.Narrow(req.PathValue("id"), in.Stores)
+		if err != nil {
+			writeErr(w, err)
+			return
+		}
+		writeJSON(w, 200, map[string]any{"ok": true, "stores": kept})
 	})
 
 	// ---- approvals -----------------------------------------------------------------------------------
@@ -440,15 +428,15 @@ func (r *Router) buildHandlers() {
 	})
 	app("POST /api/approvals/{id}/respond", func(w http.ResponseWriter, req *http.Request) {
 		var in struct {
-			Signature string `json:"signature"`
+			Signatures []string `json:"signatures"`
 		}
 		json.NewDecoder(io.LimitReader(req.Body, 1<<16)).Decode(&in)
-		cert, sid, err := r.Respond(req.PathValue("id"), in.Signature)
+		sid, err := r.Respond(req.PathValue("id"), in.Signatures)
 		if err != nil {
 			writeErr(w, err)
 			return
 		}
-		writeJSON(w, 200, map[string]any{"answer": cert, "session": sid})
+		writeJSON(w, 200, map[string]any{"ok": true, "session": sid})
 	})
 	app("POST /api/approvals/{id}/reject", func(w http.ResponseWriter, req *http.Request) {
 		if err := r.Reject(req.PathValue("id")); err != nil {
@@ -458,203 +446,37 @@ func (r *Router) buildHandlers() {
 		writeJSON(w, 200, map[string]bool{"ok": true})
 	})
 
-	// ---- the core, relayed unchanged ------------------------------------------------------------------
-	for _, p := range []string{"stores", "stores/create", "stores/mark-sensitive", "unlock/begin", "lock", "unlocked", "store-key"} {
+	// ---- secrets, relayed unchanged ---------------------------------------------------------------------
+	for _, p := range secretsRelays {
 		path := "/" + p
-		app("POST /api/core"+path, func(w http.ResponseWriter, req *http.Request) {
+		app("POST /api/secrets"+path, func(w http.ResponseWriter, req *http.Request) {
 			b, _ := io.ReadAll(io.LimitReader(req.Body, 1<<20))
-			r.relay(w, "POST", path, b)
+			r.relay(w, "secrets", "POST", path, b)
 		})
 	}
-
-	// an unlock for one running session's cert: its machine pulls again (storedocs.go unlockArrived)
-	app("POST /api/core/unlock/finish", func(w http.ResponseWriter, req *http.Request) {
+	// an unlock of a store: every running machine whose grant names it pulls again
+	app("POST /api/secrets/unlock/finish", func(w http.ResponseWriter, req *http.Request) {
 		b, _ := io.ReadAll(io.LimitReader(req.Body, 1<<20))
-		status, out, err := r.core.Raw("POST", "/unlock/finish", b)
+		status, out, err := r.k.Raw("secrets", "POST", "/unlock/finish", b)
 		if err != nil {
-			log.Printf("core POST /unlock/finish: %v", err)
-			writeJSON(w, 503, map[string]any{"error": "the core isn't running", "coreDown": true})
+			writeJSON(w, 503, map[string]any{"error": err.Error(), "kernelDown": true})
 			return
 		}
 		if status == 200 {
-			r.unlockArrived(out)
+			var d kernel.SignedDoc
+			var u struct {
+				Kind  string `json:"kind"`
+				Store string `json:"store"`
+			}
+			if json.Unmarshal(out, &d) == nil && payloadOf(d, &u) == nil && u.Kind == "unlocked" && u.Store != "" {
+				r.pullHolders(u.Store)
+			}
 		}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(status)
 		w.Write(out)
 	})
 
-	// ---- machines --------------------------------------------------------------------------------------
-	m("GET /m/cert", func(w http.ResponseWriter, req *http.Request, machine string, _ []byte) {
-		var cert, pred *Doc
-		r.st.Do(func(d *persisted) {
-			cert = d.Certs[machine]
-			if cert != nil {
-				var c struct {
-					PredID string `json:"predecessorId"`
-				}
-				cert.Decode(&c)
-				if c.PredID != "" && c.PredID != machine {
-					pred = d.Certs[c.PredID]
-				}
-			}
-		})
-		if cert == nil {
-			writeJSON(w, 404, map[string]string{"error": "no cert yet"})
-			return
-		}
-		writeJSON(w, 200, map[string]any{"cert": cert, "predecessorCert": pred})
-	})
-	m("GET /m/snapshot", func(w http.ResponseWriter, req *http.Request, machine string, _ []byte) {
-		var pred string
-		r.st.Do(func(d *persisted) {
-			if cert := d.Certs[machine]; cert != nil {
-				var c struct {
-					PredID string `json:"predecessorId"`
-				}
-				cert.Decode(&c)
-				pred = c.PredID
-			}
-		})
-		if pred == "" {
-			writeJSON(w, 404, map[string]string{"error": "no predecessor"})
-			return
-		}
-		p := r.st.snapshotPath(pred)
-		sig, err := os.ReadFile(p + ".sig")
-		if err != nil {
-			writeJSON(w, 404, map[string]string{"error": "no snapshot"})
-			return
-		}
-		w.Header().Set("X-Snapshot-Sig", strings.TrimSpace(string(sig)))
-		w.Header().Set("Content-Type", "application/gzip")
-		http.ServeFile(w, req, p)
-	})
-	// the snapshot streams to the volume (a session's workspace can be several GB; the router has 1 GiB of memory):
-	// hashed on the way, the machine's request signature checked against that hash, then put in place
-	mmux.Handle("POST /m/snapshot", r.requireMachineStream(func(w http.ResponseWriter, req *http.Request, machine, tmp string) {
-		p := r.st.snapshotPath(machine)
-		if req.Header.Get("X-Snapshot-None") != "" {
-			os.Remove(tmp)
-			// a machine still booting has nothing to snapshot: the waiting pause or destroy goes on at once
-			log.Printf("machine %s: nothing to snapshot (%s)", machine, req.Header.Get("X-Snapshot-None"))
-			r.snapshotArrived(machine)
-			writeJSON(w, 200, map[string]bool{"ok": true})
-			return
-		}
-		sig := req.Header.Get("X-Snapshot-Sig")
-		if sig == "" {
-			os.Remove(tmp)
-			writeJSON(w, 400, map[string]string{"error": "X-Snapshot-Sig missing"})
-			return
-		}
-		if err := os.Rename(tmp, p); err != nil {
-			os.Remove(tmp)
-			writeErr(w, err)
-			return
-		}
-		os.WriteFile(p+".sig", []byte(sig), 0o600)
-		r.snapshotArrived(machine)
-		writeJSON(w, 200, map[string]bool{"ok": true})
-	}))
-	m("POST /m/pull-secrets", func(w http.ResponseWriter, req *http.Request, machine string, body []byte) {
-		var cert *Doc
-		r.st.Do(func(d *persisted) { cert = d.Certs[machine] })
-		if cert == nil {
-			writeJSON(w, 404, map[string]string{"error": "no cert"})
-			return
-		}
-		// carry.go: the line's carried secrets go with the pull; a pull that goes through answers the next blob
-		release := carryLock(machine)
-		d, err := r.core.Call("/pull-secrets", map[string]any{"cert": cert, "carry": r.carryForPull(machine, cert)})
-		if err == nil {
-			r.pulled(machine, cert, d)
-			markPulled(machine)               // vouch.go: a pause waits briefly for such a machine's boot to finish
-			go r.refreshAfterPull(machine, d) // storedocs.go: stores behind a write → the phone is asked to refresh them
-		}
-		release()
-		r.noteSecretsPull(machine, err) // the app says which locked store the machine waits on, and offers to unlock it
-		if err != nil {
-			writeErr(w, err)
-			return
-		}
-		r.st.Do(func(d *persisted) {
-			if s := d.Sessions[d.Machines[machine]]; s != nil && s.MachineID == machine && s.State == "initialising" {
-				s.State, s.Error = "started", ""
-			}
-		})
-		writeJSON(w, 200, d)
-	})
-	m("GET /m/commands", func(w http.ResponseWriter, req *http.Request, machine string, _ []byte) {
-		q := r.queue(machine)
-		r.cmdMu.Lock()
-		eq := r.execQueue(machine)
-		r.cmdMu.Unlock()
-		dq := deliveryQueue(machine) // vouch.go
-		select {
-		case c := <-q:
-			writeJSON(w, 200, map[string]any{"commands": []string{c}, "execs": []execItem{}})
-		case e := <-eq:
-			writeJSON(w, 200, map[string]any{"commands": []string{}, "execs": []execItem{e}})
-		case d := <-dq:
-			writeJSON(w, 200, map[string]any{"commands": []string{}, "execs": []execItem{}, "deliveries": []Delivery{d}})
-		case <-time.After(50 * time.Second):
-			writeJSON(w, 200, map[string]any{"commands": []string{}, "execs": []execItem{}})
-		case <-req.Context().Done():
-		}
-	})
-	m("POST /m/exec-result", func(w http.ResponseWriter, req *http.Request, machine string, body []byte) {
-		var res ExecResult
-		json.Unmarshal(body, &res)
-		r.execResult(res)
-		writeJSON(w, 200, map[string]bool{"ok": true})
-	})
-	m("GET /m/holders", func(w http.ResponseWriter, req *http.Request, machine string, _ []byte) {
-		pub, err := r.HolderPublicKeys()
-		if err != nil {
-			writeErr(w, err)
-			return
-		}
-		writeJSON(w, 200, pub)
-	})
-	m("POST /m/add-store", func(w http.ResponseWriter, req *http.Request, machine string, body []byte) {
-		var in struct {
-			Store string `json:"store"`
-		}
-		json.Unmarshal(body, &in)
-		if err := r.AddStore(machine, in.Store); err != nil {
-			writeErr(w, err)
-			return
-		}
-		writeJSON(w, 200, map[string]bool{"ok": true})
-	})
-	m("POST /m/downgrade", func(w http.ResponseWriter, req *http.Request, machine string, body []byte) {
-		var in struct {
-			Stores           []string `json:"stores"`
-			NewEncryptionKey string   `json:"newEncryptionKey"`
-			NewSigningKey    string   `json:"newSigningKey"`
-		}
-		json.Unmarshal(body, &in)
-		ch, err := r.DowngradeBegin(machine, in.Stores, in.NewEncryptionKey, in.NewSigningKey)
-		if err != nil {
-			writeErr(w, err)
-			return
-		}
-		writeJSON(w, 200, map[string]any{"challenge": ch})
-	})
-	m("POST /m/downgrade/finish", func(w http.ResponseWriter, req *http.Request, machine string, body []byte) {
-		var in struct {
-			Challenge *Doc   `json:"challenge"`
-			Signature string `json:"signature"`
-		}
-		json.Unmarshal(body, &in)
-		cert, err := r.DowngradeFinish(machine, in.Challenge, in.Signature)
-		if err != nil {
-			writeErr(w, err)
-			return
-		}
-		writeJSON(w, 200, map[string]any{"cert": cert})
-	})
 	// ---- the web page ------------------------------------------------------------------------------------
 	web := http.FileServer(http.Dir(r.cfg.WebDir))
 	mux.Handle("GET /", r.requireDeyao(func(w http.ResponseWriter, req *http.Request) {
@@ -670,13 +492,14 @@ func (r *Router) buildHandlers() {
 	}))
 }
 
-func (r *Router) relay(w http.ResponseWriter, method, path string, body []byte) {
-	status, b, err := r.core.Raw(method, path, body)
+// relay: one call to a kernel part, its answer unchanged
+func (r *Router) relay(w http.ResponseWriter, part, method, path string, body []byte) {
+	status, b, err := r.k.Raw(part, method, path, body)
 	if err != nil {
-		// no core to talk to (its pod is restarting, e.g. after a wipe): a state, not a fault — the app waits
-		// and shows it as a plain note (coreDown)
-		log.Printf("core %s %s: %v", method, path, err)
-		writeJSON(w, 503, map[string]any{"error": "the core isn't running", "coreDown": true})
+		// the part isn't reachable (its pod is restarting, e.g. after a wipe): a state, not a fault — the app waits
+		// and shows it as a plain note (kernelDown)
+		log.Printf("%s %s %s: %v", part, method, path, err)
+		writeJSON(w, 503, map[string]any{"error": err.Error(), "kernelDown": true})
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -729,12 +552,31 @@ func sessionView(s *Session, d *persisted) map[string]any {
 		"environment": strings.Join(s.Stores, ","), "stores": s.Stores, "content": orEmptyS(s.Content), "harness": s.Harness, "label": s.Label, "aiTitle": s.Title,
 		"model": s.Model, "permissionMode": s.PermissionMode, "guest": guest, "size": s.Size, "pausedAt": s.PausedAt,
 		"image": s.Image, "createRequestId": s.RequestID, "repos": s.Repos, "discordChannel": s.DiscordChannel,
-		"waiting": s.Waiting, "lockedStore": s.LockedStore,
+		"waiting": s.Waiting, "lockedStore": s.LockedStore, "commands": orEmptyC(s.Commands), "addOns": addOnsView(s),
 	}
 	liveView(s, v)
 	scheduleView(d, s.ID, v)
 	opsView(s, v)
 	return v
+}
+
+func orEmptyC(c []CommandRun) []CommandRun {
+	if c == nil {
+		return []CommandRun{}
+	}
+	return c
+}
+
+// addOnsView: the add-ons in force on the running machine (kind, until; the documents are in the chain)
+func addOnsView(s *Session) []map[string]any {
+	out := []map[string]any{}
+	if s.Chain == nil || s.MachineID == "" {
+		return out
+	}
+	for _, a := range s.Chain.active(time.Now()) {
+		out = append(out, map[string]any{"id": a.ID, "kind": a.Kind, "until": a.Until})
+	}
+	return out
 }
 
 func nullIfEmpty(s string) any {
@@ -811,11 +653,8 @@ func (r *Router) requireMachine(fn func(w http.ResponseWriter, req *http.Request
 		})
 		sum := sha256.Sum256(body)
 		msg := req.Method + " " + req.URL.Path + " " + t + " " + hex.EncodeToString(sum[:])
-		// a signature over the path WITH its query is as good (it binds more): the session image of 2026-10-13
-		// 01:30-03:00 signed its Claude login polls that way
-		withQuery := req.Method + " " + req.URL.Path + "?" + req.URL.RawQuery + " " + t + " " + hex.EncodeToString(sum[:])
-		if key == "" || !(verifyP256(key, []byte(msg), sig) || (req.URL.RawQuery != "" && verifyP256(key, []byte(withQuery), sig))) {
-			writeJSON(w, 401, map[string]string{"error": "not signed by a machine the core started"})
+		if key == "" || !verifyP256(key, []byte(msg), sig) {
+			writeJSON(w, 401, map[string]string{"error": "not signed by a machine the spawner started"})
 			return
 		}
 		fn(w, req, machine, body)
@@ -827,7 +666,7 @@ const snapshotMax = 32 << 30
 
 // requireMachineStream: requireMachine for a large body — streamed to a temp file on the volume while it is hashed,
 // then the signature (over that hash) checked; fn gets the file's path and must move or remove it
-func (r *Router) requireMachineStream(fn func(w http.ResponseWriter, req *http.Request, machine, tmp string)) http.Handler {
+func (r *Router) requireMachineStream(fn func(w http.ResponseWriter, req *http.Request, machine, tmp, sum string)) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		machine, t, sig := req.Header.Get("X-Machine"), req.Header.Get("X-Time"), req.Header.Get("X-Sig")
 		ts, _ := strconv.ParseInt(t, 10, 64)
@@ -841,11 +680,11 @@ func (r *Router) requireMachineStream(fn func(w http.ResponseWriter, req *http.R
 				key = s.SigningKey
 			}
 		})
-		if key == "" { // before reading a byte: only a machine the core started may write to the volume
-			writeJSON(w, 401, map[string]string{"error": "not signed by a machine the core started"})
+		if key == "" { // before reading a byte: only a machine the spawner started may write to the volume
+			writeJSON(w, 401, map[string]string{"error": "not signed by a machine the spawner started"})
 			return
 		}
-		f, err := os.CreateTemp(filepath.Dir(r.st.snapshotPath(machine)), ".upload-*")
+		f, err := os.CreateTemp(filepath.Dir(r.st.snapshotPath("x")), ".upload-*")
 		if err != nil {
 			writeErr(w, err)
 			return
@@ -864,13 +703,14 @@ func (r *Router) requireMachineStream(fn func(w http.ResponseWriter, req *http.R
 			writeErr(w, err)
 			return
 		}
-		msg := req.Method + " " + req.URL.Path + " " + t + " " + hex.EncodeToString(h.Sum(nil))
+		sum := hex.EncodeToString(h.Sum(nil))
+		msg := req.Method + " " + req.URL.Path + " " + t + " " + sum
 		if !verifyP256(key, []byte(msg), sig) {
 			os.Remove(tmp)
-			writeJSON(w, 401, map[string]string{"error": "not signed by a machine the core started"})
+			writeJSON(w, 401, map[string]string{"error": "not signed by a machine the spawner started"})
 			return
 		}
-		fn(w, req, machine, tmp)
+		fn(w, req, machine, tmp, sum)
 	})
 }
 

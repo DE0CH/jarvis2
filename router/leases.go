@@ -18,15 +18,13 @@ package main
 // Leases end with their session: a destroyed session's holder or queue place goes at the next tick.
 //
 // Jarvis 2 differences (docs/DECISIONS.md 100): the state is the router's (persisted.Leases, state.json on its volume),
-// the holder is the calling machine's own session (the path's id must be it), and the wake messages are deliveries
-// the machine checks (machine/deliver.go): "lease-granted" carries the waiter's own signed acquire request (its
-// prompt and the device name in the signed path), "lease-taken" and "lease-back" are texts built into the image over
-// the device name. Deyao's notes never go into a session (nothing vouches for them); the session reads them with
+// the holder is the calling machine's own session (the path's id must be it), and the wake messages are notices
+// (texts built into the image, docs/API-grants.md "notices"): "lease-granted" names the device, the minutes and whether
+// Deyao had taken it over (the wake note is the session's own, kept on its machine by the local API proxy),
+// "lease-taken" and "lease-back" name the device. Deyao's notes never go into a session; the session reads them with
 // lease.py status. Jarvis 1's lease table is separate: Jarvis 2 is the lease authority for Jarvis 2 sessions.
 
 import (
-	"encoding/base64"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -69,9 +67,7 @@ type LeaseEntry struct {
 	Since       int64          `json:"since,omitempty"`
 	ExpiresAt   int64          `json:"expiresAt,omitempty"` // ms; 0 for Deyao
 	EnqueuedAt  int64          `json:"enqueuedAt,omitempty"`
-	Prompt      string         `json:"prompt,omitempty"` // the wake note (the session's own words)
-	Signed      *SignedRequest `json:"signed,omitempty"` // the acquire request that carried the prompt, as signed
-	Note        string         `json:"note,omitempty"`   // Deyao's take-over note
+	Note        string         `json:"note,omitempty"` // Deyao's take-over note
 	Promoted    bool           `json:"promoted,omitempty"`
 	Notified    bool           `json:"notified,omitempty"`
 	Interrupted bool           `json:"interrupted,omitempty"`
@@ -185,10 +181,8 @@ func truncRunes(s string, max int) string {
 type LeaseOpts struct {
 	Purpose     *string
 	Description *string
-	Prompt      string
 	TTL         any
 	LowPriority bool
-	Signed      *SignedRequest
 }
 
 func (e *LeaseEntry) setText(o LeaseOpts, now int64) {
@@ -227,12 +221,10 @@ func (st *LeaseState) acquire(name, sid string, o LeaseOpts, now int64) (*LeaseO
 		h.setText(o, now)
 		return &LeaseOut{Status: "renewed", Lease: leaseView(r, name, now)}, nil
 	}
-	prompt := cleanLine(o.Prompt, leaseMaxPrompt)
 	if r.Holder == nil {
 		r.Queue = dropSid(r.Queue, sid)
-		// the prompt is kept for a direct grant too: if Deyao takes the device over, it goes back in the queue with it
 		r.Holder = &LeaseEntry{Sid: sid, Purpose: cleanLine(deref(o.Purpose), leaseMaxPurpose), Description: cleanText(deref(o.Description), leaseMaxDescr),
-			DescribedAt: now, TTL: ttl, Since: now, ExpiresAt: now + ttl*1000, Prompt: prompt, Signed: o.Signed}
+			DescribedAt: now, TTL: ttl, Since: now, ExpiresAt: now + ttl*1000}
 		r.logEv(now, "granted", sid, LeaseEvent{Purpose: r.Holder.Purpose})
 		return &LeaseOut{Status: "granted", Lease: leaseView(r, name, now)}, nil
 	}
@@ -253,7 +245,7 @@ func (st *LeaseState) acquire(name, sid string, o LeaseOpts, now int64) (*LeaseO
 	if o.Description != nil || w.DescribedAt == 0 {
 		w.Description, w.DescribedAt = cleanText(deref(o.Description), leaseMaxDescr), now
 	}
-	w.Prompt, w.Signed, w.TTL = prompt, o.Signed, ttl
+	w.TTL = ttl
 	return &LeaseOut{Status: "queued", Position: indexOf(r.Queue, sid) + 1, Lease: leaseView(r, name, now)}, nil
 }
 
@@ -367,7 +359,7 @@ func (r *LeaseResource) promote(now int64) *LeaseEntry {
 		d = now
 	}
 	r.Holder = &LeaseEntry{Sid: next.Sid, Purpose: next.Purpose, Description: next.Description, DescribedAt: d, TTL: ttl, Since: now,
-		ExpiresAt: now + ttl*1000, Promoted: true, Prompt: next.Prompt, Signed: next.Signed, Interrupted: next.Interrupted}
+		ExpiresAt: now + ttl*1000, Promoted: true, Interrupted: next.Interrupted}
 	r.logEv(now, "promoted", next.Sid, LeaseEvent{})
 	c := *next
 	return &c
@@ -436,7 +428,7 @@ func (st *LeaseState) takeOver(name string, note *string, now int64) (*takeOverO
 	if h := r.Holder; h != nil {
 		out.Interrupted = h.Sid
 		r.Queue = append([]*LeaseEntry{{Sid: h.Sid, EnqueuedAt: now, Purpose: h.Purpose, Description: h.Description, DescribedAt: h.DescribedAt,
-			Prompt: h.Prompt, Signed: h.Signed, TTL: h.TTL, Interrupted: true}}, dropSid(r.Queue, h.Sid)...)
+			TTL: h.TTL, Interrupted: true}}, dropSid(r.Queue, h.Sid)...)
 	}
 	r.Holder = &LeaseEntry{Sid: leaseHuman, Human: true, Purpose: "Deyao is using it himself", Since: now, Note: cleanLine(deref(note), leaseMaxNote)}
 	r.logEv(now, "taken-over", leaseHuman, LeaseEvent{Note: r.Holder.Note, Interrupted: out.Interrupted})
@@ -530,7 +522,6 @@ type leasePending struct {
 	Name, Sid   string
 	Since       int64
 	TTL         int64
-	Signed      *SignedRequest
 	Handover    bool
 	Interrupted bool
 }
@@ -541,7 +532,7 @@ func (st *LeaseState) pendingNotifications() []leasePending {
 	for _, name := range sortedKeys(st.Resources) {
 		r := st.Resources[name]
 		if h := r.Holder; h != nil && h.Promoted && !h.Notified {
-			out = append(out, leasePending{Name: name, Sid: h.Sid, Since: h.Since, TTL: h.TTL, Signed: h.Signed, Handover: h.Handover != nil, Interrupted: h.Interrupted})
+			out = append(out, leasePending{Name: name, Sid: h.Sid, Since: h.Since, TTL: h.TTL, Handover: h.Handover != nil, Interrupted: h.Interrupted})
 		}
 	}
 	return out
@@ -607,55 +598,6 @@ func (st *LeaseState) list(now int64) []map[string]any {
 		out = append(out, leaseView(r, n, now))
 	}
 	return out
-}
-
-// ---- the wake texts (built the same way in machine/deliver.go; the router picks when and for which device) ------
-
-func leaseGrantedText(device string, ttlMin int64, handover, interrupted bool, prompt string) string {
-	t := fmt.Sprintf("[lease %q granted] This session now holds the shared device %q (you were queued for it). ", device, device) +
-		fmt.Sprintf("It is yours for %d min, renewed automatically by the device helpers on every action; return it when done (scripts/lease.py return %s). ", ttlMin, device)
-	if handover {
-		t += fmt.Sprintf("Deyao had taken %q over himself", device)
-		if interrupted {
-			t += " (interrupting you: your earlier steps may no longer apply)"
-		}
-		t += fmt.Sprintf(" and has handed it back; his notes are in scripts/lease.py status %s. The device is in whatever state he left it: look at it first (screenshot / UI tree) and continue from there.", device)
-	} else {
-		t += "The previous holder may have left it in any state: inspect it first."
-	}
-	if prompt != "" {
-		t += " Your note: " + prompt
-	}
-	return t
-}
-
-func leaseTakenText(device string) string {
-	return fmt.Sprintf("[lease %q taken over] Deyao has taken the shared device %q himself. Stop using it now: every device action is refused while he has it. ", device, device) +
-		"You are first in the queue; when he hands it back you'll be woken. Then look at the device first: it will be in whatever state he left it. " +
-		"This is an automated message from Jarvis, not an answer to any open question."
-}
-
-func leaseBackText(device string) string {
-	return fmt.Sprintf("[lease %q handed back] Deyao has handed the shared device %q back. Earlier this session found it taken over: that no longer applies. ", device, device) +
-		fmt.Sprintf("Run scripts/lease.py status %s to see whether it is free or who holds it now, and acquire it if this session still needs it (scripts/lease.py acquire %s --purpose \"…\"). ", device, device) +
-		"If you told Deyao or planned around it being unavailable, reconsider now. It is in whatever state he left it: look at it first. " +
-		"This is an automated message from Jarvis, not an answer to any open question."
-}
-
-// signedPrompt: the prompt of a signed acquire request (what the machine reads from it too)
-func signedPrompt(s *SignedRequest) string {
-	if s == nil {
-		return ""
-	}
-	b, err := base64.StdEncoding.DecodeString(s.Body)
-	if err != nil {
-		return ""
-	}
-	var x struct {
-		Prompt string `json:"prompt"`
-	}
-	json.Unmarshal(b, &x)
-	return cleanLine(x.Prompt, leaseMaxPrompt)
 }
 
 // ---- the router's side ----------------------------------------------------------------------------------------
@@ -774,8 +716,7 @@ func (r *Router) registerLeases(app appRoute, m machineRoute, public publicRoute
 			return
 		}
 		low, _ := m["lowPriority"].(bool)
-		o := LeaseOpts{Purpose: optStr(m, "purpose"), Description: optStr(m, "description"), Prompt: deref(optStr(m, "prompt")), TTL: m["ttlSeconds"],
-			LowPriority: low, Signed: signedRequestOf(req, req.Header.Get("X-Machine"), b)}
+		o := LeaseOpts{Purpose: optStr(m, "purpose"), Description: optStr(m, "description"), TTL: m["ttlSeconds"], LowPriority: low}
 		var out *LeaseOut
 		err = r.leaseTx(func(st *LeaseState) (e error) { out, e = st.acquire(name, sid, o, time.Now().UnixMilli()); return })
 		if err != nil {
@@ -883,7 +824,7 @@ func (r *Router) takeOverLease(w http.ResponseWriter, name string, b []byte) {
 	writeJSON(w, 200, map[string]any{"taken": out.Taken, "interrupted": nullIfEmpty(out.Interrupted), "noteUpdated": out.NoteUpdated})
 	if out.Interrupted != "" {
 		leaseWG.Add(1)
-		go r.tellLease(out.Interrupted, Delivery{Kind: "lease-taken", Device: name}, 1)
+		go r.tellLease(out.Interrupted, Notice{Kind: "lease-taken", Device: name}, 1)
 	}
 }
 
@@ -908,7 +849,7 @@ func (r *Router) handBackLease(w http.ResponseWriter, name string, b []byte) {
 	r.kickLeases(out.Promoted)
 	for _, sid := range out.Notify {
 		leaseWG.Add(1)
-		go r.tellLease(sid, Delivery{Kind: "lease-back", Device: name}, 5)
+		go r.tellLease(sid, Notice{Kind: "lease-back", Device: name}, 5)
 	}
 }
 
@@ -951,12 +892,12 @@ func (r *Router) kickLeases(p *LeaseEntry) {
 	}
 }
 
-// tellLease: an image text about a device (taken over, handed back), with a few retries (a session mid-pause or
-// mid-start refuses a delivery for a while)
-func (r *Router) tellLease(sid string, d Delivery, tries int) {
+// tellLease: a notice about a device (taken over, handed back), with a few retries (a session mid-pause or mid-start
+// refuses a delivery for a while)
+func (r *Router) tellLease(sid string, d Notice, tries int) {
 	defer leaseWG.Done()
 	for i := 1; ; i++ {
-		err := deliverVouchedHook(r, sid, d)
+		err := deliverNoticeHook(r, sid, d, d.Kind == "lease-granted")
 		if err == nil {
 			log.Printf("[lease] %s: told %s (%s)", d.Device, sid, d.Kind)
 			return
@@ -1024,8 +965,8 @@ func (r *Router) leaseTick() {
 		go func(p leasePending) {
 			defer leaseWG.Done()
 			defer func() { leaseRun.Lock(); delete(leaseRun.busy, key); leaseRun.Unlock() }()
-			d := Delivery{Kind: "lease-granted", Device: p.Name, Request: p.Signed, Minutes: int(max(1, p.TTL/60)), Handover: p.Handover, Interrupted: p.Interrupted}
-			if err := deliverVouchedHook(r, p.Sid, d); err != nil {
+			d := Notice{Kind: "lease-granted", Device: p.Name, Minutes: int(min(360, max(1, p.TTL/60))), Handover: p.Handover, Interrupted: p.Interrupted}
+			if err := deliverNoticeHook(r, p.Sid, d, true); err != nil {
 				leaseRun.Lock()
 				leaseRun.attempts[key]++
 				n := leaseRun.attempts[key]
@@ -1051,4 +992,12 @@ func init() {
 			out["leases"] = r.LeaseList()
 		}
 	})
+}
+
+func trimTo(s string, n int) string {
+	s = strings.TrimSpace(s)
+	if len(s) > n {
+		return s[:n]
+	}
+	return s
 }

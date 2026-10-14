@@ -1,7 +1,17 @@
 package main
 
-// The session flows of docs/DESIGN.md ("Flows (router, outside the core)"), each a chain of core
-// primitives. Every long step runs in its own goroutine; the session's `state` says where it is.
+// The session lifecycles (docs/DESIGN.md "Paths and lifecycles"), each a sequence of kernel steps the router carries:
+//
+//	new session   the router drafts (sink, source-x, P) and asks the log notary for its challenge; the phone signs it;
+//	              notarized, root's ⊤ moved along it (→ the main grant on source-x); spawn from it, init, notarize the
+//	              spawn cert, move the main grant onto the machine
+//	pause         a kill into a fresh source (with the machine's final snapshot); the main grant moved onto it
+//	resume        a spawn from that source; the main grant moved onto the new machine. A resume that changes what the
+//	              source holds (a newer image, a prompt, a rollback, another model) is a new phone-made source whose
+//	              snapshot is the paused one's; the paused source is burned.
+//	destroy, end  a pause if it runs, the archive, then the burn (source, sink) by the gullible signer
+//
+// Every long step runs in its own goroutine; the session's `state` says where it is.
 
 import (
 	"crypto/rand"
@@ -12,27 +22,26 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"slices"
 	"sort"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/DE0CH/jarvis2/core/kernel"
 )
 
 type Router struct {
 	cfg  Config
 	st   *State
-	core *CoreClient
+	k    *Kernel
+	docs *DocStore
 
-	cmdMu    sync.Mutex
-	commands map[string]chan string     // machine id → pending commands (snapshot)
-	execs    map[string]chan execItem   // machine id → holder-signed shell commands (grants.go)
-	results  map[string]chan ExecResult // exec request id → its waiting caller
-	hk       holders
-	snapped  map[string]chan struct{}
-	locks    sync.Map   // session id → *sync.Mutex: one lifecycle action at a time
-	drain    drainState // drain.go: the lifecycle goroutines running, refused once SIGTERM came
-	ops      opsState   // sessionops.go: busy marks, permission-mode/restart jobs, uploads, repos
+	locks sync.Map   // session id → *sync.Mutex: one lifecycle action at a time
+	drain drainState // drain.go: the lifecycle goroutines running, refused once SIGTERM came
+	ops   opsState   // sessionops.go: busy marks, restart jobs, uploads, repos
+
+	snapMu  sync.Mutex
+	snapped map[string]chan struct{}
 
 	policy Policy
 
@@ -47,8 +56,8 @@ type Router struct {
 	appPatterns           map[string]bool // http.go: every app route's pattern (apicalls.go classifies them)
 }
 
-func NewRouter(cfg Config, st *State, core *CoreClient, policy Policy) *Router {
-	return &Router{cfg: cfg, st: st, core: core, policy: policy, setupSeen: map[string]time.Time{}, commands: map[string]chan string{}, execs: map[string]chan execItem{}, results: map[string]chan ExecResult{}, snapped: map[string]chan struct{}{}}
+func NewRouter(cfg Config, st *State, k *Kernel, policy Policy) *Router {
+	return &Router{cfg: cfg, st: st, k: k, docs: newDocStore(st.dir), policy: policy, setupSeen: map[string]time.Time{}, snapped: map[string]chan struct{}{}}
 }
 
 func randID() string {
@@ -88,244 +97,154 @@ func (r *Router) setState(id, state, errMsg string) {
 	}
 }
 
-// ---- the core's primitives, as the router chains them ----------------------------------------------
+// ---- new session ------------------------------------------------------------------------------------------------
 
 type NewSession struct {
 	RequestID      string         `json:"requestId"`
 	Label          string         `json:"label"`
 	Prompt         string         `json:"prompt"`
 	Model          string         `json:"model"`
-	PermissionMode string         `json:"permissionMode"`
+	PermissionMode string         `json:"permissionMode"` // fixed for the session's life (in its source's settings)
 	Size           string         `json:"size"`
 	Harness        string         `json:"harness"`
 	Stores         []string       `json:"stores"`
 	Repos          string         `json:"repos"`
-	Content        []string       `json:"content"`     // content stores (content.go), signed with the line
+	Content        []string       `json:"content"`     // content stores (content.go), in the source's settings
 	OneShot        bool           `json:"oneShot"`     // destroyed once its prompt is done (autopilot.go)
 	AutoPause      *bool          `json:"autoPause"`   // default on
-	APIProxy       bool           `json:"apiProxy"`    // SESSION_API_PROXY (sessionops.go)
+	APIProxy       bool           `json:"apiProxy"`    // in the source's settings
 	Attachments    *AttachmentsIn `json:"attachments"` // first-prompt attachments (uploads.go)
 	Origin         *Origin        `json:"-"`           // inbox.go: who asked, from the credential (the handler sets it)
-	Explanation    string         `json:"-"`           // a session's proposal: its reason, shown with the approval (sessionapi.go)
-	Task           *TaskConfig    `json:"-"`           // tasks.go: a task line's instance and parameters (into the cert's config)
-	Import         *J1ImportRef   `json:"-"`           // jarvis1import.go: the paused Jarvis 1 session this line restores
+	Explanation    string         `json:"-"`           // a proposal's reason, shown with the approval (sessionapi.go)
+	Task           *TaskConfig    `json:"-"`           // tasks.go: a task line's instance and parameters (into the settings)
+	Snapshot       string         `json:"-"`           // a restore's: the snapshot the source names (its sha256)
+	RestoreFrom    string         `json:"-"`           // restore.go: the record it restores
+	RestoreShown   string         `json:"-"`           // what the approval's "restore" line says
+	Import         *J1ImportRef   `json:"-"`           // jarvis1import.go: the Jarvis 1 session it imports (its manifest is the snapshot)
 	Batch          string         `json:"-"`           // batches.go: the batch its approval belongs to
 }
 
-const nullImage = "null" // a succession to it burns the predecessor (core.NullImage)
-
-func (r *Router) machineEnv(s *Session) map[string]string {
-	e := map[string]string{
-		"JARVIS2_URL": r.cfg.MachineURL, "JARVIS2_SESSION_ID": s.ID,
-		"SESSION_LABEL": s.Label, "SESSION_MODEL": s.Model, "SESSION_PERMISSION_MODE": s.PermissionMode,
-		"JARVIS2_REPOS": s.Repos,
+// CreateSession → the session's id. A requestId already on a session answers that session (idempotent). The phone's
+// approval (its draft and challenge) exists when this returns.
+func (r *Router) CreateSession(in NewSession) (string, error) {
+	h, ok := r.policy.Harnesses[in.Harness]
+	if !ok && isTaskHarness(in.Harness) {
+		ok = true // a task line (tasks.go): the template's stores only, no harness stores
 	}
-	if s.Prompt != "" {
-		e["SESSION_PROMPT"] = s.Prompt
-	}
-	if s.Label == "" && s.AppTitle != "" {
-		// the title the Claude app showed: a resumed claude names a fresh Remote Control entry with it (Jarvis 1's
-		// session-supervisor.sh), so the conversation keeps its title in the app
-		e["SESSION_RESUME_TITLE"] = s.AppTitle
-	}
-	for _, h := range envHooks {
-		h(r, s, e)
-	}
-	return e
-}
-
-// succession: a challenge, before any machine exists. machine is set only for adding a store. config and once:
-// Options.Config and Options.Once (vouch.go); a core that doesn't vouch ignores them.
-func (r *Router) succession(pred *Doc, machine string, stores []string, harness, mode, image, config, once string) (*Doc, error) {
-	var predecessor any // JSON null = from null
-	if pred != nil {
-		predecessor = pred
-	}
-	// the defaults are the router's: the core refuses rather than fills in (R2)
-	if mode != "bypass" {
-		mode = "auto"
-	}
-	if harness == "" {
-		harness = "claude"
-	}
-	opts := map[string]string{"harness": harness, "permissionMode": mode} // both signed (core Options)
-	if config != "" {
-		opts["config"] = config
-	}
-	if once != "" {
-		opts["once"] = once
-	}
-	if image == nullImage {
-		opts = map[string]string{}
-	}
-	in := map[string]any{"predecessor": predecessor, "machine": machine, "stores": sortedSet(stores), "options": opts, "image": image}
-	if pred == nil {
-		in["salt"] = randID() + randID() // a new line: two identical requests get different nonces
-	}
-	return r.core.Call("/succession", in)
-}
-
-// the router's waits on the core's single-shot machine calls (tests shorten them)
-var (
-	initStep, initMax = 5 * time.Second, 12 * time.Minute // a session image's first pull on a Fly host takes minutes
-	killStep, killMax = time.Second, 30 * time.Second
-)
-
-// startMachine: the core's start (one Fly create), then its init until Fly reports the machine up and the image's
-// init command gave its keys → the core's signed "started" document. A machine that never comes up is killed.
-// A core from before R2 answers "started" from /start itself (it waited and retried inside).
-func (r *Router) startMachine(image, size string) (*Doc, error) {
-	if size == "" {
-		size = "medium"
-	}
-	in := map[string]any{"image": image, "region": r.cfg.Region, "size": size}
-	d, err := r.core.Call("/start", in)
-	// Fly's org machine limit (lessons/58): nothing was created and the approval is still unused, so wait for a
-	// machine to go (sessions pause by themselves) instead of failing a start Deyao already approved
-	// A drain (drain.go) doesn't wait out the limit: the start ends with errLimitDraining and Deyao starts it again.
-	for waited := time.Duration(0); err != nil && flyMachineLimit(err) && waited < machineLimitWait; waited += machineLimitStep {
-		if r.draining() {
-			return nil, errLimitDraining
+	if !ok {
+		in.Harness = "claude"
+		if h, ok = r.policy.Harnesses[in.Harness]; !ok {
+			return "", fmt.Errorf("no harness %s in the policy", in.Harness)
 		}
-		log.Printf("start: the Fly org is at its machine limit; trying again in %s", machineLimitStep)
-		if r.sleepUnlessDraining(machineLimitStep) {
-			return nil, errLimitDraining
-		}
-		d, err = r.core.Call("/start", in)
 	}
+	if in.Size == "" {
+		in.Size = "medium"
+	}
+	var err error
+	if in.Model, err = sessionModel(in.Harness, in.Model); err != nil { // harness.go
+		return "", err
+	}
+	in.PermissionMode = normMode(in.PermissionMode)
+	stores, err := r.withHarnessStores(in.Stores, h.Stores)
 	if err != nil {
-		return nil, err
+		return "", err
 	}
-	var c struct {
-		Kind string `json:"kind"`
-		ID   string `json:"id"`
+	content, err := r.checkContentStores(in.Content) // content.go: each an existing store
+	if err != nil {
+		return "", err
 	}
-	d.Decode(&c)
-	if c.Kind != "created" {
-		return d, nil
+	if in.Import != nil {
+		in.Snapshot, in.RestoreShown = in.Import.Sha256, in.Import.Shown
 	}
-	deadline := time.Now().Add(initMax)
-	for {
-		st, err := r.core.Call("/init", map[string]string{"machine": c.ID})
-		if err == nil {
-			return st, nil
-		}
-		var ce *CoreError
-		retry := errors.As(err, &ce) && (ce.Status == 502 || ce.Status == 409 && strings.Contains(ce.Msg, "not started"))
-		if !retry || time.Now().After(deadline) {
-			r.killUntilDestroyed(map[string]any{"machine": c.ID})
-			return nil, err
-		}
-		time.Sleep(initStep)
+	s := &Session{ID: "s" + randID(), State: "approval", Created: time.Now().UTC(), Label: in.Label, Prompt: in.Prompt, Model: in.Model,
+		PermissionMode: in.PermissionMode, Size: in.Size, Harness: in.Harness, Stores: stores, Repos: in.Repos, Content: content,
+		RequestID: in.RequestID, Live: newLiveness(in), StartSnapshot: in.Snapshot, Image: r.cfg.SessionImage, RestoreFrom: in.RestoreFrom}
+	if in.Import != nil {
+		s.ImportFrom = in.Import.Session
 	}
-}
-
-// machineLimitWait / machineLimitStep: how long a start waits out Fly's org machine limit, and how often it tries
-var machineLimitWait, machineLimitStep = 3 * time.Hour, time.Minute
-
-func flyMachineLimit(err error) bool {
-	return strings.Contains(strings.ToLower(err.Error()), "machine limit")
-}
-
-// killUntilDestroyed: the core's kill (one Fly destroy) again until Fly reports the machine destroyed (409 before).
-// A core from before R2 waited inside its kill.
-func (r *Router) killUntilDestroyed(in map[string]any) (*Doc, error) {
-	deadline := time.Now().Add(killMax)
-	for {
-		d, err := r.core.Call("/kill", in)
-		var ce *CoreError
-		if err == nil || !errors.As(err, &ce) || ce.Status != 409 || time.Now().After(deadline) {
-			return d, err
-		}
-		time.Sleep(killStep)
-	}
-}
-
-// startAndCertify: an approval → a machine on the approved image → its cert. The core's start is open (it
-// can't lead to a secret); certify binds the approval to that one machine.
-func (r *Router) startAndCertify(sid string, approval *Doc) {
-	var a struct {
-		Request struct {
-			Image string `json:"image"`
-		} `json:"request"`
-	}
-	approval.Decode(&a)
-	var s Session
+	var dup string
 	r.st.Do(func(d *persisted) {
-		if x := d.Sessions[sid]; x != nil {
-			s = *x
+		if dup, err = admitSession(d, s, in); err == nil && dup == "" {
+			d.Sessions[s.ID] = s
 		}
 	})
-	r.setState(sid, "starting", "")
-	d, err := r.startMachine(a.Request.Image, s.Size)
+	if err != nil || dup != "" {
+		return dup, err
+	}
+	s.taskConfig = in.Task
+	drop := func(err error) (string, error) {
+		r.st.Do(func(d *persisted) { delete(d.Sessions, s.ID) })
+		return "", err
+	}
+	attach, err := r.attachmentRefs(s) // uploads.go: each file's sha256 and size
 	if err != nil {
-		r.setState(sid, "failed", "start: "+err.Error())
-		return
+		return drop(err)
 	}
-	var st struct {
-		Machine *Started `json:"machine"`
-	}
-	if d.Decode(&st) != nil || st.Machine == nil {
-		r.setState(sid, "failed", "start: unexpected answer")
-		return
-	}
-	m := st.Machine
-	r.st.Do(func(d *persisted) {
-		d.Started[m.ID] = m
-		d.Machines[m.ID] = sid
-	})
-	// "started": the core's signed document (a core from before R2 reads "machine" instead); "carry": the line's
-	// carried secrets, answered rebound to this machine beside the cert
-	pred := ""
-	var ap struct {
-		Request struct {
-			PredID string `json:"predecessorId"`
-		} `json:"request"`
-	}
-	if approval.Decode(&ap) == nil {
-		pred = ap.Request.PredID
-	}
-	cert, ans, err := r.core.CallAnswer("/certify", map[string]any{"approval": approval, "machine": m.ID, "started": d, "carry": r.readCarry(pred)})
+	settings, err := r.sessionSettings(s, s.Prompt, "", attach)
 	if err != nil {
-		r.killUntilDestroyed(map[string]any{"machine": m.ID})
-		r.setState(sid, "failed", "certify: "+err.Error())
-		return
+		return drop(err)
 	}
-	r.st.Do(func(d *persisted) {
-		d.Certs[m.ID] = cert
-		if x := d.Sessions[sid]; x != nil {
-			x.Cert, x.MachineID, x.Image, x.State, x.Error, x.PausedAt = cert, m.ID, m.Image, "initialising", "", nil
+	src := kernel.Object{ID: newSourceID(), Image: r.cfg.SessionImage, Settings: settings, Snapshot: in.Snapshot}
+	dr, err := r.makeDraft(kernel.Object{ID: kernel.Sink}, src, mainPair(s.ID, s.Stores))
+	if err != nil {
+		return drop(err)
+	}
+	opts := map[string]string{"model": s.Model, "size": s.Size, "permissionMode": s.PermissionMode, "repos": s.Repos}
+	if len(s.Content) > 0 {
+		opts["content"] = strings.Join(s.Content, ",")
+	}
+	liveOptions(s, opts)
+	opsOptions(s, opts)
+	if in.RestoreShown != "" {
+		opts["restore"] = in.RestoreShown // the app shows it beside the signed snapshot hash
+	}
+	r.addApproval(&Approval{Kind: "new-session", Session: s.ID, Label: s.Label, Drafts: []Draft{dr}, Source: &src,
+		Options: opts, Origin: in.Origin, Explanation: in.Explanation, Batch: in.Batch})
+	return s.ID, nil
+}
+
+// deployKeyTokenStore: secrets opens it only inside a deploy-key call
+const deployKeyTokenStore = "github-deploy-keys"
+
+// withHarnessStores: the chosen stores plus the harness's, sorted
+func (r *Router) withHarnessStores(chosen, harness []string) ([]string, error) {
+	set := map[string]bool{}
+	for _, n := range append(append([]string{}, chosen...), harness...) {
+		if n == flyStore {
+			return nil, fmt.Errorf("store %s is reserved and never goes to a session", n)
 		}
-	})
-	r.logInputs(ans.Entry) // vouch.go: the cert's input-log entry
-	if p := predOf(cert); p != "" {
-		r.carryAfter(p, m.ID, cert, ans) // carry.go: a resume carries the line's secrets, no store unlocked
+		if n == deployKeyTokenStore {
+			return nil, fmt.Errorf("store %s holds the deploy-key token: only a phone-approved deploy-key call opens it", n)
+		}
+		if !storeNameOK(n) {
+			return nil, fmt.Errorf("bad store name %q", n)
+		}
+		set[n] = true
 	}
+	out := make([]string, 0, len(set))
+	for n := range set {
+		out = append(out, n)
+	}
+	sort.Strings(out)
+	return out, nil
 }
 
 func (r *Router) addApproval(a *Approval) {
-	a.ID, a.Created = randID(), time.Now().UTC()
+	a.ID, a.Created = "a"+randID(), time.Now().UTC()
 	if a.Origin == nil {
 		a.Origin = takeOrigin(a.Session) // inbox.go: the caller the handler noted
 	}
-	var ch struct {
-		Request struct {
-			Image string `json:"image"`
-		} `json:"request"`
-	}
-	img := ""
-	if a.Challenge != nil && a.Challenge.Decode(&ch) == nil {
-		img = ch.Request.Image
-	}
-	// a resume on the session's own image names an older CI build than the current one: its signature is in the list
-	if img != "" && img == r.cfg.SessionImage {
-		a.ImageSig = r.cfg.SessionImageSig
-	} else if img != "" {
-		a.ImageSig = r.cfg.ImageSigs[img]
+	if a.Source != nil && a.Source.Image != "" {
+		img := a.Source.Image
+		if img == r.cfg.SessionImage {
+			a.ImageSig = r.cfg.SessionImageSig
+		} else {
+			a.ImageSig = r.cfg.ImageSigs[img]
+		}
 	}
 	denied := false
 	r.st.Do(func(d *persisted) {
-		// a batch denied while this approval's challenge was being made: the approval goes the way the batch did
+		// a batch denied while this approval's drafts were being made: the approval goes the way the batch did
 		if a.Batch != "" && d.Batches[a.Batch] == nil {
 			denied = true
 		}
@@ -356,304 +275,107 @@ func loadImageSigs(path string) map[string]string {
 	return out
 }
 
-// loadImageOrder: the images of session-image-sigs.txt in line order (images.yml appends each pin)
-func loadImageOrder(path string) []string {
-	if path == "" {
-		return nil
-	}
-	b, err := os.ReadFile(path)
-	if err != nil {
-		return nil
-	}
-	var out []string
-	for _, l := range strings.Split(string(b), "\n") {
-		if f := strings.Fields(l); len(f) == 2 {
-			out = append(out, f[0])
-		}
-	}
-	return out
-}
+// ---- approvals -------------------------------------------------------------------------------------------------------
 
-// firstRouterLoginImage: the first pinned session image whose machine takes the Claude login from the router
-// (machine/claudelogin.go, 2026-10-13 01:39). Every earlier image fetched it from Jarvis 1 with the store claude's
-// JARVIS1_CREDENTIALS_*, which no longer exist: such a line resumes on the newest image (the phone approves).
-const firstRouterLoginImage = ":sha-c5427052a542@"
-
-// legacyLoginImage: image (ref@digest) is a pin older than firstRouterLoginImage, by its digest's place in the pin
-// order. Unknown when the order is missing or lacks the marker (a test router): false. A digest the order doesn't
-// list at all is an image from before the list began: legacy.
-func legacyLoginImage(image string, order []string) bool {
-	digest := func(s string) string {
-		if i := strings.LastIndex(s, "@"); i >= 0 {
-			return s[i+1:]
-		}
-		return s
-	}
-	mark := -1
-	for i, o := range order {
-		if strings.Contains(o, firstRouterLoginImage) {
-			mark = i
-			break
-		}
-	}
-	if mark < 0 || image == "" {
-		return false
-	}
-	d := digest(image)
-	for i, o := range order {
-		if digest(o) == d {
-			return i < mark
-		}
-	}
-	return true
-}
-
-// ---- new session ------------------------------------------------------------------------------------
-
-// CreateSession → the session's id. A requestId already on a session answers that session (idempotent).
-func (r *Router) CreateSession(in NewSession) (string, error) {
-	h, ok := r.policy.Harnesses[in.Harness]
-	if !ok && isTaskHarness(in.Harness) {
-		ok = true // a task line (tasks.go): the template's stores only, no harness stores
-	}
-	if !ok {
-		in.Harness = "claude"
-		if h, ok = r.policy.Harnesses[in.Harness]; !ok {
-			return "", fmt.Errorf("no harness %s in the policy", in.Harness)
-		}
-	}
-	if in.Size == "" {
-		in.Size = "medium"
-	}
-	var err error
-	if in.Model, err = sessionModel(in.Harness, in.Model); err != nil { // harness.go
-		return "", err
-	}
-	if in.PermissionMode != "bypass" {
-		in.PermissionMode = "auto"
-	}
-	// the harness's stores come with it (the policy document); the app doesn't list them
-	stores, err := r.withHarnessStores(in.Stores, h.Stores)
-	if err != nil {
-		return "", err
-	}
-	content, err := r.checkContentStores(in.Content) // content.go: each an existing store
-	if err != nil {
-		return "", err
-	}
-	s := &Session{ID: "s" + randID(), State: "approval", Created: time.Now().UTC(), Label: in.Label, Prompt: in.Prompt, Model: in.Model,
-		PermissionMode: in.PermissionMode, Size: in.Size, Harness: in.Harness, Stores: stores, Repos: in.Repos, Content: content,
-		RequestID: in.RequestID, Live: newLiveness(in)}
-	if in.Import != nil {
-		s.ImportFrom, s.ImportSha = in.Import.Session, in.Import.Sha256
-	}
-	var dup string
-	r.st.Do(func(d *persisted) {
-		if dup, err = admitSession(d, s, in); err == nil && dup == "" {
-			d.Sessions[s.ID] = s
-		}
-	})
-	if err != nil || dup != "" {
-		return dup, err
-	}
-	s.taskConfig = in.Task
-	config, err := r.sessionConfig(s) // vouch.go: the settings the phone signs with the line
-	if err != nil {
-		r.st.Do(func(d *persisted) { delete(d.Sessions, s.ID) })
-		return "", err
-	}
-	ch, err := r.succession(nil, "", s.Stores, s.Harness, s.PermissionMode, r.cfg.SessionImage, config, "")
-	if err != nil {
-		r.st.Do(func(d *persisted) { delete(d.Sessions, s.ID) })
-		return "", err
-	}
-	opts := map[string]string{"model": s.Model, "size": s.Size, "permissionMode": s.PermissionMode, "repos": s.Repos}
-	if len(s.Content) > 0 {
-		opts["content"] = strings.Join(s.Content, ",")
-	}
-	liveOptions(s, opts)
-	opsOptions(s, opts)
-	if in.Import != nil {
-		opts["restore"] = in.Import.Shown // the app shows it beside the signed "Restores machine" and hash
-	}
-	go func() {
-		r.addApproval(&Approval{Kind: "new-session", Session: s.ID, Label: s.Label, Challenge: ch,
-			Options: opts, Origin: in.Origin, Explanation: in.Explanation, Batch: in.Batch})
-	}()
-	return s.ID, nil
-}
-
-// deployKeyTokenStore: the core opens it only inside a deploy-key call (core/deploykeys.go)
-const deployKeyTokenStore = "github-deploy-keys"
-
-// withHarnessStores: the chosen stores plus the harness's, sorted (the core refuses unknown ones)
-func (r *Router) withHarnessStores(chosen, harness []string) ([]string, error) {
-	set := map[string]bool{}
-	for _, n := range append(append([]string{}, chosen...), harness...) {
-		if n == flyStore {
-			return nil, fmt.Errorf("store %s holds the core's Fly token and never goes to a session", n)
-		}
-		if n == deployKeyTokenStore {
-			return nil, fmt.Errorf("store %s holds the deploy-key token: only a phone-approved deploy-key call opens it", n)
-		}
-		set[n] = true
-	}
-	out := make([]string, 0, len(set))
-	for n := range set {
-		out = append(out, n)
-	}
-	sort.Strings(out)
-	return out, nil
-}
-
-// ---- approvals ---------------------------------------------------------------------------------------
-
-func (r *Router) Respond(id, signature string) (*Doc, string, error) {
+// Respond: the phone's signatures, one per draft in order → the session the approval was for. The certs are notarized
+// here (a refusal leaves the approval in the Inbox); what follows runs as the approval's kind says.
+func (r *Router) Respond(id string, sigs []string) (string, error) {
 	var a *Approval
 	r.expireApprovals(time.Now().UTC()) // an approval answered after inboxTTL is gone: the phone's answer comes too late
-	r.st.Do(func(d *persisted) { a = d.Approvals[id] })
+	r.st.Do(func(d *persisted) {
+		if x := d.Approvals[id]; x != nil {
+			c := *x
+			a = &c
+		}
+	})
 	if a == nil {
-		return nil, "", fmt.Errorf("no such approval (answered, denied or expired)")
+		return "", fmt.Errorf("no such approval (answered, denied or expired)")
 	}
-	if a.Kind == "add-store" {
-		return r.respondAddStore(a, signature)
+	if len(sigs) != len(a.Drafts) {
+		return "", &badRequest{fmt.Sprintf("this approval has %d draft(s): one signature each, in order", len(a.Drafts))}
 	}
-	in := map[string]any{"challenge": a.Challenge, "signature": signature}
-	// a start the answer leads to is a tracked lifecycle action (drain.go): during a drain the answer is refused before
-	// the core uses it up, so the approval stays in the Inbox for the phone to answer again
 	done, err := r.begin(a.Session, "approved")
 	if err != nil {
-		return nil, "", err
+		return "", err
 	}
-	ans, extra, err := r.core.CallAnswer("/approve/by-phone", in)
-	if err != nil {
-		done()
-		return nil, "", err
+	ncs := []kernel.NotarizedCert{}
+	for i, d := range a.Drafts {
+		nc, err := r.notarizeDraft(d, sigs[i])
+		if err != nil {
+			done()
+			return "", err
+		}
+		ncs = append(ncs, nc)
 	}
-	r.logInputs(extra.Entry)
 	r.st.Do(func(d *persisted) {
 		delete(d.Approvals, id)
-		if a.Kind == "new-session" { // outcomes.go: the core's approval, by the phone, of exactly the proposal
-			noteOutcome(d, a.Origin, a.Kind, a.Session, outcomeApproved, 0, ans)
-		}
+		noteOutcome(d, a.Origin, a.Kind, a.Session, outcomeApproved, 0)
 	})
-	go func() {
-		defer done()
-		r.startAndCertify(a.Session, ans)
-	}()
-	return ans, a.Session, nil
-}
-
-// selfSuccessionLocks: one new cert of a running machine at a time (an add-store answer, a downgrade's finish), so each
-// call sends the core the machine's newest cert and carry and stores the answer before the next one reads them
-var selfSuccessionLocks sync.Map
-
-func selfSuccessionLock(machine string) func() {
-	m, _ := selfSuccessionLocks.LoadOrStore(machine, &sync.Mutex{})
-	mu := m.(*sync.Mutex)
-	mu.Lock()
-	return mu.Unlock
-}
-
-// respondAddStore: the phone's answer to "add store X to this running machine". The core answers every add-store onto
-// the machine's newest cert, which the router sends beside it as current (core addOnto), so every approved store ends
-// in the session whatever order and timing the phone answers in (2026-10-13: identity and yyc, filed 20 minutes apart
-// and approved together; the second answer rebuilt the cert from the one both were filed against and yyc left). The
-// router never stores an answer that loses a store the session holds: the live core (sha-06ab2452f8ad, until the held
-// one goes live) ignores current and answers from the cert the challenge was made from, and then the approval is filed
-// again from the newest cert for the phone to answer once more, instead of dropping a store.
-func (r *Router) respondAddStore(a *Approval, signature string) (*Doc, string, error) {
-	unlock := selfSuccessionLock(a.Machine)
-	defer unlock()
-	var cur *Doc
-	var have []string
-	r.st.Do(func(d *persisted) {
-		if s := d.Sessions[a.Session]; s != nil && s.MachineID == a.Machine && s.State == "started" {
-			cur, have = s.Cert, append([]string{}, s.Stores...)
-		}
-	})
-	if cur == nil {
-		r.st.Do(func(d *persisted) {
-			delete(d.Approvals, a.ID)
-			noteOutcome(d, a.Origin, a.Kind, a.Session, outcomeDropped, 0, nil)
-		})
-		return nil, "", fmt.Errorf("the session no longer runs on the machine this store was asked for")
-	}
-	store := a.Options["store"]
-	done, err := r.begin(a.Session, "approved")
-	if err != nil {
-		return nil, "", err
-	}
-	defer done()
-	in := map[string]any{"challenge": a.Challenge, "signature": signature, "current": cur, "carry": r.readCarry(a.Machine)}
-	ans, extra, err := r.core.CallAnswer("/approve/by-phone", in)
-	if err != nil {
-		var ce *CoreError
-		if errors.As(err, &ce) && ce.Status == 409 && containsString(have, store) {
-			// this very challenge was answered before (the same store asked for twice from one cert): it is in already
-			r.st.Do(func(d *persisted) {
-				delete(d.Approvals, a.ID)
-				noteOutcome(d, a.Origin, a.Kind, a.Session, outcomeApproved, 0, cur)
-			})
-			return cur, a.Session, nil
-		}
-		return nil, "", err
-	}
-	r.logInputs(extra.Entry) // the machine's new cert
-	var c struct {
-		Stores  []string `json:"stores"`
-		Machine *Started `json:"machine"`
-	}
-	ans.Decode(&c)
-	if c.Machine == nil || c.Machine.ID != a.Machine || !containsAll(c.Stores, append(have, store)) {
-		log.Printf("add-store %s for %s: the core answered %v from a stale cert (the session holds %v): filed again", store, a.Session, c.Stores, have)
-		harness, mode, config := "", certMode(cur), ""
-		r.st.Do(func(d *persisted) {
-			if s := d.Sessions[a.Session]; s != nil {
-				harness, config = s.Harness, lineConfig(s)
-			}
-		})
-		ch, err := r.succession(cur, a.Machine, sortedSet(append(have, store)), harness, mode, "", config, "")
+	switch a.Kind {
+	case "new-session", "resume-upgrade":
+		err = r.fromPhoneSource(a, ncs[0])
 		if err != nil {
-			r.st.Do(func(d *persisted) { delete(d.Approvals, a.ID) })
-			return nil, "", fmt.Errorf("another store was added while this approval waited, and asking again failed: %v", err)
+			done()
+			r.setState(a.Session, "failed", err.Error())
+			return "", err
 		}
-		r.st.Do(func(d *persisted) {
-			if x := d.Approvals[a.ID]; x != nil {
-				x.Challenge = ch
-			}
-		})
-		return nil, "", fmt.Errorf("another store was added to this session while this approval waited: approve it again")
+		go func() {
+			defer done()
+			r.startFrom(a.Session)
+		}()
+	default: // an add-on to a running machine (addons.go)
+		defer done()
+		if err := r.applyAddOn(a, ncs); err != nil {
+			return "", err
+		}
 	}
+	return a.Session, nil
+}
+
+// fromPhoneSource: a phone-made source becomes the session's: root's ⊤ moved along (sink, source-x, P) is its main
+// grant. A resume out of a new source burns the paused one (it is never continued).
+func (r *Router) fromPhoneSource(a *Approval, nc kernel.NotarizedCert) error {
+	s, err := successionOf(nc.Cert)
+	if err != nil {
+		return err
+	}
+	top, err := r.rootGrant()
+	if err != nil {
+		return err
+	}
+	g, err := r.k.Move(top, nc)
+	if err != nil {
+		return err
+	}
+	var old *Chain
 	r.st.Do(func(d *persisted) {
-		delete(d.Approvals, a.ID)
-		noteOutcome(d, a.Origin, a.Kind, a.Session, outcomeApproved, 0, ans) // the machine's new cert names the store
-		d.Certs[a.Machine] = ans
-		if s := d.Sessions[a.Session]; s != nil {
-			s.Cert, s.Stores = ans, c.Stores
+		x := d.Sessions[a.Session]
+		if x == nil {
+			return
+		}
+		if x.Chain != nil {
+			c := x.Chain.clone()
+			old = &c
+		} else {
+			x.Chain = &Chain{Steps: []ChainStep{}}
+		}
+		x.Image = s.Successor.Image
+		x.State, x.Error = "starting", ""
+	})
+	if old != nil && old.Source.ID != "" && old.Machine == nil {
+		if err := r.burn(a.Session, old.Source); err != nil {
+			log.Printf("session %s: burning the paused source %s: %v", a.Session, old.Source.ID, err)
+		}
+	}
+	certID := r.stepCert(a.Session, nc)
+	gid := r.stepGrant(a.Session, g)
+	r.st.Do(func(d *persisted) {
+		if x := d.Sessions[a.Session]; x != nil && x.Chain != nil {
+			x.Chain.Origin, x.Chain.Source, x.Chain.Main = certID, s.Successor, gid
+			x.Chain.Spawn, x.Chain.Machine, x.Chain.AddOns, x.Chain.Held = "", nil, nil, ""
 		}
 	})
-	r.carryAfter(a.Machine, a.Machine, ans, extra) // its carried stores go on; the added one comes from its unlock
-	return ans, a.Session, nil
-}
-
-func containsString(list []string, x string) bool {
-	for _, s := range list {
-		if s == x {
-			return true
-		}
-	}
-	return false
-}
-
-// containsAll: every name of want is in have
-func containsAll(have, want []string) bool {
-	for _, w := range want {
-		if !containsString(have, w) {
-			return false
-		}
-	}
-	return true
+	return nil
 }
 
 func (r *Router) Reject(id string) error { return r.RejectAs(id, outcomeDenied) }
@@ -665,7 +387,7 @@ func (r *Router) RejectAs(id, outcome string) error {
 		a = d.Approvals[id]
 		delete(d.Approvals, id)
 		if a != nil {
-			noteOutcome(d, a.Origin, a.Kind, a.Session, outcome, 0, nil)
+			noteOutcome(d, a.Origin, a.Kind, a.Session, outcome, 0)
 		}
 	})
 	if a == nil {
@@ -678,13 +400,153 @@ func (r *Router) RejectAs(id, outcome string) error {
 		case a.Kind == "new-session":
 			delete(d.Sessions, a.Session) // no machine was made
 		case a.Kind == "resume-upgrade":
-			s.State, s.Error = "paused", "" // nothing happened to the old machine
+			s.State, s.Error = "paused", "" // nothing happened to the paused source
 		}
 	})
 	return nil
 }
 
-// ---- pause ---------------------------------------------------------------------------------------------
+// ---- start: spawn from the current source -------------------------------------------------------------------------
+
+// the router's waits on the spawner's single-shot calls (tests shorten them)
+var (
+	initStep, initMax = 5 * time.Second, 12 * time.Minute // a session image's first pull on a Fly host takes minutes
+	killStep, killMax = time.Second, 2 * time.Minute
+)
+
+// machineLimitWait / machineLimitStep: how long a start waits out Fly's org machine limit, and how often it tries
+var machineLimitWait, machineLimitStep = 3 * time.Hour, time.Minute
+
+func flyMachineLimit(err error) bool {
+	return strings.Contains(strings.ToLower(err.Error()), "machine limit")
+}
+
+// startFrom: spawn from the session's current source, wait for the spawner's init (the spawn cert), notarize it and
+// move the main grant onto the machine — the grant the machine takes at boot (GET /m/grant)
+func (r *Router) startFrom(sid string) {
+	var s Session
+	var c *Chain
+	r.st.Do(func(d *persisted) {
+		if x := d.Sessions[sid]; x != nil && x.Chain != nil {
+			s, c = *x, ptr(x.Chain.clone())
+		}
+	})
+	if c == nil || c.Origin == "" {
+		r.setState(sid, "failed", "start: the session has no source")
+		return
+	}
+	r.setState(sid, "starting", "")
+	origin, err := r.notarized(c.Origin)
+	if err != nil {
+		r.setState(sid, "failed", "start: "+err.Error())
+		return
+	}
+	size := s.Size
+	if size == "" {
+		size = "medium"
+	}
+	machine, err := r.k.Spawn(origin, r.cfg.Region, size)
+	// Fly's org machine limit (lessons/58): nothing was created and the source is still unspent, so wait for a machine
+	// to go (sessions pause by themselves) instead of failing a start Deyao already approved. A drain doesn't wait.
+	for waited := time.Duration(0); err != nil && flyMachineLimit(err) && waited < machineLimitWait; waited += machineLimitStep {
+		if r.draining() || r.sleepUnlessDraining(machineLimitStep) {
+			r.setState(sid, "paused", "start: "+errLimitDraining.Error())
+			return
+		}
+		log.Printf("start: the Fly org is at its machine limit; trying again in %s", machineLimitStep)
+		machine, err = r.k.Spawn(origin, r.cfg.Region, size)
+	}
+	if err != nil {
+		r.setState(sid, "failed", "spawn: "+err.Error())
+		return
+	}
+	r.st.Do(func(d *persisted) {
+		d.Machines[machine] = sid
+		if x := d.Sessions[sid]; x != nil {
+			x.MachineID, x.PausedAt = machine, nil
+		}
+	})
+	var cert kernel.SignedDoc
+	for deadline := time.Now().Add(initMax); ; {
+		cert, err = r.k.Init(machine)
+		if err == nil || kernelStatus(err) != 409 && kernelStatus(err) != 502 || time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(initStep)
+	}
+	if err != nil {
+		// without a spawn cert nothing can kill it: the spawner destroys a machine that runs the wrong image; one that
+		// never came up stays for the Machines view (machines.go) and Fly
+		r.st.Do(func(d *persisted) {
+			if x := d.Sessions[sid]; x != nil && x.MachineID == machine {
+				x.MachineID = ""
+			}
+		})
+		r.setState(sid, "failed", "init: "+err.Error())
+		return
+	}
+	sp, _ := successionOf(cert)
+	m := sp.Successor
+	// the machine's keys from its spawn cert: from here on its requests are signed with them (it polls /m/boot)
+	r.st.Do(func(d *persisted) {
+		d.Started[machine] = &Started{ID: machine, Image: c.Source.Image, EncryptionKey: m.EncryptionKey, SigningKey: m.SigningKey}
+	})
+	nc, err := r.k.NotarizeNew(cert)
+	if err != nil {
+		r.setState(sid, "failed", "notarizing the spawn cert: "+err.Error())
+		return
+	}
+	main, err := r.doc(c.Main)
+	var g kernel.SignedDoc
+	if err == nil {
+		g, err = r.k.Move(main, nc)
+	}
+	if err != nil {
+		r.killQuietly(sid, nc)
+		r.setState(sid, "failed", "moving the grant onto the machine: "+err.Error())
+		return
+	}
+	spawnID := r.stepCert(sid, nc)
+	gid := r.stepGrant(sid, g)
+	r.st.Do(func(d *persisted) {
+		if st := d.Started[machine]; st != nil {
+			st.Spawn = spawnID
+		}
+		if x := d.Sessions[sid]; x != nil && x.Chain != nil {
+			x.Chain.Spawn, x.Chain.Machine, x.Chain.Main, x.Chain.Held, x.Chain.AddOns = spawnID, &m, gid, gid, nil
+			x.State, x.Error = "initialising", ""
+		}
+	})
+	log.Printf("session %s: machine %s spawned from %s", sid, machine, c.Source.ID)
+}
+
+func ptr[T any](v T) *T { return &v }
+
+// killQuietly: a machine the router can't give a grant is killed (its spawn cert is notarized); the session fails
+func (r *Router) killQuietly(sid string, spawn kernel.NotarizedCert) {
+	cert, err := r.killUntilDestroyed(spawn, nil)
+	if err != nil {
+		log.Printf("session %s: kill after a failed start: %v", sid, err)
+		return
+	}
+	if nc, err := r.k.NotarizeNew(cert); err == nil {
+		r.docs.PutNotarized(nc)
+	}
+}
+
+// killUntilDestroyed: the spawner's kill again until Fly reports the machine destroyed (409 before)
+func (r *Router) killUntilDestroyed(spawn kernel.NotarizedCert, snap *SnapshotClaim) (kernel.SignedDoc, error) {
+	deadline := time.Now().Add(killMax)
+	for {
+		d, err := r.k.Kill(spawn, snap)
+		if err == nil || kernelStatus(err) != 409 || time.Now().After(deadline) {
+			return d, err
+		}
+		time.Sleep(killStep)
+	}
+}
+
+// ---- pause ------------------------------------------------------------------------------------------------------------
 
 func (r *Router) Pause(id string) error {
 	unlock, err := r.lock(id, "pausing")
@@ -697,31 +559,94 @@ func (r *Router) Pause(id string) error {
 			s = *x
 		}
 	})
-	if s.ID == "" || s.MachineID == "" || s.Cert == nil {
+	if s.ID == "" || s.MachineID == "" || s.Chain == nil || s.Chain.Spawn == "" {
 		unlock()
 		return fmt.Errorf("session %s isn't running", id)
 	}
 	r.setState(id, "pausing", "")
 	go func() {
 		defer unlock()
-		r.lastSnapshot(id, s.MachineID)
-		if _, err := r.killMachine(s.MachineID); err != nil { // vouch.go: with the snapshot's hash
+		if err := r.snapshotAndKill(id); err != nil {
 			r.setState(id, "failed", "kill: "+err.Error())
-			return
 		}
-		now := time.Now().UTC()
-		r.st.Do(func(d *persisted) {
-			if x := d.Sessions[id]; x != nil {
-				x.State, x.MachineID, x.PausedAt, x.Status = "paused", "", &now, ""
-			}
-		})
 	}()
 	return nil
 }
 
-// ---- resume ----------------------------------------------------------------------------------------------
+// snapshotAndKill: the machine's final snapshot, then the spawner's kill into a fresh source naming it, notarized; the
+// main grant moved onto that source. The session is paused.
+func (r *Router) snapshotAndKill(id string) error {
+	var machine, spawnID, mainID string
+	r.st.Do(func(d *persisted) {
+		if x := d.Sessions[id]; x != nil && x.Chain != nil {
+			machine, spawnID, mainID = x.MachineID, x.Chain.Spawn, x.Chain.Main
+		}
+	})
+	if machine == "" || spawnID == "" {
+		return errors.New("no running machine")
+	}
+	r.lastSnapshot(id, machine)
+	spawn, err := r.notarized(spawnID)
+	if err != nil {
+		return err
+	}
+	cert, err := r.killUntilDestroyed(spawn, r.snapshotClaim(machine))
+	if err != nil {
+		return err
+	}
+	nc, err := r.k.NotarizeNew(cert)
+	if err != nil {
+		return fmt.Errorf("notarizing the kill: %w", err)
+	}
+	kc, _ := successionOf(cert)
+	certID := r.stepCert(id, nc)
+	main, err := r.doc(mainID)
+	var g kernel.SignedDoc
+	if err == nil {
+		g, err = r.k.Move(main, nc)
+	}
+	if err != nil {
+		return fmt.Errorf("moving the main grant onto the paused source: %w", err)
+	}
+	gid := r.stepGrant(id, g)
+	now := time.Now().UTC()
+	r.st.Do(func(d *persisted) {
+		if x := d.Sessions[id]; x != nil && x.Chain != nil {
+			x.Chain.Origin, x.Chain.Source, x.Chain.Main = certID, kc.Successor, gid
+			x.Chain.Spawn, x.Chain.Machine, x.Chain.AddOns, x.Chain.Held = "", nil, nil, ""
+			x.State, x.Error, x.MachineID, x.PausedAt, x.Status = "paused", "", "", &now, ""
+		}
+	})
+	dropOutbox(machine)
+	return nil
+}
 
-func (r *Router) Resume(id string, upgrade bool) error {
+// snapshotClaim: the machine's last uploaded snapshot (its sha256 and its signature over it), if any
+func (r *Router) snapshotClaim(machine string) *SnapshotClaim {
+	var c *SnapshotClaim
+	r.st.Do(func(d *persisted) {
+		if st := d.Started[machine]; st != nil && st.Snapshot != "" {
+			c = &SnapshotClaim{Sha256: st.Snapshot, Sig: st.SnapshotSig}
+		}
+	})
+	return c
+}
+
+// ---- resume -----------------------------------------------------------------------------------------------------------
+
+// ResumeIn: what a resume may change. Size is the router's (the spawn's); the rest is in the source, so a change
+// makes a new phone-made source.
+type ResumeIn struct {
+	Upgrade  bool   `json:"upgrade"`
+	Prompt   string `json:"prompt"`
+	Rollback string `json:"-"` // a restart's rollback marker (sessionops.go)
+	ResumeOptions
+}
+
+func (r *Router) Resume(id string, in ResumeIn) error {
+	if err := r.applyResumeOptions(id, in.ResumeOptions); err != nil { // sessionops.go: size, model, apiProxy
+		return err
+	}
 	unlock, err := r.lock(id, "starting")
 	if err != nil {
 		return err
@@ -730,61 +655,71 @@ func (r *Router) Resume(id string, upgrade bool) error {
 	r.st.Do(func(d *persisted) {
 		if x := d.Sessions[id]; x != nil {
 			s = *x
+			if x.Chain != nil {
+				c := x.Chain.clone()
+				s.Chain = &c
+			}
 		}
 	})
-	if s.ID == "" || s.State != "paused" || s.Cert == nil {
+	if s.ID == "" || s.State != "paused" || s.Chain == nil || s.Chain.Source.ID == "" {
 		unlock()
 		return fmt.Errorf("session %s isn't paused", id)
 	}
-	r.setState(id, "resuming", "")
-	go func() {
-		defer unlock()
-		image := s.Image // the same image, pinned by digest
-		if !upgrade && slices.Contains(s.Stores, "claude") && legacyLoginImage(s.Image, r.cfg.ImageOrder) {
-			upgrade = true // its machine would fetch the Claude login from Jarvis 1: the newest image instead
-			log.Printf("session %s: resume on the newest image (its image %s predates the router's Claude login)", id, s.Image)
-		}
-		if upgrade {
-			image = r.cfg.SessionImage
-		}
-		once := r.resumeOnce(&s) // vouch.go: a resume prompt or a rollback: only the phone approves one
-		ch, err := r.succession(s.Cert, "", s.Stores, s.Harness, s.PermissionMode, image, lineConfig(&s), once)
-		if err != nil {
-			r.setState(id, "paused", "resume: "+err.Error())
-			return
-		}
-		if once != "" {
-			r.onceTaken(id) // the cert will carry them; nothing else delivers them
-			r.setState(id, "approval", "")
-			r.addApproval(&Approval{Kind: "resume-upgrade", Session: id, Label: s.Label, Challenge: ch,
-				Options: map[string]string{"permissionMode": normMode(s.PermissionMode), "once": once}})
-			return
-		}
-		// the permission mode is signed: a resume in another mode than the line's cert (raising to bypass) is a
-		// change the iPhone approves, like a newer image
-		if certMode(s.Cert) != normMode(s.PermissionMode) {
-			r.setState(id, "approval", "")
-			r.addApproval(&Approval{Kind: "resume-upgrade", Session: id, Label: s.Label, Challenge: ch,
-				Options: map[string]string{"permissionMode": normMode(s.PermissionMode)}})
-			return
-		}
-		if upgrade {
-			// a change: the iPhone approves first; nothing happens to the old machine until then
-			r.setState(id, "approval", "")
-			r.addApproval(&Approval{Kind: "resume-upgrade", Session: id, Label: s.Label, Challenge: ch})
-			return
-		}
-		a, err := r.core.Call("/approve/by-dead-machine", map[string]any{"challenge": ch})
-		if err != nil {
-			r.setState(id, "paused", "resume: "+err.Error())
-			return
-		}
-		r.startAndCertify(id, a)
-	}()
+	image := s.Chain.Source.Image
+	if in.Upgrade {
+		image = r.cfg.SessionImage
+	}
+	settings, err := r.sessionSettings(&s, in.Prompt, in.Rollback, nil)
+	if err != nil {
+		unlock()
+		return err
+	}
+	if image == s.Chain.Source.Image && in.Prompt == "" && in.Rollback == "" && sameSettings(settings, s.Chain.Source.Settings) {
+		r.setState(id, "resuming", "")
+		go func() {
+			defer unlock()
+			r.startFrom(id)
+		}()
+		return nil
+	}
+	defer unlock()
+	// a change to what the source holds: the phone signs a new source, starting from the paused one's snapshot
+	src := kernel.Object{ID: newSourceID(), Image: image, Settings: settings, Snapshot: s.Chain.Source.Snapshot}
+	dr, err := r.makeDraft(kernel.Object{ID: kernel.Sink}, src, mainPair(s.ID, s.Stores))
+	if err != nil {
+		return err
+	}
+	opts := map[string]string{"permissionMode": normMode(s.PermissionMode), "model": s.Model, "size": s.Size}
+	if in.Upgrade {
+		opts["upgrade"] = "1"
+	}
+	if in.Prompt != "" {
+		opts["prompt"] = fmt.Sprintf("(%d characters)", len([]rune(in.Prompt)))
+	}
+	if in.Rollback != "" {
+		opts["rollback"] = in.Rollback
+	}
+	r.setState(id, "approval", "")
+	r.addApproval(&Approval{Kind: "resume-upgrade", Session: id, Label: s.Label, Drafts: []Draft{dr}, Source: &src, Options: opts})
 	return nil
 }
 
-// ---- destroy ---------------------------------------------------------------------------------------------
+// sameSettings: two sources' settings hold the same start settings once what only a phone-made source applies (its
+// prompt, attachments and rollback) is left out
+func sameSettings(a, b string) bool {
+	strip := func(s string) string {
+		var x SessionSettings
+		if json.Unmarshal([]byte(s), &x) != nil {
+			return "?" + s
+		}
+		x.Prompt, x.Attachments, x.Rollback = "", nil, ""
+		out, _ := json.Marshal(x)
+		return string(out)
+	}
+	return strip(a) == strip(b)
+}
+
+// ---- destroy ------------------------------------------------------------------------------------------------------------
 
 func (r *Router) Destroy(id string) error { return r.DestroyWith(id, false) }
 
@@ -794,15 +729,14 @@ func (r *Router) DestroyWith(id string, force bool) error {
 	return r.destroy(id, destroyOpts{force: force})
 }
 
-// destroyOpts: force = destroy even when the archive failed; report (oneshot.go) gets, once the line is
-// burnt and the session is a record, the repos' state as the final snapshot recorded it and what the archive did
+// destroyOpts: force = destroy even when the archive failed; report (oneshot.go) gets, once the source is burnt and
+// the session is a record, the repos' state as the final snapshot recorded it and what the archive did
 type destroyOpts struct {
 	force  bool
 	report func(s Session, changes map[string]any, archived *ArchiveInfo, aerr error)
 }
 
 func (r *Router) destroy(id string, o destroyOpts) error {
-	force := o.force
 	unlock, err := r.lock(id, "destroying")
 	if err != nil {
 		return err
@@ -820,29 +754,24 @@ func (r *Router) destroy(id string, o destroyOpts) error {
 	r.setState(id, "destroying", "")
 	go func() {
 		defer unlock()
-		if s.MachineID != "" && !r.snapshotAndKill(id, s.MachineID) {
-			return
+		if s.MachineID != "" && s.Chain != nil && s.Chain.Spawn != "" {
+			if err := r.snapshotAndKill(id); err != nil {
+				r.setState(id, "failed", "kill: "+err.Error())
+				return
+			}
+			r.setState(id, "destroying", "")
 		}
 		var changes map[string]any
 		if o.report != nil {
 			changes = r.snapshotChanges(id) // archive.go: before finish() drops the snapshot
 		}
 		archived, aerr := r.archive(id)
-		if aerr != nil && !force {
+		if aerr != nil && !o.force {
 			r.setState(id, "paused", "archive: "+aerr.Error())
 			return
 		}
-		if s.Cert != nil {
-			// end the line: a succession to the null image, answered by the dead-machine responder → burn cert
-			ch, err := r.succession(s.Cert, "", nil, "", "", nullImage, "", "")
-			var a *Doc
-			if err == nil {
-				a, err = r.core.Call("/approve/by-dead-machine", map[string]any{"challenge": ch})
-			}
-			if err == nil {
-				_, err = r.core.Call("/certify", map[string]any{"approval": a, "machine": ""})
-			}
-			if err != nil {
+		if c := r.chainOf(id); c != nil && c.Source.ID != "" {
+			if err := r.burn(id, c.Source); err != nil {
 				log.Printf("session %s: burn: %v", id, err)
 			}
 		}
@@ -870,6 +799,20 @@ func (r *Router) destroy(id string, o destroyOpts) error {
 	return nil
 }
 
+// burn: (source, sink) by the gullible signer, notarized — the source is never continued
+func (r *Router) burn(sid string, src kernel.Object) error {
+	cert, err := r.k.GullibleSign(src, kernel.Object{ID: kernel.Sink}, kernel.Top())
+	if err != nil {
+		return err
+	}
+	nc, err := r.k.NotarizeNew(cert)
+	if err != nil {
+		return err
+	}
+	r.stepCert(sid, nc)
+	return nil
+}
+
 // finish: the session leaves the list for the records; its snapshots go
 func (r *Router) finish(id string) {
 	r.st.Do(func(d *persisted) {
@@ -885,128 +828,34 @@ func (r *Router) finish(id string) {
 		}
 		for m, sid := range d.Machines {
 			if sid == id {
-				os.Remove(r.st.snapshotPath(m))
-				os.Remove(r.st.snapshotPath(m) + ".sig")
-				r.dropCarry(m) // the carried secrets go with the line (the core has burnt it too)
+				if st := d.Started[m]; st != nil && st.Snapshot != "" {
+					os.Remove(r.st.snapshotPath(st.Snapshot))
+				}
+				dropOutbox(m)
 			}
+		}
+		if s.Chain != nil && s.Chain.Source.Snapshot != "" {
+			os.Remove(r.st.snapshotPath(s.Chain.Source.Snapshot))
 		}
 		s.State, s.MachineID = "destroyed", ""
 		d.Records = append([]*Record{{Session: *s, DestroyedAt: time.Now().UTC()}}, d.Records...)
 	})
 }
 
-// ---- add a store (asked by the machine) -------------------------------------------------------------------
+// ---- the last snapshot --------------------------------------------------------------------------------------------------
 
-func (r *Router) AddStore(machine, store string) error {
-	var sid string
-	r.st.Do(func(d *persisted) { sid = d.Machines[machine] })
-	return r.AddStoreFrom(machine, store, Origin{Caller: Caller{Kind: "session", Session: sid}, Call: APICall{Method: "POST", Path: "/m/add-store", Args: map[string]any{"store": store}}}, "", "")
-}
-
-// AddStoreFrom: the add-store approval, with its caller and the caller's explanation (inbox.go)
-func (r *Router) AddStoreFrom(machine, store string, o Origin, explanation, batch string) error {
-	var s Session
-	r.st.Do(func(d *persisted) {
-		if x := d.Sessions[d.Machines[machine]]; x != nil {
-			s = *x
-		}
-	})
-	if s.ID == "" || s.MachineID != machine || s.Cert == nil {
-		return fmt.Errorf("this machine isn't a running session")
-	}
-	stores, err := r.withHarnessStores(append(append([]string{}, s.Stores...), store), nil)
-	if err != nil {
-		return err
-	}
-	ch, err := r.succession(s.Cert, machine, stores, s.Harness, certMode(s.Cert), "", lineConfig(&s), "")
-	if err != nil {
-		return err
-	}
-	r.addApproval(&Approval{Kind: "add-store", Session: s.ID, Machine: machine, Label: s.Label, Challenge: ch,
-		Options: map[string]string{"store": store}, Origin: &o, Explanation: explanation, Batch: batch})
-	return nil
-}
-
-// ---- downgrade in place (asked by the machine) -------------------------------------------------------------
-
-// DowngradeBegin: the machine names a subset of its stores and its new key pair → the challenge it must sign
-// with its old key
-func (r *Router) DowngradeBegin(machine string, stores []string, encKey, sigKey string) (*Doc, error) {
-	var s Session
-	r.st.Do(func(d *persisted) {
-		if x := d.Sessions[d.Machines[machine]]; x != nil {
-			s = *x
-		}
-	})
-	if s.ID == "" || s.MachineID != machine || s.Cert == nil {
-		return nil, fmt.Errorf("this machine isn't a running session")
-	}
-	harness := s.Harness
-	if harness == "" {
-		harness = "claude"
-	}
-	opts := map[string]string{"harness": harness, "permissionMode": certMode(s.Cert)}
-	if c := lineConfig(&s); c != "" {
-		opts["config"] = c
-	}
-	return r.core.Call("/succession", map[string]any{"predecessor": s.Cert, "machine": machine, "stores": sortedSet(stores),
-		"options": opts, "newEncryptionKey": encKey, "newSigningKey": sigKey})
-}
-
-// DowngradeFinish: the challenge signed with the machine's old key → its new cert; from now on the router
-// knows the machine by its new signing key
-func (r *Router) DowngradeFinish(machine string, challenge *Doc, signature string) (*Doc, error) {
-	unlock := selfSuccessionLock(machine)
-	defer unlock()
-	cert, ans, err := r.core.CallAnswer("/approve/by-old-key", map[string]any{"challenge": challenge, "signature": signature, "carry": r.readCarry(machine)})
-	if err != nil {
-		return nil, err
-	}
-	r.logInputs(ans.Entry)
-	var c struct {
-		Machine *Started `json:"machine"`
-		Stores  []string `json:"stores"`
-	}
-	if cert.Decode(&c) != nil || c.Machine == nil || c.Machine.ID != machine {
-		return nil, fmt.Errorf("the core's cert names another machine")
-	}
-	r.st.Do(func(d *persisted) {
-		d.Certs[machine] = cert
-		d.Started[machine] = c.Machine
-		if s := d.Sessions[d.Machines[machine]]; s != nil {
-			s.Cert, s.Stores = cert, c.Stores
-		}
-	})
-	r.carryAfter(machine, machine, cert, ans) // the dropped stores leave the carried secrets at once
-	return cert, nil
-}
-
-// ---- commands to machines ---------------------------------------------------------------------------------
-
-func (r *Router) queue(machine string) chan string {
-	r.cmdMu.Lock()
-	defer r.cmdMu.Unlock()
-	q := r.commands[machine]
-	if q == nil {
-		q = make(chan string, 8)
-		r.commands[machine] = q
-	}
-	return q
-}
-
-func (r *Router) send(machine, cmd string) {
-	select {
-	case r.queue(machine) <- cmd:
-	default:
-	}
-}
-
-// lastSnapshot: before a pause or destroy kills the machine, its last snapshot (or its "nothing to snapshot"
-// while booting), waiting up to SnapshotWait with the reason shown in the app. A machine that never got past boot
-// (no status report from it) isn't asked at all: it has nothing to snapshot, and an older image may never answer
-// (e.g. stuck pulling the secrets of a locked store).
+// lastSnapshot: before a pause or destroy kills the machine, its final snapshot (or its "nothing to snapshot" while
+// booting), waiting up to SnapshotWait with the reason shown in the app. A machine that never got past boot (no status
+// report from it) isn't asked at all.
 // silentAfter: a booted machine whose last report is older than this isn't asked for a snapshot
 var silentAfter = 3 * time.Minute
+
+var bootGrace = 90 * time.Second
+
+var pulledMachines sync.Map // machine → its secrets pull went through (it is about to finish booting)
+
+func markPulled(machine string)     { pulledMachines.Store(machine, true) }
+func hasPulled(machine string) bool { _, ok := pulledMachines.Load(machine); return ok }
 
 func (r *Router) lastSnapshot(id, machine string) {
 	booted := func() (b bool) {
@@ -1017,9 +866,8 @@ func (r *Router) lastSnapshot(id, machine string) {
 		})
 		return
 	}
-	// a machine that has its secrets is seconds from booted (repos, then its first report): wait for it, or a pause
-	// right after a start would leave its successor with no state at all (its cert names the snapshot this machine
-	// signs, and only that one: vouch.go)
+	// a machine that has its secrets is seconds from booted: wait for it, or a pause right after a start would leave
+	// its successor with no state at all
 	for deadline := time.Now().Add(bootGrace); !booted() && hasPulled(machine) && time.Now().Before(deadline); {
 		time.Sleep(time.Second)
 	}
@@ -1027,8 +875,6 @@ func (r *Router) lastSnapshot(id, machine string) {
 		log.Printf("session %s: %s never got past boot; nothing to snapshot", id, machine)
 		return
 	}
-	// a machine that has gone silent (stopped or gone: its agent reports at least every 60 s) can't answer: no wait,
-	// so a pause that a router restart re-runs still reaches the kill
 	var last time.Time
 	r.st.Do(func(d *persisted) {
 		if x := d.Sessions[id]; x != nil && x.Live != nil {
@@ -1040,13 +886,13 @@ func (r *Router) lastSnapshot(id, machine string) {
 		return
 	}
 	done := r.awaitSnapshot(machine)
-	r.send(machine, "snapshot")
+	r.out(machine).word("snapshot")
 	r.setWaiting(id, "waiting for the machine's last snapshot (up to "+waitText(r.cfg.SnapshotWait)+")")
 	defer r.setWaiting(id, "")
 	select {
 	case <-done:
 	case <-time.After(r.cfg.SnapshotWait):
-		log.Printf("session %s: no snapshot from %s within %s; going on from the last one", id, machine, r.cfg.SnapshotWait)
+		log.Printf("session %s: no snapshot from %s within %s; going on without it", id, machine, r.cfg.SnapshotWait)
 	}
 }
 
@@ -1067,53 +913,27 @@ func waitText(d time.Duration) string {
 }
 
 func (r *Router) awaitSnapshot(machine string) chan struct{} {
-	r.cmdMu.Lock()
-	defer r.cmdMu.Unlock()
+	r.snapMu.Lock()
+	defer r.snapMu.Unlock()
 	c := make(chan struct{})
 	r.snapped[machine] = c
 	return c
 }
 
 func (r *Router) snapshotArrived(machine string) {
-	r.cmdMu.Lock()
-	defer r.cmdMu.Unlock()
+	r.snapMu.Lock()
+	defer r.snapMu.Unlock()
 	if c := r.snapped[machine]; c != nil {
 		close(c)
 		delete(r.snapped, machine)
 	}
 }
 
-func normMode(m string) string {
-	if m == "bypass" {
-		return "bypass"
-	}
-	return "auto"
-}
-
-// certMode: the permission mode the line's cert signs (a machine succeeding itself keeps it)
-func certMode(c *Doc) string {
-	if c == nil {
-		return "auto"
-	}
-	var x struct {
-		Options struct {
-			PermissionMode string `json:"permissionMode"`
-		} `json:"options"`
-	}
-	json.Unmarshal([]byte(c.Payload), &x)
-	return normMode(x.Options.PermissionMode)
-}
-
-// sortedSet: the stores sorted, each once (the core takes them only so)
-func sortedSet(xs []string) []string {
-	seen := map[string]bool{}
-	out := []string{}
-	for _, x := range xs {
-		if !seen[x] {
-			seen[x] = true
-			out = append(out, x)
+func containsString(list []string, x string) bool {
+	for _, s := range list {
+		if s == x {
+			return true
 		}
 	}
-	sort.Strings(out)
-	return out
+	return false
 }

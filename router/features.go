@@ -2,12 +2,11 @@ package main
 
 // Features outside the lifecycle (Jarvis 1 parity, docs/PARITY.md). Each lives in its own file, registers its
 // routes in registerFeatures and its background loop in startFeatures, and reads its own settings from the
-// environment (secrets come from k8s/secrets/router.enc.yaml via envFrom). They act on sessions only through
-// the router's own flows and through grants (grants.go); none talks to the core directly, except machines.go's Destroy
-// of a machine with no session (the core's kill, as a pause makes it).
+// environment (secrets come from k8s/secrets/router.enc.yaml via envFrom). They act on sessions only through the
+// router's own flows, the command channel's content-free signals (commands.go) and, while Deyao has opened a terminal,
+// shell commands under it (addons.go).
 
 import (
-	"encoding/json"
 	"log"
 	"net/http"
 )
@@ -34,7 +33,6 @@ func (r *Router) registerFeatures(app appRoute, m machineRoute, public publicRou
 	r.registerTasks(app, m)                 // tasks.go: task instances (one-shot session lines), runs, schedules
 	r.registerInbox(app, m, public)         // inbox.go: requests waiting for the phone (the app's Inbox)
 	r.registerOutcomes(m)                   // outcomes.go: a session reads what became of its requests
-	r.registerVouch(app, m)                 // vouch.go: /m/config, /m/restore-cert, deliveries, the input log
 	r.registerMachines(app)                 // machines.go: every Fly machine of the app; Destroy for one with no session
 	r.registerContent(app, m)               // content.go: content stores (Storage Box folders) for the app and the sessions
 	r.registerClaudeLogin(app, m, public)   // claudelogin.go: the Claude login, its refresh, Re-login, the usage quota
@@ -46,19 +44,18 @@ func (r *Router) startFeatures() {
 	r.endCutOff() // drain.go: what a crash cut off becomes a failed or paused session, before any loop looks
 	r.startDiscord()
 	r.startAutopilot()
-	go r.scheduleLoop()   // schedule.go: wakeups, crons, resume prompts
-	go r.leaseLoop()      // leases.go: expire silent holders, wake promoted ones
-	go r.watchLoop()      // watches.go: run due checks on the watch runner, deliver met / given-up watches
-	go r.archiveLoop()    // archive.go: restore files tidied
-	go r.budgetLoop()     // budget.go: the Fly budget cap
-	go r.bbBudgetLoop()   // bbbudget.go: the Browserbase spend DM
-	go r.uploadsLoop()    // uploads.go: stale attachments
-	go r.inboxLoop()      // inbox.go: requests and approvals go after 10 min
-	go r.outcomeLoop()    // outcomes.go: tell a session what became of its Inbox requests
-	go r.tasksLoop()      // tasks.go: daily schedules, runs, pausing finished task lines
-	go r.inputLogLoop()   // vouch.go: the core's input log onto the volume
-	go r.coreChangeLoop() // corechange.go: a new core → the earlier core's paused sessions are destroyed
-	go r.loginLoop()      // claudelogin.go: refresh the Claude login (own) or mirror Jarvis 1's (follow)
+	go r.scheduleLoop() // schedule.go: wakeups, crons, resume prompts
+	go r.leaseLoop()    // leases.go: expire silent holders, wake promoted ones
+	go r.watchLoop()    // watches.go: run due checks on the watch runner, deliver met / given-up watches
+	go r.archiveLoop()  // archive.go: restore files tidied
+	go r.budgetLoop()   // budget.go: the Fly budget cap
+	go r.bbBudgetLoop() // bbbudget.go: the Browserbase spend DM
+	go r.uploadsLoop()  // uploads.go: stale attachments
+	go r.inboxLoop()    // inbox.go: requests and approvals go after 10 min
+	go r.outcomeLoop()  // outcomes.go: tell a session what became of its Inbox requests
+	go r.tasksLoop()    // tasks.go: daily schedules, runs, pausing finished task lines
+	go r.grantLoop()    // chain.go: an add-on's until passed → the machine holds its main grant again
+	go r.loginLoop()    // claudelogin.go: refresh the Claude login, write it into the store claude
 }
 
 // stateHooks: add fields to GET /api/state
@@ -75,36 +72,6 @@ func (r *Router) DM(text string) {
 	log.Printf("[dm] %s", text)
 }
 
-// DeliverCanned: a text built into the session image ("continue", the watchdog's nudge), as a delivery the core
-// attests: the router picks when, never what
-func (r *Router) DeliverCanned(session string, d Delivery, text string) error {
-	return r.deliverVouched(session, d)
-}
-
-// envHooks: each adds to the env a machine starts with (start and resume; flows.go machineEnv). Not secret:
-// the env is unsigned.
-var envHooks []func(r *Router, s *Session, env map[string]string)
-
-// onDestroy: each runs once a session's machine is killed and its line burned, before it becomes a record
+// onDestroy: each runs once a session's machine is killed and its source burned, before it becomes a record
 // (flows.go Destroy), in order; they must not fail the destroy
 var onDestroy []func(r *Router, s Session)
-
-// coreSetUp: the core answers and was set up (Reset or Recover): its state names a master key
-func (r *Router) coreSetUp() bool {
-	status, b, err := r.core.Raw("GET", "/identity", nil)
-	if err != nil || status != 200 {
-		return false
-	}
-	var id struct {
-		State struct {
-			Payload string `json:"payload"`
-		} `json:"state"`
-	}
-	var st struct {
-		Master string `json:"master"`
-	}
-	if json.Unmarshal(b, &id) != nil || json.Unmarshal([]byte(id.State.Payload), &st) != nil {
-		return false
-	}
-	return st.Master != ""
-}

@@ -5,12 +5,12 @@ package main
 // jarvis2-sessions, live from Fly with the router's read-only token (FLY_READ_TOKEN, as budget.go), each with
 // the session it belongs to or none, and marked "test" when its JARVIS2_URL is not production's router.
 //
-// Destroying one goes through the core's kill, the same call a pause makes: the core alone holds a Fly token
-// that can destroy, and its kill takes any machine of the app (Fly-confirmed). The router allows it only for a
-// machine that belongs to no session: Fly lists it, the router never started it (no Started entry, no cert, no
-// session mapping) and it is older than orphanMinAge, so a machine the core is still creating for a Start (not
-// yet recorded) is never caught. A session machine is never acted on from this view; it is paused or destroyed
-// as its session. The kill gives the router no power it didn't have (it kills session machines on every pause).
+// Destroying one goes through the spawner's kill, the same call a pause makes: the spawner alone holds a Fly token
+// that can destroy, and it kills only a machine whose notarized spawn cert it is given. So the view can destroy a
+// machine the router holds a spawn cert for that is no session's current machine (a leftover of a failed pause or
+// start) and older than orphanMinAge; any other machine (one that never got its spawn cert) is shown with the reason
+// and is Fly's to remove. A session machine is never acted on from this view; it is paused or destroyed as its
+// session.
 
 import (
 	"fmt"
@@ -143,10 +143,12 @@ func (r *Router) machinesView(ms []flyMachineDetail, now time.Time) []machineVie
 // the state held.
 func orphanRefusal(d *persisted, m flyMachineDetail, now time.Time) string {
 	if sid, ok := d.Machines[m.ID]; ok {
-		return "it belongs to session " + sid + ": pause or destroy the session"
+		if s := d.Sessions[sid]; s != nil && s.MachineID == m.ID {
+			return "it is session " + sid + "'s machine: pause or destroy the session"
+		}
 	}
-	if d.Started[m.ID] != nil || d.Certs[m.ID] != nil {
-		return "the router started it for a session"
+	if st := d.Started[m.ID]; st == nil || st.Spawn == "" {
+		return "the router holds no spawn cert for it: the spawner kills only a machine it started, by its spawn cert"
 	}
 	if t, err := time.Parse(time.RFC3339, m.CreatedAt); err != nil || now.Sub(t) < orphanMinAge {
 		return fmt.Sprintf("it is less than %d minutes old and may be a session still starting", int(orphanMinAge.Minutes()))
@@ -172,9 +174,19 @@ var listFlyMachines = func() ([]flyMachineDetail, error) {
 	return ms, f.get("/machines", &ms)
 }
 
-// the core's kill (flows.go makes the same call on a pause); swappable in tests
+// the spawner's kill with the machine's spawn cert (flows.go makes the same call on a pause); swappable in tests
 var orphanKill = func(r *Router, id string) error {
-	_, err := r.killUntilDestroyed(map[string]any{"machine": id})
+	var spawn string
+	r.st.Do(func(d *persisted) {
+		if st := d.Started[id]; st != nil {
+			spawn = st.Spawn
+		}
+	})
+	nc, err := r.notarized(spawn)
+	if err != nil {
+		return err
+	}
+	_, err = r.killUntilDestroyed(nc, nil)
 	return err
 }
 

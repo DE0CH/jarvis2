@@ -2,21 +2,19 @@ package main
 
 // The session operations Jarvis 1 has beyond create/pause/resume/destroy (docs/PARITY.md "Session lifecycle"):
 //
-//   permission mode   POST /api/sessions/:id/permission-mode {mode}: running → in place, Jarvis 1's
-//                     set-permission-mode through the "terminal" holder (a grant, standing rule or the
-//                     session's allow list); paused → the next start's SESSION_PERMISSION_MODE
-//   resume options    POST /api/sessions/:id/resume {size, model, apiProxy}: applied before the resume.
-//                     None of them is in the core's Options (only the harness is), so the dead-machine rule
-//                     still approves the resume: they are the router's unsigned word, like at New session.
-//   restart           POST /api/sessions/:id/restart {env, rollback: {dropFromMarker}, prompt}: pause (if
-//                     running) + resume on the same image. `env` patches the machine env with NON-secret
-//                     keys only (secrets come from stores); a rollback is applied by the next machine to the
-//                     snapshot it has verified (machine/rollback.go), since the router can't edit a
-//                     machine-signed snapshot.
-//   API proxy         New session / resume {apiProxy}: SESSION_API_PROXY=1 in the machine env
+//   resume options    POST /api/sessions/:id/resume {size, model, apiProxy}: applied before the resume. The size
+//                     is the spawn's (the router's word); the model and the API proxy are start settings in the
+//                     source, so changing either makes the resume a new phone-made source (flows.go Resume).
+//   restart           POST /api/sessions/:id/restart {rollback: {dropFromMarker}, prompt}: pause (if running) +
+//                     resume. A prompt or a rollback is in a new phone-made source's settings (the phone signs
+//                     it); the next machine applies the rollback to the snapshot it has verified
+//                     (machine/rollback.go), since the router can't edit a machine-signed snapshot.
+//   API proxy         New session / resume {apiProxy}: the source's settings `apiProxy`
 //   idempotent create the New Session form's requestId: a repeat answers the session it already made
 //   busy              /api/state: the lifecycle action holding a session ({kind, since}); `wake`: the last
-//                     permission-mode / restart job ({kind, phase, error, finishedAt})
+//                     restart job ({kind, phase, error, finishedAt})
+//
+// The permission mode is a start setting fixed for the session's life: nothing changes it.
 
 import (
 	"encoding/json"
@@ -24,7 +22,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -32,18 +29,9 @@ import (
 
 // SessionOps: the per-session settings of these operations (Session.Ops, persisted)
 type SessionOps struct {
-	APIProxy bool              `json:"apiProxy,omitempty"`
-	Env      map[string]string `json:"env,omitempty"`      // non-secret env patch, kept for every later start
-	Rollback *RollbackMark     `json:"rollback,omitempty"` // for the next start only (see rollbackEnv)
-	Upload   string            `json:"upload,omitempty"`   // first-prompt attachments (uploads.go)
-	Attach   []AttachFile      `json:"attachments,omitempty"`
-}
-
-// RollbackMark: drop every transcript line from the first one containing Marker, in the snapshot of machine
-// Pred (the machine the next start succeeds)
-type RollbackMark struct {
-	Marker string `json:"dropFromMarker"`
-	Pred   string `json:"predecessor"`
+	APIProxy bool         `json:"apiProxy,omitempty"`
+	Upload   string       `json:"upload,omitempty"` // first-prompt attachments (uploads.go)
+	Attach   []AttachFile `json:"attachments,omitempty"`
 }
 
 // opsState: in memory only (a router restart forgets running jobs, as Jarvis 1 does)
@@ -92,7 +80,7 @@ func (o *opsState) busyOf(id string) *busyMark {
 	return nil
 }
 
-// startJob: one permission-mode / restart job per session at a time
+// startJob: one restart job per session at a time
 func (o *opsState) startJob(id, kind string) (*wakeJob, error) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
@@ -131,7 +119,6 @@ func (o *opsState) jobView(id string) map[string]any {
 }
 
 func init() {
-	envHooks = append(envHooks, func(_ *Router, s *Session, e map[string]string) { opsEnv(s, e) })
 	stateHooks = append(stateHooks, func(r *Router, out map[string]any) {
 		ss, _ := out["sessions"].([]map[string]any)
 		if r == nil {
@@ -147,42 +134,6 @@ func init() {
 			}
 		}
 	})
-}
-
-// opsEnv: the machine env these settings make (a start and a resume; flows.go machineEnv)
-func opsEnv(s *Session, e map[string]string) {
-	o := s.Ops
-	if o == nil {
-		return
-	}
-	for k, v := range o.Env {
-		if envKeyAllowed(k) == nil {
-			e[k] = v
-		}
-	}
-	if o.APIProxy {
-		e["SESSION_API_PROXY"] = "1"
-	}
-	rollbackEnv(s, e)
-	attachEnv(s, e)
-}
-
-// rollbackEnv: only for the start that succeeds the machine the rollback was asked against. While a session
-// is paused its cert is the predecessor's, so a later start (another predecessor) never repeats it.
-func rollbackEnv(s *Session, e map[string]string) {
-	rb := s.Ops.Rollback
-	if rb == nil || rb.Marker == "" {
-		return
-	}
-	var c struct {
-		Machine struct {
-			ID string `json:"id"`
-		} `json:"machine"`
-	}
-	if s.Cert == nil || s.Cert.Decode(&c) != nil || c.Machine.ID != rb.Pred {
-		return
-	}
-	e["JARVIS2_ROLLBACK"], e["JARVIS2_ROLLBACK_PRED"] = rb.Marker, rb.Pred
 }
 
 // opsOptions: what the phone sees on the new-session approval
@@ -204,13 +155,6 @@ func opsView(s *Session, v map[string]any) {
 		return
 	}
 	v["apiProxy"] = onOff(!s.Ops.APIProxy)
-	if len(s.Ops.Env) > 0 {
-		keys := make([]string, 0, len(s.Ops.Env))
-		for k := range s.Ops.Env {
-			keys = append(keys, k)
-		}
-		v["envKeys"] = keys
-	}
 }
 
 // ---- idempotent create -------------------------------------------------------------------------------------
@@ -234,95 +178,6 @@ func admitSession(d *persisted, s *Session, in NewSession) (dup string, err erro
 		s.Ops.Upload, s.Ops.Attach = in.Attachments.UploadID, files
 	}
 	return "", nil
-}
-
-// ---- permission mode ----------------------------------------------------------------------------------------
-
-const setPermissionModeCmd = "/usr/local/bin/set-permission-mode "
-
-// SetPermissionMode: running → in place (the supervisor relaunches claude --resume in the new mode within
-// ~5 s; nothing else restarts); paused → the next start. Runs in the background; the job is the session's
-// `wake` in /api/state.
-func (r *Router) SetPermissionMode(id, mode string) (map[string]any, error) {
-	if mode != "bypass" {
-		mode = "auto"
-	}
-	var s Session
-	r.st.Do(func(d *persisted) {
-		if x := d.Sessions[id]; x != nil {
-			s = *x
-		}
-	})
-	if s.ID == "" {
-		return nil, errNoSession
-	}
-	if s.PermissionMode == mode {
-		return map[string]any{"ok": true, "permissionMode": mode, "unchanged": true}, nil
-	}
-	if s.MachineID == "" {
-		if s.State != "paused" {
-			return nil, fmt.Errorf("session is %s", s.State)
-		}
-		r.st.Do(func(d *persisted) {
-			if x := d.Sessions[id]; x != nil {
-				x.PermissionMode = mode
-			}
-		})
-		return map[string]any{"ok": true, "permissionMode": mode, "nextStart": true}, nil
-	}
-	// raising a running session to bypass needs a fresh phone grant (Deyao, 2026-10-09), checked here and by
-	// the machine (ExecPhone)
-	if mode == "bypass" && !r.HasPhoneGrant(id, "terminal") {
-		return nil, &GrantNeeded{Holder: "terminal", Phone: true}
-	}
-	unlock, err := r.lock(id, "mode")
-	if err != nil {
-		return nil, err
-	}
-	j, err := r.ops.startJob(id, "permission-mode")
-	if err != nil {
-		unlock()
-		return nil, err
-	}
-	go func() {
-		defer unlock()
-		r.ops.phase(j, "switching", nil)
-		exec := r.Exec
-		if mode == "bypass" {
-			exec = r.ExecPhone
-		}
-		res, err := exec(id, "terminal", setPermissionModeCmd+mode, 30*time.Second)
-		if err == nil && res.Code != 0 {
-			err = fmt.Errorf("set-permission-mode exited %d: %s", res.Code, clip(res.Stderr+res.Stdout, 200))
-		}
-		if err != nil {
-			r.markRefused(id, "terminal", err)
-			r.ops.phase(j, "failed", err)
-			return
-		}
-		r.st.Do(func(d *persisted) {
-			if x := d.Sessions[id]; x != nil {
-				x.PermissionMode = mode
-			}
-		})
-		r.ops.phase(j, "done", nil)
-	}()
-	return map[string]any{"started": true, "kind": "permission-mode", "permissionMode": mode, "inPlace": true}, nil
-}
-
-// markRefused: a grant refusal shows as the session's needsGrant, so the app offers a grant
-func (r *Router) markRefused(id, holder string, err error) {
-	if !isGrantRefusal(err) {
-		return
-	}
-	r.st.Do(func(d *persisted) {
-		if x := d.Sessions[id]; x != nil {
-			if x.Live == nil {
-				x.Live = &Liveness{}
-			}
-			x.Live.NeedsGrant = holder
-		}
-	})
 }
 
 func clip(s string, n int) string {
@@ -358,8 +213,8 @@ func resumeModel(harness, model string) error {
 	return nil
 }
 
-// applyResumeOptions: only to a paused session (they reach the machine through the next start's env and
-// /start's size)
+// applyResumeOptions: only to a paused session (the size reaches the spawn; the model and the API proxy the next
+// source's settings, which the phone signs when they change)
 func (r *Router) applyResumeOptions(id string, o ResumeOptions) error {
 	if err := o.check(); err != nil {
 		return err
@@ -395,10 +250,9 @@ func (r *Router) applyResumeOptions(id string, o ResumeOptions) error {
 	return err
 }
 
-// ---- restart: pause + resume, with an env patch and a transcript rollback -----------------------------------
+// ---- restart: pause + resume, with a prompt and a transcript rollback ----------------------------------------------
 
 type RestartRequest struct {
-	Env      map[string]any `json:"env"`
 	Rollback *struct {
 		DropFromMarker string `json:"dropFromMarker"`
 	} `json:"rollback"`
@@ -406,68 +260,9 @@ type RestartRequest struct {
 	ResumeOptions
 }
 
-// env keys a patch may never set: the router's and the harness's own settings, the session-API placeholders,
-// the loader's
-var envReserved = regexp.MustCompile(`^(JARVIS2?_|SESSION_|FLY_|CF_ACCESS_|LOBSTER_|CLAUDE_|ANTHROPIC_|LD_|HOME$|PATH$|USER$|SHELL$|TERM$)`)
-
-// env keys that name a secret: those come only from stores (core-sealed), never the unsigned machine env
-var envSecretish = regexp.MustCompile(`(?i)(TOKEN|SECRET|PASSWORD|PASSWD|PRIVATE|CREDENTIAL|COOKIE|WEBHOOK|ACCESS_?KEY|API_?KEY|(^|_)(PASS|PWD|AUTH|KEY|API|DSN|SIG|SIGNATURE|SALT|OTP|TOTP|PIN|CERT)(_|$))`)
-
-var envKeyRE = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]{0,63}$`)
-
-func envKeyAllowed(k string) error {
-	switch {
-	case !envKeyRE.MatchString(k):
-		return fmt.Errorf("bad env name %q", k)
-	case envReserved.MatchString(k):
-		return fmt.Errorf("%s is set by Jarvis itself", k)
-	case envSecretish.MatchString(k):
-		return fmt.Errorf("%s looks like a secret: secrets go in a store, never the machine env", k)
-	}
-	return nil
-}
-
-// normalizeEnvPatch: string/number/bool values, at most 32 keys, 2000 characters each; "" or null removes
-func normalizeEnvPatch(in map[string]any) (map[string]*string, error) {
-	if len(in) > 32 {
-		return nil, errors.New("at most 32 env keys")
-	}
-	out := map[string]*string{}
-	for k, v := range in {
-		if err := envKeyAllowed(k); err != nil {
-			return nil, err
-		}
-		var s string
-		switch x := v.(type) {
-		case nil:
-			out[k] = nil
-			continue
-		case string:
-			s = x
-		case bool, float64:
-			s = fmt.Sprint(x)
-		default:
-			return nil, fmt.Errorf("env %s: a string value", k)
-		}
-		if len(s) > 2000 || strings.ContainsRune(s, 0) {
-			return nil, fmt.Errorf("env %s: at most 2000 characters, no NUL", k)
-		}
-		if s == "" {
-			out[k] = nil
-		} else {
-			out[k] = &s
-		}
-	}
-	return out, nil
-}
-
-// Restart: a running session is paused (its signed snapshot), then the patch and the rollback are recorded,
-// then it resumes on the same image (the dead-machine rule). A paused one just resumes.
+// Restart: a running session is paused (its signed snapshot), then resumed: with a prompt or a rollback, out of a new
+// phone-made source (the phone signs it); without, from the paused source
 func (r *Router) Restart(id string, in RestartRequest) (map[string]any, error) {
-	patch, err := normalizeEnvPatch(in.Env)
-	if err != nil {
-		return nil, err
-	}
 	if err := in.ResumeOptions.check(); err != nil {
 		return nil, err
 	}
@@ -520,63 +315,14 @@ func (r *Router) Restart(id string, in RestartRequest) (map[string]any, error) {
 				return
 			}
 		}
-		r.ops.phase(j, "patching", nil)
-		var perr error
-		r.st.Do(func(d *persisted) {
-			x := d.Sessions[id]
-			if x == nil || x.State != "paused" {
-				perr = errors.New("the session isn't paused any more")
-				return
-			}
-			if x.Ops == nil {
-				x.Ops = &SessionOps{}
-			}
-			for k, v := range patch {
-				if x.Ops.Env == nil {
-					x.Ops.Env = map[string]string{}
-				}
-				if v == nil {
-					delete(x.Ops.Env, k)
-				} else {
-					x.Ops.Env[k] = *v
-				}
-			}
-			x.Ops.Rollback = nil
-			if marker != "" {
-				x.Ops.Rollback = &RollbackMark{Marker: marker, Pred: certMachine(x.Cert)}
-			}
-		})
-		if perr == nil {
-			perr = r.applyResumeOptions(id, in.ResumeOptions)
-		}
-		if perr != nil {
-			fail(perr)
-			return
-		}
 		r.ops.phase(j, "resuming", nil)
-		if err := r.resumeWithPrompt(id, false, prompt); err != nil {
+		if err := r.Resume(id, ResumeIn{Prompt: prompt, Rollback: marker, ResumeOptions: in.ResumeOptions}); err != nil {
 			fail(err)
 			return
 		}
 		r.ops.phase(j, "done", nil)
 	}()
-	keys := []string{}
-	for k := range patch {
-		keys = append(keys, k)
-	}
-	return map[string]any{"started": true, "kind": "restart", "env": keys, "rollback": marker != ""}, nil
-}
-
-func certMachine(c *Doc) string {
-	var x struct {
-		Machine struct {
-			ID string `json:"id"`
-		} `json:"machine"`
-	}
-	if c == nil || c.Decode(&x) != nil {
-		return ""
-	}
-	return x.Machine.ID
+	return map[string]any{"started": true, "kind": "restart", "rollback": marker != ""}, nil
 }
 
 // waitState: polls until the session reaches state (or fails / disappears)
@@ -608,22 +354,6 @@ var opsPoll = 500 * time.Millisecond
 // ---- routes -------------------------------------------------------------------------------------------------
 
 func (r *Router) registerSessionOps(app appRoute, m machineRoute) {
-	app("POST /api/sessions/{id}/permission-mode", func(w http.ResponseWriter, req *http.Request) {
-		var in struct {
-			Mode string `json:"mode"`
-		}
-		json.NewDecoder(io.LimitReader(req.Body, 1<<16)).Decode(&in)
-		out, err := r.SetPermissionMode(req.PathValue("id"), in.Mode)
-		if err != nil {
-			scheduleErr(w, err)
-			return
-		}
-		code := 200
-		if out["started"] == true {
-			code = 202
-		}
-		writeJSON(w, code, out)
-	})
 	app("POST /api/sessions/{id}/restart", func(w http.ResponseWriter, req *http.Request) {
 		var in RestartRequest
 		if err := json.NewDecoder(io.LimitReader(req.Body, 1<<20)).Decode(&in); err != nil && err != io.EOF {
@@ -631,23 +361,6 @@ func (r *Router) registerSessionOps(app appRoute, m machineRoute) {
 			return
 		}
 		out, err := r.Restart(req.PathValue("id"), in)
-		if err != nil {
-			scheduleErr(w, err)
-			return
-		}
-		writeJSON(w, 202, out)
-	})
-	// Jarvis 1's env patch = a restart with only env
-	app("POST /api/sessions/{id}/env", func(w http.ResponseWriter, req *http.Request) {
-		var in struct {
-			Env map[string]any `json:"env"`
-		}
-		json.NewDecoder(io.LimitReader(req.Body, 1<<20)).Decode(&in)
-		if len(in.Env) == 0 {
-			writeJSON(w, 400, map[string]string{"error": "body.env must be a non-empty object"})
-			return
-		}
-		out, err := r.Restart(req.PathValue("id"), RestartRequest{Env: in.Env})
 		if err != nil {
 			scheduleErr(w, err)
 			return

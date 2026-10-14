@@ -1,29 +1,32 @@
 package main
 
 // The Claude login: one OAuth pair shared by every Claude session (Jarvis 1's lib/oauth.js, lib/claudelogin.js,
-// /api/credentials, /api/usage and its Re-login, moved here; docs/DECISIONS.md 115-121). The router keeps the pair on its
-// volume (claude-login.json, 0600) and is its ONLY refresher. A refresh revokes the previous access token at once,
-// so there is one refresher: this router. Jarvis 1, while it still runs, only follows (reads the pair from here).
+// /api/usage and its Re-login, moved here; docs/DECISIONS.md 115-121, 163). The router keeps the pair on its volume
+// (claude-login.json, 0600) and is its ONLY refresher. A refresh revokes the previous access token at once, so there
+// is one refresher: this router.
 //
-// Who takes the pair, all with the same long poll (GET …/claude-login?have=&ack=&wait=):
-//   - a session machine whose cert names the store `claude` (/m/claude-login, signed with its machine key;
-//     machine/claudelogin.go checks every pair against the account in its store before writing it);
-//   - Jarvis 1, while it still runs, for its own sessions (/peer/claude-login, behind a path-scoped Access app that
-//     admits one service token, JARVIS1_LOGIN_CLIENT_ID). Jarvis 2 never calls Jarvis 1.
+// How sessions get it (DESIGN "Secrets": the Claude login is the `claude` store): on every refresh, Re-login, accepted
+// push, and right after a claim, the router writes the pair into the store `claude` as CLAUDE_CREDENTIALS (the exact
+// ~/.claude/.credentials.json) and CLAUDE_ACCOUNT (the account record), writer "router", with a backup and the `live`
+// seal, then sends `pull` to every running machine whose grant names store:claude. The guard writes the files from the
+// store (machine/claudelogin.go). Jarvis 1, while it still runs, follows with a long poll (/peer/claude-login, behind a
+// path-scoped Access app that admits one service token, JARVIS1_LOGIN_CLIENT_ID). Jarvis 2 never calls Jarvis 1.
+//
 // The refresh protocol keeps lessons/74's guarantee (a session that gets a 401 mid-refresh waits for the new pair
-// instead of burning its refresh token): before refreshing, the router answers every waiting poll with
-// {preparing, gen}; each participant takes the CLI's refresh lock (~/.claude/.oauth_refresh.lock) and polls again
-// with ack=gen; the router waits for every participant seen in the last 2 minutes (at most 10 s), refreshes,
-// writes the pair to its volume, then answers every poll with it; a participant writes the file and releases the
-// lock. A failed refresh answers {preparing: false}: participants release.
+// instead of burning its refresh token): before refreshing, the router sends `claude-prepare:<gen>` to every running
+// machine whose grant names store:claude (and answers Jarvis 1's poll with {preparing, gen}); each takes the CLI's
+// refresh lock and acks (POST /m/claude-ack {gen}; Jarvis 1 polls with ack=gen); the router waits for them (at most
+// 10 s), refreshes, writes the pair to its volume and the store, and sends `pull`; the guard releases the lock when the
+// new pair arrives (or after 45 s).
 //
-// Pushes (a participant whose claude refreshed by itself, e.g. while the router was down): newer expiresAt wins,
-// and the pair's account must be the stored one (checked with Anthropic's profile endpoint), except for a
-// Re-login (Deyao's own action in the app).
+// Pushes (a machine whose CLI refreshed by itself, POST /m/claude-push; Jarvis 1's): newer expiresAt wins, and the
+// pair's account must be the stored one (checked with Anthropic's profile endpoint), except for a Re-login (Deyao's
+// own action in the app).
 
 import (
 	"bytes"
 	"context"
+	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
@@ -41,6 +44,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/DE0CH/jarvis2/core/kernel"
 )
 
 // The Claude Code CLI's own OAuth parameters (read from claude 2.1.296: dn().TOKEN_URL, CLAUDE_AI_AUTHORIZE_URL,
@@ -112,6 +117,11 @@ type loginHub struct {
 		body map[string]any
 	}
 	dm func(string)
+	// participants: the running machines a refresh asks to take the CLI's lock (it sends each claude-prepare:<gen>),
+	// as participant ids "m:<machine>"
+	participants func(gen int64) []string
+	// changed: the stored pair changed (source names why): the router writes it into the store claude
+	onChange func(source string)
 }
 
 func newLoginHub(dir string) *loginHub {
@@ -133,6 +143,15 @@ func (r *Router) loginHub() *loginHub {
 		}
 		r.login = newLoginHub(dir)
 		r.login.dm = r.DM
+		r.login.participants = func(gen int64) []string {
+			out := []string{}
+			for _, machine := range r.holdersOf("claude") {
+				r.out(machine).word("claude-prepare:" + strconv.FormatInt(gen, 10))
+				out = append(out, "m:"+machine)
+			}
+			return out
+		}
+		r.login.onChange = func(source string) { go r.publishLogin(source) }
 	})
 	return r.login
 }
@@ -386,6 +405,9 @@ func (h *loginHub) offer(credentials, account, source string, switchOK, force bo
 	h.usage.body = nil
 	h.broadcastLocked()
 	log.Printf("[login] stored a newer Claude pair from %s (valid until %s)", source, time.UnixMilli(p.ExpiresAt).UTC().Format(time.RFC3339))
+	if h.onChange != nil {
+		h.onChange(source)
+	}
 	return true, nil
 }
 
@@ -468,13 +490,16 @@ func (h *loginHub) refresh(force bool) (bool, error) {
 	gen := h.gen
 	h.preparing = true
 	var want []string
-	for who, at := range h.seen {
+	for who, at := range h.seen { // Jarvis 1's poll
 		if time.Since(at) < loginSeenWindow {
 			want = append(want, who)
 		}
 	}
 	h.broadcastLocked()
 	h.mu.Unlock()
+	if h.participants != nil {
+		want = append(want, h.participants(gen)...)
+	}
 	acked := h.waitAcks(gen, want, loginAckWait)
 
 	// 2. refresh, and keep the answer before anything else (the old refresh token is dead from here on)
@@ -503,6 +528,9 @@ func (h *loginHub) refresh(force bool) (bool, error) {
 	}
 	h.usage.body = nil
 	log.Printf("[login] refreshed (%d/%d participants locked); valid until %s", acked, len(want), time.UnixMilli(credsExpiry(newCreds)).UTC().Format(time.RFC3339))
+	if h.onChange != nil {
+		h.onChange("refresh")
+	}
 	return true, nil
 }
 
@@ -510,7 +538,17 @@ func deadLoginMessage(why string) string {
 	if len(why) > 200 {
 		why = why[:200]
 	}
-	return "🔑 The Claude login has run out: refreshing it was refused (" + why + "). Only a new sign-in fixes it: Jarvis 2 → Settings → Claude account → Re-login. Sessions stuck on “Please run /login” are resumed once that is done."
+	return "🔑 The Claude login has run out: refreshing it was refused (" + why + "). Only a new sign-in fixes it: Jarvis 2 → Settings → Claude account → Re-login."
+}
+
+// ack: a participant holds its CLI's lock for refresh gen (a machine's POST /m/claude-ack)
+func (h *loginHub) ack(who string, gen int64) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.preparing && gen == h.gen && h.acks[who] != gen {
+		h.acks[who] = gen
+		h.broadcastLocked()
+	}
 }
 
 // waitAcks: until every participant in want acknowledged gen, or d passed; returns how many did
@@ -844,19 +882,13 @@ func pollArgs(req *http.Request) (have, ack int64, wait time.Duration) {
 	return have, ack, time.Duration(ws) * time.Second
 }
 
-// machineHasClaude: the session this machine runs, if its cert names the store `claude`
+// machineHasClaude: the session this machine runs, if the grant it holds names store:claude
 func (r *Router) machineHasClaude(machine string) (string, bool) {
-	var sid string
-	ok := false
-	r.st.Do(func(d *persisted) {
-		if s := d.Sessions[d.Machines[machine]]; s != nil && s.MachineID == machine {
-			sid = s.ID
-			for _, st := range s.Stores {
-				ok = ok || st == "claude"
-			}
-		}
-	})
-	return sid, sid != "" && ok
+	sid, err := r.machineSession(machine)
+	if err != nil {
+		return "", false
+	}
+	return sid, r.machineHoldsStore(sid, "claude")
 }
 
 type pushBody struct {
@@ -905,41 +937,37 @@ func (r *Router) pushAnswer(w http.ResponseWriter, h *loginHub, body []byte, sou
 
 func (r *Router) registerClaudeLogin(app appRoute, m machineRoute, public publicRoute) {
 	h := r.loginHub()
-	// ---- session machines (store `claude` in the cert) ----
-	machinePoll := func(w http.ResponseWriter, req *http.Request, machine string, _ []byte) {
+	// ---- session machines (a grant naming store:claude) ----
+	m("POST /m/claude-ack", func(w http.ResponseWriter, req *http.Request, machine string, body []byte) {
 		if _, ok := r.machineHasClaude(machine); !ok {
-			writeJSON(w, 403, map[string]string{"error": "this machine's cert doesn't name the store claude"})
+			writeJSON(w, 403, map[string]string{"error": "this machine's grant doesn't name the store claude"})
 			return
 		}
-		have, ack, wait := pollArgs(req)
-		w.Header().Set("Cache-Control", "no-store")
-		writeJSON(w, 200, h.poll(req.Context(), "m:"+machine, have, ack, wait))
-	}
-	machinePush := func(w http.ResponseWriter, req *http.Request, machine string, body []byte) {
+		var in struct {
+			Gen string `json:"gen"`
+		}
+		json.Unmarshal(body, &in)
+		gen, err := strconv.ParseInt(in.Gen, 10, 64)
+		if err != nil || gen <= 0 {
+			writeJSON(w, 400, map[string]string{"error": "gen: the refresh's number (decimal)"})
+			return
+		}
+		h.ack("m:"+machine, gen)
+		writeJSON(w, 200, map[string]bool{"ok": true})
+	})
+	m("POST /m/claude-push", func(w http.ResponseWriter, req *http.Request, machine string, body []byte) {
 		sid, ok := r.machineHasClaude(machine)
 		if !ok {
-			writeJSON(w, 403, map[string]string{"error": "this machine's cert doesn't name the store claude"})
+			writeJSON(w, 403, map[string]string{"error": "this machine's grant doesn't name the store claude"})
 			return
 		}
-		r.pushAnswer(w, h, body, "session "+sid, false)
-	}
-	m("GET /m/claude-login", machinePoll)
-	m("POST /m/claude-login", machinePush)
-	// session images from before 2026-10-13 (their push-claude-credentials, through the machine's $JARVIS_URL proxy)
-	m("GET /m/api/credentials", func(w http.ResponseWriter, req *http.Request, machine string, _ []byte) {
-		if _, ok := r.machineHasClaude(machine); !ok {
-			writeJSON(w, 403, map[string]string{"error": "this machine's cert doesn't name the store claude"})
-			return
+		var in struct {
+			Credentials string `json:"credentials"`
 		}
-		cur := h.current()
-		if cur.Credentials == "" {
-			writeJSON(w, 409, map[string]any{"error": "no Claude login stored: Re-login", "needLogin": true})
-			return
-		}
-		w.Header().Set("Cache-Control", "no-store")
-		writeJSON(w, 200, map[string]any{"credentials": cur.Credentials, "account": cur.Account, "expiresAt": cur.ExpiresAt})
+		json.Unmarshal(body, &in)
+		b, _ := json.Marshal(map[string]string{"credentials": in.Credentials})
+		r.pushAnswer(w, h, b, "session "+sid, false)
 	})
-	m("POST /m/api/credentials", machinePush)
 
 	// ---- Jarvis 1 (its sessions take the pair from here once it follows): one Access service token ----
 	peer := r.requireClient(os.Getenv("ACCESS_PEER_AUD"), os.Getenv("JARVIS1_LOGIN_CLIENT_ID"))
@@ -987,7 +1015,6 @@ func (r *Router) registerClaudeLogin(app appRoute, m machineRoute, public public
 			return
 		}
 		cur := h.current()
-		go r.resumeStuckLogins()
 		writeJSON(w, 200, map[string]any{"ok": true, "email": email, "expiresAt": cur.ExpiresAt})
 	})
 	app("GET /api/usage", func(w http.ResponseWriter, req *http.Request) {
@@ -1030,6 +1057,156 @@ func (r *Router) requireClient(aud, clientID string) func(http.HandlerFunc) http
 	}
 }
 
-// resumeStuckLogins: after a Re-login, the next autopilot tick delivers "continue" to sessions stuck on
-// "Please run /login" (autopilot.go plans it from the stored pair's expiry)
-func (r *Router) resumeStuckLogins() { r.autopilotTick() }
+// ---- the store claude ----------------------------------------------------------------------------------------
+
+// the Claude login's keys in the store claude (machine/claudelogin.go reads the same names)
+const (
+	claudeStore    = "claude"
+	claudeCredsKey = "CLAUDE_CREDENTIALS"
+	claudeAcctKey  = "CLAUDE_ACCOUNT"
+	claudeCredsDoc = "The shared Claude login: the exact ~/.claude/.credentials.json (written by the router on every refresh)."
+	claudeAcctDoc  = "The Claude login's account record ({oauthAccount, userID}), written by the router with the credentials."
+)
+
+var publishMu sync.Mutex
+
+// publishLogin: the stored pair written into the store claude (writer router: backup first, the live seal so the
+// next pull serves it), then every running machine whose grant names store:claude pulls. why: for the log.
+func (r *Router) publishLogin(why string) {
+	publishMu.Lock()
+	defer publishMu.Unlock()
+	cur := r.loginHub().current()
+	if cur.Credentials == "" {
+		return
+	}
+	t, err := r.sealTargets()
+	if err != nil {
+		log.Printf("[login] not written into the store claude (%s): %v", why, err)
+		return
+	}
+	vals := map[string][2]string{claudeCredsKey: {cur.Credentials, claudeCredsDoc}}
+	if cur.Account != "" {
+		vals[claudeAcctKey] = [2]string{cur.Account, claudeAcctDoc}
+	}
+	for _, key := range []string{claudeCredsKey, claudeAcctKey} {
+		v, ok := vals[key]
+		if !ok {
+			continue
+		}
+		in, err := sealKeyWrite(t, claudeStore, key, []byte(v[0]), v[1])
+		if err == nil {
+			_, err = r.WriteKey("router", "", claudeStore, key, in)
+		}
+		if err != nil {
+			log.Printf("[login] %s not written into the store claude (%s): %v", key, why, err)
+			return
+		}
+	}
+	log.Printf("[login] written into the store claude (%s)", why)
+}
+
+// sealTargets: what a writer seals to, from secrets' signed documents (checked against secrets' signing key from its
+// /identity, and P + K = the signed store key)
+type sealTargets struct{ StoreKey, Master, Agreement string }
+
+func (r *Router) sealTargets() (sealTargets, error) {
+	id, err := r.k.Identity("secrets")
+	if err != nil {
+		return sealTargets{}, err
+	}
+	keys, err := r.storeKeys()
+	if err != nil {
+		return sealTargets{}, err
+	}
+	state, _ := keys["state"].(kernel.SignedDoc)
+	sk, _ := keys["storeKey"].(kernel.SignedDoc)
+	var st struct {
+		Kind   string `json:"kind"`
+		Master string `json:"master"`
+		Phone  *struct {
+			AgreementKey string `json:"agreementKey"`
+		} `json:"phone"`
+		Bundle string `json:"bundle"`
+	}
+	if kernel.Open(id.SigningKey, state, &st) != nil || st.Master == "" || st.Phone == nil {
+		return sealTargets{}, errors.New("secrets' state isn't signed by secrets' key, or secrets isn't set up")
+	}
+	var k struct {
+		Kind     string `json:"kind"`
+		Phone    string `json:"phone"`
+		StoreKey string `json:"storeKey"`
+	}
+	if kernel.Open(id.SigningKey, sk, &k) != nil || k.Phone != st.Phone.AgreementKey || k.StoreKey == "" {
+		return sealTargets{}, errors.New("the store key isn't secrets' for its phone")
+	}
+	if addPoints(st.Phone.AgreementKey, id.AgreementKey) != k.StoreKey {
+		return sealTargets{}, errors.New("secrets' agreement key doesn't make the signed store key with the phone's")
+	}
+	return sealTargets{StoreKey: k.StoreKey, Master: st.Master, Agreement: id.AgreementKey}, nil
+}
+
+// sealKeyWrite: a value sealed three ways (machine/putkey.go's keyWriteRequest): to the store key under a fresh data
+// key, to the master key for its backup, to secrets' agreement key (live)
+func sealKeyWrite(t sealTargets, store, key string, value []byte, explanation string) (keyWriteIn, error) {
+	in := keyWriteIn{Explanation: explanation}
+	dk := make([]byte, 32)
+	rand.Read(dk)
+	wrapped, err := kernel.SealTo(t.StoreKey, dk, "jarvis2/store-data-key")
+	if err != nil {
+		return in, fmt.Errorf("the store key: %w", err)
+	}
+	in.Wrapped = &struct {
+		E       string `json:"e"`
+		Wrapped string `json:"wrapped"`
+	}{wrapped.E, wrapped.Data}
+	in.Data = kernel.B64.EncodeToString(kernel.GCMSeal(dk, value, []byte(store+"\n"+key)))
+	backup, err := sealWithAAD(t.Master, value, "jarvis2/backup", []byte(store+"\n"+key))
+	if err != nil {
+		return in, fmt.Errorf("the master key: %w", err)
+	}
+	in.Backup = &struct {
+		E    string `json:"e"`
+		Data string `json:"data"`
+	}{backup.E, backup.Data}
+	in.BackupSha256 = backupSha(backup.E, backup.Data)
+	live, err := kernel.SealTo(t.Agreement, value, "jarvis2/live-key\n"+store+"\n"+key)
+	if err != nil {
+		return in, fmt.Errorf("secrets' agreement key: %w", err)
+	}
+	in.Live = &live
+	return in, nil
+}
+
+// sealWithAAD: kernel.SealTo with associated data (the backup's format: store\nkey bound in)
+func sealWithAAD(recipient string, plain []byte, info string, aad []byte) (kernel.Sealed, error) {
+	rp, err := kernel.ParsePoint(recipient)
+	if err != nil {
+		return kernel.Sealed{}, err
+	}
+	e, err := rp.Curve().GenerateKey(rand.Reader)
+	if err != nil {
+		return kernel.Sealed{}, err
+	}
+	x, err := e.ECDH(rp)
+	if err != nil {
+		return kernel.Sealed{}, err
+	}
+	return kernel.Sealed{E: kernel.B64.EncodeToString(e.PublicKey().Bytes()), Data: kernel.B64.EncodeToString(kernel.GCMSeal(kernel.KDF(x, info), plain, aad))}, nil
+}
+
+// addPoints: a + b on P-256, uncompressed, base64 ("" when either isn't a point)
+func addPoints(a, b string) string {
+	pa, err1 := kernel.ParsePoint(a)
+	pb, err2 := kernel.ParsePoint(b)
+	if err1 != nil || err2 != nil {
+		return ""
+	}
+	c := elliptic.P256()
+	x1, y1 := elliptic.Unmarshal(c, pa.Bytes()) //nolint:staticcheck // plain point addition, public points only
+	x2, y2 := elliptic.Unmarshal(c, pb.Bytes()) //nolint:staticcheck
+	if x1 == nil || x2 == nil {
+		return ""
+	}
+	x, y := c.Add(x1, y1, x2, y2)                               //nolint:staticcheck
+	return kernel.B64.EncodeToString(elliptic.Marshal(c, x, y)) //nolint:staticcheck
+}

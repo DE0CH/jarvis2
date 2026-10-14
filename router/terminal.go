@@ -1,7 +1,8 @@
 package main
 
-// The live terminal (Jarvis 1's lib/tty.js over grants instead of Fly exec): the harness runs in tmux session
-// `claude` inside the machine; the app polls a capture of the pane and sends keystrokes. Holder "terminal".
+// The live terminal (Jarvis 1's lib/tty.js): the harness runs in tmux session `claude` inside the machine. The app
+// polls the pane the machine pushes itself (output only, no grant); typing, Escape and resizing are shell commands,
+// which run only while Deyao has opened a terminal for the session (a phone-signed add-on, addons.go).
 
 import (
 	"errors"
@@ -16,8 +17,8 @@ const snapCmd = `tmux capture-pane -p -e -t claude; printf '\n__CUR__%s\n' "$(tm
 
 type TermSnap struct {
 	Screen string `json:"screen"`
-	Cursor string `json:"cursor"` // x,y,width,height,visible
-	At     string `json:"at,omitempty"` // when the machine pushed it (a pushed screen; empty = read just now by the holder)
+	Cursor string `json:"cursor"`       // x,y,width,height,visible
+	At     string `json:"at,omitempty"` // when the machine pushed it (empty = read just now with a shell command)
 }
 
 // pushedScreen: a machine's screen push counts while its heartbeat (30 s) can still be on time
@@ -41,13 +42,13 @@ func (r *Router) pushedScreen(session string) (TermSnap, bool) {
 	return out, ok
 }
 
-// TermSnapshot: the pane. Viewing needs no grant (Deyao, 2026-10-12): the machine pushes its own capture; only a
-// machine on an image from before the push is read through the terminal holder (a grant).
+// TermSnapshot: the pane. Viewing needs no grant (Deyao, 2026-10-12): the machine pushes its own capture; with no
+// fresh push, it is read with a shell command while a terminal is open.
 func (r *Router) TermSnapshot(session string) (TermSnap, error) {
 	if snap, ok := r.pushedScreen(session); ok {
 		return snap, nil
 	}
-	res, err := r.Exec(session, "terminal", snapCmd, 15*time.Second)
+	res, err := r.Shell(session, snapCmd, 15*time.Second)
 	if err != nil {
 		return TermSnap{}, err
 	}
@@ -79,7 +80,7 @@ func (r *Router) TermInput(session, text string, keys []string) error {
 	if len(cmd) == 0 {
 		return nil
 	}
-	_, err := r.Exec(session, "terminal", strings.Join(cmd, " && "), 15*time.Second)
+	_, err := r.Shell(session, strings.Join(cmd, " && "), 15*time.Second)
 	return err
 }
 
@@ -87,6 +88,6 @@ func (r *Router) TermResize(session string, cols, rows int) error {
 	if cols < 20 || cols > 400 || rows < 5 || rows > 200 {
 		return errors.New("bad size")
 	}
-	_, err := r.Exec(session, "terminal", "tmux resize-window -t claude -x "+strconv.Itoa(cols)+" -y "+strconv.Itoa(rows), 15*time.Second)
+	_, err := r.Shell(session, "tmux resize-window -t claude -x "+strconv.Itoa(cols)+" -y "+strconv.Itoa(rows), 15*time.Second)
 	return err
 }

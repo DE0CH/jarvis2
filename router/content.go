@@ -6,21 +6,20 @@ package main
 //
 //   - Deyao manages them in the app's Content tab: list, create, delete a store; list, upload, download, delete a file
 //     (/api/content…, his Access login).
-//   - A session gets the stores picked in New session. The pick is a signed setting (SessionConfig.Content: the phone
-//     approves it with the line, every machine of the line gets the same ones). The machine's local API proxy turns
+//   - A session gets the stores picked in New session. The pick is a start setting (the source's settings `content`:
+//     the phone signs it with the source, every machine of the session gets the same ones). The machine's local API proxy turns
 //     Jarvis 1's content-sync calls (`$JARVIS_URL/api/sessions/<id>/content…`) into machine-signed /m/api calls, and
-//     the router answers them with its own Storage Box credentials, only for the stores the calling machine's cert
-//     names. The machine never holds Storage Box credentials.
-//   - Each file a machine downloads carries the core's attestation (input "content", origin "router", its sha256):
-//     the machine's proxy refuses a file without it, so every content file a machine took is in the input log. The
+//     the router answers them with its own Storage Box credentials, only for the stores the calling session was started
+//     with. The machine never holds Storage Box credentials.
+//   - Each file a machine downloads carries the log notary's challenge over its sha256 (about "content", header
+//     X-Jarvis2-Challenge): the machine's proxy refuses a file without it, so every content file a machine took is in
+//     the notary's log. The
 //     bytes are the router's word (the Storage Box is the router's storage): a content store is data the session
 //     reads, as it reads the web, kept in ~/content (never the cwd, never run). DECISIONS 132-133.
 //
 // The box is Apache mod_dav: PROPFIND with Depth infinity is refused, so a store is walked one level at a time.
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"encoding/xml"
 	"errors"
@@ -35,6 +34,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/DE0CH/jarvis2/core/kernel"
 )
 
 const (
@@ -500,22 +501,18 @@ func (r *Router) deleteContentFile(name, p string) error {
 
 // ---- a session's stores ------------------------------------------------------------------------------------
 
-// certContent: the content stores the machine's current cert names (its signed config); a machine with no cert,
-// or a cert naming none, has none
+// certContent: the content stores in the settings of the source the machine's session runs from (the start setting
+// the phone signed); none for a machine that runs no session
 func (r *Router) certContent(machine string) []string {
-	var cert *Doc
-	r.st.Do(func(d *persisted) { cert = d.Certs[machine] })
-	config, _ := certOptions(cert)
-	if config == "" {
+	_, c := r.machineChain(machine)
+	if c == nil {
 		return nil
 	}
-	var c struct {
-		Content []string `json:"content"`
-	}
-	if json.Unmarshal([]byte(config), &c) != nil {
+	var st SessionSettings
+	if json.Unmarshal([]byte(c.Source.Settings), &st) != nil {
 		return nil
 	}
-	return c.Content
+	return st.Content
 }
 
 func (r *Router) machineContentStore(machine, name string) (string, error) {
@@ -527,20 +524,13 @@ func (r *Router) machineContentStore(machine, name string) (string, error) {
 	return "", contentFail(403, "content store %q is not one this session was started with", name)
 }
 
-// attestContent: the core's input-log entry for a content file a machine is about to take
-func (r *Router) attestContent(machine string, data []byte) (*Doc, error) {
-	sum := sha256Hex(data)
-	a, err := r.core.Call("/attest", map[string]string{"machine": machine, "input": "content", "origin": "router", "sha256": sum})
-	if err != nil {
-		return nil, err
+// contentChallenge: the log notary's challenge over a content file a machine is about to take
+func (r *Router) contentChallenge(data []byte) (kernel.SignedDoc, error) {
+	ch, err := r.k.Challenge(sha256Hex(string(data)), "content")
+	if err == nil {
+		r.docs.Put(ch)
 	}
-	r.logInputs(a)
-	return a, nil
-}
-
-func sha256Hex(b []byte) string {
-	sum := sha256.Sum256(b)
-	return hex.EncodeToString(sum[:])
+	return ch, err
 }
 
 // ---- routes ---------------------------------------------------------------------------------------------
@@ -691,14 +681,14 @@ func (r *Router) registerContent(app appRoute, m machineRoute) {
 			contentWriteErr(w, err)
 			return
 		}
-		a, err := r.attestContent(machine, data)
+		ch, err := r.contentChallenge(data)
 		if err != nil {
-			writeJSON(w, 503, map[string]string{"error": "the core's attestation: " + err.Error()})
+			writeJSON(w, 503, map[string]string{"error": "the log notary's challenge: " + err.Error()})
 			return
 		}
-		aj, _ := json.Marshal(a)
+		cj, _ := json.Marshal(ch)
 		w.Header().Set("Content-Type", "application/octet-stream")
-		w.Header().Set("X-Jarvis2-Attest", string(aj))
+		w.Header().Set("X-Jarvis2-Challenge", string(cj))
 		w.Write(data)
 	})
 	own("PUT /m/api/sessions/{id}/content/{name}/file", func(w http.ResponseWriter, req *http.Request, machine string, body []byte) {

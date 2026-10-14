@@ -1,11 +1,12 @@
 package main
 
 // The actions (Deyao, 2026-10-13): what a session may do to Jarvis 2 beyond its own business — list sessions and the
-// Inbox, resume a paused session with no prompt (same image: approve_by_dead_machine), pause one, move a running one
-// to the next size, destroy one (the app's Destroy), deny a request or approval, and file requests (a new session,
-// an added store, a repo, a grant, an unlock, or any app API call: apicalls.go), which only wait in Deyao's Inbox.
+// Inbox, resume a paused session with no prompt (same image: a spawn from its paused source), pause one, move a running
+// one to the next size, destroy one (the app's Destroy), deny a request or approval, and file requests (a new session,
+// a repo, an unlock, a terminal, a command or a store for itself, or any app API call: apicalls.go), which only wait in
+// Deyao's Inbox.
 //
-// Each session's key is its own machine key (minted when the core starts the machine, signs every /m call), so
+// Each session's key is its own machine key (its spawn cert names it; it signs every /m call), so
 // every action is recorded as that session's actions (Caller{Kind: "actions", Session}), shown in the Inbox and
 // logged. The key works only while the session runs: once it starts pausing or destroying (or is paused), every
 // action is refused and its pending API-call requests leave the Inbox (dropActionsOf).
@@ -54,9 +55,6 @@ func (r *Router) registerActions(m machineRoute) {
 				if l := s.Live; l != nil && l.Reg != nil {
 					v["status"] = l.Reg.Status
 				}
-				if l := s.Live; l != nil && l.NeedsGrant != "" {
-					v["needsGrant"] = l.NeedsGrant
-				}
 				out = append(out, v)
 			}
 		})
@@ -65,12 +63,11 @@ func (r *Router) registerActions(m machineRoute) {
 	act("GET /m/api/actions/requests", func(w http.ResponseWriter, req *http.Request, _ Caller, _ []byte) {
 		writeJSON(w, 200, map[string]any{"requests": r.Inbox(), "batches": r.InboxBatches(nil)})
 	})
-	// resume: same image, no prompt, no option changes, so the core answers approve_by_dead_machine and nothing
-	// reaches the phone (a line whose permission mode differs from its cert still gets its approval in the Inbox)
+	// resume: same image, no prompt, no option changes: a spawn from the paused source, nothing reaches the phone
 	act("POST /m/api/actions/sessions/{id}/resume", func(w http.ResponseWriter, req *http.Request, c Caller, _ []byte) {
 		id := req.PathValue("id")
 		r.noteOrigin(id, Origin{Caller: c, Call: APICall{Method: "POST", Path: path(req), Args: map[string]any{"upgrade": false}}})
-		if err := r.Resume(id, false); err != nil {
+		if err := r.Resume(id, ResumeIn{}); err != nil {
 			writeErr(w, err)
 			return
 		}
@@ -110,22 +107,27 @@ func (r *Router) registerActions(m machineRoute) {
 		writeJSON(w, 200, map[string]bool{"ok": true})
 	})
 	act("POST /m/api/actions/sessions", func(w http.ResponseWriter, req *http.Request, c Caller, b []byte) {
-		r.proposeSession(w, c, "actions-"+c.Session, b, signedRequestOf(req, req.Header.Get("X-Machine"), b))
+		r.proposeSession(w, c, "actions-"+c.Session, b, filingOf(req))
 	})
 	act("POST /m/api/actions/requests/batch", func(w http.ResponseWriter, req *http.Request, c Caller, b []byte) {
-		r.serveFileBatch(w, c, req.Method, path(req), b, signedRequestOf(req, req.Header.Get("X-Machine"), b))
+		r.serveFileBatch(w, c, req.Method, path(req), b, filingOf(req))
 	})
 	act("POST /m/api/actions/requests/batches/{id}/deny", func(w http.ResponseWriter, req *http.Request, _ Caller, _ []byte) {
 		r.serveDenyBatch(w, req.PathValue("id"))
 	})
 	for intent := range intents {
 		act("POST /m/api/actions/requests/"+intent, func(w http.ResponseWriter, req *http.Request, c Caller, b []byte) {
-			r.fileIntent(w, req.Method, path(req), intent, c, b, signedRequestOf(req, req.Header.Get("X-Machine"), b))
+			r.fileIntent(w, req.Method, path(req), intent, c, b, filingOf(req))
+		})
+	}
+	for intent := range addOnIntents {
+		act("POST /m/api/actions/requests/"+intent, func(w http.ResponseWriter, req *http.Request, c Caller, b []byte) {
+			r.fileAddOnIntent(w, req.Method, path(req), intent, c, b, filingOf(req))
 		})
 	}
 	// any app API call (apicalls.go): filed for Deyao's approval; its result read back by the same session
 	act("POST /m/api/actions/requests/call", func(w http.ResponseWriter, req *http.Request, c Caller, b []byte) {
-		r.fileCall(w, c, path(req), b, signedRequestOf(req, req.Header.Get("X-Machine"), b))
+		r.fileCall(w, c, path(req), b, filingOf(req))
 	})
 	act("GET /m/api/actions/requests/call/{id}", func(w http.ResponseWriter, req *http.Request, c Caller, _ []byte) {
 		r.serveCallResult(w, c, req.PathValue("id"))

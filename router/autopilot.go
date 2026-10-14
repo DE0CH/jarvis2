@@ -1,20 +1,18 @@
 package main
 
-// What the router does by itself with a running session, from the status its machine reports (registry.go):
-// Jarvis 1's autoPauseTick and oneShotTick (server.js) over grants instead of Fly exec.
+// What the router does by itself with a running session, from the status and the screen its machine pushes
+// (registry.go, /m/screen): Jarvis 1's autoPauseTick and oneShotTick (server.js). Nothing here runs anything in a
+// machine: the router has no shell there unless Deyao opened a terminal (addons.go).
 //
 //   auto-pause      idle (no background jobs) for 1 h → Pause; per-session off switch
 //   one-shot        the supervisor's ~/.claude/.one-shot-done marker → Destroy
-//   stale prompt    "waiting" for 1 h → Escape in the tmux pane (holder "status")
 //   attention DMs   idle / waiting / dead for 5 min → one DM per episode; the idle one can be muted
-//   downgrade DM    a new safeguard refusal or refusal fallback in a transcript, or the "switch model?" dialog
-//   stall nudge     idle with background jobs for 15 min → Jarvis 1's watchdog text as a peer message
-//   login           a session holding the store `claude` stopped on "Please run /login" and its own pair is in
-//                   step again → deliver "continue" (the router never writes a login)
+//   downgrade DM    a new safeguard refusal or refusal fallback in a transcript, or the "switch model?" dialog on the
+//                   pushed screen
+//   stall nudge     idle with background jobs for 15 min → the nudge notice (a text built into the image)
 //
 // One tick at a time (a single loop). The decisions are made under the state lock by planTick (pure, tested);
-// the actions run outside it. A command the machine refuses (no grant) is recorded as the session's
-// needsGrant and not retried for grantRetry.
+// the actions run outside it.
 
 import (
 	"encoding/json"
@@ -23,7 +21,6 @@ import (
 	"log"
 	"net/http"
 	"regexp"
-	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -32,11 +29,10 @@ import (
 // Liveness: a session's reported status, its settings, and the loop's clocks (unexported: in memory only, as
 // in Jarvis 1, so a router restart just restarts them)
 type Liveness struct {
-	AutoPauseOff    bool   `json:"autoPauseOff,omitempty"`
-	NotifyIdleOff   bool   `json:"notifyIdleOff,omitempty"`
-	OneShot         bool   `json:"oneShot,omitempty"`
-	NeedsGrant      string `json:"needsGrant,omitempty"` // a holder the machine refused; the app offers a grant
-	DowngradeSeenAt int64  `json:"downgradeSeenAt,omitempty"`
+	AutoPauseOff    bool  `json:"autoPauseOff,omitempty"`
+	NotifyIdleOff   bool  `json:"notifyIdleOff,omitempty"`
+	OneShot         bool  `json:"oneShot,omitempty"`
+	DowngradeSeenAt int64 `json:"downgradeSeenAt,omitempty"`
 	// the settled episode already DMed ("idle:<statusUpdatedAt>"), so a router restart doesn't ping it again
 	// the auto-pause clock: idle since when, on which turn (statusUpdatedAt) — kept across a router restart, so
 	// frequent deploys don't keep restarting the hour
@@ -46,12 +42,8 @@ type Liveness struct {
 	Reg           *Registry `json:"registry,omitempty"`
 	LastReport    time.Time `json:"lastReport,omitempty"`
 
-	waiting         *waitEpisode
 	settled         *settledEpisode
 	Stall           *stallClock `json:"stall,omitempty"`
-	loginRepaired   *repairMark
-	loginBusy       bool
-	grantRetry      map[string]time.Time // holder → not before
 	oneShotFiring   bool
 	dialogCheckedAt int64 // statusUpdatedAt of the waiting episode whose pane was checked for the dialog
 	dialogReported  bool
@@ -60,12 +52,6 @@ type Liveness struct {
 	// the stall watchdog's last nudge: when and how it ended ("" = delivered), for GET /setup/sessions
 	NudgeAt    time.Time `json:"nudgeAt,omitempty"`
 	NudgeError string    `json:"nudgeError,omitempty"`
-}
-
-type waitEpisode struct {
-	at        time.Time
-	statusAt  int64
-	cancelled bool
 }
 
 type settledEpisode struct {
@@ -81,18 +67,13 @@ type stallClock struct {
 	StatusAt int64     `json:"statusAt"`
 }
 
-type repairMark struct {
-	uuid string
-	at   time.Time
-}
-
 type pilotConfig struct {
-	IdlePause, WaitingCancel, Attention, StallNudge, StaleReport, GrantRetry, RepairEvery, DowngradeLookback time.Duration
+	IdlePause, Attention, StallNudge, StaleReport, DowngradeLookback time.Duration
 }
 
 var defaultPilot = pilotConfig{
-	IdlePause: time.Hour, WaitingCancel: time.Hour, Attention: 5 * time.Minute, StallNudge: 15 * time.Minute,
-	StaleReport: 3 * time.Minute, GrantRetry: 10 * time.Minute, RepairEvery: 10 * time.Minute, DowngradeLookback: 15 * time.Minute,
+	IdlePause: time.Hour, Attention: 5 * time.Minute, StallNudge: 15 * time.Minute, StaleReport: 3 * time.Minute,
+	DowngradeLookback: 15 * time.Minute,
 }
 
 const pilotTick = 30 * time.Second
@@ -107,17 +88,6 @@ var autoPauseVeto func(d *persisted, session string) bool
 
 func newLiveness(in NewSession) *Liveness {
 	return &Liveness{OneShot: in.OneShot, AutoPauseOff: in.OneShot || (in.AutoPause != nil && !*in.AutoPause)}
-}
-
-func init() {
-	envHooks = append(envHooks, func(_ *Router, s *Session, e map[string]string) { liveEnv(s, e) })
-}
-
-// liveEnv: what the machine's env needs (session-supervisor.sh reads SESSION_ONE_SHOT)
-func liveEnv(s *Session, e map[string]string) {
-	if s.Live != nil && s.Live.OneShot {
-		e["SESSION_ONE_SHOT"] = "1"
-	}
 }
 
 // liveOptions: what the phone sees on the new-session approval
@@ -153,7 +123,6 @@ func liveView(s *Session, v map[string]any) {
 		l = &Liveness{}
 	}
 	v["autoPause"], v["notifyIdle"], v["oneShot"] = onOff(l.AutoPauseOff), onOff(l.NotifyIdleOff), l.OneShot
-	v["needsGrant"] = l.NeedsGrant
 	if !l.LastReport.IsZero() {
 		v["lastReport"] = l.LastReport
 	}
@@ -274,14 +243,11 @@ func (r *Router) registerAutopilot(app appRoute, m machineRoute) {
 // ---- the loop ---------------------------------------------------------------------------------------------
 
 type pilotAction struct {
-	Kind    string // dm | escape | dialog | nudge | login | pause | destroy
+	Kind    string // dm | dialog | nudge | pause | destroy
 	Session string
-	Text    string // dm, nudge
-	Repair  string // login: the uuid of the "Please run /login" reply being repaired
-	// login: the machine keeps its own pair in step (store `claude`, machine/claudelogin.go): no write, only
-	// "continue" for a session stuck on "Please run /login"
+	Text    string // dm, nudge (the router's log; the machine builds the nudge's text from Jobs and Minutes)
 	Name    string
-	Jobs    int // nudge: the numbers its text is built from (the image builds the same text: vouch.go)
+	Jobs    int
 	Minutes int
 }
 
@@ -303,13 +269,9 @@ func (r *Router) autopilotTick() {
 	if !running {
 		return
 	}
-	storedExp := int64(0)
-	if l, err := r.sharedLogin(); err == nil {
-		storedExp = l.ExpiresAt
-	}
 	var acts []pilotAction
 	r.st.Do(func(d *persisted) {
-		acts = planTick(d, time.Now(), storedExp, defaultPilot, r.busy, func(id string) bool { return autoPauseVeto != nil && autoPauseVeto(d, id) })
+		acts = planTick(d, time.Now(), defaultPilot, r.busy, func(id string) bool { return autoPauseVeto != nil && autoPauseVeto(d, id) })
 		for _, t := range memSilentTick(d, time.Now().UTC()) { // memory.go: a starving machine that went silent
 			acts = append(acts, pilotAction{Kind: "dm", Text: t})
 		}
@@ -376,12 +338,8 @@ func sessionName(s *Session, g *Registry) string {
 	return s.ID
 }
 
-func (l *Liveness) mayExec(holder string, now time.Time) bool {
-	return l.grantRetry == nil || !now.Before(l.grantRetry[holder])
-}
-
 // planTick: one pass over the sessions; it moves the clocks and returns what to do. Called under the state lock.
-func planTick(d *persisted, now time.Time, storedExp int64, c pilotConfig, busy, veto func(string) bool) []pilotAction {
+func planTick(d *persisted, now time.Time, c pilotConfig, busy, veto func(string) bool) []pilotAction {
 	var out []pilotAction
 	add := func(a pilotAction) { out = append(out, a) }
 	for id, s := range d.Sessions {
@@ -390,7 +348,7 @@ func planTick(d *persisted, now time.Time, storedExp int64, c pilotConfig, busy,
 		}
 		l := s.Live
 		if s.State != "started" || s.MachineID == "" {
-			l.IdleSince, l.waiting, l.settled, l.Stall, l.dialogCheckedAt, l.dialogReported = time.Time{}, nil, nil, nil, 0, false
+			l.IdleSince, l.settled, l.Stall, l.dialogCheckedAt, l.dialogReported = time.Time{}, nil, nil, 0, false
 			l.screen = nil
 			if s.MachineID == "" {
 				l.Reg = nil // paused: the next machine reports afresh
@@ -437,13 +395,13 @@ func planTick(d *persisted, now time.Time, storedExp int64, c pilotConfig, busy,
 				add(pilotAction{Kind: "dm", Session: id, Text: downgradeText(name, ev)})
 			} else if g.Status != "waiting" {
 				l.dialogCheckedAt, l.dialogReported = 0, false
-			} else if !l.dialogReported && l.dialogCheckedAt != g.StatusUpdatedAt && l.mayExec("status", now) {
+			} else if !l.dialogReported && l.dialogCheckedAt != g.StatusUpdatedAt {
 				l.dialogCheckedAt = g.StatusUpdatedAt
 				add(pilotAction{Kind: "dialog", Session: id, Name: name})
 			}
 		}
 
-		// stall nudge: idle with background jobs, no turn for StallNudge → a peer message, repeated every StallNudge.
+		// stall nudge: idle with background jobs, no turn for StallNudge → the nudge notice, repeated every StallNudge.
 		// Claude Code (2.1.29x) keeps the status "busy" while background jobs run after the turn ended, so a
 		// "busy" session counts as waiting on its jobs when its pushed screen shows no turn running (no spinner)
 		jobsOnly := g != nil && g.BgTasks > 0 && g.Status == "idle"
@@ -464,35 +422,6 @@ func planTick(d *persisted, now time.Time, storedExp int64, c pilotConfig, busy,
 		} else if stalled := now.Sub(l.Stall.At); stalled >= c.StallNudge {
 			l.Stall.At = now
 			add(pilotAction{Kind: "nudge", Session: id, Text: nudgeText(g.BgTasks, stalled), Jobs: g.BgTasks, Minutes: int(stalled.Round(time.Minute) / time.Minute)})
-		}
-
-		// Claude login: a session holding the store `claude` keeps its pair in step by itself (machine/claudelogin.go),
-		// whatever the account; the router writes nothing (Deyao, 2026-10-14: no login repair). A turn that stopped on
-		// "Please run /login" gets "continue" once the session's pair is in step again.
-		if g != nil && !operating && !l.loginBusy && s.Harness != "opencode" && slices.Contains(s.Stores, "claude") &&
-			storedExp > now.UnixMilli() && g.CredsExpiresAt >= storedExp && g.Status == "idle" {
-			if u := g.AuthFailed; u != "" && (l.loginRepaired == nil || (l.loginRepaired.uuid != u && now.Sub(l.loginRepaired.at) >= c.RepairEvery)) {
-				l.loginRepaired = &repairMark{uuid: u, at: now}
-				l.loginBusy = true
-				add(pilotAction{Kind: "login", Session: id, Repair: u, Name: name})
-			}
-		}
-
-		// a prompt unanswered for WaitingCancel → Escape (once per waiting episode)
-		if g == nil || g.Status != "waiting" || operating {
-			l.waiting = nil
-			// "status" is only wanted while a prompt waits (the dialog check, the Escape): once the session has
-			// moved on, a refusal from that episode is moot, so the card stops offering a grant for it (2026-10-12:
-			// a short question left "The machine turned away status" on a session that was running fine)
-			if g != nil && l.NeedsGrant == "status" {
-				l.NeedsGrant = ""
-				delete(l.grantRetry, "status")
-			}
-		} else if l.waiting == nil || l.waiting.statusAt != g.StatusUpdatedAt {
-			l.waiting = &waitEpisode{at: now, statusAt: g.StatusUpdatedAt}
-		} else if !l.waiting.cancelled && now.Sub(l.waiting.at) >= c.WaitingCancel && l.mayExec("status", now) {
-			l.waiting.cancelled = true
-			add(pilotAction{Kind: "escape", Session: id, Name: name})
 		}
 
 		// auto-pause after IdlePause of plain idle
@@ -613,33 +542,11 @@ func (r *Router) runAction(a pilotAction) {
 			return
 		}
 		log.Printf("[oneshot] %s (%s) finished its prompt; destroying", a.Session, a.Name)
-	case "escape":
-		go func() {
-			_, err := r.execAs(a.Session, "status", "tmux send-keys -t claude Escape", 20*time.Second)
-			if err != nil {
-				log.Printf("[autopause] %s: cancelling the stale prompt failed: %v", a.Session, err)
-				r.st.Do(func(d *persisted) {
-					if s := d.Sessions[a.Session]; s != nil && s.Live != nil && s.Live.waiting != nil {
-						s.Live.waiting.cancelled = false
-					}
-				})
-				return
-			}
-			log.Printf("[autopause] %s (%s): cancelled a prompt unanswered for %s", a.Session, a.Name, defaultPilot.WaitingCancel)
-		}()
 	case "dialog":
 		go func() {
-			// the machine's own pushed pane first (no grant); a machine without the screen push needs the status grant
+			// the machine's own pushed pane (output only)
 			snap, ok := r.pushedScreen(a.Session)
-			screen := snap.Screen
-			if !ok {
-				res, err := r.execAs(a.Session, "status", "tmux capture-pane -p -t claude", 20*time.Second)
-				if err != nil {
-					return
-				}
-				screen = res.Stdout
-			}
-			if !promptOnScreen(screen) {
+			if !ok || !promptOnScreen(snap.Screen) {
 				return
 			}
 			r.st.Do(func(d *persisted) {
@@ -651,7 +558,7 @@ func (r *Router) runAction(a pilotAction) {
 		}()
 	case "nudge":
 		go func() {
-			err := r.DeliverCanned(a.Session, Delivery{Kind: "nudge", Jobs: a.Jobs, Minutes: a.Minutes}, a.Text)
+			err := deliverNoticeHook(r, a.Session, Notice{Kind: "nudge", Jobs: min(a.Jobs, 10000), Minutes: min(max(a.Minutes, 1), 100000)}, false)
 			r.st.Do(func(d *persisted) {
 				if s := d.Sessions[a.Session]; s != nil && s.Live != nil {
 					s.Live.NudgeAt, s.Live.NudgeError = time.Now().UTC(), ""
@@ -661,55 +568,10 @@ func (r *Router) runAction(a pilotAction) {
 				}
 			})
 			if err != nil {
-				r.noteRefusal(a.Session, "scheduler", err)
 				log.Printf("[stall] nudge for %s failed (retried next interval): %v", a.Session, err)
 				return
 			}
 			log.Printf("[stall] %s nudged", a.Session)
 		}()
-	case "login":
-		go func() {
-			defer r.st.Do(func(d *persisted) {
-				if s := d.Sessions[a.Session]; s != nil && s.Live != nil {
-					s.Live.loginBusy = false
-				}
-			})
-			r.repairLogin(a)
-		}()
 	}
-}
-
-// execAs: r.Exec, recording a refusal as the session's needsGrant (and backing off) and clearing it on success
-func (r *Router) execAs(session, holder, cmd string, timeout time.Duration) (ExecResult, error) {
-	res, err := r.Exec(session, holder, cmd, timeout)
-	if err != nil && res.Error != "" {
-		r.noteRefusal(session, holder, err)
-	} else if err == nil {
-		r.st.Do(func(d *persisted) {
-			if s := d.Sessions[session]; s != nil && s.Live != nil {
-				delete(s.Live.grantRetry, holder)
-				if s.Live.NeedsGrant == holder {
-					s.Live.NeedsGrant = ""
-				}
-			}
-		})
-	}
-	return res, err
-}
-
-// noteRefusal: the machine refused (or the delivery through a grant failed): the app offers a grant, and the
-// loop leaves that holder alone for GrantRetry
-func (r *Router) noteRefusal(session, holder string, err error) {
-	if err == nil || !strings.Contains(err.Error(), "refused") {
-		return
-	}
-	r.st.Do(func(d *persisted) {
-		if s := d.Sessions[session]; s != nil && s.Live != nil {
-			if s.Live.grantRetry == nil {
-				s.Live.grantRetry = map[string]time.Time{}
-			}
-			s.Live.grantRetry[holder] = time.Now().Add(defaultPilot.GrantRetry)
-			s.Live.NeedsGrant = holder
-		}
-	})
 }

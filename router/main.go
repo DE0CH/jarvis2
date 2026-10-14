@@ -1,7 +1,8 @@
-// The Jarvis 2 router (docs/API.md): chains the core's primitives into sessions and serves the app, the web
-// page and the session machines. It is untrusted by design (docs/DESIGN.md): a
-// bug here can fail or stall an action, but every document that matters is signed by the core or the
-// iPhone and checked at the far end, so it can't move a store to a machine nobody approved.
+// The Jarvis 2 router (docs/API.md, docs/API-grants.md): chains the kernel's steps into session lifecycles and serves
+// the app, the web page and the session machines. It is untrusted by design (docs/DESIGN.md "Target design"): it
+// stores, carries and schedules; a bug here can fail or stall an action, but every document that matters is signed by
+// a kernel part, the iPhone or a machine and checked at the far end, so it can't give a machine anything nobody
+// approved. Writing secrets is the one thing only the router protects.
 package main
 
 import (
@@ -15,14 +16,12 @@ import (
 )
 
 type Config struct {
-	CoreURL         string            // the core, inside the cluster
 	DataDir         string            // state.json + snapshots (a volume on the box)
 	WebDir          string            // the web page (expo export), served at /
 	SessionImage    string            // the image new sessions get (a tag; resume pins what Fly reported)
 	SessionImageSig string            // CI's signature over it (images.yml; keys/ci.pub)
 	ImageSigs       map[string]string // every earlier CI-pinned session image → its signature (SESSION_IMAGE_SIGS_FILE)
-	ImageOrder      []string          // the same images in pin order (the file's line order)
-	Region          string            // Fly region for session machines
+	Region          string            // Fly region for session machines (the spawn's)
 	MachineURL      string            // how machines reach the router (JARVIS2_URL on the machine): its Fly private-network address
 	AccessTeam      string            // e.g. de0ch.cloudflareaccess.com
 	AppAUD          string            // the Access app audience for /api and /
@@ -43,13 +42,11 @@ func env(k, def string) string {
 func main() {
 	wait, _ := strconv.Atoi(env("SNAPSHOT_WAIT_SECONDS", "600"))
 	cfg := Config{
-		CoreURL:         env("CORE_URL", "http://core.jarvis2-core.svc.cluster.local:8090"),
 		DataDir:         env("DATA_DIR", "/data"),
 		WebDir:          env("WEB_DIR", "/web"),
 		SessionImage:    env("SESSION_IMAGE", "ghcr.io/de0ch/jarvis2-session:latest"),
 		SessionImageSig: os.Getenv("SESSION_IMAGE_SIG"),
 		ImageSigs:       loadImageSigs(os.Getenv("SESSION_IMAGE_SIGS_FILE")),
-		ImageOrder:      loadImageOrder(os.Getenv("SESSION_IMAGE_SIGS_FILE")),
 		Region:          env("FLY_REGION", "lhr"),
 		MachineURL:      os.Getenv("MACHINE_URL"),
 		AccessTeam:      env("ACCESS_TEAM", "de0ch.cloudflareaccess.com"),
@@ -76,10 +73,11 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	r := NewRouter(cfg, st, &CoreClient{base: cfg.CoreURL, http: &http.Client{Timeout: 15 * time.Minute}}, policy)
+	k := kernelFromEnv()
+	r := NewRouter(cfg, st, k, policy)
 	r.startFeatures()
 	addr, maddr := env("ADDR", ":8080"), env("MACHINE_ADDR", ":8081")
-	log.Printf("router on %s (core %s)", addr, cfg.CoreURL)
+	log.Printf("router on %s (kernel parts %v)", addr, k.URLs)
 	// two listeners: the public one (cloudflared → app, web, setup) and the machines' one, which only
 	// Fly's private network reaches (the WireGuard peer); /m exists only on the second
 	if wg := os.Getenv("WG_CONFIG"); wg != "" {

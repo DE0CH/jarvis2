@@ -316,7 +316,7 @@ func (r *Router) registerDevices(app appRoute, public publicRoute) {
 	r.appPatterns["GET /api/remotes"], r.appPatterns["POST /api/sessions/{id}/start"] = true, true // Deyao's too (apicalls.go)
 	public("GET /api/remotes", r.requireDeyaoOrDevice(r.remotes))
 	public("POST /api/sessions/{id}/start", r.requireDeyaoOrDevice(func(w http.ResponseWriter, req *http.Request) {
-		if err := r.resumeWithPrompt(req.PathValue("id"), false, ""); err != nil {
+		if err := r.Resume(req.PathValue("id"), ResumeIn{}); err != nil {
 			scheduleErr(w, err)
 			return
 		}

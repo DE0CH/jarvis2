@@ -7,8 +7,8 @@ package main
 //             end-to-end encrypted, the link IS the secret)
 //   openclaw  the OpenClaw gateway: Control UI over HTTPS and the app's WebSocket on the same origin; the gateway
 //             token (~/.openclaw/jarvis-remote.json, written by harness-openclaw.sh) is the secret
-// The router reads those secrets on demand through a grant for holder "remote" (grants.go): its own key, so
-// Deyao can let the router read a session's remote without giving it the terminal. Never in /api/state.
+// The router reads those secrets on demand with a shell command, which runs only while Deyao has opened a terminal
+// for the session (addons.go); otherwise the answer says so (needsTerminal). Never in /api/state.
 //
 // The tunnel agent on the machine needs an Access service token: the store `tunnel` (CF_ACCESS_CLIENT_ID/SECRET =
 // the token jarvis2-tunnel, which the cf-tunnel Worker confines to registering agents for Jarvis 2 session ids),
@@ -24,6 +24,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/url"
 	"os"
@@ -33,11 +34,9 @@ import (
 	"time"
 )
 
-const remoteHolder = "remote"
-
 var remoteHarnesses = map[string]bool{"opencode": true, "openclaw": true}
 
-// the commands the remote holder runs (bash -lc as the session user)
+// the commands it runs (bash -lc as the session user)
 const (
 	paseoPairCmd   = `export PATH="$HOME/.local/bin:/usr/local/bin:$PATH" PASEO_HOME="$HOME/.paseo"; paseo daemon pair --json`
 	openclawRemote = `cat "$HOME/.openclaw/jarvis-remote.json"`
@@ -51,8 +50,8 @@ type RemoteInfo struct {
 	URL     string `json:"url,omitempty"`     // openclaw: the gateway's WebSocket
 	Token   string `json:"token,omitempty"`   // openclaw: the gateway token
 	Error   string `json:"error,omitempty"`
-	// NeedsGrant: the machine refused the remote holder; a phone grant or standing rule for "remote" opens it
-	NeedsGrant string `json:"needsGrant,omitempty"`
+	// NeedsTerminal: the session's grant doesn't allow shell: a terminal opens it (POST /api/requests/terminal)
+	NeedsTerminal bool `json:"needsTerminal,omitempty"`
 }
 
 func tunnelHost(id string) string { return id + env("SESSION_TUNNEL_SUFFIX", "-s.deyaochen.com") }
@@ -68,7 +67,7 @@ type remoteHit struct {
 	info RemoteInfo
 }
 
-// parseRemote: what the holder's command printed → the remote of that harness
+// parseRemote: what the command printed → the remote of that harness
 func parseRemote(harness, id, stdout string) RemoteInfo {
 	web := "https://" + tunnelHost(id) + "/"
 	info := RemoteInfo{WebURL: web, Harness: harness}
@@ -96,7 +95,7 @@ func parseRemote(harness, id, stdout string) RemoteInfo {
 	return info
 }
 
-// RemoteInfo: a started OpenCode/OpenClaw session's remote, read through the remote holder
+// RemoteInfo: a started OpenCode/OpenClaw session's remote, read with a shell command under its terminal
 func (r *Router) RemoteInfo(s Session) RemoteInfo {
 	remoteCache.Lock()
 	hit, ok := remoteCache.m[s.MachineID]
@@ -108,12 +107,10 @@ func (r *Router) RemoteInfo(s Session) RemoteInfo {
 	if s.Harness == "opencode" {
 		cmd, wait = paseoPairCmd, 30*time.Second
 	}
-	res, err := r.Exec(s.ID, remoteHolder, cmd, wait)
+	res, err := r.Shell(s.ID, cmd, wait)
 	if err != nil {
 		info := RemoteInfo{WebURL: "https://" + tunnelHost(s.ID) + "/", Harness: s.Harness, Error: err.Error()}
-		if isGrantRefusal(err) {
-			info.NeedsGrant = remoteHolder
-		}
+		info.NeedsTerminal = errors.Is(err, errNoShell)
 		return info
 	}
 	info := parseRemote(s.Harness, s.ID, res.Stdout)
@@ -147,7 +144,7 @@ func (r *Router) registerRemote(app appRoute, m machineRoute, public publicRoute
 		info := r.RemoteInfo(s)
 		w.Header().Set("Cache-Control", "no-store")
 		status := 200
-		if info.NeedsGrant != "" {
+		if info.NeedsTerminal {
 			status = 403
 		} else if info.Error != "" {
 			status = 503
@@ -211,8 +208,8 @@ func (r *Router) remotes(w http.ResponseWriter, req *http.Request) {
 			info := r.RemoteInfo(s)
 			if info.Error != "" {
 				o["error"] = info.Error
-				if info.NeedsGrant != "" {
-					o["needsGrant"] = info.NeedsGrant
+				if info.NeedsTerminal {
+					o["needsTerminal"] = true
 				}
 				if harness == "openclaw" {
 					o["url"], o["token"] = nil, nil

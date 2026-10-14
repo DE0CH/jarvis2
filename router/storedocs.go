@@ -4,26 +4,25 @@ package main
 // api"; 2026-10-13: the explanation of each key is surfaced on the web and iPhone portal, and writing one key by name
 // is allowed without overwriting the store).
 //
-// Key names and who wrote each key come from the core's signed store list (a store is a set of keys, core/keys.go).
-// What a store and each key are for is the router's own record (store-docs.json on its data volume): not a secret and
-// not part of any trust decision, written by whoever writes a key (a new key name needs its explanation), by the setup
-// session (`POST /setup/store-docs`) and by Deyao in the app. Every key's backup carries its explanation too, so a
-// Recover brings them back.
+// Key names and who wrote each key come from secrets' signed store list (a store is a set of keys,
+// core/kernel/secrets/keys.go). What a store and each key are for is the router's own record (store-docs.json on its
+// data volume): not a secret and not part of any trust decision, written by whoever writes a key (a new key name needs
+// its explanation), by the setup session (`POST /setup/store-docs`) and by Deyao in the app. Every key's backup carries
+// its explanation too, so a Recover brings them back.
 //
 // Writing a key (no approval: Deyao, 2026-10-13, "any session with a valid machine key … writing a key is perfectly
-// safe (has backup, so can't overwrite, and also can't read)"): the writer seals the value to the store key P + K and,
-// for the backup, to the master key, and signs both (core.WriterText). The router writes the backup first
-// (keys/<store>/<key>.json in the versioned bucket), then the key into the core, records the explanation, and asks
-// the phone to refresh every running session that holds the store (its copy is behind until a new unlock: the core
-// can't open the new value without the phone).
+// safe (has backup, so can't overwrite, and also can't read)"; DESIGN "Layers": writing secrets is protected only by
+// the router): the writer seals the value to the store key P + K, to the master key for its backup, and to secrets'
+// agreement key (`live`, so the next pull serves it at once). The router writes the backup first (keys/<store>/<key>.json
+// in the versioned bucket), then the key into secrets, records the explanation, and sends `pull` to every running
+// machine whose grant names the store.
 //
 //	GET /api/stores, GET /m/stores, GET /setup/stores/keys → {stores: [StoreRow], signed}
-//	GET /m/store-key, GET /setup/store-key → {identity, storeKey}: what a writer seals to (the core's signed identity,
-//	    naming the master key, and its signed store key for the claimed phone)
-//	POST /m/stores/{store}/keys/{key}      a session writes or deletes one key (machine-signed: core.WriterText)
-//	POST /setup/stores/{store}/keys/{key}  the same as the setup session (setup-key signed)
+//	GET /m/store-keys, GET /setup/store-keys → {state, storeKey, agreementKey}: what a writer seals to (secrets'
+//	    signed state naming the master key and the phone, its signed store key for that phone, its agreement key)
+//	POST /m/stores/{store}/keys/{key}      a session writes or deletes one key (writer "machine", its id)
+//	POST /setup/stores/{store}/keys/{key}  the same as the setup session (writer "setup", the setup key's signature)
 //	POST /setup/store-docs, PUT /api/stores/{store}/docs {about?, keys: {KEY: text}} → {ok}
-//	POST /setup/store-keys {name, keys} → {ok}: key names for a core from before keys.go (until the held core is live)
 
 import (
 	"crypto/sha256"
@@ -41,13 +40,14 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/DE0CH/jarvis2/core/kernel"
 )
 
-// KeyWriter: who wrote a key, as the core signed it, with the session the router knows that line as
+// KeyWriter: who wrote a key, as secrets recorded it, with the session the router knows that machine as
 type KeyWriter struct {
 	By           string `json:"by"`
 	Machine      string `json:"machine,omitempty"`
-	Line         string `json:"line,omitempty"`
 	Session      string `json:"session,omitempty"`
 	SessionLabel string `json:"sessionLabel,omitempty"`
 }
@@ -62,17 +62,16 @@ type KeyRow struct {
 
 // StoreRow: one store as listed
 type StoreRow struct {
-	Name      string   `json:"name"`
-	Sensitive bool     `json:"sensitive"`
-	Empty     bool     `json:"empty"`
-	Unlocked  bool     `json:"unlocked"`
-	About     string   `json:"about"`
-	Version   string   `json:"version,omitempty"`
-	// Keys: the key names (null: not known — a core from before keys.go with no recorded names), the shape every
-	// session image reads; KeyInfo: the same keys with what each is for and who wrote it
-	Keys     []string `json:"keys"`
-	KeyInfo  []KeyRow `json:"keyInfo"`
-	KeysFrom string   `json:"keysFrom"` // core | recorded | "" (not known)
+	Name      string `json:"name"`
+	Sensitive bool   `json:"sensitive"`
+	Empty     bool   `json:"empty"`
+	Unlocked  bool   `json:"unlocked"`
+	About     string `json:"about"`
+	Version   string `json:"version,omitempty"`
+	// Keys: the key names, the shape every session image reads; KeyInfo: the same keys with what each is for and who
+	// wrote it
+	Keys    []string `json:"keys"`
+	KeyInfo []KeyRow `json:"keyInfo"`
 }
 
 // StoreDoc: what a store and its keys are for
@@ -171,7 +170,7 @@ func storeNameOK(n string) bool {
 	return true
 }
 
-// envSlug: the core's EnvSlug (core/deploykeys.go) — OWNER_NAME, upper case, anything outside [A-Z0-9] as "_"
+// envSlug: secrets' EnvSlug (core/kernel/secrets/deploykeys.go) — OWNER_NAME, upper case, anything outside [A-Z0-9] as "_"
 func envSlug(repo string) string {
 	b := []byte(strings.ToUpper(repo))
 	for i, ch := range b {
@@ -182,97 +181,68 @@ func envSlug(repo string) string {
 	return string(b)
 }
 
-// coreStoreRow: one row of the core's signed list. Keys is nil from a core before keys.go.
-type coreStoreRow struct {
+// secretsStoreRow: one row of secrets' signed list
+type secretsStoreRow struct {
 	Name      string `json:"name"`
 	Sensitive bool   `json:"sensitive"`
 	Empty     bool   `json:"empty"`
 	Unlocked  bool   `json:"unlocked"`
 	Version   string `json:"version"`
-	Keys      *[]struct {
+	Keys      []struct {
 		Name   string     `json:"name"`
 		At     string     `json:"at"`
 		Writer *KeyWriter `json:"writer"`
 	} `json:"keys"`
 }
 
-// StoreList: the core's signed list with each store's keys, who wrote them and what they are for
+// StoreList: secrets' signed list with each store's keys, who wrote them and what they are for
 func (r *Router) StoreList() ([]StoreRow, *Doc, error) {
-	d, err := r.core.Call("/stores", map[string]string{"nonce": "store-keys-" + randID()})
+	d, err := r.k.SecretsDoc("/stores", map[string]string{"nonce": "store-keys-" + randID()})
 	if err != nil {
 		return nil, nil, err
 	}
 	var list struct {
-		Kind   string         `json:"kind"`
-		Stores []coreStoreRow `json:"stores"`
+		Kind   string            `json:"kind"`
+		Stores []secretsStoreRow `json:"stores"`
 	}
-	if err := d.Decode(&list); err != nil || list.Kind != "stores" {
-		return nil, nil, fmt.Errorf("the core's store list isn't readable")
+	if err := payloadOf(d, &list); err != nil || list.Kind != "stores" {
+		return nil, nil, fmt.Errorf("secrets' store list isn't readable")
 	}
 	storeDocsMu.Lock()
 	docs := r.readStoreDocs()
 	storeDocsMu.Unlock()
-	recorded := r.readRecordedKeys()
-	lines := map[string][2]string{} // line → session id, label
-	r.st.Do(func(d *persisted) {
-		for _, s := range d.Sessions {
-			if l := certLine(s.Cert); l != "" {
-				lines[l] = [2]string{s.ID, s.Label}
-			}
-		}
-		for _, rec := range d.Records {
-			if l := certLine(rec.Session.Cert); l != "" {
-				if _, ok := lines[l]; !ok {
-					lines[l] = [2]string{rec.Session.ID, rec.Session.Label}
+	owners := map[string][2]string{} // machine → session id, label
+	r.st.Do(func(p *persisted) {
+		for m, sid := range p.Machines {
+			label := ""
+			if s := p.Sessions[sid]; s != nil {
+				label = sessionTitle(*s)
+			} else {
+				for _, rec := range p.Records {
+					if rec.ID == sid {
+						label = sessionTitle(rec.Session)
+					}
 				}
 			}
+			owners[m] = [2]string{sid, label}
 		}
 	})
-	repoKeys := map[string][]string{}
-	for _, e := range r.Repos() {
-		s := envSlug(e.Repo)
-		repoKeys[e.Store] = []string{"GITHUB_DEPLOY_KEY_" + s, "GITHUB_DEPLOY_REPO_" + s}
-	}
 	rows := make([]StoreRow, 0, len(list.Stores))
 	for _, s := range list.Stores {
 		doc := docs[s.Name]
-		row := StoreRow{Name: s.Name, Sensitive: s.Sensitive, Empty: s.Empty, Unlocked: s.Unlocked, About: doc.About, Version: s.Version}
-		var names []string
-		switch {
-		case s.Keys != nil:
-			row.KeysFrom, row.Keys, row.KeyInfo = "core", []string{}, []KeyRow{}
-			for _, k := range *s.Keys {
-				kr := KeyRow{Name: k.Name, Explanation: doc.Keys[k.Name], At: k.At, Writer: k.Writer}
-				if w := kr.Writer; w != nil && w.Line != "" {
-					w.Session, w.SessionLabel = lines[w.Line][0], lines[w.Line][1]
-				}
-				row.Keys, row.KeyInfo = append(row.Keys, k.Name), append(row.KeyInfo, kr)
+		row := StoreRow{Name: s.Name, Sensitive: s.Sensitive, Empty: s.Empty, Unlocked: s.Unlocked, About: doc.About, Version: s.Version,
+			Keys: []string{}, KeyInfo: []KeyRow{}}
+		for _, k := range s.Keys {
+			kr := KeyRow{Name: k.Name, Explanation: doc.Keys[k.Name], At: k.At, Writer: k.Writer}
+			if w := kr.Writer; w != nil && w.Machine != "" {
+				w.Session, w.SessionLabel = owners[w.Machine][0], owners[w.Machine][1]
 			}
-		case s.Empty:
-			row.KeysFrom, row.Keys, row.KeyInfo = "core", []string{}, []KeyRow{}
-		case repoKeys[s.Name] != nil:
-			names, row.KeysFrom = repoKeys[s.Name], "recorded"
-		case recorded[s.Name] != nil:
-			names, row.KeysFrom = recorded[s.Name], "recorded"
-		}
-		for _, k := range names {
-			row.Keys, row.KeyInfo = append(row.Keys, k), append(row.KeyInfo, KeyRow{Name: k, Explanation: doc.Keys[k]})
+			row.Keys, row.KeyInfo = append(row.Keys, k.Name), append(row.KeyInfo, kr)
 		}
 		rows = append(rows, row)
 	}
 	sort.Slice(rows, func(i, j int) bool { return rows[i].Name < rows[j].Name })
-	return rows, d, nil
-}
-
-func certLine(c *Doc) string {
-	if c == nil {
-		return ""
-	}
-	var x struct {
-		Line string `json:"line"`
-	}
-	c.Decode(&x)
-	return x.Line
+	return rows, docOf(d), nil
 }
 
 func (r *Router) serveStoreList(w http.ResponseWriter) {
@@ -284,46 +254,49 @@ func (r *Router) serveStoreList(w http.ResponseWriter) {
 	writeJSON(w, 200, map[string]any{"stores": rows, "signed": d})
 }
 
-// storeKeyFor: what a writer seals to — the core's identity (its keys, the box key's signature, its signed state
-// naming the master key and the phone) and its signed store key for that phone
-func (r *Router) storeKeyFor() (map[string]any, error) {
-	status, b, err := r.core.Raw("GET", "/identity", nil)
-	if err != nil || status != 200 {
-		return nil, fmt.Errorf("the core's identity isn't readable (HTTP %d, %v)", status, err)
-	}
-	var id struct {
-		State *Doc `json:"state"`
-	}
-	json.Unmarshal(b, &id)
-	var st struct {
-		Phone struct {
-			AgreementKey string `json:"agreementKey"`
-		} `json:"phone"`
-	}
-	if id.State == nil || id.State.Decode(&st) != nil || st.Phone.AgreementKey == "" {
-		return nil, errors.New("the core isn't set up (no phone in its signed state)")
-	}
-	sk, err := r.core.Call("/store-key", map[string]string{"phone": st.Phone.AgreementKey})
+// storeKeys: what a writer seals to — secrets' signed state (the master key, the phone), its signed store key for that
+// phone, and its agreement key (the writer checks P + K = the store key)
+func (r *Router) storeKeys() (map[string]any, error) {
+	state, err := r.k.SecretsDoc("/state", map[string]string{})
 	if err != nil {
 		return nil, err
 	}
-	return map[string]any{"identity": json.RawMessage(b), "storeKey": sk}, nil
+	var st struct {
+		Master string `json:"master"`
+		Phone  *struct {
+			AgreementKey string `json:"agreementKey"`
+		} `json:"phone"`
+	}
+	if payloadOf(state, &st) != nil || st.Master == "" || st.Phone == nil || st.Phone.AgreementKey == "" {
+		return nil, errors.New("secrets isn't set up (no master key or phone in its signed state)")
+	}
+	sk, err := r.k.SecretsDoc("/store-key", map[string]string{"phone": st.Phone.AgreementKey})
+	if err != nil {
+		return nil, err
+	}
+	id, err := r.k.Identity("secrets")
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{"state": state, "storeKey": sk, "agreementKey": id.AgreementKey}, nil
 }
 
-// keyWriteIn: a writer's request (core.WriteKeyInput's sealed parts, the backup and the explanation)
+// keyWriteIn: a writer's request (docs/API-grants.md POST /m/stores/{store}/keys/{key})
 type keyWriteIn struct {
 	Delete  bool `json:"delete"`
 	Wrapped *struct {
 		E       string `json:"e"`
 		Wrapped string `json:"wrapped"`
 	} `json:"wrapped"`
-	Data         string `json:"data"`
-	BackupSha256 string `json:"backupSha256"`
+	Data         string         `json:"data"`
+	Live         *kernel.Sealed `json:"live"`
+	BackupSha256 string         `json:"backupSha256"`
 	Backup       *struct {
 		E    string `json:"e"`
 		Data string `json:"data"`
 	} `json:"backup"`
-	Sig         string `json:"sig"`
+	Sig         string `json:"sig"`        // setup: the setup key's signature over secrets.WriterText
+	WriterText  string `json:"writerText"` // informational
 	Explanation string `json:"explanation"`
 }
 
@@ -348,13 +321,14 @@ func dataSha(data string) string {
 	return hex.EncodeToString(h[:])
 }
 
-// WriteKey: one key written by a session's machine (writer "machine") or the setup session (writer "setup")
+// WriteKey: one key written by a session's machine (writer "machine"), the setup session (writer "setup") or the
+// router itself (writer "router": the Claude login, claudelogin.go). The backup first, then secrets, then `pull` to
+// the machines whose grant names the store.
 func (r *Router) WriteKey(writer, machine, store, key string, in keyWriteIn) (map[string]any, error) {
 	if !storeNameOK(store) || !keyNameRE.MatchString(key) {
 		return nil, &badRequest{"store: lower-case letters, digits and -; key: letters, digits and _"}
 	}
-	// the core's own store never; the deploy-key token store only by the setup session (the core refuses a machine's
-	// write there too: its keys otherwise come only from a phone-approved deploy-key call)
+	// the reserved store never; the deploy-key token store only by the setup session (secrets refuses others there too)
 	if store == flyStore || (store == deployKeyTokenStore && writer != "setup") {
 		return nil, &forbidden{fmt.Sprintf("store %s isn't written this way", store)}
 	}
@@ -368,13 +342,13 @@ func (r *Router) WriteKey(writer, machine, store, key string, in keyWriteIn) (ma
 	if !in.Delete && expl == "" && !documented {
 		return nil, &badRequest{fmt.Sprintf("%s has no explanation yet: say what the key is for (explanation)", key)}
 	}
-	if in.Sig == "" {
-		return nil, &badRequest{"sig: the writer's signature over core.WriterText"}
+	if writer == "setup" && in.Sig == "" {
+		return nil, &badRequest{"sig: the setup key's signature over secrets' WriterText"}
 	}
 	var sealed any
 	if !in.Delete {
-		if in.Wrapped == nil || in.Data == "" || in.Backup == nil || in.Backup.E == "" || in.Backup.Data == "" {
-			return nil, &badRequest{"a write carries wrapped, data and its backup (sealed to the master key)"}
+		if in.Wrapped == nil || in.Data == "" || in.Live == nil || in.Backup == nil || in.Backup.E == "" || in.Backup.Data == "" {
+			return nil, &badRequest{"a write carries wrapped, data, live and its backup (sealed to the master key)"}
 		}
 		if in.BackupSha256 != backupSha(in.Backup.E, in.Backup.Data) {
 			return nil, &badRequest{"backupSha256 isn't the backup's"}
@@ -383,41 +357,46 @@ func (r *Router) WriteKey(writer, machine, store, key string, in keyWriteIn) (ma
 	} else if in.BackupSha256 != "" {
 		return nil, &badRequest{"a delete has no backup"}
 	}
-	core := map[string]any{"store": store, "key": key, "delete": in.Delete, "data": in.Data, "backupSha256": in.BackupSha256,
-		"writer": writer, "sig": in.Sig}
+	fwd := map[string]any{"store": store, "key": key, "delete": in.Delete, "data": in.Data, "backupSha256": in.BackupSha256, "writer": writer}
 	if in.Wrapped != nil {
-		core["wrapped"] = in.Wrapped
+		fwd["wrapped"] = in.Wrapped
 	}
-	var sid string
-	if writer == "machine" {
-		var cert *Doc
+	if in.Live != nil {
+		fwd["live"] = in.Live
+	}
+	switch writer {
+	case "setup":
+		fwd["sig"] = in.Sig
+	case "machine":
+		var ok bool
 		r.st.Do(func(d *persisted) {
-			if s := d.Sessions[d.Machines[machine]]; s != nil && s.MachineID == machine && s.State == "started" {
-				sid, cert = s.ID, s.Cert
-			}
+			s := d.Sessions[d.Machines[machine]]
+			ok = s != nil && s.MachineID == machine && s.State == "started"
 		})
-		if cert == nil {
+		if !ok {
 			return nil, &forbidden{"only a running session writes a key"}
 		}
-		core["cert"] = cert
+		fwd["machine"] = machine
 	}
-	idStatus, ident, err := r.core.Raw("GET", "/identity", nil)
-	if err != nil || idStatus != 200 {
-		return nil, fmt.Errorf("the core's identity isn't readable: %v", err)
+	id, err := r.k.Identity("secrets")
+	if err != nil {
+		return nil, fmt.Errorf("secrets' identity isn't readable: %v", err)
 	}
-	// the backup first: a key never reaches the core without one (Deyao: "has backup, so can't overwrite")
+	// the backup first: a key never reaches secrets without one (Deyao: "has backup, so can't overwrite")
 	b := backupBucketFromEnv()
 	if b == nil {
 		return nil, errors.New("the router has no backup credential (BACKUP_READ_ACCESS_KEY): no key is written without its backup")
 	}
+	ident, _ := json.Marshal(id)
 	obj := map[string]any{"kind": "key-backup", "store": store, "key": key, "deleted": in.Delete, "sealed": sealed,
-		"backupSha256": in.BackupSha256, "e": wrappedE(in), "dataSha256": dataSha(in.Data), "writer": map[string]any{"by": writer, "sig": in.Sig, "cert": core["cert"]},
-		"core": json.RawMessage(ident), "explanation": expl, "at": time.Now().UTC().Format(time.RFC3339)}
+		"backupSha256": in.BackupSha256, "e": wrappedE(in), "dataSha256": dataSha(in.Data),
+		"writer": map[string]any{"by": writer, "sig": in.Sig, "machine": machine}, "secrets": json.RawMessage(ident),
+		"explanation": expl, "at": time.Now().UTC().Format(time.RFC3339)}
 	raw, _ := json.Marshal(obj)
 	if err := b.put("keys/"+store+"/"+key+".json", raw); err != nil {
 		return nil, fmt.Errorf("the backup wasn't written, so the key wasn't either: %v", err)
 	}
-	receipt, err := r.core.Call("/stores/write-key", core)
+	receipt, err := r.k.SecretsDoc("/stores/write-key", fwd)
 	if err != nil {
 		return nil, err
 	}
@@ -426,167 +405,16 @@ func (r *Router) WriteKey(writer, machine, store, key string, in keyWriteIn) (ma
 			log.Printf("store %s: the explanation of %s wasn't kept: %v", store, key, err)
 		}
 	}
-	who := "the setup session"
-	if sid != "" {
-		who = "session " + inboxSessionNameOf(r, sid)
-	}
-	verb := map[bool]string{true: "deleted", false: "written"}[in.Delete]
-	asked := r.refreshHolders(store, fmt.Sprintf("Key %s of store %s was %s by %s. Unlock gives these sessions the store as it is now.", key, store, verb, who))
-	return map[string]any{"ok": true, "receipt": receipt, "refreshAsked": asked}, nil
-}
-
-func inboxSessionNameOf(r *Router, sid string) (n string) {
-	r.st.Do(func(d *persisted) { n = inboxSessionName(d, sid) })
-	return
-}
-
-// refreshHolders: every running session whose cert names the store gets an unlock request (one batch when several),
-// so the phone gives them the store as it is now; their machines pull again once it is unlocked (unlockArrived)
-func (r *Router) refreshHolders(store, why string) []string {
-	sids := []string{}
-	r.st.Do(func(d *persisted) {
-		for _, s := range d.Sessions {
-			if s.State == "started" && s.MachineID != "" && containsString(s.Stores, store) {
-				sids = append(sids, s.ID)
-			}
-		}
-	})
-	sort.Strings(sids)
-	r.fileRefresh(sids, why)
-	return sids
-}
-
-// fileRefresh: the unlock requests that bring sessions their stores as they are now (filed by the router)
-func (r *Router) fileRefresh(sids []string, why string) {
-	o := Origin{Caller: Caller{Kind: "router"}, Call: APICall{Method: "POST", Path: "/router/refresh"}}
-	switch {
-	case len(sids) == 1:
-		if _, _, err := r.FileRequest(requestKindUnlock, RequestParams{Session: sids[0]}, why, o); err != nil {
-			log.Printf("refresh %s: %v", sids[0], err)
-		}
-	case len(sids) > 1:
-		for i := 0; i < len(sids); i += batchMaxItems {
-			part := sids[i:min(i+batchMaxItems, len(sids))]
-			items := []map[string]any{}
-			for _, sid := range part {
-				items = append(items, map[string]any{"intent": "unlock", "session": sid, "explanation": why})
-			}
-			if code, out := r.FileBatch(o.Caller, "POST", "/router/refresh", mustJSON(map[string]any{"summary": why, "items": items}), nil); code != 200 {
-				log.Printf("refresh %v: %d %v", part, code, out)
-			}
-		}
-	}
-}
-
-// refreshAfterPull: a pull whose stores were behind the core's (stale): the session's copy predates a write
-func (r *Router) refreshAfterPull(machine string, pulled *Doc) {
-	var x struct {
-		Stale []string `json:"stale"`
-	}
-	if pulled == nil || pulled.Decode(&x) != nil || len(x.Stale) == 0 {
-		return
-	}
-	var sid string
-	r.st.Do(func(d *persisted) {
-		if s := d.Sessions[d.Machines[machine]]; s != nil && s.MachineID == machine {
-			sid = s.ID
-		}
-	})
-	if sid != "" {
-		r.fileRefresh([]string{sid}, fmt.Sprintf("This session's copy of %s is older than the store: keys were written since. Unlock gives it the stores as they are now.", strings.Join(x.Stale, ", ")))
-	}
-}
-
-// unlockArrived: an unlock for one cert went through (the phone's unlock_finish): when that cert is a running,
-// booted machine's newest, the machine pulls again so ~/.secrets has the store as it is now
-func (r *Router) unlockArrived(answer []byte) {
-	var a struct {
-		Payload string `json:"payload"`
-	}
-	var x struct {
-		Kind string `json:"kind"`
-		For  string `json:"for"`
-	}
-	if json.Unmarshal(answer, &a) != nil || json.Unmarshal([]byte(a.Payload), &x) != nil || x.Kind != "unlocked" || x.For == "" {
-		return
-	}
-	var machine string
-	r.st.Do(func(d *persisted) {
-		for _, s := range d.Sessions {
-			if s.State == "started" && s.MachineID != "" && s.Booted == s.MachineID && certNonce(s.Cert) == x.For {
-				machine = s.MachineID
-			}
-		}
-	})
-	if machine != "" {
-		r.send(machine, "refresh-secrets")
-	}
-}
-
-func certNonce(c *Doc) string {
-	if c == nil {
-		return ""
-	}
-	var x struct {
-		Nonce string `json:"nonce"`
-	}
-	c.Decode(&x)
-	return x.Nonce
-}
-
-// ---- key names for a core from before keys.go (until the held core is live; delete then) -------------------------
-
-func (r *Router) recordedKeysPath() string { return filepath.Join(r.cfg.DataDir, "store-keys.json") }
-
-func (r *Router) readRecordedKeys() map[string][]string {
-	var m map[string]struct {
-		Keys []string `json:"keys"`
-	}
-	out := map[string][]string{}
-	if b, err := os.ReadFile(r.recordedKeysPath()); err == nil && json.Unmarshal(b, &m) == nil {
-		for k, v := range m {
-			out[k] = v.Keys
-		}
-	}
-	return out
-}
-
-// RecordStoreKeys: the names a store holds (nil forgets them), for a core that doesn't list them
-func (r *Router) RecordStoreKeys(name string, keys []string) error {
-	if !storeNameOK(name) {
-		return fmt.Errorf("bad store name %q", name)
-	}
-	for _, k := range keys {
-		if !keyNameRE.MatchString(k) {
-			return fmt.Errorf("bad key name %q", k)
-		}
-	}
-	storeDocsMu.Lock()
-	defer storeDocsMu.Unlock()
-	m := map[string]any{}
-	if b, err := os.ReadFile(r.recordedKeysPath()); err == nil {
-		json.Unmarshal(b, &m)
-	}
-	if keys == nil {
-		delete(m, name)
-	} else {
-		sort.Strings(keys)
-		m[name] = map[string]any{"keys": keys, "at": time.Now().UTC().Format(time.RFC3339)}
-	}
-	b, _ := json.MarshalIndent(m, "", " ")
-	tmp := r.recordedKeysPath() + ".tmp"
-	if err := os.WriteFile(tmp, b, 0o600); err != nil {
-		return err
-	}
-	return os.Rename(tmp, r.recordedKeysPath())
+	pulled := r.pullHolders(store)
+	return map[string]any{"ok": true, "receipt": receipt, "pulled": pulled}, nil
 }
 
 // ---- routes -------------------------------------------------------------------------------------------------
 
 func writeWriteErr(w http.ResponseWriter, err error) {
-	var ce *CoreError
-	if errors.As(err, &ce) {
-		writeJSON(w, ce.Status, map[string]string{"error": ce.Msg})
+	var ke *KernelError
+	if errors.As(err, &ke) {
+		writeJSON(w, ke.Status, map[string]string{"error": ke.Msg})
 		return
 	}
 	writeRequestErr(w, err)
@@ -611,8 +439,8 @@ func (r *Router) registerStoreDocs(app appRoute, m machineRoute, mux *http.Serve
 	})
 	// every session may see every store's names (not only its own): it needs them to know which store to ask for
 	m("GET /m/stores", func(w http.ResponseWriter, req *http.Request, machine string, _ []byte) { r.serveStoreList(w) })
-	m("GET /m/store-key", func(w http.ResponseWriter, req *http.Request, machine string, _ []byte) {
-		out, err := r.storeKeyFor()
+	m("GET /m/store-keys", func(w http.ResponseWriter, req *http.Request, machine string, _ []byte) {
+		out, err := r.storeKeys()
 		if err != nil {
 			writeErr(w, err)
 			return
@@ -625,6 +453,7 @@ func (r *Router) registerStoreDocs(app appRoute, m machineRoute, mux *http.Serve
 			writeJSON(w, 400, map[string]string{"error": "bad JSON: " + err.Error()})
 			return
 		}
+		in.Sig = ""
 		out, err := r.WriteKey("machine", machine, req.PathValue("store"), req.PathValue("key"), in)
 		if err != nil {
 			writeWriteErr(w, err)
@@ -643,8 +472,8 @@ func (r *Router) registerStoreDocs(app appRoute, m machineRoute, mux *http.Serve
 		}))
 	}
 	setup("GET /setup/stores/keys", func(w http.ResponseWriter, req *http.Request, _ []byte) { r.serveStoreList(w) })
-	setup("GET /setup/store-key", func(w http.ResponseWriter, req *http.Request, _ []byte) {
-		out, err := r.storeKeyFor()
+	setup("GET /setup/store-keys", func(w http.ResponseWriter, req *http.Request, _ []byte) {
+		out, err := r.storeKeys()
 		if err != nil {
 			writeErr(w, err)
 			return
@@ -676,21 +505,6 @@ func (r *Router) registerStoreDocs(app appRoute, m machineRoute, mux *http.Serve
 		}
 		if err := r.SetStoreDocs(in.Store, in.About, in.Keys); err != nil {
 			writeJSON(w, 400, map[string]string{"error": err.Error()})
-			return
-		}
-		writeJSON(w, 200, map[string]bool{"ok": true})
-	})
-	setup("POST /setup/store-keys", func(w http.ResponseWriter, req *http.Request, b []byte) {
-		var in struct {
-			Name string   `json:"name"`
-			Keys []string `json:"keys"`
-		}
-		if err := json.Unmarshal(b, &in); err != nil {
-			writeErr(w, fmt.Errorf("bad JSON: %v", err))
-			return
-		}
-		if err := r.RecordStoreKeys(in.Name, in.Keys); err != nil {
-			writeErr(w, err)
 			return
 		}
 		writeJSON(w, 200, map[string]bool{"ok": true})

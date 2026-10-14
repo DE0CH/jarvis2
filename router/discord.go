@@ -4,7 +4,7 @@ package main
 //   DM       → r.DM(text) posts to Deyao's DM with the bot (dmHook)
 //   create   → every session gets a text channel under its own category (DISCORD_SESSIONS_CATEGORY,
 //              default "Jarvis 2"; Jarvis 1's "Sessions" category and its channels are never touched),
-//              made when the router builds the machine's env (envHooks), so a start or resume carries it
+//              made when the machine asks for its config (GET /m/config, configHooks), so a start or resume carries it
 //              as LOBSTER_CHANNEL and the session's scripts/lobster-send.sh posts there. A resume reuses the
 //              channel; one deleted by hand is made again.
 //              name = a slug of the session's title, topic = "Jarvis 2 session <id>" (Jarvis 1 adds the
@@ -626,7 +626,7 @@ func (r *Router) startDiscord() {
 		log.Printf("[discord] DISCORD_SESSION_CHANNELS=off: DMs only")
 		return
 	}
-	envHooks = append(envHooks, discordEnv)
+	configHooks = append(configHooks, discordConfig)
 	onDestroy = append(onDestroy, discordDestroy)
 	go func() {
 		for {
@@ -636,10 +636,10 @@ func (r *Router) startDiscord() {
 	}()
 }
 
-// discordEnv: at every start/resume the session's channel (the one it carries, or a new one) goes into the
-// machine's env as LOBSTER_CHANNEL. Best effort: Discord being down mustn't stop a session (the session's
-// lobster-send.sh then DMs).
-func discordEnv(r *Router, s *Session, env map[string]string) {
+// discordConfig: the session's channel (the one it carries, or a new one) for its machine's GET /m/config
+// (discordChannel, LOBSTER_CHANNEL on the machine). Best effort: Discord being down mustn't stop a session (the
+// session's lobster-send.sh then DMs).
+func discordConfig(r *Router, s *Session, env map[string]string) {
 	if disc == nil || isTaskHarness(s.Harness) { // task lines report to their run records and the DM
 		return
 	}
@@ -659,7 +659,7 @@ func discordEnv(r *Router, s *Session, env map[string]string) {
 	if created {
 		log.Printf("[discord] %s: channel #%s made", s.ID, ch.Name)
 	}
-	env["LOBSTER_CHANNEL"] = ch.ID
+	env["discordChannel"] = ch.ID
 }
 
 // discordTick: channels follow their sessions' titles; a running session without one (Discord was down when

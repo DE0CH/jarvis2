@@ -2,31 +2,17 @@ package main
 
 // Outcomes (Deyao, 2026-10-13: "Approving an Inbox request should send a message or something to notify the session
 // that requested it"): when an Inbox item a SESSION filed is decided — approved, denied, lapsed after inboxTTL, dropped
-// (it left without a decision), or failed after approval — the requesting session gets a delivery saying so (one per
-// filing: a batch's items arrive together). It fits "router-only data never reaches the agent" the way the lease wake
-// does (leases.go):
-//
-//   - the delivery carries the session's OWN signed filing request (the intent POST, the batch, the add-store, the
-//     new-session proposal) and the item's index in it; the machine (machine/outcomes.go) builds the text from that
-//     body and texts built into the image, never from router prose;
-//   - per item the router names only strict-format values: the outcome (a word), the Inbox id or session id (a
-//     [a-z0-9-] id), an HTTP status (a number), and a proof document;
-//   - an approval that leaves a signed trace carries it, and the machine refuses the delivery when it doesn't check
-//     out: a grant is the phone-signed grant (checked against the phone key in the machine's cert), an added store is
-//     the machine's new core-signed cert naming it, a new session is the core's approval (by phone) whose config is
-//     the proposal's label and prompt, a deploy key is the core's signed key answer for the repo. An unlock and an
-//     API call leave nothing signed: the text says it is Jarvis's report. A denial, a lapse or a drop is the router's
-//     word too (docs/DECISIONS.md): nothing can sign a non-event, and the text says so;
-//   - the core attests the delivery (the input log) over the canonical record below.
+// (it left without a decision), or failed after approval — the requesting session gets a request-outcome notice (one
+// per filing: a batch's items arrive together). The notice names only the filing id the session's guard gave the
+// filing (header X-Jarvis2-Filing, kept with the Inbox item) and per item strictly formatted values: the item's index,
+// the outcome (a word), the Inbox id or session id, an HTTP status. The guard builds the text from what it kept of the
+// filing and texts built into its image, never from router prose; a denial, a lapse or a drop is the router's word, and
+// the text says so.
 //
 // A paused session isn't started for this: the outcomes wait in the router's state and go in once it runs again. A
 // destroyed session's outcomes go with it. Deyao's own words (a note, a reason) never travel.
 
 import (
-	"crypto/sha256"
-	"encoding/base64"
-	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"log"
 	"net/http"
@@ -56,76 +42,33 @@ var (
 
 // Outcome: one decided item of a session's filing, kept until it is delivered (persisted)
 type Outcome struct {
-	ID          string         `json:"id"`
-	Session     string         `json:"session"` // the requesting session
-	Request     *SignedRequest `json:"request"` // its own filing, as its machine signed it
-	Item        int            `json:"item"`    // the item's index in a batch (0 otherwise)
-	Batch       string         `json:"batch,omitempty"`
-	Ref         string         `json:"ref"`  // the Inbox id, or the session the approval was for
-	Kind        string         `json:"kind"` // what was asked (for listing): repo-key | grant | unlock | api-call | add-store | new-session
-	Outcome     string         `json:"outcome"`
-	Status      int            `json:"status,omitempty"` // an approved API call: its HTTP status
-	Proof       *Doc           `json:"proof,omitempty"`
-	At          time.Time      `json:"at"`
-	DeliveredAt *time.Time     `json:"deliveredAt,omitempty"`
-	Attempts    int            `json:"attempts,omitempty"`
-	Error       string         `json:"error,omitempty"` // the last delivery error (or why it was given up)
+	ID          string     `json:"id"`
+	Session     string     `json:"session"` // the requesting session
+	Filing      string     `json:"filing"`  // the guard's id of its filing
+	Item        int        `json:"item"`    // the item's index in a batch (0 otherwise)
+	Batch       string     `json:"batch,omitempty"`
+	Ref         string     `json:"ref"`  // the Inbox id, or the session the approval was for
+	Kind        string     `json:"kind"` // what was asked (for listing)
+	Outcome     string     `json:"outcome"`
+	Status      int        `json:"status,omitempty"` // an approved API call: its HTTP status
+	At          time.Time  `json:"at"`
+	DeliveredAt *time.Time `json:"deliveredAt,omitempty"`
+	Attempts    int        `json:"attempts,omitempty"`
+	Error       string     `json:"error,omitempty"` // the last delivery error (or why it was given up)
 }
 
-// OutcomeItem: one item in a request-outcome delivery
+// OutcomeItem: one item in a request-outcome notice
 type OutcomeItem struct {
 	Item    int    `json:"item"`
 	Outcome string `json:"outcome"`
 	Ref     string `json:"ref"`
-	Status  int    `json:"status,omitempty"`
-	Proof   *Doc   `json:"proof,omitempty"`
-}
-
-// outcomeRecord: what the core attests for a request-outcome delivery (machine/outcomes.go builds the same bytes)
-type outcomeRecord struct {
-	Request string              `json:"request"` // the filing's signature
-	Items   []outcomeRecordItem `json:"items"`
-}
-
-type outcomeRecordItem struct {
-	Item    int    `json:"item"`
-	Outcome string `json:"outcome"`
-	Ref     string `json:"ref"`
 	Status  int    `json:"status"`
-	Proof   string `json:"proof"` // sha256 of the proof's payload and signature, "" = none
 }
 
-func proofHash(p *Doc) string {
-	if p == nil {
-		return ""
-	}
-	sum := sha256.Sum256([]byte(p.Payload + "\n" + p.Sig))
-	return hex.EncodeToString(sum[:])
-}
-
-func outcomeAttested(d Delivery) ([]byte, error) {
-	if d.Request == nil || len(d.Outcomes) == 0 {
-		return nil, errors.New("request-outcome: no signed request or no items")
-	}
-	rec := outcomeRecord{Request: d.Request.Sig}
-	for _, it := range d.Outcomes {
-		if !outcomeRefRE.MatchString(it.Ref) || it.Status < 0 || it.Status > 999 || it.Item < 0 || it.Item >= batchMaxItems {
-			return nil, errors.New("request-outcome: not an id, status or item index")
-		}
-		switch it.Outcome {
-		case outcomeApproved, outcomeDenied, outcomeLapsed, outcomeDropped, outcomeFailed:
-		default:
-			return nil, errors.New("request-outcome: not an outcome")
-		}
-		rec.Items = append(rec.Items, outcomeRecordItem{Item: it.Item, Outcome: it.Outcome, Ref: it.Ref, Status: it.Status, Proof: proofHash(it.Proof)})
-	}
-	return json.Marshal(rec)
-}
-
-// noteOutcome (under the state lock): the item an Origin filed was decided. Only a session's own signed filing gets
-// one; the first decision of an item stands.
-func noteOutcome(d *persisted, o *Origin, kind, ref, outcome string, status int, proof *Doc) {
-	if o == nil || o.Signed == nil || (o.Caller.Kind != "session" && o.Caller.Kind != "actions") || o.Caller.Session == "" {
+// noteOutcome (under the state lock): the item an Origin filed was decided. Only a session's own filing (with the
+// guard's filing id) gets one; the first decision of an item stands.
+func noteOutcome(d *persisted, o *Origin, kind, ref, outcome string, status int) {
+	if o == nil || !textIDRE.MatchString(o.Filing) || (o.Caller.Kind != "session" && o.Caller.Kind != "actions") || o.Caller.Session == "" {
 		return
 	}
 	sid := o.Caller.Session
@@ -139,16 +82,12 @@ func noteOutcome(d *persisted, o *Origin, kind, ref, outcome string, status int,
 		d.Outcomes = map[string][]*Outcome{}
 	}
 	for _, x := range d.Outcomes[sid] {
-		if x.Request != nil && x.Request.Sig == o.Signed.Sig && x.Item == o.Item {
+		if x.Filing == o.Filing && x.Item == o.Item {
 			return
 		}
 	}
-	batch := ""
-	if isBatchPath(o.Signed.Path) {
-		batch = o.Batch
-	}
-	list := append(d.Outcomes[sid], &Outcome{ID: randID(), Session: sid, Request: o.Signed, Item: o.Item, Batch: batch, Ref: ref,
-		Kind: kind, Outcome: outcome, Status: status, Proof: proof, At: time.Now().UTC()})
+	list := append(d.Outcomes[sid], &Outcome{ID: randID(), Session: sid, Filing: o.Filing, Item: o.Item, Batch: o.Batch, Ref: ref,
+		Kind: kind, Outcome: outcome, Status: status, At: time.Now().UTC()})
 	if len(list) > outcomeMaxPerSession { // the oldest delivered one goes, else the oldest
 		drop := 0
 		for i, x := range list {
@@ -169,31 +108,21 @@ func noteOutcome(d *persisted, o *Origin, kind, ref, outcome string, status int,
 
 var outcomeKick = make(chan struct{}, 1)
 
-func isBatchPath(p string) bool { return strings.HasSuffix(p, "/requests/batch") }
-
-// batchSize: the number of items in a signed batch filing (0 when it isn't one)
-func batchSize(sr *SignedRequest) int {
-	if sr == nil || !isBatchPath(sr.Path) {
-		return 0
-	}
-	b, err := base64.StdEncoding.DecodeString(sr.Body)
-	if err != nil {
-		return 0
-	}
-	var in struct {
-		Items []json.RawMessage `json:"items"`
-	}
-	json.Unmarshal(b, &in)
-	return len(in.Items)
-}
-
 // ---- delivery ---------------------------------------------------------------------------------------------
 
 type outcomeGroup struct {
-	sid   string
-	sig   string
-	ids   []string
-	deliv Delivery
+	sid    string
+	filing string
+	ids    []string
+	notice Notice
+}
+
+// batchItems: how many items a batch had when filed (0 when it is gone or not a batch)
+func batchItems(d *persisted, id string) int {
+	if b := d.Batches[id]; b != nil {
+		return len(b.Entries)
+	}
+	return 0
 }
 
 // readyOutcomes (under the lock): each started session's undelivered outcomes, grouped by filing; a batch's group is
@@ -211,45 +140,49 @@ func readyOutcomes(d *persisted, now time.Time) []outcomeGroup {
 		}
 		groups := map[string]*outcomeGroup{}
 		newest := map[string]time.Time{}
+		batchOf := map[string]string{}
 		order := []string{}
 		for _, x := range list {
-			if x.DeliveredAt != nil || x.Request == nil {
+			if x.DeliveredAt != nil || x.Filing == "" {
 				continue
 			}
-			g := groups[x.Request.Sig]
+			g := groups[x.Filing]
 			if g == nil {
-				g = &outcomeGroup{sid: sid, sig: x.Request.Sig, deliv: Delivery{Kind: "request-outcome", Request: x.Request}}
-				groups[x.Request.Sig] = g
-				order = append(order, x.Request.Sig)
+				g = &outcomeGroup{sid: sid, filing: x.Filing, notice: Notice{Kind: "request-outcome", Filing: x.Filing}}
+				groups[x.Filing] = g
+				order = append(order, x.Filing)
 			}
 			g.ids = append(g.ids, x.ID)
-			g.deliv.Outcomes = append(g.deliv.Outcomes, OutcomeItem{Item: x.Item, Outcome: x.Outcome, Ref: x.Ref, Status: x.Status, Proof: x.Proof})
-			if x.At.After(newest[x.Request.Sig]) {
-				newest[x.Request.Sig] = x.At
+			g.notice.Items = append(g.notice.Items, OutcomeItem{Item: x.Item, Outcome: x.Outcome, Ref: x.Ref, Status: x.Status})
+			if x.At.After(newest[x.Filing]) {
+				newest[x.Filing] = x.At
+			}
+			if x.Batch != "" {
+				batchOf[x.Filing] = x.Batch
 			}
 		}
-		for _, sig := range order {
-			g := groups[sig]
-			if n := batchSize(g.deliv.Request); n > 0 {
+		for _, f := range order {
+			g := groups[f]
+			if b := batchOf[f]; b != "" {
 				decided := map[int]bool{}
 				for _, x := range list {
-					if x.Request != nil && x.Request.Sig == sig {
+					if x.Filing == f {
 						decided[x.Item] = true
 					}
 				}
-				if len(decided) < n && now.Sub(newest[sig]) < outcomeSettle {
+				if n := batchItems(d, b); (n == 0 || len(decided) < n) && now.Sub(newest[f]) < outcomeSettle {
 					continue
 				}
 			}
-			sort.Slice(g.deliv.Outcomes, func(i, j int) bool { return g.deliv.Outcomes[i].Item < g.deliv.Outcomes[j].Item })
+			sort.Slice(g.notice.Items, func(i, j int) bool { return g.notice.Items[i].Item < g.notice.Items[j].Item })
 			out = append(out, *g)
 		}
 	}
 	return out
 }
 
-// deliverOutcomeHook: a seam for tests
-var deliverOutcomeHook = func(r *Router, sid string, d Delivery) error { return r.deliverVouchedRunning(sid, d) }
+// deliverOutcomeHook: a seam for tests (a running session only: nothing resumes a session for this)
+var deliverOutcomeHook = func(r *Router, sid string, n Notice) error { return deliverNoticeHook(r, sid, n, false) }
 
 var outcomeRun = struct {
 	sync.Mutex
@@ -281,7 +214,7 @@ func (r *Router) outcomeTick() {
 	var ready []outcomeGroup
 	r.st.Do(func(d *persisted) { ready = readyOutcomes(d, time.Now().UTC()) })
 	for _, g := range ready {
-		key := g.sid + " " + g.sig
+		key := g.sid + " " + g.filing
 		outcomeRun.Lock()
 		if outcomeRun.busy[key] {
 			outcomeRun.Unlock()
@@ -293,7 +226,7 @@ func (r *Router) outcomeTick() {
 		go func(g outcomeGroup) {
 			defer outcomeWG.Done()
 			defer func() { outcomeRun.Lock(); delete(outcomeRun.busy, key); outcomeRun.Unlock() }()
-			err := deliverOutcomeHook(r, g.sid, g.deliv)
+			err := deliverOutcomeHook(r, g.sid, g.notice)
 			if errors.Is(err, errSkip) {
 				return // not running right now: the next tick (or the next start)
 			}
@@ -313,8 +246,7 @@ func (r *Router) outcomeTick() {
 					}
 					x.Attempts++
 					x.Error = trimTo(err.Error(), 300)
-					// an image from before outcomes refuses the kind: it never will take it
-					if x.Attempts >= outcomeMaxAttempts || errors.Is(err, errNoSession) || strings.Contains(err.Error(), "unknown delivery kind") {
+					if x.Attempts >= outcomeMaxAttempts || errors.Is(err, errNoSession) || strings.Contains(err.Error(), "no filing of this session") {
 						x.DeliveredAt = &now // given up; the session can still read it (GET /m/api/requests/outcomes)
 						x.Error = "not delivered: " + x.Error
 					}

@@ -1,7 +1,8 @@
 package main
 
 // The router's own records, in one JSON file on the box's volume (written atomically). Nothing here is
-// trusted by anyone else: the certs are core-signed and the snapshots machine-signed.
+// trusted by anyone else: the kernel's documents are signed by their parts (docstore.go keeps them by ID) and the
+// snapshots by their machines.
 
 import (
 	"encoding/json"
@@ -9,62 +10,69 @@ import (
 	"path/filepath"
 	"sync"
 	"time"
+
+	"github.com/DE0CH/jarvis2/core/kernel"
 )
 
 type Session struct {
-	ID             string      `json:"id"`        // stable: the first machine's id
-	MachineID      string      `json:"machineId"` // "" while paused
-	State          string      `json:"state"`
-	Error          string      `json:"error,omitempty"`
-	Created        time.Time   `json:"created"`
-	PausedAt       *time.Time  `json:"pausedAt,omitempty"`
-	Label          string      `json:"label"`
-	Prompt         string      `json:"-"`
-	Model          string      `json:"model"`
-	PermissionMode string      `json:"permissionMode"`
-	Size           string      `json:"size"`
-	Harness        string      `json:"harness"`
-	Stores         []string    `json:"stores"`
-	Repos          string      `json:"repos"`
-	Content        []string    `json:"content,omitempty"` // content.go: the content stores the line gets (signed in its config)
-	Image          string      `json:"image"`             // what the current line runs (ref@digest), pinned on resume
-	Cert           *Doc        `json:"-"`                 // the line's latest succession cert
-	RequestID      string      `json:"createRequestId,omitempty"`
-	Title          string      `json:"aiTitle,omitempty"`
-	Status         string      `json:"status,omitempty"`
-	UserTitle      string      `json:"userTitle,omitempty"`      // Deyao's own rename (the transcript's custom title): beats Label
-	AppTitle       string      `json:"serverTitle,omitempty"`    // the Claude app's own title (machine report; Jarvis 1's serverTitle): beats all
-	LiveSync       *LiveSync   `json:"liveSync,omitempty"`       // livesync.go: the transcripts the machine last copied out
-	DiscordChannel string      `json:"discordChannel,omitempty"` // the session's channel (discord.go), LOBSTER_CHANNEL on the machine
-	Live           *Liveness   `json:"live,omitempty"`           // reported status, auto-pause/one-shot settings (autopilot.go)
-	ArchiveDir     string      `json:"archiveDir,omitempty"`     // archive.go: fixed by the destroy that archives it
-	RestoreFrom    string      `json:"restoreFrom,omitempty"`    // restore.go: the record this session restores
-	RestoreCert    *Doc        `json:"restoreCert,omitempty"`    // restore.go: that record's signer cert
-	ImportFrom     string      `json:"importFrom,omitempty"`     // jarvis1import.go: the paused Jarvis 1 session this line imports
-	ImportSha      string      `json:"importSha256,omitempty"`   // jarvis1import.go: that import manifest's sha256 (in the cert's restore)
-	Ops            *SessionOps `json:"ops,omitempty"`            // sessionops.go: API proxy, env patch, rollback, attachments
-	Booted         string      `json:"booted,omitempty"`         // the machine that has reported status: it got past boot (lastSnapshot)
-	Waiting        string      `json:"waiting,omitempty"`        // what a pause or destroy is waiting on, in plain words (the app shows it)
-	LockedStore    string      `json:"lockedStore,omitempty"`    // the store the machine waits on at boot (its secrets pull got 423 "store X is locked")
-	OldCore        bool        `json:"oldCore,omitempty"`        // corechange.go: its line is an earlier core's; destroyed once paused
-	taskConfig     *TaskConfig // vouch.go: a task line's instance + parameters while its first challenge is made (not kept)
+	ID             string       `json:"id"`        // stable: "s" + 16 hex, the settings' `session`
+	MachineID      string       `json:"machineId"` // "" while paused
+	State          string       `json:"state"`
+	Error          string       `json:"error,omitempty"`
+	Created        time.Time    `json:"created"`
+	PausedAt       *time.Time   `json:"pausedAt,omitempty"`
+	Label          string       `json:"label"`
+	Prompt         string       `json:"-"`
+	Model          string       `json:"model"`
+	PermissionMode string       `json:"permissionMode"`
+	Size           string       `json:"size"`
+	Harness        string       `json:"harness"`
+	Stores         []string     `json:"stores"`
+	Repos          string       `json:"repos"`
+	Content        []string     `json:"content,omitempty"` // content.go: the content stores the line gets (signed in its config)
+	Image          string       `json:"image"`             // the current source's image (ref@digest)
+	Chain          *Chain       `json:"chain,omitempty"`   // chain.go: where the session's chain is, its grants
+	RequestID      string       `json:"createRequestId,omitempty"`
+	Title          string       `json:"aiTitle,omitempty"`
+	Status         string       `json:"status,omitempty"`
+	UserTitle      string       `json:"userTitle,omitempty"`      // Deyao's own rename (the transcript's custom title): beats Label
+	AppTitle       string       `json:"serverTitle,omitempty"`    // the Claude app's own title (machine report; Jarvis 1's serverTitle): beats all
+	LiveSync       *LiveSync    `json:"liveSync,omitempty"`       // livesync.go: the transcripts the machine last copied out
+	DiscordChannel string       `json:"discordChannel,omitempty"` // the session's channel (discord.go), LOBSTER_CHANNEL on the machine
+	Live           *Liveness    `json:"live,omitempty"`           // reported status, auto-pause/one-shot settings (autopilot.go)
+	ArchiveDir     string       `json:"archiveDir,omitempty"`     // archive.go: fixed by the destroy that archives it
+	RestoreFrom    string       `json:"restoreFrom,omitempty"`    // restore.go: the record this session restores
+	ImportFrom     string       `json:"importFrom,omitempty"`     // jarvis1import.go: the paused Jarvis 1 session this line imports
+	StartSnapshot  string       `json:"startSnapshot,omitempty"`  // the snapshot the first source names (a restore's, an import's manifest)
+	Ops            *SessionOps  `json:"ops,omitempty"`            // sessionops.go: API proxy, env patch, rollback, attachments
+	Booted         string       `json:"booted,omitempty"`         // the machine that has reported status: it got past boot (lastSnapshot)
+	Waiting        string       `json:"waiting,omitempty"`        // what a pause or destroy is waiting on, in plain words (the app shows it)
+	LockedStore    string       `json:"lockedStore,omitempty"`    // a store the machine's last pull named as locked
+	Commands       []CommandRun `json:"commands,omitempty"`       // addons.go: the approved commands' results, newest last
+	taskConfig     *TaskConfig  // a task line's instance + parameters while its first draft is made (not kept)
 }
 
 type Approval struct {
-	ID        string            `json:"id"`
-	Kind      string            `json:"kind"` // new-session | resume-upgrade | add-store
-	Created   time.Time         `json:"created"`
-	Session   string            `json:"session"`
-	Machine   string            `json:"machine"`
-	Label     string            `json:"label"`
-	Challenge *Doc              `json:"challenge"`
-	BurnCert  *Doc              `json:"burnCert,omitempty"`
-	Options   map[string]string `json:"options,omitempty"`
+	ID      string    `json:"id"`
+	Kind    string    `json:"kind"` // new-session | resume-upgrade | terminal | command | add-store
+	Created time.Time `json:"created"`
+	Session string    `json:"session"`
+	Machine string    `json:"machine,omitempty"` // an add-on: the running machine it is for
+	Label   string    `json:"label"`
+	// Drafts: the succession certs the phone signs, in order, each with its log-notary challenge (chain.go)
+	Drafts  []Draft           `json:"drafts"`
+	Options map[string]string `json:"options,omitempty"`
+	// an add-on's facts (the phone reads them from the drafts; these are the router's own record)
+	Until  *time.Time     `json:"until,omitempty"`
+	Cmd    string         `json:"cmd,omitempty"`
+	Once   string         `json:"once,omitempty"`
+	Store  string         `json:"store,omitempty"`
+	Source *kernel.Object `json:"source,omitempty"` // resume-upgrade: the source its draft makes
 	// inbox.go: who asked for it (from the caller's credential) and the call it made, and the caller's own words
 	Origin      *Origin `json:"origin,omitempty"`
 	Explanation string  `json:"explanation,omitempty"`
-	// ImageSig: CI's signature over "jarvis2-session-image <image>" for the image the challenge names, when that is the
-	// current CI build (SESSION_IMAGE_SIG, made by images.yml with the key of keys/ci.pub): the phone checks it
+	// ImageSig: CI's signature over "jarvis2-session-image <image>" for the image the draft names, when that is a
+	// CI build (SESSION_IMAGE_SIG / the signatures file, made by images.yml with the key of keys/ci.pub): the phone checks it
 	ImageSig string `json:"imageSig,omitempty"`
 	// batches.go: the batch it was filed in (reviewed with the batch's others under one Face ID)
 	Batch string `json:"batch,omitempty"`
@@ -78,25 +86,27 @@ type Record struct {
 	Restored     []RestoreMark `json:"restored,omitempty"`
 }
 
-// Started: what the core reported at start (the machine's keys authenticate its requests here)
+// Started: a machine's keys as its spawn cert names them (its signing key authenticates its requests here)
 type Started struct {
 	ID            string `json:"id"`
 	Image         string `json:"image"`
 	EncryptionKey string `json:"encryptionKey"`
 	SigningKey    string `json:"signingKey"`
+	Spawn         string `json:"spawn"` // its notarized spawn cert's ID (docstore.go)
+	// the machine's last snapshot as it uploaded it: the sha256 and its signature over it (POST /m/snapshot)
+	Snapshot    string `json:"snapshot,omitempty"`
+	SnapshotSig string `json:"snapshotSig,omitempty"`
 }
 
 type persisted struct {
-	Sessions  map[string]*Session     `json:"sessions"`
-	Approvals map[string]*Approval    `json:"approvals"`
-	Records   []*Record               `json:"records"`
-	Started   map[string]*Started     `json:"started"`
-	Certs     map[string]*Doc         `json:"certs"`    // machine id → its latest succession cert
-	Machines  map[string]string       `json:"machines"` // machine id → session id
-	SessCerts map[string]*Doc         `json:"sessionCerts"`
-	Grants    map[string]*StoredGrant `json:"grants"` // id → a phone-signed grant or standing rule (grants.go)
+	Sessions  map[string]*Session  `json:"sessions"`
+	Approvals map[string]*Approval `json:"approvals"`
+	Records   []*Record            `json:"records"`
+	Started   map[string]*Started  `json:"started"`             // machine id → its keys (from its spawn cert)
+	Machines  map[string]string    `json:"machines"`            // machine id → session id
+	RootGrant string               `json:"rootGrant,omitempty"` // docstore.go: root's ⊤ on the sink (its ID)
 
-	Schedules   map[string]*Schedule     `json:"schedules,omitempty"`   // session id → wakeups, crons, resume prompt (schedule.go)
+	Schedules   map[string]*Schedule     `json:"schedules,omitempty"`   // session id → wakeups, crons, watches (schedule.go)
 	Budget      *BudgetState             `json:"budget,omitempty"`      // budget.go: this month's Fly spend estimate
 	BBBudget    *BBBudgetState           `json:"bbBudget,omitempty"`    // bbbudget.go: this month's Browserbase DM flags
 	Devices     map[string]*Device       `json:"devices,omitempty"`     // devices.go: Deyao's paired OpenClaw/Paseo apps
@@ -105,7 +115,6 @@ type persisted struct {
 	Inbox       map[string]*InboxRequest `json:"inbox,omitempty"`       // inbox.go: requests waiting for the phone
 	Batches     map[string]*Batch        `json:"batches,omitempty"`     // batches.go: requests and approvals filed together, one review
 	CallResults map[string]*CallResult   `json:"callResults,omitempty"` // apicalls.go: approved/denied API calls, for their caller
-	CoreKey     string                   `json:"coreKey,omitempty"`     // corechange.go: the signing key of the core the sessions' lines belong to
 	Leases      *LeaseState              `json:"leases,omitempty"`      // leases.go: shared-device leases (holder + queue per device)
 	Outcomes    map[string][]*Outcome    `json:"outcomes,omitempty"`    // outcomes.go: session id → decisions on its Inbox filings, until delivered
 }
@@ -143,22 +152,8 @@ func LoadState(dir string) (*State, error) {
 	if d.Started == nil {
 		d.Started = map[string]*Started{}
 	}
-	if d.Certs == nil {
-		d.Certs = map[string]*Doc{}
-	}
 	if d.Machines == nil {
 		d.Machines = map[string]string{}
-	}
-	if d.SessCerts == nil {
-		d.SessCerts = map[string]*Doc{}
-	}
-	if d.Grants == nil {
-		d.Grants = map[string]*StoredGrant{}
-	}
-	for id, c := range d.SessCerts {
-		if s := d.Sessions[id]; s != nil {
-			s.Cert = c
-		}
 	}
 	return s, nil
 }
@@ -172,20 +167,14 @@ func (s *State) Do(fn func(d *persisted)) {
 }
 
 func (s *State) save() {
-	d := &s.data
-	d.SessCerts = map[string]*Doc{}
-	for id, ss := range d.Sessions {
-		if ss.Cert != nil {
-			d.SessCerts[id] = ss.Cert
-		}
-	}
-	b, _ := json.MarshalIndent(d, "", " ")
+	b, _ := json.MarshalIndent(&s.data, "", " ")
 	tmp := filepath.Join(s.dir, "state.json.tmp")
 	if os.WriteFile(tmp, b, 0o600) == nil {
 		os.Rename(tmp, filepath.Join(s.dir, "state.json"))
 	}
 }
 
-func (s *State) snapshotPath(machine string) string {
-	return filepath.Join(s.dir, "snapshots", machine+".tar.gz")
+// snapshotPath: a snapshot (or a Jarvis 1 import manifest) by its sha256 — what a source's `snapshot` names
+func (s *State) snapshotPath(sha string) string {
+	return filepath.Join(s.dir, "snapshots", sha)
 }

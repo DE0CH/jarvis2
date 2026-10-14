@@ -145,7 +145,7 @@ func (r *Router) applyKeyAnswer(a keyAnswer, proof *Doc) error {
 	// a pending request for the same thing is answered too (inbox.go)
 	r.dropRequests(func(q *InboxRequest) bool {
 		return q.Kind == requestKindRepo && strings.EqualFold(q.Params.Repo, repo) && (q.Params.Action == "add") == (a.Kind == "deploy-key-added")
-	}, outcomeApproved, proof)
+	}, outcomeApproved)
 	return r.updateRepos(func(rs []RepoEntry) []RepoEntry {
 		out := []RepoEntry{}
 		for _, e := range rs {
@@ -211,22 +211,17 @@ func (r *Router) registerDeployKeys(app appRoute) {
 	})
 }
 
-// relayDeployKey: the core's answer unchanged; a finished add or remove also updates the list. A core from
-// before deploy keys answers its mux's plain-text 404: say so plainly.
+// relayDeployKey: secrets' answer unchanged; a finished add or remove also updates the list
 func (r *Router) relayDeployKey(w http.ResponseWriter, path string, body []byte, finish bool) {
-	status, b, err := r.core.Raw("POST", path, body)
+	status, b, err := r.k.Raw("secrets", "POST", path, body)
 	if err != nil {
-		log.Printf("core %s: %v", path, err)
-		writeJSON(w, 503, map[string]any{"error": "the core isn't running", "coreDown": true})
+		log.Printf("secrets %s: %v", path, err)
+		writeJSON(w, 503, map[string]any{"error": err.Error(), "kernelDown": true})
 		return
 	}
 	var d Doc
-	if status == 404 && json.Unmarshal(b, &d) != nil {
-		writeJSON(w, 501, map[string]string{"error": "the running core predates deploy keys: it makes them once it has been restarted with the new core image (then Recover)"})
-		return
-	}
 	if status == 502 && json.Unmarshal(b, &d) == nil {
-		// the core says only what GitHub said; a 403/404 means the token can't manage this repo's deploy keys
+		// secrets says only what GitHub said; a 403/404 means the token can't manage this repo's deploy keys
 		var e struct{ Error string }
 		if d.Decode(&e) == nil && (strings.HasPrefix(e.Error, "github: HTTP 403") || strings.HasPrefix(e.Error, "github: HTTP 404")) {
 			writeJSON(w, 502, map[string]string{"error": "the GitHub token in github-deploy-keys can't manage this repo's deploy keys (" + e.Error +

@@ -46,10 +46,10 @@ var liveDirs sync.Map // session id → its .live dir exists on the box
 func liveDir(sid string) string { return liveRoot + "/" + sid }
 
 func init() {
-	// how often the machine looks for changed transcripts (unsigned machine env; the e2e test shortens it)
-	envHooks = append(envHooks, func(_ *Router, s *Session, e map[string]string) {
+	// how often the machine looks for changed transcripts (GET /m/config liveSyncSeconds; the e2e test shortens it)
+	configHooks = append(configHooks, func(_ *Router, s *Session, e map[string]string) {
 		if n, err := strconv.Atoi(os.Getenv("LIVE_SYNC_SECONDS")); err == nil && n > 0 {
-			e["JARVIS2_LIVE_SYNC_SECONDS"] = strconv.Itoa(n)
+			e["liveSyncSeconds"] = strconv.Itoa(n)
 		}
 	})
 	// the archive supersedes the live copy (Jarvis 1 archive.clearLive)

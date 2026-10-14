@@ -1,22 +1,10 @@
 package main
 
-// Restoring a destroyed session (Jarvis 1 POST /api/records/:id/restore). The destroy burnt the old line, so
-// a restore is a NEW line from null — the phone approves it like any new session — whose first machine
-// restores the archived snapshot.
-//
-// What the machine trusts (machine/restore.go): the core's succession challenge has no room for "restore
-// from" (core Options carry only the harness, and the core is off-limits), so the router passes the old
-// line's signer cert in the machine's env (JARVIS2_RESTORE_CERT) and serves the archived snapshot at
-// /m/restore-snapshot. The machine accepts it only on a line's FIRST machine (a cert with no predecessor),
-// checks the old cert against the core key (a core-signed succession cert, another machine), the snapshot
-// against that cert's machine signing key, and refuses a snapshot from a line that held a sensitive store
-// into a line that holds none.
-//
-// The risk this leaves (docs/PARITY.md): the restore choice is not signed by the phone. A malicious router
-// can make a new line, which Deyao approved as "restore X", restore some other old snapshot of Deyao's
-// (signed by one of his own machines), or none. It can't forge a snapshot or bring one from outside Deyao's
-// own lines; and the router holds every snapshot in plaintext anyway, so the mix-up moves no data to anyone
-// who didn't already have it (confidentiality-neutral), apart from the sensitive-store rule above.
+// Restoring a destroyed session (Jarvis 1 POST /api/records/:id/restore). The destroy burnt the old source, so a
+// restore is a NEW session out of the sink — the phone signs (sink, source-x, P) like any new session — whose source
+// names the archived snapshot by its sha256. The router downloads the archive's snapshot onto its volume and serves it
+// at GET /m/snapshot; the guard takes exactly the bytes whose hash the phone signed. The router checks the archive's
+// own signatures first (the spawn cert's machine signed the snapshot), only to refuse a broken archive early.
 
 import (
 	"encoding/json"
@@ -25,25 +13,17 @@ import (
 	"log"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
-)
 
-func init() {
-	envHooks = append(envHooks, func(_ *Router, s *Session, env map[string]string) {
-		if s.RestoreCert != nil && s.Cert == nil { // only the new line's first machine
-			b, _ := json.Marshal(s.RestoreCert)
-			env["JARVIS2_RESTORE_CERT"] = string(b)
-		}
-	})
-}
+	"github.com/DE0CH/jarvis2/core/kernel"
+)
 
 func (r *Router) restoresDir(sid string) string {
 	return filepath.Join(r.cfg.DataDir, "restores", sid)
 }
 
-// RestoreRecord: the record's archived snapshot onto the volume, then a new session with the record's
-// options, waiting for the phone (approval kind new-session, options.restore names what it restores)
+// RestoreRecord: the record's archived snapshot onto the volume, then a new session with the record's options,
+// waiting for the phone (approval kind new-session, its source naming the snapshot; options.restore says what it is)
 func (r *Router) RestoreRecord(recordID, requestID string) (string, error) {
 	rec := r.record(recordID)
 	if rec == nil {
@@ -59,140 +39,91 @@ func (r *Router) RestoreRecord(recordID, requestID string) (string, error) {
 	if box == nil {
 		return "", errNoStorageBox
 	}
-	h, ok := r.policy.Harnesses[rec.Harness]
-	if !ok {
-		return "", fmt.Errorf("no harness %s in the policy", rec.Harness)
-	}
-	stores, err := r.withHarnessStores(rec.Stores, h.Stores)
-	if err != nil {
-		return "", err
-	}
-	sid := "s" + randID()
-	dir := r.restoresDir(sid)
+	dir := r.restoresDir("r" + randID())
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return "", err
 	}
-	fail := func(err error) (string, error) {
-		os.RemoveAll(dir)
-		return "", err
-	}
-	for _, f := range []string{"snapshot.tar.gz", "snapshot.sig", "cert.json"} {
+	defer os.RemoveAll(dir)
+	for _, f := range []string{"snapshot.tar.gz", "snapshot.sig", "spawn.json"} {
 		found, err := box.Download(rec.Archive.Dir+"/jarvis2/"+f, filepath.Join(dir, f))
 		if err != nil {
-			return fail(err)
+			return "", err
 		}
 		if !found {
-			return fail(fmt.Errorf("the archive has no jarvis2/%s", f))
+			return "", fmt.Errorf("the archive has no jarvis2/%s", f)
 		}
 	}
-	cert, err := r.checkRestoreFiles(dir)
+	sum, err := checkRestoreFiles(dir)
 	if err != nil {
-		return fail(err)
+		return "", err
+	}
+	if err := os.Rename(filepath.Join(dir, "snapshot.tar.gz"), r.st.snapshotPath(sum)); err != nil {
+		return "", err
 	}
 	label := rec.Label
 	if label == "" {
 		label = rec.Archive.Title
 	}
-	s := &Session{ID: sid, State: "approval", Created: time.Now().UTC(), Label: label, Model: rec.Model, PermissionMode: rec.PermissionMode,
-		Size: rec.Size, Harness: rec.Harness, Stores: stores, Repos: rec.Repos, RequestID: requestID, RestoreFrom: recordID, RestoreCert: cert}
-	r.st.Do(func(d *persisted) { d.Sessions[sid] = s })
-	config, err := r.sessionConfig(s) // vouch.go: names the snapshot this line restores (machine + sha256)
-	if err != nil {
-		r.st.Do(func(d *persisted) { delete(d.Sessions, sid) })
-		return fail(err)
-	}
-	ch, err := r.succession(nil, "", s.Stores, s.Harness, s.PermissionMode, r.cfg.SessionImage, config, "")
-	if err != nil {
-		r.st.Do(func(d *persisted) { delete(d.Sessions, sid) })
-		return fail(err)
-	}
 	what := label
 	if what == "" {
 		what = recordID
 	}
-	r.addApproval(&Approval{Kind: "new-session", Session: sid, Label: s.Label, Challenge: ch,
-		Options: map[string]string{"model": s.Model, "size": s.Size, "permissionMode": s.PermissionMode, "repos": s.Repos,
-			"restore": fmt.Sprintf("%s (destroyed %s)", what, rec.DestroyedAt.UTC().Format("2006-01-02"))}})
-	return sid, nil
+	auto := rec.Live == nil || !rec.Live.AutoPauseOff
+	return r.CreateSession(NewSession{RequestID: requestID, Label: label, Model: rec.Model, PermissionMode: rec.PermissionMode, Size: rec.Size,
+		Harness: rec.Harness, Stores: rec.Stores, Repos: rec.Repos, Content: rec.Content, AutoPause: &auto, Snapshot: sum, RestoreFrom: recordID,
+		RestoreShown: fmt.Sprintf("%s (destroyed %s)", what, rec.DestroyedAt.UTC().Format("2006-01-02"))})
 }
 
-// checkRestoreFiles: the router's own early check (the machine checks again, and only its check counts):
-// the cert is the core's and the snapshot is signed by the cert's machine
-func (r *Router) checkRestoreFiles(dir string) (*Doc, error) {
-	b, err := os.ReadFile(filepath.Join(dir, "cert.json"))
+// checkRestoreFiles: the router's own early check (the guard checks the hash the phone signed, and only its check
+// counts): the snapshot is signed by the machine the archive's spawn cert names → the snapshot's sha256
+func checkRestoreFiles(dir string) (string, error) {
+	b, err := os.ReadFile(filepath.Join(dir, "spawn.json"))
 	if err != nil {
-		return nil, err
+		return "", err
 	}
-	var cert Doc
-	if json.Unmarshal(b, &cert) != nil || cert.Payload == "" {
-		return nil, errors.New("the archive's cert.json isn't a signed document")
+	var nc kernel.NotarizedCert
+	if json.Unmarshal(b, &nc) != nil || nc.Cert.Payload == "" {
+		return "", errors.New("the archive's spawn.json isn't a notarized cert")
 	}
-	var c struct {
-		Kind    string `json:"kind"`
-		Machine *struct {
-			ID         string `json:"id"`
-			SigningKey string `json:"signingKey"`
-		} `json:"machine"`
-	}
-	if cert.Decode(&c) != nil || c.Kind != "succession-cert" || c.Machine == nil {
-		return nil, errors.New("the archive's cert.json isn't a succession cert")
-	}
-	if key, err := r.core.Key(); err == nil && key["signingKey"] != "" && !verifyP256(key["signingKey"], []byte(cert.Payload), cert.Sig) {
-		return nil, errors.New("the archive's cert isn't signed by this core (was the core recovered since?)")
+	s, err := successionOf(nc.Cert)
+	if err != nil || s.Signer != kernel.RoleSpawner || s.Successor.SigningKey == "" {
+		return "", errors.New("the archive's spawn.json isn't a spawn cert naming a machine's key")
 	}
 	sig, err := os.ReadFile(filepath.Join(dir, "snapshot.sig"))
 	if err != nil {
-		return nil, err
+		return "", err
 	}
 	sum, err := sha256hex(filepath.Join(dir, "snapshot.tar.gz"))
 	if err != nil {
-		return nil, err
+		return "", err
 	}
-	if !verifyP256(c.Machine.SigningKey, []byte(sum), strings.TrimSpace(string(sig))) {
-		return nil, errors.New("the archived snapshot isn't signed by the machine its cert names")
+	if !kernel.Verify(s.Successor.SigningKey, []byte(sum), string(trimSpaceBytes(sig))) {
+		return "", errors.New("the archived snapshot isn't signed by the machine its spawn cert names")
 	}
-	return &cert, nil
+	return sum, nil
 }
 
-// restoreFilesFor: the restore files a machine may fetch — only the first machine of a restoring session
-func (r *Router) restoreFilesFor(machine string) string {
-	var sid string
-	r.st.Do(func(d *persisted) {
-		s := d.Sessions[d.Machines[machine]]
-		if s == nil || s.RestoreCert == nil || s.MachineID != machine || certField(d.Certs[machine], "predecessorId") != "" {
-			return
-		}
-		sid = s.ID
-	})
-	if sid == "" {
-		return ""
+func trimSpaceBytes(b []byte) []byte {
+	for len(b) > 0 && (b[len(b)-1] == '\n' || b[len(b)-1] == ' ' || b[len(b)-1] == '\r') {
+		b = b[:len(b)-1]
 	}
-	dir := r.restoresDir(sid)
-	if _, err := os.Stat(filepath.Join(dir, "snapshot.tar.gz")); err != nil {
-		return ""
-	}
-	return dir
+	return b
 }
 
-// tidyRestores: once a restoring session is past its first boot (or gone), its restore files go; a session
-// that came up is noted on the record it was restored from
+// tidyRestores: a restoring session that came up is noted on the record it was restored from (once)
 func (r *Router) tidyRestores() {
-	ents, _ := os.ReadDir(filepath.Join(r.cfg.DataDir, "restores"))
-	for _, e := range ents {
-		sid := e.Name()
-		var state, from string
-		r.st.Do(func(d *persisted) {
-			if s := d.Sessions[sid]; s != nil {
-				state, from = s.State, s.RestoreFrom
+	type up struct{ sid, from string }
+	var ups []up
+	r.st.Do(func(d *persisted) {
+		for _, s := range d.Sessions {
+			if s.RestoreFrom != "" && s.State == "started" {
+				ups = append(ups, up{s.ID, s.RestoreFrom})
+				s.RestoreFrom = ""
 			}
-		})
-		switch state {
-		case "approval", "starting", "initialising":
-			continue
-		case "started":
-			r.markRestored(from, sid)
 		}
-		os.RemoveAll(filepath.Join(r.cfg.DataDir, "restores", sid))
+	})
+	for _, u := range ups {
+		r.markRestored(u.from, u.sid)
 	}
 }
 

@@ -5,16 +5,17 @@ package main
 // they are staged on the router's volume (DATA_DIR/uploads/<uploadId>/<name>), not on the Storage Box, so no
 // machine needs Storage Box creds. POST /api/sessions {attachments: {uploadId, files: [{name, isImage}]}}
 // binds the upload to that one session; only that session's machines can fetch it (machine-signed
-// GET /m/attachments, /m/attachments/{name}), and its machine drops it once fetched (DELETE /m/attachments).
-// Each file's sha256 and size go into the new line's signed config (vouch.go sessionConfig), so the phone signs them;
-// the listing carries the core's attestation of each (input "attachment", origin "cert"), so each is in the input log,
-// and the machine takes a file only with both (machine/attachments.go). The app can read a staged file back
+// GET /m/attachments/{name}), and its machine drops it once fetched (DELETE /m/attachments). Each file's sha256 and
+// size go into the new source's settings (attachments), so the phone signs them and the machine takes a file only
+// when its bytes match (machine/attachments.go). The app can read a staged file back
 // (GET /api/sessions/{id}/attachments/{name}) to show it on the approval page, checked against the signed hash there.
 // The first machine fetches them before the harness starts (machine/attachments.go) and hands Jarvis 1's
 // session-attachments script a local file:// "box", so ~/uploads and the first message come out exactly as in
 // Jarvis 1.
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -205,24 +206,6 @@ func bindUpload(d *persisted, sid string, in *AttachmentsIn) ([]AttachFile, erro
 	return out, nil
 }
 
-// attachEnv: the first machine only (no cert yet). session-attachments (Jarvis 1) reads the names from
-// SESSION_ATTACHMENTS_JSON; the machine fills in where they are (machine/attachments.go).
-func attachEnv(s *Session, e map[string]string) {
-	if s.Cert != nil || len(s.Ops.Attach) == 0 {
-		return
-	}
-	var b strings.Builder
-	b.WriteString("[")
-	for i, f := range s.Ops.Attach {
-		if i > 0 {
-			b.WriteString(",")
-		}
-		fmt.Fprintf(&b, `{"name":%q,"isImage":%t}`, f.Name, f.IsImage)
-	}
-	b.WriteString("]")
-	e["SESSION_ATTACHMENTS_JSON"] = b.String()
-}
-
 // machineUpload: the upload bound to the calling machine's session
 func (r *Router) machineUpload(machine string) (*Upload, error) {
 	sid, err := r.machineSession(machine)
@@ -246,23 +229,34 @@ func (r *Router) machineUpload(machine string) (*Upload, error) {
 	return u, nil
 }
 
-// attestAttachments: the core's input-log entry for each file as it is on the volume now (machine, "attachment",
-// origin "cert", its sha256), kept in the router's copy of the log. The machine checks each against the bytes it gets.
-func (r *Router) attestAttachments(machine string, u *Upload) (map[string]*Doc, error) {
-	out := map[string]*Doc{}
-	for _, f := range u.Files {
-		sum, _, err := fileSha256(filepath.Join(r.uploadDir(u.ID), f.Name))
+// attachmentRefs: each staged first-prompt file's name, sha256 and size, for the new source's settings
+func (r *Router) attachmentRefs(s *Session) ([]AttachmentRef, error) {
+	if s.Ops == nil || len(s.Ops.Attach) == 0 {
+		return nil, nil
+	}
+	out := []AttachmentRef{}
+	for _, f := range s.Ops.Attach {
+		sum, size, err := fileSha256(filepath.Join(r.uploadDir(s.Ops.Upload), f.Name))
 		if err != nil {
 			return nil, fmt.Errorf("attachment %s: %v", f.Name, err)
 		}
-		a, err := r.core.Call("/attest", map[string]string{"machine": machine, "input": "attachment", "origin": "cert", "sha256": sum})
-		if err != nil {
-			return nil, err
-		}
-		r.logInputs(a)
-		out[f.Name] = a
+		out = append(out, AttachmentRef{Name: f.Name, Sha256: sum, Size: size})
 	}
 	return out, nil
+}
+
+func fileSha256(p string) (string, int64, error) {
+	f, err := os.Open(p)
+	if err != nil {
+		return "", 0, err
+	}
+	defer f.Close()
+	h := sha256.New()
+	n, err := io.Copy(h, f)
+	if err != nil {
+		return "", 0, err
+	}
+	return hex.EncodeToString(h.Sum(nil)), n, nil
 }
 
 func (r *Router) dropUpload(id string) {
@@ -323,19 +317,6 @@ func (r *Router) registerUploads(app appRoute, m machineRoute) {
 			return
 		}
 		writeJSON(w, 200, af)
-	})
-	m("GET /m/attachments", func(w http.ResponseWriter, req *http.Request, machine string, _ []byte) {
-		u, err := r.machineUpload(machine)
-		if err != nil {
-			writeJSON(w, 404, map[string]string{"error": err.Error()})
-			return
-		}
-		attest, err := r.attestAttachments(machine, u)
-		if err != nil {
-			writeJSON(w, 502, map[string]string{"error": err.Error()})
-			return
-		}
-		writeJSON(w, 200, map[string]any{"files": u.Files, "attest": attest})
 	})
 	// the app: a staged file of a session not yet started (the approval page shows it, checked against the signed hash)
 	app("GET /api/sessions/{id}/attachments/{name}", func(w http.ResponseWriter, req *http.Request) {

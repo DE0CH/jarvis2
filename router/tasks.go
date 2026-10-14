@@ -66,7 +66,7 @@ var (
 )
 
 func init() {
-	envHooks = append(envHooks, taskEnv)
+	configHooks = append(configHooks, taskConfigHook)
 	taskKick = func(r *Router) { go r.tasksTick(time.Now()) }
 }
 
@@ -665,7 +665,7 @@ func instanceState(i *TaskInstance, s *Session) (state, detail string) {
 	switch {
 	case s == nil:
 		return "gone", i.SessionError
-	case s.State == "approval" && s.Cert == nil:
+	case s.State == "approval" && s.Chain == nil:
 		return "approval", "waiting for the phone"
 	case i.Active != "":
 		return "running", ""
@@ -786,7 +786,7 @@ var taskOps = struct {
 	reject  func(r *Router, approval string) error
 }{
 	create:  (*Router).CreateSession,
-	resume:  (*Router).Resume,
+	resume:  func(r *Router, id string, upgrade bool) error { return r.Resume(id, ResumeIn{Upgrade: upgrade}) },
 	pause:   (*Router).Pause,
 	destroy: (*Router).Destroy,
 	reject:  (*Router).Reject,
@@ -985,7 +985,7 @@ func (r *Router) DeleteTask(id string) error {
 			}
 		}
 		if s := d.Sessions[inst.Session]; s != nil {
-			if s.State == "approval" && s.Cert == nil {
+			if s.State == "approval" && s.Chain == nil {
 				for _, a := range d.Approvals {
 					if a.Session == s.ID && a.Kind == "new-session" {
 						approval = a.ID
@@ -1071,7 +1071,7 @@ func (r *Router) StartRun(id, trigger, schedule string, slot *time.Time, upgrade
 		switch {
 		case s == nil:
 			err = conflict("the task's session is gone: POST /api/tasks/instances/%s/approve makes a new one (phone approval)", id)
-		case s.State == "approval" && s.Cert == nil:
+		case s.State == "approval" && s.Chain == nil:
 			err = conflict("the task waits for its approval on the phone")
 		case s.State == "destroying":
 			err = conflict("the task's session is being destroyed")
@@ -1368,7 +1368,9 @@ func (r *Router) registerTasks(app appRoute, m machineRoute) {
 // ---- the machine's env and its result -----------------------------------------------------------------
 
 // taskEnv: a task line's machine gets the run it is for and the instance's (non-secret) parameters
-func taskEnv(r *Router, s *Session, e map[string]string) {
+// taskConfigHook: the run a task session's machine is started for (GET /m/config taskRun, taskTrigger); the instance
+// and its parameters are in the source's settings
+func taskConfigHook(r *Router, s *Session, e map[string]string) {
 	if !isTaskHarness(s.Harness) {
 		return
 	}
@@ -1377,14 +1379,8 @@ func taskEnv(r *Router, s *Session, e map[string]string) {
 		if i == nil {
 			return
 		}
-		e["TASK_INSTANCE"], e["TASK_NAME"] = i.ID, i.Name
-		pj, _ := json.Marshal(i.Params)
-		e["TASK_PARAMS"] = string(pj)
-		for k, v := range i.Params {
-			e["PARAM_"+strings.ToUpper(k)] = paramEnv(v)
-		}
 		if a := i.run(i.Active); a != nil && a.Phase == "starting" {
-			e["JARVIS2_TASK_RUN"], e["TASK_RUN"], e["TASK_TRIGGER"] = a.ID, a.ID, a.Trigger
+			e["taskRun"], e["taskTrigger"] = a.ID, a.Trigger
 		}
 	})
 }
@@ -1662,7 +1658,7 @@ func (r *Router) tasksTick(now time.Time) {
 				continue
 			case s.State == "paused":
 				i.PauseWanted, i.StartedIdle = false, nil
-			case s.State == "failed" && s.MachineID == "" && s.Cert != nil:
+			case s.State == "failed" && s.MachineID == "" && s.Chain != nil:
 				i.PauseWanted, i.StartedIdle = false, nil
 			default:
 				continue

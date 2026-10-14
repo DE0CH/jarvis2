@@ -1,18 +1,16 @@
 package main
 
-// Watches (conditional wakeups; Jarvis 1's lib/watch.js and its server.js loop, in Jarvis 2's shape). A session arms a
-// watch with its own signed request: a check script, the prompt for when the condition is met, a "fail" prompt for when
-// it gives up, an interval and a maximum age. The router runs the check on the box's watch runner (k8s/apps/watch.yaml,
+// Watches (conditional wakeups; Jarvis 1's lib/watch.js and its server.js loop, in the target design's shape). A session
+// arms a watch through its machine's local API proxy, which keeps the prompts (met, gave up) in the guard's records and
+// sends the router the check script, an interval, a maximum age and the guard's id. The router runs the check on the
+// box's watch runner (k8s/apps/watch.yaml,
 // services/watch) every interval, whether the session is running or paused; the runner holds no secrets and reaches
-// only the public internet, so a check gets none of the session's stores (docs/DECISIONS.md 101). Exit 0 = met: the
-// prompt is delivered (the session resumed first when it is paused); exit 3, or the maximum age passed = give up: the
-// fail prompt is delivered instead. Any other exit = not yet.
-//
-// The delivery is the session's own signed request ("watch" or "watch-fail", machine/deliver.go checks it against the
-// line's keys and the core attests it), exactly like a wakeup: the router picks when, never what. The runner's output
-// never reaches the agent (nothing vouches for it); the machine runs the check once more itself, with the session's own
-// env, and appends that output. Watches belong to their session (Schedule.Watches) and end with it; a session with an
-// armed watch is kept (PendingSchedule), so a paused one stays until the watch fires.
+// only the public internet, so a check gets none of the session's stores (docs/DECISIONS.md 101). Exit 0 = met; exit 3,
+// or the maximum age passed = gave up; any other exit = not yet. The router then sends the machine a due signal
+// {kind: watch, id, outcome} (the session resumed first when it is paused) and the guard types its own text: the
+// router picks when, never what. The runner's output never reaches the agent. Watches belong to their session
+// (Schedule.Watches) and end with it; a session with an armed watch is kept (PendingSchedule), so a paused one stays
+// until the watch fires.
 
 import (
 	"bytes"
@@ -31,7 +29,6 @@ import (
 
 const (
 	watchMaxScript       = 32 * 1024
-	watchMaxPrompt       = 3500
 	watchMinInterval     = 30
 	watchMaxInterval     = 3600
 	watchDefaultInterval = 60
@@ -44,9 +41,8 @@ const (
 
 type Watch struct {
 	Name       string `json:"name"`
+	ID         string `json:"id"` // the guard's id for its texts
 	Script     string `json:"script"`
-	Prompt     string `json:"prompt"`
-	FailPrompt string `json:"failPrompt,omitempty"`
 	Interval   int64  `json:"interval"`   // seconds
 	MaxSeconds int64  `json:"maxSeconds"` // from ArmedAt
 	ArmedAt    int64  `json:"armedAt"`    // ms: the arming's identity (compare-and-clear)
@@ -58,8 +54,6 @@ type Watch struct {
 	LastOutput string `json:"lastOutput,omitempty"` // the start of the last stdout (shown in the app, never delivered)
 	// Outcome: "" = checking; "met" or "gave-up" = waiting for its delivery
 	Outcome string `json:"outcome,omitempty"`
-	// Signed: the session's own request that armed it, as its machine signed it: what vouches for the delivery
-	Signed *SignedRequest `json:"signed,omitempty"`
 }
 
 func normalizeWatch(b map[string]any, now time.Time) (*Watch, error) {
@@ -75,13 +69,12 @@ func normalizeWatch(b map[string]any, now time.Time) (*Watch, error) {
 	if len(script) > watchMaxScript {
 		return nil, bad("script longer than %d bytes", watchMaxScript)
 	}
-	prompt := cleanPrompt(b["prompt"])
-	if prompt == "" {
-		return nil, bad("prompt is required — what the session should do when the condition is met")
+	id, err := textID(b)
+	if err != nil {
+		return nil, err
 	}
-	fail := cleanPrompt(b["failPrompt"])
-	if len([]rune(prompt)) > watchMaxPrompt || len([]rune(fail)) > watchMaxPrompt {
-		return nil, bad("prompt or failPrompt longer than %d characters", watchMaxPrompt)
+	if _, ok := b["failPrompt"]; ok {
+		return nil, bad("the prompts stay on the machine: the router takes only their id")
 	}
 	interval := int64(watchDefaultInterval)
 	if v, ok := b["interval"]; ok && v != nil {
@@ -100,12 +93,12 @@ func normalizeWatch(b map[string]any, now time.Time) (*Watch, error) {
 		maxS = int64(math.Min(watchMaxSeconds, math.Round(f)))
 	}
 	ms := now.UnixMilli()
-	return &Watch{Name: name, Script: script, Prompt: prompt, FailPrompt: fail, Interval: interval, MaxSeconds: maxS, ArmedAt: ms, NextAt: ms}, nil
+	return &Watch{Name: name, ID: id, Script: script, Interval: interval, MaxSeconds: maxS, ArmedAt: ms, NextAt: ms}, nil
 }
 
 // watchView: no script body (Jarvis 1's view, plus the last run)
 func watchView(w *Watch) map[string]any {
-	v := map[string]any{"name": w.Name, "prompt": w.Prompt, "failPrompt": w.FailPrompt, "interval": w.Interval, "maxSeconds": w.MaxSeconds,
+	v := map[string]any{"name": w.Name, "id": w.ID, "interval": w.Interval, "maxSeconds": w.MaxSeconds,
 		"armedAt": w.ArmedAt, "armedAtIso": iso(w.ArmedAt), "expiresAtIso": iso(w.ArmedAt + w.MaxSeconds*1000), "nextCheckIso": iso(w.NextAt),
 		"runs": w.Runs, "lastExit": nil, "lastRunIso": nil, "lastError": w.LastError, "lastOutput": w.LastOutput, "outcome": w.Outcome}
 	if w.LastExit != nil {
@@ -158,7 +151,7 @@ func (r *Router) ArmWatch(sid string, w *Watch) error {
 	})
 	if err == nil {
 		schedRun.forget(sid + "/watch/" + w.Name)
-		log.Printf("[watch] %s armed %q every %ds for up to %dh: %s", sid, w.Name, w.Interval, w.MaxSeconds/3600, trimTo(w.Prompt, 80))
+		log.Printf("[watch] %s armed %q (%s) every %ds for up to %dh", sid, w.Name, w.ID, w.Interval, w.MaxSeconds/3600)
 	}
 	return err
 }
@@ -338,17 +331,10 @@ func (r *Router) deliverWatch(sid, name string, armedAt int64, key string) {
 	if w == nil || w.Outcome == "" {
 		return
 	}
-	kind := "watch"
-	if w.Outcome == "gave-up" {
-		kind = "watch-fail"
-	}
-	err := errNotVouched
-	if w.Signed != nil {
-		err = deliverVouchedHook(r, sid, Delivery{Kind: kind, Request: w.Signed})
-	}
+	err := deliverDueHook(r, sid, Due{Kind: "watch", ID: w.ID, Outcome: w.Outcome})
 	if err == nil {
 		schedRun.forget(key)
-		log.Printf("[watch] %s %q delivered (%s)", sid, name, kind)
+		log.Printf("[watch] %s %q delivered (%s)", sid, name, w.Outcome)
 		r.st.Do(func(d *persisted) {
 			if s := d.Schedules[sid]; s != nil && s.Watches[name] != nil && s.Watches[name].ArmedAt == armedAt {
 				delete(s.Watches, name)
@@ -359,7 +345,7 @@ func (r *Router) deliverWatch(sid, name string, armedAt int64, key string) {
 	if errors.Is(err, errSkip) {
 		return
 	}
-	drop, _ := schedRun.failed(key, false, time.Now())
+	drop := schedRun.failed(key, time.Now())
 	log.Printf("[watch] %s %q delivery failed (drop=%v): %v", sid, name, drop, err)
 	r.st.Do(func(d *persisted) {
 		if s := d.Schedules[sid]; s != nil && s.Watches[name] != nil && s.Watches[name].ArmedAt == armedAt {
@@ -389,10 +375,8 @@ func (r *Router) registerWatches(app appRoute, m machineRoute) {
 	app("DELETE /api/sessions/{id}/watches/{name}", func(w http.ResponseWriter, req *http.Request) {
 		r.deleteWatch(w, req.PathValue("id"), req.PathValue("name"))
 	})
-	// arming from the app: nothing would vouch for its delivery into the session (only the session's own request does)
-	app("POST /api/sessions/{id}/watches", func(w http.ResponseWriter, req *http.Request) {
-		writeJSON(w, 400, map[string]string{"error": "a watch is armed by the session itself (scripts/schedule-watch.sh): only its own signed request can be delivered into it"})
-	})
+	// arming from the app: there would be no text on the machine to deliver (the session's guard keeps it)
+	app("POST /api/sessions/{id}/watches", func(w http.ResponseWriter, req *http.Request) { scheduleErr(w, errAppArmed) })
 	own := func(pattern string, fn func(w http.ResponseWriter, req *http.Request, sid string, body []byte)) {
 		m(pattern, func(w http.ResponseWriter, req *http.Request, machine string, body []byte) {
 			sid, err := r.machineSession(machine)
@@ -416,7 +400,6 @@ func (r *Router) registerWatches(app appRoute, m machineRoute) {
 		}
 		wt, err := normalizeWatch(m, time.Now())
 		if err == nil {
-			wt.Signed = signedRequestOf(req, req.Header.Get("X-Machine"), b)
 			err = r.ArmWatch(sid, wt)
 		}
 		if err != nil {

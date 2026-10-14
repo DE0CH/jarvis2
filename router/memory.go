@@ -144,14 +144,6 @@ func memMessage(name, size string, a *MemAlert) string {
 	return msg + "\nIt is already on the biggest size."
 }
 
-// upgradedText: the "upgraded" delivery's text; machine/deliver.go builds the same and checks both sizes
-func upgradedText(from, to string) string {
-	return fmt.Sprintf("Jarvis: this session ran out of memory and was moved from a %s (%d GB) to a %s (%d GB) machine. ", from, sizeGB[from], to, sizeGB[to]) +
-		"To free memory for the move, every process of the old machine was stopped: Claude itself, background jobs, builds, dev servers, browsers. " +
-		"Their list is in ~/artifacts/jarvis2-upgrade-freed.txt. Check which of them the task still needs, restart only those (and keep an eye on memory: run fewer heavy things at once), then carry on with the task. " +
-		"This is an automated message from Jarvis, not from Deyao, and not an answer to any open question."
-}
-
 // memView: the session's memAlert and latest memory sample in /api/state (under the state lock)
 func memView(s *Session, v map[string]any) {
 	if s.Live == nil || s.Live.mem == nil || s.State != "started" || s.Live.mem.machine != s.MachineID {
@@ -266,7 +258,7 @@ func (r *Router) Upgrade(id string) (map[string]any, error) {
 			r.ops.phase(j, "failed", err)
 		}
 		r.ops.phase(j, "freeing", nil)
-		r.send(s.MachineID, "free")
+		r.out(s.MachineID).word("free")
 		time.Sleep(memFreeWait)
 		r.ops.phase(j, "snapshotting", nil)
 		if err := r.Pause(id); err != nil {
@@ -282,13 +274,13 @@ func (r *Router) Upgrade(id string) (map[string]any, error) {
 			return
 		}
 		r.ops.phase(j, "resuming", nil)
-		if err := r.resumeWithPrompt(id, false, ""); err != nil {
+		if err := r.Resume(id, ResumeIn{}); err != nil {
 			fail(err)
 			return
 		}
 		r.ops.phase(j, "done", nil)
 		log.Printf("[memory] %s upgraded %s → %s", id, from, to)
-		if err := r.DeliverCanned(id, Delivery{Kind: "upgraded", From: from, To: to}, upgradedText(from, to)); err != nil {
+		if err := deliverNoticeHook(r, id, Notice{Kind: "upgraded", From: from, To: to}, false); err != nil {
 			log.Printf("[memory] telling %s about its upgrade: %v", id, err)
 		}
 	}()

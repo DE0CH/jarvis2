@@ -164,17 +164,16 @@ func (r *Router) Drain(max time.Duration) bool {
 var errLimitDraining = errors.New("the Fly org is at its machine limit and the router is updating: start it again")
 
 // endCutOff: at start, sessions a crash left in the middle of an action (no goroutine runs them any more) become
-// plain sessions with the reason; Deyao runs the action again. A cut-off resume's line is still there (the core marks
-// the predecessor used only at certify), so it is paused again; a new line's start, a pause or a destroy is failed.
-// A machine the cut-off start had made, never certified, holds no secret and shows on the Machines tab with no
-// session (attention), where Deyao can destroy it.
+// plain sessions with the reason; Deyao runs the action again. A cut-off start that hadn't made a machine yet is
+// paused again (its source is unspent); one that had is failed (its source is spent; the machine, if it came up, has
+// no grant and shows on the Machines tab). A cut-off pause or destroy is failed.
 func (r *Router) endCutOff() {
 	r.st.Do(func(d *persisted) {
 		for id, s := range d.Sessions {
 			why := ""
 			switch s.State {
 			case "resuming", "starting":
-				if s.Cert != nil && s.MachineID == "" {
+				if s.Chain != nil && s.Chain.Source.ID != "" && s.MachineID == "" && s.Chain.Spawn == "" {
 					s.State, s.Error = "paused", "the resume was cut off by a router crash: resume it again"
 				} else {
 					s.State, s.Error = "failed", "the start was cut off by a router crash: start it again"

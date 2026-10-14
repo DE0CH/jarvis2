@@ -8,8 +8,9 @@ package main
 // for it, which renders what the core (or the phone's grant) will actually do from the signed content, and signs
 // only that. Nothing here can approve anything: a request is a pointer to a secure page, and Deny just drops it.
 //
-// The approvals the router already holds (new session, resume on the latest image, add a store) are listed in the
-// same Inbox, with their caller and call recorded when they were made.
+// The approvals the router holds (new session, a resume out of a new source, and the add-ons to a running machine:
+// a terminal, a command, a store) are listed in the same Inbox, with their caller and call recorded when they were
+// made: the phone signs their drafted succession certs.
 
 import (
 	"encoding/json"
@@ -32,7 +33,6 @@ const (
 	explanationLines  = 8
 	originRemember    = 10 * time.Minute // a caller noted before its approval is made (flows run in goroutines)
 	requestKindRepo   = "repo-key"
-	requestKindGrant  = "grant"
 	requestKindUnlock = "unlock"
 )
 
@@ -52,21 +52,18 @@ type APICall struct {
 type Origin struct {
 	Caller Caller  `json:"caller"`
 	Call   APICall `json:"call"`
-	// outcomes.go: a session's filing exactly as its machine signed it, and the item's index in it (a batch), so the
-	// decision can be delivered into the session built from its own request
-	Signed *SignedRequest `json:"signed,omitempty"`
-	Item   int            `json:"item,omitempty"`
-	Batch  string         `json:"batch,omitempty"`
+	// outcomes.go: the filing id the session's guard gave its request (header X-Jarvis2-Filing), and the item's index
+	// in it (a batch): the outcome notice names only these, the guard builds the text from what it kept
+	Filing string `json:"filing,omitempty"`
+	Item   int    `json:"item,omitempty"`
+	Batch  string `json:"batch,omitempty"`
 }
 
 type RequestParams struct {
 	Action    string `json:"action,omitempty"` // repo-key: add | remove
 	Repo      string `json:"repo,omitempty"`   // repo-key: owner/name
 	Sensitive bool   `json:"sensitive,omitempty"`
-	Session   string `json:"session,omitempty"` // grant, unlock
-	Holder    string `json:"holder,omitempty"`  // grant
-	Minutes   int    `json:"minutes,omitempty"` // grant: 1–10
-	Days      int    `json:"days,omitempty"`    // a standing rule instead: 1–365 days
+	Session   string `json:"session,omitempty"` // unlock
 	// api-call (apicalls.go): the call to run as Deyao
 	Method      string `json:"method,omitempty"`
 	Path        string `json:"path,omitempty"` // with its query
@@ -79,7 +76,7 @@ type RequestParams struct {
 
 type InboxRequest struct {
 	ID          string        `json:"id"`
-	Kind        string        `json:"kind"` // repo-key | grant | unlock | api-call | restore
+	Kind        string        `json:"kind"` // repo-key | unlock | api-call | restore
 	Params      RequestParams `json:"params"`
 	Origin      Origin        `json:"origin"`
 	Explanation string        `json:"explanation"`
@@ -90,9 +87,9 @@ type InboxRequest struct {
 }
 
 // what a caller may ask for. Every request still needs Face ID on the phone; this only keeps a session to its
-// own business: it may ask for a grant, an unlock or a store for itself, and for a repo to be added (harmless: a
-// new deploy key in its own store, which no session holds until Deyao picks it). Removing a repo, or anything about
-// another session, is refused. The web page, the app and the setup session may ask for any kind.
+// own business: it may ask for an unlock for itself, and for a repo to be added (harmless: a new deploy key in its own
+// store, which no session holds until Deyao picks it). Removing a repo, or anything about another session, is refused.
+// The web page, the app and the setup session may ask for any kind. (The add-ons, approvals: addOnMay.)
 func callerMay(c Caller, kind string, p RequestParams) error {
 	if c.Kind != "session" {
 		return nil
@@ -104,7 +101,7 @@ func callerMay(c Caller, kind string, p RequestParams) error {
 		if p.Action != "add" {
 			return errors.New("a session may ask for a repo to be added, not removed")
 		}
-	case requestKindGrant, requestKindUnlock:
+	case requestKindUnlock:
 		if p.Session != c.Session {
 			return fmt.Errorf("a session may ask only for itself (%s)", c.Session)
 		}
@@ -177,7 +174,7 @@ func (r *Router) normalizeRequest(kind string, p RequestParams) (RequestParams, 
 			out.Sensitive = p.Sensitive
 		}
 		return out, nil
-	case requestKindGrant, requestKindUnlock:
+	case requestKindUnlock:
 		var ok bool
 		r.st.Do(func(d *persisted) {
 			s := d.Sessions[p.Session]
@@ -186,35 +183,7 @@ func (r *Router) normalizeRequest(kind string, p RequestParams) (RequestParams, 
 		if !ok {
 			return p, fmt.Errorf("no session %q", p.Session)
 		}
-		if kind == requestKindUnlock {
-			return RequestParams{Session: p.Session}, nil
-		}
-		known := false
-		for _, h := range holderNames {
-			known = known || h == p.Holder
-		}
-		if !known {
-			return p, fmt.Errorf("holder is one of %s", strings.Join(holderNames, ", "))
-		}
-		out := RequestParams{Session: p.Session, Holder: p.Holder}
-		switch {
-		case p.Days != 0 && p.Minutes != 0:
-			return p, errors.New("minutes (a grant) or days (a standing rule), not both")
-		case p.Days != 0:
-			if p.Days < 1 || p.Days > 365 {
-				return p, errors.New("a standing rule lasts 1 to 365 days")
-			}
-			out.Days = p.Days
-		default:
-			if p.Minutes == 0 {
-				p.Minutes = 10
-			}
-			if p.Minutes < 1 || p.Minutes > 10 {
-				return p, errors.New("a grant lasts 1 to 10 minutes")
-			}
-			out.Minutes = p.Minutes
-		}
-		return out, nil
+		return RequestParams{Session: p.Session}, nil
 	case requestKindRestore:
 		if !storeNameOK(p.Store) || p.Store == flyStore {
 			return p, fmt.Errorf("no store %q", p.Store)
@@ -295,20 +264,20 @@ func pruneRequests(d *persisted, now time.Time) {
 			if lapsed {
 				oc = outcomeLapsed
 			}
-			noteOutcome(d, &q.Origin, q.Kind, q.ID, oc, 0, nil)
+			noteOutcome(d, &q.Origin, q.Kind, q.ID, oc, 0)
 		}
 	}
 }
 
 // dropRequests: requests that were done (by any path: a repo added from Settings answers a pending request too), with
-// what the requesting session is told (outcomes.go; "" = nothing) and what vouches for it
-func (r *Router) dropRequests(match func(q *InboxRequest) bool, outcome string, proof *Doc) {
+// what the requesting session is told (outcomes.go; "" = nothing)
+func (r *Router) dropRequests(match func(q *InboxRequest) bool, outcome string) {
 	r.st.Do(func(d *persisted) {
 		for id, q := range d.Inbox {
 			if match(q) {
 				delete(d.Inbox, id)
 				if outcome != "" {
-					noteOutcome(d, &q.Origin, q.Kind, q.ID, outcome, 0, proof)
+					noteOutcome(d, &q.Origin, q.Kind, q.ID, outcome, 0)
 				}
 			}
 		}
@@ -406,7 +375,7 @@ func takeOrigin(sid string) *Origin {
 // and the shell from the signed content (the review page) — never from router prose.
 type InboxItem struct {
 	ID          string            `json:"id"`
-	Kind        string            `json:"kind"` // repo-key | grant | unlock | new-session | resume-upgrade | add-store
+	Kind        string            `json:"kind"` // repo-key | unlock | api-call | restore | new-session | resume-upgrade | terminal | command | add-store
 	Approval    bool              `json:"approval"`
 	Params      RequestParams     `json:"params"`
 	Session     string            `json:"session,omitempty"`
@@ -465,14 +434,6 @@ func requestItem(d *persisted, q *InboxRequest, now time.Time) InboxItem {
 	switch q.Kind {
 	case requestKindRepo:
 		opts["action"], opts["repo"], opts["sensitive"] = q.Params.Action, q.Params.Repo, q.Params.Sensitive
-	case requestKindGrant:
-		it.SessionName = inboxSessionName(d, q.Params.Session)
-		opts["sessionId"], opts["label"], opts["holder"] = q.Params.Session, it.SessionName, q.Params.Holder
-		if q.Params.Days > 0 {
-			opts["grantKind"], opts["until"] = "rule", now.Add(time.Duration(q.Params.Days)*24*time.Hour).Format(time.RFC3339)
-		} else {
-			opts["grantKind"], opts["minutes"] = "grant", q.Params.Minutes
-		}
 	case requestKindUnlock:
 		it.SessionName = inboxSessionName(d, q.Params.Session)
 		opts["sessionId"], opts["label"] = q.Params.Session, it.SessionName
@@ -505,7 +466,7 @@ func approvalItem(d *persisted, a *Approval) InboxItem {
 }
 
 // expireApprovals: an approval older than inboxTTL is rejected, exactly as Deny would (a new session disappears, a
-// resume stays paused, an add-store is dropped); the caller asks again if it still needs it.
+// resume stays paused, an add-on is dropped); the caller asks again if it still needs it.
 func (r *Router) expireApprovals(now time.Time) {
 	var old []string
 	r.st.Do(func(d *persisted) {
@@ -538,7 +499,7 @@ func (r *Router) DenyRequest(id string) error {
 		if q, ok := d.Inbox[id]; ok {
 			delete(d.Inbox, id)
 			found = true
-			noteOutcome(d, &q.Origin, q.Kind, q.ID, outcomeDenied, 0, nil)
+			noteOutcome(d, &q.Origin, q.Kind, q.ID, outcomeDenied, 0)
 			if q.Kind == requestKindCall { // the caller reads that it was denied
 				pruneCallResults(d, time.Now().UTC())
 				d.CallResults[id] = &CallResult{ID: id, Caller: q.Origin.Caller, Method: q.Params.Method, Path: q.Params.Path, State: "denied", At: time.Now().UTC()}
@@ -558,9 +519,8 @@ type requestIn struct {
 	Repo        string `json:"repo"`
 	Sensitive   bool   `json:"sensitive"`
 	Session     string `json:"session"`
-	Holder      string `json:"holder"`
-	Minutes     int    `json:"minutes"`
-	Days        int    `json:"days"`
+	Minutes     int    `json:"minutes"` // terminal
+	Cmd         string `json:"cmd"`     // command
 	Store       string `json:"store"`
 	Seq         int    `json:"seq"`
 	Explanation string `json:"explanation"`
@@ -573,9 +533,6 @@ var intents = map[string]func(in requestIn) (string, RequestParams){
 	},
 	"repo/remove": func(in requestIn) (string, RequestParams) {
 		return requestKindRepo, RequestParams{Action: "remove", Repo: in.Repo}
-	},
-	"grant": func(in requestIn) (string, RequestParams) {
-		return requestKindGrant, RequestParams{Session: in.Session, Holder: in.Holder, Minutes: in.Minutes, Days: in.Days}
 	},
 	"unlock": func(in requestIn) (string, RequestParams) {
 		return requestKindUnlock, RequestParams{Session: in.Session}
@@ -592,14 +549,6 @@ func callArgs(kind string, p RequestParams) map[string]any {
 		a := map[string]any{"repo": p.Repo}
 		if p.Sensitive {
 			a["sensitive"] = true
-		}
-		return a
-	case requestKindGrant:
-		a := map[string]any{"session": p.Session, "holder": p.Holder}
-		if p.Days > 0 {
-			a["days"] = p.Days
-		} else {
-			a["minutes"] = p.Minutes
 		}
 		return a
 	case requestKindRestore:
@@ -626,7 +575,7 @@ func writeRequestErr(w http.ResponseWriter, err error) {
 }
 
 // fileIntent: one intent endpoint call → 200 {id, duplicate, expires} or 202 {approval} for add-store
-func (r *Router) fileIntent(w http.ResponseWriter, method, path, intent string, c Caller, body []byte, signed *SignedRequest) {
+func (r *Router) fileIntent(w http.ResponseWriter, method, path, intent string, c Caller, body []byte, filing string) {
 	var in requestIn
 	if len(body) > 0 {
 		if err := json.Unmarshal(body, &in); err != nil {
@@ -648,7 +597,7 @@ func (r *Router) fileIntent(w http.ResponseWriter, method, path, intent string, 
 		writeRequestErr(w, &badRequest{err.Error()})
 		return
 	}
-	q, dup, err := r.FileRequest(kind, np, in.Explanation, Origin{Caller: c, Call: APICall{Method: method, Path: path, Args: callArgs(kind, np)}, Signed: signed})
+	q, dup, err := r.FileRequest(kind, np, in.Explanation, Origin{Caller: c, Call: APICall{Method: method, Path: path, Args: callArgs(kind, np)}, Filing: filing})
 	if err != nil {
 		writeRequestErr(w, err)
 		return
@@ -681,7 +630,7 @@ func (r *Router) registerInbox(app appRoute, m machineRoute, public publicRoute)
 	// by itself when it is answered.
 	app("POST /api/requests/{id}/done", func(w http.ResponseWriter, req *http.Request) {
 		id := req.PathValue("id")
-		r.dropRequests(func(q *InboxRequest) bool { return q.ID == id }, outcomeApproved, nil)
+		r.dropRequests(func(q *InboxRequest) bool { return q.ID == id }, outcomeApproved)
 		writeJSON(w, 200, map[string]bool{"ok": true})
 	})
 	// approve an API-call request (apicalls.go): the call runs now as Deyao (this request's Access login)
@@ -699,13 +648,13 @@ func (r *Router) registerInbox(app appRoute, m machineRoute, public publicRoute)
 	})
 	// batches (batches.go): several items filed together, reviewed on one page under one Face ID
 	app("POST /api/requests/batch", func(w http.ResponseWriter, req *http.Request) {
-		r.serveFileBatch(w, appCaller(req), req.Method, req.URL.Path, readBody(req), nil)
+		r.serveFileBatch(w, appCaller(req), req.Method, req.URL.Path, readBody(req), "")
 	})
 	app("GET /api/requests/batches/{id}", func(w http.ResponseWriter, req *http.Request) { r.serveBatch(w, req.PathValue("id"), nil) })
 	app("DELETE /api/requests/batches/{id}", func(w http.ResponseWriter, req *http.Request) { r.serveDenyBatch(w, req.PathValue("id")) })
 	for intent := range intents {
 		app("POST /api/requests/"+intent, func(w http.ResponseWriter, req *http.Request) {
-			r.fileIntent(w, req.Method, req.URL.Path, intent, appCaller(req), readBody(req), nil)
+			r.fileIntent(w, req.Method, req.URL.Path, intent, appCaller(req), readBody(req), "")
 		})
 	}
 
@@ -732,7 +681,7 @@ func (r *Router) registerInbox(app appRoute, m machineRoute, public publicRoute)
 				v := map[string]any{"id": s.ID, "machineId": s.MachineID, "state": s.State, "title": sessionTitle(*s), "image": s.Image, "stores": s.Stores}
 				// the autopilot's view (no secrets): what the machine last reported and the stall watchdog's clock
 				if l := s.Live; l != nil {
-					v["lastReport"], v["nudgeAt"], v["nudgeError"], v["needsGrant"] = l.LastReport, l.NudgeAt, l.NudgeError, l.NeedsGrant
+					v["lastReport"], v["nudgeAt"], v["nudgeError"] = l.LastReport, l.NudgeAt, l.NudgeError
 					if g := l.Reg; g != nil {
 						v["status"], v["bgTasks"], v["statusUpdatedAt"] = g.Status, g.BgTasks, g.StatusUpdatedAt
 					}
@@ -750,14 +699,14 @@ func (r *Router) registerInbox(app appRoute, m machineRoute, public publicRoute)
 		writeJSON(w, 200, map[string]any{"repos": r.Repos()})
 	}))
 	public("POST /setup/requests/batch", setupOnly(func(w http.ResponseWriter, req *http.Request, b []byte) {
-		r.serveFileBatch(w, Caller{Kind: "setup"}, req.Method, req.URL.Path, b, nil)
+		r.serveFileBatch(w, Caller{Kind: "setup"}, req.Method, req.URL.Path, b, "")
 	}))
 	public("GET /setup/requests/batches/{id}", setupOnly(func(w http.ResponseWriter, req *http.Request, _ []byte) {
 		r.serveBatch(w, req.PathValue("id"), nil)
 	}))
 	for intent := range intents {
 		public("POST /setup/requests/"+intent, setupOnly(func(w http.ResponseWriter, req *http.Request, b []byte) {
-			r.fileIntent(w, req.Method, req.URL.Path, intent, Caller{Kind: "setup"}, b, nil)
+			r.fileIntent(w, req.Method, req.URL.Path, intent, Caller{Kind: "setup"}, b, "")
 		}))
 	}
 
@@ -783,39 +732,104 @@ func (r *Router) registerInbox(app appRoute, m machineRoute, public publicRoute)
 		writeJSON(w, 200, map[string]any{"requests": mine, "batches": r.InboxBatches(&c)})
 	}))
 	m("POST /m/api/requests/batch", own(func(w http.ResponseWriter, req *http.Request, sid string, b []byte) {
-		r.serveFileBatch(w, Caller{Kind: "session", Session: sid}, req.Method, strings.TrimPrefix(req.URL.Path, "/m"), b, signedRequestOf(req, req.Header.Get("X-Machine"), b))
+		r.serveFileBatch(w, Caller{Kind: "session", Session: sid}, req.Method, strings.TrimPrefix(req.URL.Path, "/m"), b, filingOf(req))
 	}))
 	m("GET /m/api/requests/batches/{id}", own(func(w http.ResponseWriter, req *http.Request, sid string, _ []byte) {
 		r.serveBatch(w, req.PathValue("id"), &Caller{Kind: "session", Session: sid})
 	}))
 	for intent := range intents {
 		m("POST /m/api/requests/"+intent, own(func(w http.ResponseWriter, req *http.Request, sid string, b []byte) {
-			r.fileIntent(w, req.Method, strings.TrimPrefix(req.URL.Path, "/m"), intent, Caller{Kind: "session", Session: sid}, b, signedRequestOf(req, req.Header.Get("X-Machine"), b))
+			r.fileIntent(w, req.Method, strings.TrimPrefix(req.URL.Path, "/m"), intent, Caller{Kind: "session", Session: sid}, b, filingOf(req))
 		}))
 	}
-	// one more store for this session: the router's add-store approval, with the caller's explanation
-	m("POST /m/api/requests/add-store", own(func(w http.ResponseWriter, req *http.Request, sid string, b []byte) {
-		var in requestIn
-		json.Unmarshal(b, &in)
-		expl, err := cleanExplanation(in.Explanation, true)
-		if err != nil {
-			writeJSON(w, 400, map[string]string{"error": err.Error()})
-			return
-		}
-		var machine string
-		r.st.Do(func(d *persisted) {
-			if s := d.Sessions[sid]; s != nil {
-				machine = s.MachineID
-			}
+	// the add-ons to a running session (addons.go): approvals with drafts, filed for every kind of caller
+	for intent := range addOnIntents {
+		app("POST /api/requests/"+intent, func(w http.ResponseWriter, req *http.Request) {
+			r.fileAddOnIntent(w, req.Method, req.URL.Path, intent, appCaller(req), readBody(req), "")
 		})
-		o := Origin{Caller: Caller{Kind: "session", Session: sid}, Call: APICall{Method: "POST", Path: "/api/requests/add-store", Args: map[string]any{"store": in.Store}},
-			Signed: signedRequestOf(req, req.Header.Get("X-Machine"), b)}
-		if err := r.AddStoreFrom(machine, in.Store, o, expl, ""); err != nil {
-			writeErr(w, err)
+		public("POST /setup/requests/"+intent, setupOnly(func(w http.ResponseWriter, req *http.Request, b []byte) {
+			r.fileAddOnIntent(w, req.Method, req.URL.Path, intent, Caller{Kind: "setup"}, b, "")
+		}))
+		m("POST /m/api/requests/"+intent, own(func(w http.ResponseWriter, req *http.Request, sid string, b []byte) {
+			r.fileAddOnIntent(w, req.Method, strings.TrimPrefix(req.URL.Path, "/m"), intent, Caller{Kind: "session", Session: sid}, b, filingOf(req))
+		}))
+	}
+}
+
+// filingOf: the filing id the session's guard gave its Inbox filing (header X-Jarvis2-Filing), "" when none
+func filingOf(req *http.Request) string {
+	if f := req.Header.Get("X-Jarvis2-Filing"); textIDRE.MatchString(f) {
+		return f
+	}
+	return ""
+}
+
+// addOnIntents: the add-on intents and their kinds
+var addOnIntents = map[string]string{"terminal": "terminal", "command": "command", "add-store": "add-store"}
+
+// addOnMay: a session asks for an add-on only for itself; the web page, the app and the setup session for any session
+func addOnMay(c Caller, sid string) error {
+	if (c.Kind == "session" || c.Kind == "actions") && sid != c.Session {
+		return fmt.Errorf("a session may ask only for itself (%s)", c.Session)
+	}
+	return nil
+}
+
+// addOnArgs: the call's arguments as the router understood them
+func addOnArgs(in AddOnIn) map[string]any {
+	a := map[string]any{"session": in.Session}
+	switch in.Kind {
+	case "terminal":
+		a["minutes"] = in.Minutes
+	case "command":
+		a["cmd"] = fmt.Sprintf("(%d bytes, sha256 %s)", len(in.Cmd), sha256Hex(in.Cmd))
+	case "add-store":
+		a["store"] = in.Store
+	}
+	return a
+}
+
+// addOnFrom: an intent body → the add-on, the session defaulting to the caller's own
+func addOnFrom(intent string, c Caller, in requestIn) (AddOnIn, error) {
+	a := AddOnIn{Kind: addOnIntents[intent], Session: in.Session, Minutes: in.Minutes, Cmd: in.Cmd, Store: in.Store}
+	if a.Session == "" && c.Kind == "session" {
+		a.Session = c.Session
+	}
+	if err := addOnMay(c, a.Session); err != nil {
+		return a, &forbidden{err.Error()}
+	}
+	return a, nil
+}
+
+// fileAddOnIntent: POST …/requests/{terminal|command|add-store} → 200 {id, approval: true, expires}
+func (r *Router) fileAddOnIntent(w http.ResponseWriter, method, path, intent string, c Caller, body []byte, filing string) {
+	var in requestIn
+	if len(body) > 0 {
+		if err := json.Unmarshal(body, &in); err != nil {
+			writeJSON(w, 400, map[string]string{"error": "bad JSON: " + err.Error()})
 			return
 		}
-		writeJSON(w, 200, map[string]any{"ok": true, "approval": true})
-	}))
+	}
+	expl, err := cleanExplanation(in.Explanation, c.Kind == "session" || c.Kind == "setup" || c.Kind == "actions")
+	if err != nil {
+		writeJSON(w, 400, map[string]string{"error": err.Error()})
+		return
+	}
+	a, err := addOnFrom(intent, c, in)
+	if err == nil {
+		a, err = r.checkAddOn(a)
+	}
+	if err != nil {
+		writeRequestErr(w, err)
+		return
+	}
+	o := &Origin{Caller: c, Call: APICall{Method: method, Path: path, Args: addOnArgs(a)}, Filing: filing}
+	id, err := r.FileAddOn(a, o, expl, "")
+	if err != nil {
+		writeRequestErr(w, err)
+		return
+	}
+	writeJSON(w, 200, map[string]any{"id": id, "approval": true, "expires": time.Now().UTC().Add(inboxTTL)})
 }
 
 func init() {
@@ -826,6 +840,6 @@ func init() {
 		}
 	})
 	onDestroy = append(onDestroy, func(r *Router, s Session) {
-		r.dropRequests(func(q *InboxRequest) bool { return q.Params.Session == s.ID }, outcomeDropped, nil)
+		r.dropRequests(func(q *InboxRequest) bool { return q.Params.Session == s.ID }, outcomeDropped)
 	})
 }
