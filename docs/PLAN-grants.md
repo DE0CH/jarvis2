@@ -15,7 +15,13 @@ machine** with a fresh random id (`source-<32 hex>`: 128 random bits, so it can'
 predecessor. A source counts as killed from birth, with no snapshot; certify's one-successor-per-predecessor rule
 uses it up. Grants reach the first machine by an ordinary exchange through the cert whose predecessor is that source. No `pending` field, no special exchange form. A burn is an ordinary succession onto the fixed machine **`sink`**: the old machine is used up as usual, and
 the signer refuses any succession whose predecessor is `sink`, so nothing continues an ended session (`sink` is neither
-a Fly id nor a source). The burn cert and the null image go. Sessions are paths from one of many sources into the one sink. Also decided: a `grants` branch (§4); terminal grants at most
+a Fly id nor a source). The burn cert and the null image go. Sessions are paths from one of many sources into the one sink. **Structure, not branches:** the signer keeps one machine table and one
+succession path with the same two rules for everything: a predecessor must be killed and unused (using it marks it
+used), and a target must be a known machine. A source is a row inserted killed and unused (no snapshot, no keys), so it
+gets exactly one successor; the sink is one permanent row that is never killed, so nothing succeeds it, and as a target
+it binds no keys, so any number of machines succeed into it. No "new line" or "burn" branches, no burn-cert kind, no
+null image: a new session is a succession from a source, an ended one a succession into the sink. One cert per real
+machine follows from Start being single-shot. Also decided: a `grants` branch (§4); terminal grants at most
 10 minutes (Q9); a secrets grant covers every key of its stores, current and future, whoever writes them (Q5: secrets
 are not code and the model never reads them, so a written key can't be a prompt injection).
 
