@@ -10,14 +10,12 @@ Status: plan only. Nothing here is built. Sources: DESIGN "Target design" (docs/
 - **D6.** Grants signed by a machine follow the same steps as phone grants (notary challenge, logged). A phone-signed grant (the start grant) says which other signers the guard accepts, and for which text types.
 
 
-**Decided 2026-10-14 (Deyao), supersedes `pending` everywhere below:** each New session gets its own logical **null
-machine** with a fresh random id (`null-<32 hex>`: 128 random bits, so it can't clash with a Fly id; the prefix is only
-for display). The phone binds the start and secrets grants to it and signs the succession challenge naming it as the
-predecessor. A null machine counts as killed from birth, with no snapshot; certify's one-successor-per-predecessor rule
-uses it up. Grants reach the first machine by an ordinary exchange through the cert whose predecessor is that null
-machine. No `pending` field, no special exchange form. A burn is an ordinary succession onto the fixed machine **`sink`**: the old machine is used up as usual, and
+**Decided 2026-10-14 (Deyao), supersedes `pending` everywhere below:** each New session gets its own logical **source
+machine** with a fresh random id (`source-<32 hex>`: 128 random bits, so it can't clash with a Fly id). The phone binds the start and secrets grants to it and signs the succession challenge naming it as the
+predecessor. A source counts as killed from birth, with no snapshot; certify's one-successor-per-predecessor rule
+uses it up. Grants reach the first machine by an ordinary exchange through the cert whose predecessor is that source. No `pending` field, no special exchange form. A burn is an ordinary succession onto the fixed machine **`sink`**: the old machine is used up as usual, and
 the signer refuses any succession whose predecessor is `sink`, so nothing continues an ended session (`sink` is neither
-a Fly id nor a `null-` source). The burn cert and the null image go. Also decided: a `grants` branch (§4); terminal grants at most
+a Fly id nor a source). The burn cert and the null image go. Sessions are paths from one of many sources into the one sink. Also decided: a `grants` branch (§4); terminal grants at most
 10 minutes (Q9); a secrets grant covers every key of its stores, current and future, whoever writes them (Q5: secrets
 are not code and the model never reads them, so a written key can't be a prompt injection).
 
