@@ -67,7 +67,7 @@ where noted.
 | `GET /m/boot` | — | `{"spawn": NotarizedCert, "source": NotarizedCert}` — `spawn` is this machine's spawn cert `(source-x, M, ⊤)` signed by the spawner (from `/init`) with its challenge and notarization; `source` is the notarized cert source-x came out of: `(sink, source-x, P)` signed by the phone (or root), or `(M_prev, source-x, ⊤)` signed by the spawner (a kill). 404 until both exist (the guard polls every 2 s for 10 minutes). |
 | `GET /m/config` | — | `{"discordChannel": "123…", "liveSyncSeconds": 300, "taskRun": "…", "taskTrigger": "cron", "tunnelProof": "…"}` — the values the router gives on its own; each is dropped unless it matches its strict format. Anything else is ignored (there is no `sessionId` any more: it is in the settings). |
 | `GET /m/tunnel-proof` | — | `{"proof"}` (unchanged; used when `/m/config` has no `tunnelProof`) |
-| `GET /m/snapshot` | — | Body: the bytes whose sha256 the machine's source names (`source.snapshot`), streamed. The router keeps snapshots by sha256: a pause's upload, a destroyed session's archive, or a Jarvis 1 import manifest. 404 when it has none. The guard refuses any other bytes. No signature header is needed (the hash is the spawner's or the phone's). |
+| `GET /m/snapshot` | — | Body: the bytes whose sha256 the machine's source names (`source.snapshot`), streamed. The router keeps snapshots by sha256: a pause's upload, a destroyed session's archive, or a Jarvis 1 import manifest. 404 when it has none. The guard refuses any other bytes. Signed like every call (the router finds the machine's source by it); the bytes need no signature (the hash is the spawner's or the phone's). |
 | `GET /m/import-file/{name}` | — | A Jarvis 1 import: one file the manifest lists (unchanged). |
 | `GET /m/grant` | — | `{"grant": SignedDoc \| null}` — the grant the router holds for this machine: made by the mover or the merger, naming this machine with its keys. At boot the guard polls until it takes one. |
 | `GET /m/attachments/{name}`, `DELETE /m/attachments` | — | The first-prompt files (bytes), checked against the settings' sha256 and size; the router's copy dropped once fetched. No listing call and no attestation any more. |
@@ -202,7 +202,13 @@ until:T}))` and `(source-x, M, ⊤)`; the router moves and merges as DESIGN "Add
 `POST /m/api/requests/command {cmd, explanation}` (the same with `{shell}`, `{session:S, cmd:<sha256>, once:<id>,
 until:T}`). `add-store` becomes a phone-signed `(sink, source-x, ({store:X}, {session:S}))` plus `(source-x, M, ⊤)`,
 moved and merged onto the machine's main grant (equal conditions), then an unlock of X; the merged grant reaches the
-machine in `grant`.
+machine in `grant`. Each answers `{id /* the approval's */, approval: true, expires}`; a terminal over 10 minutes, an empty command, a
+reserved store or another session's id is refused at filing (400/403). `until` is fixed at filing (filing + minutes; a
+command: filing + 10 minutes). The router sends an approved command once, in `shell`, under the merged grant, keeps its
+result (`GET /m/api/sessions/:id/commands` → `{commands: [{approval, cmd, code, stdout, stderr, error?, at}]}`, the last
+10), then sends the main grant back. `POST /m/api/sessions/:id/narrow {stores}` drops stores in place: the main grant
+moved along `(M, M, ({only: store:<kept>…}, []))`, the new grant in `grant`. The same intents exist for a session's
+actions (`/m/api/actions/requests/{terminal,command,add-store}`, only for its own session) and in a batch.
 
 ## Gone
 
