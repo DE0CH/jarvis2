@@ -23,8 +23,8 @@ type liveSyncer struct {
 	send func(name string, body []byte) error
 }
 
-func liveSyncInterval() time.Duration {
-	if n := readVouchedInt("liveSyncSeconds"); n >= 5 { // vouch.go: a format exception from /m/config
+func liveSyncInterval(ex FormatExceptions) time.Duration {
+	if n := ex.LiveSyncSeconds; n >= 5 { // settings.go: a format exception from /m/config
 		return time.Duration(n) * time.Second
 	}
 	return 300 * time.Second
@@ -65,8 +65,9 @@ func (l *liveSyncer) once() int {
 	return n
 }
 
-// liveSync: the agent's loop (started by agent())
-func liveSync(c *client) {
+// liveSync: the guard's loop (started once booted)
+func liveSync(g *guard) {
+	c := g.c
 	l := &liveSyncer{sent: map[string]time.Time{}, send: func(name string, body []byte) error {
 		b, _, status, err := c.raw("POST", "/m/live-transcript", body, "X-Name", name)
 		if err != nil {
@@ -77,7 +78,7 @@ func liveSync(c *client) {
 		}
 		return nil
 	}}
-	every := liveSyncInterval()
+	every := liveSyncInterval(g.ex)
 	for {
 		time.Sleep(every)
 		l.once()

@@ -1,189 +1,325 @@
 package main
 
-// Grants (docs/DESIGN.md "Grants"): a router feature (terminal, scheduler, archive, …) has its own key pair,
-// the holder. It asks this machine to run a shell command. The machine runs it when one of these allows it:
-//   - a phone grant: the phone's signature over {kind "grant", holder, session, scope "shell", expires}, at most
-//     10 minutes long. The phone's key comes from this machine's core-signed cert.
-//   - a standing rule: the phone's signature over {kind "rule", holder, session, scope "shell", until}.
-//   - this session's own allow list (~/.jarvis2-allow.json, written by `jarvis2-machine allow`): the machine
-//     approving for itself. It travels in the snapshot, so it survives a pause.
-// A session holding a sensitive store accepts only a phone grant. The core takes no part.
+// The guard's judgement of grants (docs/DESIGN.md "Target design", "The guard"; docs/API-grants.md). A grant is
+// (machine, allowed, conditions), made only by the kernel's grant mover or grant merger. The guard:
+//
+//   - holds exactly one grant at a time: a new one (from /m/commands) replaces the old one whole; the guard never
+//     unions two grants itself (that is the merger's job);
+//   - takes a grant only when the mover's or the merger's key (from the roster in the machine's Fly config) signed it,
+//     and it names this machine with its own keys (the whole object);
+//   - gives the conditions their meaning, and refuses a grant with a condition it doesn't know (fail closed):
+//     until:<RFC 3339 time>  holds while the clock is before it (several: the earliest);
+//     cmd:<sha256 hex>       the grant covers only a command whose sha256 is that (several: only one that is all);
+//     once:<id>              the grant covers one command, once in the session's life (records in the snapshot);
+//     session:<id>           holds only on this session (the session id in the source's start settings);
+//   - reads two allowed strings: `shell` (run any command the router delivers while the grant holds, after a
+//     log-notary challenge over the command's sha256) and `store:<name>` (the secrets component serves that store;
+//     the guard only pulls with the grant). Any other allowed string grants nothing here.
 
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
 	"os"
 	"os/exec"
-	"path/filepath"
+	"regexp"
 	"strings"
-	"sync"
 	"time"
+
+	"github.com/DE0CH/jarvis2/core/kernel"
 )
 
 const (
-	allowFile     = ".jarvis2-allow.json"
-	maxGrant      = 10*time.Minute + 30*time.Second // 10 minutes, plus clock slack
-	maxExecOutput = 1 << 20
+	allowShell     = "shell"
+	storePrefix    = "store:"
+	maxExecOutput  = 1 << 20
+	maxExecTimeout = 600 // seconds
+	// challengeSkew: how far a log-notary challenge's time may be from this machine's clock
+	challengeSkew = 5 * time.Minute
+	aboutShell    = "shell"
 )
-
-// ExecRequest: what the holder signs
-type ExecRequest struct {
-	ID      string `json:"id"`
-	Session string `json:"session"`
-	Holder  string `json:"holder"` // the holder's public key (base64 x963)
-	Cmd     string `json:"cmd"`
-	Timeout int    `json:"timeout"` // seconds
-	At      int64  `json:"at"`      // unix seconds
-	// PhoneOnly: only a phone grant may allow this request (raising the session to bypass)
-	PhoneOnly bool `json:"phoneOnly,omitempty"`
-}
-
-// Session in requests and grants is the line id from the core-signed cert (the line's first machine), not the
-// router's session id.
-
-// Exec: one item of /m/commands — the holder-signed request and what authorises it
-type Exec struct {
-	Request string     `json:"request"`
-	Sig     string     `json:"sig"`
-	Grant   *SignedDoc `json:"grant,omitempty"` // phone-signed grant or rule; nil = the allow list
-}
-
-type Grant struct {
-	Kind    string `json:"kind"` // grant | rule
-	Holder  string `json:"holder"`
-	Session string `json:"session"`
-	Scope   string `json:"scope"`
-	Issued  string `json:"issued"`
-	Expires string `json:"expires"` // grant
-	Until   string `json:"until"`   // rule
-}
-
-type allowEntry struct {
-	Holder string `json:"holder"`
-	Name   string `json:"name"`
-	Until  string `json:"until"`
-}
-
-type ExecResult struct {
-	ID     string `json:"id"`
-	Code   int    `json:"code"`
-	Stdout string `json:"stdout"`
-	Stderr string `json:"stderr"`
-	Error  string `json:"error,omitempty"`
-}
 
 var (
-	seenMu sync.Mutex
-	seen   = map[string]time.Time{}
+	sha256RE = regexp.MustCompile(`^[0-9a-f]{64}$`)
+	onceIDRE = regexp.MustCompile(`^[A-Za-z0-9._-]{1,128}$`)
 )
 
-var currentCert = readCert // a var so tests can supply a cert
+// untilLayouts: an until condition's time: RFC 3339 (seconds optional, as in DESIGN's `until:2026-10-14T12:10Z`)
+var untilLayouts = []string{time.RFC3339Nano, "2006-01-02T15:04Z07:00"}
 
-func readCert() (Cert, error) {
-	raw, err := os.ReadFile(certPath)
-	if err != nil {
-		return Cert{}, err
-	}
-	var d SignedDoc
-	if err := json.Unmarshal(raw, &d); err != nil {
-		return Cert{}, err
-	}
-	key, err := readTrim(coreKeyPath)
-	if err != nil {
-		return Cert{}, err
-	}
-	var c Cert
-	return c, verifyDoc(key, &d, &c)
+// conds: a grant's conditions, read
+type conds struct {
+	until    *time.Time
+	cmds     []string
+	once     []string
+	sessions []string
 }
 
-func readAllow() []allowEntry {
-	home, _ := os.UserHomeDir()
-	var out []allowEntry
-	if b, err := os.ReadFile(filepath.Join(home, allowFile)); err == nil {
-		json.Unmarshal(b, &out)
-	}
-	return out
-}
-
-// authorise: nil when the request may run
-func authorise(e Exec, now time.Time) (ExecRequest, error) {
-	var r ExecRequest
-	if err := json.Unmarshal([]byte(e.Request), &r); err != nil {
-		return r, errors.New("bad request")
-	}
-	if !verify(r.Holder, []byte(e.Request), e.Sig) {
-		return r, errors.New("not signed by the holder it names")
-	}
-	if at := time.Unix(r.At, 0); now.Sub(at) > 2*time.Minute || at.Sub(now) > 2*time.Minute {
-		return r, errors.New("request too old or from the future")
-	}
-	seenMu.Lock()
-	for id, t := range seen {
-		if now.Sub(t) > 5*time.Minute {
-			delete(seen, id)
+// parseConditions: every condition read, or an error naming the first one the guard doesn't know (the grant is then
+// refused whole)
+func parseConditions(cs kernel.Conditions) (conds, error) {
+	var c conds
+	for _, x := range cs {
+		kind, val, ok := strings.Cut(x, ":")
+		if !ok {
+			return c, fmt.Errorf("unknown condition %q", x)
 		}
-	}
-	dup := seen[r.ID] != time.Time{}
-	seen[r.ID] = now
-	seenMu.Unlock()
-	if r.ID == "" || dup {
-		return r, errors.New("request id missing or already used")
-	}
-	cert, err := currentCert()
-	if err != nil {
-		return r, fmt.Errorf("no valid cert: %v", err)
-	}
-	me := cert.Line // core-signed, so the router can't relabel a machine to reuse another line's grant
-	if me == "" || r.Session != me {
-		return r, fmt.Errorf("request is for line %s, this is %s", r.Session, me)
-	}
-	if r.PhoneOnly && e.Grant == nil {
-		return r, errors.New("this request needs a phone grant")
-	}
-	if e.Grant == nil {
-		if cert.Sensitive {
-			return r, errors.New("this session holds a sensitive store: only a phone grant opens a shell")
-		}
-		for _, a := range readAllow() {
-			if u, err := time.Parse(time.RFC3339, a.Until); err == nil && a.Holder == r.Holder && now.Before(u) {
-				return r, nil
+		switch kind {
+		case "until":
+			var t time.Time
+			var err error
+			for _, l := range untilLayouts {
+				if t, err = time.Parse(l, val); err == nil {
+					break
+				}
 			}
+			if err != nil {
+				return c, fmt.Errorf("condition %q: not a time", x)
+			}
+			if c.until == nil || t.Before(*c.until) {
+				c.until = &t
+			}
+		case "cmd":
+			if !sha256RE.MatchString(val) {
+				return c, fmt.Errorf("condition %q: not a sha256", x)
+			}
+			c.cmds = append(c.cmds, val)
+		case "once":
+			if !onceIDRE.MatchString(val) {
+				return c, fmt.Errorf("condition %q: not an id", x)
+			}
+			c.once = append(c.once, val)
+		case "session":
+			if !sessionIDRE.MatchString(val) {
+				return c, fmt.Errorf("condition %q: not a session id", x)
+			}
+			c.sessions = append(c.sessions, val)
+		default:
+			return c, fmt.Errorf("unknown condition %q", x)
 		}
-		return r, errors.New("no grant, and the holder isn't on this session's allow list")
 	}
-	var g Grant
-	if cert.Phone == "" || verifyDoc(cert.Phone, e.Grant, &g) != nil {
-		return r, errors.New("the grant isn't signed by the phone named in this machine's cert")
+	return c, nil
+}
+
+// holds: the conditions that don't depend on a command, now, on this session, with these once records
+func (c conds) holds(now time.Time, session string, used func(string) bool) error {
+	if c.until != nil && !now.Before(*c.until) {
+		return fmt.Errorf("the grant ran out at %s", c.until.UTC().Format(time.RFC3339))
 	}
-	if g.Holder != r.Holder || g.Session != me || g.Scope != "shell" {
-		return r, errors.New("the grant is for another holder, session or scope")
+	for _, s := range c.sessions {
+		if s != session {
+			return fmt.Errorf("the grant is for session %s, this is %s", s, session)
+		}
 	}
-	switch g.Kind {
-	case "grant":
-		iss, err1 := time.Parse(time.RFC3339, g.Issued)
-		exp, err2 := time.Parse(time.RFC3339, g.Expires)
-		if err1 != nil || err2 != nil || exp.Sub(iss) > maxGrant || !now.Before(exp) || now.Before(iss.Add(-2*time.Minute)) {
-			return r, errors.New("the grant is expired, or longer than 10 minutes")
+	for _, id := range c.once {
+		if used(id) {
+			return fmt.Errorf("the grant's once:%s was already used", id)
 		}
-	case "rule":
-		if r.PhoneOnly {
-			return r, errors.New("this request needs a phone grant, not a standing rule")
-		}
-		if cert.Sensitive {
-			return r, errors.New("this session holds a sensitive store: standing rules don't apply")
-		}
-		u, err := time.Parse(time.RFC3339, g.Until)
-		if err != nil || !now.Before(u) {
-			return r, errors.New("the standing rule has expired")
-		}
-	default:
-		return r, errors.New("unknown grant kind")
 	}
-	return r, nil
+	return nil
+}
+
+// coversCmd: a command whose sha256 is sum, under the grant's cmd: conditions (none: any command)
+func (c conds) coversCmd(sum string) bool {
+	for _, h := range c.cmds {
+		if h != sum {
+			return false
+		}
+	}
+	return true
+}
+
+// current: the grant the guard holds
+type current struct {
+	doc   kernel.SignedDoc
+	g     kernel.Grant
+	conds conds
+}
+
+// checkGrant: a grant the guard may take: by the mover or the merger, for this machine with its keys, every condition
+// known, and holding right now (a grant already run out, for another session, or whose once was used is refused)
+func (g *guard) checkGrant(doc kernel.SignedDoc) (*current, error) {
+	gr, err := kernel.OpenGrant(g.roster, doc, kernel.RoleMover, kernel.RoleMerger)
+	if err != nil {
+		return nil, err
+	}
+	if gr.Machine != g.me {
+		return nil, fmt.Errorf("the grant is for %s, not this machine with its keys", gr.Machine.ID)
+	}
+	cs, err := parseConditions(gr.Conditions)
+	if err != nil {
+		return nil, err
+	}
+	if err := cs.holds(g.now(), g.st.Session, g.rec.onceUsed); err != nil {
+		return nil, err
+	}
+	return &current{doc: doc, g: gr, conds: cs}, nil
+}
+
+// acceptGrant: the grant replaces the one the guard holds (one at a time); the caller pulls the stores it names
+func (g *guard) acceptGrant(doc kernel.SignedDoc) error {
+	_, err := g.takeGrant(doc)
+	return err
+}
+
+// takeGrant: acceptGrant, and whether it changed the grant held (the same grant sent again changes nothing)
+func (g *guard) takeGrant(doc kernel.SignedDoc) (bool, error) {
+	cur, err := g.checkGrant(doc)
+	if err != nil {
+		return false, err
+	}
+	g.mu.Lock()
+	same := g.cur != nil && g.cur.doc.ID() == doc.ID()
+	g.cur = cur
+	g.mu.Unlock()
+	if same {
+		return false, nil
+	}
+	b, _ := json.Marshal(doc)
+	if err := os.WriteFile(g.grantPath, b, 0o600); err != nil {
+		log.Printf("grant: keeping a copy for the CLI: %v", err)
+	}
+	log.Printf("grant %s taken (by %s): allowed %s, conditions %v", doc.ID()[:12], cur.g.By, setString(cur.g.Allowed), []string(cur.g.Conditions))
+	return true, nil
+}
+
+// grant: the grant the guard holds (nil: none yet)
+func (g *guard) grant() *current {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.cur
+}
+
+func setString(s kernel.Set) string {
+	b, _ := json.Marshal(s)
+	return string(b)
+}
+
+// ---- shell -----------------------------------------------------------------------------------------------
+
+// ShellRequest: a command the router delivers (docs/API-grants.md /m/commands "shell")
+type ShellRequest struct {
+	ID             string `json:"id"`
+	Cmd            string `json:"cmd"`
+	TimeoutSeconds int    `json:"timeoutSeconds"`
+}
+
+// ShellResult: POST /m/shell-result
+type ShellResult struct {
+	ID        string `json:"id"`
+	Code      int    `json:"code"`
+	Stdout    string `json:"stdout"`
+	Stderr    string `json:"stderr"`
+	Error     string `json:"error,omitempty"`
+	Grant     string `json:"grant,omitempty"`     // ID of the grant it ran under
+	Challenge string `json:"challenge,omitempty"` // ID of the log notary's challenge over the command
+}
+
+var shellIDRE = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
+
+// authoriseShell: the grant the command may run under, or why not
+func (g *guard) authoriseShell(sum string) (*current, error) {
+	cur := g.grant()
+	if cur == nil {
+		return nil, errors.New("no grant")
+	}
+	if !cur.g.Allowed.Contains(allowShell) {
+		return nil, errors.New("the grant doesn't allow shell")
+	}
+	if err := cur.conds.holds(g.now(), g.st.Session, g.rec.onceUsed); err != nil {
+		return nil, err
+	}
+	if !cur.conds.coversCmd(sum) {
+		return nil, errors.New("the grant covers another command (cmd: condition)")
+	}
+	return cur, nil
+}
+
+// challenge: the log notary's challenge over subject (through the router), checked: the notary's key, this subject
+// and word, and a time near this machine's clock
+func (g *guard) challenge(subject, about string) (kernel.SignedDoc, error) {
+	var doc kernel.SignedDoc
+	if err := g.c.json("POST", "/m/challenge", map[string]string{"subject": subject, "about": about}, &doc); err != nil {
+		return doc, fmt.Errorf("challenge: %w", err)
+	}
+	return doc, g.checkChallenge(doc, subject, about)
+}
+
+func (g *guard) checkChallenge(doc kernel.SignedDoc, subject, about string) error {
+	ch, err := kernel.OpenChallenge(g.roster, doc)
+	if err != nil {
+		return err
+	}
+	if ch.Subject != subject || ch.About != about {
+		return errors.New("the challenge is about something else")
+	}
+	at, err := time.Parse(time.RFC3339Nano, ch.At)
+	if err != nil {
+		return errors.New("the challenge has no time")
+	}
+	if d := g.now().Sub(at); d > challengeSkew || d < -challengeSkew {
+		return fmt.Errorf("the challenge's time %s is too far from this machine's clock", ch.At)
+	}
+	return nil
+}
+
+// shell: one delivered command — authorised by the grant, logged by the notary, once conditions recorded before it
+// runs — and its result
+func (g *guard) shell(r ShellRequest) ShellResult {
+	res := ShellResult{ID: r.ID}
+	fail := func(err error) ShellResult {
+		res.Code, res.Error = -1, err.Error()
+		log.Printf("shell %s refused: %v", r.ID, err)
+		return res
+	}
+	if !shellIDRE.MatchString(r.ID) || r.Cmd == "" {
+		return fail(errors.New("a command has an id and a command line"))
+	}
+	if err := notFrozen(); err != nil {
+		return fail(err)
+	}
+	h := sha256.Sum256([]byte(r.Cmd))
+	sum := hex.EncodeToString(h[:])
+	if _, err := g.authoriseShell(sum); err != nil {
+		return fail(err)
+	}
+	ch, err := g.challenge(sum, aboutShell)
+	if err != nil {
+		return fail(err)
+	}
+	res.Challenge = ch.ID()
+	cur, err := g.authoriseShell(sum) // the grant may have changed while the notary answered: judge again
+	if err != nil {
+		return fail(err)
+	}
+	res.Grant = cur.doc.ID()
+	if err := g.rec.useOnce(cur.conds.once, g.now()); err != nil {
+		return fail(err)
+	}
+	t := time.Duration(max(1, min(r.TimeoutSeconds, maxExecTimeout))) * time.Second
+	if r.TimeoutSeconds <= 0 {
+		t = maxExecTimeout * time.Second
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), t)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "bash", "-lc", r.Cmd)
+	var out, errb capped
+	cmd.Stdout, cmd.Stderr = &out, &errb
+	err = cmd.Run()
+	res.Stdout, res.Stderr = out.String(), errb.String()
+	if cmd.ProcessState != nil {
+		res.Code = cmd.ProcessState.ExitCode()
+	}
+	if err != nil && cmd.ProcessState == nil {
+		res.Code, res.Error = -1, err.Error()
+	}
+	log.Printf("shell %s ran under grant %s (challenge %s): exit %d", r.ID, res.Grant[:12], res.Challenge[:12], res.Code)
+	return res
 }
 
 type capped struct{ bytes.Buffer }
@@ -195,86 +331,9 @@ func (c *capped) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-func runExec(c *client, e Exec) {
-	r, err := authorise(e, time.Now())
-	if err == nil {
-		err = notFrozen()
+func (g *guard) runShell(r ShellRequest) {
+	res := g.shell(r)
+	if err := g.c.json("POST", "/m/shell-result", res, nil); err != nil {
+		log.Printf("shell result not sent: %v", err)
 	}
-	res := ExecResult{ID: r.ID}
-	if err != nil {
-		res.Code, res.Error = -1, err.Error()
-		log.Printf("exec refused: %v", err)
-	} else {
-		t := time.Duration(max(1, min(r.Timeout, 600))) * time.Second
-		ctx, cancel := context.WithTimeout(context.Background(), t)
-		cmd := exec.CommandContext(ctx, "bash", "-lc", r.Cmd)
-		var out, errb capped
-		cmd.Stdout, cmd.Stderr = &out, &errb
-		err := cmd.Run()
-		cancel()
-		res.Stdout, res.Stderr = out.String(), errb.String()
-		if cmd.ProcessState != nil {
-			res.Code = cmd.ProcessState.ExitCode()
-		}
-		if err != nil && cmd.ProcessState == nil {
-			res.Code, res.Error = -1, err.Error()
-		}
-	}
-	if err := c.json("POST", "/m/exec-result", res, nil); err != nil {
-		log.Printf("exec result not delivered: %v", err)
-	}
-}
-
-// allowCmd: `jarvis2-machine allow <holder name> <duration>` (e.g. scheduler 720h) or `allow --remove <name>`;
-// the holder's key comes from the router's list of feature keys
-func allowCmd(args []string) error {
-	home, _ := os.UserHomeDir()
-	list := readAllow()
-	if len(args) == 2 && args[0] == "--remove" {
-		out := list[:0]
-		for _, a := range list {
-			if a.Name != args[1] {
-				out = append(out, a)
-			}
-		}
-		b, _ := json.MarshalIndent(out, "", " ")
-		return os.WriteFile(filepath.Join(home, allowFile), b, 0o600)
-	}
-	if len(args) == 0 {
-		b, _ := json.MarshalIndent(list, "", " ")
-		fmt.Println(string(b))
-		return nil
-	}
-	if len(args) != 2 {
-		return errors.New("usage: jarvis2-machine allow [<holder> <duration> | --remove <holder>]")
-	}
-	d, err := time.ParseDuration(args[1])
-	if err != nil {
-		return err
-	}
-	c, err := newClient()
-	if err != nil {
-		return err
-	}
-	var holders map[string]string
-	if err := c.json("GET", "/m/holders", nil, &holders); err != nil {
-		return err
-	}
-	key := holders[args[0]]
-	if key == "" {
-		names := []string{}
-		for n := range holders {
-			names = append(names, n)
-		}
-		return fmt.Errorf("no holder %q (known: %s)", args[0], strings.Join(names, ", "))
-	}
-	out := []allowEntry{}
-	for _, a := range list {
-		if a.Name != args[0] {
-			out = append(out, a)
-		}
-	}
-	out = append(out, allowEntry{Holder: key, Name: args[0], Until: time.Now().Add(d).UTC().Format(time.RFC3339)})
-	b, _ := json.MarshalIndent(out, "", " ")
-	return os.WriteFile(filepath.Join(home, allowFile), b, 0o600)
 }

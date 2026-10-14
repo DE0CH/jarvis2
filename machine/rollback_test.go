@@ -3,7 +3,6 @@ package main
 import (
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -42,7 +41,7 @@ func TestApplyRollback(t *testing.T) {
 	}
 	write()
 
-	// the env asks for one: nothing happens (only the cert's one-time inputs do: vouch.go)
+	// the env asks for one: nothing happens (only the settings of a source the phone made do: boot.go)
 	t.Setenv("JARVIS2_ROLLBACK", "XYZZY")
 	t.Setenv("JARVIS2_ROLLBACK_PRED", "m-old")
 	applyRollback("")
@@ -76,23 +75,16 @@ func TestApplyRollback(t *testing.T) {
 }
 
 func TestFetchAttachments(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	key, core := newKey(), newKey()
+	x := newWorld(t)
+	home, _ := os.UserHomeDir()
 	files := map[string]string{"photo 1.png": "PNG", "notes%.txt": "text"}
-	attest := map[string]*SignedDoc{}
-	for n, b := range files {
-		attest[n] = attestFor(core, "m1", "attachment", []byte(b))
-	}
-	deleted, listed := false, 0
+	deleted := false
 	var mu sync.Mutex
-	srv := fakeRouter(t, key, func(w http.ResponseWriter, req *http.Request, body []byte) {
+	inner := x.srv.Config.Handler
+	x.srv.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		mu.Lock()
 		defer mu.Unlock()
 		switch {
-		case req.Method == "GET" && req.URL.Path == "/m/attachments":
-			listed++
-			json.NewEncoder(w).Encode(map[string]any{"files": []map[string]any{{"name": "photo 1.png", "isImage": true}, {"name": "notes%.txt"}}, "attest": attest})
 		case req.Method == "GET" && strings.HasPrefix(req.URL.Path, "/m/attachments/"):
 			b, ok := files[strings.TrimPrefix(req.URL.Path, "/m/attachments/")]
 			if !ok {
@@ -104,19 +96,17 @@ func TestFetchAttachments(t *testing.T) {
 			deleted = true
 			w.Write([]byte(`{"ok":true}`))
 		default:
-			w.WriteHeader(404)
+			inner.ServeHTTP(w, req)
 		}
 	})
-	defer srv.Close()
-	c := &client{base: srv.URL, me: "m1", sig: key.k, http: srv.Client()}
-
+	c := x.g.c
 	refs := []AttachmentRef{}
 	for n, b := range files {
 		refs = append(refs, AttachmentRef{Name: n, Sha256: hexSum(b), Size: int64(len(b))})
 	}
 	refused := func(why string, r []AttachmentRef) {
 		t.Helper()
-		if env := fetchAttachments(c, core.pub(), r); env != nil {
+		if env := fetchAttachments(c, r); env != nil {
 			t.Fatalf("%s: taken: %v", why, env)
 		}
 		if _, err := os.Stat(filepath.Join(home, attachStaging)); err == nil {
@@ -126,34 +116,22 @@ func TestFetchAttachments(t *testing.T) {
 			t.Fatalf("%s: the router's copy was dropped for a refused set", why)
 		}
 	}
-	// the router swapped a file: its bytes aren't the ones the cert names
+	// the router swapped a file: its bytes aren't the ones the settings name
 	bad := append([]AttachmentRef{}, refs...)
 	bad[0].Sha256 = hexSum("other bytes")
 	refused("a swapped file", bad)
 	bad = append([]AttachmentRef{}, refs...)
 	bad[1].Size++
 	refused("another size", bad)
-	// no attestation, an attestation for another machine, kind, input, or not by the core: not in the input log
-	mu.Lock()
-	saved := attest["notes%.txt"]
-	for _, a := range []*SignedDoc{nil, attestFor(core, "m2", "attachment", []byte("text")), attestFor(core, "m1", "wakeup", []byte("text")),
-		attestFor(core, "m1", "attachment", []byte("PNG")), attestFor(newKey(), "m1", "attachment", []byte("text"))} {
-		attest["notes%.txt"] = a
-		mu.Unlock()
-		refused("an attachment without the core's attestation", refs)
-		mu.Lock()
-	}
-	attest["notes%.txt"] = saved
-	mu.Unlock()
 
-	env := fetchAttachments(c, core.pub(), refs)
+	env := fetchAttachments(c, refs)
 	for n, want := range files {
 		if b, err := os.ReadFile(filepath.Join(home, attachStaging, n)); err != nil || string(b) != want {
 			t.Fatalf("%s: %q %v", n, b, err)
 		}
 	}
-	if !deleted || listed == 0 {
-		t.Fatalf("the router's copy wasn't dropped (%v) or the listing wasn't read (%d)", deleted, listed)
+	if !deleted {
+		t.Fatal("the router's copy wasn't dropped")
 	}
 	joined := strings.Join(env, "\n")
 	if !strings.Contains(joined, "SESSION_ATTACH_DAV_BASE=file://"+home+"\n") || !strings.Contains(joined, "SESSION_ATTACH_DIR="+attachStaging) ||

@@ -1,9 +1,9 @@
 package main
 
-// Task lines (router/tasks.go, DECISIONS 32-37): a machine whose signed harness is "task:<template>" runs that
-// template from the image (/opt/jarvis2/tasks/<template>, fixed by the cert's image digest) instead of a harness,
-// reports the result to /m/task-result, and waits to be paused. No AI is in the loop unless the template is a
-// prompt (claude -p). No shell grant is involved, so a line holding a sensitive store runs unattended too.
+// Task lines (router/tasks.go, DECISIONS 32-37): a machine whose start settings name the harness "task:<template>"
+// runs that template from the image (/opt/jarvis2/tasks/<template>, fixed by the source's image digest) instead of a
+// harness, reports the result to /m/task-result, and waits to be paused. No AI is in the loop unless the template is a
+// prompt (claude -p). No shell grant is involved.
 //
 // The script's environment is built here, not inherited: a fixed base (PATH, HOME, …), the router's
 // TASK_* / PARAM_* values (not secret, unsigned: the script treats them as data), the run's paths, and the
@@ -21,7 +21,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
-	"slices"
 	"sort"
 	"strings"
 	"syscall"
@@ -100,7 +99,7 @@ func loadTaskSpec(dir string) (taskSpec, time.Duration, error) {
 }
 
 // taskCommand: Jarvis 1's runner by extension (python3 -u / bash / node / the file itself); a prompt runs
-// claude -p in the cert's permission mode with the prompt on stdin ({{field}} filled from TASK_PARAMS)
+// claude -p in the settings' permission mode with the prompt on stdin ({{field}} filled from TASK_PARAMS)
 func taskCommand(dir string, s taskSpec, mode, params string) ([]string, string, error) {
 	if s.Run != "" {
 		p := filepath.Join(dir, s.Run)
@@ -281,47 +280,32 @@ func pruneLogs(dir string) {
 	}
 }
 
-// claudeLoginForPrompt: a prompt task needs a Claude login: the router's shared pair (store `claude`, as a
-// session's, claudelogin.go), else the store's CLAUDE_CREDENTIALS. Returns what was written, to push a refreshed
-// pair back afterwards.
-func claudeLoginForPrompt(secrets map[string]string, stores []string) []byte {
-	var creds []byte
-	if slices.Contains(stores, "claude") {
-		c, err := newClient()
-		var l routerLogin
-		if err == nil {
-			l, err = fetchLogin(c, 0, 0, 0)
-		}
-		if err == nil && l.Credentials == "" {
-			err = errors.New("the router holds no Claude login")
-		}
-		if err == nil {
-			creds = []byte(l.Credentials)
-			home, _ := os.UserHomeDir()
-			if _, err := os.Stat(filepath.Join(home, ".claude.json")); err != nil && l.Account != "" {
-				os.WriteFile(filepath.Join(home, ".claude.json"), []byte(l.Account), 0o600)
-			}
-		} else {
-			log.Printf("task: Claude login: %v", err)
+// claudeLoginForPrompt: a prompt task needs a Claude login: the `claude` store's pair (claudelogin.go), from the
+// secrets the grant served. Returns what was written, to push a refreshed pair back afterwards.
+func claudeLoginForPrompt(secrets map[string]string) []byte {
+	if secrets["CLAUDE_CREDENTIALS"] == "" {
+		log.Printf("task: no Claude login (the grant serves no store with CLAUDE_CREDENTIALS)")
+		return nil
+	}
+	creds := []byte(secrets["CLAUDE_CREDENTIALS"])
+	home, _ := os.UserHomeDir()
+	if a := secrets["CLAUDE_ACCOUNT"]; a != "" {
+		if _, err := os.Stat(filepath.Join(home, ".claude.json")); err != nil {
+			os.WriteFile(filepath.Join(home, ".claude.json"), []byte(a), 0o600)
 		}
 	}
-	if creds == nil && secrets["CLAUDE_CREDENTIALS"] != "" {
-		creds = []byte(secrets["CLAUDE_CREDENTIALS"])
-	}
-	if creds != nil {
-		os.MkdirAll(filepath.Dir(credsPath()), 0o700)
-		os.WriteFile(credsPath(), creds, 0o600)
-	}
+	os.MkdirAll(filepath.Dir(credsPath()), 0o700)
+	os.WriteFile(credsPath(), creds, 0o600)
 	return creds
 }
 
 // runTask: the task line's boot after the checks (prepare): run the template once for JARVIS2_TASK_RUN (none:
 // just report ready), report, and wait for the router's pause. Never returns.
-func runTask(c *client, template string, secrets map[string]string, stores []string, mode string) {
+func runTask(c *client, template string, secrets map[string]string, mode string) {
 	run := os.Getenv("JARVIS2_TASK_RUN")
 	res := TaskResult{Run: run, StartedAt: time.Now().UTC()}
 	if run != "" {
-		res = doRun(template, run, secrets, stores, mode)
+		res = doRun(template, run, secrets, mode)
 	} else {
 		log.Printf("task %s: no run asked for (the line's first boot): reporting ready", template)
 		res.FinishedAt = time.Now().UTC()
@@ -339,10 +323,10 @@ func runTask(c *client, template string, secrets map[string]string, stores []str
 		}
 		time.Sleep(taskReportWait)
 	}
-	select {} // the router pauses this machine (snapshot through the agent, then the core's kill)
+	select {} // the router pauses this machine (snapshot through the guard's command loop, then the spawner's kill)
 }
 
-func doRun(template, run string, secrets map[string]string, stores []string, mode string) TaskResult {
+func doRun(template, run string, secrets map[string]string, mode string) TaskResult {
 	res := TaskResult{Run: run, StartedAt: time.Now().UTC()}
 	fail := func(msg string) TaskResult {
 		res.Error, res.ExitCode, res.FinishedAt = msg, -1, time.Now().UTC()
@@ -374,7 +358,7 @@ func doRun(template, run string, secrets map[string]string, stores []string, mod
 	}
 	var creds []byte
 	if spec.Prompt != "" {
-		creds = claudeLoginForPrompt(secrets, stores)
+		creds = claudeLoginForPrompt(secrets)
 	}
 	env := taskEnviron(os.Environ(), secrets, map[string]string{"TASK_DIR": dir, "TASK_TEMPLATE": template, "TASK_RUN": run,
 		"TASK_OUTPUT": outPath, "TASK_STATE_DIR": state, "TASK_WORK": work, "TASK_TIMEOUT": fmt.Sprint(int(timeout.Seconds()))})
@@ -385,12 +369,11 @@ func doRun(template, run string, secrets map[string]string, stores []string, mod
 	if err != nil {
 		res.Error = "could not run: " + err.Error()
 	}
-	if creds != nil { // claude may have refreshed (rotated) the pair: the router keeps the newest
-		if now, err := os.ReadFile(credsPath()); err == nil && !bytes.Equal(now, creds) && slices.Contains(stores, "claude") {
-			var out map[string]any
+	if creds != nil { // claude may have refreshed (rotated) the pair: the router keeps the newest (output only)
+		if now, err := os.ReadFile(credsPath()); err == nil && !bytes.Equal(now, creds) {
 			c, err := newClient()
 			if err == nil {
-				err = c.json("POST", "/m/claude-login", map[string]string{"credentials": string(now)}, &out)
+				err = c.json("POST", "/m/claude-push", map[string]string{"credentials": string(now)}, nil)
 			}
 			if err != nil {
 				log.Printf("task: pushing the refreshed Claude login: %v", err)

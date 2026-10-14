@@ -149,7 +149,6 @@ COPY session-supervisor.sh /usr/local/bin/session-supervisor.sh
 COPY workspace-layer.sh /usr/local/bin/workspace-layer.sh
 COPY pull-secrets /usr/local/bin/pull-secrets
 COPY content-sync /usr/local/bin/content-sync
-COPY set-permission-mode /usr/local/bin/set-permission-mode
 # The OpenRouter harness (an OpenRouter model): OpenCode is the agent, the Paseo daemon drives it and is the
 # remote control (its app over its relay + a web UI published through the cf-tunnel agent, cf-tunnel-agent.js).
 # harness-opencode.sh is its supervisor; `ws` is global.
@@ -183,7 +182,7 @@ COPY openclaw-claw-harness /usr/local/lib/openclaw-claw-harness
 COPY harness-openclaw.sh /usr/local/bin/harness-openclaw.sh
 COPY openclaw-transcript /usr/local/bin/openclaw-transcript
 RUN chmod +x /usr/local/bin/harness-openclaw.sh /usr/local/bin/openclaw-transcript
-RUN chmod +x /usr/local/bin/entrypoint.sh /usr/local/bin/session-supervisor.sh /usr/local/bin/workspace-layer.sh /usr/local/bin/pull-secrets /usr/local/bin/content-sync /usr/local/bin/set-permission-mode
+RUN chmod +x /usr/local/bin/entrypoint.sh /usr/local/bin/session-supervisor.sh /usr/local/bin/workspace-layer.sh /usr/local/bin/pull-secrets /usr/local/bin/content-sync
 USER claude
 WORKDIR /home/claude
 # Native claude binary for the claude user.

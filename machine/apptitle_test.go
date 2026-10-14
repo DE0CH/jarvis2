@@ -116,15 +116,11 @@ func TestLiveSyncOnce(t *testing.T) {
 	if l.once() != 1 || sent["bbbb.jsonl"] != "x\n" {
 		t.Fatal("not retried")
 	}
-	old := vouchedPath
-	vouchedPath = filepath.Join(t.TempDir(), "vouched.json")
-	t.Cleanup(func() { vouchedPath = old })
 	t.Setenv("JARVIS2_LIVE_SYNC_SECONDS", "20") // the env: ignored
-	if liveSyncInterval() != 300*time.Second {
+	if liveSyncInterval(FormatExceptions{}) != 300*time.Second {
 		t.Fatal("the env set the interval")
 	}
-	writeVouched(Vouched{Ex: FormatExceptions{LiveSyncSeconds: 20}, Cert: Cert{}})
-	if liveSyncInterval() != 20*time.Second {
+	if liveSyncInterval(checkExceptions(FormatExceptions{LiveSyncSeconds: 20})) != 20*time.Second {
 		t.Fatal("interval")
 	}
 }

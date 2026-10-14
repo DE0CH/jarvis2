@@ -2,7 +2,7 @@ package main
 
 // The session's live status, reported by the machine itself (Jarvis 1 read it by Fly exec every tick:
 // readRegistry's REG_CMD in jarvis/server.js, with lib/claudelogin.js and lib/downgrade.js REG_SECTIONs). The
-// agent runs the same shell locally every 10 s and POSTs the raw output to /m/status when it changed, and at
+// guard runs the same shell locally every 10 s and POSTs the raw output to /m/status when it changed, and at
 // least once a minute as a heartbeat; the router parses it (router/registry.go). It prints claude's registry
 // files, ai-title lines, background-job counts, the one-shot marker, transcript ids ending on "Please run
 // /login", the credentials file's expiry and refusal entries — never a token.
@@ -43,7 +43,7 @@ func readStatus() string {
 	return string(out)
 }
 
-// statusReporter: the agent's status loop (started by agent())
+// statusReporter: the guard's status loop (started once booted)
 func statusReporter(c *client) {
 	var last, lastTitle string
 	var sent time.Time

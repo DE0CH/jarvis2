@@ -38,8 +38,8 @@ for path in {wd, os.path.expanduser("~/workspace"), os.path.expanduser("~")}:
     e["hasTrustDialogAccepted"]=True
     e["hasCompletedProjectOnboarding"]=True
     e.setdefault("allowedTools",[])
-# A Re-login to another Claude account reached this running machine (jarvis2-machine creds-sync wrote the new
-# pair and restarted this host): its account record goes in before claude starts, so Remote Control comes up there.
+# A Re-login to another Claude account reached this running machine (the guard took the claude store's new pair
+# and restarted this host: machine/claudelogin.go): its account record goes in before claude starts, so Remote Control comes up there.
 sw=os.path.expanduser("~/.claude/.account-switch.json")
 try:
     d.update(json.load(open(sw)))
@@ -78,14 +78,9 @@ start() {
   # `--permission-mode auto` overrides whatever was remembered, so the launched mode always
   # matches SESSION_PERMISSION_MODE. Bypass keeps --dangerously-skip-permissions (whose
   # TTY warning is pre-accepted via skipDangerousModePermissionPrompt above).
-  # Effective mode: an in-place override file (written by /usr/local/bin/set-permission-mode) wins
-  # over the boot env var. That is how Jarvis switches auto<->bypass on a RUNNING machine
-  # WITHOUT a Fly restart: it drops the file + kills the claude tmux session, and the watchdog
-  # below relaunches here in the new mode — so /tmp, tunnels, browser logins and background jobs
-  # all survive. A real machine restart (pause/wake) wipes the file, but wakeMachine re-asserts
-  # SESSION_PERMISSION_MODE from the persisted metadata, so the mode is still right after a wake.
-  SESSION_PERMISSION_MODE="$(cat "$HOME/.claude/.permission-mode" 2>/dev/null || printf '%s' "${SESSION_PERMISSION_MODE:-auto}")"
-  case "$SESSION_PERMISSION_MODE" in
+  # The mode is the source's start settings' (the guard sets SESSION_PERMISSION_MODE from them): fixed for the
+  # session's life, nothing switches it on a running machine.
+  case "${SESSION_PERMISSION_MODE:-auto}" in
     bypass) SESSION_PERMISSION_MODE=bypass; export SESSION_PERM_FLAG="--dangerously-skip-permissions" ;;
     *)      SESSION_PERMISSION_MODE=auto;   export SESSION_PERM_FLAG="--permission-mode auto" ;;
   esac
@@ -298,8 +293,8 @@ fi
 start
 send_first_prompt &
 one_shot_watch &
-# The Claude login (pushing a pair claude refreshed by itself, taking the router's) and the live transcript copy
-# are jarvis2-machine's (machine/claudelogin.go, the agent's live sync): nothing here.
+# The Claude login (pushing a pair claude refreshed by itself, taking the claude store's) and the live transcript
+# copy are the guard's (jarvis2-machine: machine/claudelogin.go, livesync.go): nothing here.
 while true; do
   # Liveness by a token present in every launch form (--model is always passed; the
   # supervisor/push-creds processes don't contain it).
@@ -308,5 +303,5 @@ while true; do
     echo "[supervisor] host gone; restarting"
     start
   fi
-  sleep 5   # short poll so an in-place permission-mode switch (kills claude) relaunches promptly
+  sleep 5   # short poll so a killed host (an account switch restarts it) relaunches promptly
 done

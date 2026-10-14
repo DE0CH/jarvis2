@@ -5,7 +5,7 @@
 //	kill M (given M's notarized spawn cert): check it is alive, kill it, confirm it dead through the Fly API, take its
 //	snapshot hash, sign (M, source-y, ⊤), source-y a fresh source holding M's image, settings and that hash.
 //
-// The machine's Fly config env is the spawner's alone: its own signing key and the router's address. Its state (which
+// The machine's Fly config env is the spawner's alone: its own signing key, the kernel roster and the router's address. Its state (which
 // machines it created, which it killed) is in memory; the notarizer's first-successor rule is what stops a source from
 // being continued twice, the spawner only avoids starting machines nobody can certify.
 package spawner
@@ -47,9 +47,12 @@ func reportedDigest(ref string) string {
 	return ref[i+1:]
 }
 
-// Env names in every machine's Fly config
+// Env names in every machine's Fly config: the spawner's key, the kernel roster (the JSON of kernel.Roster: the guard
+// checks every kernel document against it, and the roster's spawner key must be SpawnerKeyEnv's) and the router's
+// address. Only the spawner's Fly token creates machines in the app, so the guard takes these as the spawner's word.
 const (
 	SpawnerKeyEnv = "JARVIS2_SPAWNER_KEY"
+	RosterEnv     = "JARVIS2_ROSTER"
 	RouterURLEnv  = "JARVIS2_URL"
 )
 
@@ -138,8 +141,9 @@ func (sp *Spawner) Spawn(cert kernel.NotarizedCert, region, size string) (kernel
 	}
 	sp.spawned[src.ID] = "" // held while Fly creates
 	sp.mu.Unlock()
+	roster, _ := json.Marshal(sp.roster)
 	id, err := sp.fly.Create(CreateRequest{Image: src.Image, Region: region, Guest: guest,
-		Env: map[string]string{SpawnerKeyEnv: sp.signer.PublicKey(), RouterURLEnv: sp.url}})
+		Env: map[string]string{SpawnerKeyEnv: sp.signer.PublicKey(), RosterEnv: string(roster), RouterURLEnv: sp.url}})
 	sp.mu.Lock()
 	defer sp.mu.Unlock()
 	if err != nil {

@@ -1,21 +1,23 @@
 package main
 
-// The session-facing API, machine side. Jarvis 1's session scripts (schedule-wakeup.sh, schedule-cron.sh,
-// lease.py, transcript-search.py, pull-secrets, content-sync, retire-session.sh, …) call `$JARVIS_URL/api/...`
-// with Cloudflare Access headers and the session's SESSION_API_TOKEN. In a Jarvis 2 session JARVIS_URL is this
-// proxy (127.0.0.1:7171, served by `jarvis2-machine agent`): it drops those headers and forwards each request to
-// the router as /m/api/<rest>, signed with the machine key like every other /m call.
+// The session-facing API, machine side. Jarvis 1's session scripts (schedule-wakeup.sh, schedule-cron.sh, lease.py,
+// transcript-search.py, pull-secrets, content-sync, retire-session.sh, jarvis2-request, …) call `$JARVIS_URL/api/...`
+// with Cloudflare Access headers and the session's SESSION_API_TOKEN. In a Jarvis 2 session JARVIS_URL is this proxy
+// (127.0.0.1:7171, served by the guard): it drops those headers and forwards each request to the router as
+// /m/api/<rest>, signed with the machine key like every other /m call (docs/API-grants.md "/m/api").
 //
-// Two calls never leave the machine: GET …/secrets (the session's stores, pulled fresh through the core-signed
-// /m/pull-secrets and answered in Jarvis 1's shape) and GET …/changes (the repos' uncommitted/unpushed work).
-//
-// Arming a wakeup or a cron is the session approving the scheduler for itself: after the router accepts it, the
-// proxy puts the scheduler holder on this session's allow list until the wakeup is due + 1 h (a cron: a month or
-// two periods, renewed at each firing by `jarvis2-machine allow-at-least`). A session holding a sensitive store
-// ignores its allow list; its wakeups then need a phone grant.
+// Kept on the machine:
+//   - GET …/secrets: the session's stores, pulled fresh with the grant the guard holds;
+//   - GET …/changes: the repos' uncommitted/unpushed work;
+//   - the session's own texts: arming a wakeup, cron or watch, or taking a lease, keeps the prompt (and a watch's
+//     give-up prompt, a lease's note) in the guard's records and sends the router the request without it, with the id
+//     the guard gave it ("id"); an Inbox filing is kept by a filing id (header X-Jarvis2-Filing), so its outcome's
+//     text is built from what the session asked, not from what the router says it asked;
+//   - a content file is taken only with the log notary's challenge over exactly its bytes (header X-Jarvis2-Challenge).
 
 import (
 	"bytes"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -24,60 +26,70 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
+	"sort"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
+
+	"github.com/DE0CH/jarvis2/core/kernel"
 )
 
 const (
 	apiProxyAddr = "127.0.0.1:7171"
 	apiMaxBody   = 64 << 20
+	aboutContent = "content"
 )
 
-// serveAPIProxy: runs for the agent's life
-func serveAPIProxy(c *client) {
+// serveAPIProxy: runs for the guard's life
+func serveAPIProxy(g *guard) {
 	addr := os.Getenv("JARVIS2_API_ADDR")
 	if addr == "" {
 		addr = apiProxyAddr
 	}
-	srv := &http.Server{Addr: addr, Handler: apiProxyHandler(c), ReadHeaderTimeout: 30 * time.Second}
+	srv := &http.Server{Addr: addr, Handler: apiProxyHandler(g), ReadHeaderTimeout: 30 * time.Second}
 	log.Printf("session API on http://%s (→ router /m/api)", addr)
 	if err := srv.ListenAndServe(); err != nil {
 		log.Printf("session API stopped: %v", err)
 	}
 }
 
-func apiProxyHandler(c *client) http.Handler {
+func apiProxyHandler(g *guard) http.Handler {
+	c := g.c
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/sessions/{id}/secrets", func(w http.ResponseWriter, req *http.Request) {
-		if !ownSession(w, c, req.PathValue("id")) {
+		if !ownSession(w, g, req.PathValue("id")) {
 			return
 		}
-		localSecrets(w, c)
+		a, err := g.pullAndApply(false)
+		if err != nil {
+			writeJSONResp(w, 502, map[string]string{"error": err.Error()})
+			return
+		}
+		writeJSONResp(w, 200, map[string]any{"ok": true, "environment": strings.Join(a.Stores, ","), "locked": a.Locked, "secrets": g.secrets()})
 	})
 	mux.HandleFunc("GET /api/sessions/{id}/changes", func(w http.ResponseWriter, req *http.Request) {
-		if !ownSession(w, c, req.PathValue("id")) {
+		if !ownSession(w, g, req.PathValue("id")) {
 			return
 		}
 		home, _ := os.UserHomeDir()
 		writeJSONResp(w, 200, map[string]any{"checked": true, "repos": repoChanges(filepath.Join(home, "workspace")), "status": ""})
 	})
-	// a content file (content-sync, a task's script): taken only with the core's attestation of exactly these bytes
 	mux.HandleFunc("GET /api/sessions/{id}/content/{name}/file", func(w http.ResponseWriter, req *http.Request) {
-		if !ownSession(w, c, req.PathValue("id")) {
+		if !ownSession(w, g, req.PathValue("id")) {
 			return
 		}
-		status, hdr, body, err := forwardToRouter(c, req)
+		status, hdr, body, err := forwardToRouter(c, req, nil, nil)
 		if err != nil {
 			writeJSONResp(w, 502, map[string]string{"error": "Jarvis 2 router unreachable: " + err.Error()})
 			return
 		}
 		if status == 200 {
-			if err := checkContentAttest(c.me, hdr.Get("X-Jarvis2-Attest"), body); err != nil {
+			if err := g.checkContent(hdr.Get("X-Jarvis2-Challenge"), body); err != nil {
 				log.Printf("content: refused %s: %v", req.URL.Query().Get("path"), err)
 				writeJSONResp(w, 502, map[string]string{"error": "content file refused: " + err.Error()})
 				return
@@ -85,11 +97,30 @@ func apiProxyHandler(c *client) http.Handler {
 		}
 		copyResp(w, status, hdr, body)
 	})
-	for _, p := range []string{"POST /api/sessions/{id}/wakeup", "POST /api/sessions/{id}/wakeups", "POST /api/sessions/{id}/crons"} {
-		mux.HandleFunc(p, func(w http.ResponseWriter, req *http.Request) { armAndAllow(w, req, c) })
+	for _, p := range []string{"POST /api/sessions/{id}/wakeup", "POST /api/sessions/{id}/wakeups", "POST /api/sessions/{id}/crons",
+		"POST /api/sessions/{id}/watches", "POST /api/sessions/{id}/leases/{device}"} {
+		mux.HandleFunc(p, func(w http.ResponseWriter, req *http.Request) {
+			if !ownSession(w, g, req.PathValue("id")) {
+				return
+			}
+			body, err := io.ReadAll(io.LimitReader(req.Body, apiMaxBody))
+			if err != nil {
+				writeJSONResp(w, 400, map[string]string{"error": err.Error()})
+				return
+			}
+			status, hdr, out, err := g.arm(req.URL.Path, req.PathValue("device"), body)
+			if err != nil {
+				writeJSONResp(w, status, map[string]string{"error": err.Error()})
+				return
+			}
+			copyResp(w, status, hdr, out)
+		})
+	}
+	for _, p := range []string{"POST /api/requests/", "POST /api/actions/requests/", "POST /api/sessions"} {
+		mux.HandleFunc(p, func(w http.ResponseWriter, req *http.Request) { g.file(w, req) })
 	}
 	mux.HandleFunc("/api/", func(w http.ResponseWriter, req *http.Request) {
-		status, hdr, body, err := forwardToRouter(c, req)
+		status, hdr, body, err := forwardToRouter(c, req, nil, nil)
 		if err != nil {
 			writeJSONResp(w, 502, map[string]string{"error": "Jarvis 2 router unreachable: " + err.Error()})
 			return
@@ -118,32 +149,188 @@ func copyResp(w http.ResponseWriter, status int, hdr http.Header, body []byte) {
 	w.Write(body)
 }
 
-// ownSession: Jarvis 1's scripts name the session by SESSION_ID (the router's id) or FLY_MACHINE_ID
-func ownSession(w http.ResponseWriter, c *client, id string) bool {
-	if id == sessionID(c.me) || id == c.me {
+// ownSession: Jarvis 1's scripts name the session by SESSION_ID (the settings' session) or FLY_MACHINE_ID
+func ownSession(w http.ResponseWriter, g *guard, id string) bool {
+	if id == g.st.Session || id == g.c.me {
 		return true
 	}
-	writeJSONResp(w, 403, map[string]string{"error": "this is session " + sessionID(c.me) + ", not " + id})
+	writeJSONResp(w, 403, map[string]string{"error": "this is session " + g.st.Session + ", not " + id})
 	return false
 }
 
-// forwardToRouter: the request as /m/api/<rest>; the signature covers the decoded path, as the router checks it
-func forwardToRouter(c *client, req *http.Request) (int, http.Header, []byte, error) {
-	body, err := io.ReadAll(io.LimitReader(req.Body, apiMaxBody+1))
-	if err != nil {
-		return 0, nil, nil, err
+// forwardToRouter: the request as /m/api/<rest>; the signature covers the decoded path, as the router checks it.
+// body: instead of the request's own (nil: read it); hdr: extra headers.
+func forwardToRouter(c *client, req *http.Request, body []byte, hdr map[string]string) (int, http.Header, []byte, error) {
+	if body == nil {
+		b, err := io.ReadAll(io.LimitReader(req.Body, apiMaxBody+1))
+		if err != nil {
+			return 0, nil, nil, err
+		}
+		if len(b) > apiMaxBody {
+			return 0, nil, nil, errors.New("request body too large")
+		}
+		body = b
 	}
-	if len(body) > apiMaxBody {
-		return 0, nil, nil, errors.New("request body too large")
+	h := map[string]string{"Content-Type": req.Header.Get("Content-Type")}
+	for k, v := range hdr {
+		h[k] = v
 	}
-	return c.signedDo(req.Method, "/m"+req.URL.Path, "/m"+req.URL.EscapedPath(), req.URL.RawQuery, body, req.Header.Get("Content-Type"))
+	return c.signedDo(req.Method, "/m"+req.URL.Path, "/m"+req.URL.EscapedPath(), req.URL.RawQuery, body, h)
 }
 
-// signedDo: like client.raw, with a query string (unsigned: the router signs the path only) and an escaped path
-func (c *client) signedDo(method, path, escaped, query string, body []byte, contentType string) (int, http.Header, []byte, error) {
-	if k, err := loadPrivate(); err == nil {
-		c.sig = k.sig
+// checkContent: the log notary's challenge over the content file's bytes (about "content")
+func (g *guard) checkContent(header string, body []byte) error {
+	var d kernel.SignedDoc
+	if header == "" || json.Unmarshal([]byte(header), &d) != nil {
+		return errors.New("no log-notary challenge over the file")
 	}
+	sum := sha256.Sum256(body)
+	return g.checkChallenge(d, hex.EncodeToString(sum[:]), aboutContent)
+}
+
+// ---- the session's own texts ---------------------------------------------------------------------------------
+
+func newTextID() string {
+	b := make([]byte, 16)
+	rand.Read(b)
+	return hex.EncodeToString(b)
+}
+
+var watchNameRE = regexp.MustCompile(`^[A-Za-z0-9_-]{1,40}$`)
+
+func oneLine(s string) string { return strings.Join(strings.Fields(s), " ") }
+
+// arm: a wakeup, cron, watch or lease the session asks for (path /api/sessions/<id>/…): its text into the records,
+// the request without it to the router (as /m/api/…, with "id"). A refusal by the router takes the record back.
+func (g *guard) arm(path, device string, body []byte) (int, http.Header, []byte, error) {
+	var in map[string]any
+	if err := json.Unmarshal(body, &in); err != nil || in == nil {
+		return 400, nil, nil, errors.New("the body is a JSON object")
+	}
+	str := func(k string) string { s, _ := in[k].(string); return s }
+	id := newTextID()
+	var undo func(*recordsData)
+	var rec func(*recordsData) error
+	switch {
+	case strings.HasSuffix(path, "/wakeup") || strings.HasSuffix(path, "/wakeups"):
+		prompt := oneLine(str("prompt"))
+		if prompt == "" {
+			return 400, nil, nil, errors.New("a wakeup needs a prompt")
+		}
+		name := strings.TrimSpace(fmt.Sprint(in["name"]))
+		if in["name"] == nil || name == "" {
+			name = "default"
+		}
+		rec = func(r *recordsData) error {
+			for k, x := range r.Wakeups { // the router replaces a wakeup of the same name
+				if x.Name == name && x.Delivered == "" {
+					delete(r.Wakeups, k)
+				}
+			}
+			r.Wakeups[id] = wakeupText{Name: name, Prompt: prompt}
+			return nil
+		}
+		undo = func(r *recordsData) { delete(r.Wakeups, id) }
+		delete(in, "prompt")
+	case strings.HasSuffix(path, "/crons"):
+		prompt := oneLine(str("prompt"))
+		every, _ := in["everySeconds"].(float64)
+		if prompt == "" || every <= 0 {
+			return 400, nil, nil, errors.New("a cron needs a prompt and everySeconds")
+		}
+		name := strings.TrimSpace(fmt.Sprint(in["name"]))
+		if in["name"] == nil || name == "" {
+			name = "default"
+		}
+		until, _ := in["until"].(float64)
+		rec = func(r *recordsData) error {
+			r.Crons[id] = cronText{Name: name, Prompt: prompt, EverySeconds: int64(every), Until: int64(until)}
+			return nil
+		}
+		undo = func(r *recordsData) { delete(r.Crons, id) }
+		delete(in, "prompt")
+	case strings.HasSuffix(path, "/watches"):
+		name := strings.TrimSpace(str("name"))
+		prompt := oneLine(str("prompt"))
+		if !watchNameRE.MatchString(name) || prompt == "" || str("script") == "" {
+			return 400, nil, nil, errors.New("a watch needs a name, a script and a prompt")
+		}
+		rec = func(r *recordsData) error {
+			r.Watches[id] = watchText{Name: name, Script: str("script"), Prompt: prompt, FailPrompt: oneLine(str("failPrompt"))}
+			return nil
+		}
+		undo = func(r *recordsData) { delete(r.Watches, id) }
+		delete(in, "prompt")
+		delete(in, "failPrompt")
+	case device != "":
+		if !leaseNameRE.MatchString(device) {
+			return 400, nil, nil, errors.New("not a device name")
+		}
+		var old string
+		var had bool
+		note := str("prompt")
+		rec = func(r *recordsData) error {
+			old, had = r.Leases[device]
+			r.Leases[device] = note
+			return nil
+		}
+		undo = func(r *recordsData) {
+			if had {
+				r.Leases[device] = old
+			} else {
+				delete(r.Leases, device)
+			}
+		}
+		delete(in, "prompt")
+	default:
+		return 404, nil, nil, errors.New("not something the session arms")
+	}
+	in["id"] = id
+	if err := g.rec.update(rec); err != nil {
+		return 500, nil, nil, err
+	}
+	fwd, _ := json.Marshal(in)
+	escaped := (&url.URL{Path: path}).EscapedPath()
+	status, hdr, out, err := g.c.signedDo("POST", "/m"+path, "/m"+escaped, "", fwd, map[string]string{"Content-Type": "application/json"})
+	if err != nil || status/100 != 2 {
+		g.rec.update(func(r *recordsData) error { undo(r); return nil })
+		if err != nil {
+			return 502, nil, nil, fmt.Errorf("Jarvis 2 router unreachable: %v", err)
+		}
+	}
+	return status, hdr, out, nil
+}
+
+// file: an Inbox filing (jarvis2-request): kept by a filing id, forwarded with it
+func (g *guard) file(w http.ResponseWriter, req *http.Request) {
+	body, err := io.ReadAll(io.LimitReader(req.Body, apiMaxBody))
+	if err != nil {
+		writeJSONResp(w, 400, map[string]string{"error": err.Error()})
+		return
+	}
+	id := newTextID()
+	raw := json.RawMessage("null")
+	if json.Valid(body) {
+		raw = append(json.RawMessage(nil), body...)
+	}
+	g.rec.update(func(r *recordsData) error {
+		r.Filings[id] = filing{Path: req.URL.Path, Body: raw}
+		return nil
+	})
+	status, hdr, out, err := forwardToRouter(g.c, req, body, map[string]string{"X-Jarvis2-Filing": id})
+	if err != nil || status/100 != 2 {
+		g.rec.update(func(r *recordsData) error { delete(r.Filings, id); return nil })
+	}
+	if err != nil {
+		writeJSONResp(w, 502, map[string]string{"error": "Jarvis 2 router unreachable: " + err.Error()})
+		return
+	}
+	copyResp(w, status, hdr, out)
+}
+
+// signedDo: like client.raw, with a query string (unsigned: the router signs the path only), an escaped path and
+// extra headers
+func (c *client) signedDo(method, path, escaped, query string, body []byte, hdr map[string]string) (int, http.Header, []byte, error) {
 	t := strconv.FormatInt(time.Now().Unix(), 10)
 	sum := sha256.Sum256(body)
 	sig, err := sign(c.sig, []byte(method+" "+path+" "+t+" "+hex.EncodeToString(sum[:])))
@@ -161,8 +348,10 @@ func (c *client) signedDo(method, path, escaped, query string, body []byte, cont
 	req.Header.Set("X-Machine", c.me)
 	req.Header.Set("X-Time", t)
 	req.Header.Set("X-Sig", sig)
-	if contentType != "" {
-		req.Header.Set("Content-Type", contentType)
+	for k, v := range hdr {
+		if v != "" {
+			req.Header.Set(k, v)
+		}
 	}
 	resp, err := c.http.Do(req)
 	if err != nil {
@@ -173,59 +362,7 @@ func (c *client) signedDo(method, path, escaped, query string, body []byte, cont
 	return resp.StatusCode, resp.Header, b, err
 }
 
-// ---- pull-secrets (Jarvis 1's GET /api/sessions/:id/secrets) ----------------------------------------------
-
-func localSecrets(w http.ResponseWriter, c *client) {
-	cert, err := currentCert()
-	if err != nil {
-		writeJSONResp(w, 409, map[string]string{"error": "no valid cert: " + err.Error()})
-		return
-	}
-	coreKey, err := readTrim(coreKeyPath)
-	if err != nil {
-		writeJSONResp(w, 409, map[string]string{"error": err.Error()})
-		return
-	}
-	var doc SignedDoc
-	if err := c.json("POST", "/m/pull-secrets", map[string]string{}, &doc); err != nil {
-		// never the answer's body: only the error the router or core gave
-		writeJSONResp(w, 502, map[string]string{"error": "pull secrets: " + err.Error()})
-		return
-	}
-	secrets, err := openSecretsDoc(coreKey, c.me, &doc)
-	if err != nil {
-		writeJSONResp(w, 502, map[string]string{"error": err.Error()})
-		return
-	}
-	writeJSONResp(w, 200, map[string]any{"ok": true, "environment": strings.Join(cert.Stores, ","), "secrets": secrets})
-}
-
-// openSecretsDoc: the core-signed secrets answer, opened with this machine's key (as pullSecrets, one attempt)
-func openSecretsDoc(coreKey, me string, doc *SignedDoc) (map[string]string, error) {
-	var out struct {
-		Kind    string `json:"kind"`
-		Machine string `json:"machine"`
-		Sealed  struct {
-			E    string `json:"e"`
-			Data string `json:"data"`
-		} `json:"sealed"`
-	}
-	if err := verifyDoc(coreKey, doc, &out); err != nil || out.Kind != "secrets" || out.Machine != me {
-		return nil, fmt.Errorf("the secrets answer isn't core-signed for this machine (%v)", err)
-	}
-	priv, err := loadPrivate()
-	if err != nil {
-		return nil, err
-	}
-	plain, err := openSealed(priv.enc, out.Sealed.E, out.Sealed.Data, "jarvis2/secrets")
-	if err != nil {
-		return nil, fmt.Errorf("the secrets don't decrypt with this machine's key: %w", err)
-	}
-	m := map[string]string{}
-	return m, json.Unmarshal(plain, &m)
-}
-
-// ---- changes (Jarvis 1's GET /api/sessions/:id/changes, archive.REPO_CHANGES_SH) ---------------------------
+// ---- changes (Jarvis 1's GET /api/sessions/:id/changes) ------------------------------------------------------
 
 type repoChange struct {
 	Name        string `json:"name"`
@@ -236,8 +373,9 @@ type repoChange struct {
 func repoChanges(workspace string) []repoChange {
 	out := []repoChange{}
 	dirs, _ := filepath.Glob(filepath.Join(workspace, "*", ".git"))
-	for _, g := range dirs {
-		d := filepath.Dir(g)
+	sort.Strings(dirs)
+	for _, gd := range dirs {
+		d := filepath.Dir(gd)
 		rc := repoChange{Name: filepath.Base(d)}
 		if b, err := exec.Command("git", "-C", d, "status", "--porcelain").Output(); err == nil {
 			for _, l := range strings.Split(string(b), "\n") {
@@ -254,99 +392,4 @@ func repoChanges(workspace string) []repoChange {
 		out = append(out, rc)
 	}
 	return out
-}
-
-// ---- arming = approving the scheduler ----------------------------------------------------------------------
-
-func armAndAllow(w http.ResponseWriter, req *http.Request, c *client) {
-	status, hdr, body, err := forwardToRouter(c, req)
-	if err != nil {
-		writeJSONResp(w, 502, map[string]string{"error": "Jarvis 2 router unreachable: " + err.Error()})
-		return
-	}
-	var ans map[string]any
-	if status != 200 || json.Unmarshal(body, &ans) != nil || ans["ok"] != true {
-		copyResp(w, status, hdr, body)
-		return
-	}
-	// the wakeup comes back as a delivery of this very request (deliver.go), checked against this line's keys and
-	// attested by the core; nobody needs a shell for it
-	ans["scheduler"] = "delivered as this session's own signed request; no shell access granted"
-	if cert, err := currentCert(); err == nil && cert.Sensitive {
-		ans["note"] = "this session holds a sensitive store: the scheduler gets in only under a phone grant; when it is due and can't, Deyao gets a DM"
-	}
-	writeJSONResp(w, 200, ans)
-}
-
-// extendAllow: the holder stays on the allow list at least until `until`; a later end already there is kept
-func extendAllow(c *client, name string, until time.Time) error {
-	var holders map[string]string
-	if err := c.json("GET", "/m/holders", nil, &holders); err != nil {
-		return err
-	}
-	key := holders[name]
-	if key == "" {
-		return fmt.Errorf("the router names no holder %q", name)
-	}
-	home, _ := os.UserHomeDir()
-	lock, err := os.OpenFile(filepath.Join(home, ".jarvis2-allow.lock"), os.O_CREATE|os.O_RDWR, 0o600)
-	if err != nil {
-		return err
-	}
-	defer lock.Close()
-	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX); err != nil {
-		return err
-	}
-	defer syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
-	out := []allowEntry{}
-	for _, a := range readAllow() {
-		if a.Name != name {
-			out = append(out, a)
-			continue
-		}
-		if u, err := time.Parse(time.RFC3339, a.Until); err == nil && u.After(until) && a.Holder == key {
-			until = u
-		}
-	}
-	out = append(out, allowEntry{Holder: key, Name: name, Until: until.UTC().Format(time.RFC3339)})
-	b, _ := json.MarshalIndent(out, "", " ")
-	tmp := filepath.Join(home, allowFile+".tmp")
-	if err := os.WriteFile(tmp, b, 0o600); err != nil {
-		return err
-	}
-	return os.Rename(tmp, filepath.Join(home, allowFile))
-}
-
-// allowAtLeastCmd: `jarvis2-machine allow-at-least <holder> <duration>` — like allow, but never shortens an
-// existing entry (what a cron's firing runs to renew the session's approval)
-func allowAtLeastCmd(args []string) error {
-	if len(args) != 2 {
-		return errors.New("usage: jarvis2-machine allow-at-least <holder> <duration>")
-	}
-	d, err := time.ParseDuration(args[1])
-	if err != nil {
-		return err
-	}
-	c, err := newClient()
-	if err != nil {
-		return err
-	}
-	return extendAllow(c, args[0], time.Now().Add(d))
-}
-
-// readCoreKey: the core's key as boot wrote it (a var so tests can give their own)
-var readCoreKey = func() (string, error) { return readTrim(coreKeyPath) }
-
-// checkContentAttest: the core's input-log entry (machine, "content", sha256 of the bytes) the router sent with a
-// content file (router/content.go)
-func checkContentAttest(me, header string, body []byte) error {
-	coreKey, err := readCoreKey()
-	if err != nil {
-		return errors.New("no core key on this machine")
-	}
-	var d SignedDoc
-	if header == "" || json.Unmarshal([]byte(header), &d) != nil {
-		return errors.New("no core attestation (the input isn't in the core's log)")
-	}
-	return checkAttest(coreKey, me, "content", body, &d)
 }

@@ -94,7 +94,8 @@ func TestUpgradedText(t *testing.T) {
 	if _, err := upgradedText("medium", "do this instead"); err == nil {
 		t.Fatal("a size outside the three must be refused")
 	}
-	if _, _, err := deliveryText(Delivery{Kind: "upgraded", From: "small", To: "medium"}, nil); err != nil {
+	x := newWorld(t)
+	if _, err := x.g.noticeText(Notice{Kind: "upgraded", From: "small", To: "medium"}); err != nil {
 		t.Fatal(err)
 	}
 }

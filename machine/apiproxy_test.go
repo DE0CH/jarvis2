@@ -1,8 +1,6 @@
 package main
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -13,37 +11,19 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/DE0CH/jarvis2/core/kernel"
 )
 
-// a fake router: checks the machine signature the way requireMachine does (decoded path, no query)
-func fakeRouter(t *testing.T, key tkey, handle func(w http.ResponseWriter, req *http.Request, body []byte)) *httptest.Server {
-	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-		body, _ := io.ReadAll(req.Body)
-		sum := sha256.Sum256(body)
-		msg := req.Method + " " + req.URL.Path + " " + req.Header.Get("X-Time") + " " + hex.EncodeToString(sum[:])
-		if req.Header.Get("X-Machine") != "m1" || !verify(key.pub(), []byte(msg), req.Header.Get("X-Sig")) {
-			w.WriteHeader(401)
-			return
-		}
-		handle(w, req, body)
-	}))
+func proxy(t *testing.T, x *world) *httptest.Server {
+	p := httptest.NewServer(apiProxyHandler(x.g))
+	t.Cleanup(p.Close)
+	return p
 }
 
 func TestProxyForwardsSigned(t *testing.T) {
-	t.Setenv("JARVIS2_SESSION_ID", "s1")
-	key := newKey()
-	var got *http.Request
-	var gotBody string
-	srv := fakeRouter(t, key, func(w http.ResponseWriter, req *http.Request, body []byte) {
-		got, gotBody = req, string(body)
-		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`{"hits":[]}`))
-	})
-	defer srv.Close()
-	c := &client{base: srv.URL, me: "m1", sig: key.k, http: srv.Client()}
-	p := httptest.NewServer(apiProxyHandler(c))
-	defer p.Close()
-
+	x := newWorld(t)
+	p := proxy(t, x)
 	req, _ := http.NewRequest("PUT", p.URL+"/api/sessions/s1/content/my%20store/file?path=a%2Fb.txt", strings.NewReader("data"))
 	req.Header.Set("CF-Access-Client-Id", "placeholder")
 	req.Header.Set("Authorization", "Bearer placeholder")
@@ -52,62 +32,76 @@ func TestProxyForwardsSigned(t *testing.T) {
 	if err != nil || resp.StatusCode != 200 {
 		t.Fatalf("%v %v", err, resp)
 	}
-	if got.URL.Path != "/m/api/sessions/s1/content/my store/file" || got.URL.RawQuery != "path=a%2Fb.txt" || gotBody != "data" ||
-		got.Header.Get("Authorization") != "" || got.Header.Get("CF-Access-Client-Id") != "" || got.Header.Get("Content-Type") != "application/octet-stream" {
-		t.Fatalf("forwarded %s ? %s %v %q", got.URL.Path, got.URL.RawQuery, got.Header, gotBody)
+	h := x.headers["/m/api/sessions/s1/content/my store/file"]
+	if string(x.forwarded["/m/api/sessions/s1/content/my store/file"]) != "data" || h.Get("Authorization") != "" ||
+		h.Get("CF-Access-Client-Id") != "" || h.Get("Content-Type") != "application/octet-stream" {
+		t.Fatalf("forwarded %v %v", x.forwarded, h)
 	}
 	// secrets and changes for another session are refused locally
-	resp, _ = http.Get(p.URL + "/api/sessions/sX/secrets")
-	if resp.StatusCode != 403 {
-		t.Fatal(resp.StatusCode)
+	for _, u := range []string{"/api/sessions/sX/secrets", "/api/sessions/sX/changes"} {
+		if resp, _ := http.Get(p.URL + u); resp.StatusCode != 403 {
+			t.Fatal(u, resp.StatusCode)
+		}
 	}
 }
 
-func TestProxyArmingGivesTheSchedulerNoShell(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	t.Setenv("JARVIS2_SESSION_ID", "s1")
-	old := currentCert
-	currentCert = func() (Cert, error) { return Cert{Line: "m1"}, nil }
-	t.Cleanup(func() { currentCert = old })
-	key, sched := newKey(), newKey()
-	at := time.Now().Add(2 * time.Hour).UnixMilli()
-	srv := fakeRouter(t, key, func(w http.ResponseWriter, req *http.Request, body []byte) {
-		switch req.URL.Path {
-		case "/m/holders":
-			json.NewEncoder(w).Encode(map[string]string{"scheduler": sched.pub()})
-		case "/m/api/sessions/s1/wakeup":
-			json.NewEncoder(w).Encode(map[string]any{"ok": true, "wakeup": map[string]any{"name": "default", "at": at}})
-		default:
-			w.WriteHeader(404)
+// a wakeup's prompt stays on the machine: the router gets the schedule and the guard's id, never the text
+func TestArmingKeepsTheTextOnTheMachine(t *testing.T) {
+	x := newWorld(t)
+	p := proxy(t, x)
+	post := func(path, body string) (int, string) {
+		resp, err := http.Post(p.URL+path, "application/json", strings.NewReader(body))
+		if err != nil {
+			t.Fatal(err)
 		}
-	})
-	defer srv.Close()
-	c := &client{base: srv.URL, me: "m1", sig: key.k, http: srv.Client()}
-	p := httptest.NewServer(apiProxyHandler(c))
-	defer p.Close()
-	resp, err := http.Post(p.URL+"/api/sessions/s1/wakeup", "application/json", strings.NewReader(`{"delaySeconds":7200,"prompt":"x"}`))
-	if err != nil {
-		t.Fatal(err)
+		b, _ := io.ReadAll(resp.Body)
+		return resp.StatusCode, string(b)
 	}
-	b, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode != 200 || !strings.Contains(string(b), `"ok":true`) || !strings.Contains(string(b), "no shell access granted") {
-		t.Fatalf("%d %s", resp.StatusCode, b)
+	if st, b := post("/api/sessions/s1/wakeup", `{"delaySeconds":60,"name":"release","prompt":"ship the release"}`); st != 200 {
+		t.Fatal(st, b)
 	}
-	if l := readAllow(); len(l) != 0 {
-		t.Fatalf("the scheduler was put on the allow list: %+v", l)
+	if st, b := post("/api/sessions/s1/crons", `{"everySeconds":3600,"name":"tick","prompt":"check the queue"}`); st != 200 {
+		t.Fatal(st, b)
 	}
-	_ = at
-	// an allow list entry (the CLI's allow command) is never shortened
-	if err := extendAllow(c, "scheduler", time.Now().Add(time.Hour)); err != nil {
-		t.Fatal(err)
+	if st, b := post("/api/sessions/s1/watches", `{"name":"ci","script":"exit 0","prompt":"CI is done","failPrompt":"CI never finished"}`); st != 200 {
+		t.Fatal(st, b)
 	}
-	list := readAllow()
-	if err := extendAllow(c, "scheduler", time.Now().Add(time.Minute)); err != nil {
-		t.Fatal(err)
+	if st, b := post("/api/sessions/s1/leases/iphone", `{"purpose":"x","prompt":"tap the button"}`); st != 200 {
+		t.Fatal(st, b)
 	}
-	if l := readAllow(); len(l) != 1 || l[0].Until != list[0].Until {
-		t.Fatalf("shortened: %+v", l)
+	for path, raw := range x.forwarded {
+		var m map[string]any
+		json.Unmarshal(raw, &m)
+		if m["prompt"] != nil || m["failPrompt"] != nil || strings.Contains(string(raw), "ship the release") || strings.Contains(string(raw), "tap the button") {
+			t.Fatalf("%s carried the text to the router: %s", path, raw)
+		}
+		if id, _ := m["id"].(string); !textIDRE.MatchString(id) {
+			t.Fatalf("%s carried no id: %s", path, raw)
+		}
+	}
+	var w map[string]any
+	json.Unmarshal(x.forwarded["/m/api/sessions/s1/watches"], &w)
+	if w["script"] != "exit 0" {
+		t.Fatal("the watch's script (the router's runner runs it) didn't go")
+	}
+	r := x.g.rec.read()
+	if len(r.Wakeups) != 1 || len(r.Crons) != 1 || len(r.Watches) != 1 || r.Leases["iphone"] != "tap the button" {
+		t.Fatalf("records %+v", r)
+	}
+	// another session's, or a wakeup with no text, is refused locally
+	if st, _ := post("/api/sessions/sX/wakeup", `{"prompt":"x"}`); st != 403 {
+		t.Fatal(st)
+	}
+	if st, _ := post("/api/sessions/s1/wakeup", `{"delaySeconds":5}`); st != 400 {
+		t.Fatal(st)
+	}
+	// the router refuses: the record goes again
+	x.apiAnswer = func(string, []byte) (int, string) { return 409, `{"error":"no"}` }
+	if st, _ := post("/api/sessions/s1/wakeup", `{"name":"later","prompt":"p"}`); st != 409 {
+		t.Fatal(st)
+	}
+	if len(x.g.rec.read().Wakeups) != 1 {
+		t.Fatal("a refused wakeup stayed in the records")
 	}
 }
 
@@ -133,75 +127,60 @@ func TestRepoChanges(t *testing.T) {
 	}
 }
 
-func TestProxyTakesAContentFileOnlyAttested(t *testing.T) {
-	t.Setenv("JARVIS2_SESSION_ID", "s1")
-	key, core := newKey(), newKey()
-	old := readCoreKey
-	readCoreKey = func() (string, error) { return core.pub(), nil }
-	t.Cleanup(func() { readCoreKey = old })
-	var attest *SignedDoc
-	srv := fakeRouter(t, key, func(w http.ResponseWriter, req *http.Request, body []byte) {
-		if req.URL.Path != "/m/api/sessions/m1/content/notes/file" || req.URL.Query().Get("path") != "a.txt" {
-			w.WriteHeader(404)
-			return
+// a content file is taken only with the log notary's challenge over exactly its bytes
+func TestProxyTakesAContentFileOnlyWithItsChallenge(t *testing.T) {
+	x := newWorld(t)
+	p := proxy(t, x)
+	var hdr string
+	x.apiAnswer = func(path string, _ []byte) (int, string) { return 200, "hello" }
+	// the fake's apiAnswer can't set headers: wrap the server
+	inner := x.srv.Config.Handler
+	x.srv.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if hdr != "" {
+			w.Header().Set("X-Jarvis2-Challenge", hdr)
 		}
-		if attest != nil {
-			b, _ := json.Marshal(attest)
-			w.Header().Set("X-Jarvis2-Attest", string(b))
-		}
-		w.Write([]byte("hello"))
+		inner.ServeHTTP(w, r)
 	})
-	defer srv.Close()
-	c := &client{base: srv.URL, me: "m1", sig: key.k, http: srv.Client()}
-	p := httptest.NewServer(apiProxyHandler(c))
-	defer p.Close()
-	get := func() (int, string) {
-		resp, err := http.Get(p.URL + "/api/sessions/m1/content/notes/file?path=a.txt")
+	ch := func(key, subject, about string, at time.Time) string {
+		d, _ := kernel.Sign(x.w.Keys[key], kernel.Challenge{Kind: "challenge", At: at.Format(time.RFC3339Nano), Subject: subject, About: about,
+			Nonce: "00112233445566778899aabbccddeeff"})
+		b, _ := json.Marshal(d)
+		return string(b)
+	}
+	get := func() int {
+		resp, err := http.Get(p.URL + "/api/sessions/s1/content/notes/file?path=a.txt")
 		if err != nil {
 			t.Fatal(err)
 		}
-		b, _ := io.ReadAll(resp.Body)
-		return resp.StatusCode, string(b)
+		return resp.StatusCode
 	}
-	for _, a := range []*SignedDoc{nil, attestFor(core, "m2", "content", []byte("hello")), attestFor(core, "m1", "attachment", []byte("hello")),
-		attestFor(core, "m1", "content", []byte("other")), attestFor(newKey(), "m1", "content", []byte("hello"))} {
-		attest = a
-		if code, _ := get(); code != 502 {
-			t.Fatalf("taken without a matching attestation (%v): %d", a, code)
+	for _, h := range []string{"", "not json", ch("notarizer", sha("hello"), "content", x.clock), ch("notary", sha("other"), "content", x.clock),
+		ch("notary", sha("hello"), "shell", x.clock), ch("notary", sha("hello"), "content", x.clock.Add(-time.Hour))} {
+		hdr = h
+		if code := get(); code != 502 {
+			t.Fatalf("taken without a matching challenge (%q): %d", h, code)
 		}
 	}
-	attest = attestFor(core, "m1", "content", []byte("hello"))
-	if code, body := get(); code != 200 || body != "hello" {
-		t.Fatalf("%d %q", code, body)
-	}
-	if resp, _ := http.Get(p.URL + "/api/sessions/sX/content/notes/file?path=a.txt"); resp.StatusCode != 403 {
-		t.Fatalf("another session: %d", resp.StatusCode)
+	hdr = ch("notary", sha("hello"), "content", x.clock)
+	if code := get(); code != 200 {
+		t.Fatal(code)
 	}
 }
 
-// jarvis2-request batch: the batch reaches the router as /m/api/requests/batch, signed, body unchanged (the router
-// names the session from the machine key)
-func TestProxyForwardsABatch(t *testing.T) {
-	t.Setenv("JARVIS2_SESSION_ID", "s1")
-	key := newKey()
-	var path, body string
-	srv := fakeRouter(t, key, func(w http.ResponseWriter, req *http.Request, b []byte) {
-		path, body = req.URL.Path, string(b)
-		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`{"id":"b1","items":[]}`))
-	})
-	defer srv.Close()
-	c := &client{base: srv.URL, me: "m1", sig: key.k, http: srv.Client()}
-	p := httptest.NewServer(apiProxyHandler(c))
-	defer p.Close()
-	in := `{"summary":"two grants","items":[{"intent":"grant","holder":"scheduler","minutes":5},{"intent":"grant","holder":"remote"}]}`
+// jarvis2-request: a filing is kept by a filing id and forwarded with it, body unchanged
+func TestProxyKeepsAFiling(t *testing.T) {
+	x := newWorld(t)
+	p := proxy(t, x)
+	in := `{"summary":"two","items":[{"intent":"add-store","store":"gmail"},{"intent":"terminal","minutes":5}]}`
 	resp, err := http.Post(p.URL+"/api/requests/batch", "application/json", strings.NewReader(in))
 	if err != nil || resp.StatusCode != 200 {
 		t.Fatalf("%v %v", err, resp)
 	}
-	var out map[string]any
-	json.NewDecoder(resp.Body).Decode(&out)
-	if path != "/m/api/requests/batch" || body != in || out["id"] != "b1" {
-		t.Fatalf("forwarded %s %q %v", path, body, out)
+	if string(x.forwarded["/m/api/requests/batch"]) != in {
+		t.Fatalf("forwarded %q", x.forwarded["/m/api/requests/batch"])
+	}
+	id := x.headers["/m/api/requests/batch"].Get("X-Jarvis2-Filing")
+	if f, ok := x.g.rec.read().Filings[id]; !ok || f.Path != "/api/requests/batch" {
+		t.Fatalf("filing %q not kept", id)
 	}
 }

@@ -57,7 +57,9 @@ unknown field refuses the document. Golden vectors in `testdata/` (keys derived 
 - identity signer: `/sign {machine, allowed, conditions}` → cert (M, M, P).
 - gullible signer: `/sign {predecessor, successor, allowed, conditions}` → cert.
 - spawner: `/fly-token {sealed}` (`{"FLY_API_TOKEN"}` sealed to its agreement key, info `jarvis2/fly-token`);
-  `/spawn {cert: notarized, ending in a source, region, size}` → `{"kind":"created","machine","source"}`;
+  `/spawn {cert: notarized, ending in a source, region, size}` → `{"kind":"created","machine","source"}` (the machine's
+  Fly config: `JARVIS2_SPAWNER_KEY`, `JARVIS2_ROSTER` = the roster's JSON, which the guard checks every kernel document
+  against, and `JARVIS2_URL`);
   `/init {machine}` → cert (source, M, ⊤), 409 while it boots; `/kill {cert: M's notarized spawn cert, snapshot?:
   {sha256, sig}}` → cert (M, source-y, ⊤), 409 until Fly confirms it destroyed.
 - secrets: `/state`, `/claim`, `/wipe`, `/store-key`, `/stores`, `/stores/create`, `/stores/mark-sensitive`,

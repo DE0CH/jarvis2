@@ -94,8 +94,10 @@ func TestSpawnIsOneCreateThenInitSignsSourceToMachineTop(t *testing.T) {
 	if !s.Pair().Leq(kernel.Top()) || !kernel.Top().Leq(s.Pair()) {
 		t.Fatal("the spawner's P is ⊤")
 	}
-	// the machine's env is the spawner's alone
-	if len(fm.Env) != 2 || fm.Env[SpawnerKeyEnv] != w.Keys["spawner"].PublicKey() || fm.Env[RouterURLEnv] != url {
+	// the machine's env is the spawner's alone: its key, the kernel roster (the guard checks against it) and the router
+	var roster kernel.Roster
+	if len(fm.Env) != 3 || fm.Env[SpawnerKeyEnv] != w.Keys["spawner"].PublicKey() || fm.Env[RouterURLEnv] != url ||
+		json.Unmarshal([]byte(fm.Env[RosterEnv]), &roster) != nil || roster != w.Roster {
 		t.Fatalf("env %v", fm.Env)
 	}
 	// init happens once

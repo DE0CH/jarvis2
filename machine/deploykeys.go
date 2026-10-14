@@ -1,6 +1,6 @@
 package main
 
-// Per-repo deploy keys (docs/DESIGN.md "Deploy keys"). A repo's store (github-<repo>, made by the core when Deyao
+// Per-repo deploy keys (docs/DESIGN.md "Deploy keys"). A repo's store (github-<repo>, made by the secrets component when Deyao
 // added the repo in Settings) holds two values: GITHUB_DEPLOY_REPO_<SLUG> = "owner/name" and
 // GITHUB_DEPLOY_KEY_<SLUG> = the base64 of an OpenSSH private key that GitHub accepts for that one repo only
 // (read + push). For every such pair in the session's secrets the machine writes:
@@ -12,7 +12,7 @@ package main
 //     so clone, pull and push of that repo go over SSH with its key, with no setup in the session.
 //
 // Nothing else reaches the alias: other repos keep plain HTTPS (no credentials). The set is rewritten whole
-// at boot and after add-store / downgrade, so a dropped store's key and rewrites go with it.
+// at boot and after every pull (a new grant, a "pull"), so a store the grant no longer names takes its key and rewrites with it.
 
 import (
 	"encoding/base64"

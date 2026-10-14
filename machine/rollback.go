@@ -1,9 +1,9 @@
 package main
 
 // Transcript rollback (Jarvis 1's restart {rollback: {dropFromMarker}}, archive.js editSnapshotTranscript).
-// The router can't edit a snapshot: it is signed by the machine that took it, and this machine checks that
-// signature. A rollback is a one-time input of the successor's cert (Options.Once "rollback", approved on the
-// phone; vouch.go), and this machine applies it AFTER it has verified and unpacked the snapshot: in every
+// The router can't edit a snapshot: the source names its sha256, and the guard takes only those bytes. A rollback is
+// a start setting of a source the phone made ("rollback", approved on the phone with the restart; boot.go), and this
+// machine applies it AFTER it has verified and unpacked the snapshot: in every
 // conversation transcript (~/.claude/projects/<dir>/<id>.jsonl), the first line containing the marker and
 // everything after it are dropped. Nothing in the env or from the router alone asks for one.
 
@@ -23,8 +23,8 @@ type rollbackResult struct {
 	Dropped int    `json:"dropped"`
 }
 
-// applyRollback: called by prepare once the predecessor's snapshot is restored, with the marker from the cert's
-// one-time inputs (only the phone approves one: vouch.go)
+// applyRollback: called at boot once the snapshot the source names is restored, with the marker from the settings of a
+// source the phone made (boot.go)
 func applyRollback(marker string) {
 	if marker == "" {
 		return

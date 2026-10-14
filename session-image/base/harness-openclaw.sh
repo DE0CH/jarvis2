@@ -33,7 +33,7 @@ REMOTE="$OPENCLAW_STATE_DIR/jarvis-remote.json"
 LOG="$OPENCLAW_STATE_DIR"
 export SESSION_LABEL="${SESSION_LABEL:-}"
 
-perm_mode() { cat "$STATE/.permission-mode" 2>/dev/null || printf '%s' "${SESSION_PERMISSION_MODE:-auto}"; }
+perm_mode() { printf '%s' "${SESSION_PERMISSION_MODE:-auto}"; }   # the start settings' mode, fixed for the session's life
 
 # openclaw.json, written whole by this script (no `openclaw onboard`: it hung under memory pressure). Every
 # start re-applies what Jarvis owns — model, claw-code as its runtime, the proxy, the origin, the permission
@@ -189,12 +189,11 @@ send_first_prompt &
 inbox_loop &
 one_shot_watch &
 transcript_loop &
-# An in-place permission-mode switch (set-permission-mode kills the tmux session): restart the gateway
-# (run_gateway rewrites the config before it starts again) and bring the pane back; then keep the machine
-# alive for as long as Jarvis wants it.
+# The terminal pane gone (killed): restart the gateway (run_gateway rewrites the config before it starts
+# again) and bring the pane back; then keep the machine alive for as long as Jarvis wants it.
 while true; do
   if ! tmux has-session -t "$SESSION" 2>/dev/null && [ ! -e "$STATE/.one-shot-done" ]; then
-    echo "[openclaw] terminal pane gone (permission-mode switch?); reloading"
+    echo "[openclaw] terminal pane gone; reloading"
     kill "$(cat "$LOG/gateway.pid" 2>/dev/null)" 2>/dev/null; tmux_pane
   fi
   sleep 5

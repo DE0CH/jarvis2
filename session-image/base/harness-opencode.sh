@@ -16,7 +16,7 @@
 #   ~/.claude/sessions/<pid>.json       status shim: idle | busy | waiting (from `paseo ls`)
 #   ~/.claude/projects/<slug>/*.jsonl   conversations (opencode-transcript.py)
 #   tmux session `claude`               what the dashboard's Terminal panel mirrors
-#   ~/.claude/.first-prompt-sent, .one-shot-done, .permission-mode   same markers
+#   ~/.claude/.first-prompt-sent, .one-shot-done   same markers
 # Prompts are delivered with /usr/local/bin/harness-send (Jarvis execs it), not keystrokes.
 set -u
 WD="${1:-$HOME/workspace}"
@@ -43,7 +43,7 @@ export PASEO_DICTATION_ENABLED=false PASEO_VOICE_MODE_ENABLED=false
 export PASEO_CORS_ORIGINS="https://app.paseo.sh,https://$WEB_HOST"
 export PASEO_HOSTNAMES="$WEB_HOST,localhost,127.0.0.1"
 
-perm_mode() { cat "$STATE/.permission-mode" 2>/dev/null || printf '%s' "${SESSION_PERMISSION_MODE:-auto}"; }
+perm_mode() { printf '%s' "${SESSION_PERMISSION_MODE:-auto}"; }   # the start settings' mode, fixed for the session's life
 
 # OpenCode config: the model picked on the dashboard is the default everywhere (Paseo agents get
 # it explicitly; this covers a plain `opencode` run in the terminal). Permission mode: "bypass"
@@ -230,12 +230,11 @@ send_first_prompt &
 inbox_loop &
 one_shot_watch &
 shim_loop &
-# An in-place permission-mode switch (set-permission-mode kills the tmux session): rewrite the
-# OpenCode config and restart the daemon so its agents pick the new mode up; then keep the
-# machine alive for as long as Jarvis wants it.
+# The terminal pane gone (killed): rewrite the OpenCode config, restart the daemon and bring the pane back;
+# then keep the machine alive for as long as Jarvis wants it.
 while true; do
   if ! tmux has-session -t "$SESSION" 2>/dev/null && [ ! -e "$STATE/.one-shot-done" ]; then
-    echo "[opencode] terminal pane gone (permission-mode switch?); reloading"
+    echo "[opencode] terminal pane gone; reloading"
     write_config; paseo daemon stop >/dev/null 2>&1 || true   # run_daemon brings it back
     tmux_pane
   fi

@@ -1,24 +1,26 @@
 package main
 
-// Writing one key into a store from a session (Deyao, 2026-10-13: any session with a valid machine key may write a key,
-// with no approval: it can't read the store, and the key's backup keeps every earlier value). The value never leaves
-// this machine in the clear: it is sealed to the store key P + K (only the phone and the core together open it) and,
-// for its backup, to the master key (only Deyao's kit opens it), and this machine signs both (core.WriterText). The
-// store key, the master key and the phone come from the core's signed documents, checked against the core key this
-// machine was started with, so the router can't hand it a key of its own.
+// Writing one key into a store from a session (Deyao, 2026-10-13: any session may write a key, with no approval: it
+// can't read the store, and the key's backup keeps every earlier value; DESIGN "Layers": writing secrets is protected
+// only by the router). The value never leaves this machine in the clear. It goes three ways, each sealed here:
+//
+//   - to the store key P + K (phone + secrets: only both together open it), under a fresh data key (core/kernel/secrets
+//     keys.go);
+//   - to the master key, for its backup (only Deyao's kit opens it);
+//   - to secrets' own agreement key K ("live"), so secrets serves it on the next pull of a store that is unlocked.
+//
+// The store key, the master key and the phone come from secrets' signed documents (checked against secrets' key in the
+// roster), and K is checked against them (P + K must be the signed store key), so the router can't hand this machine a
+// key of its own.
 //
 //	jarvis2 put-key STORE KEY [--explain TEXT] < value     the value from stdin (never an argument)
 //	jarvis2 delete-key STORE KEY
 //
-// The session's own ~/.secrets doesn't change: every running session holding the store (this one too) gets the new
-// value once Deyao allows the refresh the router files (the phone's unlock), and then pulls it by itself (agent:
-// refresh-secrets).
+// Every running session whose grant names the store (this one too) gets the new value with its next pull: the router
+// sends them "pull".
 
 import (
-	"crypto/aes"
-	"crypto/cipher"
-	"crypto/ecdh"
-	"crypto/hkdf"
+	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
@@ -26,113 +28,118 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"os"
 	"strings"
+
+	"github.com/DE0CH/jarvis2/core/kernel"
 )
 
-// writerText: core.WriterText
+// writerText: secrets.WriterText (what a setup writer signs; recorded the same way for every write)
 func writerText(store, key, e, data, backupSha string) string {
 	sum := ""
 	if data != "" {
-		h := sha256.Sum256([]byte(data))
-		sum = hex.EncodeToString(h[:])
+		sum = kernel.SHA256Hex(data)
 	}
 	return "jarvis2-store-key\n" + store + "\n" + key + "\n" + e + "\n" + sum + "\n" + backupSha
 }
 
-// sealParts: ephemeral ECDH with the recipient point, HKDF-SHA256(info), AES-256-GCM (nonce ‖ ciphertext ‖ tag)
-func sealParts(recipientB64 string, plain []byte, info string, aad []byte) (string, string, error) {
-	rb, err := b64.DecodeString(recipientB64)
-	if err != nil {
-		return "", "", err
-	}
-	r, err := ecdh.P256().NewPublicKey(rb)
-	if err != nil {
-		return "", "", err
-	}
-	e, err := ecdh.P256().GenerateKey(rand.Reader)
-	if err != nil {
-		return "", "", err
-	}
-	x, err := e.ECDH(r)
-	if err != nil {
-		return "", "", err
-	}
-	k, err := hkdf.Key(sha256.New, x, nil, info, 32)
-	if err != nil {
-		return "", "", err
-	}
-	return b64.EncodeToString(e.PublicKey().Bytes()), b64.EncodeToString(gcmSeal(k, plain, aad)), nil
+// sealTargets: the answer of GET /m/store-keys, checked
+type sealTargets struct {
+	StoreKey  string // P + K
+	Master    string
+	Agreement string // K
 }
 
-func gcmSeal(key, plain, aad []byte) []byte {
-	block, _ := aes.NewCipher(key)
-	g, _ := cipher.NewGCM(block)
-	nonce := make([]byte, g.NonceSize())
-	rand.Read(nonce)
-	return append(nonce, g.Seal(nil, nonce, plain, aad)...)
+// addPoints: a + b on P-256, uncompressed, base64 ("" when either isn't a point)
+func addPoints(a, b string) string {
+	pa, err1 := kernel.ParsePoint(a)
+	pb, err2 := kernel.ParsePoint(b)
+	if err1 != nil || err2 != nil {
+		return ""
+	}
+	c := elliptic.P256()
+	x1, y1 := elliptic.Unmarshal(c, pa.Bytes()) //nolint:staticcheck // plain point addition, public points only
+	x2, y2 := elliptic.Unmarshal(c, pb.Bytes()) //nolint:staticcheck
+	if x1 == nil || x2 == nil {
+		return ""
+	}
+	x, y := c.Add(x1, y1, x2, y2)                               //nolint:staticcheck
+	return kernel.B64.EncodeToString(elliptic.Marshal(c, x, y)) //nolint:staticcheck
 }
 
-// sealTargets: the store key and the master key, from the core's signed documents (checked with the core key)
-func sealTargets(c *client, coreKey string) (storeKey, master string, err error) {
-	var out struct {
-		Identity struct {
-			SigningKey string     `json:"signingKey"`
-			State      *SignedDoc `json:"state"`
-		} `json:"identity"`
-		StoreKey *SignedDoc `json:"storeKey"`
-	}
-	if err := c.json("GET", "/m/store-key", nil, &out); err != nil {
-		return "", "", err
-	}
+// checkSealTargets: secrets' state (master key, phone) and store key, signed by secrets' key, and K with P + K = the
+// store key
+func checkSealTargets(r kernel.Roster, state, storeKey kernel.SignedDoc, agreement string) (sealTargets, error) {
 	var st struct {
 		Kind   string `json:"kind"`
 		Master string `json:"master"`
 		Phone  *struct {
+			SigningKey   string `json:"signingKey"`
 			AgreementKey string `json:"agreementKey"`
 		} `json:"phone"`
+		Bundle string `json:"bundle"`
 	}
-	if out.Identity.SigningKey != coreKey || verifyDoc(coreKey, out.Identity.State, &st) != nil || st.Kind != "core-state" || st.Master == "" || st.Phone == nil {
-		return "", "", errors.New("the core's state isn't signed by this machine's core, or the core isn't set up")
+	if kernel.Open(r.Secrets, state, &st) != nil || st.Kind != "secrets-state" || st.Master == "" || st.Phone == nil {
+		return sealTargets{}, errors.New("secrets' state isn't signed by secrets' key, or secrets isn't set up")
 	}
 	var sk struct {
-		Kind, Phone, StoreKey string
+		Kind     string `json:"kind"`
+		Phone    string `json:"phone"`
+		StoreKey string `json:"storeKey"`
 	}
-	if verifyDoc(coreKey, out.StoreKey, &sk) != nil || sk.Kind != "store-key" || sk.Phone != st.Phone.AgreementKey || sk.StoreKey == "" {
-		return "", "", errors.New("the store key isn't the core's for its phone")
+	if kernel.Open(r.Secrets, storeKey, &sk) != nil || sk.Kind != "store-key" || sk.Phone != st.Phone.AgreementKey || sk.StoreKey == "" {
+		return sealTargets{}, errors.New("the store key isn't secrets' for its phone")
 	}
-	return sk.StoreKey, st.Master, nil
+	if addPoints(st.Phone.AgreementKey, agreement) != sk.StoreKey {
+		return sealTargets{}, errors.New("secrets' agreement key doesn't make the signed store key with the phone's")
+	}
+	return sealTargets{StoreKey: sk.StoreKey, Master: st.Master, Agreement: agreement}, nil
 }
 
-// keyWriteRequest: what the router takes (router/storedocs.go keyWriteIn), sealed and signed here
-func keyWriteRequest(storeKey, master string, sig *ecdh.PrivateKey, store, key string, value []byte, del bool, explanation string) (map[string]any, error) {
+// keyWriteRequest: what the router takes (docs/API-grants.md POST /m/stores/{store}/keys/{key}), sealed here
+func keyWriteRequest(t sealTargets, store, key string, value []byte, del bool, explanation string) (map[string]any, error) {
 	req := map[string]any{"delete": del, "explanation": explanation}
-	e, data, backupSha := "", "", ""
-	if !del {
-		dk := make([]byte, 32)
-		rand.Read(dk)
-		var wrapped string
-		var err error
-		if e, wrapped, err = sealParts(storeKey, dk, "jarvis2/store-data-key", nil); err != nil {
-			return nil, fmt.Errorf("the store key: %w", err)
-		}
-		data = b64.EncodeToString(gcmSeal(dk, value, []byte(store+"\n"+key)))
-		be, bd, err := sealParts(master, value, "jarvis2/backup", []byte(store+"\n"+key))
-		if err != nil {
-			return nil, fmt.Errorf("the master key: %w", err)
-		}
-		h := sha256.Sum256([]byte(be + "\n" + bd))
-		backupSha = hex.EncodeToString(h[:])
-		req["wrapped"] = map[string]string{"e": e, "wrapped": wrapped}
-		req["data"], req["backup"], req["backupSha256"] = data, map[string]string{"e": be, "data": bd}, backupSha
+	if del {
+		return req, nil
 	}
-	s, err := sign(sig, []byte(writerText(store, key, e, data, backupSha)))
+	dk := make([]byte, 32)
+	rand.Read(dk)
+	wrapped, err := kernel.SealTo(t.StoreKey, dk, "jarvis2/store-data-key")
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("the store key: %w", err)
 	}
-	req["sig"] = s
+	data := kernel.B64.EncodeToString(kernel.GCMSeal(dk, value, []byte(store+"\n"+key)))
+	backup, err := sealWithAAD(t.Master, value, "jarvis2/backup", []byte(store+"\n"+key))
+	if err != nil {
+		return nil, fmt.Errorf("the master key: %w", err)
+	}
+	h := sha256.Sum256([]byte(backup.E + "\n" + backup.Data))
+	backupSha := hex.EncodeToString(h[:])
+	live, err := kernel.SealTo(t.Agreement, value, "jarvis2/live-key\n"+store+"\n"+key)
+	if err != nil {
+		return nil, fmt.Errorf("secrets' agreement key: %w", err)
+	}
+	req["wrapped"] = map[string]string{"e": wrapped.E, "wrapped": wrapped.Data}
+	req["data"], req["live"], req["backup"], req["backupSha256"] = data, live, backup, backupSha
+	req["writerText"] = writerText(store, key, wrapped.E, data, backupSha)
 	return req, nil
+}
+
+// sealWithAAD: kernel.SealTo with associated data (the backup's format: store\nkey bound in)
+func sealWithAAD(recipient string, plain []byte, info string, aad []byte) (kernel.Sealed, error) {
+	r, err := kernel.ParsePoint(recipient)
+	if err != nil {
+		return kernel.Sealed{}, err
+	}
+	e, err := r.Curve().GenerateKey(rand.Reader)
+	if err != nil {
+		return kernel.Sealed{}, err
+	}
+	x, err := e.ECDH(r)
+	if err != nil {
+		return kernel.Sealed{}, err
+	}
+	return kernel.Sealed{E: kernel.B64.EncodeToString(e.PublicKey().Bytes()), Data: kernel.B64.EncodeToString(kernel.GCMSeal(kernel.KDF(x, info), plain, aad))}, nil
 }
 
 // putKeyCmd: jarvis2 put-key STORE KEY [--explain TEXT] (value on stdin) | jarvis2 delete-key STORE KEY
@@ -172,7 +179,7 @@ func putKeyCmd(args []string, del bool) error {
 			return errors.New("no value on stdin (an empty key is a delete: jarvis2 delete-key)")
 		}
 	}
-	coreKey, err := readTrim(coreKeyPath)
+	r, err := readRoster()
 	if err != nil {
 		return err
 	}
@@ -180,49 +187,31 @@ func putKeyCmd(args []string, del bool) error {
 	if err != nil {
 		return err
 	}
-	storeKey, master, err := sealTargets(c, coreKey)
+	var keys struct {
+		State        kernel.SignedDoc `json:"state"`
+		StoreKey     kernel.SignedDoc `json:"storeKey"`
+		AgreementKey string           `json:"agreementKey"`
+	}
+	if err := c.json("GET", "/m/store-keys", nil, &keys); err != nil {
+		return err
+	}
+	t, err := checkSealTargets(r, keys.State, keys.StoreKey, keys.AgreementKey)
 	if err != nil {
 		return err
 	}
-	priv, err := loadPrivate()
-	if err != nil {
-		return err
-	}
-	req, err := keyWriteRequest(storeKey, master, priv.sig, store, key, value, del, explain)
+	req, err := keyWriteRequest(t, store, key, value, del, explain)
 	if err != nil {
 		return err
 	}
 	var out struct {
-		RefreshAsked []string `json:"refreshAsked"`
+		Pulled []string `json:"pulled"`
 	}
 	if err := c.json("POST", "/m/stores/"+store+"/keys/"+key, req, &out); err != nil {
 		return err
 	}
 	verb := map[bool]string{true: "deleted", false: "written"}[del]
-	fmt.Fprintf(os.Stderr, "%s %s in %s (backed up first). Sessions holding %s get it once Deyao allows their refresh in the Jarvis 2 Inbox (asked for %d running session(s)); this session's ~/.secrets changes then too, if it holds the store.\n",
-		key, verb, store, store, len(out.RefreshAsked))
+	b, _ := json.Marshal(out.Pulled)
+	fmt.Fprintf(os.Stderr, "%s %s in %s (backed up first). Running sessions whose grant names %s get it with their next pull (the router sent \"pull\" to %s).\n",
+		key, verb, store, store, b)
 	return nil
-}
-
-// refreshFromRouter: the router's refresh-secrets (an unlock for this machine's cert went through): pull again with the
-// newest cert and rewrite ~/.secrets and the deploy keys, under the same lock as every other writer of them
-func refreshFromRouter(c *client) {
-	coreKey, err := readTrim(coreKeyPath)
-	if err != nil {
-		log.Printf("refresh-secrets: %v", err)
-		return
-	}
-	n, err := refreshSecrets(func() error {
-		doc, ok := newestCert(c, coreKey, c.me)
-		if !ok {
-			return errors.New("the router has no cert for this machine")
-		}
-		raw, _ := json.Marshal(doc)
-		return os.WriteFile(certPath, raw, 0o644)
-	}, func() (map[string]string, error) { return pullSecrets(c, coreKey, c.me) })
-	if err != nil {
-		log.Printf("refresh-secrets: %v", err)
-		return
-	}
-	log.Printf("refresh-secrets: ~/.secrets rewritten with the stores as they are now (%d keys)", n)
 }

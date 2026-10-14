@@ -1,6 +1,7 @@
 #!/bin/bash
 # Session container entrypoint (runs as user `claude` on a Fly Machine).
-# Injected by Jarvis via Fly Machine env:
+# Set by the guard (jarvis2-machine, machine/settings.go harnessEnv), from the source's start settings, the secrets
+# the grant served and a few strictly formatted router values:
 #   CLAUDE_CREDENTIALS      contents of ~/.claude/.credentials.json (OAuth; enables remote-control)
 #   CLAUDE_ACCOUNT          minimal ~/.claude.json (oauthAccount + userID)  [optional]
 #   SESSION_SECRETS_JSON    the chosen environment's secrets as a JSON object (-> ~/.secrets + env)
@@ -8,7 +9,7 @@
 #   SESSION_CONTENT         comma-separated content store names, pulled into ~/content/<store>/ (content-sync)
 #   SESSION_API_PROXY       "1": the supervisor runs claude through api-proxy.js (logs ~/artifacts/api-log)
 #   SESSION_LABEL           session title; blank => the Claude session names itself
-#   SESSION_PERMISSION_MODE auto | bypass
+#   SESSION_PERMISSION_MODE auto | bypass (the start settings': fixed for the session's life)
 #   SESSION_PROMPT          [optional] first prompt, typed into the host once it is up (supervisor)
 #   SESSION_ATTACHMENTS_JSON [optional] first-prompt attachments as [{name,isImage}] — the supervisor
 #                           downloads them (SESSION_ATTACH_DAV_BASE/_DIR/_DAV_USER/_DAV_PASS point at
@@ -17,9 +18,10 @@
 #   SESSION_ONE_SHOT        "1" = one-shot: claude exits once SESSION_PROMPT is done and Jarvis
 #                           archives + destroys the machine (see one_shot_watch in the supervisor)
 #   SESSION_MODEL           model id (default claude-opus-5-5, see session-supervisor.sh)
-# Fly itself sets FLY_MACHINE_ID. jarvis2-machine runs first (machine/main.go): it restores the predecessor's signed
-# snapshot (transcripts placed under the project, ~/.claude.json, ~/workspace, ~/artifacts), pulls the secrets and
-# sets the env, then execs this script; session-supervisor.sh then `claude --resume`s the newest transcript.
+# Fly itself sets FLY_MACHINE_ID. The guard (jarvis2-machine, machine/boot.go) runs first: it restores the snapshot
+# the source names (transcripts placed under the project, ~/.claude.json, ~/workspace, ~/artifacts), pulls the
+# secrets with its grant and sets the env, then starts this script as its child; session-supervisor.sh then
+# `claude --resume`s the newest transcript.
 set -uo pipefail
 HOME=/home/claude; cd "$HOME"
 # ~/artifacts: anything the session puts (or symlinks) here is archived to the Storage Box by

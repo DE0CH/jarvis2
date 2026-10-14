@@ -1,9 +1,8 @@
 package main
 
-// A Jarvis 1 import (router/jarvis1import.go): a new line whose cert's restore names a paused Jarvis 1 session (its
-// id) and the sha256 of the router's import manifest {kind "jarvis1-import", session, files: [{name, sha256, size}]}.
-// Deyao's Face ID signed that hash, so it vouches for every byte the manifest lists (DESIGN "Inputs to a machine"
-// (a)); this machine takes each file through the router (no Storage Box credential here) and refuses any whose
+// A Jarvis 1 import (router/jarvis1import.go): a source the phone made whose snapshot hash is the sha256 of the
+// router's import manifest {kind "jarvis1-import", session, files: [{name, sha256, size}]}. Deyao's Face ID signed that
+// hash, so it vouches for every byte the manifest lists; this machine takes each file through the router (no Storage Box credential here) and refuses any whose
 // sha256 or size differs from the manifest. Then it does what Jarvis 1's restore-snapshot + entrypoint did:
 //
 //   - workspace.tar.gz → ~/workspace, artifacts.tar.gz → ~/artifacts, harness.tar.gz → ~/.paseo, ~/.openclaw,
@@ -16,7 +15,7 @@ package main
 //   - repo remotes: credentials embedded in a GitHub https URL are dropped and the URL normalised to
 //     https://github.com/<owner>/<name>.git, which this machine's deploy-key rewrites send over SSH;
 //   - session.json (the Jarvis 1 record) → ~/artifacts/jarvis1-import/session.json, and every wakeup and cron it had
-//     armed is armed again as THIS line's own signed request (vouched (c), delivered later like any of its own): a
+//     armed is armed again as THIS session's own (their texts in the guard's records, delivered later like any of its own): a
 //     wakeup whose time has passed fires 5 minutes after boot, a cron keeps its period and time of day (its next run
 //     after now), and a cron run that was missed while paused fires once 5 minutes after boot as a wakeup. What was
 //     armed is written to ~/artifacts/jarvis1-import/rearmed.txt.
@@ -64,8 +63,8 @@ type j1Manifest struct {
 	Files   []j1File `json:"files"`
 }
 
-// readJ1Manifest: the restore bytes as an import manifest (strictly: known fields and names, for the session the cert
-// names), or false (they are something else: a Jarvis 2 snapshot)
+// readJ1Manifest: the restore bytes as an import manifest (strictly: known fields and names; session "" = any, the
+// bytes are already pinned by the hash the source names), or false (they are something else: a Jarvis 2 snapshot)
 func readJ1Manifest(p, session string) (*j1Manifest, bool) {
 	fi, err := os.Stat(p)
 	if err != nil || fi.Size() > 1<<20 {
@@ -78,7 +77,7 @@ func readJ1Manifest(p, session string) (*j1Manifest, bool) {
 	var m j1Manifest
 	d := json.NewDecoder(strings.NewReader(string(b)))
 	d.DisallowUnknownFields()
-	if d.Decode(&m) != nil || m.Kind != j1Kind || m.V != 1 || m.Session != session || len(m.Files) == 0 {
+	if d.Decode(&m) != nil || m.Kind != j1Kind || m.V != 1 || (session != "" && m.Session != session) || len(m.Files) == 0 {
 		return nil, false
 	}
 	seen := map[string]bool{}
@@ -131,7 +130,6 @@ func importJarvis1(c *client, m *j1Manifest) error {
 		os.WriteFile(filepath.Join(out, "session.json"), record, 0o600)
 	}
 	j1FixRemotes(filepath.Join(home, "workspace"))
-	restoredArchive = false // a new line's own keys: Jarvis 1 brings none (deliver.go)
 	j1Imported = m
 	log.Printf("imported Jarvis 1 session %s (%d files)", m.Session, len(m.Files))
 	return nil
@@ -152,7 +150,7 @@ func j1FetchFile(c *client, f j1File, p string) error {
 func j1Check(f j1File, sum string, n int64, drop func()) error {
 	if n != f.Size || sum != f.Sha256 {
 		drop()
-		return fmt.Errorf("not the bytes the cert names (got %d bytes, sha256 %.12s…)", n, sum)
+		return fmt.Errorf("not the bytes the manifest names (got %d bytes, sha256 %.12s…)", n, sum)
 	}
 	return nil
 }
@@ -530,9 +528,9 @@ func j1MissedName(n string) string {
 	return n
 }
 
-// rearmJarvis1: the Jarvis 1 record's wakeups and crons, signed by this machine (the router keeps each request
-// exactly as signed: what vouches for its delivery later). A failure is noted, never fatal.
-func rearmJarvis1(c *client, sid string) {
+// rearmJarvis1: the Jarvis 1 record's wakeups and crons, armed as this session's own (their texts in the guard's
+// records, the rest to the router: apiproxy.go arm). A failure is noted, never fatal.
+func rearmJarvis1(g *guard) {
 	if j1Imported == nil {
 		return
 	}
@@ -542,10 +540,15 @@ func rearmJarvis1(c *client, sid string) {
 	if err != nil {
 		return
 	}
-	arms, notes := j1Schedule(record, sid, time.Now())
+	arms, notes := j1Schedule(record, g.st.Session, time.Now())
 	lines := []string{"Re-armed from Jarvis 1 session " + j1Imported.Session + " on " + time.Now().UTC().Format(time.RFC3339) + ":"}
 	for _, a := range arms {
-		if err := c.json("POST", a.Path, a.Body, nil); err != nil {
+		body, _ := json.Marshal(a.Body)
+		status, _, resp, err := g.arm(strings.TrimPrefix(a.Path, "/m"), "", body)
+		if err == nil && status/100 != 2 {
+			err = fmt.Errorf("HTTP %d %s", status, strings.TrimSpace(string(resp)))
+		}
+		if err != nil {
 			lines = append(lines, "FAILED "+a.Note+": "+err.Error())
 			log.Printf("jarvis1 import: arming failed: %s: %v", a.Note, err)
 			continue

@@ -3,7 +3,7 @@ package main
 // The read-only terminal (Deyao, 2026-10-12: "a read only terminal that doesn't require a grant"): like the status
 // report, the machine itself captures the harness's tmux pane every 2 s and POSTs it to /m/screen when it changed
 // (and every 30 s as a heartbeat). Nothing goes INTO the machine for it: no command, no flag, no grant; the router
-// only keeps the latest capture for the terminal page. Typing still goes through the "terminal" holder's grant.
+// only keeps the latest capture for the terminal page. Typing is a shell command under a grant with `shell` (grants.go).
 
 import (
 	"context"
@@ -13,7 +13,7 @@ import (
 	"time"
 )
 
-// the same capture the router's terminal holder runs (router/terminal.go snapCmd)
+// the pane capture (the read-only terminal shows it)
 const screenCmd = `tmux capture-pane -p -e -t claude; printf '\n__CUR__%s\n' "$(tmux display-message -p -t claude '#{cursor_x},#{cursor_y},#{pane_width},#{pane_height},#{cursor_flag}')"`
 
 const (
@@ -42,7 +42,7 @@ func readScreen() (screen, cursor string, ok bool) {
 	return screen, cursor, cursor != ""
 }
 
-// screenReporter: the agent's screen loop (started by agent())
+// screenReporter: the guard's screen loop (started once booted)
 func screenReporter(c *client) {
 	var last string
 	var sent time.Time

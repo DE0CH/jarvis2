@@ -727,7 +727,9 @@ and end are lifecycles the router manages, each certified by succession certs:
   P_add = (`{shell}`, `{session:S, until:T}`); the router moves M's main grant along (M, M, (everything, `{until:T}`)) so
   the conditions match, and merges. The main grant stays untouched for after T; extending signs only a new small grant.
 
-**The guard** (the image's entry point, one process that pulls everything)
+**The guard** (the image's entry point, one process that pulls everything; built on branch `grants` in `machine/`, its
+router API in docs/API-grants.md; it learns the kernel's keys from the roster the spawner puts in the machine's Fly
+config next to its own key)
 
 - Accepts exactly one grant at a time: signed by the grant mover or merger, naming this machine.
 - Reads the start settings from its source (fixed for the session's life: the permission mode never changes).

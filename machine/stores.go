@@ -1,15 +1,18 @@
 package main
 
 // jarvis2 stores [--keys | --json]: every store and the key NAMES it holds (never a value), with what each key is for,
-// from the router's GET /m/stores (router/storedocs.go), so a session knows which store to ask for with
-// `jarvis2 add-store <name>`. The store list, sensitivity and key names are the core's signed list, checked here
-// against the core's key; the explanations are the router's record (words, not a trust decision).
+// from the router's GET /m/stores, so a session knows which store to ask for (`jarvis2-request add-store <name>`). The
+// store list, sensitivity and key names are the secrets component's signed list, checked here against secrets' key in
+// the roster; the explanations are the router's record (words, not a trust decision). "in this session": the stores
+// the grant the guard holds names (store:<name>).
 
 import (
 	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
+
+	"github.com/DE0CH/jarvis2/core/kernel"
 )
 
 type keyRow struct {
@@ -36,12 +39,12 @@ type storeRow struct {
 
 func (s storeRow) keyNames() string { return strings.Join(s.Keys, " ") }
 
-// coreRow: a row of the core's signed list (its keys name who wrote them; a core from before keys.go has none)
-type coreRow struct {
+// signedRow: a row of secrets' signed list
+type signedRow struct {
 	Name      string `json:"name"`
 	Sensitive bool   `json:"sensitive"`
 	Empty     bool   `json:"empty"`
-	Keys      *[]struct {
+	Keys      []struct {
 		Name string `json:"name"`
 	} `json:"keys"`
 }
@@ -57,57 +60,55 @@ func storesCmd(args []string) error {
 		return err
 	}
 	var out struct {
-		Stores []storeRow `json:"stores"`
-		Signed *SignedDoc `json:"signed"`
+		Stores []storeRow        `json:"stores"`
+		Signed *kernel.SignedDoc `json:"signed"`
 	}
 	if err := c.json("GET", "/m/stores", nil, &out); err != nil {
 		return err
 	}
-	// the store list and sensitivity: only as the core signed them
-	if coreKey, err := readTrim(coreKeyPath); err == nil && out.Signed != nil {
-		var list struct {
-			Kind   string    `json:"kind"`
-			Stores []coreRow `json:"stores"`
+	// the store list, sensitivity and key names: only as secrets signed them
+	r, err := readRoster()
+	if err != nil {
+		return err
+	}
+	if out.Signed == nil {
+		return fmt.Errorf("the router sent no signed store list")
+	}
+	var list struct {
+		Kind   string      `json:"kind"`
+		Stores []signedRow `json:"stores"`
+	}
+	if !kernel.Verify(r.Secrets, []byte(out.Signed.Payload), out.Signed.Sig) {
+		return fmt.Errorf("the store list isn't signed by the secrets component")
+	}
+	if json.Unmarshal([]byte(out.Signed.Payload), &list) != nil || list.Kind != "stores" {
+		return fmt.Errorf("the store list isn't signed by the secrets component")
+	}
+	signed := map[string]signedRow{}
+	for _, s := range list.Stores {
+		signed[s.Name] = s
+	}
+	if len(signed) != len(out.Stores) {
+		return fmt.Errorf("the store list differs from secrets' list")
+	}
+	for _, s := range out.Stores {
+		c, ok := signed[s.Name]
+		if !ok || c.Sensitive != s.Sensitive || c.Empty != s.Empty {
+			return fmt.Errorf("store %s differs from secrets' list", s.Name)
 		}
-		if err := verifyDoc(coreKey, out.Signed, &list); err != nil || list.Kind != "stores" {
-			return fmt.Errorf("the store list isn't signed by the core")
+		names := []string{}
+		for _, k := range c.Keys {
+			names = append(names, k.Name)
 		}
-		signed := map[string]coreRow{}
-		for _, s := range list.Stores {
-			signed[s.Name] = s
-		}
-		if len(signed) != len(out.Stores) {
-			return fmt.Errorf("the store list differs from the core's")
-		}
-		for _, s := range out.Stores {
-			c, ok := signed[s.Name]
-			if !ok || c.Sensitive != s.Sensitive || c.Empty != s.Empty {
-				return fmt.Errorf("store %s differs from the core's list", s.Name)
-			}
-			if c.Keys != nil && s.KeysFrom == "core" { // the core names the keys
-				names := []string{}
-				for _, k := range *c.Keys {
-					names = append(names, k.Name)
-				}
-				if strings.Join(names, " ") != s.keyNames() {
-					return fmt.Errorf("store %s's keys differ from the core's list", s.Name)
-				}
-			}
+		if s.Keys != nil && strings.Join(names, " ") != s.keyNames() {
+			return fmt.Errorf("store %s's keys differ from secrets' list", s.Name)
 		}
 	}
-	// this session's own stores: from its core-signed cert
+	// this session's own stores: what the grant the guard holds names
 	mine := map[string]bool{}
-	var certs struct {
-		Cert *SignedDoc `json:"cert"`
-	}
-	if coreKey, err := readTrim(coreKeyPath); err == nil && c.json("GET", "/m/cert", nil, &certs) == nil && certs.Cert != nil {
-		var cert struct {
-			Stores []string `json:"stores"`
-		}
-		if verifyDoc(coreKey, certs.Cert, &cert) == nil {
-			for _, n := range cert.Stores {
-				mine[n] = true
-			}
+	if g, err := readHeldGrant(r); err == nil {
+		for _, s := range out.Stores {
+			mine[s.Name] = g.Allowed.Contains(storePrefix + s.Name)
 		}
 	}
 	if asJSON {
@@ -155,4 +156,27 @@ func storesCmd(args []string) error {
 		}
 	}
 	return nil
+}
+
+// readRoster: the roster the guard wrote at boot (from the machine's Fly config)
+func readRoster() (kernel.Roster, error) {
+	var r kernel.Roster
+	b, err := os.ReadFile(rosterPath)
+	if err != nil {
+		return r, fmt.Errorf("no roster on this machine (the guard writes it at boot): %v", err)
+	}
+	return r, json.Unmarshal(b, &r)
+}
+
+// readHeldGrant: the grant the guard holds (its copy for the CLI), checked again against the roster
+func readHeldGrant(r kernel.Roster) (kernel.Grant, error) {
+	var d kernel.SignedDoc
+	b, err := os.ReadFile(grantPath)
+	if err != nil {
+		return kernel.Grant{}, err
+	}
+	if err := json.Unmarshal(b, &d); err != nil {
+		return kernel.Grant{}, err
+	}
+	return kernel.OpenGrant(r, d, kernel.RoleMover, kernel.RoleMerger)
 }

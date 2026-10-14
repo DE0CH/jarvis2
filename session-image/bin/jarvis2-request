@@ -4,13 +4,15 @@ Jarvis 2 app (docs/API.md "Requests"). He sees exactly what would be signed, the
 this session as the caller, from the machine's key) and the reason given here, and allows or denies it.
 
   jarvis2-request add-repo OWNER/NAME --why TEXT [--sensitive]   a deploy key (read + push) for a repo, in its own store
-  jarvis2-request grant HOLDER [--minutes N | --days N] --why TEXT
-                                    let a router feature into THIS session (terminal, scheduler, status, login,
-                                    archive, remote): 1-10 minutes, or a standing rule for N days
+  jarvis2-request terminal --minutes N --why TEXT
+                                    a shell grant on THIS session for N minutes (Deyao types into its terminal)
+  jarvis2-request command --cmd TEXT --why TEXT
+                                    one command run once on THIS session, as Deyao approves it (a grant with
+                                    shell, cmd:<its sha256> and once:<id>)
   jarvis2-request unlock --why TEXT the locked stores this session waits on
   jarvis2-request add-store STORE --why TEXT
-                                    one more store for this running session (its machine keeps its keys); once
-                                    approved (within 1 h) it is pulled into ~/.secrets by a background waiter
+                                    one more store for this running session; once approved, the new grant reaches
+                                    the machine and the store is pulled into ~/.secrets by itself
   jarvis2-request new-session --label TEXT --prompt-file FILE [--stores a,b] [--repos URL,URL] [--model M]
                   [--size small|medium|large] [--harness claude] [--request-id ID] --why TEXT
                                     propose a NEW session: it appears in the Inbox like the app's New session and starts
@@ -19,10 +21,10 @@ this session as the caller, from the machine's key) and the reason given here, a
                                     several of the above as ONE Inbox entry, allowed together under one Face ID (or
                                     denied together). FILE: a JSON list of items, each {"intent": …} plus that
                                     intent's fields: {"intent":"repo/add","repo":"OWNER/NAME"},
-                                    {"intent":"grant","holder":"terminal","minutes":5}, {"intent":"unlock"},
+                                    {"intent":"terminal","minutes":5}, {"intent":"unlock"},
                                     {"intent":"add-store","store":"gmail"},
                                     {"intent":"new-session","label":…,"prompt":…,"stores":[…],"repos":…};
-                                    or --item INTENT,key=value,… once per item (e.g. --item grant,holder=status,minutes=5);
+                                    or --item INTENT,key=value,… once per item (e.g. --item terminal,minutes=5);
                                     an item may carry its own "explanation"; --summary (required) says what the
                                     whole batch is for. At most 20 items; a batch counts as one of the 3 waiting
                                     proposals. Every item is checked first: one bad item and nothing is filed
@@ -33,14 +35,14 @@ this session as the caller, from the machine's key) and the reason given here, a
                                     id) is decided, then print its outcome (default timeout 660 s; exit 0 approved,
                                     1 anything else, 2 still waiting)
 
-A session may ask only for itself (grant, unlock, add-store), for a repo to be added, and propose new sessions; --why is required (plain
+A session may ask only for itself (terminal, command, unlock, add-store), for a repo to be added, and propose new sessions; --why is required (plain
 text, at most 600 characters, 8 lines). Nothing happens until Deyao allows it; a request goes after 10 minutes.
 Once it is decided, the outcome arrives in this session by itself as a message from Jarvis ("[Inbox outcome] …", per
 item for a batch; a paused session gets it when it runs again), so there is no need to poll; `wait` is for a script
 that must block on it.
 Goes through the machine's local proxy ($JARVIS_URL, machine/apiproxy.go), which signs it with the machine key.
 """
-import json, os, subprocess, sys, urllib.error, urllib.request
+import json, os, sys, urllib.error, urllib.request
 
 BASE = os.environ.get("JARVIS_URL", "http://127.0.0.1:7171").rstrip("/")
 
@@ -80,17 +82,6 @@ def opt(args, name):
         del args[i:i + 2]
         return v
     return None
-
-
-def start_await(store):
-    """the approval only lands in the cert: a detached waiter pulls the store's secrets once it does (no second ask; a
-    foreground wait would outlive a tool call's timeout)"""
-    log = os.path.expanduser("~/.jarvis2-await-" + "".join(c if c.isalnum() or c in "-_" else "_" for c in store) + ".log")
-    with open(log, "ab") as f:
-        subprocess.Popen(["jarvis2-machine", "await-store", store], stdout=f, stderr=f, stdin=subprocess.DEVNULL,
-                         start_new_session=True)
-    print(f"Once he allows {store}, it is pulled into ~/.secrets by itself (log: {log}); then run "
-          "`set -a; . ~/.secrets; set +a` in a shell to load it.", file=sys.stderr)
 
 
 def show(o):
@@ -166,10 +157,6 @@ def main():
         if not isinstance(items, list):
             raise SystemExit("FILE must hold a JSON list of items")
         out = call("POST", "/api/requests/batch", {"summary": summary, "items": items})
-        # the added stores are pulled by a waiter each, as for a single add-store
-        for x in items:
-            if x.get("intent") == "add-store" and x.get("store"):
-                start_await(x["store"])
         print(json.dumps(out))
         print("Waiting in Deyao's Inbox as one batch (the Jarvis 2 app); nothing happens until he allows it. The outcome of "
               f"every item arrives in this session as a message once decided (or block: jarvis2-request wait {out.get('id')}).",
@@ -192,7 +179,7 @@ def main():
             new_session["stores"] = [s for s in stores.split(",") if s]
         if repos:
             new_session["repos"] = ",".join(r for r in repos.split(",") if r)
-    minutes, days = opt(args, "--minutes"), opt(args, "--days")
+    minutes, cmd = opt(args, "--minutes"), opt(args, "--cmd")
     sensitive = "--sensitive" in args
     args = [a for a in args if a != "--sensitive"]
     if not why:
@@ -203,20 +190,16 @@ def main():
         if sensitive:
             body["sensitive"] = True
         out = call("POST", "/api/requests/repo/add", body)
-    elif kind == "grant" and len(rest) == 1:
-        body = {"holder": rest[0], "explanation": why}
-        if days:
-            body["days"] = int(days)
-        elif minutes:
-            body["minutes"] = int(minutes)
-        out = call("POST", "/api/requests/grant", body)
+    elif kind == "terminal" and not rest and minutes:
+        out = call("POST", "/api/requests/terminal", {"minutes": int(minutes), "explanation": why})
+    elif kind == "command" and not rest and cmd:
+        out = call("POST", "/api/requests/command", {"cmd": cmd, "explanation": why})
     elif kind == "unlock" and not rest:
         out = call("POST", "/api/requests/unlock", {"explanation": why})
     elif kind == "new-session" and not rest and new_session:
         out = call("POST", "/api/sessions", dict(new_session, explanation=why))
     elif kind == "add-store" and len(rest) == 1:
         out = call("POST", "/api/requests/add-store", {"store": rest[0], "explanation": why})
-        start_await(rest[0])
     else:
         raise SystemExit(__doc__)
     print(json.dumps(out))

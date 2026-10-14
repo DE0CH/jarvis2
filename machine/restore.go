@@ -1,28 +1,23 @@
 package main
 
-// Restoring a destroyed session's archived snapshot into a NEW line (router/restore.go), and the repos'
-// state recorded in every snapshot (for the router's uncommitted-work check of a paused session).
+// The snapshot a machine starts from (docs/DESIGN.md "Target design": "restore only the snapshot whose hash the source
+// names"), and the repos' state recorded in every snapshot (for the router's uncommitted-work check of a paused
+// session).
 //
-// A new line (a cert with no predecessor) whose cert names a restore (Config.restore: the old machine and the
-// snapshot's sha256, which the phone approved) restores the snapshot the router serves at /m/restore-snapshot,
-// after checking:
-//   - its sha256 is the one the cert names;
-//   - the old cert (/m/restore-cert) is a succession cert signed by the core, for the machine the cert names;
-//   - the snapshot is signed by that cert's machine signing key (same format as a pause snapshot);
-//   - a snapshot from a line that held a sensitive store doesn't land in a line that holds none.
+// A source names a snapshot by its sha256: the spawner's kill took it from the machine's own signed snapshot claim, or
+// the phone approved it (a restore of a destroyed session, a Jarvis 1 import). The router serves the bytes at
+// GET /m/snapshot; the guard takes exactly the bytes whose hash the source names, nothing else. They are either a Jarvis
+// 2 snapshot (a tar.gz relative to $HOME) or a Jarvis 1 import's manifest (jarvis1import.go), told apart by content.
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
-	"fmt"
 	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
 )
 
-// restoreTmp: where a restore's bytes land while they are checked (a var: tests move it)
+// restoreTmp: where the snapshot lands while it is checked (a var: tests move it)
 var restoreTmp = dir + "/restore.tar.gz"
 
 // changesFile: the repos' state when the snapshot was taken (router/archive.go reads it); in snapshotPaths
@@ -44,96 +39,24 @@ func writeChanges() {
 	os.WriteFile(filepath.Join(home, changesFile), out, 0o600)
 }
 
-// restoreArchived: the archived snapshot into a new line's first machine, only when the cert names it
-// (Config.restore: the old line's machine and the snapshot's sha256, approved on the phone with the new line). The
-// bytes whose hash the cert names are either a destroyed Jarvis 2 session's signed snapshot, or a Jarvis 1 import's
-// manifest (jarvis1import.go), told apart by their content: either way they are exactly what the phone approved.
-func restoreArchived(c *client, coreKey, me string, cert *Cert, v Vouched) error {
-	ref := v.Config.Restore
-	if cert.PredID != "" || ref == nil {
-		return nil
-	}
+// restoreSnapshot: the bytes whose sha256 the source names, unpacked into $HOME (or imported, for a Jarvis 1 manifest)
+func restoreSnapshot(g *guard, sum string) error {
 	tmp := restoreTmp
 	defer os.Remove(tmp)
-	sum, hdr, err := c.download("/m/restore-snapshot", tmp)
-	if err != nil {
-		return fmt.Errorf("a restore was asked for but the router serves no snapshot (%v)", err)
-	}
-	if sum != ref.Sha256 {
-		return errors.New("the archived snapshot isn't the one the cert names")
-	}
-	if man, ok := readJ1Manifest(tmp, ref.Machine); ok {
-		return importJarvis1(c, man)
-	}
-	var rc struct {
-		Cert *SignedDoc `json:"cert"`
-	}
-	if err := c.json("GET", "/m/restore-cert", nil, &rc); err != nil || rc.Cert == nil {
-		return fmt.Errorf("the cert names a restore but the router serves no old cert (%v)", err)
-	}
-	old, err := checkRestoreCert(coreKey, me, cert, rc.Cert)
+	got, _, err := g.c.download("/m/snapshot", tmp) // streamed to disk, hashed on the way
 	if err != nil {
 		return err
 	}
-	if old.Machine.ID != ref.Machine {
-		return fmt.Errorf("the old cert is for %s, the cert names %s", old.Machine.ID, ref.Machine)
+	if got != sum {
+		return errors.New("the snapshot isn't the one the source names")
 	}
-	if !verify(old.Machine.SigningKey, []byte(sum), hdr.Get("X-Snapshot-Sig")) {
-		return errors.New("the snapshot isn't signed by the machine its cert names")
+	if man, ok := readJ1Manifest(tmp, ""); ok {
+		return importJarvis1(g.c, man)
 	}
 	n, err := unpackFile(tmp)
 	if err != nil {
 		return err
 	}
-	restoredArchive = true
-	log.Printf("restored the archived snapshot of %s (line %s, %d files)", old.Machine.ID, old.Line, n)
+	log.Printf("restored the snapshot the source names (%d files)", n)
 	return nil
-}
-
-// checkRestoreCert: the old line's cert, core-signed, for another machine; sensitive stays sensitive
-func checkRestoreCert(coreKey, me string, cert *Cert, doc *SignedDoc) (*Cert, error) {
-	var old Cert
-	if err := verifyDoc(coreKey, doc, &old); err != nil || old.Kind != "succession-cert" || old.Machine == nil {
-		return nil, fmt.Errorf("the restore cert isn't a succession cert signed by the core (%v)", err)
-	}
-	if old.Machine.ID == me {
-		return nil, errors.New("the restore cert names this machine")
-	}
-	if old.Sensitive && !cert.Sensitive {
-		return nil, errors.New("the snapshot comes from a line with a sensitive store; this line holds none")
-	}
-	return &old, nil
-}
-
-func checkSnapshotSig(signingKey string, body []byte, sig string) error {
-	sum := sha256.Sum256(body)
-	if !verify(signingKey, []byte(hex.EncodeToString(sum[:])), sig) {
-		return errors.New("the snapshot isn't signed by the machine its cert names")
-	}
-	return nil
-}
-
-// reimportJarvis1: a successor whose cert names no snapshot (its predecessor left none: e.g. its machine was stopped
-// before it could sign one) while the line's config names a restore takes that restore again, if it is a Jarvis 1
-// import — exactly the bytes the phone approved for the line (DECISIONS 133). A destroyed Jarvis 2 session's snapshot
-// is not taken again this way.
-func reimportJarvis1(c *client, v Vouched) error {
-	ref := v.Config.Restore
-	tmp := restoreTmp
-	defer os.Remove(tmp)
-	sum, _, err := c.download("/m/restore-snapshot", tmp)
-	if err != nil {
-		log.Printf("no snapshot and no import to take again (%v): starting with no predecessor state", err)
-		return nil
-	}
-	if sum != ref.Sha256 {
-		return errors.New("the import manifest isn't the one the cert names")
-	}
-	man, ok := readJ1Manifest(tmp, ref.Machine)
-	if !ok {
-		log.Printf("the line's restore isn't a Jarvis 1 import: starting with no predecessor state")
-		return nil
-	}
-	log.Printf("the predecessor left no snapshot: importing Jarvis 1 session %s again", man.Session)
-	return importJarvis1(c, man)
 }

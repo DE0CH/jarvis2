@@ -16,15 +16,6 @@ import (
 	"time"
 )
 
-// the machine's own run dir doesn't exist on a test host: the restore temp files go to a temp dir
-func TestMain(m *testing.M) {
-	d, _ := os.MkdirTemp("", "jarvis2-run")
-	restoreTmp, predecessorTmp = filepath.Join(d, "restore.tar.gz"), filepath.Join(d, "predecessor.tar.gz")
-	code := m.Run()
-	os.RemoveAll(d)
-	os.Exit(code)
-}
-
 type tentry struct {
 	name, body, link string
 	typ              byte
@@ -60,36 +51,31 @@ func shaHex(b []byte) string { s := sha256.Sum256(b); return hex.EncodeToString(
 
 const tUUID = "0fa81372-5d1c-49af-b680-25a842f5df96"
 
-// a fake router serving one import: the manifest at /m/restore-snapshot, its files at /m/import-file/<name>, and
-// taking the wakeups and crons the machine arms
-func importRouter(t *testing.T, key tkey, files map[string][]byte, order []string, tamper map[string][]byte) (*client, []byte, *[]string) {
+// importWorld: a world whose router serves one import: the manifest as the snapshot, its files at /m/import-file/<name>
+func importWorld(t *testing.T, build func(home string) (map[string][]byte, []string, map[string][]byte)) (*world, []byte) {
 	t.Helper()
+	x := newWorld(t)
+	home, _ := os.UserHomeDir()
+	files, order, tamper := build(home)
 	man := j1Manifest{Kind: "jarvis1-import", V: 1, Session: "j1abc"}
 	for _, n := range order {
 		man.Files = append(man.Files, j1File{Name: n, Sha256: shaHex(files[n]), Size: int64(len(files[n]))})
 	}
 	mb, _ := json.Marshal(man)
-	var armed []string
-	srv := fakeRouter(t, key, func(w http.ResponseWriter, req *http.Request, body []byte) {
-		switch {
-		case req.URL.Path == "/m/restore-snapshot":
-			w.Write(mb)
-		case strings.HasPrefix(req.URL.Path, "/m/import-file/"):
-			n := strings.TrimPrefix(req.URL.Path, "/m/import-file/")
+	x.snapshot = mb
+	inner := x.srv.Config.Handler
+	x.srv.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if n, ok := strings.CutPrefix(r.URL.Path, "/m/import-file/"); ok {
 			if b, ok := tamper[n]; ok {
 				w.Write(b)
 				return
 			}
 			w.Write(files[n])
-		case strings.HasPrefix(req.URL.Path, "/m/api/sessions/s1/"):
-			armed = append(armed, req.URL.Path+" "+string(body))
-			w.Write([]byte(`{"ok":true}`))
-		default:
-			w.WriteHeader(404)
+			return
 		}
+		inner.ServeHTTP(w, r)
 	})
-	t.Cleanup(srv.Close)
-	return &client{base: srv.URL, me: "m1", sig: key.k, http: srv.Client()}, mb, &armed
+	return x, mb
 }
 
 func j1Files(t *testing.T, home string) (map[string][]byte, []string) {
@@ -122,19 +108,14 @@ func j1Files(t *testing.T, home string) (map[string][]byte, []string) {
 
 func jsonInt(n int64) string { b, _ := json.Marshal(n); return string(b) }
 
-func TestJarvis1ImportRestoresWhatTheCertNames(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
+func TestJarvis1ImportRestoresWhatTheSourceNames(t *testing.T) {
+	x, mb := importWorld(t, func(home string) (map[string][]byte, []string, map[string][]byte) {
+		f, o := j1Files(t, home)
+		return f, o, nil
+	})
+	home, _ := os.UserHomeDir()
 	os.MkdirAll(filepath.Join(home, ".ssh"), 0o700)
-	key := newKey()
-	files, order := j1Files(t, home)
-	c, mb, armed := importRouter(t, key, files, order, nil)
-	cert := v2(`{"v":1,"restore":{"machine":"j1abc","sha256":"`+shaHex(mb)+`"}}`, "")
-	v, err := vouch(cert)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := restoreArchived(c, "", "m1", &cert, v); err != nil {
+	if err := restoreSnapshot(x.g, shaHex(mb)); err != nil {
 		t.Fatal(err)
 	}
 	read := func(rel string) string { b, _ := os.ReadFile(filepath.Join(home, rel)); return string(b) }
@@ -168,15 +149,15 @@ func TestJarvis1ImportRestoresWhatTheCertNames(t *testing.T) {
 		t.Fatalf("transcript not placed: %v", ents)
 	}
 	// the record's wakeup (long past) fires soon; the cron keeps its period and time of day; its missed run fires soon
-	rearmJarvis1(c, "s1")
-	if len(*armed) != 3 {
-		t.Fatalf("armed %v", *armed)
+	rearmJarvis1(x.g)
+	r := x.g.rec.read()
+	if len(r.Wakeups) != 2 || len(r.Crons) != 1 {
+		t.Fatalf("armed %+v", r)
 	}
-	all := strings.Join(*armed, "\n")
-	if !strings.Contains(all, `/wakeups {"delaySeconds":300,"name":"default","prompt":"warm up"}`) ||
-		!strings.Contains(all, `/crons {"at":`) || !strings.Contains(all, `"everySeconds":86400`) || !strings.Contains(all, `"tz":"Asia/Shanghai"`) ||
-		!strings.Contains(all, `"name":"missed-owcs-tix"`) {
-		t.Fatalf("armed %s", all)
+	wk, cr := string(x.forwarded["/m/api/sessions/s1/wakeups"]), string(x.forwarded["/m/api/sessions/s1/crons"])
+	if !strings.Contains(cr, `"everySeconds":86400`) || !strings.Contains(cr, `"tz":"Asia/Shanghai"`) || strings.Contains(cr, "check tickets") ||
+		!strings.Contains(wk, `"delaySeconds":300`) || strings.Contains(wk, "warm up") || strings.Contains(wk, "check tickets") {
+		t.Fatalf("armed %s %s", wk, cr)
 	}
 	note := read("artifacts/jarvis1-import/rearmed.txt")
 	if !strings.Contains(note, "passed while paused") || !strings.Contains(note, "watch_x") || read("artifacts/jarvis1-import/session.json") == "" {
@@ -189,18 +170,16 @@ func TestJarvis1ImportRestoresWhatTheCertNames(t *testing.T) {
 
 func TestJarvis1ImportRefusesOtherBytes(t *testing.T) {
 	for _, n := range []string{"workspace.tar.gz", tUUID + ".jsonl", "claude.json"} {
-		home := t.TempDir()
-		t.Setenv("HOME", home)
-		key := newKey()
-		files, order := j1Files(t, home)
-		other := map[string][]byte{n: append(append([]byte{}, files[n]...), 'x')}
-		if n == "workspace.tar.gz" {
-			other[n] = tgz(t, []tentry{{name: "workspace/claude-env/README.md", body: "swapped"}})
-		}
-		c, mb, _ := importRouter(t, key, files, order, other)
-		cert := v2(`{"v":1,"restore":{"machine":"j1abc","sha256":"`+shaHex(mb)+`"}}`, "")
-		v, _ := vouch(cert)
-		if err := restoreArchived(c, "", "m1", &cert, v); err == nil || !strings.Contains(err.Error(), "not the bytes the cert names") {
+		x, mb := importWorld(t, func(home string) (map[string][]byte, []string, map[string][]byte) {
+			files, order := j1Files(t, home)
+			other := map[string][]byte{n: append(append([]byte{}, files[n]...), 'x')}
+			if n == "workspace.tar.gz" {
+				other[n] = tgz(t, []tentry{{name: "workspace/claude-env/README.md", body: "swapped"}})
+			}
+			return files, order, other
+		})
+		home, _ := os.UserHomeDir()
+		if err := restoreSnapshot(x.g, shaHex(mb)); err == nil || !strings.Contains(err.Error(), "not the bytes the manifest names") {
 			t.Fatalf("%s: %v", n, err)
 		}
 		if n == "workspace.tar.gz" {
@@ -209,23 +188,13 @@ func TestJarvis1ImportRefusesOtherBytes(t *testing.T) {
 			}
 		}
 	}
-	// a manifest whose hash isn't the cert's: refused before anything is fetched
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	key := newKey()
-	files, order := j1Files(t, home)
-	c, _, _ := importRouter(t, key, files, order, nil)
-	cert := v2(`{"v":1,"restore":{"machine":"j1abc","sha256":"`+strings.Repeat("a", 64)+`"}}`, "")
-	v, _ := vouch(cert)
-	if err := restoreArchived(c, "", "m1", &cert, v); err == nil || !strings.Contains(err.Error(), "isn't the one the cert names") {
+	// a manifest whose hash isn't the source's: refused before anything is fetched
+	x, _ := importWorld(t, func(home string) (map[string][]byte, []string, map[string][]byte) {
+		f, o := j1Files(t, home)
+		return f, o, nil
+	})
+	if err := restoreSnapshot(x.g, strings.Repeat("a", 64)); err == nil || !strings.Contains(err.Error(), "isn't the one the source names") {
 		t.Fatal(err)
-	}
-	// a manifest for another Jarvis 1 session than the cert names is not an import (and not a signed snapshot)
-	c, mb, _ := importRouter(t, key, files, order, nil)
-	cert = v2(`{"v":1,"restore":{"machine":"other","sha256":"`+shaHex(mb)+`"}}`, "")
-	v, _ = vouch(cert)
-	if err := restoreArchived(c, "", "m1", &cert, v); err == nil {
-		t.Fatal("imported a manifest naming another session")
 	}
 }
 
@@ -268,27 +237,5 @@ func TestJ1ScheduleKeepsFutureTimes(t *testing.T) {
 	}
 	if len(notes) != 1 || !strings.Contains(notes[0], `cron "c": ended`) {
 		t.Fatalf("%v", notes)
-	}
-}
-
-func TestASuccessorWithNoSnapshotImportsAgain(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	key := newKey()
-	files, order := j1Files(t, home)
-	c, mb, _ := importRouter(t, key, files, order, nil)
-	cert := v2(`{"v":1,"restore":{"machine":"j1abc","sha256":"`+shaHex(mb)+`"}}`, "")
-	cert.PredID = "m0"
-	v, _ := vouch(cert)
-	if err := reimportJarvis1(c, v); err != nil {
-		t.Fatal(err)
-	}
-	if b, _ := os.ReadFile(filepath.Join(home, "workspace/claude-env/README.md")); string(b) != "readme" {
-		t.Fatal("not imported again")
-	}
-	bad := v2(`{"v":1,"restore":{"machine":"j1abc","sha256":"`+strings.Repeat("c", 64)+`"}}`, "")
-	bv, _ := vouch(bad)
-	if err := reimportJarvis1(c, bv); err == nil {
-		t.Fatal("took a manifest the cert doesn't name")
 	}
 }
