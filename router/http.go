@@ -175,7 +175,9 @@ func (r *Router) buildHandlers() {
 
 	// ---- setting secrets up: Reset and Recover (the app, with the master key) --------------------------------------
 	app("GET /api/secrets/identity", func(w http.ResponseWriter, req *http.Request) { r.relay(w, "secrets", "GET", "/identity", nil) })
-	app("GET /api/kernel/identities", func(w http.ResponseWriter, req *http.Request) {
+	// every kernel part's box-signed identity ({role: identity|null}); the setup session reads the same through
+	// GET /setup/kernel/identities (setup.py fly-token / kernel: the spawner's agreement key changes at every restart)
+	identities := func(w http.ResponseWriter, req *http.Request) {
 		out := map[string]any{}
 		for role := range kernelParts {
 			if id, err := r.k.Identity(role); err == nil {
@@ -185,7 +187,15 @@ func (r *Router) buildHandlers() {
 			}
 		}
 		writeJSON(w, 200, out)
-	})
+	}
+	app("GET /api/kernel/identities", identities)
+	mux.Handle("GET /setup/kernel/identities", r.requireSetup(func(w http.ResponseWriter, req *http.Request) {
+		if err := r.checkSetupSig(req.Method, req.URL.Path, req.Header.Get("X-Setup-Time"), req.Header.Get("X-Setup-Sig"), nil); err != nil {
+			writeJSON(w, 401, map[string]string{"error": err.Error()})
+			return
+		}
+		identities(w, req)
+	}))
 	// claim and wipe come only from the app's own device login (the cf-access-token header the shell sends)
 	deviceOnly := func(req *http.Request, w http.ResponseWriter) bool {
 		if !r.cfg.NoAccess && req.Header.Get("cf-access-token") == "" {

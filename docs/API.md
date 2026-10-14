@@ -50,6 +50,7 @@ the mover and the merger made along it. The app checks all of it against the key
 | `PUT /api/kernel/root-grant` | Body: the signed grant `{"kind":"grant","by":"root","machine":{"id":"sink"},"allowed":{"except":[]},"conditions":[],"from":[]}` signed with the root key (the app makes it once at setup, behind the root-key warning screen). 400 for any other shape; the mover checks the root key's signature on every use. |
 | `GET /api/kernel/roster` | `{parts: {notary, notarizer, mover, merger, identity, gullible, spawner, secrets}}`: each part's signing key as it answers `/identity` ("" when it doesn't). Not trusted: the app checks each part's box signature at `GET /api/kernel/identities`. |
 | `GET /api/kernel/identities` | `{<part>: {role, signingKey, agreementKey?, boxSig?} \| null}`: every part's `GET /identity`, unchanged. |
+| `GET /setup/kernel/identities` | The same, for the setup session (setup-signed): `setup.py fly-token` and `kernel` read the spawner's box-signed agreement key from it. |
 
 ## Sessions
 

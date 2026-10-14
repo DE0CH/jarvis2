@@ -290,3 +290,17 @@ func TestInboxItemsGoAfterTenMinutes(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// setup.py reads every kernel part's identity through the setup mirror of GET /api/kernel/identities
+func TestSetupKernelIdentities(t *testing.T) {
+	r := newTestRouter(t)
+	code, out := inboxDo(t, r, "GET", "/setup/kernel/identities", "", false)
+	if code != 200 || len(out) != len(kernelParts) {
+		t.Fatalf("%d %v", code, out)
+	}
+	// with a setup key configured, an unsigned request is refused
+	r.cfg.SetupKey = newTestKey().pub()
+	if code, _ := inboxDo(t, r, "GET", "/setup/kernel/identities", "", false); code != 401 {
+		t.Fatalf("served without the setup signature: %d", code)
+	}
+}
