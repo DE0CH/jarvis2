@@ -1,0 +1,1460 @@
+[
+ {
+  "a": {
+   "only": []
+  },
+  "b": {
+   "only": []
+  },
+  "subset": true,
+  "equal": true,
+  "intersection": {
+   "only": []
+  },
+  "union": {
+   "only": []
+  }
+ },
+ {
+  "a": {
+   "only": []
+  },
+  "b": {
+   "except": []
+  },
+  "subset": true,
+  "equal": false,
+  "intersection": {
+   "only": []
+  },
+  "union": {
+   "except": []
+  }
+ },
+ {
+  "a": {
+   "only": []
+  },
+  "b": {
+   "only": [
+    "a"
+   ]
+  },
+  "subset": true,
+  "equal": false,
+  "intersection": {
+   "only": []
+  },
+  "union": {
+   "only": [
+    "a"
+   ]
+  }
+ },
+ {
+  "a": {
+   "only": []
+  },
+  "b": {
+   "only": [
+    "a",
+    "b"
+   ]
+  },
+  "subset": true,
+  "equal": false,
+  "intersection": {
+   "only": []
+  },
+  "union": {
+   "only": [
+    "a",
+    "b"
+   ]
+  }
+ },
+ {
+  "a": {
+   "only": []
+  },
+  "b": {
+   "except": [
+    "a"
+   ]
+  },
+  "subset": true,
+  "equal": false,
+  "intersection": {
+   "only": []
+  },
+  "union": {
+   "except": [
+    "a"
+   ]
+  }
+ },
+ {
+  "a": {
+   "only": []
+  },
+  "b": {
+   "except": [
+    "a",
+    "b"
+   ]
+  },
+  "subset": true,
+  "equal": false,
+  "intersection": {
+   "only": []
+  },
+  "union": {
+   "except": [
+    "a",
+    "b"
+   ]
+  }
+ },
+ {
+  "a": {
+   "only": []
+  },
+  "b": {
+   "only": [
+    "shell",
+    "store:claude"
+   ]
+  },
+  "subset": true,
+  "equal": false,
+  "intersection": {
+   "only": []
+  },
+  "union": {
+   "only": [
+    "shell",
+    "store:claude"
+   ]
+  }
+ },
+ {
+  "a": {
+   "only": []
+  },
+  "b": {
+   "except": [
+    "shell"
+   ]
+  },
+  "subset": true,
+  "equal": false,
+  "intersection": {
+   "only": []
+  },
+  "union": {
+   "except": [
+    "shell"
+   ]
+  }
+ },
+ {
+  "a": {
+   "except": []
+  },
+  "b": {
+   "only": []
+  },
+  "subset": false,
+  "equal": false,
+  "intersection": {
+   "only": []
+  },
+  "union": {
+   "except": []
+  }
+ },
+ {
+  "a": {
+   "except": []
+  },
+  "b": {
+   "except": []
+  },
+  "subset": true,
+  "equal": true,
+  "intersection": {
+   "except": []
+  },
+  "union": {
+   "except": []
+  }
+ },
+ {
+  "a": {
+   "except": []
+  },
+  "b": {
+   "only": [
+    "a"
+   ]
+  },
+  "subset": false,
+  "equal": false,
+  "intersection": {
+   "only": [
+    "a"
+   ]
+  },
+  "union": {
+   "except": []
+  }
+ },
+ {
+  "a": {
+   "except": []
+  },
+  "b": {
+   "only": [
+    "a",
+    "b"
+   ]
+  },
+  "subset": false,
+  "equal": false,
+  "intersection": {
+   "only": [
+    "a",
+    "b"
+   ]
+  },
+  "union": {
+   "except": []
+  }
+ },
+ {
+  "a": {
+   "except": []
+  },
+  "b": {
+   "except": [
+    "a"
+   ]
+  },
+  "subset": false,
+  "equal": false,
+  "intersection": {
+   "except": [
+    "a"
+   ]
+  },
+  "union": {
+   "except": []
+  }
+ },
+ {
+  "a": {
+   "except": []
+  },
+  "b": {
+   "except": [
+    "a",
+    "b"
+   ]
+  },
+  "subset": false,
+  "equal": false,
+  "intersection": {
+   "except": [
+    "a",
+    "b"
+   ]
+  },
+  "union": {
+   "except": []
+  }
+ },
+ {
+  "a": {
+   "except": []
+  },
+  "b": {
+   "only": [
+    "shell",
+    "store:claude"
+   ]
+  },
+  "subset": false,
+  "equal": false,
+  "intersection": {
+   "only": [
+    "shell",
+    "store:claude"
+   ]
+  },
+  "union": {
+   "except": []
+  }
+ },
+ {
+  "a": {
+   "except": []
+  },
+  "b": {
+   "except": [
+    "shell"
+   ]
+  },
+  "subset": false,
+  "equal": false,
+  "intersection": {
+   "except": [
+    "shell"
+   ]
+  },
+  "union": {
+   "except": []
+  }
+ },
+ {
+  "a": {
+   "only": [
+    "a"
+   ]
+  },
+  "b": {
+   "only": []
+  },
+  "subset": false,
+  "equal": false,
+  "intersection": {
+   "only": []
+  },
+  "union": {
+   "only": [
+    "a"
+   ]
+  }
+ },
+ {
+  "a": {
+   "only": [
+    "a"
+   ]
+  },
+  "b": {
+   "except": []
+  },
+  "subset": true,
+  "equal": false,
+  "intersection": {
+   "only": [
+    "a"
+   ]
+  },
+  "union": {
+   "except": []
+  }
+ },
+ {
+  "a": {
+   "only": [
+    "a"
+   ]
+  },
+  "b": {
+   "only": [
+    "a"
+   ]
+  },
+  "subset": true,
+  "equal": true,
+  "intersection": {
+   "only": [
+    "a"
+   ]
+  },
+  "union": {
+   "only": [
+    "a"
+   ]
+  }
+ },
+ {
+  "a": {
+   "only": [
+    "a"
+   ]
+  },
+  "b": {
+   "only": [
+    "a",
+    "b"
+   ]
+  },
+  "subset": true,
+  "equal": false,
+  "intersection": {
+   "only": [
+    "a"
+   ]
+  },
+  "union": {
+   "only": [
+    "a",
+    "b"
+   ]
+  }
+ },
+ {
+  "a": {
+   "only": [
+    "a"
+   ]
+  },
+  "b": {
+   "except": [
+    "a"
+   ]
+  },
+  "subset": false,
+  "equal": false,
+  "intersection": {
+   "only": []
+  },
+  "union": {
+   "except": []
+  }
+ },
+ {
+  "a": {
+   "only": [
+    "a"
+   ]
+  },
+  "b": {
+   "except": [
+    "a",
+    "b"
+   ]
+  },
+  "subset": false,
+  "equal": false,
+  "intersection": {
+   "only": []
+  },
+  "union": {
+   "except": [
+    "b"
+   ]
+  }
+ },
+ {
+  "a": {
+   "only": [
+    "a"
+   ]
+  },
+  "b": {
+   "only": [
+    "shell",
+    "store:claude"
+   ]
+  },
+  "subset": false,
+  "equal": false,
+  "intersection": {
+   "only": []
+  },
+  "union": {
+   "only": [
+    "a",
+    "shell",
+    "store:claude"
+   ]
+  }
+ },
+ {
+  "a": {
+   "only": [
+    "a"
+   ]
+  },
+  "b": {
+   "except": [
+    "shell"
+   ]
+  },
+  "subset": true,
+  "equal": false,
+  "intersection": {
+   "only": [
+    "a"
+   ]
+  },
+  "union": {
+   "except": [
+    "shell"
+   ]
+  }
+ },
+ {
+  "a": {
+   "only": [
+    "a",
+    "b"
+   ]
+  },
+  "b": {
+   "only": []
+  },
+  "subset": false,
+  "equal": false,
+  "intersection": {
+   "only": []
+  },
+  "union": {
+   "only": [
+    "a",
+    "b"
+   ]
+  }
+ },
+ {
+  "a": {
+   "only": [
+    "a",
+    "b"
+   ]
+  },
+  "b": {
+   "except": []
+  },
+  "subset": true,
+  "equal": false,
+  "intersection": {
+   "only": [
+    "a",
+    "b"
+   ]
+  },
+  "union": {
+   "except": []
+  }
+ },
+ {
+  "a": {
+   "only": [
+    "a",
+    "b"
+   ]
+  },
+  "b": {
+   "only": [
+    "a"
+   ]
+  },
+  "subset": false,
+  "equal": false,
+  "intersection": {
+   "only": [
+    "a"
+   ]
+  },
+  "union": {
+   "only": [
+    "a",
+    "b"
+   ]
+  }
+ },
+ {
+  "a": {
+   "only": [
+    "a",
+    "b"
+   ]
+  },
+  "b": {
+   "only": [
+    "a",
+    "b"
+   ]
+  },
+  "subset": true,
+  "equal": true,
+  "intersection": {
+   "only": [
+    "a",
+    "b"
+   ]
+  },
+  "union": {
+   "only": [
+    "a",
+    "b"
+   ]
+  }
+ },
+ {
+  "a": {
+   "only": [
+    "a",
+    "b"
+   ]
+  },
+  "b": {
+   "except": [
+    "a"
+   ]
+  },
+  "subset": false,
+  "equal": false,
+  "intersection": {
+   "only": [
+    "b"
+   ]
+  },
+  "union": {
+   "except": []
+  }
+ },
+ {
+  "a": {
+   "only": [
+    "a",
+    "b"
+   ]
+  },
+  "b": {
+   "except": [
+    "a",
+    "b"
+   ]
+  },
+  "subset": false,
+  "equal": false,
+  "intersection": {
+   "only": []
+  },
+  "union": {
+   "except": []
+  }
+ },
+ {
+  "a": {
+   "only": [
+    "a",
+    "b"
+   ]
+  },
+  "b": {
+   "only": [
+    "shell",
+    "store:claude"
+   ]
+  },
+  "subset": false,
+  "equal": false,
+  "intersection": {
+   "only": []
+  },
+  "union": {
+   "only": [
+    "a",
+    "b",
+    "shell",
+    "store:claude"
+   ]
+  }
+ },
+ {
+  "a": {
+   "only": [
+    "a",
+    "b"
+   ]
+  },
+  "b": {
+   "except": [
+    "shell"
+   ]
+  },
+  "subset": true,
+  "equal": false,
+  "intersection": {
+   "only": [
+    "a",
+    "b"
+   ]
+  },
+  "union": {
+   "except": [
+    "shell"
+   ]
+  }
+ },
+ {
+  "a": {
+   "except": [
+    "a"
+   ]
+  },
+  "b": {
+   "only": []
+  },
+  "subset": false,
+  "equal": false,
+  "intersection": {
+   "only": []
+  },
+  "union": {
+   "except": [
+    "a"
+   ]
+  }
+ },
+ {
+  "a": {
+   "except": [
+    "a"
+   ]
+  },
+  "b": {
+   "except": []
+  },
+  "subset": true,
+  "equal": false,
+  "intersection": {
+   "except": [
+    "a"
+   ]
+  },
+  "union": {
+   "except": []
+  }
+ },
+ {
+  "a": {
+   "except": [
+    "a"
+   ]
+  },
+  "b": {
+   "only": [
+    "a"
+   ]
+  },
+  "subset": false,
+  "equal": false,
+  "intersection": {
+   "only": []
+  },
+  "union": {
+   "except": []
+  }
+ },
+ {
+  "a": {
+   "except": [
+    "a"
+   ]
+  },
+  "b": {
+   "only": [
+    "a",
+    "b"
+   ]
+  },
+  "subset": false,
+  "equal": false,
+  "intersection": {
+   "only": [
+    "b"
+   ]
+  },
+  "union": {
+   "except": []
+  }
+ },
+ {
+  "a": {
+   "except": [
+    "a"
+   ]
+  },
+  "b": {
+   "except": [
+    "a"
+   ]
+  },
+  "subset": true,
+  "equal": true,
+  "intersection": {
+   "except": [
+    "a"
+   ]
+  },
+  "union": {
+   "except": [
+    "a"
+   ]
+  }
+ },
+ {
+  "a": {
+   "except": [
+    "a"
+   ]
+  },
+  "b": {
+   "except": [
+    "a",
+    "b"
+   ]
+  },
+  "subset": false,
+  "equal": false,
+  "intersection": {
+   "except": [
+    "a",
+    "b"
+   ]
+  },
+  "union": {
+   "except": [
+    "a"
+   ]
+  }
+ },
+ {
+  "a": {
+   "except": [
+    "a"
+   ]
+  },
+  "b": {
+   "only": [
+    "shell",
+    "store:claude"
+   ]
+  },
+  "subset": false,
+  "equal": false,
+  "intersection": {
+   "only": [
+    "shell",
+    "store:claude"
+   ]
+  },
+  "union": {
+   "except": [
+    "a"
+   ]
+  }
+ },
+ {
+  "a": {
+   "except": [
+    "a"
+   ]
+  },
+  "b": {
+   "except": [
+    "shell"
+   ]
+  },
+  "subset": false,
+  "equal": false,
+  "intersection": {
+   "except": [
+    "a",
+    "shell"
+   ]
+  },
+  "union": {
+   "except": []
+  }
+ },
+ {
+  "a": {
+   "except": [
+    "a",
+    "b"
+   ]
+  },
+  "b": {
+   "only": []
+  },
+  "subset": false,
+  "equal": false,
+  "intersection": {
+   "only": []
+  },
+  "union": {
+   "except": [
+    "a",
+    "b"
+   ]
+  }
+ },
+ {
+  "a": {
+   "except": [
+    "a",
+    "b"
+   ]
+  },
+  "b": {
+   "except": []
+  },
+  "subset": true,
+  "equal": false,
+  "intersection": {
+   "except": [
+    "a",
+    "b"
+   ]
+  },
+  "union": {
+   "except": []
+  }
+ },
+ {
+  "a": {
+   "except": [
+    "a",
+    "b"
+   ]
+  },
+  "b": {
+   "only": [
+    "a"
+   ]
+  },
+  "subset": false,
+  "equal": false,
+  "intersection": {
+   "only": []
+  },
+  "union": {
+   "except": [
+    "b"
+   ]
+  }
+ },
+ {
+  "a": {
+   "except": [
+    "a",
+    "b"
+   ]
+  },
+  "b": {
+   "only": [
+    "a",
+    "b"
+   ]
+  },
+  "subset": false,
+  "equal": false,
+  "intersection": {
+   "only": []
+  },
+  "union": {
+   "except": []
+  }
+ },
+ {
+  "a": {
+   "except": [
+    "a",
+    "b"
+   ]
+  },
+  "b": {
+   "except": [
+    "a"
+   ]
+  },
+  "subset": true,
+  "equal": false,
+  "intersection": {
+   "except": [
+    "a",
+    "b"
+   ]
+  },
+  "union": {
+   "except": [
+    "a"
+   ]
+  }
+ },
+ {
+  "a": {
+   "except": [
+    "a",
+    "b"
+   ]
+  },
+  "b": {
+   "except": [
+    "a",
+    "b"
+   ]
+  },
+  "subset": true,
+  "equal": true,
+  "intersection": {
+   "except": [
+    "a",
+    "b"
+   ]
+  },
+  "union": {
+   "except": [
+    "a",
+    "b"
+   ]
+  }
+ },
+ {
+  "a": {
+   "except": [
+    "a",
+    "b"
+   ]
+  },
+  "b": {
+   "only": [
+    "shell",
+    "store:claude"
+   ]
+  },
+  "subset": false,
+  "equal": false,
+  "intersection": {
+   "only": [
+    "shell",
+    "store:claude"
+   ]
+  },
+  "union": {
+   "except": [
+    "a",
+    "b"
+   ]
+  }
+ },
+ {
+  "a": {
+   "except": [
+    "a",
+    "b"
+   ]
+  },
+  "b": {
+   "except": [
+    "shell"
+   ]
+  },
+  "subset": false,
+  "equal": false,
+  "intersection": {
+   "except": [
+    "a",
+    "b",
+    "shell"
+   ]
+  },
+  "union": {
+   "except": []
+  }
+ },
+ {
+  "a": {
+   "only": [
+    "shell",
+    "store:claude"
+   ]
+  },
+  "b": {
+   "only": []
+  },
+  "subset": false,
+  "equal": false,
+  "intersection": {
+   "only": []
+  },
+  "union": {
+   "only": [
+    "shell",
+    "store:claude"
+   ]
+  }
+ },
+ {
+  "a": {
+   "only": [
+    "shell",
+    "store:claude"
+   ]
+  },
+  "b": {
+   "except": []
+  },
+  "subset": true,
+  "equal": false,
+  "intersection": {
+   "only": [
+    "shell",
+    "store:claude"
+   ]
+  },
+  "union": {
+   "except": []
+  }
+ },
+ {
+  "a": {
+   "only": [
+    "shell",
+    "store:claude"
+   ]
+  },
+  "b": {
+   "only": [
+    "a"
+   ]
+  },
+  "subset": false,
+  "equal": false,
+  "intersection": {
+   "only": []
+  },
+  "union": {
+   "only": [
+    "a",
+    "shell",
+    "store:claude"
+   ]
+  }
+ },
+ {
+  "a": {
+   "only": [
+    "shell",
+    "store:claude"
+   ]
+  },
+  "b": {
+   "only": [
+    "a",
+    "b"
+   ]
+  },
+  "subset": false,
+  "equal": false,
+  "intersection": {
+   "only": []
+  },
+  "union": {
+   "only": [
+    "a",
+    "b",
+    "shell",
+    "store:claude"
+   ]
+  }
+ },
+ {
+  "a": {
+   "only": [
+    "shell",
+    "store:claude"
+   ]
+  },
+  "b": {
+   "except": [
+    "a"
+   ]
+  },
+  "subset": true,
+  "equal": false,
+  "intersection": {
+   "only": [
+    "shell",
+    "store:claude"
+   ]
+  },
+  "union": {
+   "except": [
+    "a"
+   ]
+  }
+ },
+ {
+  "a": {
+   "only": [
+    "shell",
+    "store:claude"
+   ]
+  },
+  "b": {
+   "except": [
+    "a",
+    "b"
+   ]
+  },
+  "subset": true,
+  "equal": false,
+  "intersection": {
+   "only": [
+    "shell",
+    "store:claude"
+   ]
+  },
+  "union": {
+   "except": [
+    "a",
+    "b"
+   ]
+  }
+ },
+ {
+  "a": {
+   "only": [
+    "shell",
+    "store:claude"
+   ]
+  },
+  "b": {
+   "only": [
+    "shell",
+    "store:claude"
+   ]
+  },
+  "subset": true,
+  "equal": true,
+  "intersection": {
+   "only": [
+    "shell",
+    "store:claude"
+   ]
+  },
+  "union": {
+   "only": [
+    "shell",
+    "store:claude"
+   ]
+  }
+ },
+ {
+  "a": {
+   "only": [
+    "shell",
+    "store:claude"
+   ]
+  },
+  "b": {
+   "except": [
+    "shell"
+   ]
+  },
+  "subset": false,
+  "equal": false,
+  "intersection": {
+   "only": [
+    "store:claude"
+   ]
+  },
+  "union": {
+   "except": []
+  }
+ },
+ {
+  "a": {
+   "except": [
+    "shell"
+   ]
+  },
+  "b": {
+   "only": []
+  },
+  "subset": false,
+  "equal": false,
+  "intersection": {
+   "only": []
+  },
+  "union": {
+   "except": [
+    "shell"
+   ]
+  }
+ },
+ {
+  "a": {
+   "except": [
+    "shell"
+   ]
+  },
+  "b": {
+   "except": []
+  },
+  "subset": true,
+  "equal": false,
+  "intersection": {
+   "except": [
+    "shell"
+   ]
+  },
+  "union": {
+   "except": []
+  }
+ },
+ {
+  "a": {
+   "except": [
+    "shell"
+   ]
+  },
+  "b": {
+   "only": [
+    "a"
+   ]
+  },
+  "subset": false,
+  "equal": false,
+  "intersection": {
+   "only": [
+    "a"
+   ]
+  },
+  "union": {
+   "except": [
+    "shell"
+   ]
+  }
+ },
+ {
+  "a": {
+   "except": [
+    "shell"
+   ]
+  },
+  "b": {
+   "only": [
+    "a",
+    "b"
+   ]
+  },
+  "subset": false,
+  "equal": false,
+  "intersection": {
+   "only": [
+    "a",
+    "b"
+   ]
+  },
+  "union": {
+   "except": [
+    "shell"
+   ]
+  }
+ },
+ {
+  "a": {
+   "except": [
+    "shell"
+   ]
+  },
+  "b": {
+   "except": [
+    "a"
+   ]
+  },
+  "subset": false,
+  "equal": false,
+  "intersection": {
+   "except": [
+    "a",
+    "shell"
+   ]
+  },
+  "union": {
+   "except": []
+  }
+ },
+ {
+  "a": {
+   "except": [
+    "shell"
+   ]
+  },
+  "b": {
+   "except": [
+    "a",
+    "b"
+   ]
+  },
+  "subset": false,
+  "equal": false,
+  "intersection": {
+   "except": [
+    "a",
+    "b",
+    "shell"
+   ]
+  },
+  "union": {
+   "except": []
+  }
+ },
+ {
+  "a": {
+   "except": [
+    "shell"
+   ]
+  },
+  "b": {
+   "only": [
+    "shell",
+    "store:claude"
+   ]
+  },
+  "subset": false,
+  "equal": false,
+  "intersection": {
+   "only": [
+    "store:claude"
+   ]
+  },
+  "union": {
+   "except": []
+  }
+ },
+ {
+  "a": {
+   "except": [
+    "shell"
+   ]
+  },
+  "b": {
+   "except": [
+    "shell"
+   ]
+  },
+  "subset": true,
+  "equal": true,
+  "intersection": {
+   "except": [
+    "shell"
+   ]
+  },
+  "union": {
+   "except": [
+    "shell"
+   ]
+  }
+ }
+]

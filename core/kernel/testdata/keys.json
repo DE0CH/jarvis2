@@ -1,0 +1,70 @@
+{
+ "note": "TEST KEYS ONLY, derived from a public seed (golden_test.go testScalar): never used outside tests",
+ "roles": {
+  "gullible": {
+   "public": "BIwfT1FBNnJFbO2NxyjvcimkWcl6NUfnMkFrrqQljYw6MopyOwIVR741ykSB+skYASPPbvyXEX5eiGaYzmq/34I=",
+   "scalar": "94da2825570c666aaad98acbc8494d9674b5faac5168ae72beeb497b76179b6d"
+  },
+  "identity": {
+   "public": "BEy3/fyWHVKGXBQDRP4ofPPoL/rtQUlWnd76y4wvHtKRsbIP//WErKclYnpKYctKXkQ0UIZbv9GpEYxN3dO3d+s=",
+   "scalar": "987857fe75cd5ca25b42498abb2b296d62345e7c9ddf66d1fedb96b512656134"
+  },
+  "machine-encryption": {
+   "public": "BLG+Qg5c17OsFNbK+gOqO/qLYrINEVmvgWE49c1iIL+PIxXigqgLXr6v5QgwaIsyLXyhpNmynBOzGLfM6ks6Jm8=",
+   "scalar": "26b928fcbd745cf426c0fb188c7bfb91d702d1fd653ab793cdb24928b0a34627"
+  },
+  "machine-signing": {
+   "public": "BCFuC9JFxHulxVu0fo1XS0bIZJilkH3m6sh7WBRJ02fSrZLTKHZP1w1f3fbvdnxb/SEjHl+nCTi6qLGupaPp4Vg=",
+   "scalar": "09945363ea840aff0f65023d2cdb1e1b22eef74977f7a5b7d78c8e1f1cc2dfe0"
+  },
+  "merger": {
+   "public": "BG0yCd5J83JvEwGT9gJkdVgbHl1+iZosxVeEmGHCZkcrGbPgvusGUBcV5OGNZO04lMaYn5W2xayd3tpTWPoKANc=",
+   "scalar": "4a867a842bccdaa44057a05de6a49f8f01a60ff0d9b6944d6a9defbfa789a1aa"
+  },
+  "mover": {
+   "public": "BKMa5N1fJPS4AAAQcV5oBRVsK5tnDDAxC3I0gtIe6M1ucQ/O2JWfOHq26PcFXGZPnqKUJ2yfn9eoWHd1z7DcWng=",
+   "scalar": "d5de3ffb367204382903e5b41a624238dc326dd7b15cc1896a46ccac94a1f0fe"
+  },
+  "notarizer": {
+   "public": "BB8tjlm9DJY69vuzOS330Dr0QYXlfacFugHW1FNGF9J9iZN+jO5u4J+jMtz0imolgLTy6mYaAW9Hhp/Qgz1WP/c=",
+   "scalar": "4ceacbcc80fa3a7d2ae5b3bbe6442e665556fa7d5360849e422313fdff8d4c2f"
+  },
+  "notary": {
+   "public": "BEoDBVbQRpFwJC1+/hnsL0zpGwVKAnYfojcDCnfM4JH3RY466tZg2CPEGekCh7EcjUtdZvDRLvt+XjbSazOTVYA=",
+   "scalar": "145345aaee8828df72b943fbad5383943ceb8edb1ff28e479d6ae5c99d084310"
+  },
+  "phone": {
+   "public": "BGvOqAdWpGiuiyT0dt8U81HM+Cd7i3DtlYXcqDd90SW8EiZa0mXH8QTg5fIT5w1iMJwW4UR1Nryh+rEVO9yrTVQ=",
+   "scalar": "1b62aa6a6b55e2e4ef5298c4d7381f82e20f8065f8949c08bfdfb9a9e20534ee"
+  },
+  "root": {
+   "public": "BKqvyTPcS5mD4sw8iaVOWTPXlR/kKAsjH3CU5jrpag+ioY/2HhqX6PqLhbFCYbS4N7jHiW0dB5AD4cCOinNwu30=",
+   "scalar": "426ed402f75d86c8320d0ea085facbe676753a12308ca3095d7c5d4589587000"
+  },
+  "secrets": {
+   "public": "BOyWuiqppFnkgSCN9yiCK0HnMLHxNUYesr1FFos9p1oI3gcdHPjxMG+GvSzoipiBToK5z9xyijhYW4nd+4PkHKc=",
+   "scalar": "56548a9b997b93f36b048f3746632615e546a3cb474c49c74bbacc5d8753715e"
+  },
+  "spawner": {
+   "public": "BGxhUlI9afuII3C82TP52XqEW7sOnO0IV9GW7FOmv+/6j+qDE09uRiXH0LKbfOKYuceDPDF2Xmnz3RmH+4TwLTI=",
+   "scalar": "a0f4b8e28c1ec403c372ff4291fd7c3f079e264308640743b336eb8b33912f26"
+  }
+ },
+ "roster": {
+  "notary": "BEoDBVbQRpFwJC1+/hnsL0zpGwVKAnYfojcDCnfM4JH3RY466tZg2CPEGekCh7EcjUtdZvDRLvt+XjbSazOTVYA=",
+  "notarizer": "BB8tjlm9DJY69vuzOS330Dr0QYXlfacFugHW1FNGF9J9iZN+jO5u4J+jMtz0imolgLTy6mYaAW9Hhp/Qgz1WP/c=",
+  "mover": "BKMa5N1fJPS4AAAQcV5oBRVsK5tnDDAxC3I0gtIe6M1ucQ/O2JWfOHq26PcFXGZPnqKUJ2yfn9eoWHd1z7DcWng=",
+  "merger": "BG0yCd5J83JvEwGT9gJkdVgbHl1+iZosxVeEmGHCZkcrGbPgvusGUBcV5OGNZO04lMaYn5W2xayd3tpTWPoKANc=",
+  "spawner": "BGxhUlI9afuII3C82TP52XqEW7sOnO0IV9GW7FOmv+/6j+qDE09uRiXH0LKbfOKYuceDPDF2Xmnz3RmH+4TwLTI=",
+  "identity": "BEy3/fyWHVKGXBQDRP4ofPPoL/rtQUlWnd76y4wvHtKRsbIP//WErKclYnpKYctKXkQ0UIZbv9GpEYxN3dO3d+s=",
+  "gullible": "BIwfT1FBNnJFbO2NxyjvcimkWcl6NUfnMkFrrqQljYw6MopyOwIVR741ykSB+skYASPPbvyXEX5eiGaYzmq/34I=",
+  "secrets": "BOyWuiqppFnkgSCN9yiCK0HnMLHxNUYesr1FFos9p1oI3gcdHPjxMG+GvSzoipiBToK5z9xyijhYW4nd+4PkHKc=",
+  "phone": "BGvOqAdWpGiuiyT0dt8U81HM+Cd7i3DtlYXcqDd90SW8EiZa0mXH8QTg5fIT5w1iMJwW4UR1Nryh+rEVO9yrTVQ=",
+  "root": "BKqvyTPcS5mD4sw8iaVOWTPXlR/kKAsjH3CU5jrpag+ioY/2HhqX6PqLhbFCYbS4N7jHiW0dB5AD4cCOinNwu30="
+ },
+ "machine": {
+  "id": "e2860a1b2c3d4e",
+  "signingKey": "BCFuC9JFxHulxVu0fo1XS0bIZJilkH3m6sh7WBRJ02fSrZLTKHZP1w1f3fbvdnxb/SEjHl+nCTi6qLGupaPp4Vg=",
+  "encryptionKey": "BLG+Qg5c17OsFNbK+gOqO/qLYrINEVmvgWE49c1iIL+PIxXigqgLXr6v5QgwaIsyLXyhpNmynBOzGLfM6ks6Jm8="
+ }
+}

@@ -1,0 +1,729 @@
+[
+ {
+  "p": {
+   "allowed": {
+    "except": []
+   },
+   "conditions": []
+  },
+  "q": {
+   "allowed": {
+    "except": []
+   },
+   "conditions": []
+  },
+  "leq": true,
+  "meet": {
+   "allowed": {
+    "except": []
+   },
+   "conditions": []
+  }
+ },
+ {
+  "p": {
+   "allowed": {
+    "except": []
+   },
+   "conditions": []
+  },
+  "q": {
+   "allowed": {
+    "only": [
+     "shell"
+    ]
+   },
+   "conditions": [
+    "session:s1",
+    "until:2026-10-14T12:10Z"
+   ]
+  },
+  "leq": false,
+  "meet": {
+   "allowed": {
+    "only": [
+     "shell"
+    ]
+   },
+   "conditions": [
+    "session:s1",
+    "until:2026-10-14T12:10Z"
+   ]
+  }
+ },
+ {
+  "p": {
+   "allowed": {
+    "except": []
+   },
+   "conditions": []
+  },
+  "q": {
+   "allowed": {
+    "only": [
+     "shell",
+     "store:claude"
+    ]
+   },
+   "conditions": [
+    "session:s1"
+   ]
+  },
+  "leq": false,
+  "meet": {
+   "allowed": {
+    "only": [
+     "shell",
+     "store:claude"
+    ]
+   },
+   "conditions": [
+    "session:s1"
+   ]
+  }
+ },
+ {
+  "p": {
+   "allowed": {
+    "except": []
+   },
+   "conditions": []
+  },
+  "q": {
+   "allowed": {
+    "except": []
+   },
+   "conditions": [
+    "until:2026-10-14T12:10Z"
+   ]
+  },
+  "leq": false,
+  "meet": {
+   "allowed": {
+    "except": []
+   },
+   "conditions": [
+    "until:2026-10-14T12:10Z"
+   ]
+  }
+ },
+ {
+  "p": {
+   "allowed": {
+    "except": []
+   },
+   "conditions": []
+  },
+  "q": {
+   "allowed": {
+    "only": []
+   },
+   "conditions": []
+  },
+  "leq": false,
+  "meet": {
+   "allowed": {
+    "only": []
+   },
+   "conditions": []
+  }
+ },
+ {
+  "p": {
+   "allowed": {
+    "only": [
+     "shell"
+    ]
+   },
+   "conditions": [
+    "session:s1",
+    "until:2026-10-14T12:10Z"
+   ]
+  },
+  "q": {
+   "allowed": {
+    "except": []
+   },
+   "conditions": []
+  },
+  "leq": true,
+  "meet": {
+   "allowed": {
+    "only": [
+     "shell"
+    ]
+   },
+   "conditions": [
+    "session:s1",
+    "until:2026-10-14T12:10Z"
+   ]
+  }
+ },
+ {
+  "p": {
+   "allowed": {
+    "only": [
+     "shell"
+    ]
+   },
+   "conditions": [
+    "session:s1",
+    "until:2026-10-14T12:10Z"
+   ]
+  },
+  "q": {
+   "allowed": {
+    "only": [
+     "shell"
+    ]
+   },
+   "conditions": [
+    "session:s1",
+    "until:2026-10-14T12:10Z"
+   ]
+  },
+  "leq": true,
+  "meet": {
+   "allowed": {
+    "only": [
+     "shell"
+    ]
+   },
+   "conditions": [
+    "session:s1",
+    "until:2026-10-14T12:10Z"
+   ]
+  }
+ },
+ {
+  "p": {
+   "allowed": {
+    "only": [
+     "shell"
+    ]
+   },
+   "conditions": [
+    "session:s1",
+    "until:2026-10-14T12:10Z"
+   ]
+  },
+  "q": {
+   "allowed": {
+    "only": [
+     "shell",
+     "store:claude"
+    ]
+   },
+   "conditions": [
+    "session:s1"
+   ]
+  },
+  "leq": true,
+  "meet": {
+   "allowed": {
+    "only": [
+     "shell"
+    ]
+   },
+   "conditions": [
+    "session:s1",
+    "until:2026-10-14T12:10Z"
+   ]
+  }
+ },
+ {
+  "p": {
+   "allowed": {
+    "only": [
+     "shell"
+    ]
+   },
+   "conditions": [
+    "session:s1",
+    "until:2026-10-14T12:10Z"
+   ]
+  },
+  "q": {
+   "allowed": {
+    "except": []
+   },
+   "conditions": [
+    "until:2026-10-14T12:10Z"
+   ]
+  },
+  "leq": true,
+  "meet": {
+   "allowed": {
+    "only": [
+     "shell"
+    ]
+   },
+   "conditions": [
+    "session:s1",
+    "until:2026-10-14T12:10Z"
+   ]
+  }
+ },
+ {
+  "p": {
+   "allowed": {
+    "only": [
+     "shell"
+    ]
+   },
+   "conditions": [
+    "session:s1",
+    "until:2026-10-14T12:10Z"
+   ]
+  },
+  "q": {
+   "allowed": {
+    "only": []
+   },
+   "conditions": []
+  },
+  "leq": false,
+  "meet": {
+   "allowed": {
+    "only": []
+   },
+   "conditions": [
+    "session:s1",
+    "until:2026-10-14T12:10Z"
+   ]
+  }
+ },
+ {
+  "p": {
+   "allowed": {
+    "only": [
+     "shell",
+     "store:claude"
+    ]
+   },
+   "conditions": [
+    "session:s1"
+   ]
+  },
+  "q": {
+   "allowed": {
+    "except": []
+   },
+   "conditions": []
+  },
+  "leq": true,
+  "meet": {
+   "allowed": {
+    "only": [
+     "shell",
+     "store:claude"
+    ]
+   },
+   "conditions": [
+    "session:s1"
+   ]
+  }
+ },
+ {
+  "p": {
+   "allowed": {
+    "only": [
+     "shell",
+     "store:claude"
+    ]
+   },
+   "conditions": [
+    "session:s1"
+   ]
+  },
+  "q": {
+   "allowed": {
+    "only": [
+     "shell"
+    ]
+   },
+   "conditions": [
+    "session:s1",
+    "until:2026-10-14T12:10Z"
+   ]
+  },
+  "leq": false,
+  "meet": {
+   "allowed": {
+    "only": [
+     "shell"
+    ]
+   },
+   "conditions": [
+    "session:s1",
+    "until:2026-10-14T12:10Z"
+   ]
+  }
+ },
+ {
+  "p": {
+   "allowed": {
+    "only": [
+     "shell",
+     "store:claude"
+    ]
+   },
+   "conditions": [
+    "session:s1"
+   ]
+  },
+  "q": {
+   "allowed": {
+    "only": [
+     "shell",
+     "store:claude"
+    ]
+   },
+   "conditions": [
+    "session:s1"
+   ]
+  },
+  "leq": true,
+  "meet": {
+   "allowed": {
+    "only": [
+     "shell",
+     "store:claude"
+    ]
+   },
+   "conditions": [
+    "session:s1"
+   ]
+  }
+ },
+ {
+  "p": {
+   "allowed": {
+    "only": [
+     "shell",
+     "store:claude"
+    ]
+   },
+   "conditions": [
+    "session:s1"
+   ]
+  },
+  "q": {
+   "allowed": {
+    "except": []
+   },
+   "conditions": [
+    "until:2026-10-14T12:10Z"
+   ]
+  },
+  "leq": false,
+  "meet": {
+   "allowed": {
+    "only": [
+     "shell",
+     "store:claude"
+    ]
+   },
+   "conditions": [
+    "session:s1",
+    "until:2026-10-14T12:10Z"
+   ]
+  }
+ },
+ {
+  "p": {
+   "allowed": {
+    "only": [
+     "shell",
+     "store:claude"
+    ]
+   },
+   "conditions": [
+    "session:s1"
+   ]
+  },
+  "q": {
+   "allowed": {
+    "only": []
+   },
+   "conditions": []
+  },
+  "leq": false,
+  "meet": {
+   "allowed": {
+    "only": []
+   },
+   "conditions": [
+    "session:s1"
+   ]
+  }
+ },
+ {
+  "p": {
+   "allowed": {
+    "except": []
+   },
+   "conditions": [
+    "until:2026-10-14T12:10Z"
+   ]
+  },
+  "q": {
+   "allowed": {
+    "except": []
+   },
+   "conditions": []
+  },
+  "leq": true,
+  "meet": {
+   "allowed": {
+    "except": []
+   },
+   "conditions": [
+    "until:2026-10-14T12:10Z"
+   ]
+  }
+ },
+ {
+  "p": {
+   "allowed": {
+    "except": []
+   },
+   "conditions": [
+    "until:2026-10-14T12:10Z"
+   ]
+  },
+  "q": {
+   "allowed": {
+    "only": [
+     "shell"
+    ]
+   },
+   "conditions": [
+    "session:s1",
+    "until:2026-10-14T12:10Z"
+   ]
+  },
+  "leq": false,
+  "meet": {
+   "allowed": {
+    "only": [
+     "shell"
+    ]
+   },
+   "conditions": [
+    "session:s1",
+    "until:2026-10-14T12:10Z"
+   ]
+  }
+ },
+ {
+  "p": {
+   "allowed": {
+    "except": []
+   },
+   "conditions": [
+    "until:2026-10-14T12:10Z"
+   ]
+  },
+  "q": {
+   "allowed": {
+    "only": [
+     "shell",
+     "store:claude"
+    ]
+   },
+   "conditions": [
+    "session:s1"
+   ]
+  },
+  "leq": false,
+  "meet": {
+   "allowed": {
+    "only": [
+     "shell",
+     "store:claude"
+    ]
+   },
+   "conditions": [
+    "session:s1",
+    "until:2026-10-14T12:10Z"
+   ]
+  }
+ },
+ {
+  "p": {
+   "allowed": {
+    "except": []
+   },
+   "conditions": [
+    "until:2026-10-14T12:10Z"
+   ]
+  },
+  "q": {
+   "allowed": {
+    "except": []
+   },
+   "conditions": [
+    "until:2026-10-14T12:10Z"
+   ]
+  },
+  "leq": true,
+  "meet": {
+   "allowed": {
+    "except": []
+   },
+   "conditions": [
+    "until:2026-10-14T12:10Z"
+   ]
+  }
+ },
+ {
+  "p": {
+   "allowed": {
+    "except": []
+   },
+   "conditions": [
+    "until:2026-10-14T12:10Z"
+   ]
+  },
+  "q": {
+   "allowed": {
+    "only": []
+   },
+   "conditions": []
+  },
+  "leq": false,
+  "meet": {
+   "allowed": {
+    "only": []
+   },
+   "conditions": [
+    "until:2026-10-14T12:10Z"
+   ]
+  }
+ },
+ {
+  "p": {
+   "allowed": {
+    "only": []
+   },
+   "conditions": []
+  },
+  "q": {
+   "allowed": {
+    "except": []
+   },
+   "conditions": []
+  },
+  "leq": true,
+  "meet": {
+   "allowed": {
+    "only": []
+   },
+   "conditions": []
+  }
+ },
+ {
+  "p": {
+   "allowed": {
+    "only": []
+   },
+   "conditions": []
+  },
+  "q": {
+   "allowed": {
+    "only": [
+     "shell"
+    ]
+   },
+   "conditions": [
+    "session:s1",
+    "until:2026-10-14T12:10Z"
+   ]
+  },
+  "leq": false,
+  "meet": {
+   "allowed": {
+    "only": []
+   },
+   "conditions": [
+    "session:s1",
+    "until:2026-10-14T12:10Z"
+   ]
+  }
+ },
+ {
+  "p": {
+   "allowed": {
+    "only": []
+   },
+   "conditions": []
+  },
+  "q": {
+   "allowed": {
+    "only": [
+     "shell",
+     "store:claude"
+    ]
+   },
+   "conditions": [
+    "session:s1"
+   ]
+  },
+  "leq": false,
+  "meet": {
+   "allowed": {
+    "only": []
+   },
+   "conditions": [
+    "session:s1"
+   ]
+  }
+ },
+ {
+  "p": {
+   "allowed": {
+    "only": []
+   },
+   "conditions": []
+  },
+  "q": {
+   "allowed": {
+    "except": []
+   },
+   "conditions": [
+    "until:2026-10-14T12:10Z"
+   ]
+  },
+  "leq": false,
+  "meet": {
+   "allowed": {
+    "only": []
+   },
+   "conditions": [
+    "until:2026-10-14T12:10Z"
+   ]
+  }
+ },
+ {
+  "p": {
+   "allowed": {
+    "only": []
+   },
+   "conditions": []
+  },
+  "q": {
+   "allowed": {
+    "only": []
+   },
+   "conditions": []
+  },
+  "leq": true,
+  "meet": {
+   "allowed": {
+    "only": []
+   },
+   "conditions": []
+  }
+ }
+]

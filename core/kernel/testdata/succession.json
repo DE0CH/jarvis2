@@ -1,0 +1,206 @@
+[
+ {
+  "name": "new session: (sink, source-x) by the phone",
+  "cert": {
+   "payload": "{\"kind\":\"succession\",\"signer\":\"phone\",\"predecessor\":{\"id\":\"sink\"},\"successor\":{\"id\":\"source-0123456789abcdef0123456789abcdef\",\"image\":\"ghcr.io/de0ch/jarvis2-session:1@sha256:1111111111111111111111111111111111111111111111111111111111111111\",\"settings\":\"{\\\"harness\\\":\\\"claude\\\",\\\"permissionMode\\\":\\\"auto\\\",\\\"title\\\":\\\"t\\\"}\"},\"allowed\":{\"only\":[\"store:claude\",\"store:default\"]},\"conditions\":[\"session:s4f00\"]}",
+   "sig": "MEUCIQCNvP6wgE5vjJxhEay5ItnZPI0UC21osrEVcbYH/+rcMAIgbIuM8FfuID23h3Ms6gs02/9n5ACNy0rWQZx0138ccog="
+  },
+  "challenge": {
+   "payload": "{\"kind\":\"challenge\",\"seq\":0,\"prev\":\"\",\"at\":\"2026-10-14T12:00:00.000000001Z\",\"subject\":\"290100df41b4916e2907abb35646eee9e8a71ac9c9e65c2310b9fbb4b8278f97\",\"about\":\"succession\",\"nonce\":\"0000000000000000000000000000000a\"}",
+   "sig": "MEUCIGUGEdJ/V0KDHKuwp4xYS+QNmUNR0U2H1lxW6qSvbEwZAiEAzKoYNCHFcgygVbgXNB3gdndZvZVnbrR+rYyw6p1fl2U="
+  },
+  "notarization": {
+   "payload": "{\"kind\":\"notarization\",\"cert\":\"290100df41b4916e2907abb35646eee9e8a71ac9c9e65c2310b9fbb4b8278f97\",\"challenge\":\"c634762a15c477477cc7bd1b122bf29d39b073e535993a860b5215752b0a2bcf\"}",
+   "sig": "MEQCIEF+JJdoIBbvHdbGQ0BEUSlT968dblnd1wVPte1pkAKHAiAsDvd3gUgACjKmiSlo8DkyaB+F6y9Oxh2k7LD4rgwrow=="
+  }
+ },
+ {
+  "name": "spawn: (source-x, M) by the spawner",
+  "cert": {
+   "payload": "{\"kind\":\"succession\",\"signer\":\"spawner\",\"predecessor\":{\"id\":\"source-0123456789abcdef0123456789abcdef\",\"image\":\"ghcr.io/de0ch/jarvis2-session:1@sha256:1111111111111111111111111111111111111111111111111111111111111111\",\"settings\":\"{\\\"harness\\\":\\\"claude\\\",\\\"permissionMode\\\":\\\"auto\\\",\\\"title\\\":\\\"t\\\"}\"},\"successor\":{\"id\":\"e2860a1b2c3d4e\",\"signingKey\":\"BCFuC9JFxHulxVu0fo1XS0bIZJilkH3m6sh7WBRJ02fSrZLTKHZP1w1f3fbvdnxb/SEjHl+nCTi6qLGupaPp4Vg=\",\"encryptionKey\":\"BLG+Qg5c17OsFNbK+gOqO/qLYrINEVmvgWE49c1iIL+PIxXigqgLXr6v5QgwaIsyLXyhpNmynBOzGLfM6ks6Jm8=\"},\"allowed\":{\"except\":[]},\"conditions\":[]}",
+   "sig": "MEQCIGYgBpTLRwV8MiYcYx5LDWb7gj7JNHtdPUWuzidHVLR9AiBXAp4dY50qHw6rZWqYrz2GzuHBeDccyo8kLFJiEGJ7Jg=="
+  },
+  "challenge": {
+   "payload": "{\"kind\":\"challenge\",\"seq\":1,\"prev\":\"\",\"at\":\"2026-10-14T12:00:00.000000001Z\",\"subject\":\"b499751c21c3b1dde49071bfcd8b639e18d2330491b2e0c0461e033abccb75fc\",\"about\":\"succession\",\"nonce\":\"0000000000000000000000000000000b\"}",
+   "sig": "MEQCIGTkLhqrcJjnbCGdmP+Bhhdi9gaS+x6FmeSOF8PAZ3OyAiBpX7SXV7tbiMOb+cjQl7mJrw53NCC4KxOqSiXvo3RZ9w=="
+  },
+  "notarization": {
+   "payload": "{\"kind\":\"notarization\",\"cert\":\"b499751c21c3b1dde49071bfcd8b639e18d2330491b2e0c0461e033abccb75fc\",\"challenge\":\"864398d32c93d2234597d70d0bceda6fba5509107487bd2ab19a23feb356f5eb\"}",
+   "sig": "MEYCIQD1KfVFFl53FKYGlX0GI1w0phroN1PMUt2zILCTbxrRxQIhAIdsHIDOlS3AsXIyXC2I60BZol40z42vBTdN63Y+a745"
+  }
+ },
+ {
+  "name": "refused: a second spawn of source-x",
+  "cert": {
+   "payload": "{\"kind\":\"succession\",\"signer\":\"spawner\",\"predecessor\":{\"id\":\"source-0123456789abcdef0123456789abcdef\",\"image\":\"ghcr.io/de0ch/jarvis2-session:1@sha256:1111111111111111111111111111111111111111111111111111111111111111\",\"settings\":\"{\\\"harness\\\":\\\"claude\\\",\\\"permissionMode\\\":\\\"auto\\\",\\\"title\\\":\\\"t\\\"}\"},\"successor\":{\"id\":\"e2860a1b2c3d4f\",\"signingKey\":\"BEy3/fyWHVKGXBQDRP4ofPPoL/rtQUlWnd76y4wvHtKRsbIP//WErKclYnpKYctKXkQ0UIZbv9GpEYxN3dO3d+s=\",\"encryptionKey\":\"BOyWuiqppFnkgSCN9yiCK0HnMLHxNUYesr1FFos9p1oI3gcdHPjxMG+GvSzoipiBToK5z9xyijhYW4nd+4PkHKc=\"},\"allowed\":{\"except\":[]},\"conditions\":[]}",
+   "sig": "MEUCIQDE6GjpUtLYAdWD8SY83a3547v42fhgA1jxoLr4e6ya4gIgYku9FMsHaq0fRtFHSDW+c5MQDnOy1z0agcgxBOiyWVk="
+  },
+  "challenge": {
+   "payload": "{\"kind\":\"challenge\",\"seq\":2,\"prev\":\"\",\"at\":\"2026-10-14T12:00:00.000000001Z\",\"subject\":\"5bf335141956273fada21370cc86193426080169a8393d01d457d861c9135da1\",\"about\":\"succession\",\"nonce\":\"0000000000000000000000000000000c\"}",
+   "sig": "MEYCIQCZQETgeZfW5u/IDH3rJhnZ50/IOleUeJZ4mGDn17hmEAIhAIiBXhKIBTqggpwkEMVI/siVim6SSdeJQdKtRT7jFdBX"
+  },
+  "refused": "source-0123456789abcdef0123456789abcdef already has a notarized successor"
+ },
+ {
+  "name": "refused: the phone's (source-x, M') after the spawn",
+  "cert": {
+   "payload": "{\"kind\":\"succession\",\"signer\":\"phone\",\"predecessor\":{\"id\":\"source-0123456789abcdef0123456789abcdef\",\"image\":\"ghcr.io/de0ch/jarvis2-session:1@sha256:1111111111111111111111111111111111111111111111111111111111111111\",\"settings\":\"{\\\"harness\\\":\\\"claude\\\",\\\"permissionMode\\\":\\\"auto\\\",\\\"title\\\":\\\"t\\\"}\"},\"successor\":{\"id\":\"e2860a1b2c3d4f\",\"signingKey\":\"BEy3/fyWHVKGXBQDRP4ofPPoL/rtQUlWnd76y4wvHtKRsbIP//WErKclYnpKYctKXkQ0UIZbv9GpEYxN3dO3d+s=\",\"encryptionKey\":\"BOyWuiqppFnkgSCN9yiCK0HnMLHxNUYesr1FFos9p1oI3gcdHPjxMG+GvSzoipiBToK5z9xyijhYW4nd+4PkHKc=\"},\"allowed\":{\"except\":[]},\"conditions\":[]}",
+   "sig": "MEUCID0KFWNXX3hxA9GpVg+Xd/dpx5rRMuNrubXfjYarwVJdAiEAm1W5Ez3wN60gme8awDEgBm3AmsV0J9kC0b7COue0dsg="
+  },
+  "challenge": {
+   "payload": "{\"kind\":\"challenge\",\"seq\":3,\"prev\":\"\",\"at\":\"2026-10-14T12:00:00.000000001Z\",\"subject\":\"2ff5fe33910fcfa573db7aa1aa027609f0c03930a51c200c4c3eda15009a2cd9\",\"about\":\"succession\",\"nonce\":\"0000000000000000000000000000000d\"}",
+   "sig": "MEQCIAJlMporJum4mL1KohHZxcBWgS3QtZywLiRprfykBhbJAiBjahb3NxSmLUuxamF9dOuJAcruK7myAd1P5gRumhYxww=="
+  },
+  "refused": "source-0123456789abcdef0123456789abcdef already has a notarized successor"
+ },
+ {
+  "name": "add: (sink, source-a, P_add) by the phone",
+  "cert": {
+   "payload": "{\"kind\":\"succession\",\"signer\":\"phone\",\"predecessor\":{\"id\":\"sink\"},\"successor\":{\"id\":\"source-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"allowed\":{\"only\":[\"shell\"]},\"conditions\":[\"session:s4f00\",\"until:2026-10-14T12:10Z\"]}",
+   "sig": "MEUCIQDBEbbo9p66vqj5PWkh7K8pGM+8v6lNLAByfZjgoyaDEAIgaV5XMxJ70IRpo0pUv0z7TwRGxASsEf+Sp2G587+APaU="
+  },
+  "challenge": {
+   "payload": "{\"kind\":\"challenge\",\"seq\":4,\"prev\":\"\",\"at\":\"2026-10-14T12:00:00.000000001Z\",\"subject\":\"9d4a269db550c05485d7c5f68295ada7f6b79e8bc6b512932df02ddc715a288f\",\"about\":\"succession\",\"nonce\":\"0000000000000000000000000000000e\"}",
+   "sig": "MEUCIQDKNgoGE4BzykoA7D1Kvuv2Jb2syXMdO2l75L2BdpF0ZQIgV2u0r0ABwgjZeVmi8oOH7gjZlpnjsq3z9GS/8O0l6CM="
+  },
+  "notarization": {
+   "payload": "{\"kind\":\"notarization\",\"cert\":\"9d4a269db550c05485d7c5f68295ada7f6b79e8bc6b512932df02ddc715a288f\",\"challenge\":\"6c917136be7009d7978e56ac674f6e08285eeeb20b0522f7e2b0aa9d22cbd368\"}",
+   "sig": "MEYCIQDbzFzegY2jau1skhkCZxGOF1GtbrV5Vf3SDxHVFMz12gIhAI54E8/ldm9Mhy/xaKcHoT5kr+BEf/Rtq0KvPvHTd8gQ"
+  }
+ },
+ {
+  "name": "add: (source-a, M, ⊤) by the phone",
+  "cert": {
+   "payload": "{\"kind\":\"succession\",\"signer\":\"phone\",\"predecessor\":{\"id\":\"source-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"successor\":{\"id\":\"e2860a1b2c3d4e\",\"signingKey\":\"BCFuC9JFxHulxVu0fo1XS0bIZJilkH3m6sh7WBRJ02fSrZLTKHZP1w1f3fbvdnxb/SEjHl+nCTi6qLGupaPp4Vg=\",\"encryptionKey\":\"BLG+Qg5c17OsFNbK+gOqO/qLYrINEVmvgWE49c1iIL+PIxXigqgLXr6v5QgwaIsyLXyhpNmynBOzGLfM6ks6Jm8=\"},\"allowed\":{\"except\":[]},\"conditions\":[]}",
+   "sig": "MEUCIQCwWw/s2mWUvriigQiTdx8rgtMLEmmghSPhELlkDc56yQIgZYjXHUAWWVeAsug8XDcpcoROV7XJrRhA16RUs2qoCQ0="
+  },
+  "challenge": {
+   "payload": "{\"kind\":\"challenge\",\"seq\":5,\"prev\":\"\",\"at\":\"2026-10-14T12:00:00.000000001Z\",\"subject\":\"3a56c5273bc376774188bdc810843394931910a3af594309bc3ce901b6ce1955\",\"about\":\"succession\",\"nonce\":\"0000000000000000000000000000000f\"}",
+   "sig": "MEUCIQDmujn1rZW8cK+FiVjSCTs/LTQe4h91i1jjm234TnOQNwIgaiKgo91lJ7ugO7n8rRu7J7RQu7WoNKwGBcvSFc5JfYE="
+  },
+  "notarization": {
+   "payload": "{\"kind\":\"notarization\",\"cert\":\"3a56c5273bc376774188bdc810843394931910a3af594309bc3ce901b6ce1955\",\"challenge\":\"0124a5c2c859a43e0e0e0a391eb9646f69e4b20921a9dfd3837a41e3d9e587c2\"}",
+   "sig": "MEYCIQDgV/LE88w6pJw3ZhX4fcakM1tQmsdRjwP7sHk2hgggEAIhALZ50T3PwsG8TBWVAEM2Mif+I6YGKXhp9D/9KvJYhH2+"
+  }
+ },
+ {
+  "name": "narrow: (M, M, (everything, {until})) by the identity signer",
+  "cert": {
+   "payload": "{\"kind\":\"succession\",\"signer\":\"identity\",\"predecessor\":{\"id\":\"e2860a1b2c3d4e\",\"signingKey\":\"BCFuC9JFxHulxVu0fo1XS0bIZJilkH3m6sh7WBRJ02fSrZLTKHZP1w1f3fbvdnxb/SEjHl+nCTi6qLGupaPp4Vg=\",\"encryptionKey\":\"BLG+Qg5c17OsFNbK+gOqO/qLYrINEVmvgWE49c1iIL+PIxXigqgLXr6v5QgwaIsyLXyhpNmynBOzGLfM6ks6Jm8=\"},\"successor\":{\"id\":\"e2860a1b2c3d4e\",\"signingKey\":\"BCFuC9JFxHulxVu0fo1XS0bIZJilkH3m6sh7WBRJ02fSrZLTKHZP1w1f3fbvdnxb/SEjHl+nCTi6qLGupaPp4Vg=\",\"encryptionKey\":\"BLG+Qg5c17OsFNbK+gOqO/qLYrINEVmvgWE49c1iIL+PIxXigqgLXr6v5QgwaIsyLXyhpNmynBOzGLfM6ks6Jm8=\"},\"allowed\":{\"except\":[]},\"conditions\":[\"until:2026-10-14T12:10Z\"]}",
+   "sig": "MEQCIAVl8r9G/vWyBFxyklVBGumObfoCDLTsWAxnru39JYRQAiB18x17WrWiU3YpdnFJTgB3tcXZZA+riWusuNU+P3CHeg=="
+  },
+  "challenge": {
+   "payload": "{\"kind\":\"challenge\",\"seq\":6,\"prev\":\"\",\"at\":\"2026-10-14T12:00:00.000000001Z\",\"subject\":\"d23b6d0bc5263abd6b139a2082f5c9ec66983fad8121a938c6b879ab45cdc59b\",\"about\":\"succession\",\"nonce\":\"0000000000000000000000000000000a\"}",
+   "sig": "MEQCIGoMzeO3gnaYYFN6lHrBWYmIYKX++lr/N7DJtX8KBagzAiBdJvYbvclb5I53duZbSfRmgOXoTr+Hev9MG+Bb6YeOvw=="
+  },
+  "notarization": {
+   "payload": "{\"kind\":\"notarization\",\"cert\":\"d23b6d0bc5263abd6b139a2082f5c9ec66983fad8121a938c6b879ab45cdc59b\",\"challenge\":\"7ed80f454b2f2feaa7b2e32e280cd9fea25033953dadc72eb3888957a681e4ff\"}",
+   "sig": "MEUCICsyrrSF8jzsiNWNOo7sfwgrWs3D61y7a+pcpJiO3zx0AiEA1u9ltANZ/+sCeDtPIk8rI/344r0fdFx8GmOWmHNksrk="
+  }
+ },
+ {
+  "name": "refused: the identity signer's (M, M')",
+  "cert": {
+   "payload": "{\"kind\":\"succession\",\"signer\":\"identity\",\"predecessor\":{\"id\":\"e2860a1b2c3d4e\",\"signingKey\":\"BCFuC9JFxHulxVu0fo1XS0bIZJilkH3m6sh7WBRJ02fSrZLTKHZP1w1f3fbvdnxb/SEjHl+nCTi6qLGupaPp4Vg=\",\"encryptionKey\":\"BLG+Qg5c17OsFNbK+gOqO/qLYrINEVmvgWE49c1iIL+PIxXigqgLXr6v5QgwaIsyLXyhpNmynBOzGLfM6ks6Jm8=\"},\"successor\":{\"id\":\"e2860a1b2c3d4f\",\"signingKey\":\"BEy3/fyWHVKGXBQDRP4ofPPoL/rtQUlWnd76y4wvHtKRsbIP//WErKclYnpKYctKXkQ0UIZbv9GpEYxN3dO3d+s=\",\"encryptionKey\":\"BOyWuiqppFnkgSCN9yiCK0HnMLHxNUYesr1FFos9p1oI3gcdHPjxMG+GvSzoipiBToK5z9xyijhYW4nd+4PkHKc=\"},\"allowed\":{\"except\":[]},\"conditions\":[\"until:2026-10-14T12:10Z\"]}",
+   "sig": "MEUCIQC5HMdFaGX/vuA2tcRpi7bdvkDCRfm9iXu6ypyXOnomogIgIrBiz7lEiyUNP/66N9ffqPKjbFRt6kMHjFgAMAiK6Cw="
+  },
+  "challenge": {
+   "payload": "{\"kind\":\"challenge\",\"seq\":7,\"prev\":\"\",\"at\":\"2026-10-14T12:00:00.000000001Z\",\"subject\":\"9842fdf9f752a77c110e3100ae374fa4e8d66a358a6fab1276a3907b1d64d7f4\",\"about\":\"succession\",\"nonce\":\"0000000000000000000000000000000b\"}",
+   "sig": "MEUCIQCl3B7xMc0nK2tTsj1ciXedYdd+ZQg1OIJsMHEBUz6ZVgIgbL9tFiE/IE8Ak6lFiiKXKwSOepgMQbzXPuUS6lkQRAA="
+  },
+  "refused": "(machine, machine) signed by identity is not in the table"
+ },
+ {
+  "name": "refused: a gullible (source, M)",
+  "cert": {
+   "payload": "{\"kind\":\"succession\",\"signer\":\"gullible\",\"predecessor\":{\"id\":\"source-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"successor\":{\"id\":\"e2860a1b2c3d4e\",\"signingKey\":\"BCFuC9JFxHulxVu0fo1XS0bIZJilkH3m6sh7WBRJ02fSrZLTKHZP1w1f3fbvdnxb/SEjHl+nCTi6qLGupaPp4Vg=\",\"encryptionKey\":\"BLG+Qg5c17OsFNbK+gOqO/qLYrINEVmvgWE49c1iIL+PIxXigqgLXr6v5QgwaIsyLXyhpNmynBOzGLfM6ks6Jm8=\"},\"allowed\":{\"except\":[]},\"conditions\":[]}",
+   "sig": "MEUCIDgeQUmntcnGaO6d8DhTOqo43oEccoTUn64UkxawsLKqAiEAlaWzQoUhWqc0WS3L1A4hv/I5Udlw1/BJHv5/TEFN4do="
+  },
+  "challenge": {
+   "payload": "{\"kind\":\"challenge\",\"seq\":8,\"prev\":\"\",\"at\":\"2026-10-14T12:00:00.000000001Z\",\"subject\":\"686c8ec52b6958faf69eba6917a4544cee2bf53798343c9d74f51116f06fc3f1\",\"about\":\"succession\",\"nonce\":\"0000000000000000000000000000000c\"}",
+   "sig": "MEQCIDTWTYxrQsPhuXFxULUScuCqBXhr06iZ7NJUa8ZbGq9KAiA3IS2Fx799Yxg6Q21vGo5tVddGTx3H1Gg7pr8B1qXWGw=="
+  },
+  "refused": "(source, machine) signed by gullible is not in the table"
+ },
+ {
+  "name": "refused: a cert naming the phone, signed by the gullible key",
+  "cert": {
+   "payload": "{\"kind\":\"succession\",\"signer\":\"phone\",\"predecessor\":{\"id\":\"sink\"},\"successor\":{\"id\":\"source-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"allowed\":{\"except\":[]},\"conditions\":[]}",
+   "sig": "MEUCIHrXdYXwPI/8dSyMTOTBmz+9KPkWVXXv1mwpG5Dzs4jCAiEAg8PsPI69WxlMbsps+1I7ZCVO6P23hSi+hqpI6qaVuJ4="
+  },
+  "challenge": {
+   "payload": "{\"kind\":\"challenge\",\"seq\":9,\"prev\":\"\",\"at\":\"2026-10-14T12:00:00.000000001Z\",\"subject\":\"34073ddc11bee3988a5c0cfccf5c8bf6d07c7cfee1c1269c70615ed6c630ba6e\",\"about\":\"succession\",\"nonce\":\"0000000000000000000000000000000d\"}",
+   "sig": "MEUCIFvQ53o1cgYfTuy1ovB13wvy2Q+Df65LRppQxFZCjnCmAiEAghMYu7u2z2XPV6PfHSE7TMRXpl75tvL5G0RLMFIYsg8="
+  },
+  "refused": "the cert isn't signed by the phone key"
+ },
+ {
+  "name": "pause: (M, source-y, ⊤) by the spawner",
+  "cert": {
+   "payload": "{\"kind\":\"succession\",\"signer\":\"spawner\",\"predecessor\":{\"id\":\"e2860a1b2c3d4e\",\"signingKey\":\"BCFuC9JFxHulxVu0fo1XS0bIZJilkH3m6sh7WBRJ02fSrZLTKHZP1w1f3fbvdnxb/SEjHl+nCTi6qLGupaPp4Vg=\",\"encryptionKey\":\"BLG+Qg5c17OsFNbK+gOqO/qLYrINEVmvgWE49c1iIL+PIxXigqgLXr6v5QgwaIsyLXyhpNmynBOzGLfM6ks6Jm8=\"},\"successor\":{\"id\":\"source-fedcba9876543210fedcba9876543210\",\"image\":\"ghcr.io/de0ch/jarvis2-session:1@sha256:1111111111111111111111111111111111111111111111111111111111111111\",\"settings\":\"{\\\"harness\\\":\\\"claude\\\",\\\"permissionMode\\\":\\\"auto\\\",\\\"title\\\":\\\"t\\\"}\",\"snapshot\":\"abababababababababababababababababababababababababababababababab\"},\"allowed\":{\"except\":[]},\"conditions\":[]}",
+   "sig": "MEYCIQDQA2wvDR5tHk+YQb966ZRwKXOLU/nPGPSrAAOkh39M5QIhAJdttZFV4Y7BaS2zh3l6hvlTZVggy7Yauypsz9TFAjWd"
+  },
+  "challenge": {
+   "payload": "{\"kind\":\"challenge\",\"seq\":10,\"prev\":\"\",\"at\":\"2026-10-14T12:00:00.000000001Z\",\"subject\":\"b9a5a151e6ce66d96aa5393903688959a6d4deef6017e606cbd76630202b387a\",\"about\":\"succession\",\"nonce\":\"0000000000000000000000000000000e\"}",
+   "sig": "MEUCIFEg2KiW8hR5QKxwTGwiq9u2hPnXmGCXOhwY0WIbr0nZAiEAtCl1hu8xcLtD+A+HAasW/68qI+tQCLsIh7anLmaZDoI="
+  },
+  "notarization": {
+   "payload": "{\"kind\":\"notarization\",\"cert\":\"b9a5a151e6ce66d96aa5393903688959a6d4deef6017e606cbd76630202b387a\",\"challenge\":\"1555e28f4987b38ac098bdb887b84aa4af5395c05ad08d58649ee7a985194e10\"}",
+   "sig": "MEQCIHHL3WYiPYoZ7haGWeA7dNenJsObSccI5wLHk6nWzuzVAiBxtfXaqMzz/CswYp/JkXvc7xNCXhxEqDtu+scOBAp0sA=="
+  }
+ },
+ {
+  "name": "end: (source-y, sink) by the gullible signer",
+  "cert": {
+   "payload": "{\"kind\":\"succession\",\"signer\":\"gullible\",\"predecessor\":{\"id\":\"source-fedcba9876543210fedcba9876543210\",\"image\":\"ghcr.io/de0ch/jarvis2-session:1@sha256:1111111111111111111111111111111111111111111111111111111111111111\",\"settings\":\"{\\\"harness\\\":\\\"claude\\\",\\\"permissionMode\\\":\\\"auto\\\",\\\"title\\\":\\\"t\\\"}\",\"snapshot\":\"abababababababababababababababababababababababababababababababab\"},\"successor\":{\"id\":\"sink\"},\"allowed\":{\"except\":[]},\"conditions\":[]}",
+   "sig": "MEYCIQDoEAVNLAHToOdfsNZVvkGy329XH4KBCx2BbJ89uMcimAIhAPPVBBmcPa3ieX8Snpq+ZbD7bMSdG0+d+Gt2zDik3Z0v"
+  },
+  "challenge": {
+   "payload": "{\"kind\":\"challenge\",\"seq\":11,\"prev\":\"\",\"at\":\"2026-10-14T12:00:00.000000001Z\",\"subject\":\"4f7664191b3f6c7c90d534ddf1e23e08bacd9c3861984a0b79d1695b25aaac00\",\"about\":\"succession\",\"nonce\":\"0000000000000000000000000000000f\"}",
+   "sig": "MEUCIQCw6t7eQzzMjf9ub0sVZ9gIFoTXbBlmXgvG63k12Q5gdAIgBI1dr74DnY0QQM7YbPxsgMtwoBFL7olLXmBFvreN0Tw="
+  },
+  "notarization": {
+   "payload": "{\"kind\":\"notarization\",\"cert\":\"4f7664191b3f6c7c90d534ddf1e23e08bacd9c3861984a0b79d1695b25aaac00\",\"challenge\":\"d5f6ba71247fcf6c30d00e5215b59d8ab6312110fc3899f086c772834fd48c35\"}",
+   "sig": "MEUCICyMono4XmyLTUHSXsf3JaEehVGGDivJ1DXwUdQAKagTAiEAnH+QSxp8hCpO6p+7USELI0DUKVXLN6jRXou+USBtVPU="
+  }
+ },
+ {
+  "name": "refused: a spawn of source-y after its burn",
+  "cert": {
+   "payload": "{\"kind\":\"succession\",\"signer\":\"spawner\",\"predecessor\":{\"id\":\"source-fedcba9876543210fedcba9876543210\",\"image\":\"ghcr.io/de0ch/jarvis2-session:1@sha256:1111111111111111111111111111111111111111111111111111111111111111\",\"settings\":\"{\\\"harness\\\":\\\"claude\\\",\\\"permissionMode\\\":\\\"auto\\\",\\\"title\\\":\\\"t\\\"}\",\"snapshot\":\"abababababababababababababababababababababababababababababababab\"},\"successor\":{\"id\":\"e2860a1b2c3d4f\",\"signingKey\":\"BEy3/fyWHVKGXBQDRP4ofPPoL/rtQUlWnd76y4wvHtKRsbIP//WErKclYnpKYctKXkQ0UIZbv9GpEYxN3dO3d+s=\",\"encryptionKey\":\"BOyWuiqppFnkgSCN9yiCK0HnMLHxNUYesr1FFos9p1oI3gcdHPjxMG+GvSzoipiBToK5z9xyijhYW4nd+4PkHKc=\"},\"allowed\":{\"except\":[]},\"conditions\":[]}",
+   "sig": "MEUCIGDVr3igq3eQdtgoNun29C3erWIB0fTL0q/riUG3RliyAiEA4iHYgePRFGPtcIs5iTnkfeEDI3MgAXtNxp+QNrr9tak="
+  },
+  "challenge": {
+   "payload": "{\"kind\":\"challenge\",\"seq\":12,\"prev\":\"\",\"at\":\"2026-10-14T12:00:00.000000001Z\",\"subject\":\"b2612f10a976d9c6b1b2f4e846b9ab06344e6791c832a7e2b660d37ab6d210c7\",\"about\":\"succession\",\"nonce\":\"0000000000000000000000000000000a\"}",
+   "sig": "MEQCIA3U5O1Lu1+NbCmMPLGOKXoeuRF/Z5dbqFKPmSaQ/GTMAiABLQi8mz8cqjqTAHveviMZofGH3Aj0oFlKQhm+4STREA=="
+  },
+  "refused": "source-fedcba9876543210fedcba9876543210 already has a notarized successor"
+ },
+ {
+  "name": "refused: (M, sink): only a source is burned",
+  "cert": {
+   "payload": "{\"kind\":\"succession\",\"signer\":\"gullible\",\"predecessor\":{\"id\":\"e2860a1b2c3d4e\",\"signingKey\":\"BCFuC9JFxHulxVu0fo1XS0bIZJilkH3m6sh7WBRJ02fSrZLTKHZP1w1f3fbvdnxb/SEjHl+nCTi6qLGupaPp4Vg=\",\"encryptionKey\":\"BLG+Qg5c17OsFNbK+gOqO/qLYrINEVmvgWE49c1iIL+PIxXigqgLXr6v5QgwaIsyLXyhpNmynBOzGLfM6ks6Jm8=\"},\"successor\":{\"id\":\"sink\"},\"allowed\":{\"except\":[]},\"conditions\":[]}",
+   "sig": "MEUCIETxVI+MmHaTxKP2vS3tlbXd1bzmI4ZelDNugiz3PGYgAiEA2k/hdQw8kkJ8rXZ9ue3XD6DMvbr08oY6cQuSKDd0YVU="
+  },
+  "challenge": {
+   "payload": "{\"kind\":\"challenge\",\"seq\":13,\"prev\":\"\",\"at\":\"2026-10-14T12:00:00.000000001Z\",\"subject\":\"0f3fd183879abf7e23a14f55b21000c1e8b92b42c564fa238a4cdf73fcc96d63\",\"about\":\"succession\",\"nonce\":\"0000000000000000000000000000000b\"}",
+   "sig": "MEYCIQDj8vxDIIhGV7s2GIqOJu5IDUALURhPPeXoLyYrNZ07VQIhAIkoS/gi8pKi7txQVQs1tvUquWgQfI2MaXP/eR4MzT3/"
+  },
+  "refused": "(machine, sink) signed by gullible is not in the table"
+ },
+ {
+  "name": "root: (anything, anything)",
+  "cert": {
+   "payload": "{\"kind\":\"succession\",\"signer\":\"root\",\"predecessor\":{\"id\":\"source-fedcba9876543210fedcba9876543210\",\"image\":\"ghcr.io/de0ch/jarvis2-session:1@sha256:1111111111111111111111111111111111111111111111111111111111111111\",\"settings\":\"{\\\"harness\\\":\\\"claude\\\",\\\"permissionMode\\\":\\\"auto\\\",\\\"title\\\":\\\"t\\\"}\",\"snapshot\":\"abababababababababababababababababababababababababababababababab\"},\"successor\":{\"id\":\"e2860a1b2c3d4f\",\"signingKey\":\"BEy3/fyWHVKGXBQDRP4ofPPoL/rtQUlWnd76y4wvHtKRsbIP//WErKclYnpKYctKXkQ0UIZbv9GpEYxN3dO3d+s=\",\"encryptionKey\":\"BOyWuiqppFnkgSCN9yiCK0HnMLHxNUYesr1FFos9p1oI3gcdHPjxMG+GvSzoipiBToK5z9xyijhYW4nd+4PkHKc=\"},\"allowed\":{\"except\":[]},\"conditions\":[]}",
+   "sig": "MEYCIQD2rqky3KdAlKUBF+v01N3IUEr3uoyvP0dIkyVpx/GlYQIhANZOsYHC4/SNoF8BxxoVRClfeZ7tjkwmkAmTo3/JI2ti"
+  },
+  "challenge": {
+   "payload": "{\"kind\":\"challenge\",\"seq\":14,\"prev\":\"\",\"at\":\"2026-10-14T12:00:00.000000001Z\",\"subject\":\"3f6db673b27e0bc9320919fd47cbf83d350c35680fcff157bd96487af908a68c\",\"about\":\"succession\",\"nonce\":\"0000000000000000000000000000000c\"}",
+   "sig": "MEUCIQCjT1TdOJ7C1NtBrixorMWZrdIOkfdM/2lXFxphegnbuQIgKQsy1L6iTzDPVvq9pbhv6ZhZIIzgXrq5yTUwaA6ZpTM="
+  },
+  "notarization": {
+   "payload": "{\"kind\":\"notarization\",\"cert\":\"3f6db673b27e0bc9320919fd47cbf83d350c35680fcff157bd96487af908a68c\",\"challenge\":\"4ff4f719564ca741f39e444d14616b6583a22ff4b19f585a5522fb5c385362c9\"}",
+   "sig": "MEUCIQDVnAzFhiWx5LT10W3QG3ZykNKppQv/EXf4JNHjSxV9rwIgOJI3w3kMTyriy38wvsx+tHLJxprA/sBUweXbJXD1Qkk="
+  }
+ }
+]

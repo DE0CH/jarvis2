@@ -218,3 +218,12 @@ func OpenSealed(priv *ecdh.PrivateKey, s Sealed, info string) ([]byte, error) {
 	}
 	return GCMOpen(KDF(x, info), d, nil)
 }
+
+// SignerFromScalar: a P-256 key from its 32-byte private scalar (test vectors derive theirs from a seed)
+func SignerFromScalar(d []byte) (*Signer, error) {
+	k, err := ecdsa.ParseRawPrivateKey(elliptic.P256(), d)
+	if err != nil {
+		return nil, err
+	}
+	return &Signer{k}, nil
+}

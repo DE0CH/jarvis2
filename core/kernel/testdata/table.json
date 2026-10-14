@@ -1,0 +1,40 @@
+[
+ {
+  "pred": "sink",
+  "succ": "source",
+  "signer": "phone"
+ },
+ {
+  "pred": "source",
+  "succ": "machine",
+  "signer": "spawner",
+  "firstSuccessor": true
+ },
+ {
+  "pred": "source",
+  "succ": "machine",
+  "signer": "phone",
+  "firstSuccessor": true
+ },
+ {
+  "pred": "machine",
+  "succ": "machine",
+  "signer": "identity",
+  "same": true
+ },
+ {
+  "pred": "machine",
+  "succ": "source",
+  "signer": "spawner"
+ },
+ {
+  "pred": "source",
+  "succ": "sink",
+  "signer": "gullible"
+ },
+ {
+  "pred": "any",
+  "succ": "any",
+  "signer": "root"
+ }
+]

@@ -1,0 +1,22 @@
+{
+ "valid": [
+  {
+   "payload": "{\"kind\":\"challenge\",\"seq\":0,\"prev\":\"\",\"at\":\"2026-10-14T12:00:00.000000001Z\",\"subject\":\"abababababababababababababababababababababababababababababababab\",\"about\":\"succession\",\"nonce\":\"01010101010101010101010101010101\"}",
+   "sig": "MEQCICj68oK47XgY5x01AOvsaWnsvu4xveMz6vQLhpE7u9xOAiBdmLjtC+ifibhu0EGMjkCY40KwYiP3WJtdqDguL3GF+Q=="
+  },
+  {
+   "payload": "{\"kind\":\"challenge\",\"seq\":1,\"prev\":\"553e3a5115c9ee73b8f6728b379776bd9939794f931aea687b873262c30f8173\",\"at\":\"2026-10-14T12:00:00.000000001Z\",\"subject\":\"abababababababababababababababababababababababababababababababab\",\"about\":\"command\",\"nonce\":\"01010101010101010101010101010101\"}",
+   "sig": "MEUCIEaVJPw3/nxysnUEid4HYMHr2oDFv69pjqPeJlvdyBYgAiEAqTKOIii2/R94ZDqE3HhZamMGdl9ZTrt3tG9+uBWhRZw="
+  }
+ ],
+ "invalid": [
+  {
+   "payload": "{\"kind\":\"challenge\",\"seq\":0,\"prev\":\"\",\"at\":\"2026-10-14T12:00:00.000000001Z\",\"subject\":\"abababababababababababababababababababababababababababababababab\",\"about\":\"succession\",\"nonce\":\"01010101010101010101010101010101\"}",
+   "sig": "MEQCICxlHRBfMCsbe0WB2joHlfjkufMLzn0N6LkS5mUkIXwRAiAm20R3IbABnEqeLF75nxBk3cryAdQsGxF8ILtZwt03pA=="
+  },
+  {
+   "payload": "{\"kind\":\"challenge\",\"seq\":0,\"prev\":\"\",\"at\":\"2026-10-14T12:00:00.000000001Z\",\"subject\":\"AB\",\"about\":\"succession\",\"nonce\":\"01010101010101010101010101010101\"}",
+   "sig": "MEUCIQDwYlShSfTZE9zEDKvsfIiBn2ErmXpcsWU17ZV6JX7P8QIgCZpBdKEwop2tCreMdzM+yYfDTuW5BR1sOJl1pWMeWVo="
+  }
+ ]
+}
