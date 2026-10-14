@@ -63,7 +63,8 @@ struct SetupView: View {
       .navigationBarTitleDisplayMode(.inline)
       .toolbar { toolbar }
       .interactiveDismissDisabled(busy != nil)
-      .task { await load() }
+      // once: .task runs again whenever the page reappears (back from the root key's screen), which must not undo .done
+      .task { if step == .loading { await load() } }
       .onDisappear { forget(); newKey = nil }
     }
   }
