@@ -9,6 +9,16 @@ Status: plan only. Nothing here is built. Sources: DESIGN "Target design" (docs/
 - **D5.** There is no revocation.
 - **D6.** Grants signed by a machine follow the same steps as phone grants (notary challenge, logged). A phone-signed grant (the start grant) says which other signers the guard accepts, and for which text types.
 
+
+**Decided 2026-10-14 (Deyao), supersedes `pending` everywhere below:** each New session gets its own logical **null
+machine** with a fresh random id (`null-<32 hex>`: 128 random bits, so it can't clash with a Fly id; the prefix is only
+for display). The phone binds the start and secrets grants to it and signs the succession challenge naming it as the
+predecessor. A null machine counts as killed from birth, with no snapshot; certify's one-successor-per-predecessor rule
+uses it up. Grants reach the first machine by an ordinary exchange through the cert whose predecessor is that null
+machine. No `pending` field, no special exchange form. Also decided: a `grants` branch (§4); terminal grants at most
+10 minutes (Q9); a secrets grant covers every key of its stores, current and future, whoever writes them (Q5: secrets
+are not code and the model never reads them, so a written key can't be a prompt injection).
+
 ---
 
 ## 0. Summary of the recommendations
