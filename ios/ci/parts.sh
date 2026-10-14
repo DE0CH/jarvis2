@@ -21,7 +21,7 @@ for p in "${PARTS[@]}"; do
     notarizer) extra=(STATE_FILE="$W/notarizer-state.json") ;;
     spawner) extra=(MACHINE_URL=http://127.0.0.1:18081 FAKEFLY_KEYS_DIR="$W/fakefly") ;;
   esac
-  (env KEY_FILE="$W/key-$role.pem" BOX_KEY_FILE="$W/box-key.pem" ROSTER_FILE="$W/roster.json" ADDR="127.0.0.1:$port" "${extra[@]}" \
+  (env KEY_FILE="$W/key-$role.pem" BOX_KEY_FILE="$W/box-key.pem" ROSTER_FILE="$W/roster.json" ADDR="127.0.0.1:$port" ${extra[@]+"${extra[@]}"} \
      nohup "$W/$bin" >> "$LOGS/$bin-$TAG.log" 2>&1 & echo $! > "$W/part-$bin.pid")
 done
 for p in "${PARTS[@]}"; do
