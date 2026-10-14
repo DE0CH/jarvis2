@@ -61,7 +61,7 @@ session_check() { # a session with rh-plain + rh-secret (+ the harness's claude,
   "$RH" session rh-plain rh-secret | tee "$W/session.out"
   local sid m
   sid=$(awk '/^SESSION /{print $2}' "$W/session.out"); m=$(awk '/^MACHINE /{print $2}' "$W/session.out")
-  for kv in "RH_PLAIN=$V_PLAIN" "RH_SECRET=$V_SECRET" "CLAUDE_ACCOUNT_UUID=$V_CLAUDE" "CF_ACCESS_CLIENT_ID=$V_TUNNEL"; do
+  for kv in "RH_PLAIN=$V_PLAIN" "RH_SECRET=$V_SECRET" "RH_CLAUDE=$V_CLAUDE" "CF_ACCESS_CLIENT_ID=$V_TUNNEL"; do
     got=""
     for i in $(seq 1 12); do
       got=$(on_machine "$m" "grep -E '^(export )?${kv%%=*}=' /home/claude/.secrets | grep -c -F '${kv#*=}' || true" 2>/dev/null || true)  # that key's line holds that value
@@ -85,7 +85,7 @@ step "Reset with the test kit, then the stores (infra/setup.py, dummy values)"
 "$RH" reset
 rnd=$(python3 -c "import secrets;print(secrets.token_hex(6))")
 export V_PLAIN="plain-$rnd" V_SECRET="secret-$rnd" V_MARKED="marked-$rnd" V_CLAUDE="claude-id-$rnd" V_TUNNEL="tunnel-id-$rnd"
-export RH_PLAIN="$V_PLAIN" RH_SECRET="$V_SECRET" RH_MARKED="$V_MARKED" CLAUDE_ACCOUNT_UUID="$V_CLAUDE" \
+export RH_PLAIN="$V_PLAIN" RH_SECRET="$V_SECRET" RH_MARKED="$V_MARKED" RH_CLAUDE="$V_CLAUDE" \
   CF_ACCESS_CLIENT_ID="$V_TUNNEL" CF_ACCESS_CLIENT_SECRET="tunnel-secret-$rnd"
 S="python3 $ROOT/infra/setup.py"
 export JARVIS2_NOT_SENSITIVE=rh-plain,rh-marked
@@ -96,7 +96,7 @@ $S write rh-plain RH_PLAIN --explain 'RH_PLAIN=rehearsal test value'
 $S write rh-secret RH_SECRET --explain 'RH_SECRET=rehearsal test value'
 $S write rh-marked RH_MARKED --explain 'RH_MARKED=rehearsal test value'
 $S mark-sensitive rh-marked
-$S write claude CLAUDE_ACCOUNT_UUID --explain 'CLAUDE_ACCOUNT_UUID=rehearsal test value'
+$S write claude RH_CLAUDE --explain 'RH_CLAUDE=rehearsal test value'
 $S write tunnel CF_ACCESS_CLIENT_ID CF_ACCESS_CLIENT_SECRET --explain 'CF_ACCESS_CLIENT_ID=rehearsal dummy tunnel id' --explain 'CF_ACCESS_CLIENT_SECRET=rehearsal dummy tunnel secret'
 $S backup-core "$W/fly.tok"
 $S stores
@@ -107,7 +107,7 @@ json.dump({"stores": {
     "rh-plain": e(False, RH_PLAIN=os.environ["RH_PLAIN"]),
     "rh-secret": e(True, RH_SECRET=os.environ["RH_SECRET"]),
     "rh-marked": e(True, RH_MARKED=os.environ["RH_MARKED"]),
-    "claude": e(True, CLAUDE_ACCOUNT_UUID=os.environ["CLAUDE_ACCOUNT_UUID"]),
+    "claude": e(True, RH_CLAUDE=os.environ["RH_CLAUDE"]),
     "tunnel": e(True, CF_ACCESS_CLIENT_ID=os.environ["CF_ACCESS_CLIENT_ID"], CF_ACCESS_CLIENT_SECRET=os.environ["CF_ACCESS_CLIENT_SECRET"]),
 }}, open(sys.argv[1], "w"))
 PY

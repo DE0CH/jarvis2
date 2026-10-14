@@ -24,7 +24,7 @@ import (
 )
 
 // the features that may hold grants
-var holderNames = []string{"terminal", "scheduler", "status", "login", "archive", "remote"}
+var holderNames = []string{"terminal", "scheduler", "status", "archive", "remote"}
 
 type StoredGrant struct {
 	ID      string    `json:"id"`

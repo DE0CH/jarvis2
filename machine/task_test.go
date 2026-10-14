@@ -128,7 +128,7 @@ exit 0`})
 	t.Setenv("PARAM_MSG", "hi")
 	t.Setenv("TASK_PARAMS", `{"msg":"hi"}`)
 	secrets := map[string]string{"API_KEY": "s3cr3t-value"}
-	res := doRun("job", "r1", secrets, "auto")
+	res := doRun("job", "r1", secrets, nil, "auto")
 	if res.Error != "" || res.ExitCode != 0 || res.Run != "r1" {
 		t.Fatalf("%+v", res)
 	}
@@ -143,14 +143,14 @@ exit 0`})
 		t.Fatal("~/.secrets not written")
 	}
 	t.Setenv("PARAM_FAIL", "true")
-	res = doRun("job", "r2", secrets, "auto")
+	res = doRun("job", "r2", secrets, nil, "auto")
 	if res.ExitCode != 2 || !strings.Contains(res.Log, "run 2") {
 		t.Fatalf("%+v", res) // the state dir carried the count over
 	}
-	if res := doRun("nope", "r3", secrets, "auto"); res.Error == "" || res.ExitCode != -1 {
+	if res := doRun("nope", "r3", secrets, nil, "auto"); res.Error == "" || res.ExitCode != -1 {
 		t.Fatalf("%+v", res)
 	}
-	if res := doRun("../etc", "r4", secrets, "auto"); !strings.Contains(res.Error, "bad template name") {
+	if res := doRun("../etc", "r4", secrets, nil, "auto"); !strings.Contains(res.Error, "bad template name") {
 		t.Fatalf("%+v", res)
 	}
 }

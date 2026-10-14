@@ -7,31 +7,28 @@ package main
 // the CLI's own refresh lock (~/.claude/.oauth_refresh.lock, lessons/74) until the new pair is written, so a
 // claude process that gets a 401 in between waits and adopts it instead of burning its refresh token.
 //
-// The router is not trusted to pick the account (DESIGN "Inputs to a machine": the login decides whose Claude
-// app reaches this session through Remote Control). So every pair is checked before it is written: Anthropic's
-// profile endpoint (a trusted provider over TLS) must name the account the store vouches for
-// (CLAUDE_ACCOUNT_UUID, written by the setup session; else the account in the ~/.claude.json the predecessor's
-// signed snapshot restored). A pair for any other account is refused; the router can only withhold the login.
+// The router's pair is taken whatever its account (DECISIONS 116, Deyao 2026-10-14): a Re-login to another Claude
+// account reaches every running and new session within a minute, with no store write and no grant. When the pair
+// on disk belongs to another account than the router's, the router's wins even if it expires sooner, the account
+// record (~/.claude.json oauthAccount) is handed to the supervisor (~/.claude/.account-switch.json, merged at the
+// host's next start), and the claude host is restarted as soon as it is idle, so its Remote Control comes up under
+// the new account (a running host keeps the account it connected with).
 
 import (
 	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"log"
-	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"slices"
-	"strings"
 	"syscall"
 	"time"
 )
 
 var (
-	profileURL    = "https://api.anthropic.com/api/oauth/profile" // the store may name a stand-in (the end-to-end test)
 	credsPollWait = 50 * time.Second
 	credsRetry    = 10 * time.Second
 	lockHoldMax   = 45 * time.Second // a lock held for a refresh that never answered is released (the CLI's own stale limit is 60 s)
@@ -80,60 +77,35 @@ func recordAccount(account string) string {
 	return d.O.UUID
 }
 
-// expectedAccount: the Claude account this machine accepts a login for — the store's CLAUDE_ACCOUNT_UUID, else the
-// account recorded in ~/.claude.json (restored from the predecessor's signed snapshot); "" = none, no login
-func expectedAccount(secrets map[string]string) string {
-	if a := strings.TrimSpace(secrets["CLAUDE_ACCOUNT_UUID"]); a != "" {
-		return a
+// localAccount: the account of the login on this machine: a switch the host hasn't started under yet, else
+// ~/.claude.json's; "" = not known
+func localAccount() string {
+	if b, err := os.ReadFile(switchPath()); err == nil {
+		return recordAccount(string(b))
 	}
 	home, _ := os.UserHomeDir()
 	b, _ := os.ReadFile(filepath.Join(home, ".claude.json"))
 	return recordAccount(string(b))
 }
 
-// pairAccount: the account Anthropic says the pair's access token belongs to
-func pairAccount(creds []byte) (string, error) {
-	tok := accessToken(creds)
-	if tok == "" {
-		return "", errors.New("the pair has no access token")
-	}
-	req, _ := http.NewRequest("GET", profileURL, nil)
-	req.Header.Set("Authorization", "Bearer "+tok)
-	req.Header.Set("anthropic-beta", "oauth-2025-04-20")
-	req.Header.Set("User-Agent", "jarvis2-machine/1")
-	resp, err := (&http.Client{Timeout: 20 * time.Second}).Do(req)
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-	b, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-	if resp.StatusCode != 200 {
-		return "", fmt.Errorf("profile: HTTP %d", resp.StatusCode)
-	}
-	var p struct {
-		Account struct {
-			UUID string `json:"uuid"`
-		} `json:"account"`
-	}
-	if json.Unmarshal(b, &p) != nil || p.Account.UUID == "" {
-		return "", errors.New("profile: no account")
-	}
-	return p.Account.UUID, nil
-}
+func switchPath() string { return filepath.Join(filepath.Dir(credsPath()), ".account-switch.json") }
 
-func checkPair(creds []byte, want string) error {
-	got, err := pairAccount(creds)
-	if err != nil {
-		return fmt.Errorf("checking the pair's account: %w", err)
+// takeRouterPair: write the router's pair; one for another account than this machine's always wins, and returns
+// switched (its account record is then left for the supervisor: ~/.claude/.account-switch.json)
+func takeRouterPair(l routerLogin) (took, switched bool, err error) {
+	ra, la := recordAccount(l.Account), localAccount()
+	if ra == "" || la == "" || ra == la {
+		took, err = takeIfLater([]byte(l.Credentials))
+		return took, false, err
 	}
-	if got != want {
-		return errors.New("the router's pair belongs to another Claude account than this session's store vouches for: refused")
+	if err = writeAtomic(switchPath(), []byte(l.Account)); err != nil {
+		return false, false, err
 	}
-	return nil
+	return true, true, writeAtomic(credsPath(), []byte(l.Credentials))
 }
 
 // fetchLogin: one poll; the path is signed as every /m call, the query (numbers only) travels beside it as on the
-// session API proxy (apiproxy.go), and what comes back is checked against Anthropic before it is used
+// session API proxy (apiproxy.go)
 func fetchLogin(c *client, have, ack int64, wait time.Duration) (routerLogin, error) {
 	var l routerLogin
 	status, _, b, err := c.signedDo("GET", "/m/claude-login", "/m/claude-login", fmt.Sprintf("have=%d&ack=%d&wait=%d", have, ack, int(wait.Seconds())), nil, "")
@@ -149,56 +121,69 @@ func fetchLogin(c *client, have, ack int64, wait time.Duration) (routerLogin, er
 // sessionClaudeLogin: a session's first Claude login, at boot, before the harness starts (Deyao, 2026-10-11: a new
 // session logs in by itself, no grant, no Face ID). Returns the account record (~/.claude.json oauthAccount) for
 // CLAUDE_ACCOUNT, "" when there is none.
-func sessionClaudeLogin(c *client, secrets map[string]string, stores []string) string {
+func sessionClaudeLogin(c *client, stores []string) string {
 	if !slices.Contains(stores, "claude") {
 		return ""
 	}
-	if u := secrets["CLAUDE_PROFILE_URL"]; strings.HasPrefix(u, "https://") {
-		profileURL = u // a stand-in named by the store itself (vouched like the rest of it): the end-to-end test's
-	}
-	want := expectedAccount(secrets)
-	if want == "" {
-		log.Printf("claude login: no account to check the router's pair against (the store claude has no CLAUDE_ACCOUNT_UUID): no login")
-		return ""
-	}
-	var account string
+	var l routerLogin
 	var err error
 	for i := 0; i < 3; i++ { // a short retry: the harness starts right after, logged in or not (credsSync catches up)
-		var l routerLogin
 		if l, err = fetchLogin(c, 0, 0, 0); err == nil && l.Credentials == "" {
 			err = errors.New("the router holds no Claude login")
 		}
 		if err == nil {
-			if err = checkPair([]byte(l.Credentials), want); err == nil {
-				if recordAccount(l.Account) == want {
-					account = l.Account
-				}
-				switch took, werr := takeIfLater([]byte(l.Credentials)); {
-				case werr != nil:
-					log.Printf("claude login: writing the credentials file: %v", werr)
-				case took:
-					log.Printf("claude login: took the router's pair at boot")
-				default:
-					log.Printf("claude login: the pair here expires as late or later; kept")
-				}
-				break
-			}
+			break
 		}
 		time.Sleep(2 * time.Second)
 	}
 	if err != nil {
 		log.Printf("claude login: at boot: %v (credsSync keeps trying)", err)
+		startCredsSync()
+		return ""
 	}
-	startCredsSync(want)
-	return account
+	// the host hasn't started: its ~/.claude.json takes the account now (the entrypoint merges CLAUDE_ACCOUNT too)
+	if recordAccount(l.Account) != "" && recordAccount(l.Account) != localAccount() {
+		if err := mergeAccount(l.Account); err != nil {
+			log.Printf("claude login: ~/.claude.json: %v", err)
+		}
+	}
+	switch took, werr := takeIfLater([]byte(l.Credentials)); {
+	case werr != nil:
+		log.Printf("claude login: writing the credentials file: %v", werr)
+	case took:
+		log.Printf("claude login: took the router's pair at boot")
+	default:
+		log.Printf("claude login: the pair here expires as late or later; kept")
+	}
+	startCredsSync()
+	return l.Account
+}
+
+// mergeAccount: the account record's keys (oauthAccount, userID) into ~/.claude.json, the rest kept
+func mergeAccount(account string) error {
+	var rec map[string]any
+	if err := json.Unmarshal([]byte(account), &rec); err != nil {
+		return err
+	}
+	home, _ := os.UserHomeDir()
+	p := filepath.Join(home, ".claude.json")
+	cur := map[string]any{}
+	if b, err := os.ReadFile(p); err == nil {
+		json.Unmarshal(b, &cur)
+	}
+	for k, v := range rec {
+		cur[k] = v
+	}
+	b, _ := json.Marshal(cur)
+	return writeAtomic(p, b)
 }
 
 // startCredsSync: credsSync in its own process (`jarvis2-machine creds-sync`) for the machine's life; a var so
 // tests don't start one
-var startCredsSync = func(want string) {
+var startCredsSync = func() {
 	cmd := exec.Command("/proc/self/exe", "creds-sync")
 	home, _ := os.UserHomeDir()
-	cmd.Env = []string{"HOME=" + home, "PATH=" + os.Getenv("PATH"), "CLAUDE_ACCOUNT_UUID=" + want, "CLAUDE_PROFILE_URL=" + profileURL}
+	cmd.Env = []string{"HOME=" + home, "PATH=" + os.Getenv("PATH")}
 	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true} // outlives the exec into Jarvis 1's entrypoint
 	if err := cmd.Start(); err != nil {
@@ -206,6 +191,18 @@ var startCredsSync = func(want string) {
 		return
 	}
 	log.Printf("claude login: credsSync running (long poll on the router)")
+}
+
+// writeAtomic: 0600, through a rename
+func writeAtomic(path string, b []byte) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return err
+	}
+	tmp := path + ".new"
+	if err := os.WriteFile(tmp, b, 0o600); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
 }
 
 // takeIfLater: write the pair unless the file here already expires as late or later; atomic, 0600
@@ -217,14 +214,7 @@ func takeIfLater(creds []byte) (bool, error) {
 	if cur, err := os.ReadFile(credsPath()); err == nil && expiresAt(cur) >= ne {
 		return false, nil
 	}
-	if err := os.MkdirAll(filepath.Dir(credsPath()), 0o700); err != nil {
-		return false, err
-	}
-	tmp := credsPath() + ".new"
-	if err := os.WriteFile(tmp, creds, 0o600); err != nil {
-		return false, err
-	}
-	return true, os.Rename(tmp, credsPath())
+	return true, writeAtomic(credsPath(), creds)
 }
 
 // ---- the CLI's refresh lock (Jarvis 1's LOCK_PY / UNLOCK_PY, lib/claudelogin.js) ----------------------------------
@@ -282,16 +272,15 @@ func takeLock() string {
 
 // credsSync: the machine's side of the router's login protocol, for the machine's life
 func credsSync() {
-	want := os.Getenv("CLAUDE_ACCOUNT_UUID")
-	if u := os.Getenv("CLAUDE_PROFILE_URL"); strings.HasPrefix(u, "https://") {
-		profileURL = u
-	}
 	c, err := newClient()
-	if err != nil || want == "" {
-		log.Printf("claude login: credsSync can't run (%v, account %q)", err, want)
+	if err != nil {
+		log.Printf("claude login: credsSync can't run: %v", err)
 		return
 	}
-	s := &syncer{c: c, want: want}
+	s := &syncer{c: c}
+	if _, err := os.Stat(switchPath()); err == nil {
+		go restartHostWhenIdle() // a switch left by an earlier credsSync whose host never got restarted
+	}
 	for {
 		if err := s.step(); err != nil {
 			log.Printf("claude login: %v", err)
@@ -301,12 +290,12 @@ func credsSync() {
 }
 
 type syncer struct {
-	c        *client
-	want     string
-	pushed   []byte    // the content last pushed or taken
-	refused  int64     // expiry of a pair refused by the account check: not asked for again
-	lockGen  int64     // the router's refresh this machine holds the CLI lock for (0: none)
-	lockedAt time.Time // when it took it
+	c         *client
+	pushed    []byte    // the content last pushed or taken
+	routerAcc string    // the account of the router's login, from its last answer
+	restarter bool      // restartHostWhenIdle is running
+	lockGen   int64     // the router's refresh this machine holds the CLI lock for (0: none)
+	lockedAt  time.Time // when it took it
 }
 
 func (s *syncer) release() {
@@ -330,19 +319,18 @@ func (s *syncer) step() error {
 		}
 		s.pushed = local
 	}
-	have := max(expiresAt(local), s.refused)
+	have := expiresAt(local)
+	if la := localAccount(); s.routerAcc != "" && la != "" && s.routerAcc != la {
+		have = 0 // the router holds another account's login: asked for whatever its expiry
+	}
 	l, err := fetchLogin(s.c, have, s.lockGen, credsPollWait)
 	if err != nil {
 		return fmt.Errorf("poll: %w", err)
 	}
+	s.routerAcc = recordAccount(l.Account)
 	switch {
 	case l.Credentials != "" && l.ExpiresAt > have:
-		if err := checkPair([]byte(l.Credentials), s.want); err != nil {
-			s.release()
-			s.refused = l.ExpiresAt
-			return err
-		}
-		took, err := takeIfLater([]byte(l.Credentials))
+		took, switched, err := takeRouterPair(l)
 		s.release() // after the write: a claude process waiting on the lock re-reads the file and adopts the pair
 		if err != nil {
 			return fmt.Errorf("writing the credentials file: %w", err)
@@ -350,6 +338,13 @@ func (s *syncer) step() error {
 		if took {
 			s.pushed = []byte(l.Credentials)
 			log.Printf("claude login: took the router's newer pair")
+		}
+		if switched {
+			log.Printf("claude login: the router's login is another Claude account: the host restarts under it once idle")
+			if !s.restarter {
+				s.restarter = true
+				go func() { restartHostWhenIdle(); s.restarter = false }()
+			}
 		}
 	case l.Preparing && l.Gen != s.lockGen:
 		s.release()
@@ -364,4 +359,68 @@ func (s *syncer) step() error {
 		s.release() // the refresh is over (failed): the pair here stays
 	}
 	return nil
+}
+
+// ---- an account switch: restart the host -------------------------------------------------------------------------
+
+var (
+	hostIdlePoll = 5 * time.Second
+	killHost     = func() error { return exec.Command("tmux", "kill-session", "-t", "claude").Run() }
+)
+
+// hostState: the Remote Control host's status and pid from claude's own session registry (~/.claude/sessions/*.json,
+// what the supervisor and the dashboard read); "" = no host
+func hostState() (status string, pid int) {
+	home, _ := os.UserHomeDir()
+	files, _ := filepath.Glob(filepath.Join(home, ".claude", "sessions", "*.json"))
+	for _, f := range files {
+		var e struct {
+			Status          string `json:"status"`
+			Pid             int    `json:"pid"`
+			BridgeSessionID string `json:"bridgeSessionId"`
+		}
+		b, err := os.ReadFile(f)
+		if err != nil || json.Unmarshal(b, &e) != nil || e.BridgeSessionID == "" || e.Pid == 0 {
+			continue
+		}
+		if syscall.Kill(e.Pid, 0) != nil {
+			continue // a dead host's leftover entry
+		}
+		return e.Status, e.Pid
+	}
+	return "", 0
+}
+
+// restartHostWhenIdle: once the host is idle (no turn, no background shell: "shell" means some are running) on two
+// polls in a row, kill its tmux session; the supervisor's watchdog relaunches it (--resume, the same conversation)
+// and its start() merges the switch file into ~/.claude.json. Returns when the switch is merged or there is no host
+// to restart (the next start merges it).
+func restartHostWhenIdle() {
+	idle := 0
+	killed := 0
+	for {
+		if _, err := os.Stat(switchPath()); err != nil {
+			return // merged by the supervisor's start()
+		}
+		status, pid := hostState()
+		switch {
+		case pid == 0:
+			if killed == 0 {
+				return
+			}
+		case pid == killed:
+			// still exiting
+		case status == "idle":
+			if idle++; idle >= 2 {
+				log.Printf("claude login: restarting the idle host (pid %d) under the new Claude account", pid)
+				if err := killHost(); err != nil {
+					log.Printf("claude login: restarting the host: %v", err)
+				}
+				killed, idle = pid, 0
+			}
+		default:
+			idle = 0
+		}
+		time.Sleep(hostIdlePoll)
+	}
 }

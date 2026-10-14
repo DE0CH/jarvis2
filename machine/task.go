@@ -21,6 +21,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"syscall"
@@ -280,15 +281,12 @@ func pruneLogs(dir string) {
 	}
 }
 
-// claudeLoginForPrompt: a prompt task needs a Claude login: the router's shared pair (store `claude`, checked
-// against the store's account like a session's, claudelogin.go), else the store's CLAUDE_CREDENTIALS. Returns what
-// was written, to push a refreshed pair back afterwards.
-func claudeLoginForPrompt(secrets map[string]string) []byte {
+// claudeLoginForPrompt: a prompt task needs a Claude login: the router's shared pair (store `claude`, as a
+// session's, claudelogin.go), else the store's CLAUDE_CREDENTIALS. Returns what was written, to push a refreshed
+// pair back afterwards.
+func claudeLoginForPrompt(secrets map[string]string, stores []string) []byte {
 	var creds []byte
-	if want := expectedAccount(secrets); want != "" {
-		if u := secrets["CLAUDE_PROFILE_URL"]; strings.HasPrefix(u, "https://") {
-			profileURL = u
-		}
+	if slices.Contains(stores, "claude") {
 		c, err := newClient()
 		var l routerLogin
 		if err == nil {
@@ -298,12 +296,9 @@ func claudeLoginForPrompt(secrets map[string]string) []byte {
 			err = errors.New("the router holds no Claude login")
 		}
 		if err == nil {
-			err = checkPair([]byte(l.Credentials), want)
-		}
-		if err == nil {
 			creds = []byte(l.Credentials)
 			home, _ := os.UserHomeDir()
-			if _, err := os.Stat(filepath.Join(home, ".claude.json")); err != nil && recordAccount(l.Account) == want {
+			if _, err := os.Stat(filepath.Join(home, ".claude.json")); err != nil && l.Account != "" {
 				os.WriteFile(filepath.Join(home, ".claude.json"), []byte(l.Account), 0o600)
 			}
 		} else {
@@ -322,11 +317,11 @@ func claudeLoginForPrompt(secrets map[string]string) []byte {
 
 // runTask: the task line's boot after the checks (prepare): run the template once for JARVIS2_TASK_RUN (none:
 // just report ready), report, and wait for the router's pause. Never returns.
-func runTask(c *client, template string, secrets map[string]string, mode string) {
+func runTask(c *client, template string, secrets map[string]string, stores []string, mode string) {
 	run := os.Getenv("JARVIS2_TASK_RUN")
 	res := TaskResult{Run: run, StartedAt: time.Now().UTC()}
 	if run != "" {
-		res = doRun(template, run, secrets, mode)
+		res = doRun(template, run, secrets, stores, mode)
 	} else {
 		log.Printf("task %s: no run asked for (the line's first boot): reporting ready", template)
 		res.FinishedAt = time.Now().UTC()
@@ -347,7 +342,7 @@ func runTask(c *client, template string, secrets map[string]string, mode string)
 	select {} // the router pauses this machine (snapshot through the agent, then the core's kill)
 }
 
-func doRun(template, run string, secrets map[string]string, mode string) TaskResult {
+func doRun(template, run string, secrets map[string]string, stores []string, mode string) TaskResult {
 	res := TaskResult{Run: run, StartedAt: time.Now().UTC()}
 	fail := func(msg string) TaskResult {
 		res.Error, res.ExitCode, res.FinishedAt = msg, -1, time.Now().UTC()
@@ -379,7 +374,7 @@ func doRun(template, run string, secrets map[string]string, mode string) TaskRes
 	}
 	var creds []byte
 	if spec.Prompt != "" {
-		creds = claudeLoginForPrompt(secrets)
+		creds = claudeLoginForPrompt(secrets, stores)
 	}
 	env := taskEnviron(os.Environ(), secrets, map[string]string{"TASK_DIR": dir, "TASK_TEMPLATE": template, "TASK_RUN": run,
 		"TASK_OUTPUT": outPath, "TASK_STATE_DIR": state, "TASK_WORK": work, "TASK_TIMEOUT": fmt.Sprint(int(timeout.Seconds()))})
@@ -391,7 +386,7 @@ func doRun(template, run string, secrets map[string]string, mode string) TaskRes
 		res.Error = "could not run: " + err.Error()
 	}
 	if creds != nil { // claude may have refreshed (rotated) the pair: the router keeps the newest
-		if now, err := os.ReadFile(credsPath()); err == nil && !bytes.Equal(now, creds) && expectedAccount(secrets) != "" {
+		if now, err := os.ReadFile(credsPath()); err == nil && !bytes.Equal(now, creds) && slices.Contains(stores, "claude") {
 			var out map[string]any
 			c, err := newClient()
 			if err == nil {

@@ -137,7 +137,7 @@ PY
 fill_stores() {
   local rnd; rnd=$(python3 -c "import secrets;print(secrets.token_hex(6))")
   local S="python3 $ROOT/infra/setup.py"
-  RH_PLAIN="plain-$rnd" RH_SECRET="secret-$rnd" CLAUDE_ACCOUNT_UUID="claude-acct-$rnd" \
+  RH_PLAIN="plain-$rnd" RH_SECRET="secret-$rnd" RH_CLAUDE="claude-$rnd" \
   CF_ACCESS_CLIENT_ID="tunnel-id-$rnd" CF_ACCESS_CLIENT_SECRET="tunnel-secret-$rnd" bash -c "
     set -e
     export JARVIS2_NOT_SENSITIVE=rh-plain
@@ -145,7 +145,7 @@ fill_stores() {
     $S create rh-plain
     $S write rh-plain RH_PLAIN --explain 'RH_PLAIN=replica test value (not secret)'
     $S write rh-secret RH_SECRET --explain 'RH_SECRET=replica test value in a sensitive store'
-    $S write claude CLAUDE_ACCOUNT_UUID --explain 'CLAUDE_ACCOUNT_UUID=replica dummy Claude account id'
+    $S write claude RH_CLAUDE --explain 'RH_CLAUDE=replica dummy value'
     $S write tunnel CF_ACCESS_CLIENT_ID CF_ACCESS_CLIENT_SECRET --explain 'CF_ACCESS_CLIENT_ID=replica dummy tunnel id' --explain 'CF_ACCESS_CLIENT_SECRET=replica dummy tunnel secret'
     $S write github-deploy-keys GITHUB_DEPLOY_KEYS_TOKEN=file:$W/deploy-keys.tok --explain 'GITHUB_DEPLOY_KEYS_TOKEN=7-day PAT for the replica throwaway repo only (deploy keys)'
     $S backup-core $W/fly.tok

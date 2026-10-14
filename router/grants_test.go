@@ -23,10 +23,10 @@ func TestAddGrantClearsTheRefusalBackoff(t *testing.T) {
 		d.Machines["mA"] = "sA"
 	})
 	r.st.Do(func(d *persisted) { d.Sessions["sA"].Live = &Liveness{} })
-	r.noteRefusal("sA", "login", errors.New("the machine refused or failed: no grant"))
+	r.noteRefusal("sA", "archive", errors.New("the machine refused or failed: no grant"))
 	now := time.Now()
 	r.st.Do(func(d *persisted) {
-		if l := d.Sessions["sA"].Live; l.NeedsGrant != "login" || l.mayExec("login", now) {
+		if l := d.Sessions["sA"].Live; l.NeedsGrant != "archive" || l.mayExec("archive", now) {
 			t.Fatalf("the refusal isn't recorded: %+v", l)
 		}
 	})
@@ -34,14 +34,14 @@ func TestAddGrantClearsTheRefusalBackoff(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	text, _ := json.Marshal(map[string]any{"kind": "grant", "holder": pub["login"], "session": "LsA", "scope": "shell",
+	text, _ := json.Marshal(map[string]any{"kind": "grant", "holder": pub["archive"], "session": "LsA", "scope": "shell",
 		"issued": now.UTC().Format(time.RFC3339), "expires": now.Add(10 * time.Minute).UTC().Format(time.RFC3339)})
 	sig, _ := signP256(phone, text)
 	if _, err := r.AddGrant("sA", &Doc{Payload: string(text), Sig: sig}); err != nil {
 		t.Fatal(err)
 	}
 	r.st.Do(func(d *persisted) {
-		if l := d.Sessions["sA"].Live; l.NeedsGrant != "" || !l.mayExec("login", now) {
+		if l := d.Sessions["sA"].Live; l.NeedsGrant != "" || !l.mayExec("archive", now) {
 			t.Fatalf("the grant left the back-off in place: %+v", l)
 		}
 	})

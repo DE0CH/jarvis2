@@ -159,10 +159,8 @@ func main() {
 		"e2e":       {"E2E_SECRET": secret},
 		"e2e-extra": {"E2E_EXTRA": "extra-" + secret},
 		"e2e-more":  {"E2E_MORE": "more-" + secret},
-		// the Claude login store: the account the machine accepts a login for, and a stand-in for Anthropic's
-		// profile endpoint (a public file naming that account), named in the store itself; the router's pair is
-		// a fake one seeded below
-		"claude": {"CLAUDE_ACCOUNT_UUID": "e2e-account", "CLAUDE_PROFILE_URL": fakeProfile},
+		// the Claude login store: no keys, a cert naming it is what gets the router's (fake, seeded below) pair
+		"claude": {},
 	}
 	keysCore = id0.Bundle == "keys"
 	var bundle []byte
@@ -738,10 +736,6 @@ var unlockIDs []string
 
 // lastUnlockWriters: store/key → who the core said wrote it ("machine <id>", "setup ", "core "), from the last unlock
 var lastUnlockWriters = map[string]string{}
-
-// fakeProfile: the test's stand-in for Anthropic's profile endpoint (testdata/claude-profile.json on main, through
-// jsDelivr: raw.githubusercontent.com answers 404 to a request with a bearer token, which the machine always sends)
-const fakeProfile = "https://cdn.jsdelivr.net/gh/DE0CH/jarvis2@main/e2e/testdata/claude-profile.json"
 
 // fakePair: the Claude login the test router holds (a fake pair, public; never refreshed: it expires in 2100)
 const fakePair = `{"claudeAiOauth": {"accessToken": "e2e-fake-access", "refreshToken": "e2e-fake-refresh", "expiresAt": 4102444800000, "scopes": ["user:inference"], "subscriptionType": "max"}}`

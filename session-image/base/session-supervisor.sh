@@ -38,7 +38,15 @@ for path in {wd, os.path.expanduser("~/workspace"), os.path.expanduser("~")}:
     e["hasTrustDialogAccepted"]=True
     e["hasCompletedProjectOnboarding"]=True
     e.setdefault("allowedTools",[])
+# A Re-login to another Claude account reached this running machine (jarvis2-machine creds-sync wrote the new
+# pair and restarted this host): its account record goes in before claude starts, so Remote Control comes up there.
+sw=os.path.expanduser("~/.claude/.account-switch.json")
+try:
+    d.update(json.load(open(sw)))
+except Exception: pass
 json.dump(d,open(p,"w"))
+try: os.remove(sw)
+except FileNotFoundError: pass
 # Pre-accept the bypass-permissions warning via the settings key the CLI actually checks, and
 # make every launch a Remote Control one (remoteControlAtStartup: "Start Remote Control bridge
 # automatically each session"), so a host started by any path — fresh, resume, watchdog

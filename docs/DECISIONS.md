@@ -697,14 +697,15 @@ Jarvis 1 half of 89.
      loses it: one Re-login in the app (Settings → Claude account). A rollout waits for a refresh in flight (SIGTERM
      drains it), and the answer reaches the volume before anything else. Change: a pod of its own if router rollouts
      ever cut a refresh short.
-116. **Machines check the account of every pair before writing it** (DESIGN "Inputs to a machine": the login decides
-     whose Claude app reaches the session through Remote Control, so the router must not pick it). Anthropic's profile
-     endpoint must name the account the store `claude` vouches for (`CLAUDE_ACCOUNT_UUID`, written by the setup session;
-     on a resume whose carried store predates it, the account in the `~/.claude.json` the signed snapshot restored).
-     The router can only withhold the login. The router checks pushes the same way. Cost: a Re-login to ANOTHER Claude
-     account needs `infra/setup.py write claude CLAUDE_ACCOUNT_UUID` (fill-stores.sh reads it from the router), and
-     running lines take the new value at their next pull with an unlock. Change: drop the check if Deyao switches
-     accounts often.
+116. **Machines take the router's Claude login whatever its account** (Deyao, 2026-10-14: "Your Re-login is enough").
+     Until then every pair was checked against `CLAUDE_ACCOUNT_UUID` in the store `claude`, which a running session
+     only gets with a Face ID unlock: the Re-login to another account on 2026-10-14 left every running session refusing
+     the new login. Now a Re-login to any account reaches every running and new session within a minute. A pair for
+     another account replaces the one on the machine even when it expires sooner, and the claude host is restarted
+     (`--resume`) once it is idle so its Remote Control comes up under the new account. The router writes no login into
+     a session any more (login repair and the `login` holder went), and `CLAUDE_ACCOUNT_UUID` is gone. The router
+     still refuses a pushed pair for another account than the one it holds (only a Re-login switches it). Cost: the
+     router alone picks which Claude account sessions use.
 117. **One refresher, chosen by a switch**: the file's `mode` is `follow` (mirror Jarvis 1's pair every 30 s, never
      refresh; the default, so a new router can't start a second refresher) or `own` (the router is the only
      refresher), set only by the setup session (`infra/setup.py claude-login own|follow`). Cutover order: Jarvis 1
@@ -924,8 +925,8 @@ Deyao: several actions approved together with ONE Face ID; the caller groups the
      app, the actions key, a wakeup, a lease or watch wake) of a line with the store `claude` whose image comes before that
      pin in `session-image-sigs.txt` (or isn't listed at all) asks for the newest image instead: a `resume-upgrade`
      approval in the Inbox, so the phone approves it; nothing boots before. A wakeup that resumes such a line waits on
-     that approval (and lapses with it after 10 minutes, leaving the line paused). Change: resume on the old image and
-     let the router's login repair (holder `login`) copy the pair in.
+     that approval (and lapses with it after 10 minutes, leaving the line paused). (The old-image route through the
+     router's login repair went with DECISIONS 116's 2026-10-14 change.)
 152. **The end-to-end test runs with Jarvis 1 unreachable, always.** The router runs in its own mount namespace (`sudo
      unshare`) whose /etc/hosts sends jarvis.deyaochen.com to 127.0.0.2, where a root listener logs every connection; any
      line fails the test. Each session machine gets `0.0.0.0 jarvis.deyaochen.com` in /etc/hosts through Fly exec as soon

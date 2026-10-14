@@ -7,8 +7,8 @@
 #                      "Administration: read and write" only (sensitive). The core makes each repo's deploy key with it
 #                      when Deyao adds the repo in the app; the repos' own stores (github-<repo>) are made there, one
 #                      Face ID each, never here. Its line is in the layout file, valued from the file minted below.
-#   claude             CLAUDE_ACCOUNT_UUID            the Claude account sessions accept the router's login for (not
-#                      secret): the account of the login the router holds (infra/setup.py claude-login)
+#   claude             (no keys)                      a cert naming it gets the router's Claude login; made empty, not
+#                      sensitive
 #   tunnel             CF_ACCESS_CLIENT_ID/SECRET     Access service token jarvis2-tunnel, rotated
 #   core               FLY_API_TOKEN              a fresh infra/fly-token.sh
 #   default, identity, infra, money, devices, work, jarvis1   Deyao's own stores by kind: the keys are listed in
@@ -85,10 +85,7 @@ grep -v '^#' "$LAYOUT" | while read -r store keys; do
   $S write "$store" $keys
 done
 $S write openrouter OPENROUTER_API
-CLAUDE_ACCOUNT_UUID="$($S claude-login | python3 -c 'import json,sys; print(json.load(sys.stdin).get("accountUuid") or "")')"
-[ -n "$CLAUDE_ACCOUNT_UUID" ] || { echo "the router holds no Claude login with an account: Re-login in the app first"; exit 1; }
-export CLAUDE_ACCOUNT_UUID
-$S write claude CLAUDE_ACCOUNT_UUID
+$S stores | grep -q '^claude \[' || $S create claude
 $S write tunnel CF_ACCESS_CLIENT_ID=file:$D/j2tunnel.id CF_ACCESS_CLIENT_SECRET=file:$D/j2tunnel.secret
 $S backup-core "$D/fly.tok"
 $S stores

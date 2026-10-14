@@ -3,9 +3,6 @@ package main
 import (
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"os/exec"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
@@ -245,83 +242,46 @@ func TestStallNudgeRepeats(t *testing.T) {
 	}
 }
 
-func TestLoginDecisions(t *testing.T) {
-	c, now := defaultPilot, time.Now()
-	stored := now.Add(time.Hour).UnixMilli()
-	l := &Liveness{AutoPauseOff: true}
-	d := running("s1", l)
-	no := func(string) bool { return false }
-	// behind the shared pair → write, no repair
-	report(l, now, &Registry{Status: "busy", CredsExpiresAt: stored - 1})
-	a := planTick(d, now, stored, c, no, no)
-	if len(a) != 1 || a[0].Kind != "login" || a[0].Repair != "" {
-		t.Fatalf("write: %+v", a)
-	}
-	if a := planTick(d, now, stored, c, no, no); len(a) != 0 {
-		t.Fatal("a second login while one runs")
-	}
-	l.loginBusy = false
-	// up to date → nothing
-	report(l, now, &Registry{Status: "busy", CredsExpiresAt: stored})
-	if a := planTick(d, now, stored, c, no, no); len(a) != 0 {
-		t.Fatalf("up to date: %+v", a)
-	}
-	// stuck on "Please run /login" → repair once per error
-	report(l, now, &Registry{Status: "idle", CredsExpiresAt: stored, AuthFailed: "u1"})
-	a = planTick(d, now, stored, c, no, no)
-	var login *pilotAction
-	for i := range a {
-		if a[i].Kind == "login" {
-			login = &a[i]
-		}
-	}
-	if login == nil || login.Repair != "u1" {
-		t.Fatalf("repair: %+v", a)
-	}
-	l.loginBusy = false
-	if a := planTick(d, now.Add(time.Hour), stored, c, no, no); strings.Contains(kinds(a), "login") {
-		t.Fatal("repaired the same error twice")
-	}
-	// the shared pair itself expired → nothing to push
-	report(l, now, &Registry{Status: "idle", CredsExpiresAt: 0, AuthFailed: "u2"})
-	if a := planTick(d, now, now.Add(-time.Minute).UnixMilli(), c, no, no); strings.Contains(kinds(a), "login") {
-		t.Fatal("pushed an expired pair")
-	}
-}
-
-// a session with the store `claude` logs in by itself (machine/claudelogin.go): no write and so no grant asked
-// for while its machine catches up; only a machine still behind after SelfLoginGrace gets the old write
-func TestSelfLoginNoGrant(t *testing.T) {
+// the router never writes a login (Deyao, 2026-10-14); a session holding the store `claude` stuck on "Please run
+// /login" gets "continue" once, after its own pair is in step
+func TestLoginContinueOnly(t *testing.T) {
 	c, now := defaultPilot, time.Now()
 	stored := now.Add(time.Hour).UnixMilli()
 	l := &Liveness{AutoPauseOff: true}
 	d := running("s1", l)
 	d.Sessions["s1"].Stores = []string{"claude", "default"}
 	no := func(string) bool { return false }
-	report(l, now, &Registry{Status: "busy", CredsExpiresAt: 0}) // a fresh machine, the first report before its sync
+	// behind the shared pair: nothing (the machine catches up by itself)
+	report(l, now, &Registry{Status: "busy", CredsExpiresAt: stored - 1})
 	if a := planTick(d, now, stored, c, no, no); strings.Contains(kinds(a), "login") {
-		t.Fatalf("a self-login session got a login write: %+v", a)
+		t.Fatalf("a login action for a session behind: %+v", a)
 	}
-	// stuck on "Please run /login" while still behind: wait for the machine's own pair
+	// stuck while still behind: wait for its pair
 	report(l, now, &Registry{Status: "idle", CredsExpiresAt: 0, AuthFailed: "u1"})
-	if a := planTick(d, now.Add(time.Minute), stored, c, no, no); strings.Contains(kinds(a), "login") {
-		t.Fatalf("repaired before the pair caught up: %+v", a)
+	if a := planTick(d, now, stored, c, no, no); strings.Contains(kinds(a), "login") {
+		t.Fatalf("continue before the pair caught up: %+v", a)
 	}
-	// in step and stuck → "continue" only, no write
+	// in step and stuck: "continue", once per error
 	report(l, now, &Registry{Status: "idle", CredsExpiresAt: stored, AuthFailed: "u1"})
-	a := planTick(d, now.Add(2*time.Minute), stored, c, no, no)
-	if len(a) != 1 || a[0].Kind != "login" || a[0].Repair != "u1" || !a[0].NoWrite {
-		t.Fatalf("continue only: %+v", a)
+	a := planTick(d, now, stored, c, no, no)
+	if len(a) != 1 || a[0].Kind != "login" || a[0].Repair != "u1" {
+		t.Fatalf("continue: %+v", a)
 	}
 	l.loginBusy = false
-	// behind past the grace (a machine from before the self-login) → the old write
-	report(l, now.Add(3*time.Minute), &Registry{Status: "busy", CredsExpiresAt: stored - 1})
-	if a := planTick(d, now.Add(3*time.Minute), stored, c, no, no); len(a) != 0 {
-		t.Fatalf("a write inside the grace: %+v", a)
+	if a := planTick(d, now.Add(time.Hour), stored, c, no, no); strings.Contains(kinds(a), "login") {
+		t.Fatal("continued the same error twice")
 	}
-	report(l, now.Add(3*time.Minute+c.SelfLoginGrace), &Registry{Status: "busy", CredsExpiresAt: stored - 1})
-	if a := planTick(d, now.Add(3*time.Minute+c.SelfLoginGrace), stored, c, no, no); len(a) != 1 || a[0].NoWrite || a[0].Kind != "login" {
-		t.Fatalf("write after the grace: %+v", a)
+	// the shared pair itself expired: nothing
+	report(l, now, &Registry{Status: "idle", CredsExpiresAt: stored, AuthFailed: "u2"})
+	if a := planTick(d, now, now.Add(-time.Minute).UnixMilli(), c, no, no); strings.Contains(kinds(a), "login") {
+		t.Fatal("acted on an expired shared pair")
+	}
+	// no store `claude`: no login at all, nothing to continue
+	l2 := &Liveness{AutoPauseOff: true}
+	d2 := running("s2", l2)
+	report(l2, now, &Registry{Status: "idle", CredsExpiresAt: stored, AuthFailed: "u3"})
+	if a := planTick(d2, now, stored, c, no, no); strings.Contains(kinds(a), "login") {
+		t.Fatalf("a session without the claude store: %+v", a)
 	}
 }
 
@@ -357,40 +317,6 @@ func TestDowngradeOnceAndDialog(t *testing.T) {
 	}
 	if !promptOnScreen("\x1b[1mOpus 5.5's Safeguards flagged\x1b[0m this message") {
 		t.Fatal("promptOnScreen")
-	}
-}
-
-func TestWriteCredsCmd(t *testing.T) {
-	if _, err := exec.LookPath("python3"); err != nil {
-		t.Skip("no python3")
-	}
-	home := t.TempDir()
-	run := func(exp int64) string {
-		creds := `{"claudeAiOauth":{"accessToken":"it's \"quoted\"","expiresAt":` + itoa(exp) + `}}`
-		cmd := exec.Command("bash", "-c", writeCredsCmd(creds))
-		cmd.Env = append(os.Environ(), "HOME="+home)
-		out, err := cmd.CombinedOutput()
-		if err != nil {
-			t.Fatalf("%v: %s", err, out)
-		}
-		return strings.TrimSpace(string(out))
-	}
-	if got := run(200); got != "written" {
-		t.Fatal(got)
-	}
-	if got := run(100); got != "kept" {
-		t.Fatal(got)
-	}
-	b, _ := os.ReadFile(filepath.Join(home, ".claude", ".credentials.json"))
-	if credsExpiry(string(b)) != 200 || !strings.Contains(string(b), `it's \"quoted\"`) {
-		t.Fatalf("file: %s", b)
-	}
-	fi, _ := os.Stat(filepath.Join(home, ".claude", ".credentials.json"))
-	if fi.Mode().Perm() != 0o600 {
-		t.Fatalf("mode %v", fi.Mode())
-	}
-	if strings.Contains(writeCredsCmd("SECRETVALUE"), "SECRETVALUE") {
-		t.Fatal("the pair is in the command in the clear")
 	}
 }
 
@@ -556,9 +482,9 @@ func TestStatusRefusalClearsAfterWaiting(t *testing.T) {
 		t.Fatalf("still offered: %q", l.NeedsGrant)
 	}
 	// another holder's refusal stays
-	l.NeedsGrant = "login"
+	l.NeedsGrant = "archive"
 	planTick(d, now, 0, c, no, no)
-	if l.NeedsGrant != "login" {
+	if l.NeedsGrant != "archive" {
 		t.Fatal("cleared another holder's refusal")
 	}
 }

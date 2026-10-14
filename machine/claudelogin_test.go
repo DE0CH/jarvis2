@@ -10,29 +10,27 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"strconv"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 func pairJSON(exp int64) string {
 	return fmt.Sprintf(`{"claudeAiOauth":{"accessToken":"a%d","refreshToken":"r%d","expiresAt":%d}}`, exp, exp, exp)
 }
 
-// fakeLoginRouter: the router's /m/claude-login and Anthropic's profile endpoint (each access token "a<exp>"
-// belongs to acct-1 unless other[exp])
+// fakeLoginRouter: the router's /m/claude-login
 type fakeLoginRouter struct {
 	mu      sync.Mutex
 	srv     *httptest.Server
 	answers []routerLogin // served in turn, the last one repeated
 	polls   []string      // the query of each poll
 	pushes  []string
-	other   map[int64]bool
 }
 
 func newFakeLoginRouter(t *testing.T) (*fakeLoginRouter, *client) {
-	f := &fakeLoginRouter{other: map[int64]bool{}}
+	f := &fakeLoginRouter{}
 	key := newKey()
 	f.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		f.mu.Lock()
@@ -48,13 +46,6 @@ func newFakeLoginRouter(t *testing.T) (*fakeLoginRouter, *client) {
 			}
 		}
 		switch {
-		case req.URL.Path == "/profile":
-			exp, _ := strconv.ParseInt(strings.TrimPrefix(strings.TrimPrefix(req.Header.Get("Authorization"), "Bearer "), "a"), 10, 64)
-			acct := "acct-1"
-			if f.other[exp] {
-				acct = "acct-evil"
-			}
-			json.NewEncoder(w).Encode(map[string]any{"account": map[string]any{"uuid": acct}})
 		case req.URL.Path == "/m/claude-login" && req.Method == "GET":
 			f.polls = append(f.polls, req.URL.RawQuery)
 			a := f.answers[0]
@@ -72,33 +63,29 @@ func newFakeLoginRouter(t *testing.T) (*fakeLoginRouter, *client) {
 		}
 	}))
 	t.Cleanup(f.srv.Close)
-	old := profileURL
-	profileURL = f.srv.URL + "/profile"
-	t.Cleanup(func() { profileURL = old })
 	return f, &client{base: f.srv.URL, me: "m1", sig: key.k, http: f.srv.Client()}
 }
 
 const acctRecord = `{"oauthAccount":{"accountUuid":"acct-1","emailAddress":"x"}}`
 
-// a new session's Claude login comes from the router at boot, checked against the store's account: no grant
+const acct2Record = `{"oauthAccount":{"accountUuid":"acct-2","emailAddress":"y"},"userID":"u2"}`
+
+// a new session's Claude login comes from the router at boot, whatever its account: no grant, no store key
 func TestSessionClaudeLoginAtBoot(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	f, c := newFakeLoginRouter(t)
 	f.answers = []routerLogin{{Credentials: pairJSON(2000), Account: acctRecord, ExpiresAt: 2000}}
 	oldStart := startCredsSync
 	defer func() { startCredsSync = oldStart }()
-	started := ""
-	startCredsSync = func(want string) { started = want }
+	started := 0
+	startCredsSync = func() { started++ }
 
-	if acct := sessionClaudeLogin(c, map[string]string{"CLAUDE_ACCOUNT_UUID": "acct-1"}, []string{"default"}); acct != "" || started != "" {
+	if acct := sessionClaudeLogin(c, []string{"default"}); acct != "" || started != 0 {
 		t.Fatal("no claude store in the cert: nothing to do")
 	}
-	if acct := sessionClaudeLogin(c, map[string]string{}, []string{"claude"}); acct != "" || started != "" {
-		t.Fatal("no account to check against: no login")
-	}
-	acct := sessionClaudeLogin(c, map[string]string{"CLAUDE_ACCOUNT_UUID": "acct-1"}, []string{"claude"})
-	if started != "acct-1" || !strings.Contains(acct, "acct-1") {
-		t.Fatalf("started %q account %q", started, acct)
+	acct := sessionClaudeLogin(c, []string{"claude"})
+	if started != 1 || !strings.Contains(acct, "acct-1") {
+		t.Fatalf("started %d account %q", started, acct)
 	}
 	b, err := os.ReadFile(credsPath())
 	if err != nil || expiresAt(b) != 2000 {
@@ -107,48 +94,121 @@ func TestSessionClaudeLoginAtBoot(t *testing.T) {
 	if fi, _ := os.Stat(credsPath()); fi.Mode().Perm() != 0o600 {
 		t.Fatalf("mode %v", fi.Mode())
 	}
-	// a resumed pair that expires later is kept
+	if localAccount() != "acct-1" {
+		t.Fatal("~/.claude.json didn't take the account")
+	}
+	// a resumed pair of the same account that expires later is kept
 	os.WriteFile(credsPath(), []byte(pairJSON(3000)), 0o600)
-	sessionClaudeLogin(c, map[string]string{"CLAUDE_ACCOUNT_UUID": "acct-1"}, []string{"claude"})
+	sessionClaudeLogin(c, []string{"claude"})
 	if b, _ := os.ReadFile(credsPath()); expiresAt(b) != 3000 {
 		t.Fatalf("a later pair was replaced: %s", b)
 	}
-	// a resume whose carried store predates CLAUDE_ACCOUNT_UUID: the account in the restored ~/.claude.json
-	home, _ := os.UserHomeDir()
-	os.WriteFile(home+"/.claude.json", []byte(acctRecord), 0o600)
-	started = ""
-	sessionClaudeLogin(c, map[string]string{"JARVIS1_CREDENTIALS_ID": "old"}, []string{"claude"})
-	if started != "acct-1" {
-		t.Fatal("the snapshot's account wasn't used", started)
+	// a resume after a Re-login to another account: the restored ~/.claude.json takes the new account, other keys kept
+	os.WriteFile(home(t)+"/.claude.json", []byte(`{"oauthAccount":{"accountUuid":"acct-1"},"projects":{"x":1}}`), 0o600)
+	f.answers = []routerLogin{{Credentials: pairJSON(2500), Account: acct2Record, ExpiresAt: 2500}}
+	sessionClaudeLogin(c, []string{"claude"})
+	j, _ := os.ReadFile(home(t) + "/.claude.json")
+	if localAccount() != "acct-2" || !strings.Contains(string(j), `"projects"`) || !strings.Contains(string(j), `"u2"`) {
+		t.Fatalf("~/.claude.json: %s", j)
 	}
 }
 
-// the router hands another account's pair: refused, nothing written
-func TestSessionClaudeLoginRefusesOtherAccount(t *testing.T) {
+// a Re-login to another account reaches a running machine: the router's pair wins even though the pair here (the old
+// account's, refreshed by its own claude) expires later, and the switch is left for the supervisor
+func TestCredsSyncAccountSwitch(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	f, c := newFakeLoginRouter(t)
-	f.other[2000] = true
-	f.answers = []routerLogin{{Credentials: pairJSON(2000), Account: `{"oauthAccount":{"accountUuid":"acct-evil"}}`, ExpiresAt: 2000}}
-	oldStart := startCredsSync
-	defer func() { startCredsSync = oldStart }()
-	startCredsSync = func(string) {}
-	if acct := sessionClaudeLogin(c, map[string]string{"CLAUDE_ACCOUNT_UUID": "acct-1"}, []string{"claude"}); acct != "" {
-		t.Fatal("another account's record was passed on")
+	os.MkdirAll(home(t)+"/.claude", 0o700)
+	os.WriteFile(home(t)+"/.claude.json", []byte(acctRecord), 0o600)
+	os.WriteFile(credsPath(), []byte(pairJSON(9000)), 0o600)
+	oldKill, oldPoll := killHost, hostIdlePoll
+	defer func() { killHost, hostIdlePoll = oldKill, oldPoll }()
+	hostIdlePoll = 10 * time.Millisecond
+	killHost = func() error { return nil } // no host registry here: nothing is killed
+	s := &syncer{c: c, pushed: []byte(pairJSON(9000))}
+
+	// the first answer only tells the router's account (its pair expires sooner than ours)
+	f.answers = []routerLogin{{Account: acct2Record, ExpiresAt: 4000}, {Credentials: pairJSON(4000), Account: acct2Record, ExpiresAt: 4000}}
+	if err := s.step(); err != nil {
+		t.Fatal(err)
 	}
-	if _, err := os.Stat(credsPath()); err == nil {
-		t.Fatal("another account's pair was written")
+	if err := s.step(); err != nil {
+		t.Fatal(err)
 	}
-	s := &syncer{c: c, want: "acct-1"}
-	if err := s.step(); err == nil || s.refused != 2000 {
-		t.Fatal("credsSync must refuse it too", err)
+	if !strings.Contains(f.polls[0], "have=9000") || !strings.Contains(f.polls[1], "have=0") {
+		t.Fatalf("polls %v", f.polls)
 	}
-	if _, err := os.Stat(credsPath()); err == nil {
-		t.Fatal("written by credsSync")
+	if b, _ := os.ReadFile(credsPath()); expiresAt(b) != 4000 {
+		t.Fatalf("the other account's pair wasn't taken: %s", b)
 	}
-	f.answers = []routerLogin{{ExpiresAt: 2000}}
+	if b, err := os.ReadFile(switchPath()); err != nil || recordAccount(string(b)) != "acct-2" {
+		t.Fatalf("switch file: %v %s", err, b)
+	}
+	if localAccount() != "acct-2" {
+		t.Fatal("the pending switch is this machine's account now")
+	}
+	// in step again: the usual expiry rule
+	f.answers = []routerLogin{{Account: acct2Record, ExpiresAt: 4000}}
 	s.step()
-	if !strings.Contains(f.polls[len(f.polls)-1], "have=2000") {
-		t.Fatal("the refused pair is asked for again", f.polls)
+	if !strings.Contains(f.polls[2], "have=4000") {
+		t.Fatalf("polls %v", f.polls)
+	}
+}
+
+// the host is restarted only once idle, then the supervisor's start merges the switch
+func TestRestartHostWhenIdle(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	os.MkdirAll(home(t)+"/.claude/sessions", 0o700)
+	reg := func(status string) {
+		b, _ := json.Marshal(map[string]any{"status": status, "pid": os.Getpid(), "bridgeSessionId": "b1"})
+		os.WriteFile(home(t)+"/.claude/sessions/1.json", b, 0o600)
+	}
+	oldKill, oldPoll := killHost, hostIdlePoll
+	defer func() { killHost, hostIdlePoll = oldKill, oldPoll }()
+	hostIdlePoll = 10 * time.Millisecond
+	var mu sync.Mutex
+	kills := 0
+	killHost = func() error {
+		mu.Lock()
+		kills++
+		mu.Unlock()
+		os.Remove(home(t) + "/.claude/sessions/1.json")
+		os.Remove(switchPath()) // the relaunched host's start() merges it
+		return nil
+	}
+	if err := os.WriteFile(switchPath(), []byte(acct2Record), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	reg("busy")
+	done := make(chan struct{})
+	go func() { restartHostWhenIdle(); close(done) }()
+	time.Sleep(100 * time.Millisecond)
+	mu.Lock()
+	if kills != 0 {
+		t.Fatal("a busy host was restarted")
+	}
+	mu.Unlock()
+	reg("shell")
+	time.Sleep(100 * time.Millisecond)
+	mu.Lock()
+	if kills != 0 {
+		t.Fatal("a host with background shells was restarted")
+	}
+	mu.Unlock()
+	reg("idle")
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("never restarted")
+	}
+	if kills != 1 {
+		t.Fatal("kills", kills)
+	}
+	// no host at all: nothing to do, the next start merges it
+	os.WriteFile(switchPath(), []byte(acct2Record), 0o600)
+	restartHostWhenIdle()
+	if kills != 1 {
+		t.Fatal("killed with no host")
 	}
 }
 
@@ -159,7 +219,7 @@ func TestCredsSyncLockProtocol(t *testing.T) {
 	f, c := newFakeLoginRouter(t)
 	os.MkdirAll(home(t)+"/.claude", 0o700)
 	os.WriteFile(credsPath(), []byte(pairJSON(1000)), 0o600)
-	s := &syncer{c: c, want: "acct-1", pushed: []byte(pairJSON(1000))}
+	s := &syncer{c: c, pushed: []byte(pairJSON(1000))}
 
 	f.answers = []routerLogin{{ExpiresAt: 1000, Gen: 1, Preparing: true}}
 	if err := s.step(); err != nil {

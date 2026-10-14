@@ -56,11 +56,9 @@ was lost: dirty repos as its final snapshot recorded them, a repo check that cou
 (`router/oneshot.go`, Jarvis 1's finishOneShot); Escape a prompt left `waiting` for 1 h (holder `status`); DM
 "needs you" / idle / dead after 5 min in that state (the idle one muted by `notifyIdle` off); DM new safeguard
 refusals and the "switch model?" dialog (holder `status` reads the pane); a Jarvis watchdog peer message every
-15 min while idle with background jobs; and login repair: when the session's credentials expire before the
-router's stored pair ("The Claude login" below) or its transcript ends on "Please run /login", write the pair
-(holder `login`) and, for the latter, deliver "continue". A session holding the store
-`claude` logs in and keeps in step by itself (machine/claudelogin.go): the router writes nothing there unless it
-stays behind for 5 min, and only delivers "continue" to a stuck one once its pair is in step. A command the machine
+15 min while idle with background jobs; and "continue" to a session holding the store `claude` whose turn stopped on "Please run /login", once its
+own pair is in step (it logs in and keeps in step by itself, machine/claudelogin.go; the router never writes a
+login into a session). A command the machine
 refuses sets `needsGrant` to that holder and the loop leaves it alone for 10 min, or until a phone grant for that
 holder is saved.
 

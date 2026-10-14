@@ -106,8 +106,8 @@ whose value lived only in the old stores and backups, sends the core its Fly tok
 session's live store values); `github-deploy-keys` (sensitive; GITHUB_DEPLOY_KEYS_TOKEN: a new fine-grained PAT
 `jarvis2-deploy-keys`, all repositories, Repository "Administration: read and write" only, minted by `github-web
 pat-create-all`, which deletes the same-name token first; its line is in the layout file too); the harness stores
-`openrouter` (OPENROUTER_API), `claude` (CLAUDE_ACCOUNT_UUID: the Claude account sessions accept the router's login
-for, read from the router's login; not secret), `tunnel` (CF_ACCESS_CLIENT_ID/SECRET: `jarvis2-tunnel`, rotated) and `core` (the Fly token). The narrowed
+`openrouter` (OPENROUTER_API), `claude` (no keys: a cert naming it gets the router's Claude login; made empty, not
+sensitive), `tunnel` (CF_ACCESS_CLIENT_ID/SECRET: `jarvis2-tunnel`, rotated) and `core` (the Fly token). The narrowed
 Fly token in an old `core` backup can't be revoked on its own (an attenuation of JARVIS2_FLY_TOKEN); it stays sealed
 to the old master key. Old backup versions stay in the versioned bucket, sealed to their old key. Nothing needs
 unlocking ahead (each Start unlocks what its session needs, for that session only); Deyao adds his repos again in
@@ -354,13 +354,17 @@ while Jarvis 1 follows).
 
 - **Re-login:** Settings → Claude account → Re-login (web page or app): the sign-in page opens; sign in, copy the code
   it shows (`code#state`), paste, Sign in. A new box starts with no login:
-  Re-login once. A Re-login to another Claude account: also `infra/setup.py write claude CLAUDE_ACCOUNT_UUID` with the
-  new account (DECISIONS 116).
+  Re-login once. A Re-login to another Claude account needs nothing else: every running and new session follows it
+  within a minute (DECISIONS 116).
 - **A dead login** (the refresh was refused) DMs Deyao once; sessions stuck on "Please run /login" get "continue" after
   the Re-login.
 - **Sessions:** a machine whose cert names the store `claude` takes the pair at boot and keeps a long poll open
-  (`jarvis2-machine creds-sync`, its log in the machine's output), writing a new pair only when Anthropic says it is the
-  store's account.
+  (`jarvis2-machine creds-sync`, its log in the machine's output), writing every newer pair, whatever its account. A pair
+  for another account than the machine's replaces the one there even when it expires sooner; creds-sync then leaves the
+  account record in `~/.claude/.account-switch.json` and restarts the claude host once it is idle (no turn, no
+  background shell), so its Remote Control comes up under the new account; the supervisor merges the record into
+  `~/.claude.json` before claude starts. The router never writes a login into a session (no login repair); a turn that
+  stopped on "Please run /login" gets "continue" once the session's pair is in step.
 
 ## Transcript search and the iCloud index
 
