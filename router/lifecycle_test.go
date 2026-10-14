@@ -87,7 +87,7 @@ func TestPauseResumeDestroy(t *testing.T) {
 	go func() {
 		for i := 0; i < 200; i++ {
 			if a := m.commands(); hasWord(a, "snapshot") {
-				done <- m.snapshot([]byte("the workspace"))
+				done <- m.trySnapshot([]byte("the workspace"))
 				return
 			}
 		}
@@ -136,7 +136,7 @@ func TestPauseResumeDestroy(t *testing.T) {
 	go func() {
 		for i := 0; i < 200; i++ {
 			if a := m2.commands(); hasWord(a, "snapshot") {
-				m2.snapshot([]byte("final"))
+				m2.trySnapshot([]byte("final"))
 				return
 			}
 		}
@@ -191,7 +191,7 @@ func TestResumeWithAPromptIsANewPhoneSource(t *testing.T) {
 	go func() {
 		for i := 0; i < 200; i++ {
 			if a := m.commands(); hasWord(a, "snapshot") {
-				m.snapshot([]byte("ws"))
+				m.trySnapshot([]byte("ws"))
 				return
 			}
 		}

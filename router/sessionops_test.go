@@ -45,7 +45,7 @@ func (g *krig) pausedSession() string {
 	go func() {
 		for i := 0; i < 200; i++ {
 			if hasWord(m.commands(), "snapshot") {
-				m.snapshot([]byte("ws"))
+				m.trySnapshot([]byte("ws"))
 				return
 			}
 		}
@@ -105,7 +105,7 @@ func TestRestartWithPromptAndRollback(t *testing.T) {
 	go func() {
 		for i := 0; i < 400; i++ {
 			if hasWord(m.commands(), "snapshot") {
-				m.snapshot([]byte("ws"))
+				m.trySnapshot([]byte("ws"))
 				return
 			}
 		}

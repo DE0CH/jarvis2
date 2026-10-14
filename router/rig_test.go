@@ -402,6 +402,18 @@ func (m *vmach) boot() {
 	m.json("POST", "/m/status", map[string]string{"raw": "", "appTitle": ""}, nil)
 }
 
+// trySnapshot: snapshot from a helper goroutine (no test failure from there: the test checks the outcome)
+func (m *vmach) trySnapshot(data []byte) string {
+	sum := sha256.Sum256(data)
+	hexsum := hex.EncodeToString(sum[:])
+	h := sha256.Sum256([]byte(hexsum))
+	ssig, _ := ecdsa.SignASN1(rand.Reader, m.sig, h[:])
+	if code, _, _ := m.call("POST", "/m/snapshot", data, "X-Snapshot-Sig", kernel.B64.EncodeToString(ssig)); code != 200 {
+		return ""
+	}
+	return hexsum
+}
+
 // snapshot: the machine uploads a signed final snapshot
 func (m *vmach) snapshot(data []byte) string {
 	sum := sha256.Sum256(data)

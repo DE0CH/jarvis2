@@ -42,6 +42,7 @@ type Router struct {
 
 	snapMu  sync.Mutex
 	snapped map[string]chan struct{}
+	outs    outboxes // commands.go: what waits for each machine
 
 	policy Policy
 
@@ -307,18 +308,18 @@ func (r *Router) Respond(id string, sigs []string) (string, error) {
 		}
 		ncs = append(ncs, nc)
 	}
-	r.st.Do(func(d *persisted) {
-		delete(d.Approvals, id)
-		noteOutcome(d, a.Origin, a.Kind, a.Session, outcomeApproved, 0)
-	})
+	r.st.Do(func(d *persisted) { delete(d.Approvals, id) })
+	outcome := func(o string) { r.st.Do(func(d *persisted) { noteOutcome(d, a.Origin, a.Kind, a.Session, o, 0) }) }
 	switch a.Kind {
 	case "new-session", "resume-upgrade":
 		err = r.fromPhoneSource(a, ncs[0])
 		if err != nil {
 			done()
+			outcome(outcomeFailed)
 			r.setState(a.Session, "failed", err.Error())
 			return "", err
 		}
+		outcome(outcomeApproved)
 		go func() {
 			defer done()
 			r.startFrom(a.Session)
@@ -326,8 +327,10 @@ func (r *Router) Respond(id string, sigs []string) (string, error) {
 	default: // an add-on to a running machine (addons.go)
 		defer done()
 		if err := r.applyAddOn(a, ncs); err != nil {
+			outcome(outcomeFailed)
 			return "", err
 		}
+		outcome(outcomeApproved)
 	}
 	return a.Session, nil
 }
@@ -457,7 +460,8 @@ func (r *Router) startFrom(sid string) {
 		machine, err = r.k.Spawn(origin, r.cfg.Region, size)
 	}
 	if err != nil {
-		r.setState(sid, "failed", "spawn: "+err.Error())
+		// nothing was made: the source is unspent, so the session stays paused on it and a resume tries again
+		r.setState(sid, "paused", "spawn: "+err.Error())
 		return
 	}
 	r.st.Do(func(d *persisted) {
@@ -617,7 +621,7 @@ func (r *Router) snapshotAndKill(id string) error {
 			x.State, x.Error, x.MachineID, x.PausedAt, x.Status = "paused", "", "", &now, ""
 		}
 	})
-	dropOutbox(machine)
+	r.dropOutbox(machine)
 	return nil
 }
 
@@ -831,7 +835,7 @@ func (r *Router) finish(id string) {
 				if st := d.Started[m]; st != nil && st.Snapshot != "" {
 					os.Remove(r.st.snapshotPath(st.Snapshot))
 				}
-				dropOutbox(m)
+				r.dropOutbox(m)
 			}
 		}
 		if s.Chain != nil && s.Chain.Source.Snapshot != "" {

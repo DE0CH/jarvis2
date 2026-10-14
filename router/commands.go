@@ -97,28 +97,33 @@ type outbox struct {
 	noticeRes map[string][]chan NoticeResult // kind → waiters, oldest first
 }
 
-var outboxes = struct {
+// outboxes: every machine's outbox (in memory: a router restart loses what wasn't taken, and the guard's own state
+// makes up for it — it asks for its grant at boot, its due signals are sent again)
+type outboxes struct {
 	sync.Mutex
 	m map[string]*outbox
-}{m: map[string]*outbox{}}
+}
 
 // out: the machine's outbox
 func (r *Router) out(machine string) *outbox {
-	outboxes.Lock()
-	defer outboxes.Unlock()
-	o := outboxes.m[machine]
+	r.outs.Lock()
+	defer r.outs.Unlock()
+	if r.outs.m == nil {
+		r.outs.m = map[string]*outbox{}
+	}
+	o := r.outs.m[machine]
 	if o == nil {
 		o = &outbox{wake: make(chan struct{}, 1), shellRes: map[string]chan ShellResult{}, dueRes: map[string]chan DueResult{},
 			noticeRes: map[string][]chan NoticeResult{}}
-		outboxes.m[machine] = o
+		r.outs.m[machine] = o
 	}
 	return o
 }
 
-func dropOutbox(machine string) {
-	outboxes.Lock()
-	delete(outboxes.m, machine)
-	outboxes.Unlock()
+func (r *Router) dropOutbox(machine string) {
+	r.outs.Lock()
+	delete(r.outs.m, machine)
+	r.outs.Unlock()
 }
 
 func (o *outbox) poke() {
