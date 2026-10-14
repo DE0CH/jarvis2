@@ -121,13 +121,16 @@ call("POST", "/api/requests/command", {"session": sid, "cmd": "echo hi"})
 a, out = approve(sid, "command")
 print("    drafts:", len(a["drafts"]), "→", str(out)[:200])
 
-step("pause → paused (no snapshot from a fake machine: the router goes on after SNAPSHOT_WAIT_SECONDS)")
+step("pause → paused (the fake machine uploads a tiny signed snapshot)")
 call("POST", f"/api/sessions/{sid}/pause", {})
 wait_state(sid, ("paused",), 120)
 
 step("resume with a prompt: the phone signs the new source's settings")
 call("POST", f"/api/sessions/{sid}/resume", {"upgrade": False, "prompt": "carry on"})
-approve(sid, "resume")
+a, _ = approve(sid, "resume")
+p0 = json.loads(a["drafts"][0]["payload"])
+if not (p0.get("successor") or {}).get("snapshot"):
+    sys.exit(f"FAIL the resume's new source names no snapshot (the app refuses it): {a['drafts'][0]['payload'][:300]}")
 wait_state(sid, ("started",))
 
 step("destroy")

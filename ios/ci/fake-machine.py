@@ -3,12 +3,12 @@
 session gets past "initialising" without Fly. The spawner (FAKEFLY_KEYS_DIR) writes each machine's private keys to
 DIR/<id>.json; for each new one this boots it as the guard would — GET /m/boot (the chain checked against the roster),
 GET /m/grant, POST /m/secrets/pull, POST /m/status, which marks the session started — then answers the command channel
-(GET /m/commands): a new grant or "pull" pulls again, "snapshot" says there is nothing to snapshot (X-Snapshot-None),
+(GET /m/commands): a new grant or "pull" pulls again, "snapshot" uploads a tiny signed snapshot (a tar.gz),
 shell commands answer that a fake machine runs nothing. A machine the router no longer takes (destroyed, or its
 session paused) is dropped. Every request is signed with the machine's key as the guard signs it
 ("METHOD PATH UNIX-TIME SHA256HEX(BODY)", headers X-Machine / X-Time / X-Sig).
 usage: fake-machine.py DIR [ROUTER_MACHINE_URL] [ROSTER_FILE]"""
-import base64, hashlib, json, os, sys, threading, time, urllib.error, urllib.request
+import base64, hashlib, io, json, os, sys, tarfile, threading, time, urllib.error, urllib.request
 
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import ec
@@ -33,6 +33,17 @@ def verify(pub_b64, payload, sig_b64):
         return True
     except Exception:
         return False
+
+
+def snapshot_bytes(mid):
+    """a gzipped tar with one small file: the shape of the guard's snapshot, nothing in it"""
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w:gz") as t:
+        b = f"fake machine {mid} (CI)\n".encode()
+        ti = tarfile.TarInfo("artifacts/fake-machine.txt")
+        ti.size, ti.mtime = len(b), int(time.time())
+        t.addfile(ti, io.BytesIO(b))
+    return buf.getvalue()
 
 
 class Machine:
@@ -115,7 +126,12 @@ class Machine:
                 if w == "pull":
                     self.pull()
                 elif w == "snapshot":
-                    c, out = self.call("POST", "/m/snapshot", b"", {"X-Snapshot-None": "a fake machine (CI) has nothing"})
+                    # a real (tiny) signed snapshot, as the guard uploads: the next source names its hash, and a resume
+                    # with a prompt is a new source the app checks carries one
+                    data = snapshot_bytes(self.id)
+                    hexsum = hashlib.sha256(data).hexdigest()
+                    ssig = base64.b64encode(self.sig.sign(hexsum.encode(), ec.ECDSA(hashes.SHA256()))).decode()
+                    c, out = self.call("POST", "/m/snapshot", data, {"X-Snapshot-Sig": ssig, "Content-Type": "application/gzip"})
                     log(self.id, "snapshot:", c, out[:200])
             for s in a.get("shell") or []:
                 self.json("POST", "/m/shell-result", {"id": s.get("id"), "code": 127, "stdout": "", "stderr": "",
