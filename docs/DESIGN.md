@@ -1,6 +1,8 @@
 # Secrets controller — design
 
-Design agreed between Deyao and Claude, 2026-10-03 → 10-09 (what is built is in PLAN.md). Goal: every
+Design agreed between Deyao and Claude, 2026-10-03 → 10-09 (what is built is in PLAN.md); the kernel (below, "Target
+design", 2026-10-14) replaces the core's succession certs, shell grants and automatic locks, and where a section here
+still speaks of "the core" the kernel's `secrets` part does that job. Goal: every
 unencrypted secret is touched only by a very small core, and a key store only ever reaches the machine
 Deyao chose — never, by bug or attack, a machine of a different privilege level.
 
@@ -92,9 +94,9 @@ machines, and run exactly one command inside a machine, `/usr/local/bin/jarvis2-
 | Primitive | Does |
 |---|---|
 | `identity()` | Its public keys, signed with the box key, and its own signed state: the master public key it was set up with (none while empty) and the phone's keys. |
-| `claim(statement, masterSig, bundle)` | Once per core, on an empty core: Reset and Recover. The statement names a master public key, this core and the phone's keys, and that master key signs it; the core keeps both keys for its life. The bundle (sealed to the core, format `keys`) carries the stores — none for a Reset; for a Recover every store's name and every key from the backups, each key already wrapped by the app to `P + K` (the core's signed store key), so the core never sees their plaintext; the `core` store's Fly token, which the core keeps for its whole life (never a session's store); each deploy-key store's repo; and the names of the stores that are not sensitive. Who may claim is the router's business (Deyao's app only). |
+| `claim(statement, masterSig, bundle)` | Once per core, on an empty core: Reset and Recover. The statement names a master public key, this core and the phone's keys (and the phone's root key, `root`, which only the setup session reads: for the kernel's roster), and that master key signs it; the core keeps both keys for its life. The bundle (sealed to the core, format `keys`) carries the stores — none for a Reset; for a Recover every store's name and every key from the backups, each key already wrapped by the app to `P + K` (the core's signed store key), so the core never sees their plaintext (never the `core` store's Fly token: the spawner alone holds it); each deploy-key store's repo; and the names of the stores that are not sensitive. Who may claim is the router's business (Deyao's app only). |
 | `wipe(statement, masterSig)` | The current master key's signature over a statement naming this core: the core answers and exits; Kubernetes starts a new, empty core. Nothing else empties a set-up core except a restart from git. |
-| `set_fly_token(sealed)` | The Fly token, sealed to the core (the setup session, after a Reset). Open: the core calls Fly only for its own app, fixed in its code, so a wrong token can only fail. |
+| `set_fly_token(sealed)` | The Fly token, sealed to the spawner's agreement key (the setup session, `infra/setup.py fly-token`, after a Reset or a spawner restart): in the kernel only the spawner holds it. Open: the spawner calls Fly only for its own app, fixed in its code, so a wrong token can only fail. |
 | `create_store(name)` | Once per name, on a set-up core: an empty, non-sensitive store. Open; the writer checks the core's word against its own list and marks a store sensitive before writing it (an empty store goes into no session). Never `github-deploy-keys`. |
 | `mark_sensitive(name)` | The one-way upgrade: the name leaves the non-sensitive set. Open. |
 | `write_key(store, key, sealed value, backupSha256, writer)` | One key written or deleted; the store's other keys are never read or touched (below, "Writing stores and their backups"). Open, on a set-up core. Writer `setup`: its signature over `WriterText` (store, key, `E`, data hash, backup hash), passed on in `unlock_begin` for the phone to check; its first key of a new name makes that store, sensitive. Writer `machine`: the machine's newest cert beside it, and the core checks the signature with the signing key in that cert (a live, certified machine only; never the deploy-key stores or a store that doesn't exist). Answers a signed receipt (`key-written`). |
@@ -147,8 +149,10 @@ and backup), where `backupSha256 = sha256(backup.e + "\n" + backup.data)`. The r
 **the backup first**, `keys/<store>/<key>.json` in Deyao's Hetzner Object Storage bucket `jarvis2-backup-de0ch`
 (**versioned**: a new version never removes an old one, and the router's credential may only add versions under
 `keys/`), then the key into the core; no key reaches the core without its backup. The backup object holds the sealed
-value, `E`, the data hash, the backup hash, the writer (`setup` + signature, or `machine` + signature + the machine's
-core-signed cert), the core's identity (signed by the box key) and the key's explanation.
+value, `E`, the data hash, the backup hash, the writer (`setup` + its signature, `machine` + the machine's id, `router`
+for its own writes, or `restore` + secrets' receipt), secrets' identity (signed by the box key) and the key's
+explanation. `tools/decrypt-backup.py` reads these offline, and the objects written before the kernel too (the old
+core's identity; a session's write signed by its machine key under a core-signed cert).
 
 **What a session can't do by writing.** It can't read a key (sealed to `P + K`), can't remove an earlier value (the
 bucket keeps every version), and can't change what any session holds without Deyao: a written key reaches a session
@@ -223,15 +227,18 @@ page says only what Deyao acts on; errors are one plain sentence with the detail
   `jarvis2-kit:2:<master private key>` with Copy and "I've saved it". On that, it signs a claim naming the
   master public key, the core's keys and its own, with an empty bundle, and the empty core takes it. The stores
   start empty; the setup session fills them later by normal writes (`infra/setup.py write`, which learns the
-  master public key from the core's signed state) and sends the core its Fly token (`backup-core`).
+  master public key from secrets' signed state), gives the spawner its Fly token (`infra/setup.py fly-token`, sealed
+  to the spawner's box-signed agreement key) and puts the claim's phone and root keys into the kernel's roster
+  (`infra/setup.py claim-keys | infra/kernel-keys.py from-claim`, then the parts that read it restart).
 - **Recover:** Deyao pastes his kit. The app fetches the backups through the router (which holds the bucket's
   credential and passes the objects on as they are), checks each writer (a whole-store backup or a setup-written
-  key: `keys/setup.pub` from GitHub; a session-written key: the machine's signature with the key in its cert, the cert
-  signed by a core whose identity the box key signed; a restore's key: that core's signed receipt naming its hashes), decrypts them with the master key, takes each store's
+  key: `keys/setup.pub` from GitHub; a key written by a session or by the router itself: the router's word, since
+  writing secrets is protected only by the router; a restore's key: the signed receipt of a secrets whose identity the
+  box key signed, naming its hashes), decrypts them with the master key, takes each store's
   whole-store backup and then its key backups written after it (a deleted key leaves), wraps each key to `P + K` (the
   store key the core signs for this phone: CryptoKit can't add points), and claims the empty core with the same
-  statement and a bundle of those keys (format `keys`: every store's name, every key, the `core` store's Fly token on
-  its own, the names that aren't sensitive, each deploy-key store's repo), sealed to the core. The plaintext lives only on the phone, well inside a 10-minute cap; the core never sees it.
+  statement and a bundle of those keys (format `keys`: every store's name, every key, the names that aren't sensitive,
+  each deploy-key store's repo; never the `core` store's Fly token, which only the spawner holds), sealed to secrets. The plaintext lives only on the phone, well inside a 10-minute cap; the core never sees it.
 
 Either way the app pins the core's keys and its own master public key, then forgets the master private key. From
 then on it refuses a core set up with another master key, or for another phone. Stores are locked; Deyao unlocks
@@ -503,8 +510,8 @@ Router-only data never reaches a program or the agent, **except values whose str
 instruction** (listed below). "Data" is no exemption: a prompt, a title, a transcript all steer the agent. This
 guards the **entry points** only: it establishes a chain of trust from Deyao's approval to the running agent that
 the router or box can't break. What the session itself chooses to read afterwards (the web, email, files it fetches,
-Deyao telling it to) is outside it, and so are shell grants (below, "Grants"): a phone grant or standing rule is
-Deyao handing a feature a shell, and the session's own allow list is the session's choice.
+Deyao telling it to) is outside it, and so is a shell (below, "Grants"): a terminal or a command the phone signed is
+Deyao handing the router a shell for its length.
 
 | Input | Who vouches |
 |---|---|
@@ -513,7 +520,7 @@ Deyao handing a feature a shell, and the session's own allow list is the session
 | The env | none needed: the core sets only `JARVIS2_CORE_KEY` and `JARVIS2_URL` (from its own deployment); the machine also throws away anything else at boot (keeps the image's own ENV, recorded at build, and Fly's `FLY_*`) |
 | Title, first prompt, model, repos, one-shot, API proxy, attachments (by sha256), a restore (machine + snapshot sha256), task parameters | (a) `Options.Config`, fixed for the line; the first prompt and attachments only for its first machine; each attachment also carries the core's attestation (input log) and is taken only when its bytes match |
 | A resume's prompt, a rollback | (a) `Options.Once`: only the phone approves one; never carried over |
-| The predecessor's state (transcripts, workspace, artifacts, `~/artifacts/on-start`, `.claude` settings and hooks, the allow list, the line keys) | (b) the one snapshot the cert names, signed by the predecessor |
+| The predecessor's state (transcripts, workspace, artifacts, `~/artifacts/on-start`, `.claude` settings and hooks, the guard's records of `once:` commands, the line keys) | (b) the one snapshot the cert names, signed by the predecessor |
 | An archived snapshot (restore) | (a) its sha256 in the config, plus the old cert (core-signed) and its machine's signature |
 | Repo contents (CLAUDE.md, hooks, skills) | (d) GitHub, for exactly the repos the cert names (a cert whose config names none: the repos of the deploy-key stores in the cert) |
 | Secrets | the cert's stores, sealed to the machine by the core; written to `~/.secrets` only under env-name keys |
@@ -605,37 +612,28 @@ signature safe stays the same:
 
 ## Grants (shell access for router features, checked by the machine)
 
-Features outside the core (terminal, scheduler, status, archive) need a shell in a session, as
-Jarvis 1 got through Fly exec. The core's Fly token can exec only `jarvis2-init`, so the machine itself decides
-(Deyao, 2026-10-09); the core only adds three fields to every succession cert: the phone's signing key, whether
-any of the line's stores is sensitive, and the **line id** (the line's first machine; a successor inherits it).
+Features outside the kernel (terminal, scheduler, status, archive) that need a shell in a session get it only through
+a kernel grant the guard holds ("Target design" below, "Adding to a running machine"): the phone signs a **terminal**
+(`{shell}` on `{session:S, until:T}`, at most 10 minutes) or a **command** (`{shell}` on `{session:S, cmd:<sha256>,
+once:<id>, until:T}`, sent once), the router merges it onto the machine's main grant, and the guard runs commands only
+while a grant it holds allows them (`router/addons.go`, `machine/grants.go`). There are no holder keys, standing rules or
+allow lists; what needs no shell is output the guard pushes by itself:
 
-- Each feature is a **holder** with its own key pair on the router's volume (`router/grants.go`).
-- A holder's request (`{id, session: line, holder, cmd, timeout, at}`) is signed by its key and reaches the
-  machine through `/m/commands`; the result goes back signed by the machine (`/m/exec-result`).
-- The machine runs it (`bash -lc` as the session user) when one of these allows it:
-  - a **phone grant**: the phone signs `{kind "grant", holder, session, scope "shell", issued, expires}`,
-    at most 10 minutes long;
-  - a **standing rule**: the phone signs `{kind "rule", …, until}` once, for things that happen while Deyao is
-    away (wakeups, crons, auto-pause);
-  - the session's **own allow list** (`jarvis2-machine allow <holder> <duration>`, kept in the snapshot): the
-    machine approving for itself.
-- A session holding a **sensitive** store accepts only a fresh phone grant.
-- **Viewing the terminal needs no grant** (Deyao, 2026-10-12): the machine pushes its own capture of the harness's
-  pane to the router (`/m/screen`, every 2 s when it changed, 30 s heartbeat), as it pushes its status. Nothing goes
-  into the machine for it. Typing, resizing and the Escape on a stale prompt stay behind the `terminal` / `status`
-  grants; the "switch model?" dialog check reads the pushed pane.
-- Grants name the line, which the machine reads from its core-signed cert, so the router can't make one line's
-  grant open another line's machine. Request ids are single-use and at most 2 minutes old.
-- Re-pairing the phone: running machines trust the old phone key until their line's next cert.
-- **Asking for one** (Deyao, 2026-10-10): the app's Grants page (feature; 1–10 minutes or a standing rule until a
-  date) or a one-tap button where a feature was turned away builds the whole request; the app's grant review only
-  reviews it (Allow with Face ID, or Deny).
+- **Viewing the terminal needs no grant** (Deyao, 2026-10-12): the guard pushes its own capture of the harness's pane
+  to the router (`/m/screen`, every 2 s when it changed, 30 s heartbeat), as it pushes its status, repo changes and the
+  remote page's offer. Typing and resizing need a terminal grant; the Escape on a stale prompt is a content-free command
+  word the guard obeys.
+- Wakeups, crons and watches fire as "X is due" from the router; their texts live on the machine.
+- **Asking for one**: the app's terminal button on a session (1–10 minutes), or an Inbox request (`terminal`,
+  `command`, `add-store` intents) a session or the web page files; the app's approval shows both certs it signs under
+  one Face ID.
 
 ## Target design: succession certs, grants and the kernel (Deyao, 2026-10-14)
 
-Not built yet; DECISIONS 163 has the why, docs/PLAN-grants.md the build. It replaces the core's succession-cert options,
-the holders' shell grants ("Grants" above), the core's automatic locks and the Claude login's own channel.
+Built: the eight parts in `core/kernel` (binaries `core/cmd/*`, one pod each, `k8s/apps-next/kernel`), the guard in
+`machine/`, the router and both apps on it; it goes live at the switchover (docs/RUNBOOK.md "Switching to the kernel").
+DECISIONS 163 has the why, docs/PLAN-grants.md the build. It replaces the core's succession-cert options, the holders'
+shell grants, the core's automatic locks and the Claude login's own channel.
 
 **Layers**
 
@@ -756,6 +754,6 @@ like the phone's keys and never backed up (the kit's master key is what survives
 - Free text into high-privilege machines: the first prompt, a resume prompt and the session's own wakeups are vouched
   for ("Inputs to a machine"); wakeups made from the app or web (not by the session) and peer messages from other
   sessions are not delivered to a machine whose cert vouches, until the phone can sign them.
-- Shell grants: a standing rule hands a feature (the router) a shell for its length; every exec under one bypasses
-  the input log. Narrowing each holder to fixed commands is not done.
+- Shell grants: a terminal hands the router a shell for up to 10 minutes; the guard gets a log-notary challenge over
+  each command's hash, but nothing narrows a terminal to fixed commands (a `command` grant is the narrow form).
 - Layer 1 hardening (CI-only builds and deploys) — see `SECURITY.md` PENDING 5–6.

@@ -6,9 +6,9 @@ Fly exec into the machine, FT Fly token, DT Discord bot token, GH GitHub token, 
 service token on the machine, OR OpenRouter, AT the Claude OAuth pair, K8s the box's API.
 
 Facts: the router has no Fly token (it calls the core's start/kill/certify). Its ways into a machine are the
-`/m/commands` poll (`snapshot`, and shell commands signed by a holder that the machine runs only under a phone grant,
-a standing rule or its own allow list — DESIGN.md "Grants") and what the machine sends by itself (status reports,
-snapshots, live transcripts, task results).
+`/m/commands` poll (content-free words such as `snapshot` and `pull`, the grant the machine should hold, and shell
+commands the guard runs only while a kernel grant it holds allows `shell`: a phone-signed terminal or command — DESIGN.md
+"Grants") and what the machine sends by itself (status reports, the pane, snapshots, live transcripts, task results).
 
 
 ## Session lifecycle
@@ -18,7 +18,7 @@ snapshots, live transcripts, task results).
 - **Start on another size / model**: present (`POST …/resume {size, model, apiProxy}`), unsigned: no phone step.
 - **Wake job status**: present for permission-mode and restart (`wake {kind, phase, error, finishedAt}` in `/api/state`).
 - **Restart / env patch / transcript rollback**: present (`router/sessionops.go`): restart = pause + resume on the same image; `env` takes NON-secret keys only and stays for later starts; the rollback is applied by the next machine after it verified the snapshot (`machine/rollback.go`). env-resync: every resume re-pulls the stores; re-pull without a restart exists only inside add-store and downgrade.
-- **Permission-mode switch**: present. The mode is signed (DECISIONS 30): a resume in another mode needs the phone; raising a running session to bypass needs a fresh phone grant for `terminal`; lowering runs Jarvis 1's `set-permission-mode` in place.
+- **Permission-mode switch**: gone. The mode is in the session's source, fixed for its life (DESIGN.md "Target design": the guard reads it from the source); a session in another mode is a new session.
 - **Auto-pause + idle countdown**: present (machine-reported status, `POST /api/sessions/:id/auto-pause`, `pauseInMs`; the scheduler vetoes it before a due wakeup). Not ported: Jarvis 1's "don't release if it moved during the snapshot" check.
 - **Destroy + archive + uncommitted-work check** (SB): present. Destroy pauses a running session first (its final signed snapshot), the router archives it to the Storage Box with its own creds (`router/archive.go`: Jarvis 1 layout + `jarvis2/` signed snapshot, cert, core cert; index `.index/jarvis2-destroyed-sessions.json`), runs `onDestroy` hooks (Discord export, the live copy removed), then burns. A failed archive leaves it paused (`?force=1` destroys anyway). `GET /api/sessions/:id/changes`: running via the `archive` holder's grant, paused from the snapshot's `.jarvis2-changes.txt`.
 - **One-shot sessions**: present (`oneShot` → `SESSION_ONE_SHOT=1`). On the supervisor's marker the router destroys with force (archived, a failed archive doesn't stop it) and DMs when work was lost: dirty repos from the final snapshot, an unchecked state, a failed archive (`router/oneshot.go`, DECISIONS 40).
@@ -33,15 +33,15 @@ snapshots, live transcripts, task results).
 
 ## Terminal, remote control, title
 - Registry read: present (the machine reports it: `/m/status {raw}`, `router/registry.go`).
-- Live terminal: present (`router/terminal.go`, holder `terminal`; the app draws tmux's capture, app/DECISIONS 27).
+- Live terminal: present (`router/terminal.go`; viewing is the pane the guard pushes, typing needs a terminal add-on the phone signs, `router/addons.go`; the app draws tmux's capture, app/DECISIONS 27).
 - **App title sync (AT)**: present. The machine reads the Claude app's title of its Remote Control entry with its own Claude login and reports it (`/m/status {appTitle}`, `machine/apptitle.go`); it names the card, the Discord channel and the archive folder first (Jarvis 1's pickTitle: app title → CLI-pinned name → label → AI title), is kept while paused, and a resume without a label passes it as `SESSION_RESUME_TITLE`. Not ported: Jarvis 1's rename-back of a fresh Remote Control entry after a Start (`keepAppTitle`; DECISIONS 39).
-- Remote page for opencode/openclaw: present (`GET /api/sessions/:id/remote`, `router/remote.go`, holder `remote`).
+- Remote page for opencode/openclaw: present (`GET /api/sessions/:id/remote`, `router/remote.go`; the guard pushes the offer, a terminal add-on unlocks it: `needsTerminal`).
 - `/api/remotes?harness=` and `POST /api/sessions/:id/start`: present (`router/devices.go`), for Deyao and his paired OpenClaw/Paseo apps ("Device pairing" below).
 - Per-session tunnel origin (CFA): present — harnesses opencode/openclaw bring the store `tunnel` (Access service token `jarvis2-tunnel`); the machine fetches a proof for its own session id (`GET /m/tunnel-proof`); the cf-tunnel Worker confines the token to `AGENT jarvis2` with that proof (claude-env `cf-tunnel/wrangler.toml` `CONFINED_TOKENS`). A paused Jarvis 2 session's link gives the Worker's bare 503 (its Unpause page is for Jarvis 1 ids only).
 
 ## Automatic behaviour
-- Auto-pause, Escape-cancel of a stale prompt (holder `status`), "needs you"/idle/dead DMs (+ `notify-idle` mute), model-downgrade DM (holder `status`), stall nudge, one-shot destroy: present (`router/autopilot.go`, `router/oneshot.go`). Refused commands set `needsGrant`.
-- Claude credential refresh: present (`router/claudelogin.go`): the router keeps the one shared pair on its volume and is its only refresher (Jarvis 2 never calls Jarvis 1), with lessons/74's refresh lock as a long-poll protocol that every session machine with the store `claude` (and Jarvis 1, while it still runs and follows) takes part in. A paused session on an image from before this (whose machine fetched the login from Jarvis 1) resumes on the newest image (DECISIONS 151). Login repair + "continue": present (holder `login`, for a session without it).
+- Auto-pause, Escape-cancel of a stale prompt (a content-free command word the guard obeys), "needs you"/idle/dead DMs (+ `notify-idle` mute), model-downgrade DM (from the pushed pane), stall nudge, one-shot destroy: present (`router/autopilot.go`, `router/oneshot.go`). A call that needs a shell the session's grant lacks answers `needsTerminal`.
+- Claude credential refresh: present (`router/claudelogin.go`): the router keeps the one shared pair on its volume and is its only refresher (Jarvis 2 never calls Jarvis 1), with lessons/74's refresh lock as a long-poll protocol that every session machine with the store `claude` (and Jarvis 1, while it still runs and follows) takes part in. A paused session on an image from before this (whose machine fetched the login from Jarvis 1) resumes on the newest image (DECISIONS 151). Login repair: the Claude login is the store `claude`; the router writes it and the guard pulls again (DESIGN.md "Target design", Secrets).
 - Fly budget cap and "Also on Fly": present (`router/budget.go`, read-only `FLY_READ_TOKEN`).
 - Browserbase budget DM: present (`router/bbbudget.go`, Jarvis 1's lib/bbbudget.js: the month re-priced from the session list, one DM at USD 8 and one at USD 10 overage; `BROWSERBASE_API_KEY` in the router's SOPS part `browserbase`; `/api/state` `browserbaseBudget`).
 - Discord channel per session (DT, SB): present (`router/discord.go`, lobster, category "Jarvis 2"), named by the title above and renamed as it changes (2 edits per 10 min), exported to `claude-records/<date> <title>/discord/` and deleted on destroy. Topic has no Remote Control link.
@@ -56,10 +56,10 @@ snapshots, live transcripts, task results).
 ## Stores, repos, content
 - Store editor in the app: partial — the shell's Stores page creates, unlocks, locks and marks stores sensitive; values are written only by the setup session (`infra/setup.py`). Copy keys between stores: missing (design question 12).
 - Restoring a store to an earlier version (no Jarvis 1 counterpart: its stores were plain SOPS files in git): present
-  with the held core (`core/history.go`, `router/storerestore.go`, DECISIONS 162): the core keeps each store's last 50
+  with the kernel (`core/kernel/secrets/history.go`, `router/storerestore.go`, DECISIONS 162): secrets keeps each store's last 50
   versions; a phone-signed restore (the app's Stores → a store → Versions → Restore…, or an Inbox request from the web
-  page / the setup session) puts one back with no kit. A whole-store write on the live core never silently drops recorded
-  keys (setup.py and the router refuse it without `--replace`).
+  page / the setup session) puts one back with no kit. Writes are per key only (no whole-store write), so nothing drops
+  recorded keys.
 - Multi-store merge conflict file: unverified. Repo picker: present (`router/repos.go`, the app's Settings → Repos). Repo delivery: replaced by per-repo deploy keys (SSH).
 - Content stores: present (`router/content.go`; DECISIONS 132-133): Jarvis 1's `claude-records/.content/<name>/` folders, used in place with the router's Storage Box creds; the app's Content tab (web) manages them; New session (web and iPhone) and task fields pick them, signed in the line's config (`content`); `content-sync` on the machine goes through the local proxy to `/m/api/sessions/:id/content…`, only for the cert's stores, each downloaded file with the core's attestation. Drop tokens: missing.
 
