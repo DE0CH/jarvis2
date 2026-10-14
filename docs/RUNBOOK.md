@@ -6,8 +6,10 @@ through git, and a box git can't fix is replaced.
 
 ## Deploying
 
-`git push` to main. The `images` workflow builds the core, router and session images, then pins them by digest in
-`k8s/apps/` (and signs the session image for the phone, `SESSION_IMAGE_SIG`); Flux applies within a minute.
+`git push` to main. The `images` workflow builds the router, session and kernel images (one per part,
+`ghcr.io/de0ch/jarvis2-<part>` from `core/cmd/<part>`, `core/cmd/Dockerfile`), then pins them by digest in `k8s/apps/`
+(and signs the session image for the phone, `SESSION_IMAGE_SIG`); Flux applies within a minute. The router image is
+built from `core/` too (it imports `core/kernel`), so any push rebuilds and pins it.
 The session image stands on its base, `session-image/base/` (every tool, harness, the entrypoint and supervisor: add a
 tool a session should always have to `session-image/base/Dockerfile` and push). The workflow's `base` job rebuilds the base
 only when that directory changed since the base pinned in `session-image/Dockerfile` (`ARG BASE=…jarvis2-session:base-sha-<12>@sha256:…`),
@@ -31,18 +33,10 @@ non_fast_forward, update; bypass: the admin role and deploy keys); environment `
 with secrets ASC_KEY_ID / ASC_ISSUER_ID / ASC_PRIVATE_KEY (ios.yml's TestFlight job), CI_IMAGE_KEY (the private half of
 `keys/ci.pub`), PIN_DEPLOY_KEY and FORK_PIN_DEPLOY_KEY (`fork-pin.yml`, deploy key `jarvis2-fork-pin`). A workflow that must push to main gets its own deploy key in `release`, never
 `contents: write` on GITHUB_TOKEN. Rotating the CI key: a new P-256 key into CI_IMAGE_KEY and its public half (base64
-X9.63) into `keys/ci.pub` in one go, then run `images` so the router gets a fresh signature. The core's tag moves only when `core/` changed (a core restart is a
-new, empty core: see "Setting the core up"), and never while the core Deployment in `k8s/apps/core.yaml` carries the
-annotation `jarvis2/core-pin: hold`: a core change that waits for Deyao's go (he then Recovers). To roll it out once
-he says so, delete the annotation, push, then `gh workflow run images -R DE0CH/jarvis2` (a k8s/ push alone doesn't
-run it): it pins the newest core and Flux restarts it. The held core now (2026-10-13) is stores made of keys (6fc20f8) with
-store versions and the phone-signed restore (ad17fec): one release. Before it: the router (already live) and an app
-build from the same main (TestFlight, after the phone replica) that speaks per-key unlock, the keys-format Recover
-and restore-written key backups; after it Deyao Recovers (the bucket has every whole-store backup and every key backup
-since, restores' included), every earlier session is destroyed once paused (DESIGN "Carried secrets"), and the setup
-session checks `infra/setup.py versions default` answers (the history starts at the Recover). A core from aa0443a on starts no machine without `MACHINE_URL`: in the same commit
-add `- { name: MACHINE_URL, value: "http://jarvis2-box._peer.internal:8081" }` to the core container's env (test cores
-get their own peer's address from `infra/e2e.sh` / `infra/rehearsal-box.sh`).
+X9.63) into `keys/ci.pub` in one go, then run `images` so the router gets a fresh signature. The kernel parts' pins
+follow "Kernel operations" below: a part without an image yet is pinned at once; the stateless parts (mover, merger,
+identity signer, gullible signer) move whenever `core/kernel`, their `core/cmd/<part>` or `core/go.mod` changed; the
+held ones (`jarvis2/kernel-pin: hold`: secrets, the spawner, the notary, the notarizer) never move without Deyao's go.
 
 A router rollout drains (`router/drain.go`): the old pod refuses new lifecycle actions with 503 "router updating, try
 again shortly" and exits once the running ones have finished (its log: `draining: … waiting for N running: [...]`, every
@@ -53,65 +47,170 @@ when the drain begins ("…start it again"). After a crash (OOM, node reboot), s
 (a resume: `paused`) with "cut off by a router crash" and are started, paused or destroyed again from the app; a
 cut-off start may leave an uncertified machine that the Machines tab flags with no session (Destroy it there).
 
+## Switching to the kernel (held: on Deyao's go)
+
+The kernel (DESIGN "Target design", DECISIONS 163) replaces the core in one release from branch `grants`: the eight
+parts, the router on them, the guard (session image), the app and the web page go live together, and every v1 session
+ends. Until the go, the kernel's manifests sit in `k8s/apps-next/` (Flux applies only `./k8s/apps`) with placeholder
+images, and `infra/kernel-switchover.sh` folds them in. Who does what, in order:
+
+**Before the go (the setup session; nothing reaches production):**
+
+1. `gh workflow run images -R DE0CH/jarvis2 --ref grants`: the test job (core, router, machine, the e2e module's vet,
+   `infra/setup_*_test.py`) and every image build pass; a non-main run pins nothing. Note the run's tag `sha-<12>`.
+2. The eight new GHCR packages (`jarvis2-notary`, `-notarizer`, `-mover`, `-merger`, `-identity-signer`,
+   `-gullible-signer`, `-spawner`, `-secrets`) start PRIVATE, which leaves k3s in ImagePullBackOff: make each public
+   with claude-env's `github-web` skill.
+3. `infra/e2e.sh` from the branch (real Fly, the eight parts and the router run locally) passes.
+4. `REHEARSAL_REF=<branch commit> REHEARSAL_KERNEL_TAG=sha-<12> REHEARSAL_ROUTER_IMAGE=ghcr.io/de0ch/jarvis2-router:sha-<12>
+   REHEARSAL_SESSION_IMAGE=ghcr.io/de0ch/jarvis2-session:sha-<12> infra/rehearse-recover.sh` passes (the box applies
+   `k8s/apps-next` with throwaway kernel keys and roster), then `infra/phone-replica.sh` from the branch (`REPLICA_REF=grants`,
+   the same overrides): the gate for the TestFlight build.
+5. `infra/setup.py` needs the router's `GET /setup/kernel/identities` (the spawner's agreement key for `fly-token`, the
+   roster check of `kernel`); check the branch router has it.
+
+**The go:**
+
+1. **Deyao** pauses every session (a v1 machine can't run under the kernel; they are archived as records when destroyed).
+2. **Deyao** installs the TestFlight build from the replica-gated tree (`ios` workflow `only=testflight`), makes the root
+   key on its root-key screen and sends its PUBLIC key in the chat (nothing secret: it goes into git).
+3. **The setup session**, on `grants` (merge main into it first; never a force push):
+   - `infra/kernel-keys.py new`: the eight parts' keys, each SOPS-encrypted to the box (`k8s/secrets/kernel-key-<part>.enc.yaml`,
+     added to `k8s/secrets/kustomization.yaml`), their public keys into `k8s/apps-next/kernel/roster.json`;
+   - `infra/kernel-keys.py set-phone <the phone's signing key>`, read from the LIVE core with main's setup.py:
+     `git show main:infra/setup.py > /tmp/setup-main.py && python3 -c 'import importlib.util as u; s=u.spec_from_file_location("s","/tmp/setup-main.py"); m=u.module_from_spec(s); s.loader.exec_module(m); print(m.identity()["phone"]["signingKey"])'`;
+   - `infra/kernel-keys.py set-root <Deyao's root key>`, then `infra/kernel-keys.py check`;
+   - `infra/kernel-switchover.sh`: k8s/apps-next moves into k8s/apps (`k8s/apps/kernel/`, `router-kernel.yaml`, the roster
+     ConfigMap), `k8s/apps/core.yaml` goes, `.github/workflows/k8s.yml` expects the fourteen Deployments; review the diff,
+     `kubectl kustomize k8s/apps`, commit, push `grants`.
+4. **Deyao** says go; **the setup session** merges `grants` into main (a merge commit, pushed with the jarvis2 deploy key).
+   The push runs `images`: the pin job pins the router, the session image and every kernel part (each has the placeholder,
+   so each is pinned once, held or not). Flux applies the merge commit first: until the pin commit lands (minutes) the old
+   core is gone, the kernel parts wait on their placeholder images and the old router has no core, so nothing works; that
+   is expected with every session paused. After the pin, Flux starts the eight parts (secrets empty, the spawner with no
+   Fly token) and rolls the router onto the parts' URLs (it drains first: up to 30 min).
+5. **The setup session**: `infra/setup.py status` (`kernel`: all eight true), `infra/setup.py kernel` (every part
+   box-signed and matching the roster), `infra/setup.py identity` (empty).
+6. **Deyao** Recovers in the app with his kit (the claim), and the app puts the root grant (its root-key warning screen,
+   `PUT /api/kernel/root-grant`). The router writes the Claude login into `claude` right after the claim.
+7. **The setup session**: `infra/setup.py identity` (set up, under the pinned master), `infra/setup.py phone-key` equals the
+   roster's `phone` (if not: `set-phone`, commit, restart the notarizer and the spawner: "Kernel operations"), `infra/setup.py
+   fly-token` with a fresh `infra/fly-token.sh`, `infra/setup.py status` (`rootGrant: true`), `infra/setup.py versions
+   default` (its history starts at the Recover).
+8. Smoke, from the app: a new session, a wakeup, a terminal add-on, an add-store, a Re-login reaching a running session,
+   pause and resume, destroy. Then Deyao destroys the paused v1 sessions (archived in Previous; none resumes under the
+   kernel).
+9. claude-env's `jarvis2` skill and anything that runs `infra/setup.py backup-core` or `infra/store-keys.sh`: `fly-token`;
+   the key names come from secrets itself.
+
+**Rollback** (the kernel misbehaves, before or after the Recover):
+
+1. `git revert -m 1 <the merge commit>` on main and push (a new commit). The images workflow pins main's router and
+   session image again; Flux prunes the kernel's Deployments and its key Secrets (they stay in git history: reverting the
+   revert brings the same keys back) and starts the old core, empty. Its image is the one `k8s/apps/core.yaml` pinned.
+2. Deyao installs the previous TestFlight build (the one main had) and Recovers the old core with his kit.
+3. The setup session, with main's scripts: `infra/setup.py identity`, `backup-core` with a fresh `infra/fly-token.sh`, and
+   any key written while the kernel ran: it exists as a key backup (`keys/<store>/<key>.json`), so check `infra/setup.py
+   stores` against the layout file and `write` what the old core lacks.
+
+## Kernel operations
+
+The eight parts run in `jarvis2-core` (the namespace Flux may write that holds the box key, `core-box-key`), one
+Deployment, Service and NetworkPolicy each (`k8s/apps/kernel/<part>.yaml`; `k8s/apps-next/kernel/` before the
+switchover). Each mounts only its own key (Secret `kernel-key-<part>`: SOPS in `k8s/secrets`, `infra/kernel-keys.py`), the
+box key (its `/identity` is box-signed) and, if it checks other parts' signatures, the roster (ConfigMap `kernel-roster` from
+`kernel/roster.json`: every part's public key, the phone's and the root key). Only the router reaches them (port 8090);
+the spawner reaches Fly's API and secrets GitHub's (443, and DNS); the others reach nothing.
+
+| part | replicas | state | a restart |
+|---|---|---|---|
+| mover, merger, identity-signer, gullible-signer | 2, rolling (`maxUnavailable: 0`) | none | nothing: no gap |
+| notary | 1, Recreate, held | the log (`notary-log` volume) | a gap of seconds; the challenge chain starts a new head (the log keeps the old lines) |
+| notarizer | 1, Recreate, held | the sources already continued (`notarizer-state` volume) | a gap of seconds; nothing lost |
+| spawner | 1, Recreate, held | the Fly token, spawns in flight (memory) | send the token again: `infra/fly-token.sh F && infra/setup.py fly-token F`; a spawn whose init was running fails (start it again); pauses work with the machine's spawn cert |
+| secrets | 1, Recreate, held | the stores, unlocks, deploy keys (memory) | an EMPTY secrets: Deyao Recovers; sessions get nothing until then |
+
+The stateful parts have readiness probes only (`GET /identity`): a liveness restart would empty secrets. Their restart has a
+gap, so their rollouts aren't zero-downtime; that is why they are held.
+
+- **Status**: `infra/setup.py status` (`kernel: {part: answers}`, `rootGrant`), `infra/setup.py kernel` (each part's
+  identity, box-signed, against the roster).
+- **A new image for a held part** (on Deyao's go, for secrets with his Recover planned): delete its `jarvis2/kernel-pin:
+  hold` (a commit), `gh workflow run images -R DE0CH/jarvis2`, check it is pinned and running, then put the hold back (a
+  commit). The stateless parts need nothing: their pins move with their code.
+- **Restarting a part**: change `jarvis2/restart` in its pod template (a commit). For secrets this is "Emptying secrets"
+  (below).
+- **The roster** (`kernel/roster.json`): the parts read it at start, and the spawner copies it into every machine's Fly config,
+  where the guard checks every kernel document against it. A change (`infra/kernel-keys.py set-phone|set-root`, or a new
+  part key) takes effect only after restarting the notarizer, the mover, the merger and the spawner (`jarvis2/restart`);
+  secrets reads only the mover's and the merger's keys, so it restarts (empty: a Recover) only when one of those changed.
+  The ConfigMap has no name hash on purpose, so a roster commit restarts nothing by itself. Running sessions keep the
+  roster they booted with: restart them (pause + resume) after any roster change.
+- **Rotating a part's key**: `infra/kernel-keys.py new --rotate PART`, commit both files, restart that part and the parts
+  that check its signatures (as above), then every running session.
+- **A new box** (`infra/create.sh`) has a new box key and a new age key: the old SOPS key files open only on the old
+  box, so run `infra/kernel-keys.py new --rotate` (sealed to the new `keys/box-age.pub`) and commit before the new box
+  applies the kernel. The roster changes with it; sessions of the old box are lost anyway.
+
 ## The keys (`keys/`)
 
-- `box.pub` — written by `infra/create.sh` with each new box; commit it. The app and `setup.py` check a core's
-  keys against it.
+- `box.pub` — written by `infra/create.sh` with each new box; commit it. The app and `setup.py` check every kernel
+  part's identity against it (each part's `/identity` carries the box key's signature).
 - `box-age.pub` — the box's age key (SOPS recipient of the router's secrets), also from `infra/create.sh`.
 - `setup.pub` — the setup key (private half JARVIS2_SETUP_KEY); also `SETUP_KEY` in `k8s/apps/router.yaml`. It
   signs every `/setup` call, every store backup and every store blob (the writer signature the phone checks).
 - `ci.pub` — CI's image key (private half: secret CI_IMAGE_KEY of the environment `release`): the phone shows a session
   image as a CI build only with its signature.
 
-There is no master key in git: Deyao makes it in the app (Reset), and the core learns it from his claim.
+There is no master key in git: Deyao makes it in the app (Reset), and secrets learns it from his claim. The kernel parts'
+public keys, the phone's and the root key are in `k8s/apps/kernel/roster.json`; the parts' private keys are SOPS-encrypted
+to the box in `k8s/secrets/kernel-key-<part>.enc.yaml` ("Kernel operations").
 
-## Setting the core up (Deyao, in the app — nothing for Claude to do)
+## Setting secrets up (Deyao, in the app — nothing for Claude to do)
 
-A new core (after any restart, deploy of `core/`, or box rebuild) is empty. Deyao opens the app (it shows
+A new secrets (after any restart of that part, a new image for it, or a box rebuild) is empty. Deyao opens the app (it shows
 Reset or recover by itself, or Settings → Reset or recover…):
 
 - **Reset** — the app shows a new recovery kit (`jarvis2-kit:2:…`, Copy), he saves it in his password manager,
-  taps "I've saved it", and the core is set up with no stores. Then "After a Reset" below.
-- **Recover** — he pastes his kit; the app reads the backups through the router and the core is set up with every
-  store. Nothing else to do.
+  taps "I've saved it", and secrets is set up with no stores. Then "After a Reset" below.
+- **Recover** — he pastes his kit; the app reads the backups through the router and secrets is set up with every
+  store. Then the setup session sends the spawner its Fly token if the spawner restarted too (`infra/setup.py fly-token`).
 
-`infra/setup.py identity` says whether the core is empty or set up (and with which master public key).
+`infra/setup.py identity` says whether secrets is empty or set up (and with which master public key).
 
 **The setup session's pins** (`pins.json` in the backup bucket, signed by the setup key): the master key the stores
-belong to and the app's device key. `setup.py` writes, backs up or sends nothing to a core whose master isn't pinned,
+belong to and the app's device key. `setup.py` writes, backs up or sends nothing to a secrets whose master isn't pinned,
 unless its claim names the pinned device key and the app's countersignature is at the router (Deyao's Reset: the pin
 moves by itself). A Recover keeps the master; a claim under the pinned master re-pins the device key it names. If
-setup.py says REFUSED, the core was claimed by something other than his app: empty it from git ("Emptying the core
-without its kit") and let him set it up again. `infra/setup.py pin-master` pins the current core's master by hand; use
-it only when the core is known to be his (it holds the stores of a Recover, which only his kit opens) and nothing is
-pinned yet (a new bucket, a rehearsal box).
+setup.py says REFUSED, secrets was claimed by something other than his app: empty it from git ("Emptying secrets
+without its kit") and let him set it up again. `infra/setup.py pin-master` pins the current master by hand; use it only
+when secrets is known to be his (it holds the stores of a Recover, which only his kit opens) and nothing is pinned yet (a
+new bucket, a rehearsal box).
 
 ### Store key names
 
 The app, sessions (`jarvis2 stores`) and `infra/setup.py stores` list every store's key names (API.md `GET
-/api/stores`). The router keeps them in its data volume; `infra/setup.py write` records them with each write. When
-they are missing (a new box, or after a Recover onto a new box) run `infra/store-keys.sh` (names only, from the
-layout file; needs only `JARVIS2_SETUP_*`). A new key in a store: add it to the layout file, then write the store
-(or `infra/setup.py keys <store> <KEY>…` to record the names alone).
+/api/stores`): secrets' own signed list, with who wrote each key; what each key is for is the router's record, written with
+the key (`--explain`) or by `infra/setup.py docs`. A new key in a store: add it to the layout file, then write it.
 
 ### After a Reset (the setup session)
 
-`infra/fill-stores.sh` — once the core is set up (and trusted: the pins above): creates the non-sensitive stores
-(only those in `NOT_SENSITIVE` in `infra/setup.py`; a write marks any other store sensitive first if someone created it), writes every store to the core
-and its backup (sealed to the new master key, read from the core's signed state), minting or rotating every token
-whose value lived only in the old stores and backups, sends the core its Fly token (`backup-core` with a fresh
-`infra/fly-token.sh`), and deletes the local copies. The stores and their keys: Deyao's own stores by kind, `default` (not sensitive), `identity`, `infra`,
+`infra/fill-stores.sh` — once secrets is set up (and trusted: the pins above): creates the non-sensitive stores
+(only those in `NOT_SENSITIVE` in `infra/setup.py`; a write marks any other store sensitive first if someone created it),
+writes every key into secrets and its key backup (sealed to the new master key, read from secrets' signed state),
+minting or rotating every token whose value lived only in the old stores and backups, sends the spawner its Fly token
+(`fly-token` with a fresh `infra/fly-token.sh`), and deletes the local copies. The stores and their keys: Deyao's own stores by kind, `default` (not sensitive), `identity`, `infra`,
 `money`, `devices`, `work` and `jarvis1` (sensitive), whose key names are listed in the private claude-env repo
 (`.claude/skills/jarvis2/stores.txt`, read by the script; run it under `pull-secrets --exec` so it sees the setup
 session's live store values); `github-deploy-keys` (sensitive; GITHUB_DEPLOY_KEYS_TOKEN: a new fine-grained PAT
 `jarvis2-deploy-keys`, all repositories, Repository "Administration: read and write" only, minted by `github-web
 pat-create-all`, which deletes the same-name token first; its line is in the layout file too); the harness stores
-`openrouter` (OPENROUTER_API), `claude` (no keys: a cert naming it gets the router's Claude login; made empty, not
-sensitive), `tunnel` (CF_ACCESS_CLIENT_ID/SECRET: `jarvis2-tunnel`, rotated) and `core` (the Fly token). The narrowed
-Fly token in an old `core` backup can't be revoked on its own (an attenuation of JARVIS2_FLY_TOKEN); it stays sealed
-to the old master key. Old backup versions stay in the versioned bucket, sealed to their old key. Nothing needs
-unlocking ahead (each Start unlocks what its session needs, for that session only); Deyao adds his repos again in
-Settings → Repos (the repos' stores aren't backed up, below).
+`openrouter` (OPENROUTER_API), `claude` (the router writes the Claude login into it right after the claim:
+CLAUDE_CREDENTIALS, CLAUDE_ACCOUNT; made empty, not sensitive) and `tunnel` (CF_ACCESS_CLIENT_ID/SECRET: `jarvis2-tunnel`,
+rotated). The Fly token is no store: the spawner keeps it in memory. A narrowed Fly token in an old `core` backup can't be
+revoked on its own (an attenuation of JARVIS2_FLY_TOKEN); it stays sealed to the old master key. Old backup versions stay
+in the versioned bucket, sealed to their old key. An unlock is per store and lasts until it is locked (secrets never locks
+by itself); Deyao adds his repos again in Settings → Repos (the repos' stores aren't backed up, below).
 
 ### Offline copy of the stores (Deyao, whenever he wants one)
 
@@ -141,20 +240,19 @@ A copy of the encrypted store backups that Deyao keeps himself and opens with hi
    only as current as its fetch time. The decrypted `jarvis2-stores-*.json` is every secret in the clear: open it,
    use what's needed, and delete it; never put it in a synced folder (iCloud Drive, Dropbox).
 
-### Carried secrets (DESIGN "Carried secrets")
+### Unlocks
 
-Stores stay locked: a Start's Face ID unlocks them for that session only, the core locks them again once its machine has
-pulled, and a paused session carries its secrets to its next machine (`snapshots/<machine>.carry` in the router's data
-volume, sealed under a key only the running core holds). Nothing to operate. A session that says "Waiting for store X"
-on a resume has no usable blob (lost, or paused under a core that predates carried secrets): Unlock… on its card, or
-`infra/setup.py request unlock SESSION --why "…"` for the Inbox. After a core restart (and Reset or Recover) the
-router destroys every earlier session by itself once it is paused (DESIGN "Carried secrets"): each is archived in
-Previous, and Restore there starts it as a new line approved on the phone.
+A store's values reach a machine only while the store is unlocked (Deyao's Face ID on its keys, per store) and the
+machine's grant names it (`store:<name>`). Secrets never locks by itself: an unlock ends with a lock (the app's Stores
+page, which shows the open ones). A written key is served on the next pull, whoever wrote it, and the router sends `pull`
+to every running machine whose grant names the store. A session that says "Waiting for store X" waits on an unlock:
+`infra/setup.py request unlock SESSION --why "…"` puts it in the Inbox. Pause is a kill into a fresh source and resume a
+spawn from it: a resumed session pulls again with its grant, no carried blob.
 
 ## Repos and their deploy keys
 
 Each repo is added in the app (Settings → Repos → Add repo, or "Make key" on a listed repo whose store is missing):
-the app makes an ed25519 key, the shell's secure page shows the core's signed request, and one Face ID lets the core
+the app makes an ed25519 key, the shell's secure page shows secrets' signed request, and one Face ID lets secrets
 use `github-deploy-keys` for that call to add the key to the repo as a read/write deploy key titled `jarvis2 <store>`
 and keep the app-wrapped private half in the store `github-<repo>` (the app keeps `github-jarvis2` sensitive). Nothing
 for Claude to do. Remove deletes both. A Recover brings no repo stores back (no backup): "Make key" again, which also
@@ -165,13 +263,13 @@ If the picker says "No match." for a repo that exists (a private one), the route
 repos only: `infra/setup.py status` shows `githubRepos.private: 0`. Mint `jarvis2-repo-list` again with Metadata read
 picked and write `--part github` (The router's secrets, below); then "refresh list" in the app.
 
-If the core says the token can't manage a repo's deploy keys, the token in `github-deploy-keys` lacks Repository
+If secrets says the token can't manage a repo's deploy keys, the token in `github-deploy-keys` lacks Repository
 "Administration: read and write" on it: mint `jarvis2-deploy-keys` again (`github-web pat-create-all
 jarvis2-deploy-keys ~/.jarvis2/gh-deploy-keys.token Administration=write`) and write the store (`setup.py write
 github-deploy-keys GITHUB_DEPLOY_KEYS_TOKEN=file:~/.jarvis2/gh-deploy-keys.token`, then shred the file).
 
 Against real GitHub: `JARVIS2_LIVE_GITHUB_TOKEN_FILE=… JARVIS2_LIVE_REPO=<a throwaway repo> JARVIS2_LIVE_OTHER_REPO=<a
-private repo> go test -run Live` in `core/` (the phone flow, then `git clone`/`push` over SSH with exactly that key,
+private repo> go test -run Live` in `core/kernel/secrets` (the phone flow, then `git clone`/`push` over SSH with exactly that key,
 the other repo refused, remove).
 
 ### Asking Deyao from a session or from the setup session (the Inbox)
@@ -179,9 +277,10 @@ the other repo refused, remove).
 Claude never adds a repo or allows anything itself: it files a request and Deyao approves it in the app's Inbox
 (docs/API.md "Requests").
 
-- Setup session: `infra/setup.py request add-repo DE0CH/claude-env --why "…"` (also `remove-repo`, `grant SESSION
-  HOLDER [--minutes N | --days N]`, `unlock SESSION`); `infra/setup.py requests` lists what waits, `infra/setup.py
-  repos` the router's repo list (check it before asking for a repo that may be there already).
+- Setup session: `infra/setup.py request add-repo DE0CH/claude-env --why "…"` (also `remove-repo`, `unlock SESSION`,
+  `restore STORE VERSION`, `terminal SESSION [--minutes N]`, `command SESSION --cmd-file F`, `add-store SESSION STORE`);
+  `infra/setup.py requests` lists what waits, `infra/setup.py repos` the router's repo list (check it before asking for a
+  repo that may be there already).
 - Inside a session: `jarvis2-request add-repo OWNER/NAME --why "…"`, `jarvis2-request grant HOLDER --minutes 5 --why
   "…"`, `jarvis2-request unlock --why "…"`, `jarvis2-request add-store STORE --why "…"`, `jarvis2-request list`
   (`session-image/bin/jarvis2-request`, through the machine's proxy). `add-store` also starts a background
@@ -196,7 +295,7 @@ says what the batch is for; each item may carry its own `explanation`. Any kind 
 grant, unlock, add-store, new-session, jarvis1-import); at most 20 items; every item is checked before any is filed.
 
 - Setup session: `infra/setup.py request batch --summary "…" --item repo/add,repo=DE0CH/x --item
-  grant,session=sID,holder=terminal,minutes=5` (or `--file items.json`, a JSON list of `{"intent": …, …}`);
+  terminal,session=sID,minutes=5` (or `--file items.json`, a JSON list of `{"intent": …, …}`);
   several Jarvis 1 imports: `infra/setup.py jarvis1 import ID1 ID2 … --stores a,b --why "…" --summary "…"`.
 - Inside a session: `jarvis2-request batch --summary "…" --item grant,holder=scheduler,minutes=5 --item
   add-store,store=gmail` (or `--file`); `--item new-session,label=…,prompt=…,stores=a|b` (lists with `|`; a long
@@ -210,34 +309,31 @@ id). No polling needed; a paused session hears at its next start. `jarvis2-reque
 `jarvis2-request wait ID` blocks on one (exit 0 approved). An outcome that wasn't delivered shows `not delivered: …` in
 `outcomes` (e.g. an image from before outcomes); the router logs `[outcome]` lines.
 
-### Emptying the core without its kit
+### Emptying secrets without its kit
 
-A set-up core ends from the app only with the kit it was set up with (Reset or Recover asks for it). Without that
-kit — a lost kit, or a core someone else claimed first (the app says "set up with a different recovery kit") —
-change the `jarvis2/restart` annotation in `k8s/apps/core.yaml` and push: Flux restarts the core, and the new one
-is empty.
+A set-up secrets ends from the app only with the kit it was set up with (Reset or Recover asks for it). Without that
+kit — a lost kit, or a secrets someone else claimed first (the app says "set up with a different recovery kit") —
+change the `jarvis2/restart` annotation in `k8s/apps/kernel/secrets.yaml` and push: Flux restarts secrets, and the new
+one is empty.
 
 ## Stores
 
-- `infra/setup.py stores` — the core's signed list.
+- `infra/setup.py stores` — secrets' signed list.
 - `infra/setup.py create NAME` — once per name, an empty store that is NOT sensitive. Without it, a store is
   sensitive.
-- `infra/setup.py write NAME KEY[=SRC]…` — new contents (values from this session's env, never printed),
-  written to the core wrapped to the phone + core key, and backed up to S3 (bucket `jarvis2-backup-de0ch`,
-  versioned, encrypted to the master key the core was set up with, signed by the setup key).
-- With the live core from before stores were made of keys, `write` REPLACES the whole store with exactly the keys
-  given: it refuses (and so does the router, 409) a write that leaves out a key name recorded for the store; name every
-  key, or add `--replace` only to drop keys on purpose. A core made of keys writes one key at a time (`delete` removes
-  one) and refuses `--replace`.
-- `infra/setup.py versions NAME` — the store's earlier versions the core keeps (core made of keys: last 50 each).
+- `infra/setup.py write NAME KEY[=SRC]… [--explain KEY=TEXT]` — one key at a time (values from this session's env, never
+  printed; the store's other keys untouched): each sealed to the store key (phone + secrets), to the master key for its
+  backup (the router writes `keys/<store>/<key>.json` in the versioned bucket first) and to secrets (`live`, served on the
+  next pull), signed by the setup key. `delete NAME KEY…` removes keys (their backups keep the earlier values).
+- `infra/setup.py versions NAME` — the store's earlier versions secrets keeps (the last 50 each).
 - `infra/setup.py request restore NAME VERSION --why TEXT` — asks Deyao (Inbox) to put that version back (below).
-- `infra/setup.py mark-sensitive NAME` — the one-way upgrade, in the core and in the backup.
-- The Fly token: `infra/fly-token.sh ~/.jarvis2/fly.tok` (narrowed to the app and to `jarvis2-init`), then
-  `infra/setup.py backup-core ~/.jarvis2/fly.tok` — sent to the core sealed to its key, and backed up as the
-  `core` store (a Recover brings it back).
+- `infra/setup.py mark-sensitive NAME` — the one-way upgrade, in secrets and in the backup.
+- The spawner's Fly token: `infra/fly-token.sh ~/.jarvis2/fly.tok` (narrowed to the app and to `jarvis2-init`), then
+  `infra/setup.py fly-token ~/.jarvis2/fly.tok` — sealed to the spawner's box-signed agreement key; send it again after
+  every spawner restart.
 
-All of them need a set-up core: they learn the master public key and the phone's keys from the core's signed
-state, after checking its keys against `keys/box.pub`.
+All of them need a set-up secrets: they learn the master public key and the phone's keys from secrets' signed state,
+after checking its identity against `keys/box.pub` (and P + K against secrets' signed store key).
 
 ### Restoring a store to an earlier version (DESIGN "Restoring a store")
 
@@ -246,13 +342,13 @@ Keys lost or overwritten by a write (a session's `put-key`, a delete, a mistaken
 1. `JARVIS2_URL=https://jarvis2.deyaochen.com infra/setup.py versions STORE` — find the version before the mistake (each
    line: number, time, what made it, the key names it held).
 2. `infra/setup.py request restore STORE VERSION --why "…"` and Discord Deyao "waiting on you: restore STORE in the
-   Inbox". He reviews exactly what the core will put back and remove, and allows it with one Face ID (or does it
+   Inbox". He reviews exactly what secrets will put back and remove, and allows it with one Face ID (or does it
    himself: Stores → the store → Versions → Restore…; the web page's Versions → Propose restore files the same request).
-3. Check `infra/setup.py versions STORE`: the newest version says `restore of version N` and is current. Sessions holding
-   the store get the restored values only after the refresh unlock the router files in his Inbox.
+3. Check `infra/setup.py versions STORE`: the newest version says `restore of version N` and is current. Running sessions
+   whose grant names the store pull the restored values at once.
 
-A core restart (a new core) keeps no versions: its first version of each store is what the Recover brought. The bucket
-backups (Recover with the kit) stay the way back from anything older or from a lost core. A restore's own backups are in
+A secrets restart (an empty secrets) keeps no versions: its first version of each store is what the Recover brought. The bucket
+backups (Recover with the kit) stay the way back from anything older or from a lost secrets. A restore's own backups are in
 the bucket like any key write's, so a later Recover brings the restored store back.
 
 ## The router's secrets
@@ -466,8 +562,9 @@ rebuilt. The same WARP steps for every other Hetzner server Claude makes: claude
 `CONFIRM=yes infra/convert-ipv6.sh` (env `HETZNER_JARVIS2_MOCK_API`, plus `JARVIS2_SETUP_ACCESS_ID/SECRET` for the
 wait): graceful shutdown, the primary IPv4 unassigned and deleted, a single-use rescue boot (throwaway SSH key, over
 IPv6) that writes `warp-host.sh` and its boot unit onto the disk, then a boot into the box's own system; it waits until
-the core answers through the tunnel. About 10 minutes of downtime. The box keeps its keys, Secrets and Flux state, but
-it reboots, so the core starts empty: Deyao Recovers in the app (as after a power failure). DECISIONS 157.
+secrets answers through the tunnel. About 10 minutes of downtime. The box keeps its keys, Secrets and Flux state, but
+it reboots, so secrets starts empty and the spawner without its Fly token: Deyao Recovers in the app (as after a power
+failure) and the setup session runs `infra/setup.py fly-token`. DECISIONS 157.
 
 ## Rebuilding the box
 
@@ -476,14 +573,17 @@ it reboots, so the core starts empty: Deyao Recovers in the app (as after a powe
    token; put it in the `default` store as JARVIS2_SETUP_ACCESS_ID/SECRET).
 3. `infra/create.sh` — a new box key and age key (commit `keys/box.pub`, `keys/box-age.pub`), a new WireGuard
    peer, no SSH, no open port, no IPv4 (above). Then both `infra/router-secrets.py …` runs (above; the backup read credential
-   needs a new one, since its old value exists nowhere but the old box's Secret). It waits until
+   needs a new one, since its old value exists nowhere but the old box's Secret), and `infra/kernel-keys.py new --rotate`
+   (the old SOPS files are sealed to the old box's age key; new part keys mean a new roster). It waits until
    `setup.py identity` answers.
-4. Deyao sets the core up in the app: Recover (above). Paused sessions are lost (their certs were signed by the
-   old core).
+4. Deyao sets secrets up in the app: Recover (above); the setup session sends the spawner its Fly token. Paused sessions
+   are lost (their machines booted with the old roster).
 
 ## Testing
 
-- Unit: `go test ./...` in core/, router/, machine/ (the core's guarantees are tested in core/).
+- Unit: `go test ./...` in core/, router/, machine/ (the kernel's guarantees are tested in core/kernel: each part, the
+  golden vectors, and `e2e_test.go` chaining them); `python3 infra/setup_trust_test.py` and `infra/setup_write_test.py`
+  (setup.py's checks and seals, offline).
 - The app's crypto against the real core and router: the `ios` workflow's interop job (`ios/interop`, runs on
   Linux too with swift-crypto: `ios/ci/standins.sh W`, then `swift run Interop` with the `INTEROP_*` env).
 - App code that needs no simulator (ResumeOnce: a continuation answered at most once): `swift run Units` in
@@ -491,9 +591,10 @@ it reboots, so the core starts empty: Deyao Recovers in the app (as after a powe
 - The iOS app on a simulator: the `ios` workflow (compile both flavours, the walkthrough in light and dark against a
   real core and router on the runner, recorded); `transitions.yml` taps every navigation and fails on a blank screen.
 - The web page: the `web` workflow (typecheck + export of `app/`).
-- End to end on real Fly with a software phone and the public TEST master key: `infra/e2e.sh` (a local core
-  and router, a throwaway WireGuard peer, the session image; set `E2E_SESSION_IMAGE` to a pinned tag). It sets its
-  own core up and never touches the production core. It always runs with Jarvis 1 unreachable (DECISIONS 152; needs
+- End to end on real Fly with a software phone, a software root key and the public TEST master key: `infra/e2e.sh`
+  (the eight kernel parts and the router run locally, each part with a throwaway key and one roster; a throwaway WireGuard
+  peer, the session image; set `E2E_SESSION_IMAGE` to a pinned tag). It claims its own secrets and never touches
+  production's kernel. It always runs with Jarvis 1 unreachable (DECISIONS 152; needs
   passwordless sudo, which sessions have): the router in its own mount namespace whose /etc/hosts sends
   jarvis.deyaochen.com to a listener that fails the test on any connection, each machine with it blackholed; search, the
   watch runner and the Storage Box are local stand-ins, so it also covers a search, a device lease, a watch, a content
@@ -505,31 +606,34 @@ it reboots, so the core starts empty: Deyao Recovers in the app (as after a powe
 ### Rehearsing Recover on a real box
 
 `infra/rehearse-recover.sh` proves Reset → backups → failure → Recover → a session, on a REAL throwaway box built
-the way production is (`infra/cloudflare.py`, `infra/create.sh`, `infra/cloud-init.sh`, Flux applying `./k8s/apps`
-with the production images at a pinned commit), in the Hetzner project **runners** (`HCLOUD_TOKEN`). It never
-touches the production box, core, router, tunnel, Access apps, WireGuard peer or bucket. About 45 minutes; one
+the way production is (`infra/cloudflare.py`, `infra/create.sh`, `infra/cloud-init.sh`, Flux applying `./k8s/apps` —
+`./k8s/apps-next` when the commit has it — with the production images at a pinned commit, or a branch's by override:
+`REHEARSAL_KERNEL_TAG`, `REHEARSAL_ROUTER_IMAGE`, `REHEARSAL_SESSION_IMAGE`, `infra/rehearsal-box.sh`), in the Hetzner project **runners** (`HCLOUD_TOKEN`). It never
+touches the production box, kernel, router, tunnel, Access apps, WireGuard peer or bucket. About 45 minutes; one
 cx23 for about an hour plus a second one for the rebuild (EUR 0.01056/h each; IPv6-only, no IPv4), a few minutes of small Fly
 machines. Run it from a setup session (needs `JARVIS2_FLY_TOKEN`, `JARVIS2_SETUP_KEY`, `CF_JARVIS2_INFRA_TOKEN`,
 `CLOUDFLARE_API`, `HETZNER_S3_*`) with a swift.org toolchain (`SWIFT_BIN`; the app's side is the `Rehearse` target
 in `ios/interop`, the app's own CoreSetup/CoreCrypto):
 
 1. its own tunnel + `jarvis2-rehearsal-<run>.deyaochen.com` + Access app + service token, its own versioned bucket
-   `jarvis2-rehearsal-<run>` (the run id: the unix time at start), a core Fly token narrowed as production's that also expires after 6 h, then the box;
+   `jarvis2-rehearsal-<run>` (the run id: the unix time at start), a spawner Fly token narrowed as production's that also
+   expires after 6 h, throwaway kernel keys and roster (the kernel layout), then the box;
 2. Reset with the TEST kit (`e2e/testdata`), stores written with `infra/setup.py` (dummy values: not sensitive,
-   sensitive, created-then-marked, the harness's `claude` and `tunnel`, the core's Fly token), backups checked;
-3. power failure (Hetzner hard reset) → Recover → every store and its sensitivity back (backups and the core's
+   sensitive, created-then-marked, the harness's `claude` and `tunnel`), the spawner's Fly token, backups checked;
+3. power failure (Hetzner hard reset) → Recover → every store and its sensitivity back (backups and secrets'
    signed list) → a session on Fly with them, values checked on the machine → destroyed;
-4. the app's restart (the kit wipes the core, Kubernetes starts an empty one) → Recover;
+4. the app's restart (the kit wipes secrets, Kubernetes starts an empty one) → Recover;
 5. the server deleted and made again (new box key, new peer) → Recover → a session again (`SKIP_REBUILD=1` skips);
-6. teardown, also on failure: servers, firewall, peer, the rehearsal cores' machines (`JARVIS2_CORE_KEY`),
+6. teardown, also on failure: servers, firewall, peer, the machines its core or spawner started (`JARVIS2_CORE_KEY`,
+   `JARVIS2_SPAWNER_KEY`),
    Cloudflare tunnel/DNS/app/token, every object version and the bucket: this run's only. After a crash:
    `infra/rehearse-recover.sh teardown <run>`.
 
 Test-only differences (all in the box's user-data, none in git; `infra/rehearsal-box.sh`, shared with the phone
 replica): the router runs `NO_ACCESS=1` behind an Access app whose only policy is the rehearsal service token (the
 router's own check wants Deyao's email login); a Flux patch sets `MACHINE_URL` (the peer `jarvis2-rehearsal-<run>`),
-`BACKUP_BUCKET`, `RECORDS_OFF=1` and Discord off, and there is no `k8s/secrets` Kustomization (encrypted to
-production's age key); the router's backup read key is the admin S3 key (a narrowed one is Console-only); the kit is
+`BACKUP_BUCKET`, `RECORDS_OFF=1` and Discord off, the spawner's `MACHINE_URL` and the roster (the kernel layout), and
+there is no `k8s/secrets` Kustomization (encrypted to production's age key: the kernel's keys ride in the user-data); the router's backup read key is the admin S3 key (a narrowed one is Console-only); the kit is
 the public test key, so the bucket holds only dummy values and the expiring Fly token. A hard reset waits 90 s after
 the stores are written: a power cut seconds after the images were pulled leaves them truncated on disk ("exec
 /router: exec format error" for ever after; only a rebuild cures it). Also checked: a session stuck at boot on a
@@ -550,7 +654,7 @@ page, its stores and the harness's unlocked) running on Fly within 10 minutes, a
 forgotten), the Inbox from a session (`jarvis2-request` run in its machine by this script with `flyctl machine exec`:
 a grant request denied, another allowed with Face ID; the badge, the three fields, the caller; then a batch of two
 grants filed with `jarvis2-request batch`, allowed with ONE Face ID), Settings → Repos (a
-throwaway repo's deploy key added and removed by the core; the script checks GitHub), the Inbox from the setup session
+throwaway repo's deploy key added and removed by secrets; the script checks GitHub), the Inbox from the setup session
 (`setup.py request remove-repo` denied with the repo kept, then `request add-repo` allowed: the key made on GitHub),
 a session stuck at boot (its store locked right after Create) destroyed within 90 s, Destroy, then Recover with the
 kit (restart and recover) and every store back with its sensitivity, and a relaunch. A step fails on a missing
@@ -571,10 +675,10 @@ under one shared name deleted each other's service token, PAT and bucket (2026-1
 - **The gate:** the `ios` workflow's TestFlight job (environment `release`, main only) ships only when a `replica` run
   passed on a commit with the same `ios/` and `policy/` (it checks the last 30 successful replica runs). After an app
   change: `infra/phone-replica.sh`, then run the `ios` workflow with `only=testflight`. `replica_gate=skip` ships without it (say why in the commit or the run).
-- **The core it runs:** while `k8s/apps/core.yaml` carries `jarvis2/core-pin: hold` (a core change waiting for
-  Deyao's go), the replica runs the core main builds — the one the shipped app expects — not the pinned one;
-  `REPLICA_PINNED_CORE=1` runs the pinned core (what production has today: e.g. Settings → Repos says "the running
-  core predates deploy keys").
+- **The kernel it runs:** the pinned parts, or a branch's (`REHEARSAL_KERNEL_TAG`, per part `REHEARSAL_<PART>_IMAGE`,
+  with `REHEARSAL_ROUTER_IMAGE` and `REHEARSAL_SESSION_IMAGE`: "Switching to the kernel"). A held part's newer build
+  (`jarvis2/kernel-pin: hold`) is what the app being shipped may expect: run the replica with that part's image
+  override and say so.
 - **The simulator:** the composite action `.github/actions/ios-simulator`, shared by `replica.yml`, `ios.yml`'s
   walkthrough and `transitions.yml`: Xcode 27.0 (build 27A266a), the iOS 27.0 runtime (Deyao's phone runs 27.0) and
   the device type whose profile says iPhone18,3 (iPhone 17), all pinned; a missing pin fails the run rather than
@@ -589,7 +693,8 @@ under one shared name deleted each other's service token, PAT and bucket (2026-1
 
 ## Looking at things
 
-- What the core did: it keeps no log of its own (R2: as small and stateless as it can be); every change it makes is a
-  signed answer the router keeps (certs, the input log in the router's `input-log.jsonl`).
+- What the kernel did: every answer is a document signed by the part that made it, which the router keeps (by ID,
+  `GET /api/kernel/docs/:id`, and each session's chain); the notary also logs every challenge it issued (`notary-log` volume,
+  and its pod's stdout).
 - A session machine's log: `FLY_API_TOKEN=$JARVIS2_FLY_TOKEN flyctl logs -a jarvis2-sessions --machine <id> --no-tail`
 - The box itself: no way in by design; GitHub (Flux status is visible only through what the services answer).
