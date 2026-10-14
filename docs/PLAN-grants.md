@@ -11,27 +11,29 @@ Status: plan only. Nothing here is built. Sources: DESIGN "Target design" (docs/
 
 
 **Decided 2026-10-14 (Deyao): the machine model. It supersedes §1-§2 wherever they differ** (the `pending` binding,
-burns, burn certs, the null image, `Predecessor == nil` for a new line, kill statements, Fly in the succession signer).
+burn certs, the null image, `Predecessor == nil` for a new line, kill statements, Fly in the succession signer).
 
-- **Everything signed is a grant** (signed text); signers differ only in the key: `phone` (Secure Enclave, Face ID),
-  `machine` (the key a machine makes at boot), `spawner` (its own key; it alone holds the Fly token and signs what Fly
-  tells it), `succession` (its own key; it signs only by exchange). The **notary** is not a signer: it is the time and
-  order under every signed statement (each carries a challenge). **Secrets** signs no grants: it turns a valid secrets
-  grant into values sealed to the grant's machine.
-- **A machine row** is one shape: id, image and everything Fly knows of it, plus keys when it runs. Kinds, by structure
-  (not by code paths):
-  - `source-<32 hex>`: dormant, no keys, created by the **phone** at New session (the image Deyao approves). The start
-    and secrets grants are bound to it under the same Face ID.
-  - a running machine: keys, created by the **spawner** (spawn = start on Fly from a dormant row's image, read its keys).
-  - `sink-<id>`: dormant, no keys, created by the **spawner** when it kills `<id>` (spawn = stop it on Fly, take its
-    snapshot hash). Killing is a spawn.
-  - `sink`: the one end; nothing leaves it.
-- **Every path alternates** `source-x → M1 → sink-M1 → M2 → sink-M2 → … → sink`. A new session, a resume and the end
-  are the same step under the same two rules: a predecessor is used once (each dormant row wakes into one successor),
-  and the successor runs the image its dormant predecessor holds. A dormant row exists only because the phone or the
-  spawner signed it, so there is no "killed" flag and no new-line or burn branch.
-- **One operation each:** phone — create sources, sign grants; spawner — spawn; succession — exchange (a grant bound to
-  A onto A's successor, marking A used); notary — challenge.
+- **Objects:** `source-<random id>`, a conceptually infinite bank, each holding an image hash and its key stores; Fly
+  machines; and one global `sink`, with no image and no stores.
+- **A succession** is (predecessor, successor), signed by a signer, plus a **succession notarization**: the component
+  that checks the rules and then answers the log notary's challenge, so every accepted succession is checked, timed
+  and logged. The guard checks only that each step carries a valid notarization, never the signatures below it.
+- **The rules are a table** (policy as data; the notarizer has one path: look up the shape, check the signer, check the
+  named condition; a shape not in the table is refused):
+
+  | shape | signer required | notarized |
+  |---|---|---|
+  | (sink, source-x) | iPhone | always (a new session: the phone creates the source, image and stores) |
+  | (source-x, Fly machine) | spawner | only for the first successor of source-x (no forks) |
+  | (Fly machine, source-y) | spawner | always (a kill: the spawner checked the machine was alive, killed it, confirmed it dead through the Fly API; source-y carries the machine's image and stores) |
+  | (anything, sink) | any, so the special signer | always (ending needs no authority) |
+
+- **The special signer** signs any pair it is given, whoever asks; its signature is worth something only where the
+  table accepts any signer, i.e. ending. The one invariant to test: it appears in the table only for (anything, sink).
+- **The spawner** is trusted and alone holds the Fly token. A paused machine becomes a fresh source, so "dormant" and
+  "not yet started" are the same kind of object; sessions start and end at the one sink.
+- **Placement:** the log notary, the succession notarizer, the spawner, the special signer and secrets are all inside
+  the same trusted core, each small and isolated, but separate components.
 - **Also decided:** a `grants` branch (§4); terminal grants at most 10 minutes (Q9); a secrets grant covers every key of
   its stores, current and future, whoever writes them (Q5: secrets are not code and the model never reads them, so a
   written key can't be a prompt injection).
