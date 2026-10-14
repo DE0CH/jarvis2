@@ -15,9 +15,9 @@ machine** with a fresh random id (`null-<32 hex>`: 128 random bits, so it can't 
 for display). The phone binds the start and secrets grants to it and signs the succession challenge naming it as the
 predecessor. A null machine counts as killed from birth, with no snapshot; certify's one-successor-per-predecessor rule
 uses it up. Grants reach the first machine by an ordinary exchange through the cert whose predecessor is that null
-machine. No `pending` field, no special exchange form. A burn is an ordinary succession onto the fixed machine **`null-sink`**: the old machine is used up as usual,
-and the signer refuses any succession whose predecessor is `null-sink`, so nothing continues an ended session (sources
-are always `null-` + 32 hex, so `null-sink` is never one). The burn cert and the null image go. Also decided: a `grants` branch (§4); terminal grants at most
+machine. No `pending` field, no special exchange form. A burn is an ordinary succession onto the fixed machine **`sink`**: the old machine is used up as usual, and
+the signer refuses any succession whose predecessor is `sink`, so nothing continues an ended session (`sink` is neither
+a Fly id nor a `null-` source). The burn cert and the null image go. Also decided: a `grants` branch (§4); terminal grants at most
 10 minutes (Q9); a secrets grant covers every key of its stores, current and future, whoever writes them (Q5: secrets
 are not code and the model never reads them, so a written key can't be a prompt injection).
 
