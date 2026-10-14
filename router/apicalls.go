@@ -287,31 +287,15 @@ var callRules = map[string]callRule{
 	"GET /api/content/{name}/file":              callBody,
 	"POST /api/content/{name}/file":             callBody,
 	"GET /api/content/{name}/files":             callBody,
-	"POST /api/core/claim":                      callNo, // the iPhone app's Recover, signed by the master key
-	"GET /api/core/identity":                    callBody,
-	"POST /api/core/lock":                       callBody,
-	"POST /api/core/store-key":                  callBody,
-	"POST /api/core/stores":                     callBody,
-	"POST /api/core/stores/create":              callBody,
-	"POST /api/core/stores/mark-sensitive":      callBody,
-	"POST /api/core/stores/restore/begin":       callNo, // half of a restore the phone finishes with its signature and shares
-	"POST /api/core/stores/versions":            callBody,
-	"POST /api/core/unlock/begin":               callNo, // half of an unlock the phone finishes with its sealed share
-	"POST /api/core/unlock/finish":              callNo, // needs the phone's sealed share
-	"POST /api/core/unlocked":                   callBody,
-	"POST /api/core/wipe":                       callNo, // the iPhone app's Reset, signed by the master key
 	"GET /api/devices":                          callBody,
 	"GET /api/devices/pair":                     callNo, // mints a device service token: a login of its own
 	"DELETE /api/devices/{id}":                  callBody,
 	"GET /api/github/repos":                     callBody,
-	"DELETE /api/grants/{gid}":                  callBody,
-	"GET /api/holders":                          callBody,
 	"GET /api/icloud/file":                      callBody,
 	"POST /api/icloud/relist":                   callBody,
 	"POST /api/icloud/retry":                    callBody,
 	"GET /api/icloud/search":                    callBody,
 	"GET /api/icloud/status":                    callBody,
-	"GET /api/input-log":                        callBody,
 	"GET /api/jarvis1/paused":                   callBody,
 	"GET /api/jarvis1/paused/{id}":              callBody,
 	"POST /api/jarvis1/paused/{id}/import":      callBody,
@@ -338,7 +322,6 @@ var callRules = map[string]callRule{
 	"POST /api/requests/batch":                  callNo, // the Inbox
 	"DELETE /api/requests/batches/{id}":         callNo, // the Inbox
 	"GET /api/requests/batches/{id}":            callNo, // the Inbox
-	"POST /api/requests/grant":                  callNo, // the Inbox
 	"POST /api/requests/repo/add":               callNo, // the Inbox
 	"POST /api/requests/repo/remove":            callNo, // the Inbox
 	"POST /api/requests/restore":                callNo, // the Inbox
@@ -354,20 +337,14 @@ var callRules = map[string]callRule{
 	"POST /api/sessions":                        callBody,
 	"GET /api/sessions/{id}/attachments/{name}": callBody,
 	"POST /api/sessions/{id}/auto-pause":        callBody,
-	"GET /api/sessions/{id}/cert":               callStatus, // the line's core-signed cert
 	"GET /api/sessions/{id}/changes":            callBody,
 	"GET /api/sessions/{id}/crons":              callBody,
 	"POST /api/sessions/{id}/crons":             callBody,
 	"DELETE /api/sessions/{id}/crons/{name}":    callBody,
 	"POST /api/sessions/{id}/destroy":           callBody,
-	"POST /api/sessions/{id}/env":               callBody,
 	"POST /api/sessions/{id}/exec":              callStatus, // another session's command output (its env, its files)
-	"GET /api/sessions/{id}/grants":             callStatus, // phone-signed grant documents
-	"POST /api/sessions/{id}/grants":            callNo,     // takes a phone-signed grant
-	"POST /api/sessions/{id}/grants/draft":      callBody,
 	"POST /api/sessions/{id}/notify-idle":       callBody,
 	"POST /api/sessions/{id}/pause":             callBody,
-	"POST /api/sessions/{id}/permission-mode":   callBody,
 	"GET /api/sessions/{id}/remote":             callStatus, // the OpenClaw gateway token / OpenCode pairing URL
 	"POST /api/sessions/{id}/restart":           callBody,
 	"POST /api/sessions/{id}/resume":            callBody,
@@ -404,5 +381,30 @@ var callRules = map[string]callRule{
 	"PUT /api/tasks/schedules/{id}":             callBody,
 	"POST /api/uploads":                         callNo, // the app's attachment upload (raw file with its x-upload-* headers)
 	"GET /api/usage":                            callBody,
+	"GET /api/kernel/docs/{id}":                 callBody,
+	"GET /api/kernel/identities":                callBody,
+	"GET /api/kernel/notarized/{id}":            callBody,
+	"GET /api/kernel/root-grant":                callBody,
+	"PUT /api/kernel/root-grant":                callNo, // takes the root key's grant (the phone, at setup)
+	"GET /api/kernel/roster":                    callBody,
+	"GET /api/sessions/{id}/chain":              callBody,
+	"POST /api/sessions/{id}/narrow":            callBody, // narrowing only: the main grant moved to fewer stores
+	"POST /api/requests/add-store":              callNo,   // the Inbox
+	"POST /api/requests/command":                callNo,   // the Inbox
+	"POST /api/requests/terminal":               callNo,   // the Inbox
+	"POST /api/secrets/claim":                   callNo,   // the iPhone app's Recover, signed by the master key
+	"GET /api/secrets/identity":                 callBody,
+	"POST /api/secrets/lock":                    callBody,
+	"POST /api/secrets/state":                   callBody,
+	"POST /api/secrets/store-key":               callBody,
+	"POST /api/secrets/stores":                  callBody,
+	"POST /api/secrets/stores/create":           callBody,
+	"POST /api/secrets/stores/mark-sensitive":   callBody,
+	"POST /api/secrets/stores/restore/begin":    callNo, // half of a restore the phone finishes with its signature and shares
+	"POST /api/secrets/stores/versions":         callBody,
+	"POST /api/secrets/unlock/begin":            callNo, // half of an unlock the phone finishes with its sealed share
+	"POST /api/secrets/unlock/finish":           callNo, // needs the phone's sealed share
+	"POST /api/secrets/unlocked":                callBody,
+	"POST /api/secrets/wipe":                    callNo, // the iPhone app's Reset, signed by the master key
 	"GET /term/{id}":                            callNo, // a terminal page for a browser
 }

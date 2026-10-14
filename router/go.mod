@@ -8,6 +8,7 @@ require (
 )
 
 require (
+	filippo.io/nistec v0.0.4 // indirect
 	github.com/google/btree v1.1.2 // indirect
 	golang.org/x/crypto v0.37.0 // indirect
 	golang.org/x/net v0.39.0 // indirect

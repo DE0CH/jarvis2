@@ -477,6 +477,11 @@ func (r *Router) buildHandlers() {
 		w.Write(out)
 	})
 
+	// an API path no route serves is a 404, not the web page
+	mux.Handle("GET /api/", r.requireDeyao(func(w http.ResponseWriter, req *http.Request) {
+		writeJSON(w, 404, map[string]string{"error": "no such API: " + req.Method + " " + req.URL.Path})
+	}))
+
 	// ---- the web page ------------------------------------------------------------------------------------
 	web := http.FileServer(http.Dir(r.cfg.WebDir))
 	mux.Handle("GET /", r.requireDeyao(func(w http.ResponseWriter, req *http.Request) {

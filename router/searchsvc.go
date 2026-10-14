@@ -4,7 +4,8 @@ package main
 // k8s/apps/search.yaml, k8s/apps/icloud-index.yaml, namespace jarvis2-edge). The router forwards to them, for the
 // app's Search tab (/api/...) and for sessions (/m/api/..., the machine's local proxy; any session may search).
 // The iCloud index is identity-level (Deyao, 2026-10-13): its paths, OCR'd text and downloads act as Deyao's own
-// files, so a session reaches it only while its cert holds the `identity` store (where the iCloud login lives);
+// files, so a session reaches it only while the grant its machine holds names store:identity (where the iCloud login
+// lives);
 // any other session gets 403. Deyao's app keeps it. Transcript search is open to every running session.
 // The services have no login of their own: only the router can reach them (their NetworkPolicies), and the router
 // is behind Cloudflare Access (the app) or the machine signature (sessions). Shapes: docs/API.md "Transcript
@@ -15,16 +16,14 @@ package main
 
 import (
 	"bytes"
-	"errors"
 	"io"
 	"log"
 	"net/http"
-	"slices"
 	"strings"
 	"time"
 )
 
-// icloudStore: the store a session's cert must hold to reach the iCloud index
+// icloudStore: the store a session's held grant must name to reach the iCloud index
 const icloudStore = "identity"
 
 type svcRoute struct{ pattern, svc, path string }
@@ -59,34 +58,18 @@ func (r *Router) registerSearchServices(app appRoute, m machineRoute) {
 			forwardService(w, req, rt, b)
 		})
 		m(strings.Replace(rt.pattern, " /api/", " /m/api/", 1), func(w http.ResponseWriter, req *http.Request, machine string, body []byte) {
-			stores, err := r.machineSessionStores(machine)
+			sid, err := r.machineSession(machine)
 			if err != nil {
 				writeJSON(w, 403, map[string]string{"error": err.Error()})
 				return
 			}
-			if rt.svc == "icloud" && !slices.Contains(stores, icloudStore) {
+			if rt.svc == "icloud" && !r.machineHoldsStore(sid, icloudStore) {
 				writeJSON(w, 403, map[string]any{"error": "the iCloud index needs the " + icloudStore + " store in this session: jarvis2-request add-store " + icloudStore + ` --why "…"`, "needsStore": icloudStore})
 				return
 			}
 			forwardService(w, req, rt, body)
 		})
 	}
-}
-
-// machineSessionStores: the stores in the cert of the machine's running session (the cert's own list: it follows
-// add-store and downgrade)
-func (r *Router) machineSessionStores(machine string) ([]string, error) {
-	var stores []string
-	found := false
-	r.st.Do(func(d *persisted) {
-		if s := d.Sessions[d.Machines[machine]]; s != nil && s.MachineID == machine {
-			found, stores = true, append([]string{}, s.Stores...)
-		}
-	})
-	if !found {
-		return nil, errors.New("this machine isn't a running session")
-	}
-	return stores, nil
 }
 
 // forwardService: method, the service's path, the query and body unchanged; the service's status and JSON back

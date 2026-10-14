@@ -1124,6 +1124,7 @@ func (r *Router) sealTargets() (sealTargets, error) {
 		Kind   string `json:"kind"`
 		Master string `json:"master"`
 		Phone  *struct {
+			SigningKey   string `json:"signingKey"`
 			AgreementKey string `json:"agreementKey"`
 		} `json:"phone"`
 		Bundle string `json:"bundle"`
