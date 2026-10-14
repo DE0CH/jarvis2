@@ -379,16 +379,38 @@ func loadImageOrder(path string) []string {
 // JARVIS1_CREDENTIALS_*, which no longer exist: such a line resumes on the newest image (the phone approves).
 const firstRouterLoginImage = ":sha-c5427052a542@"
 
+// imageDigest: the sha256:… part of a ref@digest (the whole string when it names no digest)
+func imageDigest(s string) string {
+	if i := strings.LastIndex(s, "@"); i >= 0 {
+		return s[i+1:]
+	}
+	return s
+}
+
+// pinnedImage: the ref CI pinned and signed (ref:sha-…@digest) for image's digest. A session records the image its
+// machine reports, which can be the bare repo@digest: CI's signature is over the pinned ref, so a resume on the
+// session's own image names that, or the phone refuses it as unsigned. Unchanged when no pin has the digest.
+func pinnedImage(image, current string, order []string) string {
+	if !strings.Contains(image, "@") {
+		return image
+	}
+	d := imageDigest(image)
+	if imageDigest(current) == d {
+		return current
+	}
+	for _, o := range order {
+		if imageDigest(o) == d {
+			return o
+		}
+	}
+	return image
+}
+
 // legacyLoginImage: image (ref@digest) is a pin older than firstRouterLoginImage, by its digest's place in the pin
 // order. Unknown when the order is missing or lacks the marker (a test router): false. A digest the order doesn't
 // list at all is an image from before the list began: legacy.
 func legacyLoginImage(image string, order []string) bool {
-	digest := func(s string) string {
-		if i := strings.LastIndex(s, "@"); i >= 0 {
-			return s[i+1:]
-		}
-		return s
-	}
+	digest := imageDigest
 	mark := -1
 	for i, o := range order {
 		if strings.Contains(o, firstRouterLoginImage) {
@@ -739,7 +761,7 @@ func (r *Router) Resume(id string, upgrade bool) error {
 	r.setState(id, "resuming", "")
 	go func() {
 		defer unlock()
-		image := s.Image // the same image, pinned by digest
+		image := pinnedImage(s.Image, r.cfg.SessionImage, r.cfg.ImageOrder) // the same image, as CI pinned and signed it
 		if !upgrade && slices.Contains(s.Stores, "claude") && legacyLoginImage(s.Image, r.cfg.ImageOrder) {
 			upgrade = true // its machine would fetch the Claude login from Jarvis 1: the newest image instead
 			log.Printf("session %s: resume on the newest image (its image %s predates the router's Claude login)", id, s.Image)
