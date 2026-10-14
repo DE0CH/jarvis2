@@ -5,11 +5,11 @@ package main
 // self-succession, the old core's relays), and the app can't arm a wakeup, cron or watch.
 
 import (
-	"encoding/json"
 	"net/http"
 	"sort"
 	"strings"
 	"testing"
+	"time"
 )
 
 // newTestRouter: a router with no kernel parts behind it (features that don't reach the kernel)
@@ -76,7 +76,13 @@ func TestGoneRoutes(t *testing.T) {
 		}
 	}
 	// nothing from the old command channel: no execs, no deliveries, no refresh-secrets
-	b, _ := json.Marshal(m.commands())
+	old := commandsWait
+	commandsWait = 50 * time.Millisecond
+	defer func() { commandsWait = old }()
+	code, b, _ := m.call("GET", "/m/commands", nil)
+	if code != 200 {
+		t.Fatal(code)
+	}
 	for _, gone := range []string{"execs", "deliveries", "refresh-secrets"} {
 		if strings.Contains(string(b), gone) {
 			t.Fatalf("/m/commands carries %s: %s", gone, b)

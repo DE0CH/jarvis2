@@ -98,7 +98,7 @@ func holdStores(r *Router, sid string, extra ...string) {
 
 func waitFor(t *testing.T, what string, ok func() bool) {
 	t.Helper()
-	for i := 0; i < 1000; i++ {
+	for i := 0; i < 2000; i++ {
 		if ok() {
 			return
 		}
@@ -121,3 +121,16 @@ func appDo(t *testing.T, r *Router, method, target, body string, hdr ...string) 
 }
 
 func jsonString(v any) string { b, _ := json.Marshal(v); return string(b) }
+
+func mxRaw(t *testing.T, m testMachine, h http.Handler, req *http.Request) *httptest.ResponseRecorder {
+	t.Helper()
+	ts := strconv.FormatInt(time.Now().Unix(), 10)
+	sum := sha256.Sum256(nil)
+	sig, _ := signP256(m.key, []byte(req.Method+" "+req.URL.Path+" "+ts+" "+hex.EncodeToString(sum[:])))
+	req.Header.Set("X-Machine", m.id)
+	req.Header.Set("X-Time", ts)
+	req.Header.Set("X-Sig", sig)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	return w
+}

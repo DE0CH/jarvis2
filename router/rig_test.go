@@ -368,14 +368,17 @@ func (m *vmach) pull() (map[string]map[string]string, map[string]any) {
 	return vals, a
 }
 
-// commands: one poll of the command channel (short wait)
-func (m *vmach) commands() commandsAnswer {
-	old := commandsWait
-	commandsWait = 50 * time.Millisecond
-	defer func() { commandsWait = old }()
-	var a commandsAnswer
-	m.json("GET", "/m/commands", nil, &a)
-	return a
+// commands: one poll of the command channel (short wait; the outbox GET /m/commands serves)
+func (m *vmach) commands() commandsAnswer { return m.g.r.out(m.id).next(50*time.Millisecond, nil) }
+
+// hasWord: the answer carries the word
+func hasWord(a commandsAnswer, w string) bool {
+	for _, x := range a.Commands {
+		if x == w {
+			return true
+		}
+	}
+	return false
 }
 
 // boot: what the guard does to boot (the chain checked against the roster, the status report that marks it booted)

@@ -86,7 +86,7 @@ func TestPauseResumeDestroy(t *testing.T) {
 	done := make(chan string, 1)
 	go func() {
 		for i := 0; i < 200; i++ {
-			if a := m.commands(); len(a.Commands) > 0 && a.Commands[0] == "snapshot" {
+			if a := m.commands(); hasWord(a, "snapshot") {
 				done <- m.snapshot([]byte("the workspace"))
 				return
 			}
@@ -135,7 +135,7 @@ func TestPauseResumeDestroy(t *testing.T) {
 	// destroy: kill (nothing to snapshot within the wait), then the burn
 	go func() {
 		for i := 0; i < 200; i++ {
-			if a := m2.commands(); len(a.Commands) > 0 {
+			if a := m2.commands(); hasWord(a, "snapshot") {
 				m2.snapshot([]byte("final"))
 				return
 			}
@@ -190,7 +190,7 @@ func TestResumeWithAPromptIsANewPhoneSource(t *testing.T) {
 	m.boot()
 	go func() {
 		for i := 0; i < 200; i++ {
-			if a := m.commands(); len(a.Commands) > 0 {
+			if a := m.commands(); hasWord(a, "snapshot") {
 				m.snapshot([]byte("ws"))
 				return
 			}
