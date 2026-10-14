@@ -301,9 +301,22 @@ class JarvisUITestCase: XCTestCase {
     el("setup-root-grant").tap()
     guard arrives(el("root-understood"), 15, "the root key's warning screen") else { return false }
     shot("root-key-warning")
-    el("root-understood").tap()
+    // the switch itself (a tap on the row's middle lands on its label, which doesn't flip a Form toggle)
+    let understood = el("root-understood")
+    for _ in 0..<3 where !isOn(understood) {
+      understood.coordinate(withNormalizedOffset: CGVector(dx: 0.92, dy: 0.5)).tap()
+      sleep(1)
+    }
+    if !isOn(understood), understood.switches.firstMatch.exists { understood.switches.firstMatch.tap(); sleep(1) }
+    XCTAssertTrue(isOn(understood), "[\(tag)] the root key's warning acknowledged")
+    // Sign sits below "What you sign": scrolled to, and enabled once acknowledged
+    let sign = el("root-sign")
+    guard scrolledTo(sign), wait(sign, 10, "Sign with the root key") else { return false }
+    let until = Date().addingTimeInterval(10)
+    while !sign.isEnabled && Date() < until { usleep(300_000) }
+    shot("root-key-acknowledged")
     beforeSign?()
-    el("root-sign").tap()
+    sign.tap()
     return wait(el("setup-root-granted"), 60, "the root grant signed and kept by the router")
   }
 

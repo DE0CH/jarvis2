@@ -4,6 +4,7 @@ S3 stand-in (rclone serve s3), seeded in exactly infra/setup.py's format by infr
 
   standin.py keys DIR   DIR/keys/{box,setup}.pub (served to the CI build as its key source),
                         DIR/box-key.pem (secrets' BOX_KEY_FILE), DIR/setup-key.pem (signs the backups)
+  standin.py kernel-keys DIR   DIR/key-<role>.pem per kernel part and DIR/roster.json (phone, root empty)
   standin.py seed DIR   buckets on $HETZNER_S3_ENDPOINT, the backups encrypted to the public TEST master key
                         (e2e/testdata/master-test.pub), as a Recover with the test kit expects them:
                           jarvis2-backup-ci       core, default, gmail (sensitive), claude-login (the claude
@@ -159,5 +160,21 @@ def key_backups(d, setup, s3, master, setup_pem, dump):
     print(f"seeded {name}: {[o['key'] for o in dump[name]]}")
 
 
+def kernel_keys(d):
+    """W/key-<role>.pem for each kernel part, the roster W/roster.json naming their public keys (phone and root empty
+    until the app claims secrets: roster-watch.py puts them in)"""
+    r = {}
+    for role in ("notary", "notarizer", "mover", "merger", "spawner", "identity", "gullible", "secrets"):
+        k = ec.generate_private_key(ec.SECP256R1())
+        path = os.path.join(d, f"key-{role}.pem")
+        with open(path, "wb") as f:
+            f.write(pem(k))
+        os.chmod(path, 0o600)
+        r[role] = pub(k)
+    r["phone"] = r["root"] = ""
+    with open(os.path.join(d, "roster.json"), "w") as f:
+        json.dump(r, f, indent=2)
+
+
 if __name__ == "__main__":
-    {"keys": keys, "seed": seed}[sys.argv[1]](sys.argv[2])
+    {"keys": keys, "seed": seed, "kernel-keys": kernel_keys}[sys.argv[1]](sys.argv[2])

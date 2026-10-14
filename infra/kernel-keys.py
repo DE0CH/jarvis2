@@ -8,9 +8,10 @@ roster (ROSTER_FILE: k8s/apps-next/kernel/roster.json, after the switchover k8s/
         it on the box; only that part's pod mounts it), and its public key into the roster. A part that already has a
         key is refused unless --rotate: a new key changes the roster, and every running session's guard checks the
         kernel's documents against the roster it booted with (so rotate only with no session running).
-    infra/kernel-keys.py set-phone KEY | set-root KEY
-        the phone's signing key (`infra/setup.py phone-key`, or the app) and the root key (the app's separate root-key
-        screen) into the roster: base64 of the 65-byte uncompressed P-256 point
+    infra/kernel-keys.py [--roster FILE] set-phone KEY | set-root KEY | from-claim
+        the phone's signing key and the root key into the roster (base64 of the 65-byte uncompressed P-256 point): both
+        are in the claim the app's master key signed, `infra/setup.py claim-keys`; from-claim reads that command's JSON
+        ({"phone", "root"}) on stdin and sets both. --roster: another roster file (CI's stand-in)
     infra/kernel-keys.py check
         every roster entry is a P-256 point (what the guard requires of JARVIS2_ROSTER)
     infra/kernel-keys.py manifest OUT [--phone KEY] [--root KEY]
@@ -35,7 +36,12 @@ ORDER = ["notary", "notarizer", "mover", "merger", "spawner", "identity", "gulli
 NS = "jarvis2-core"
 
 
+ROSTER_OVERRIDE = None
+
+
 def roster_path():
+    if ROSTER_OVERRIDE:
+        return ROSTER_OVERRIDE
     for d in ("k8s/apps/kernel", "k8s/apps-next/kernel"):
         p = os.path.join(ROOT, d, "roster.json")
         if os.path.exists(p):
@@ -95,7 +101,10 @@ def add_to_secrets_kustomization(fname):
 
 
 def main():
+    global ROSTER_OVERRIDE
     a = sys.argv[1:]
+    if a[:1] == ["--roster"] and len(a) >= 2:
+        ROSTER_OVERRIDE, a = a[1], a[2:]
     if not a:
         sys.exit(__doc__)
     cmd, a = a[0], a[1:]
@@ -128,6 +137,19 @@ def main():
         r[cmd[4:]] = a[0]
         save_roster(r)
         print(f"ok: roster {cmd[4:]} = {a[0][:24]}…")
+    elif cmd == "from-claim" and not a:
+        try:
+            c = json.load(sys.stdin)
+        except ValueError:
+            sys.exit("from-claim: stdin isn't infra/setup.py claim-keys' JSON")
+        bad = [k for k in ("phone", "root") if not is_point(c.get(k) or "")]
+        if bad:
+            sys.exit(f"from-claim: no {' or '.join(bad)} key in the claim (an app older than the root key names none)")
+        r = load_roster()
+        changed = [k for k in ("phone", "root") if r.get(k) != c[k]]
+        r["phone"], r["root"] = c["phone"], c["root"]
+        save_roster(r)
+        print(f"ok: roster phone = {c['phone'][:24]}…, root = {c['root'][:24]}…" + ("" if changed else " (unchanged)"))
     elif cmd == "check":
         r = load_roster()
         bad = [k for k in ORDER if not is_point(r.get(k, ""))]
@@ -167,4 +189,5 @@ def main():
         sys.exit(__doc__)
 
 
-main()
+if __name__ == "__main__":
+    main()

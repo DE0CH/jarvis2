@@ -24,7 +24,6 @@ jobs:
           W="$RUNNER_TEMP/w"
           NO_CORE=1 bash ios/ci/standins.sh "$W"
           mkdir -p out
-          echo '{"harnesses":{"claude":{"stores":["claude-login"]},"opencode":{"stores":[]}}}' > "$W/policy.json"
       - run: brew install xcodegen
       - name: Xcode 27.0 and a booted iPhone 17 (iPhone18,3) on iOS 27.0, as Deyao's phone
         uses: ./.github/actions/ios-simulator
@@ -47,14 +46,9 @@ jobs:
           for a in light dark; do
             for try in 1 2; do
               touch "$RUNNER_TEMP/try-start"
-              kill $(cat "$W/core.pid" "$W/router.pid" 2>/dev/null) 2>/dev/null || true; pkill -x secrets || true; sleep 1
-              rm -rf data-$a && mkdir -p data-$a
-              (nohup "$W/core-loop.sh" "$PWD/out/core-$a.log" > /dev/null 2>&1 & echo $! > "$W/core.pid")
-              for i in $(seq 30); do curl -sf http://127.0.0.1:8090/identity > /dev/null && break; sleep 1; done
-              (set -a; . "$W/router-backup.env"; set +a
-               NO_ACCESS=1 SETUP_KEY="$(cat "$W/keys/setup.pub")" SECRETS_URL=http://127.0.0.1:8090 DATA_DIR=$PWD/data-$a WEB_DIR=$PWD/web TASKS_DIR=$PWD/tasks SNAPSHOT_WAIT_SECONDS=2 POLICY_FILE="$W/policy.json" \
-                SESSION_IMAGE=ghcr.io/de0ch/jarvis2-session:ci@sha256:0000000000000000000000000000000000000000000000000000000000000000 ADDR=127.0.0.1:18080 MACHINE_ADDR=127.0.0.1:18081 nohup "$W/router" > out/router-$a.log 2>&1 & echo $! > "$W/router.pid")
-              sleep 2
+              # a fresh kernel (eight parts, secrets again whenever a Reset ends it), router, fake machines and roster
+              # watcher (ios/ci/kernel-up.sh), keychain and app for each attempt
+              bash ios/ci/kernel-up.sh "$W" "$PWD/out" "$a-$try" "$PWD/data-$a-$try"
               xcrun simctl keychain "$SIM_UDID" reset
               xcrun simctl uninstall "$SIM_UDID" dev.de0ch.jarvis2 || true
               xcrun simctl ui "$SIM_UDID" appearance $a

@@ -14,6 +14,8 @@ both, and relays to the kernel's parts: secrets and the spawner). Values never p
   infra/setup.py kernel                every kernel part's identity (role, signing key), each checked against keys/box.pub,
                                        and the roster file they should match (k8s/apps-next/kernel/roster.json)
   infra/setup.py phone-key             the phone's signing key from secrets' signed state (for the roster's `phone`)
+  infra/setup.py claim-keys            {"phone", "root"}: the phone's signing key and its root key from the claim the
+                                       master key signed (the router keeps it): for infra/kernel-keys.py set-phone/set-root
   infra/setup.py stores [--keys]       every store (secrets' signed list) with the key NAMES it holds (--keys: each
                                        key's explanation and writer)
   infra/setup.py create NAME           a new, empty, NOT sensitive store (once per name)
@@ -286,10 +288,9 @@ def save_pins(master, device):
     s3().put_object(Bucket=BUCKET, Key="pins.json", Body=json.dumps(signed(doc)).encode())
 
 
-def claim_of(me):
-    """the claim statement the router kept for the running secrets (checked: signed by its master key, naming this
-    secrets — the statement's `core` field — and its phone), the device key it names (the app's long-lived key, inside
-    the master-signed statement) and whether the router kept that device's countersignature over exactly this statement"""
+def claim_statement(me):
+    """the claim statement the router kept for the running secrets, checked: signed by its master key, naming this
+    secrets (the statement's `core` field) and its phone → (its text, the statement)"""
     cc = call("GET", "/setup/secrets-cert")
     st_text = cc.get("statement") or ""
     if not _verify(me["master"], st_text.encode(), cc.get("masterSig") or ""):
@@ -298,6 +299,13 @@ def claim_of(me):
     if st.get("master") != me["master"] or st.get("core", {}).get("signingKey") != me["signingKey"] or \
             st.get("core", {}).get("agreementKey") != me["agreementKey"] or st.get("phone") != me["phone"]:
         raise SystemExit("secrets' claim names another master, secrets or phone")
+    return st_text, st
+
+
+def claim_of(me):
+    """the claim statement's device key (the app's long-lived key, inside the master-signed statement) and whether the
+    router kept that device's countersignature over exactly this statement"""
+    st_text, st = claim_statement(me)
     device = st.get("device") or ""
     countersigned = bool(device) and any(
         d.get("statement") == st_text and d.get("deviceKey") == device and _verify(device, st_text.encode(), d.get("deviceSig") or "")
@@ -453,6 +461,13 @@ def main():
             k = ids[role]
             print(f"{role}: " + (f"{k['signingKey'][:24]}… (box-signed)" if k else "not answering"))
         print("\n".join(roster_check(ids)))
+    elif cmd == "claim-keys":
+        # the roster's phone and root keys, from the claim the master key signed (the app names its root key there)
+        me = identity()
+        if not me["master"] or not me["phone"]:
+            raise SystemExit("secrets is empty: no claim yet")
+        _, st = claim_statement(me)
+        print(json.dumps({"phone": st["phone"]["signingKey"], "root": st.get("root") or ""}))
     elif cmd == "phone-key":
         me = identity()
         if not me["phone"]:
