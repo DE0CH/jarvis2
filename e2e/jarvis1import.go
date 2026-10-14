@@ -2,7 +2,7 @@ package main
 
 // The Jarvis 1 import, end to end: a fake paused Jarvis 1 session served the way the Storage Box serves it (WebDAV:
 // PROPFIND depth 1 + GET), at JARVIS1_PAUSED_URL (infra/e2e.sh points the test router at it); the router prepares and
-// imports it, the phone approves the new line (its cert's restore = the Jarvis 1 id + the manifest's sha256), and the
+// imports it, the phone approves the new line (its source's snapshot = the manifest's sha256), and the
 // machine restores the workspace, the artifacts, the transcript under the right project, ~/.claude.json's machine id,
 // fixes the repo remote, resumes the conversation, and re-arms the record's wakeup (passed: fires soon) and cron.
 
@@ -19,6 +19,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/DE0CH/jarvis2/core/kernel"
 )
 
 const (
@@ -135,22 +137,16 @@ func jarvis1ImportStep(p *phone) {
 	var imp struct{ ID string }
 	must2(call(router, "POST", "/api/jarvis1/paused/"+e2eJ1ID+"/import", map[string]any{"stores": []string{"e2e"}, "explanation": "e2e import"}, &imp))
 	a := waitApproval("new-session", imp.ID)
-	checkChallenge(a, []string{"e2e"}, "")
-	var ch struct {
-		Request struct {
-			Options struct{ Config string }
-		}
+	checkDrafts(a, 1, []string{"store:e2e"}, "")
+	var c kernel.Succession
+	json.Unmarshal([]byte(a.Drafts[0].Payload), &c)
+	var cfg struct{ Title, Prompt string }
+	json.Unmarshal([]byte(c.Successor.Settings), &cfg)
+	if c.Successor.Snapshot != st.Sha256 || cfg.Title != "e2e jarvis1 import" || !strings.Contains(cfg.Prompt, "moved from Jarvis 1") {
+		log.Fatalf("the signed source doesn't name the import (snapshot %s, want %s): %s", c.Successor.Snapshot, st.Sha256, c.Successor.Settings)
 	}
-	verify(*a.Challenge, &ch)
-	var cfg struct {
-		Label, Prompt string
-		Restore       struct{ Machine, Sha256 string }
-	}
-	json.Unmarshal([]byte(ch.Request.Options.Config), &cfg)
-	if cfg.Restore.Machine != e2eJ1ID || cfg.Restore.Sha256 != st.Sha256 || cfg.Label != "e2e jarvis1 import" || !strings.Contains(cfg.Prompt, "moved from Jarvis 1") {
-		log.Fatalf("the signed config doesn't name the import: %s", ch.Request.Options.Config)
-	}
-	unlock(p, "e2e", nonceOf(*a.Challenge))
+	lockAll() // the earlier unlocks end; e2e is opened afresh for the imported session
+	unlock(p, "e2e")
 	id := approve(p, a)
 	waitState(id, "started", 8*time.Minute)
 	m := machineOf(id)

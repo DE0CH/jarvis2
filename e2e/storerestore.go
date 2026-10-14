@@ -1,19 +1,17 @@
 package main
 
-// The restore of a store to an earlier version (core/history.go, router/storerestore.go), on the test's own core set up
-// with the public TEST master key: keys written as the setup session, the store wiped by deletes (the 2026-10-13
-// incident), the versions listed, a restore refused without the phone's signature, then put back under the phone's
-// signature and shares; the core's backups land in the bucket (writer "restore") and open with the master key to the
-// values written. Runs after the core's setup (E2E_ONLY=restore runs only this, with no machines).
+// The restore of a store to an earlier version (core/kernel/secrets/history.go, router/storerestore.go), on the test's
+// own secrets set up with the public TEST master key: keys written as the setup session, the store wiped by deletes (the
+// 2026-10-13 incident), the versions listed, a restore refused without the phone's signature, then put back under the
+// phone's signature and shares; secrets' backups land in the bucket (writer "restore") and open with the master key to
+// the values written. Runs after secrets' setup (E2E_ONLY=restore runs only this, with no machines).
 
 import (
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/ecdh"
 	"crypto/ecdsa"
-	"crypto/elliptic"
 	"crypto/hkdf"
-	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -22,31 +20,24 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"github.com/DE0CH/jarvis2/core/kernel"
 )
 
-// setupKeyWrite: what infra/setup.py key_write sends for one key (value "" = a delete). The test router has no setup
-// key, and the core only passes a setup writer's signature on (the phone checks it), so the signature is a stand-in.
-func setupKeyWrite(storeKey, master, store, key, value string) {
+// setupKeyWrite: what infra/setup.py key_write sends for one key (value "" = a delete): the value wrapped to the store
+// key, its backup sealed to the master key, and `live` sealed to secrets' agreement key (served on the next pull of an
+// unlocked store). The test router has no setup key, and secrets only passes a setup writer's signature on (the phone
+// checks it), so the signature is a stand-in.
+func setupKeyWrite(storeKey, master, secretsAgreement, store, key, value string) {
 	body := map[string]any{"delete": value == "", "sig": "c2lnbmF0dXJl", "explanation": "e2e restore test key"}
 	if value != "" {
 		w := wrapKey(storeKey, store, key, value)
 		b := sealToAAD(master, []byte(value), "jarvis2/backup", []byte(store+"\n"+key))
 		h := sha256.Sum256([]byte(b["e"] + "\n" + b["data"]))
 		body["wrapped"], body["data"], body["backup"], body["backupSha256"] = w["wrapped"], w["data"], b, hex.EncodeToString(h[:])
+		body["live"] = sealTo(secretsAgreement, []byte(value), "jarvis2/live-key\n"+store+"\n"+key)
 	}
 	must2(call(router, "POST", "/setup/stores/"+store+"/keys/"+key, body, nil))
-}
-
-func sealToAAD(recipient string, plain []byte, info string, aad []byte) map[string]string {
-	rb, _ := b64.DecodeString(recipient)
-	R, err := ecdh.P256().NewPublicKey(rb)
-	if err != nil {
-		log.Fatal(err)
-	}
-	e, _ := ecdh.P256().GenerateKey(rand.Reader)
-	x, _ := e.ECDH(R)
-	k, _ := hkdf.Key(sha256.New, x, nil, info, 32)
-	return map[string]string{"e": b64.EncodeToString(e.PublicKey().Bytes()), "data": b64.EncodeToString(gcm(k, plain, aad))}
 }
 
 // openMasterSealed: a key backup opened with the master key's private half (what Recover does)
@@ -81,7 +72,7 @@ type versionRow struct {
 
 func storeVersions(store string) (current string, rows []versionRow) {
 	var d Doc
-	must2(call(router, "POST", "/api/core/stores/versions", map[string]string{"store": store, "nonce": "e2e-v"}, &d))
+	must2(call(router, "POST", "/api/secrets/stores/versions", map[string]string{"store": store, "nonce": "e2e-v"}, &d))
 	var v struct {
 		Kind, Store, Current string
 		Versions             []versionRow
@@ -113,7 +104,7 @@ func keyNamesOf(store string) []string {
 // restoreBegin → (pending, the begin document, the phone's shares of every key put back)
 func restoreBegin(p *phone, store string, seq int) (string, Doc, map[string]map[string]string) {
 	var d Doc
-	must2(call(router, "POST", "/api/core/stores/restore/begin", map[string]any{"store": store, "seq": seq}, &d))
+	must2(call(router, "POST", "/api/secrets/stores/restore/begin", map[string]any{"store": store, "seq": seq}, &d))
 	var b struct {
 		Kind, Pending, Store, T string
 		Put                     []struct{ Key, E string }
@@ -133,15 +124,16 @@ func restoreBegin(p *phone, store string, seq int) (string, Doc, map[string]map[
 	return b.Pending, d, shares
 }
 
-func restoreStep(p *phone, master *ecdsa.PrivateKey, storeKey string) {
+func restoreStep(p *phone, master *ecdsa.PrivateKey, storeKey, secretsAgreement string) {
 	mpub, _ := master.PublicKey.ECDH()
 	mk := b64.EncodeToString(mpub.Bytes())
 	store := "e2e"
+	lockAll() // an unlock in force ends first, so the end opens the restored store afresh
 	vals := map[string]string{"E2E_R1": "r1-" + hex.EncodeToString(randBytes(6)), "E2E_R2": "r2-" + hex.EncodeToString(randBytes(6))}
 
-	step("restore: keys written one by one as the setup session; the core lists each change as a version")
+	step("restore: keys written one by one as the setup session; secrets lists each change as a version")
 	for _, k := range []string{"E2E_R1", "E2E_R2"} {
-		setupKeyWrite(storeKey, mk, store, k, vals[k])
+		setupKeyWrite(storeKey, mk, secretsAgreement, store, k, vals[k])
 	}
 	_, rows := storeVersions(store)
 	if len(rows) < 3 || rows[0].Cause.Kind != "write" || rows[0].Cause.Key != "E2E_R2" || rows[len(rows)-1].Cause.Kind != "recover" {
@@ -152,9 +144,9 @@ func restoreStep(p *phone, master *ecdsa.PrivateKey, storeKey string) {
 
 	step("restore: the store wiped (every key deleted, one stray written)")
 	for _, k := range want {
-		setupKeyWrite(storeKey, mk, store, k, "")
+		setupKeyWrite(storeKey, mk, secretsAgreement, store, k, "")
 	}
-	setupKeyWrite(storeKey, mk, store, "E2E_STRAY", "stray")
+	setupKeyWrite(storeKey, mk, secretsAgreement, store, "E2E_STRAY", "stray")
 	if got := keyNamesOf(store); strings.Join(got, ",") != "E2E_STRAY" {
 		log.Fatalf("not wiped: %v", got)
 	}
@@ -162,7 +154,7 @@ func restoreStep(p *phone, master *ecdsa.PrivateKey, storeKey string) {
 	step("restore: an Inbox request from the web page; refused without the phone's signature (and the begin is spent)")
 	must2(call(router, "POST", "/api/requests/restore", map[string]any{"store": store, "seq": good.Seq, "explanation": "put the keys back"}, nil))
 	pending, d, shares := restoreBegin(p, store, good.Seq)
-	other := &phone{sig: mustKey(), agr: nil}
+	other := &phone{sig: mustSigner(), agr: nil}
 	if s, _ := call(router, "POST", "/api/stores/restore/finish", map[string]any{"pending": pending, "signature": other.sign(d.Payload), "shares": shares}, nil); s == 200 {
 		log.Fatal("a restore went through without the phone's signature")
 	}
@@ -173,7 +165,7 @@ func restoreStep(p *phone, master *ecdsa.PrivateKey, storeKey string) {
 		log.Fatalf("restored without the phone: %v", got)
 	}
 
-	step("restore: the phone signs the core's begin document and shares the keys put back; backups first, then the commit")
+	step("restore: the phone signs secrets' begin document and shares the keys put back; backups first, then the commit")
 	pending, d, shares = restoreBegin(p, store, good.Seq)
 	var out struct {
 		Restored Doc
@@ -230,13 +222,12 @@ func restoreStep(p *phone, master *ecdsa.PrivateKey, storeKey string) {
 	if json.Unmarshal(b, &stray) != nil || !stray.Deleted || stray.Writer.By != "restore" {
 		log.Fatalf("the stray's backup: %s", b)
 	}
-	step("restore: a standing unlock opens the restored store (each key opens with the phone's share)")
-	unlock(p, store, "")
-	lockAll()
+	step("restore: an unlock opens the restored store (each key opens with the phone's share)")
+	lockID(unlock(p, store))
 }
 
-func mustKey() *ecdsa.PrivateKey {
-	k, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+func mustSigner() *kernel.Signer {
+	k, err := kernel.NewSigner()
 	if err != nil {
 		log.Fatal(err)
 	}

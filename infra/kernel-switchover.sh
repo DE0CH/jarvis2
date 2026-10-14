@@ -39,8 +39,10 @@ s += """# the router on the kernel: one URL per part (router-kernel.yaml)
 patches:
   - path: router-kernel.yaml
 """
-s = s.replace("configMapGenerator:\n", """configMapGenerator:
-  # every kernel part's public key, the phone's and the root key's (infra/kernel-keys.py): ROSTER_FILE of the parts and
+anchor = "    files: [session-image-sigs.txt]\n"
+if anchor not in s:
+    sys.exit(f"{p}: no session-image-sigs generator to put the roster after")
+s = s.replace(anchor, anchor + """  # every kernel part's public key, the phone's and the root key's (infra/kernel-keys.py): ROSTER_FILE of the parts and
   # the roster the spawner puts in every machine's Fly config. No name hash: a roster change must not restart secrets
   # (an empty secrets) by itself; the parts read it at start (docs/RUNBOOK.md "Kernel operations")
   - name: kernel-roster

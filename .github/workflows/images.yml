@@ -1,7 +1,9 @@
 name: images
-# core, router and session images to GHCR, tagged sha-<12> and latest. The router image carries the
-# app's web export. k8s/ pins the core and router tags (a commit by this workflow), the router is
-# told the session image's tag through its deployment. The session image's base (session-image/base/: the tools,
+# core, kernel, router and session images to GHCR, tagged sha-<12> and latest. The router image carries the
+# app's web export and is built from core/ too (it imports core/kernel), so every run, a core/** change included,
+# rebuilds and pins it. One image per kernel part, jarvis2-<dir> from core/cmd/<dir> (core/cmd/Dockerfile). k8s/ pins
+# the core, kernel and router images (a commit by this workflow), the router is told the session image's tag through
+# its deployment. The session image's base (session-image/base/: the tools,
 # harnesses, entrypoint) is built only when that directory changed since the base it pins (or on a dispatch with
 # base=true), pushed as jarvis2-session:base-sha-<12>, and pinned in session-image/Dockerfile's BASE by the pin job.
 on:
@@ -30,6 +32,7 @@ jobs:
       - run: cd core && go vet ./... && go test ./... && go build -tags fakefly ./...
       - run: cd router && go vet ./... && go test ./...
       - run: cd machine && go vet ./... && go test ./...
+      - run: cd e2e && go vet ./...
       - run: pip install -q cryptography && python3 infra/setup_trust_test.py && python3 infra/setup_write_test.py
   base:
     needs: test
@@ -79,6 +82,15 @@ jobs:
       matrix:
         include:
           - { name: core, context: core, file: core/Dockerfile }
+          # the kernel's parts (core/kernel/README.md), each its own image from core/cmd/<part>
+          - { name: notary, context: core, file: core/cmd/Dockerfile, part: notary }
+          - { name: notarizer, context: core, file: core/cmd/Dockerfile, part: notarizer }
+          - { name: mover, context: core, file: core/cmd/Dockerfile, part: mover }
+          - { name: merger, context: core, file: core/cmd/Dockerfile, part: merger }
+          - { name: identity-signer, context: core, file: core/cmd/Dockerfile, part: identity-signer }
+          - { name: gullible-signer, context: core, file: core/cmd/Dockerfile, part: gullible-signer }
+          - { name: spawner, context: core, file: core/cmd/Dockerfile, part: spawner }
+          - { name: secrets, context: core, file: core/cmd/Dockerfile, part: secrets }
           - { name: router, context: ., file: router/Dockerfile }
           - { name: session, context: ., file: session-image/Dockerfile }
     steps:
@@ -106,8 +118,9 @@ jobs:
           context: ${{ matrix.context }}
           file: ${{ matrix.file }}
           push: true
-          # the session image on the base this run built (when it built one), else on the BASE the Dockerfile pins
-          build-args: ${{ (matrix.name == 'session' && needs.base.outputs.ref) && format('BASE={0}', needs.base.outputs.ref) || '' }}
+          # a kernel part: which core/cmd/<part>; the session image: on the base this run built (when it built one), else on
+          # the BASE the Dockerfile pins
+          build-args: ${{ matrix.part && format('PART={0}', matrix.part) || ((matrix.name == 'session' && needs.base.outputs.ref) && format('BASE={0}', needs.base.outputs.ref) || '') }}
           tags: |
             ghcr.io/de0ch/jarvis2-${{ matrix.name }}:${{ steps.tag.outputs.sha }}
             ghcr.io/de0ch/jarvis2-${{ matrix.name }}:latest
@@ -183,16 +196,43 @@ jobs:
           grep -q "SESSION_IMAGE_SIG, value: \"$SIG\"" k8s/apps/router.yaml || { echo "router.yaml has no SESSION_IMAGE_SIG line"; exit 1; }
           # and keep it in the list of every pinned image, so a resume on a session's own older image still shows as a CI build
           grep -q "^$S " k8s/apps/session-image-sigs.txt || echo "$S $SIG" >> k8s/apps/session-image-sigs.txt
-          # the core moves ONLY when core/ changed (the CI-only fake and the tests don't count): a core restart is a new, empty
-          # core (Deyao sets it up again: Reset or Recover), so a router or app push must never restart it
-          corecur="$(grep -ho 'jarvis2-core:sha-[0-9a-f]*' k8s/apps/core.yaml | cut -d- -f3)"
-          # and never while k8s/apps/core.yaml carries the annotation jarvis2/core-pin = hold (a core change waiting for Deyao's go)
-          if grep -q 'jarvis2/core-pin: hold' k8s/apps/core.yaml; then
-            echo "the core is held (jarvis2/core-pin: hold): its new image is built, not pinned"
-          elif ! corefull="$(git rev-parse -q --verify "$corecur^{commit}")" || ! git diff --quiet "$corefull" "$GITHUB_SHA" -- core/ ':!core/fakefly.go' ':!core/*_test.go'; then
-            C="$(infra/image-digest.sh "ghcr.io/de0ch/jarvis2-core:$T")"
-            sed -i -E "s#ghcr.io/de0ch/jarvis2-core:sha-[0-9a-f]{12}(@sha256:[0-9a-f]{64})?#$C#g" k8s/apps/core.yaml
+          # the old core (until the kernel switchover deletes k8s/apps/core.yaml) moves ONLY when core/ changed (the CI-only
+          # fake and the tests don't count): a core restart is a new, empty core (Deyao sets it up again: Reset or Recover),
+          # so a router or app push must never restart it
+          if [ -f k8s/apps/core.yaml ]; then
+            corecur="$(grep -ho 'jarvis2-core:sha-[0-9a-f]*' k8s/apps/core.yaml | cut -d- -f3)"
+            # and never while k8s/apps/core.yaml carries the annotation jarvis2/core-pin = hold (a core change waiting for Deyao's go)
+            if grep -q 'jarvis2/core-pin: hold' k8s/apps/core.yaml; then
+              echo "the core is held (jarvis2/core-pin: hold): its new image is built, not pinned"
+            elif ! corefull="$(git rev-parse -q --verify "$corecur^{commit}")" || ! git diff --quiet "$corefull" "$GITHUB_SHA" -- core/ ':!core/fakefly.go' ':!core/*_test.go'; then
+              C="$(infra/image-digest.sh "ghcr.io/de0ch/jarvis2-core:$T")"
+              sed -i -E "s#ghcr.io/de0ch/jarvis2-core:sha-[0-9a-f]{12}(@sha256:[0-9a-f]{64})?#$C#g" k8s/apps/core.yaml
+            fi
           fi
+          # the kernel's parts, one manifest each (k8s/apps/kernel/<part>.yaml; k8s/apps-next/kernel/ before the switchover,
+          # which Flux doesn't apply). A part without an image yet (the placeholder sha-000000000000) is always pinned. A part
+          # whose manifest carries jarvis2/kernel-pin: hold (secrets, the spawner, the notary, the notarizer: a restart loses
+          # state, an empty secrets needs Deyao's Recover) is otherwise never pinned: its new image is built and waits for
+          # Deyao's go (a commit removing the hold). The others move when the kernel's shared package, their own command or
+          # the module changed (tests, the CI-only fakes and test data don't count): they are stateless and roll one replica
+          # at a time.
+          for f in k8s/apps/kernel/*.yaml k8s/apps-next/kernel/*.yaml; do
+            [ -f "$f" ] || continue
+            part="$(basename "$f" .yaml)"
+            [ -d "core/cmd/$part" ] || { echo "$f: no core/cmd/$part"; exit 1; }
+            kcur="$(grep -ho "jarvis2-$part:sha-[0-9a-f]*" "$f" | head -1 | sed 's/.*:sha-//')"
+            [ -n "$kcur" ] || { echo "$f pins no jarvis2-$part image"; exit 1; }
+            if [ "$kcur" = 000000000000 ]; then
+              echo "kernel $part: first image"
+            elif grep -q 'jarvis2/kernel-pin: hold' "$f"; then
+              echo "kernel $part is held (jarvis2/kernel-pin: hold): its new image is built, not pinned"; continue
+            elif kfull="$(git rev-parse -q --verify "$kcur^{commit}")" && git diff --quiet "$kfull" "$GITHUB_SHA" -- core/kernel "core/cmd/$part" core/go.mod core/go.sum \
+                 ':(exclude,glob)core/**/*_test.go' ':(exclude)core/kernel/ktest' ':(exclude)core/kernel/testdata' ':(exclude,glob)core/**/fake*.go'; then
+              continue
+            fi
+            K="$(infra/image-digest.sh "ghcr.io/de0ch/jarvis2-$part:$T")"
+            sed -i -E "s#ghcr.io/de0ch/jarvis2-$part:sha-[0-9a-f]{12}(@sha256:[0-9a-f]{64})?#$K#g" "$f"
+          done
           git diff --quiet && exit 0
           git config user.name "jarvis2-ci"; git config user.email "ci@jarvis2.invalid"
           git commit -qam "images: pin $T${B:+ + session base $(echo "$B" | grep -o "base-sha-[0-9a-f]*")} [skip ci]"
