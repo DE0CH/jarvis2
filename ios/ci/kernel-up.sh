@@ -11,7 +11,7 @@
 #   roster-watch.py    puts the app's phone and root keys into the roster once it claims secrets (taken from the
 #                      master-signed claim through infra/setup.py claim-keys, as the setup session does) and starts
 #                      every part but secrets again on the new roster
-# usage: kernel-up.sh W LOGDIR TAG DATA_DIR   (logs: LOGDIR/{core,<part>,router,roster-watch}-TAG.log)
+# usage: [NO_SETUP_KEY=1] kernel-up.sh W LOGDIR TAG DATA_DIR   (logs: LOGDIR/{core,<part>,router,roster-watch}-TAG.log)
 set -euo pipefail
 W="$1"; LOGS="$2"; TAG="$3"; DATA="$4"; ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 mkdir -p "$LOGS" "$DATA" "$W/web"
@@ -34,8 +34,11 @@ for port in 8090 8091 8092 8093 8094 8095 8096 8097; do
   for i in $(seq 30); do curl -sf -o /dev/null "http://127.0.0.1:$port/identity" && break; sleep 1; done
   curl -sf -o /dev/null "http://127.0.0.1:$port/identity" || { echo "::error::kernel part on :$port didn't come up"; exit 1; }
 done
+# the router checks the setup key's signature on /setup calls, unless NO_SETUP_KEY=1 (the interop test's own setup
+# writes go unsigned, as a CI router without a setup key takes them)
+SETUP_KEY="$(cat "$W/keys/setup.pub")"; [ "${NO_SETUP_KEY:-}" = 1 ] && SETUP_KEY=""
 (set -a; . "$W/router-backup.env"; . "$W/kernel-urls.env"; set +a
- NO_ACCESS=1 SETUP_KEY="$(cat "$W/keys/setup.pub")" DATA_DIR="$DATA" WEB_DIR="$W/web" TASKS_DIR="$ROOT/tasks" SNAPSHOT_WAIT_SECONDS=2 \
+ NO_ACCESS=1 SETUP_KEY="$SETUP_KEY" DATA_DIR="$DATA" WEB_DIR="$W/web" TASKS_DIR="$ROOT/tasks" SNAPSHOT_WAIT_SECONDS=2 \
    POLICY_FILE="$W/policy.json" MACHINE_URL=http://127.0.0.1:18081 DISCORD_SESSION_CHANNELS=off RECORDS_OFF=1 \
    SESSION_IMAGE=ghcr.io/de0ch/jarvis2-session:ci@sha256:0000000000000000000000000000000000000000000000000000000000000000 \
    ADDR=127.0.0.1:18080 MACHINE_ADDR=127.0.0.1:18081 nohup "$W/router" > "$LOGS/router-$TAG.log" 2>&1 & echo $! > "$W/router.pid")

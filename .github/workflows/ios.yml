@@ -60,7 +60,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with: { go-version: "1.25" }
-      - run: sudo apt-get install -y -q rclone
+      - run: curl -fsSL https://rclone.org/install.sh | sudo bash  # apt's rclone is too old for `serve s3`
       - name: stand-ins, then the phone's flows against them
         run: |
           bash ios/ci/standins.sh "$RUNNER_TEMP/w"

@@ -54,5 +54,5 @@ printf 'BACKUP_READ_ACCESS_KEY=ciaccess\nBACKUP_READ_SECRET_KEY=%s\nBACKUP_ENDPO
 # the test policy: the claude harness brings claude-login
 echo '{"harnesses":{"claude":{"stores":["claude-login"]},"opencode":{"stores":[]}}}' > "$W/policy.json"
 if [ "${NO_CORE:-}" != 1 ]; then
-  bash "$ROOT/ios/ci/kernel-up.sh" "$W" "$W" standins "$W/router-data"
+  NO_SETUP_KEY=1 bash "$ROOT/ios/ci/kernel-up.sh" "$W" "$W" standins "$W/router-data"
 fi
