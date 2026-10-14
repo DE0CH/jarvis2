@@ -632,73 +632,117 @@ any of the line's stores is sensitive, and the **line id** (the line's first mac
   date) or a one-tap button where a feature was turned away builds the whole request; the app's grant review only
   reviews it (Allow with Face ID, or Deny).
 
-## Target design: grants, the notary, the succession signer, secrets and the guard (Deyao, 2026-10-14)
+## Target design: succession certs, grants and the kernel (Deyao, 2026-10-14)
 
-Not built yet; DECISIONS 163 has the why. It replaces the core's succession-cert options, the holders' shell
-grants ("Grants" above), the core's automatic locks and the Claude login's own channel.
+Not built yet; DECISIONS 163 has the why, docs/PLAN-grants.md the build. It replaces the core's succession-cert options,
+the holders' shell grants ("Grants" above), the core's automatic locks and the Claude login's own channel.
 
-**Trust layers.** The router trusts what it verifies itself (Cloudflare Access, API keys, machine signatures). The
-components behind it trust the router through the k8s network, which is secure enough. But nothing that matters rests
-on the router's word alone: a compromised router, a k8s breach and a leaked API key are one and the same problem.
-**Writing secrets is protected only by the router**: no component checks who writes a store key.
+**Layers**
 
-**Four components**
-
-| component | its only job |
-|---|---|
-| **Core (notary)** | Issues challenges stamped with its own clock and logs each one: proof that a request went through it, and at what time. |
-| **Succession signer** | Issues succession certs (a phone-approved one, or the dead-machine approval of an unattended resume) and exchanges a grant for one with the identical text bound to the next machine. It never reads a grant's text. |
-| **Secrets** | Holds the stores, the unlocks (the phone's shares), and the signed list of what is unlocked. Takes a `secrets` grant and returns the named stores' values encrypted to the grant's machine and signed. It never locks by itself (no release after a pull, no timer): an unlock ends only with a lock call, and an unlock left open shows on the phone. |
-| **Guard** (the image's entry point, `jarvis2-machine`) | The single process that pulls everything from the API. It checks each grant's signature and challenge and that it is allowed, then acts on the text's `type` and hands the result to whatever needs it. |
-
-**A grant** is a signed document with the fewest fields needed to chain it; the history of all grants and certs is a
-database outside the core (the router's), which the router, the guard and the phone follow through `from`.
-
-| field | |
-|---|---|
-| `kind` | `"grant"` |
-| `signedBy` | `phone`, `machine` or `succession` |
-| `text` | free text. The phone parses it to show Deyao exactly what he signs (known types as a list, unknown JSON pretty-printed, anything else raw), the guard to act on it, secrets to read its store list. The notary and the succession signer never read it. A new type needs a backend and image change only, no app update. |
-| `machine` | `{id, signingKey, encryptionKey}` of the machine it is for |
-| `challenge` | the notary's challenge (`phone` and `machine` grants) |
-| `from` | `succession` only: sha256 of the grant it replaces |
-
-- `phone`: signed by the iPhone; checked against the `phone` key in the machine's succession cert.
-- `machine`: signed by a session machine's key; same steps as a phone grant (notary challenge, logged), only the key
-  differs. Checked against the signer's succession cert, and allowed only when a grant from Deyao certifies that
-  signer for that kind of text (below).
-- `succession`: signed by the succession signer when it exchanges a grant: in goes the old grant and a succession cert
-  whose predecessor is the old grant's `machine`; out comes the same text bound to the new `machine`.
-
-Each grant **certifies a signing service**: a grant Deyao signed (directly, or carried by exchange) names which other
-signers the guard accepts, and for what (e.g. this session's own machines for wakeup and cron prompts, session X for
-peer messages). Everything traces back to the phone.
-
-There is **no revocation**: the router could simply not deliver it. A grant meant to end carries its expiry in its
-text. A one-time grant (a resume prompt, "run this command once") says in its text which session and occasion it is
-for, and the guard decides from that whether it applies.
-
-**A succession cert** shrinks to the chain: `machine` (`id`, image digest, keys), `predecessor` (sha256 of the
-previous cert; none on a new session), `snapshot` (sha256 of the predecessor's signed snapshot), `phone` (the phone's
-key) and `approvedBy` (`phone` | `dead-machine`). Harness, permission mode, config, first prompt and stores move into
-grants.
-
-**Grant types (the text's `type`)**
-
-| type | signed by | what the guard does |
+| layer | parts | trust |
 |---|---|---|
-| `start` | phone | harness, permission mode (fixed for the session's life: it can't be changed), title, model, repos, first prompt; and the signers it certifies (wakeups/crons from its own machines, peer messages from named sessions) |
-| `secrets` | phone | the stores this session gets; the guard presents it to secrets on every pull |
-| `terminal` | phone | any shell command until the expiry in its text: Deyao's fix-anything tool, used rarely. Nothing else uses it: every other need gets its own narrowly scoped type |
-| `command` | phone | one specific command, run once |
-| `prompt` | phone or machine | text typed into the harness: a resume prompt (phone), a wakeup or cron prompt (the session's own machine), a peer message (a session the start grant certifies) |
+| Kernel | log notary, succession notarizer, grant mover, grant merger, spawner, identity signer, gullible signer, secrets | trusted; each small and isolated, a separate component; checks only exact-string set operations and a policy table |
+| Interpreters | the guard (each machine's entry point), the iPhone app | give the strings meaning; can only refuse, or act within the grant they hold |
+| Router | everything else on the box | untrusted. Authenticates its callers (Cloudflare Access, API keys, machine signatures); the kernel trusts it only for transport over the k8s network. It stores, carries and schedules; it can deny service but grants nothing. **Writing secrets is protected only by the router.** |
 
-The Claude login is not a grant: the router writes the pair into the `claude` store (a secret write, protected only by
-the router) and the guard re-pulls the store with its `secrets` grant, so a refresh or a Re-login reaches every running
-session by itself, whatever the account. No login repair, no account check.
+**Objects**
 
-Output-only actions need no grant: the machine pushes its own screen capture, status, repo changes and signed
-snapshot; a request to snapshot only makes the machine produce signed output.
+- `source-<random id>`: a conceptually infinite set. Each holds an image hash, the session's start settings (harness,
+  permission mode, title, model, repos, first prompt) and, for one made by a kill, the hash of the snapshot.
+- Fly machines.
+- `sink`: one, global; no image, no settings. Holds ⊤ (below), signed by the root key.
+- Every object has keys. A source's and the sink's are hash-to-curve points derived from their names (`jarvis2 sink
+  signing`, `jarvis2 source-<id> encryption`, …), whose private halves nobody knows; anyone can recompute and check them.
+  So secrets seals to whatever machine a grant names, and a grant on a source or the sink yields a blob nobody opens.
+
+**Permission pair** `(allowed, conditions)`
+
+- `allowed`: a finite or cofinite set of exact strings (e.g. `store:claude`, `shell`). Covariant.
+- `conditions`: a finite set of exact strings (e.g. `session:s4f…`, `until:2026-10-14T12:10Z`, `cmd:<sha256>`).
+  Contravariant.
+- Order: P' ≤ P iff allowed' ⊆ allowed and conditions' ⊇ conditions. Meet: P ⊓ Q = (allowed ∩, conditions ∪).
+- ⊤ = (everything, ∅). Conditions are a conjunction and are only ever added, so the kernel never compares their values
+  (`{until:12:10, until:12:00}` means 12:00 to the guard).
+
+**A succession cert** is (predecessor, successor, P), a signer's signature, and a succession notarization.
+
+**A grant** is (machine, allowed, conditions). Grants are made only by the grant mover and the grant merger (and ⊤ on the
+sink, by the root key).
+
+**The kernel**
+
+- **Log notary:** issues challenges with its own timestamp and logs each one.
+- **Succession notarizer:** checks a succession cert against the table, then answers the log notary's challenge for it.
+  A shape not in the table is refused.
+
+  | shape | signer | condition |
+  |---|---|---|
+  | (sink, source-x) | iPhone | none |
+  | (source-x, Fly machine) | spawner | first successor of source-x |
+  | (source-x, Fly machine) | iPhone | first successor of source-x |
+  | (Fly machine M, M) | identity signer | none |
+  | (Fly machine, source-y) | spawner | none |
+  | (source-x, sink) | gullible signer | none |
+  | (anything, anything) | root | none |
+
+  "First successor of source-x": source-x has no earlier notarized successor, through any row.
+- **Grant mover:** grant G on a cert's predecessor, along a notarized cert with pair P → (successor, G ⊓ P). It never
+  refuses; a move can only narrow.
+- **Grant merger:** two grants on one machine with identical conditions → (M, allowed₁ ∪ allowed₂, conditions);
+  otherwise refuses.
+- **Spawner:** alone holds the Fly token. Spawn from source-x (given source-x's notarized cert): start a Fly machine with
+  the source's image and settings, read its keys, sign (source-x, M, ⊤). Kill M: check it is alive, kill it, confirm it
+  dead through the Fly API, take its snapshot hash, sign (M, source-y, ⊤), source-y holding M's image, settings and that
+  hash. It attests Fly facts only, so its P is always ⊤.
+- **Identity signer:** signs (M, M, P) for any P; the router picks P. Narrowing a running machine's grant = moving it along
+  M's identity edge.
+- **Gullible signer:** signs any pair given to it; it counts only where the table accepts any signer (ending).
+- **Secrets:** holds the stores, the unlocks and a signed list of open unlocks. Given a grant (signed by the mover or the
+  merger), returns the stores its `allowed` names (`store:x`), encrypted to the grant's machine and signed. An unlock is
+  per store; it never locks by itself (no release after a pull, no timer): unlocks end with a lock call, and the phone sees
+  open ones. Any written key is served on the next pull, whoever wrote it (secrets are not code and the model never reads
+  them). The Claude login is the `claude` store: the router writes it, the guard pulls again.
+
+**Signers of succession certs**
+
+| signer | signs | its own condition |
+|---|---|---|
+| iPhone key | (sink, source-x, P) | Deyao's Face ID on the screen showing source-x's image, settings and P |
+| iPhone key | (source-x, Fly machine M, P) | Face ID on the screen showing M and P |
+| root key (a separate iPhone key) | anything | Face ID on a separate root-key warning screen |
+| spawner | (source-x, M, ⊤), (M, source-y, ⊤) | as above |
+| identity signer | (M, M, P), any P | none |
+| gullible signer | any (X, Y, P) | none |
+
+**Paths and lifecycles.** The kernel knows only spawn, kill, identity, burn and the phone's steps; pause, resume, destroy
+and end are lifecycles the router manages, each certified by succession certs:
+`sink → source → M1 → source → M2 → … → source → sink`.
+
+- New session: the phone signs (sink, source-x, P); the spawner spawns from it.
+- Pause: a kill into a fresh source. Resume: a spawn from it.
+- End: a burn, (source, sink). Only a source can be burned: a machine has no used-once rule and stays alive whatever is
+  signed about it, so (machine, sink) would stop nothing.
+- Widening happens only out of the sink.
+- **Adding to a running machine M** (e.g. a terminal): the phone signs (sink, source-x, P_add) and (source-x, M, ⊤), e.g.
+  P_add = (`{shell}`, `{session:S, until:T}`); the router moves M's main grant along (M, M, (everything, `{until:T}`)) so
+  the conditions match, and merges. The main grant stays untouched for after T; extending signs only a new small grant.
+
+**The guard** (the image's entry point, one process that pulls everything)
+
+- Accepts exactly one grant at a time: signed by the grant mover or merger, naming this machine.
+- Reads the start settings from its source (fixed for the session's life: the permission mode never changes).
+- Gives conditions their meaning: `until` against the clock, `cmd:<hash>` against the command, `once:<id>` against its
+  records (kept in the snapshot), `session:` against its session. Anything that needs the clock, a hash or memory is the
+  guard's.
+- `shell`: runs any command while the grant holds, getting a log-notary challenge over each command's hash first.
+- Wakeups, crons and watches: their texts live in the snapshot (carried by the kill's snapshot hash); the router sends
+  only "X is due" / "X fired".
+- Screen, status, repo changes and the snapshot are output only.
+
+**The iPhone app** shows what Deyao signs: known strings readably, unknown JSON pretty-printed, anything else raw; a
+separate warning screen for the root key.
+
+**Out of scope:** messages between sessions (the kernel guards only the entry point).
 
 ## Open
 

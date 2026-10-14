@@ -1222,34 +1222,21 @@ Deyao: several actions approved together with ONE Face ID; the caller groups the
      *Release*: the core part is behind `jarvis2/core-pin: hold` with 6fc20f8 (stores made of keys); both ship in the
      same release (RUNBOOK "Releasing the held core"). The router, setup.py, the web page and the app work with either
      core (a core without versions answers 404 and the Versions page says so).
-163. **Grants are signed text, and the core splits into a notary, a succession signer and a secrets component; the
-     image's guard is the one entry point** (Deyao, 2026-10-14; DESIGN "Target design"). Not built yet.
-     *Why*: switching the Claude account on 2026-10-14 broke every running session (machines checked the login against
-     the old `CLAUDE_ACCOUNT_UUID`, which a running session can't get without a Face ID unlock), and the repair took
-     store writes, per-session unlocks, login grants, pauses and resumes. Behind it: router features got a general shell
-     on secret-holding machines (holder grants, standing rules, allow lists) for things that are not shell work
-     (permission mode, deliveries, login repair, archives), and the permission mode could change on a running session
-     without the cert (`~/.claude/.permission-mode` overrides it).
-     *What changes*:
-     - Two trust layers: the router verifies its callers; the components behind it trust the router over the k8s
-       network. A compromised router, k8s network or leaked key is one problem, so nothing relies on the router alone.
-       **Secret writes are protected only by the router**; no component checks them.
-     - The core is a notary: challenges with its own clock, logged. The succession signer issues succession certs and
-       exchanges grants (identical text, next machine). Secrets serves a `secrets` grant's stores, encrypted and signed.
-     - A grant is `{kind, signedBy: phone|machine|succession, text, machine, challenge, from}`. Only the phone (to show
-       it), the guard (to act) and secrets (its store list) parse the text. New grant types need no app update.
-     - Each grant certifies signing services; everything traces back to the phone. No revocation (the router could
-       withhold it); expiry and one-time use are in the text, judged by the guard.
-     - Locking is not enforced: secrets never locks by itself (the 30-minute timer and the release after a pull go). The
-       worst case is an unlock left open, which the phone sees in the signed list.
-     - The permission mode is fixed in the start grant for the session's life. `set-permission-mode`, the in-place
-       switch, `~/.claude/.permission-mode` and the permission-mode API on running and paused sessions go.
-     - The `terminal` grant (timed) is the only general shell, for Deyao's occasional fixes. The `scheduler`, `login`,
-       `archive` and `status` holders, standing rules and the session allow list go; each use gets its own grant type or
-       becomes output the machine pushes.
-     - The Claude login rides the `claude` store: the router writes the pair, the guard re-pulls. Login repair,
-       creds-sync's account check and `CLAUDE_ACCOUNT_UUID` go.
-     *Open*: whether a key written after an unlock reaches a pull without a new phone unlock (today it doesn't; the
-     login refresh needs it at least for the `claude` store); the text format of each type, above all the start
-     grant's certified signers.
-
+163. **Succession certs with permission pairs, grants moved by meet, a kernel of small parts; the guard is the one
+     entry point** (Deyao, 2026-10-14; DESIGN "Target design"; build: docs/PLAN-grants.md). Not built yet.
+     *Why*: switching the Claude account on 2026-10-14 broke every running session, and the repair took store writes,
+     per-session unlocks, login grants, pauses and resumes. Behind it: router features got a general shell on
+     secret-holding machines for things that are not shell work, and the permission mode could change on a running
+     session without the cert.
+     *What*: objects are sources (infinitely many, created by the phone), Fly machines and one sink holding ⊤; every
+     object has keys (hash-to-curve for sources and the sink, so a grant there seals to nobody). A succession cert carries
+     a permission pair (allowed covariant, conditions contravariant, exact strings, finite or cofinite); the succession
+     notarizer checks a policy table and answers the log notary; the grant mover gives the successor G ⊓ P and never
+     refuses; the grant merger joins grants with identical conditions; the spawner attests Fly facts with P = ⊤; the
+     identity signer signs (M, M, P) for narrowing; the gullible signer ends things; root signs anything. Only a source can
+     be burned. Widening only out of the sink. Start settings live in the source, so the permission mode is fixed for life.
+     Stores are grant strings; secrets never locks by itself and serves every written key at once; writing secrets is
+     protected only by the router. Pause/resume/destroy/end are the router's lifecycles. Peer messages are out of scope.
+     *How it was reached*: policy as data over control flow; structure (ideal objects: sources, the sink, identity edges,
+     a signer that signs anything) instead of special branches; the kernel checks only ⊆/⊇ and a table, everything
+     needing the clock, a hash or memory belongs to the guard.

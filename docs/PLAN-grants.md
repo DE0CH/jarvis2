@@ -10,33 +10,11 @@ Status: plan only. Nothing here is built. Sources: DESIGN "Target design" (docs/
 - **D6.** Grants signed by a machine follow the same steps as phone grants (notary challenge, logged). A phone-signed grant (the start grant) says which other signers the guard accepts, and for which text types.
 
 
-**Decided 2026-10-14 (Deyao): the machine model. It supersedes §1-§2 wherever they differ** (the `pending` binding,
-burn certs, the null image, `Predecessor == nil` for a new line, kill statements, Fly in the succession signer).
-
-- **Objects:** `source-<random id>`, a conceptually infinite bank, each holding an image hash and its key stores; Fly
-  machines; and one global `sink`, with no image and no stores.
-- **A succession** is (predecessor, successor), signed by a signer, plus a **succession notarization**: the component
-  that checks the rules and then answers the log notary's challenge, so every accepted succession is checked, timed
-  and logged. The guard checks only that each step carries a valid notarization, never the signatures below it.
-- **The rules are a table** (policy as data; the notarizer has one path: look up the shape, check the signer, check the
-  named condition; a shape not in the table is refused):
-
-  | shape | signer required | notarized |
-  |---|---|---|
-  | (sink, source-x) | iPhone | always (a new session: the phone creates the source, image and stores) |
-  | (source-x, Fly machine) | spawner | only for the first successor of source-x (no forks) |
-  | (Fly machine, source-y) | spawner | always (a kill: the spawner checked the machine was alive, killed it, confirmed it dead through the Fly API; source-y carries the machine's image and stores) |
-  | (anything, sink) | any, so the special signer | always (ending needs no authority) |
-
-- **The special signer** signs any pair it is given, whoever asks; its signature is worth something only where the
-  table accepts any signer, i.e. ending. The one invariant to test: it appears in the table only for (anything, sink).
-- **The spawner** is trusted and alone holds the Fly token. A paused machine becomes a fresh source, so "dormant" and
-  "not yet started" are the same kind of object; sessions start and end at the one sink.
-- **Placement:** the log notary, the succession notarizer, the spawner, the special signer and secrets are all inside
-  the same trusted core, each small and isolated, but separate components.
-- **Also decided:** a `grants` branch (§4); terminal grants at most 10 minutes (Q9); a secrets grant covers every key of
-  its stores, current and future, whoever writes them (Q5: secrets are not code and the model never reads them, so a
-  written key can't be a prompt injection).
+**The design is now DESIGN "Target design" (2026-10-14), which supersedes this plan's §1-§6 wherever they differ**:
+the kernel's parts and table, permission pairs, the meet mover, the merger, the identity and gullible signers, sources
+with hash-to-curve keys, start settings in the source, stores as grant strings, one grant per guard. §1-§6 below are the
+first draft and are to be rewritten around it before building. Also decided: a `grants` branch; written keys served at
+once; peer messages out of scope.
 
 ---
 
