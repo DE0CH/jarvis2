@@ -25,7 +25,6 @@ struct Session: Identifiable, Equatable, Hashable {
   var notifyIdle: Bool { j["notifyIdle"].string != "off" }
   var bgTasks: Int { j["bgTasks"].int ?? 0 }
   var pauseInMs: Double? { j["pauseInMs"].double }
-  var needsGrant: String? { j["needsGrant"].text }
   var lockedStore: String? { j["lockedStore"].text }
   var waiting: String? { j["waiting"].text }
   var resumePrompt: String? { j["resumePrompt"].text }
@@ -34,6 +33,12 @@ struct Session: Identifiable, Equatable, Hashable {
   var wakeups: [Wakeup] { j["wakeups"].array.map(Wakeup.init) }
   var crons: [Cron] { j["crons"].array.map(Cron.init) }
   var hasSchedule: Bool { !wakeups.isEmpty || !crons.isEmpty }
+  /// the add-ons in force on the running machine (a terminal, a command), each until its time
+  var addOns: [AddOn] { j["addOns"].array.map(AddOn.init) }
+  /// a terminal is open now: typing, resizing and the remote page work
+  var terminalOpen: Bool { addOns.contains { $0.kind == "terminal" && ($0.until.map { $0 > .now } ?? false) } }
+  /// the results of the commands Deyao approved for it, newest last (10 kept)
+  var commands: [CommandRun] { j["commands"].array.map(CommandRun.init) }
   var isTaskLine: Bool { harness.hasPrefix("task:") }
   /// OpenCode and OpenClaw sessions aren't in the Claude app: their primary action is the Remote page
   var hasRemote: Bool { harness == "opencode" || harness == "openclaw" }
@@ -49,7 +54,27 @@ struct Session: Identifiable, Equatable, Hashable {
     let h = Set(policy[harness] ?? [])
     return all.filter { !h.contains($0) && $0 != StoreView.coreStore }
   }
-  /// a memory-starvation episode the router is watching (absent once it is over)
+  /// an add-on in force on a running machine (GET api/state `addOns`)
+struct AddOn: Identifiable, Equatable, Hashable {
+  let j: JSON
+  var id: String { j["id"].string ?? "" }
+  var kind: String { j["kind"].string ?? "" }
+  var until: Date? { j["until"].string?.isoDate }
+}
+
+/// an approved command's result (router/addons.go CommandRun)
+struct CommandRun: Identifiable, Equatable, Hashable {
+  let j: JSON
+  var id: String { (j["approval"].string ?? "") + (j["at"].string ?? "") }
+  var cmd: String { j["cmd"].string ?? "" }
+  var code: Int { j["code"].int ?? 0 }
+  var stdout: String { j["stdout"].string ?? "" }
+  var stderr: String { j["stderr"].string ?? "" }
+  var error: String? { j["error"].text }
+  var at: Date? { j["at"].string?.isoDate }
+}
+
+/// a memory-starvation episode the router is watching (absent once it is over)
   var memAlert: MemAlert? { j["memAlert"].object == nil ? nil : MemAlert(j: j["memAlert"]) }
   /// the latest memory sample of a running machine
   var memory: (availMb: Int, totalMb: Int)? {
@@ -98,7 +123,7 @@ struct Cron: Identifiable, Equatable, Hashable {
   var until: Date? { j["untilIso"].string?.isoDate }
 }
 
-/// an approval the router holds (GET api/state `approvals`); the challenge is checked by Checks.review before anything
+/// an approval the router holds (GET api/state `approvals`); its drafts are checked by Checks.review before anything
 struct Approval: Identifiable, Equatable, Hashable {
   let j: JSON
   var id: String { j["id"].string ?? "" }
@@ -139,8 +164,6 @@ struct InboxBatch: Identifiable, Equatable, Hashable {
   var summary: String { j["summary"].string ?? "" }
   var callerText: String { j["callerText"].string ?? "someone" }
   var items: [String] { j["items"].array.compactMap(\.text) }
-  /// approvals still being made (a new session's challenge): Allow waits for them
-  var preparing: Int { j["preparing"].int ?? 0 }
   var created: Date? { j["created"].string?.isoDate }
   var expires: Date? { j["expires"].string?.isoDate }
   var callLine: String {
@@ -175,14 +198,6 @@ struct TailMessage: Equatable, Hashable, Identifiable {
   var role: String { j["role"].string ?? "assistant" }
   var text: String { j["text"].string ?? "" }
   var at: Date? { j["at"].string?.isoDate }
-}
-
-struct Grant: Identifiable, Equatable, Hashable {
-  let j: JSON
-  var id: String { j["id"].string ?? "" }
-  var holder: String { j["holder"].string ?? "" }
-  var isRule: Bool { j["kind"].string == "rule" }
-  var ends: Date? { j["ends"].string?.isoDate }
 }
 
 struct RepoEntry: Identifiable, Equatable, Hashable {

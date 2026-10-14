@@ -317,9 +317,45 @@ fixes, 34–40 carried over from the old app and still true, 41–43 the web pag
     Schedules lists and cancels wakeups and crons only: the session arms them through its guard, which keeps the prompts,
     so the router has no text to show and the app can't arm one. Batches have no "being prepared" count.
 
+71. **The iPhone app on the kernel's model** (docs/DESIGN.md "Target design", DECISIONS 163; 2026-10-14).
+    - **Approvals** carry `drafts[]` (succession certs) and the app signs each draft's exact payload with the phone key,
+      every one under ONE Face ID (plus the shares of the stores it unlocks), then `respond {signatures}` in order. The
+      kind decides the shape the app accepts (`Security/ApprovalChecks.swift`): new-session / resume-upgrade = one
+      `(sink, source, ({store:…}, [session:S]))` with an image and settings naming S; terminal / command / add-store =
+      `(sink, bare source-a, P_add)` and `(source-a, M, ⊤)`, P_add exactly the add-on's (a shell until ≤ 10 min; the
+      command's sha256, once, session, until; one store on session S); anything else is refused. An add-on's M must be
+      the machine the spawner's notarized spawn cert names, out of a source whose settings name S (the chain's `spawn`,
+      checked against the box-vouched roster from `GET api/kernel/identities`). The notary's challenge must be over the
+      payload's sha256 (its signature checked when the roster vouches for the notary).
+    - **What is shown** is rendered from the payloads (`SignedAction.cert`): each object (the sink; a source's image,
+      snapshot and start settings; a machine's id and both keys), each allowed string and condition. Known strings
+      readably (store:, shell, session:, until:, cmd: as the command whose sha256 it is, once:), JSON pretty-printed, any
+      other string exactly as it is; settings fields the app doesn't know are shown pretty-printed ("Other settings"),
+      not refused. New session still refuses a draft that isn't exactly what the page chose.
+    - **The root key** is a third Secure Enclave P-256 key made and kept like the phone's signing key: fresh at every
+      Reset/Recover (`PhoneKeys.renew`), `.biometryCurrentSet`, never backed up (the recovery kit's master key is what
+      survives; a Recover makes a new root key). Its public half goes in the master-signed claim statement as `root`
+      (secrets ignores it; the setup session takes the phone and root keys for the kernel's roster from the claim the
+      router keeps). It signs only on its own red warning screen (`Review/RootKeyView.swift`, a toggle then the button),
+      with its own Face ID (never a batch's), and only root's ⊤ on the sink, byte for byte the kernel's vector
+      (`Kernel.rootGrantPayload`) → `PUT api/kernel/root-grant`. The setup page asks for it right after the claim;
+      Settings offers it again when the router reports none (`rootGrant: false`).
+    - **Secrets** replaces the core: `api/secrets/*`, its identity checked as `jarvis2-secrets-identity …` against the
+      box key, its state (`secrets-state`) fetched apart; the claim bundle is "keys" only and carries no Fly token (the
+      spawner's, from the setup session). Unlocks are per store with no `for`, open until locked; a key written by the
+      router itself or by a session's machine is the router's word (shown when a session wrote it, as before).
+    - **Gone**: grants, holders, standing rules, the Grants page, the grant review, the permission-mode switch, line pins
+      and session certs. **New**: a session's Shell access section (terminal open until / Open a terminal; Command
+      results), its Stores page (Drop = narrow, no Face ID; Add = an add-store approval), the terminal page's `terminal`
+      message (files the terminal request and opens its approval), the Remote page's `needsTerminal`.
+    - Checked off-device by `swift run Golden` (core/kernel/testdata: reading, refusals, rendering, the app's signatures
+      verified by the kernel's Go code) and `swift run Interop` (against the real secrets binary and router).
+
 ## Unfinished / known gaps
 
-- Free text (prompt, title) reaches the machine signed only with a core that vouches (the held core doesn't).
 - Content stores: the web page has the Content tab and both apps pick them on New session (66); the iPhone app has Settings → Content (list, files, delete, new store; uploads are the web page's). Devices and lease pills are in the web page only (65); attachments are images only (no other files).
-- After a reinstall that loses the Keychain, the phone's keys and device key are new: an already-recovered core refuses a
-  second claim; restart the core (a new, empty core) and Recover.
+- After a reinstall that loses the Keychain, the phone's keys, root key and device key are new: an already-recovered
+  secrets refuses a second claim; restart secrets (a new, empty one) and Recover.
+- The simulator walkthrough, transitions and phone replica need the whole kernel (notary, notarizer, mover, merger,
+  spawner, identity and gullible signers) on the runner with a roster holding the app's phone and root keys from its
+  claim; the CI stand-ins run secrets only, so the flows after New session don't pass there yet.

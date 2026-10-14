@@ -1,6 +1,6 @@
 // Remote control of a session the Claude app doesn't see (GET api/sessions/:id/remote): OpenCode's Paseo web UI and
-// pairing offer, or OpenClaw's Control UI. The router reads them inside the machine as the `remote` feature, so the
-// phone may have to allow it first (a 403 offers the grant review).
+// pairing offer, or OpenClaw's Control UI. The router reads them inside the machine with a shell command, so only while
+// a terminal is open (a 403 {needsTerminal} offers the terminal's approval).
 import CoreImage.CIFilterBuiltins
 import SwiftUI
 
@@ -11,7 +11,7 @@ struct RemoteView: View {
   let title: String
   @State private var info: JSON?
   @State private var error: String?
-  @State private var needsGrant = false
+  @State private var needsTerminal = false
   @State private var attempt = 0
 
   var body: some View {
@@ -19,9 +19,9 @@ struct RemoteView: View {
       if let error {
         Section {
           ErrorRow(text: error, id: "rm-error")
-          if needsGrant {
-            Button("Allow the remote page for 10 minutes", systemImage: "checkmark.shield") {
-              model.requestGrant(sessionId, title, holder: "remote") { ok in if ok { attempt += 1 } }
+          if needsTerminal, let m = model.session(sessionId) {
+            Button("Open a terminal for 10 minutes", systemImage: "terminal") {
+              Task { await model.requestTerminal(m) { ok in if ok { attempt += 1 } } }
             }
             .accessibilityIdentifier("rm-allow")
           }
@@ -62,9 +62,9 @@ struct RemoteView: View {
   }
 
   private func load() async {
-    error = nil; info = nil; needsGrant = false
+    error = nil; info = nil; needsTerminal = false
     do { info = try await RouterClient.shared.get("api/sessions/\(sessionId)/remote") }
-    catch { self.error = errText(error); needsGrant = (error as? RouterError)?.status == 403 }
+    catch { self.error = errText(error); needsTerminal = (error as? RouterError)?.body["needsTerminal"].bool == true }
   }
 }
 

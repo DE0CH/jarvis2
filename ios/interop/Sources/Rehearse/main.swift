@@ -1,20 +1,22 @@
 // Rehearse: the app's side of a Recover rehearsal against a REAL throwaway box (infra/rehearse-recover.sh), with the
-// shell's own CoreSetup + CoreCrypto (symlinked in, as for Interop) and a software phone. It speaks to the box's
-// router through its Cloudflare tunnel, as the app does, with the rehearsal's Access service token.
-//   rehearse reset              the test kit sets up an empty core with no stores (the app's Reset, kit = the
-//                               public TEST master key, e2e/testdata)
-//   rehearse wait-empty [OLD]   until the router answers with an empty core (other signing key than OLD, if given)
-//   rehearse wipe               the kit ends the set-up core (the app's "Restart and recover"); waits for the new one
+// shell's own CoreSetup + CoreCrypto + Kernel + ApprovalChecks (symlinked in, as for Interop) and a software phone
+// with its root key. It speaks to the box's router through its Cloudflare tunnel, as the app does, with the
+// rehearsal's Access service token.
+//   rehearse reset              the test kit sets up an empty secrets with no stores (the app's Reset, kit = the
+//                               public TEST master key, e2e/testdata), then the root key's ⊤ on the sink
+//   rehearse wait-empty [OLD]   until the router answers with an empty secrets (other signing key than OLD, if given)
+//   rehearse wipe               the kit ends the set-up secrets (the app's "Restart and recover"); waits for the new one
 //   rehearse recover EXPECT     the app's Recover: the backups through the router, checked with keys/setup.pub and
-//                               opened with the kit, the claim; then the core's signed store list must match EXPECT
-//                               ({"stores": {name: {"sensitive": bool, "values": {K: V}}}}, the core store excluded)
+//                               opened with the kit, the claim, the root grant; then secrets' signed store list must
+//                               match EXPECT ({"stores": {name: {"sensitive": bool, "values": {K: V}}}}, the core store
+//                               excluded)
 //   rehearse session STORE…     unlock the session's stores (split key), New session (harness claude), the phone
-//                               checks and signs the challenge; waits until started. Prints SESSION and MACHINE.
+//                               checks and signs the draft; waits until started. Prints SESSION and MACHINE.
 //   rehearse stuck STORE        a session with STORE left LOCKED (its machine loops on "store is locked" at boot),
 //                               then destroy: it must end within 90 s, not wait out the snapshot wait (10 min)
 //   rehearse destroy SESSION    and waits until it is in the records
 // Env: REHEARSE_BASE (https://<host>/), REHEARSE_ACCESS_ID/SECRET, REHEARSE_KEYS (box.pub, setup.pub),
-//      REHEARSE_MASTER_PEM, REHEARSE_PHONE (the software phone's keys, made on first use; test keys only).
+//      REHEARSE_MASTER_PEM, REHEARSE_PHONE (the software phone's keys and root key, made on first use; test keys only).
 #if canImport(CryptoKit)
 import CryptoKit
 #else
@@ -62,25 +64,35 @@ func json<T: Decodable>(_ method: String, _ path: String, _ body: Any? = nil, as
 let kitString = RecoveryKit(master: MasterKey(signing: try! P256.Signing.PrivateKey(pemRepresentation: String(contentsOfFile: need("REHEARSE_MASTER_PEM"), encoding: .utf8)))).string
 guard let parsedKit = try? RecoveryKit.parse(kitString) else { fail("the test kit doesn't parse") }
 let master = parsedKit.master
-struct PhoneFile: Codable { let signing: String; let agreement: String }
+struct PhoneFile: Codable { let signing: String; let agreement: String; var root: String? = nil }
 let phonePath = need("REHEARSE_PHONE")
 let phoneFile: PhoneFile = {
   if let d = FileManager.default.contents(atPath: phonePath), let p = try? JSONDecoder().decode(PhoneFile.self, from: d) { return p }
-  let p = PhoneFile(signing: P256.Signing.PrivateKey().rawRepresentation.base64EncodedString(), agreement: P256.KeyAgreement.PrivateKey().rawRepresentation.base64EncodedString())
+  let p = PhoneFile(signing: P256.Signing.PrivateKey().rawRepresentation.base64EncodedString(), agreement: P256.KeyAgreement.PrivateKey().rawRepresentation.base64EncodedString(),
+                    root: P256.Signing.PrivateKey().rawRepresentation.base64EncodedString())
   _ = FileManager.default.createFile(atPath: phonePath, contents: try! JSONEncoder().encode(p), attributes: [.posixPermissions: 0o600])
   return p
 }()
 let phoneSigning = try! P256.Signing.PrivateKey(rawRepresentation: Data(base64Encoded: phoneFile.signing)!)
 let phoneAgreement = try! P256.KeyAgreement.PrivateKey(rawRepresentation: Data(base64Encoded: phoneFile.agreement)!)
 let phone = PublicKeys(signingKey: phoneSigning.publicKey.x963Representation.base64EncodedString(), agreementKey: phoneAgreement.publicKey.x963Representation.base64EncodedString())
+let rootKey: P256.Signing.PrivateKey = {
+  guard let r = phoneFile.root, let d = Data(base64Encoded: r), let k = try? P256.Signing.PrivateKey(rawRepresentation: d) else {
+    fail("\(phonePath) has no root key: delete it to make a new software phone")
+  }
+  return k
+}()
 
-// ---- the core ----
-/// RouterClient.identity + CoreSetup.check; nil while there is no core to ask (503/502/504, or a 530 from the edge)
+// ---- secrets ----
+/// RouterClient.identity + CoreSetup.check; nil while there is no secrets to ask (503/502/504, or a 530 from the edge)
 func coreNow() -> (keys: PublicKeys, state: CoreSetup.State)? {
-  let (s, d) = call("GET", "api/core/identity")
+  let (s, d) = call("GET", "api/secrets/identity")
   if [0, 502, 503, 504, 530].contains(s) { return nil }
-  guard s == 200, let id = try? JSONDecoder().decode(CoreSetup.Identity.self, from: d) else { fail("api/core/identity: HTTP \(s) \(String(decoding: d.prefix(200), as: UTF8.self))") }
-  do { return try CoreSetup.check(id, boxKey: boxKey) } catch { fail("the core's identity doesn't check against box.pub: \(error)") }
+  guard s == 200, let id = try? JSONDecoder().decode(CoreSetup.Identity.self, from: d) else { fail("api/secrets/identity: HTTP \(s) \(String(decoding: d.prefix(200), as: UTF8.self))") }
+  let (s2, d2) = call("POST", "api/secrets/state", [String: Any]())
+  if [0, 502, 503, 504, 530].contains(s2) { return nil }
+  guard s2 == 200, let st = try? JSONDecoder().decode(SignedDoc.self, from: d2) else { fail("api/secrets/state: HTTP \(s2)") }
+  do { return try CoreSetup.check(id, state: st, boxKey: boxKey) } catch { fail("secrets' identity doesn't check against box.pub: \(error)") }
 }
 func waitEmpty(notKey old: String?, minutes: Int = 15) -> (keys: PublicKeys, state: CoreSetup.State) {
   let end = Date().addingTimeInterval(Double(minutes) * 60)
@@ -89,55 +101,56 @@ func waitEmpty(notKey old: String?, minutes: Int = 15) -> (keys: PublicKeys, sta
     if let c = coreNow() {
       let st = CoreSetup.status(c.state, myMaster: master.publicKey, myPhone: phone)
       if st == .empty && c.keys.signingKey != old { return c }
-      if "\(st)" != last { say("core \(c.keys.signingKey.prefix(12))…: \(st)"); last = "\(st)" }
-    } else if last != "down" { say("no core answering yet"); last = "down" }
+      if "\(st)" != last { say("secrets \(c.keys.signingKey.prefix(12))…: \(st)"); last = "\(st)" }
+    } else if last != "down" { say("no secrets answering yet"); last = "down" }
     sleep(5)
   }
-  fail("no new, empty core within \(minutes) minutes")
+  fail("no new, empty secrets within \(minutes) minutes")
 }
 func claim(_ c: PublicKeys, _ stores: [RecoveredStore]) -> Int {
-  // the app's bundle: every store wrapped to the core's signed store key for this phone (Reset: none)
-  let sk = try! CoreCrypto.storeKey(json("POST", "api/core/store-key", ["phone": phone.agreementKey], as: SignedDoc.self), coreKey: c.signingKey, phone: phone.agreementKey)
-  // a core whose identity says bundle "keys": every key on its own; a core from before keys.go (until the held core is
-  // live): one blob per store
-  let id = try! JSONDecoder().decode(CoreSetup.Identity.self, from: call("GET", "api/core/identity").1)
-  let bundle = id.takesKeys ? try! CoreSetup.keysBundle(stores, storeKey: sk) : try! CoreSetup.blobsBundle(stores, storeKey: sk)
-  let body = try! CoreSetup.claim(core: c, phone: phone, master: master, bundle: bundle)
-  let d = try! CoreCrypto.decode(json("POST", "api/core/claim", body, as: SignedDoc.self), by: c.signingKey, as: KindDoc.self, what: "the core's answer")
+  // the app's bundle: every key wrapped to secrets' signed store key for this phone (Reset: none)
+  let sk = try! CoreCrypto.storeKey(json("POST", "api/secrets/store-key", ["phone": phone.agreementKey], as: SignedDoc.self), coreKey: c.signingKey, phone: phone.agreementKey)
+  let body = try! CoreSetup.claim(core: c, phone: phone, master: master, bundle: try! CoreSetup.keysBundle(stores, storeKey: sk),
+                                  root: rootKey.publicKey.x963Representation.base64EncodedString())
+  let d = try! CoreCrypto.decode(json("POST", "api/secrets/claim", body, as: SignedDoc.self), by: c.signingKey, as: KindDoc.self, what: "secrets' answer")
   guard d.kind == "claimed" else { fail("the claim's answer is \(d.kind)") }
   return d.stores ?? 0
 }
+/// root's ⊤ on the sink, signed with the phone's root key (the app's RootKeyView)
+func rootGrant() {
+  let sig = try! rootKey.signature(for: Data(Kernel.rootGrantPayload.utf8)).derRepresentation.base64EncodedString()
+  let (s, d) = call("PUT", "api/kernel/root-grant", ["payload": Kernel.rootGrantPayload, "sig": sig])
+  guard s == 200 else { fail("PUT api/kernel/root-grant: HTTP \(s) \(String(decoding: d.prefix(200), as: UTF8.self))") }
+  ok("the root grant (⊤ on the sink) is with the router")
+}
 func mine() -> PublicKeys {
   guard let c = coreNow() else { fail("no core") }
-  guard CoreSetup.status(c.state, myMaster: master.publicKey, myPhone: phone) == .mine else { fail("the core isn't set up with this kit and phone") }
+  guard CoreSetup.status(c.state, myMaster: master.publicKey, myPhone: phone) == .mine else { fail("secrets isn't set up with this kit and phone") }
   return c.keys
 }
 func storeList(_ core: String) -> [StoreView] {
   let n = CoreCrypto.nonce()
-  let d = try! CoreCrypto.decode(json("POST", "api/core/stores", ["nonce": n], as: SignedDoc.self), by: core, as: StoresDoc.self, what: "the store list")
+  let d = try! CoreCrypto.decode(json("POST", "api/secrets/stores", ["nonce": n], as: SignedDoc.self), by: core, as: StoresDoc.self, what: "the store list")
   guard d.kind == "stores", d.nonce == n else { fail("a stale store list") }
   return d.stores
 }
 
-// ---- sessions: New session as the app does it (unlock, create, the phone checks and signs the challenge) ----
-struct ApprovalDTO: Decodable { let id: String; let kind: String; let session: String?; let label: String?; let challenge: SignedDoc }
+// ---- sessions: New session as the app does it (unlock, create, the phone checks and signs the draft) ----
 struct SessionDTO: Decodable { let id: String; let state: String; let label: String?; let machineId: String?; let error: String?; let waiting: String? }
 struct StateDTO: Decodable { let sessions: [SessionDTO]; let approvals: [ApprovalDTO] }
 struct RecordsDTO: Decodable { struct Rec: Decodable { let id: String? }; let records: [Rec] }
 func sessionNow(_ id: String) -> SessionDTO? { json("GET", "api/state", as: StateDTO.self).sessions.first { $0.id == id } }
 func unlock(_ store: String, core: String) {
-  let b = try! CoreCrypto.decode(json("POST", "api/core/unlock/begin", ["store": store], as: SignedDoc.self), by: core, as: UnlockBegin.self, what: "the unlock")
+  let b = try! CoreCrypto.decode(json("POST", "api/secrets/unlock/begin", ["store": store], as: SignedDoc.self), by: core, as: UnlockBegin.self, what: "the unlock")
   guard b.kind == "unlock-begin", b.store == store else { fail("unlock-begin for \(store)") }
   func share(_ e: String) -> [String: String] {
     let x = try! phoneAgreement.sharedSecretFromKeyAgreement(with: P256.KeyAgreement.PublicKey(x963Representation: Data(base64Encoded: e)!)).withUnsafeBytes { Data($0) }
     return try! CoreCrypto.sealShare(x, to: b.t)
   }
   var body: [String: Any] = ["pending": b.pending]
-  if let keys = b.keys {
-    do { try Checks.unlockKeys(b, setupKey: setupKey) } catch { fail("unlock \(store): \(error)") }
-    body["shares"] = Dictionary(uniqueKeysWithValues: keys.map { ($0.key, share($0.e)) })
-  } else { body["share"] = share(b.e ?? "") } // a core from before keys.go (until the held core is live)
-  let u = try! CoreCrypto.decode(json("POST", "api/core/unlock/finish", body, as: SignedDoc.self), by: core, as: KindDoc.self, what: "the unlocked answer")
+  do { try Checks.unlockKeys(b, setupKey: setupKey) } catch { fail("unlock \(store): \(error)") }
+  body["shares"] = Dictionary(uniqueKeysWithValues: b.keys.map { ($0.key, share($0.e)) })
+  let u = try! CoreCrypto.decode(json("POST", "api/secrets/unlock/finish", body, as: SignedDoc.self), by: core, as: KindDoc.self, what: "the unlocked answer")
   guard u.kind == "unlocked", u.store == store else { fail("unlock \(store): \(u.kind)") }
   ok("unlocked \(store) with the phone's share")
 }
@@ -148,7 +161,7 @@ func newSession(_ picked: [String], leaveLocked locked: Set<String> = []) -> Str
   let harnessStores = json("GET", "api/policy", as: PolicyDTO.self).harnesses["claude"]?.stores ?? []
   for store in Set(picked + harnessStores).subtracting(locked).sorted() { unlock(store, core: core) }
   let label = "rehearsal \(Int(Date().timeIntervalSince1970))"
-  _ = call("POST", "api/sessions", ["label": label, "stores": picked, "size": "small", "harness": "claude"])
+  _ = call("POST", "api/sessions", ["label": label, "stores": picked, "size": "small", "harness": "claude", "permissionMode": "auto"])
   var approval: ApprovalDTO?
   for _ in 0..<60 {
     approval = json("GET", "api/state", as: StateDTO.self).approvals.first { $0.kind == "new-session" && $0.label == label }
@@ -156,12 +169,16 @@ func newSession(_ picked: [String], leaveLocked locked: Set<String> = []) -> Str
     sleep(3)
   }
   guard let a = approval else { fail("no new-session approval for \(label)") }
-  let r = try! Checks.review(challenge: a.challenge, coreKey: core)
-  do { try Checks.matchesPicked(r, stores: picked, harnessStores: harnessStores, harness: "claude", permissionMode: "auto") } catch { fail("the challenge doesn't match what was picked: \(error)") }
-  ok("the challenge is the core's and names \(r.stores) (sensitive \(r.sensitive)), harness \(r.harness)")
-  struct RespondDTO: Decodable { let answer: SignedDoc; let session: String }
-  let resp = json("POST", "api/approvals/\(a.id)/respond", ["signature": try! phoneSigning.signature(for: Data(a.challenge.payload.utf8)).derRepresentation.base64EncodedString()], as: RespondDTO.self)
-  do { try Checks.answerFor(r, answer: resp.answer, coreKey: core) } catch { fail("the answer: \(error)") }
+  let r: ReviewedApproval
+  do { r = try Checks.review(a, notaryKey: nil) } catch { fail("the draft: \(error)") }
+  do {
+    try Checks.matchesPicked(r, stores: picked, harnessStores: harnessStores, harness: "claude", permissionMode: "auto",
+                             settings: .init(label: label, prompt: "", model: "", repos: [], oneShot: false, apiProxy: false))
+  } catch { fail("the draft doesn't match what was picked: \(error)") }
+  ok("the draft names \(r.stores), harness \(r.harness), image \(r.source.image)")
+  struct RespondDTO: Decodable { let session: String }
+  let sigs = r.drafts.map { try! phoneSigning.signature(for: Data($0.payload.utf8)).derRepresentation.base64EncodedString() }
+  let resp = json("POST", "api/approvals/\(a.id)/respond", ["signatures": sigs], as: RespondDTO.self)
   ok("the phone approved; session \(resp.session)")
   return resp.session
 }
@@ -182,23 +199,24 @@ let args = Array(CommandLine.arguments.dropFirst())
 switch args.first ?? "" {
 case "reset":
   guard let c = coreNow() else { fail("no core") }
-  guard CoreSetup.status(c.state, myMaster: master.publicKey, myPhone: phone) == .empty else { fail("the core isn't empty") }
+  guard CoreSetup.status(c.state, myMaster: master.publicKey, myPhone: phone) == .empty else { fail("secrets isn't empty") }
   _ = claim(c.keys, [])
   _ = mine()
-  ok("Reset: core \(c.keys.signingKey.prefix(16))… is set up with the test kit, no stores")
+  ok("Reset: secrets \(c.keys.signingKey.prefix(16))… is set up with the test kit, no stores")
+  rootGrant()
 
 case "wait-empty":
   let c = waitEmpty(notKey: args.count > 1 ? args[1] : nil)
-  ok("an empty core: \(c.keys.signingKey)")
+  ok("an empty secrets: \(c.keys.signingKey)")
   print("CORE \(c.keys.signingKey)")
 
 case "wipe":
   let c = mine()
-  let d = try! CoreCrypto.decode(json("POST", "api/core/wipe", try! CoreSetup.wipe(core: c, master: master), as: SignedDoc.self), by: c.signingKey, as: KindDoc.self, what: "the core's answer")
+  let d = try! CoreCrypto.decode(json("POST", "api/secrets/wipe", try! CoreSetup.wipe(core: c, master: master), as: SignedDoc.self), by: c.signingKey, as: KindDoc.self, what: "secrets' answer")
   guard d.kind == "wiping", d.core == c.signingKey else { fail("the wipe's answer is \(d.kind)") }
-  ok("the kit ended core \(c.signingKey.prefix(16))…")
+  ok("the kit ended secrets \(c.signingKey.prefix(16))…")
   let n = waitEmpty(notKey: c.signingKey, minutes: 5)
-  ok("Kubernetes started a new, empty core \(n.keys.signingKey.prefix(16))…")
+  ok("Kubernetes started a new, empty secrets \(n.keys.signingKey.prefix(16))…")
 
 case "recover":
   guard args.count > 1, let ed = FileManager.default.contents(atPath: args[1]) else { fail("usage: recover EXPECT.json") }
@@ -206,7 +224,7 @@ case "recover":
   struct Expect: Decodable { let stores: [String: Want] }
   let want = try! JSONDecoder().decode(Expect.self, from: ed).stores
   guard let c = coreNow() else { fail("no core") }
-  guard CoreSetup.status(c.state, myMaster: master.publicKey, myPhone: phone) == .empty else { fail("the core isn't empty") }
+  guard CoreSetup.status(c.state, myMaster: master.publicKey, myPhone: phone) == .empty else { fail("secrets isn't empty") }
   struct B: Decodable { let bucket: String?; let objects: [CoreSetup.BackupObject] }
   let served = json("GET", "api/backups", as: B.self)
   say("the router serves \(served.objects.count) backup objects from \(served.bucket ?? "?")")
@@ -218,17 +236,18 @@ case "recover":
     guard got[n]!.values == w.values else { fail("store \(n): its values differ from what was written") }
     guard got[n]!.sensitive == w.sensitive else { fail("store \(n): sensitive \(got[n]!.sensitive) in the backups, want \(w.sensitive)") }
   }
-  guard got["core"]!.values["FLY_API_TOKEN"]?.isEmpty == false else { fail("the core store has no Fly token") }
+  guard got["core"]!.values["FLY_API_TOKEN"]?.isEmpty == false else { fail("the core store has no Fly token") }  // the spawner's, given by the setup session
   ok("every backup checks (setup key) and opens (kit): \(stores.map(\.name)), values and sensitivity as written")
   let n = claim(c.keys, stores)
-  guard n == want.count else { fail("the core says \(n) stores, want \(want.count)") }
+  guard n == want.count else { fail("secrets says \(n) stores, want \(want.count)") }
   let k = mine()
-  ok("Recover: core \(k.signingKey.prefix(16))… is set up with the kit and this phone (\(n) stores)")
+  ok("Recover: secrets \(k.signingKey.prefix(16))… is set up with the kit and this phone (\(n) stores)")
+  rootGrant()
   let l = storeList(k.signingKey)
   let listed = Dictionary(uniqueKeysWithValues: l.map { ($0.name, $0.sensitive) })
-  guard Set(listed.keys) == Set(want.keys) else { fail("the core lists \(listed.keys.sorted()), want \(want.keys.sorted())") }
-  for (n, w) in want where listed[n] != w.sensitive { fail("store \(n): the core says sensitive=\(listed[n]!), want \(w.sensitive)") }
-  ok("the core's signed list: \(l.map { "\($0.name)\($0.sensitive ? " (sensitive)" : "")" }.joined(separator: ", "))")
+  guard Set(listed.keys) == Set(want.keys) else { fail("secrets lists \(listed.keys.sorted()), want \(want.keys.sorted())") }
+  for (n, w) in want where listed[n] != w.sensitive { fail("store \(n): secrets says sensitive=\(listed[n]!), want \(w.sensitive)") }
+  ok("secrets' signed list: \(l.map { "\($0.name)\($0.sensitive ? " (sensitive)" : "")" }.joined(separator: ", "))")
 
 case "session":
   let id = newSession(Array(args.dropFirst()))

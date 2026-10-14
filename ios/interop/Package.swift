@@ -15,4 +15,7 @@ let package = Package(name: "Interop", platforms: [.macOS(.v14)], dependencies: 
             // the app's side of infra/rehearse-recover.sh (a real throwaway box): the same shell sources, symlinked in
             .executableTarget(name: "Rehearse", dependencies: tdeps),
             // app code that needs no simulator (ResumeOnce), checked on its own: `swift run Units`
-            .executableTarget(name: "Units")])
+            .executableTarget(name: "Units"),
+            // the app's reading, checking, rendering and signing of kernel documents against core/kernel/testdata:
+            // `swift run Golden`
+            .executableTarget(name: "Golden", dependencies: tdeps)])

@@ -35,7 +35,10 @@ final class AppModel {
   var inbox: [InboxItem] = []
   /// batches (router/batches.go): several Inbox items filed together, reviewed on one page under one Face ID
   var inboxBatches: [InboxBatch] = []
-  var coreUp = false
+  /// secrets answers the router (GET api/state `secrets.up`)
+  var secretsUp = false
+  /// the router holds root's ⊤ on the sink (made once at setup with the root key); nil before the first state
+  var rootGrant: Bool?
   var budget: JSON = .null
   var fly: JSON = .null
   var flyApp: String?
@@ -49,9 +52,8 @@ final class AppModel {
   /// the stores each harness brings (GET api/policy): the router adds them, the pickers don't offer them
   var policy: [String: [String]] = [:]
   var records = Loaded<Rec>()
-  /// the core's signed store list (verified against the pinned core key)
+  /// secrets' signed store list (verified against the pinned key)
   var stores = Loaded<StoreView>()
-  var scopedUnlocks = false
   var openUnlocks: [UnlockRow] = []
   var machines = Loaded<Machine>()
   /// the whole answer of api/machines: every Fly org and app (router/flyorgs.go)
@@ -111,8 +113,8 @@ final class AppModel {
     Keychain.set("held-master", nil); Keychain.set("held-master-public", nil)
     if CoreTrust.pinned == nil {
       showSetup = true
-    } else if let x = try? await RouterClient.shared.identity(), x.signingKey != CoreTrust.pinned?.signingKey {
-      // a restarted core is a new, empty core: until it is set up again nothing can be signed
+    } else if let x = try? await RouterClient.shared.identity(), x.id.signingKey != CoreTrust.pinned?.signingKey {
+      // a restarted secrets is a new, empty one: until it is set up again nothing can be signed
       showSetup = true
     }
     start()
@@ -136,7 +138,7 @@ final class AppModel {
     }
   }
 
-  /// the router's lists that change rarely (sizes, models, the harnesses' stores) and the core's stores
+  /// the router's lists that change rarely (sizes, models, the harnesses' stores) and secrets' stores
   func loadLists() async {
     let r = RouterClient.shared
     if let j = try? await r.get("api/sizes") { sizes = j["sizes"].array.map(Choice.init) }
@@ -160,7 +162,8 @@ final class AppModel {
       approvals = j["approvals"].array.map(Approval.init)
       inbox = j["inbox"].array.map(InboxItem.init)
       inboxBatches = j["inboxBatches"].array.map(InboxBatch.init)
-      coreUp = j["core"]["up"].bool == true
+      secretsUp = j["secrets"]["up"].bool == true
+      rootGrant = j["rootGrant"].bool
       budget = j["budget"]
       fly = j["fly"]
       flyApp = j["flyApp"].text
@@ -196,7 +199,6 @@ final class AppModel {
     do {
       let d = try await RouterClient.shared.storesDoc()
       stores = Loaded(items: d.stores.filter { !$0.isCore }, loaded: true, error: nil)
-      scopedUnlocks = d.scopedUnlocks == true
       openUnlocks = (try? await RouterClient.shared.unlocked()) ?? openUnlocks
     } catch { stores.error = errText(error) }
   }

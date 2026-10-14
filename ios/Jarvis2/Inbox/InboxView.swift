@@ -99,20 +99,19 @@ private struct InboxRow: View {
   }
 
   private var kindName: String {
-    ["repo-key": "Repo key", "grant": "Grant", "unlock": "Unlock", "new-session": "New session", "resume-upgrade": "Resume", "add-store": "Add a store", "api-call": "API call", "restore": "Restore store"][it.kind] ?? it.kind
+    ["repo-key": "Repo key", "unlock": "Unlock", "new-session": "New session", "resume-upgrade": "Resume", "terminal": "Terminal", "command": "Command",
+     "add-store": "Add a store", "api-call": "API call", "restore": "Restore store"][it.kind] ?? it.kind
   }
-  /// the list's title: the core action (or the phone grant) the entry leads to, a fixed name per kind
+  /// the list's title: the action the entry leads to, a fixed name per kind
   private var action: String { it.actionTitle }
-  /// what it is about, as values (repo, store, feature, session, length): the router's record, unverified
+  /// what it is about, as values (repo, store, session, length): the router's record, unverified
   private var details: [String] {
     let p = it.params, who = it.sessionName ?? it.session
     switch it.kind {
     case "repo-key":
       let repo = p["repo"].string ?? ""
       return [repo, Checks.repoStore(repo)]
-    case "grant":
-      let d = p["days"].int ?? 0
-      return [Holder.title(p["holder"].string ?? ""), who, d > 0 ? "\(d) d" : "\(p["minutes"].int ?? 10) min"].compactMap { $0 }
+    case "terminal": return [who, it.j["options"]["minutes"].string.map { "\($0) min" }].compactMap { $0 }
     case "add-store": return [it.j["options"]["store"].string, who].compactMap { $0 }
     case "api-call": return [callTarget, p["body"].string].compactMap { $0 }
     case "restore": return [p["store"].string, p["seq"].int.map { "Version \($0)" }].compactMap { $0 }
@@ -132,7 +131,7 @@ private struct BatchRow: View {
     Button(action: review) {
       VStack(alignment: .leading, spacing: 4) {
         HStack(alignment: .firstTextBaseline) {
-          Text("\(b.items.count + b.preparing) requests").font(.headline).foregroundStyle(Color.primary).accessibilityIdentifier("batch-title-\(b.id)")
+          Text("\(b.items.count) requests").font(.headline).foregroundStyle(Color.primary).accessibilityIdentifier("batch-title-\(b.id)")
           Spacer()
           if let p = model.pending["b:" + b.id] { StatusPill(text: p, color: .orange, spinning: true) } else { StatusPill(text: "Batch", color: .blue) }
         }

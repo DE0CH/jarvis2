@@ -1,7 +1,13 @@
-// The phone's two keys and the app's Keychain items (this app's own Keychain access group; nothing else reads them).
-//   - signing key: Secure Enclave P-256, Face ID on every use, bound to the faces enrolled when it was made
-//     (.biometryCurrentSet) — signs challenges;
-//   - agreement key: Secure Enclave P-256, Face ID on every use — computes this phone's share p·E of an unlock.
+// The phone's keys and the app's Keychain items (this app's own Keychain access group; nothing else reads them).
+//   - signing key ("phone" in the kernel's roster): Secure Enclave P-256, Face ID on every use, bound to the faces
+//     enrolled when it was made (.biometryCurrentSet) — signs the succession certs of approvals and secrets' begin
+//     documents;
+//   - agreement key: Secure Enclave P-256, Face ID on every use — computes this phone's share p·E of an unlock;
+//   - root key ("root" in the roster): a third Secure Enclave P-256 key, made and kept exactly like the signing key
+//     (fresh at every Reset/Recover, .biometryCurrentSet, never backed up: the master key in the recovery kit is what
+//     survives, and a Recover makes a new root key and names it in the master-signed claim). It signs anything the
+//     kernel's table accepts from root, so the app uses it only behind its own warning screen (RootKeyView), with its own
+//     Face ID (never a batch's): today only root's ⊤ on the sink, once per setup.
 // The simulator has no Secure Enclave, so its builds use software keys (the pages say so); when the simulator has
 // Face ID enrolled (the phone replica enrols it and drives matches and failures with simctl), every use asks for
 // Face ID first, as the iPhone does.
@@ -75,8 +81,9 @@ final class PhoneKeys: @unchecked Sendable {
   /// bound to the faces enrolled NOW (.biometryCurrentSet, audit finding 6): enrolling another face or an alternate
   /// appearance (which needs only the passcode) makes them unusable, and the phone is paired again with a Recover.
   func renew() {
-    for k in ["signing-se", "agreement-se", "signing-sw", "agreement-sw"] { Keychain.set(k, nil) }
+    for k in ["signing-se", "agreement-se", "signing-sw", "agreement-sw", "root-se", "root-sw"] { Keychain.set(k, nil) }
     _ = try? publicKeys()
+    _ = try? rootPublic()
   }
 
   // ---- the public halves (no Face ID needed); made on first use ----
@@ -133,6 +140,34 @@ final class PhoneKeys: @unchecked Sendable {
       throw err
     }
     #endif
+  }
+
+  // ---- the root key: signs only behind RootKeyView, with a Face ID of its own ----
+  /// its public half (base64 X9.63), made on first use
+  func rootPublic() throws -> String {
+    if usesEnclave {
+      if let b = Keychain.get("root-se") { return try SecureEnclave.P256.Signing.PrivateKey(dataRepresentation: b).publicKey.x963Representation.base64EncodedString() }
+      let k = try SecureEnclave.P256.Signing.PrivateKey(accessControl: accessControl())
+      Keychain.set("root-se", k.dataRepresentation)
+      return k.publicKey.x963Representation.base64EncodedString()
+    }
+    return softRoot().publicKey.x963Representation.base64EncodedString()
+  }
+  private func softRoot() -> P256.Signing.PrivateKey {
+    if let b = Keychain.get("root-sw"), let k = try? P256.Signing.PrivateKey(rawRepresentation: b) { return k }
+    let k = P256.Signing.PrivateKey(); Keychain.set("root-sw", k.rawRepresentation); return k
+  }
+  /// the root key's DER signature over exactly `payload`: always its own Face ID (no batch context is accepted)
+  func rootSign(_ payload: String, reason: String) throws -> Data {
+    try guarded {
+      _ = try rootPublic()
+      if usesEnclave, let b = Keychain.get("root-se") {
+        let ctx = LAContext(); ctx.localizedReason = reason
+        return try SecureEnclave.P256.Signing.PrivateKey(dataRepresentation: b, authenticationContext: ctx).signature(for: Data(payload.utf8)).derRepresentation
+      }
+      try simulatorFaceID(reason)
+      return try softRoot().signature(for: Data(payload.utf8)).derRepresentation
+    }
   }
 
   // ---- the device key: this install's long-lived identity (claims and wipes only) ----
@@ -236,11 +271,11 @@ final class PhoneKeys: @unchecked Sendable {
     let secret = try softAgreement().sharedSecretFromKeyAgreement(with: pub)
     return (sig, secret.withUnsafeBytes { Data($0) })
   }
-  /// an optional signature over `payload` and this phone's share x(p·E) for each store key in `es`, under ONE Face
-  /// ID (one LAContext for every Enclave use): New session's Start signs the approval and opens the session's locked
-  /// stores at once; the unlock review page opens several stores at once
-  func signAndShares(_ payload: String?, es: [String], reason: String, auth: PhoneAuth? = nil) throws -> (signature: Data?, shares: [Data]) { try guarded { try signAndSharesRaw(payload, es: es, reason: reason, auth: auth) } }
-  private func signAndSharesRaw(_ payload: String?, es: [String], reason: String, auth: PhoneAuth?) throws -> (signature: Data?, shares: [Data]) {
+  /// a signature over each of `payloads` and this phone's share x(p·E) for each store key in `es`, under ONE Face ID
+  /// (one LAContext for every Enclave use): an approval signs its drafts and opens the session's locked stores at once;
+  /// the unlock review page opens several stores at once
+  func signAndShares(_ payloads: [String], es: [String], reason: String, auth: PhoneAuth? = nil) throws -> (signatures: [Data], shares: [Data]) { try guarded { try signAndSharesRaw(payloads, es: es, reason: reason, auth: auth) } }
+  private func signAndSharesRaw(_ payloads: [String], es: [String], reason: String, auth: PhoneAuth?) throws -> (signatures: [Data], shares: [Data]) {
     _ = try signingPublic(); _ = try agreementPublic()
     let pubs = try es.map { e -> P256.KeyAgreement.PublicKey in
       guard let eb = Data(base64Encoded: e) else { throw TrustError.badSignature("the store's key") }
@@ -248,22 +283,22 @@ final class PhoneKeys: @unchecked Sendable {
     }
     if usesEnclave {
       let ctx = context(auth, reason)
-      var sig: Data?
-      if let payload {
+      var sigs: [Data] = []
+      if !payloads.isEmpty {
         let k = try SecureEnclave.P256.Signing.PrivateKey(dataRepresentation: Keychain.get("signing-se")!, authenticationContext: ctx)
-        sig = try k.signature(for: Data(payload.utf8)).derRepresentation
+        for p in payloads { sigs.append(try k.signature(for: Data(p.utf8)).derRepresentation) }
       }
       var shares: [Data] = []
       if !pubs.isEmpty {
         let a = try SecureEnclave.P256.KeyAgreement.PrivateKey(dataRepresentation: Keychain.get("agreement-se")!, authenticationContext: ctx)
         for pub in pubs { shares.append(try a.sharedSecretFromKeyAgreement(with: pub).withUnsafeBytes { Data($0) }) }
       }
-      return (sig, shares)
+      return (sigs, shares)
     }
     try simulatorCheck(auth, reason)
-    let sig = try payload.map { try softSigning().signature(for: Data($0.utf8)).derRepresentation }
+    let sigs = try payloads.map { try softSigning().signature(for: Data($0.utf8)).derRepresentation }
     let shares = try pubs.map { try softAgreement().sharedSecretFromKeyAgreement(with: $0).withUnsafeBytes { Data($0) } }
-    return (sig, shares)
+    return (sigs, shares)
   }
   /// this phone's share of an unlock: x(p·E), 32 bytes
   func share(with e: String, reason: String) throws -> Data { try guarded { try shareRaw(with: e, reason: reason) } }
@@ -284,10 +319,11 @@ final class PhoneKeys: @unchecked Sendable {
   }
 }
 
-/// The core this iPhone set up (Reset or Recover): its keys and the master public key it was set up with, pinned
-/// in the Keychain when the core accepted the master-signed claim naming them. Every core document is
-/// verified against the pinned core key — never learned from the network — and a core set up with another master
-/// key is refused (the setup page says so).
+/// The secrets this iPhone set up (Reset or Recover): its keys and the master public key it was set up with, pinned in
+/// the Keychain when secrets accepted the master-signed claim naming them. Every document of secrets is verified
+/// against the pinned key — never learned from the network — and a secrets set up with another master key is refused
+/// (the setup page says so). The kernel's other parts aren't pinned: each restarts on its own, and the box key vouches
+/// for its keys (KernelTrust).
 enum CoreTrust {
   static var pinned: PublicKeys? { Keychain.get("core-keys").flatMap { try? JSONDecoder().decode(PublicKeys.self, from: $0) } }
   /// this iPhone's master public key (the private half is only in Deyao's recovery kit)

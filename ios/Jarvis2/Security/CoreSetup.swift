@@ -1,8 +1,11 @@
-// Setting the core up — Reset and Recover — with no UI, network or Keychain in it (compiled into the interop test
-// too, which runs it against the real core). A new core is empty: it takes a master public key once, from a
-// claim statement the master key signs (naming the core and this iPhone), with a bundle of stores sealed to it.
+// Setting secrets up — Reset and Recover — with no UI, network or Keychain in it (compiled into the interop test too,
+// which runs it against the real secrets binary). A new secrets is empty: it takes a master public key once, from a
+// claim statement the master key signs (naming secrets and this iPhone's keys), with a bundle of stores sealed to it.
 //   Reset:   a new master key, an empty bundle; the stores are filled later by the setup session.
-//   Recover: the master key from the kit; the bundle = every store from the backups.
+//   Recover: the master key from the kit; the bundle = every store from the backups, each key wrapped by the app.
+// The claim statement also names this iPhone's root key (`root`, PhoneKeys.rootPublic) and its device key (`device`):
+// secrets ignores both; the master key's signature vouches for them to the setup session, which takes the phone and root
+// keys for the kernel's roster from the claim it keeps (GET /setup/secrets-cert).
 // The backups come from the router, which holds the bucket's read key and passes the objects on as they are:
 //   stores/<name>.json    {doc, sig}: doc = {"kind":"store-backup","name","sensitive","sealed":{e,data},"at"},
 //                         sig = the setup key's ECDSA over the doc text; sealed to the master key
@@ -10,15 +13,16 @@
 //   sensitive/<name>.json {doc, sig}: doc = {"kind":"store-sensitive","name","at"} — the store is sensitive
 //                         whatever its backup says
 //   keys/<store>/<key>.json {kind "key-backup", store, key, deleted, sealed {e,data} | null, backupSha256, e,
-//                         dataSha256, writer {by "setup"|"machine"|"restore", sig, cert?, receipt?}, core (the core's
-//                         identity), explanation, at (RFC 3339)}: one key, written after the whole-store backups
-//                         (router/storedocs.go, storerestore.go). Its writer signed Checks.writerText (backupSha256 =
-//                         sha256(sealed.e + "\n" + sealed.data)): the setup key, or a machine whose cert a core signed whose
-//                         identity the box key signed; or a phone-approved restore, whose receipt that core signed. Sealed to the master
-//                         key (info "jarvis2/backup", "<store>\n<key>" as associated data) → the value's raw bytes.
-// (infra/setup.py writes the first two; the router the key backups.) So the router can't read, change or forge a
-// backup; it can only withhold one or serve an older signed version. A store is its whole-store backup with every
-// later key backup of that store laid over it (a deleted one removes the key).
+//                         dataSha256, writer {by "setup"|"router"|"machine"|"restore", sig, machine?, receipt?}, secrets
+//                         (secrets' identity), explanation, at (RFC 3339)}: one key, written after the whole-store backups
+//                         (router/storedocs.go, storerestore.go). A setup writer signed Checks.writerText (backupSha256 =
+//                         sha256(sealed.e + "\n" + sealed.data)) with the setup key; a router or machine writer is the
+//                         router's word (writing secrets is protected only by the router); a phone-approved restore
+//                         carries the receipt of a secrets whose identity the box key signed. Sealed to the master key
+//                         (info "jarvis2/backup", "<store>\n<key>" as associated data) → the value's raw bytes.
+// (infra/setup.py writes the first two; the router the key backups.) So the router can't read a backup; it can withhold
+// one, serve an older signed version, or (as any writer of secrets can) write a key in a session's or its own name. A
+// store is its whole-store backup with every later key backup of that store laid over it (a deleted one removes the key).
 #if canImport(CryptoKit)
 import CryptoKit
 #else
@@ -30,16 +34,14 @@ import Foundation
 struct RecoveredStore { let name: String; let values: [String: String]; let sensitive: Bool }
 
 enum CoreSetup {
-  // ---- the core: its keys (vouched for by the box key) and its own signed state ----
-  /// bundle: the claim bundle format the core takes ("keys": stores of keys, core/keys.go; nil from a core from before
-  /// keys.go, until the held core is live). Not signed: a wrong word only makes the core refuse the bundle or request.
-  struct Identity: Decodable {
-    let signingKey: String; let agreementKey: String; let boxSig: String; let state: SignedDoc
-    var bundle: String? = nil
-    var takesKeys: Bool { bundle == "keys" }
+  // ---- secrets: its keys (vouched for by the box key) and its own signed state ----
+  /// GET api/secrets/identity (kernel Identity)
+  struct Identity: Codable, Equatable {
+    var role: String? = nil
+    let signingKey: String; let agreementKey: String; var boxSig: String? = nil
   }
   struct State: Decodable { let kind: String; let master: String; let phone: PublicKeys? }
-  /// the core as this iPhone sees it
+  /// secrets as this iPhone sees it
   enum Status: Equatable {
     case empty                // waiting for Reset or Recover
     case mine                 // set up with this iPhone's master key and this iPhone
@@ -47,12 +49,14 @@ enum CoreSetup {
     case foreign              // set up with a master key that isn't this iPhone's
   }
 
-  /// the box key (keys/box.pub) signed the core's keys, and the core signed its state: or nothing goes on
-  static func check(_ id: Identity, boxKey: String) throws -> (keys: PublicKeys, state: State) {
+  /// the box key (keys/box.pub) signed secrets' keys, and secrets signed its state: or nothing goes on
+  static func check(_ id: Identity, state: SignedDoc, boxKey: String) throws -> (keys: PublicKeys, state: State) {
     let k = PublicKeys(signingKey: id.signingKey, agreementKey: id.agreementKey)
-    guard CoreCrypto.identityVouched(k, boxSig: id.boxSig, boxKey: boxKey) else { throw TrustError.badSignature("the core's keys (not the box key's)") }
-    let st = try CoreCrypto.decode(id.state, by: k.signingKey, as: State.self, what: "the core's state")
-    guard st.kind == "core-state" else { throw TrustError.mismatch("not the core's state") }
+    guard id.role == nil || id.role == "secrets", let sig = id.boxSig, CoreCrypto.identityVouched(k, boxSig: sig, boxKey: boxKey) else {
+      throw TrustError.badSignature("secrets' keys (not the box key's)")
+    }
+    let st = try CoreCrypto.decode(state, by: k.signingKey, as: State.self, what: "secrets' state")
+    guard st.kind == "secrets-state" else { throw TrustError.mismatch("not secrets' state") }
     return (k, st)
   }
   static func status(_ st: State, myMaster: String?, myPhone: PublicKeys) -> Status {
@@ -67,24 +71,20 @@ enum CoreSetup {
   struct BackupDoc: Decodable { let kind: String; let name: String; let sensitive: Bool; let sealed: [String: String]; var at: Double? = nil }
   /// keys/<store>/<key>.json (router/storedocs.go)
   struct KeyBackup: Decodable {
-    /// setup: sig; machine: sig + cert; restore: the core's signed receipt (a phone-approved restore, core/history.go)
-    struct Writer: Decodable { let by: String; var sig: String? = nil; var cert: SignedDoc? = nil; var receipt: SignedDoc? = nil }
+    /// setup: sig; router, machine: the router's word (machine: its id); restore: secrets' signed receipt (a
+    /// phone-approved restore, secrets/history.go)
+    struct Writer: Decodable { let by: String; var sig: String? = nil; var machine: String? = nil; var receipt: SignedDoc? = nil }
     let kind: String; let store: String; let key: String; let deleted: Bool
     var sealed: [String: String]? = nil
     let backupSha256: String; let e: String; let dataSha256: String
     let writer: Writer
-    var core: Identity? = nil
+    var secrets: Identity? = nil
     let at: String
   }
-  /// a restore's receipt (core/history.go "store-restore-approved"): each key put back with its hashes, each removed
+  /// a restore's receipt (secrets/history.go "store-restore-approved"): each key put back with its hashes, each removed
   struct RestoreReceipt: Decodable {
     struct Put: Decodable { let key: String; let e: String; let dataSha256: String; let backupSha256: String }
     let kind: String; let store: String; var put: [Put]? = nil; var remove: [String]? = nil
-  }
-  /// a machine's cert, as far as a key backup needs it: the machine's signing key
-  struct CertMachine: Decodable {
-    struct M: Decodable { let id: String; let signingKey: String }
-    let kind: String; let machine: M?; var line: String? = nil
   }
   struct MarkerDoc: Decodable { let kind: String; let name: String }
 
@@ -99,8 +99,8 @@ enum CoreSetup {
     return doc
   }
 
-  /// every store in the backups, checked (setup key; a session-written key: its machine's cert from a core the box key
-  /// vouched for) and decrypted (master key): each store's whole-store backup, then its later key backups
+  /// every store in the backups, checked (the setup key; a restore's receipt from a secrets the box key vouched for) and
+  /// decrypted (master key): each store's whole-store backup, then its later key backups
   static func readBackups(_ objects: [BackupObject], master: MasterKey, setupKey: String, boxKey: String? = nil) throws -> [RecoveredStore] {
     var marked = Set<String>()
     for o in objects {
@@ -152,8 +152,9 @@ enum CoreSetup {
     return (String(parts[0]), String(parts[1]))
   }
 
-  /// one key backup: it names its own store and key, its hash is of its sealed value, its writer signed it (the setup
-  /// key, or a machine certified by a core the box key vouched for). Problems as one plain sentence.
+  /// one key backup: it names its own store and key, its hash is of its sealed value, and its writer is one the app takes
+  /// (the setup key's signature; the router's word for itself or a session's machine; a restore's receipt from a secrets
+  /// the box key vouched for). Problems as one plain sentence.
   static func checkKeyBackup(_ o: BackupObject, setupKey: String, boxKey: String?) throws -> KeyBackup {
     guard let (store, key) = keyName(o.key) else { throw TrustError.backup("\(o.key) isn't a key backup.") }
     guard let b = try? JSONDecoder().decode(KeyBackup.self, from: Data(o.body.utf8)), b.kind == "key-backup" else { throw TrustError.backup("\(o.key) isn't a key backup.") }
@@ -165,11 +166,11 @@ enum CoreSetup {
             CoreCrypto.sha256hex(Data("\(se)\n\(sd)".utf8)) == b.backupSha256 else { throw TrustError.backup("\(o.key)'s hash isn't of its sealed value.") }
     }
     let text = Data(Checks.writerText(store: store, key: key, e: b.e, dataSha256: b.dataSha256, backupSha256: b.backupSha256).utf8)
-    /// the core the object names, vouched for by the box key
-    func vouchedCore(_ what: String) throws -> PublicKeys {
-      guard let boxKey, let id = b.core else { throw TrustError.backup("\(o.key)'s \(what) can't be checked.") }
+    /// the secrets the object names, vouched for by the box key
+    func vouchedSecrets(_ what: String) throws -> PublicKeys {
+      guard let boxKey, let id = b.secrets else { throw TrustError.backup("\(o.key)'s \(what) can't be checked.") }
       let k = PublicKeys(signingKey: id.signingKey, agreementKey: id.agreementKey)
-      guard CoreCrypto.identityVouched(k, boxSig: id.boxSig, boxKey: boxKey) else { throw TrustError.backup("\(o.key) names a core the box key didn't vouch for.") }
+      guard let sig = id.boxSig, CoreCrypto.identityVouched(k, boxSig: sig, boxKey: boxKey) else { throw TrustError.backup("\(o.key) names a secrets the box key didn't vouch for.") }
       return k
     }
     let sig = b.writer.sig ?? ""
@@ -177,22 +178,20 @@ enum CoreSetup {
     case "setup":
       guard CoreCrypto.valid(text, sig: sig, by: setupKey) else { throw TrustError.backup("\(o.key) isn't signed by the setup key.") }
     case "restore":
-      // a phone-approved restore: the core's signed receipt names this key put back (its hashes) or removed
-      let k = try vouchedCore("restore")
+      // a phone-approved restore: secrets' signed receipt names this key put back (its hashes) or removed
+      let k = try vouchedSecrets("restore")
       guard let rd = b.writer.receipt, let r = try? CoreCrypto.decode(rd, by: k.signingKey, as: RestoreReceipt.self, what: "the restore receipt"),
-            r.kind == "store-restore-approved", r.store == store else { throw TrustError.backup("\(o.key)'s restore receipt isn't that core's.") }
+            r.kind == "store-restore-approved", r.store == store else { throw TrustError.backup("\(o.key)'s restore receipt isn't that secrets'.") }
       if b.deleted {
         guard (r.remove ?? []).contains(key) else { throw TrustError.backup("\(o.key)'s restore receipt doesn't remove it.") }
       } else {
         guard (r.put ?? []).contains(where: { $0.key == key && $0.e == b.e && $0.dataSha256 == b.dataSha256 && $0.backupSha256 == b.backupSha256 })
         else { throw TrustError.backup("\(o.key)'s restore receipt doesn't name this value.") }
       }
+    case "router":
+      break // the router's own write (the Claude login): its word
     case "machine":
-      guard let cert = b.writer.cert else { throw TrustError.backup("\(o.key)'s session writer can't be checked.") }
-      let k = try vouchedCore("session writer")
-      guard let c = try? CoreCrypto.decode(cert, by: k.signingKey, as: CertMachine.self, what: "the writer's cert"),
-            c.kind == "succession-cert", let m = c.machine else { throw TrustError.backup("\(o.key)'s machine cert isn't that core's.") }
-      guard CoreCrypto.valid(text, sig: sig, by: m.signingKey) else { throw TrustError.backup("\(o.key) isn't signed by the machine its cert names.") }
+      guard let m = b.writer.machine, !m.isEmpty else { throw TrustError.backup("\(o.key) names no session machine as its writer.") }
     default:
       throw TrustError.backup("\(o.key) was written by \(b.writer.by).")
     }
@@ -210,30 +209,23 @@ enum CoreSetup {
     return (b, v)
   }
 
-  /// the bundle's exact bytes (Reset: no stores). An even older core's format (until the held core is live).
-  static func bundle(_ stores: [RecoveredStore]) throws -> Data {
-    struct S: Encodable { let name: String; let values: [String: String] }
-    struct B: Encodable { let stores: [S]; let notSensitive: [String] }
+  /// the claim statement: this master key sets up this secrets (`core`: its keys) for this iPhone, with this bundle.
+  /// `root`: this iPhone's root key (PhoneKeys.rootPublic), `device`: this install's long-lived device key
+  /// (PhoneKeys.devicePublic): both inside the master-signed text so the setup session takes them only from there (a
+  /// router can't attach its own); secrets ignores them
+  static func statement(master: String, core: PublicKeys, phone: PublicKeys, bundle: Data, root: String? = nil, device: String? = nil) throws -> String {
+    struct St: Encodable { let kind = "claim"; let master: String; let core: PublicKeys; let phone: PublicKeys; let bundleSha256: String; let root: String?; let device: String? }
     let e = JSONEncoder(); e.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
-    return try e.encode(B(stores: stores.map { S(name: $0.name, values: $0.values) }, notSensitive: stores.filter { !$0.sensitive }.map(\.name)))
+    return String(decoding: try e.encode(St(master: master, core: core, phone: phone, bundleSha256: CoreCrypto.sha256hex(bundle), root: root, device: device)), as: UTF8.self)
   }
 
-  /// the claim statement: this master key sets up this core for this iPhone, with this bundle
-  /// `device`: this install's long-lived device key (PhoneKeys.devicePublic), inside the master-signed text so the setup
-  /// session takes it only from there (a router can't attach its own); the core ignores the field
-  static func statement(master: String, core: PublicKeys, phone: PublicKeys, bundle: Data, device: String? = nil) throws -> String {
-    struct St: Encodable { let kind = "claim"; let master: String; let core: PublicKeys; let phone: PublicKeys; let bundleSha256: String; let device: String? }
-    let e = JSONEncoder(); e.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
-    return String(decoding: try e.encode(St(master: master, core: core, phone: phone, bundleSha256: CoreCrypto.sha256hex(bundle), device: device)), as: UTF8.self)
-  }
-
-  /// the body of POST /api/core/claim
-  static func claim(core: PublicKeys, phone: PublicKeys, master: MasterKey, bundle: Data, device: String? = nil) throws -> [String: Any] {
-    let st = try statement(master: master.publicKey, core: core, phone: phone, bundle: bundle, device: device)
+  /// the body of POST /api/secrets/claim
+  static func claim(core: PublicKeys, phone: PublicKeys, master: MasterKey, bundle: Data, root: String? = nil, device: String? = nil) throws -> [String: Any] {
+    let st = try statement(master: master.publicKey, core: core, phone: phone, bundle: bundle, root: root, device: device)
     return ["statement": st, "masterSig": try master.sign(st), "bundle": try CoreCrypto.seal(bundle, to: core.agreementKey, info: CoreCrypto.claimInfo)]
   }
 
-  /// the body of POST /api/core/wipe: the core's own master key ends it (a new, empty core takes its place)
+  /// the body of POST /api/secrets/wipe: secrets' own master key ends it (a new, empty secrets takes its place)
   static func wipe(core: PublicKeys, master: MasterKey, device: String? = nil) throws -> [String: Any] {
     let e = JSONEncoder(); e.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
     struct W: Encodable { let kind = "wipe"; let core: String; let device: String? }
@@ -242,20 +234,20 @@ enum CoreSetup {
   }
 }
 
-// ---- Recover with keys (core/keys.go): every key wrapped on its own to the core's store key ----------------------
+// ---- Recover: every key wrapped on its own to secrets' store key ------------------------------------------------------
 extension CoreSetup {
-  /// the bundle a core whose identity says bundle "keys" reads: every store's name but `core`, every key of them
-  /// wrapped to the store key (its value's raw bytes, "<store>\n<key>" as associated data), the core store's Fly token
-  /// on its own, which stores are not sensitive, which repo owns each deploy-key store
+  /// the bundle secrets reads (format "keys"): every store's name but `core`, every key of them wrapped to the store key
+  /// (its value's raw bytes, "<store>\n<key>" as associated data), which stores are not sensitive, which repo owns each
+  /// deploy-key store. The `core` store's Fly token isn't in it: secrets never holds it (the setup session gives it to
+  /// the spawner, POST /setup/fly-token).
   static func keysBundle(_ stores: [RecoveredStore], storeKey: String) throws -> Data {
     struct B: Encodable {
-      let flyToken: String?; let format = "keys"; let keys: [KeyEntry]; let notSensitive: [String]; let owners: [String: String]; let stores: [String]
+      let format = "keys"; let keys: [KeyEntry]; let notSensitive: [String]; let owners: [String: String]; let stores: [String]
     }
     let rest = stores.filter { $0.name != StoreView.coreStore }
     let keys = try rest.flatMap { try CoreCrypto.wrapKeys(store: $0.name, values: $0.values, storeKey: storeKey) }
-    let fly = stores.first { $0.name == StoreView.coreStore }?.values["FLY_API_TOKEN"]
     let e = JSONEncoder(); e.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
-    return try e.encode(B(flyToken: fly, keys: keys, notSensitive: rest.filter { !$0.sensitive }.map(\.name), owners: owners(rest), stores: rest.map(\.name)))
+    return try e.encode(B(keys: keys, notSensitive: rest.filter { !$0.sensitive }.map(\.name), owners: owners(rest), stores: rest.map(\.name)))
   }
   /// a deploy-key store → its repo (from its GITHUB_DEPLOY_REPO_ key)
   static func owners(_ stores: [RecoveredStore]) -> [String: String] {
@@ -264,22 +256,6 @@ extension CoreSetup {
       if let repo = s.values.first(where: { $0.key.hasPrefix("GITHUB_DEPLOY_REPO_") })?.value { owners[s.name] = repo }
     }
     return owners
-  }
-}
-
-// ---- Recover with blobs (R2): a core from before keys.go (until the held core is live) ---------------------------
-extension CoreSetup {
-  /// the bundle a core that takes blobs reads: every store but `core` wrapped to the store key, the core store's Fly
-  /// token on its own, which stores are not sensitive, and which repo owns each deploy-key store
-  static func blobsBundle(_ stores: [RecoveredStore], storeKey: String) throws -> Data {
-    struct B: Encodable {
-      let blobs: [StoreBlob]; let flyToken: String?; let format = "blobs"; let notSensitive: [String]; let owners: [String: String]; let stores = "blobs"
-    }
-    let rest = stores.filter { $0.name != StoreView.coreStore }
-    let blobs = try rest.map { try CoreCrypto.wrapStore(name: $0.name, values: $0.values, storeKey: storeKey) }
-    let fly = stores.first { $0.name == StoreView.coreStore }?.values["FLY_API_TOKEN"]
-    let e = JSONEncoder(); e.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
-    return try e.encode(B(blobs: blobs, flyToken: fly, notSensitive: rest.filter { !$0.sensitive }.map(\.name), owners: owners(rest)))
   }
 }
 

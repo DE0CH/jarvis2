@@ -1,8 +1,8 @@
-// Restoring a store to an earlier version (core/history.go; docs/DESIGN.md "Restoring a store"): the core keeps each
-// store's last versions; putting one back is this phone's signature over the core's signed begin document — exactly
+// Restoring a store to an earlier version (secrets/history.go; docs/DESIGN.md "Restoring a store"): secrets keeps each
+// store's last versions; putting one back is this phone's signature over secrets' signed begin document — exactly
 // which keys come back (each with who wrote it), which go and which stay — plus its share of every key put back, under
-// one Face ID. No recovery kit and no plaintext outside the core: the core opens the keys put back and seals their
-// backups to the master public key itself. Foundation only (the interop test runs it against the real core).
+// one Face ID. No recovery kit and no plaintext outside secrets: it opens the keys put back and seals their backups to
+// the master public key itself. Foundation only (the interop test runs it against the real secrets binary).
 #if canImport(CryptoKit)
 import CryptoKit
 #else
@@ -10,7 +10,7 @@ import Crypto
 #endif
 import Foundation
 
-/// the core's signed list of a store's kept versions, newest first (never a value)
+/// secrets' signed list of a store's kept versions, newest first (never a value)
 struct StoreVersionsDoc: Decodable {
   struct Cause: Decodable { let kind: String; var key: String? = nil; var from: Int? = nil; var writer: StoreWriter? = nil }
   struct KeyRow: Decodable { let name: String; let e: String; let dataSha256: String; var at: String? = nil; var writer: StoreWriter? = nil }
@@ -21,7 +21,7 @@ struct StoreVersionsDoc: Decodable {
   let kind: String; let nonce: String; let store: String; let current: String; let sensitive: Bool; let versions: [Version]
 }
 
-/// restore_begin: what putting a version back changes, signed by the core
+/// restore_begin: what putting a version back changes, signed by secrets
 struct RestoreBegin: Decodable {
   struct Side: Decodable { let seq: Int; let version: String; var at: String? = nil }
   struct Put: Decodable { let key: String; let e: String; let dataSha256: String; var backupSha256: String = ""; var at: String? = nil; let writer: StoreWriter }
@@ -38,7 +38,7 @@ struct RestoreDone: Decodable { let kind: String; let pending: String; let store
 
 extension Checks {
   /// the begin document answers what this page asked for, names each key once, and every key put back has a writer
-  /// the phone accepts (Checks.keyWriter: the setup key's signature, a session's machine, or the core)
+  /// the phone accepts (Checks.keyWriter: the setup key's signature, a session's machine or the router, or secrets)
   static func restoreBegin(_ b: RestoreBegin, store: String, seq: Int, setupKey: String?) throws {
     guard b.kind == "store-restore-begin", b.store == store, b.to.seq == seq else { throw TrustError.stale("restore of \(store) to version \(seq)") }
     guard !b.put.isEmpty || !b.remove.isEmpty else { throw TrustError.mismatch("restore of \(store) changes nothing") }
@@ -57,10 +57,10 @@ extension Checks {
 }
 
 extension SignedAction {
-  /// a restore, from the core's signed begin document
+  /// a restore, from secrets' signed begin document
   static func restore(_ b: RestoreBegin) -> [SignedFact] {
     var f: [SignedFact] = [
-      .init(id: "kind", label: "Kind", value: "Core request"),
+      .init(id: "kind", label: "Kind", value: "Secrets request"),
       .init(id: "action", label: "Action", value: "Restore store"),
       .init(id: "store", label: "Store", value: b.store, style: .code),
       .init(id: "sensitive", label: "Sensitive", value: yes(b.sensitive), style: b.sensitive ? .warning : .plain),
@@ -70,11 +70,11 @@ extension SignedAction {
     ]
     let bySession = b.put.filter { $0.writer.by == "machine" }
     if !bySession.isEmpty {
-      f.append(.init(id: "session-written", label: "Written by a session", value: list(bySession.map { "\($0.key) · \($0.writer.line ?? "")" }), style: .warning))
+      f.append(.init(id: "session-written", label: "Written by a session", value: list(bySession.map { "\($0.key) · \($0.writer.machine ?? "")" }), style: .warning))
     }
     f.append(.init(id: "remove", label: "Keys removed", value: list(b.remove), style: b.remove.isEmpty ? .code : .warning))
     f.append(.init(id: "keep", label: "Keys unchanged", value: "\(b.keep.count)"))
-    f.append(.init(id: "backup", label: "Backups", value: "Sealed by the core to the master key"))
+    f.append(.init(id: "backup", label: "Backups", value: "Sealed by secrets to the master key"))
     return f
   }
 }

@@ -10,8 +10,8 @@ extension AppModel {
                     until: { ["paused", "failed"].contains($0.session(id)?.state ?? "") })
   }
 
-  /// Resume with an optional prompt (typed into the conversation once it is up; the iPhone approves it as a one-time
-  /// input). A resume that needs the phone (another permission mode, a prompt) opens its approval by itself.
+  /// Resume with an optional prompt (typed into the conversation once it is up). A resume with a prompt is a new source
+  /// the phone signs (resume-upgrade): its approval opens by itself; one with no change needs no phone.
   func resume(_ id: String) async {
     await exclusive("s:" + id) {
       let t = session(id)?.title ?? id
@@ -126,32 +126,36 @@ extension AppModel {
     }
   }
 
-  /// The permission mode (signed in the line's cert). Running: switched in place; raising to bypass needs a fresh
-  /// phone grant for the terminal, so a 403 {needsGrant} opens the grant review and the switch runs again once signed.
-  /// Paused: kept for the next resume, which the iPhone approves.
-  func switchMode(_ m: Session, to mode: String) async {
-    let bypass = mode == "bypass"
-    let detail = bypass
-      ? "No permission prompts at all."
-      : "The permission classifier gates risky actions."
-    guard await confirm("Switch “\(m.title)” to \(mode)?", detail, action: "Switch", destructive: bypass) else { return }
-    await runModeSwitch(m, mode)
-  }
-  private func runModeSwitch(_ m: Session, _ mode: String) async {
-    await exclusive("s:" + m.id) {
-      pend("s:" + m.id, "Switching mode…")
-      defer { pend("s:" + m.id, nil) }
+  // ---- add-ons (docs/DESIGN.md "Adding to a running machine"): each an approval of two certs, under one Face ID ----
+  /// a terminal for 10 minutes (typing, resizing, the remote page, the changes check): filed, then its approval opens;
+  /// `done` once it closes (true = signed)
+  func requestTerminal(_ m: Session, done: ((Bool) -> Void)? = nil) async {
+    await exclusive("t:" + m.id) {
       do {
-        let j = try await RouterClient.shared.call("POST", "api/sessions/\(m.id)/permission-mode", ["mode": mode])
-        if j["nextStart"].bool == true { say("Applies at the next resume"); await refresh(); return }
-        await refreshUntil(120) { $0.session(m.id).map { $0.permissionMode == mode && $0.serverBusy == nil } ?? true }
-      } catch let e as RouterError where e.status == 403 && e.body["needsGrant"].text != nil {
-        let h = e.body["needsGrant"].text ?? "terminal"
-        present(.grant(GrantAsk(session: m.id, label: m.title, holder: h, kind: "grant"))) { [weak self] ok in
-          if ok { Task { await self?.runModeSwitch(m, mode) } }
+        let id = try await RouterClient.shared.requestAddOn("terminal", ["session": m.id, "minutes": 10])
+        present(.approval(id: id)) { [weak self] ok in
+          if ok { self?.say("Terminal open for 10 minutes") }
+          done?(ok)
         }
-      } catch { fail(error); await refresh() }
+      } catch { fail(error); done?(false) }
     }
+  }
+  /// another store for a running session (merged onto its main grant, then unlocked under the same Face ID)
+  func requestAddStore(_ m: Session, store: String) async {
+    await exclusive("t:" + m.id) {
+      do {
+        let id = try await RouterClient.shared.requestAddOn("add-store", ["session": m.id, "store": store])
+        present(.approval(id: id)) { [weak self] ok in if ok { self?.say("Store \(store) added") } }
+      } catch { fail(error) }
+    }
+  }
+  /// drop stores a running session no longer needs: its main grant moved along its identity edge (no Face ID: it only
+  /// narrows)
+  func narrow(_ m: Session, keep: [String], dropping: [String]) async {
+    guard await confirm("Drop \(dropping.joined(separator: ", ")) from “\(m.title)”?", "The session keeps \(keep.isEmpty ? "no stores" : keep.joined(separator: ", ")).",
+                        action: "Drop", destructive: true) else { return }
+    await pendUntil("s:" + m.id, "Dropping…", 30, action: { _ = try await RouterClient.shared.narrow(m.id, keep: keep) },
+                    until: { m2 in Set(m2.session(m.id)?.j["stores"].strings ?? []).isDisjoint(with: dropping) })
   }
 
   /// Auto-pause when idle / Idle notifications: two-phase, the menu shows the router's value
@@ -167,16 +171,6 @@ extension AppModel {
   func copy(_ text: String, _ what: String) {
     UIPasteboard.general.string = text
     say("Copied")
-  }
-
-  /// the grant review for this session (a feature, 10 minutes or a standing rule); `done` once it closes
-  func requestGrant(_ session: String, _ label: String, holder: String, rule: Bool = false, minutes: Int = 10, until: Date? = nil, done: ((Bool) -> Void)? = nil) {
-    let g = GrantAsk(session: session, label: label, holder: holder, kind: rule ? "rule" : "grant", minutes: min(10, max(1, minutes)),
-                     until: rule ? (until ?? .now.addingTimeInterval(Double(GrantAsk.ruleDays) * 86400)) : nil)
-    present(.grant(g)) { [weak self] ok in
-      if ok { self?.say("Grant saved") }
-      done?(ok)
-    }
   }
 
   // ---- previous sessions ----
@@ -227,8 +221,8 @@ extension AppModel {
                     until: { m in !m.inbox.contains { $0.id == it.id } })
   }
 
-  /// an API call a session's actions asked for: run now as Deyao. No Face ID: Face ID signs only what the core
-  /// verifies, and a call that needs that (a switch to bypass) asks for it itself afterwards.
+  /// an API call a session's actions asked for: run now as Deyao. No Face ID: Face ID signs only what the kernel
+  /// verifies, and a call that needs that asks for it itself afterwards.
   func approveCall(_ it: InboxItem) async {
     var outcome: JSON?
     await pendUntil("q:" + it.id, "Running…", 30, action: { outcome = try await RouterClient.shared.inboxApproveCall(it.id) },

@@ -742,7 +742,10 @@ config next to its own key)
 - Screen, status, repo changes and the snapshot are output only.
 
 **The iPhone app** shows what Deyao signs: known strings readably, unknown JSON pretty-printed, anything else raw; a
-separate warning screen for the root key.
+separate warning screen for the root key. The root key is a third Secure Enclave key, made fresh at every Reset/Recover
+like the phone's keys and never backed up (the kit's master key is what survives); the master-signed claim names it
+(`root`, beside the phone's keys) for the roster, and the app signs root's ⊤ on the sink with it once after each setup
+(app/DECISIONS.md 71).
 
 **Out of scope:** messages between sessions (the kernel guards only the entry point).
 

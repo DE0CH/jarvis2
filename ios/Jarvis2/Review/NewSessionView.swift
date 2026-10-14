@@ -1,9 +1,9 @@
 // New session: ONE page (Deyao, 2026-10-10) with everything Jarvis 1's New session page has: prompt, title, stores,
 // harness, repos, permission mode, model, auto-pause, API proxy and size. Start asks the router for the session, checks
-// the core's challenge carries exactly the stores picked here (plus the harness's own), the harness, the permission
-// mode and (with a core that vouches) these settings, then under ONE Face ID signs it AND unlocks every store the
-// session gets that is locked, for that session only, so it never waits at boot on a locked store.
-// Images (AttachmentsSection) go up to the router before the request; Start then checks the signed config names exactly
+// its draft (sink, source-x, P) carries exactly the stores picked here (plus the harness's own) and a source whose
+// settings are exactly these (the harness, the permission mode — fixed for the session's life — and the rest), then
+// under ONE Face ID signs it AND unlocks every store the session gets that is locked, so it never waits at boot.
+// Images (AttachmentsSection) go up to the router before the request; Start then checks the signed settings name exactly
 // these files, by the sha256 and size of the bytes hashed here (docs/DECISIONS.md 94, 95, 97).
 // DE0CH/claude-env comes pre-selected with its store when it is on the repo list (Deyao, 2026-10-11); sensitive stores
 // are never pre-selected, and picking one shows a warning.
@@ -25,7 +25,6 @@ struct NewSessionView: View {
   @State private var repoDefaulted = false
   @State private var autoPause = true
   @State private var apiProxy = false
-  @State private var scoped = false
   @State private var loaded = false
   @State private var loadError: String?
   @State private var busy: String?
@@ -175,14 +174,14 @@ struct NewSessionView: View {
   }
 
   @ViewBuilder private var modeSection: some View {
-    Section("Permission mode") {
+    Section {
       CheckRow(on: perm == "auto", id: "secure-mode-auto", action: { perm = "auto" }) {
         VStack(alignment: .leading) { Text("Auto"); Text("Auto-approve safe actions; the permission classifier gates the rest.").font(.footnote).foregroundStyle(Color.secondary) }
       }
       CheckRow(on: perm == "bypass", id: "secure-mode-bypass", action: { perm = "bypass" }) {
         VStack(alignment: .leading) { Text("Dangerously skip permissions"); Text("No prompts at all (--dangerously-skip-permissions).").font(.footnote).foregroundStyle(Color.secondary) }
       }
-    }
+    } header: { Text("Permission mode") } footer: { Text("Fixed for the session's life.") }
   }
 
   @ViewBuilder private var optionsSection: some View {
@@ -214,7 +213,6 @@ struct NewSessionView: View {
         }
         .accessibilityElement(children: .combine)
         .accessibilityIdentifier("ns-unlocks")
-        LabeledContent("Open to", value: scoped ? "This session only" : "Every session")
       }
       if let failure { ErrorRow(text: failure, id: "secure-error") }
       SigningFooter()
@@ -249,7 +247,6 @@ struct NewSessionView: View {
     if model.repos.isEmpty { await model.refresh() }
     do {
       let d = try await RouterClient.shared.storesDoc()
-      scoped = true  // every core takes unlocks for one session
       apply(d.stores)
       loaded = true
     } catch { if !loaded { loadError = errText(error) } }
@@ -265,7 +262,7 @@ struct NewSessionView: View {
     let want = picked.sorted(), rid = CoreCrypto.nonce()
     let title = label.trimmingCharacters(in: .whitespacesAndNewlines)
     do {
-      let key = try CoreTrust.key()
+      _ = try CoreTrust.key()
       busy = "Requesting…"
       let chosen = model.repos.filter { repos.contains($0.name) }
       let attached = try await upload(rid)
@@ -276,8 +273,8 @@ struct NewSessionView: View {
       if !attached.isEmpty { body["attachments"] = ["uploadId": rid, "files": attached.map { ["name": $0.name] }] }
       busy = "Requesting…"
       try await RouterClient.shared.call("POST", "api/sessions", body)
-      // the core's challenge comes before any machine exists
-      var found: RouterClient.ApprovalDTO?
+      // the draft comes before any machine exists
+      var found: ApprovalDTO?
       let until = Date.now.addingTimeInterval(60)
       while found == nil && Date.now < until {
         let st = try await RouterClient.shared.approvalsState()
@@ -288,30 +285,25 @@ struct NewSessionView: View {
         if found == nil { try await Task.sleep(for: .milliseconds(700)) }
       }
       guard let a = found else { throw RouterError(message: "No approval yet: it will wait in the Inbox.") }
-      let r = try Checks.review(challenge: a.challenge, coreKey: key)
-      // sign only what was chosen here
-      try Checks.matchesPicked(r, stores: want, harnessStores: model.policy[harness] ?? [], harness: harness, permissionMode: perm)
-      // what the router added beyond the picks must be the harness's own by this app's pinned policy, and never
-      // sensitive (audit finding 2: a lying api/policy could otherwise slip a sensitive store into the signature)
-      _ = try await ImageAttestation.check(image: r.image, sig: a.imageSig)
+      let r = try Checks.review(a, notaryKey: try await KernelTrust.roster().keys["notary"])
+      // sign only what was chosen here: these stores (plus the harness's), this harness and mode, these settings
+      try Checks.matchesPicked(r, stores: want, harnessStores: model.policy[harness] ?? [], harness: harness, permissionMode: perm,
+                               settings: .init(label: title, prompt: trimmedPrompt, model: modelId, repos: chosen.map(\.url), oneShot: oneShot,
+                                               apiProxy: apiProxy, attachments: attached, content: content.sorted()))
+      _ = try await ImageAttestation.check(image: r.source.image, sig: a.imageSig)
+      // what the router added beyond the picks must be the harness's own by this app's pinned policy (audit finding 2: a
+      // lying api/policy could otherwise slip a sensitive store into the signature)
       let signedList = try await RouterClient.shared.storesDoc()
       _ = try Checks.onlyHarnessExtras(r, picked: want, pinnedHarness: PinnedPolicy.stores(harness, router: model.policy),
                                        sensitive: signedList.stores.filter(\.sensitive).map(\.name))
-      // …and, with a core that vouches, exactly these settings: the cert carries them to the machine (DESIGN "Inputs")
-      try Checks.matchesSettings(r, .init(label: title, prompt: trimmedPrompt, model: modelId, repos: chosen.map(\.url), oneShot: oneShot, apiProxy: apiProxy,
-                                              attachments: attached, content: content.sorted()))
-      // the stores the challenge carries that are locked now (fresh from the core): opened under the same Face ID
-      let now = try await RouterClient.shared.stores()
-      let locked = r.stores.filter { n in now.contains { $0.name == n && !$0.unlocked && !$0.empty } }
+      // the stores the draft carries that are locked now (fresh from secrets): opened under the same Face ID
+      let locked = r.stores.filter { n in signedList.stores.contains { $0.name == n && !$0.unlocked && !$0.empty } }
       busy = "Signing…"
       let reason = "Start \"\(title.isEmpty ? "New session" : title)\"" + (locked.isEmpty ? "" : " and unlock \(locked.joined(separator: ", "))")
-      guard let sig = try await StoreUnlock.signAndUnlock(payload: a.challenge.payload, stores: locked, reason: reason, for: r.challenge.nonce,
-                                                          shown: SessionWrites.from(storeRows, stores: locked)) else {
-        throw TrustError.stale("signature")
-      }
+      let sigs = try await StoreUnlock.signAndUnlock(payloads: r.drafts.map(\.payload), stores: locked, reason: reason,
+                                                     shown: SessionWrites.from(storeRows, stores: locked))
       busy = "Starting…"
-      let ans = try await RouterClient.shared.respond(a.id, signature: sig)
-      try Checks.answerFor(r, answer: ans.answer, coreKey: key)
+      _ = try await RouterClient.shared.respond(a.id, signatures: sigs)
       model.secureCompleted(true)
     } catch {
       busy = nil

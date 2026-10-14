@@ -100,11 +100,11 @@ final class TransitionsUITests: JarvisUITestCase {
       if arrives(row, 120, "the new session's row") {
         let sid = String(row.identifier.dropFirst("srow-".count))
         row.tap()
-        arrives(el("grants-\(sid)"), 15, "the session's page")
-        el("grants-\(sid)").tap()
-        arrives(el("grant-review"), 15, "Grants")
+        arrives(el("schedules-\(sid)"), 15, "the session's page")
+        el("schedules-\(sid)").tap()
+        arrives(el("sch-none"), 15, "Schedules")
         edgeSwipeBack()
-        arrives(el("grants-\(sid)"), 10, "the session's page after the swipe")
+        arrives(el("schedules-\(sid)"), 10, "the session's page after the swipe")
         if el("term-\(sid)").waitForExistence(timeout: 20) {
           el("term-\(sid)").tap()
           arrives(app.webViews.firstMatch, 20, "the terminal page")

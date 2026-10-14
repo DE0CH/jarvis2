@@ -2,8 +2,9 @@
 // the page in its own process, so the app carries no terminal code. The page goes through Cloudflare Access like every
 // request: it is loaded with the app's Access login (the `cf-access-token` header, the CF_Authorization cookie for the
 // router's host, and every fetch of the page given the header), in a non-persistent website data store, so nothing
-// of it outlives the view. The machine still runs the terminal's commands only under a grant: the page asks the app
-// (message handler `jarvis2`, action "grant") and the app opens its Face ID review; "signin" re-runs the sign-in sheet.
+// of it outlives the view. Viewing needs nothing; typing and resizing are shell commands the machine runs only while a
+// terminal add-on is open: the page asks the app (message handler `jarvis2`, action "terminal"), the app files the
+// terminal request and opens its approval (two certs, one Face ID); "signin" re-runs the sign-in sheet.
 import SwiftUI
 import WebKit
 
@@ -145,10 +146,9 @@ private struct TerminalWeb: UIViewRepresentable {
     func userContentController(_ ucc: WKUserContentController, didReceive message: WKScriptMessage) {
       guard let body = message.body as? [String: Any], let action = body["action"] as? String else { return }
       switch action {
-      case "grant":
-        let holder = (body["holder"] as? String) ?? "terminal"
-        let label = model.session(sessionId)?.title ?? sessionId
-        model.requestGrant(sessionId, label, holder: holder) { [weak self] _ in self?.refreshPage() }
+      case "terminal":
+        guard let m = model.session(sessionId) else { return }
+        Task { await model.requestTerminal(m) { [weak self] _ in self?.refreshPage() } }
       case "signin":
         Task {
           let t = await RouterClient.shared.signIn()

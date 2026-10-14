@@ -31,7 +31,15 @@ struct SettingsView: View {
         UsageSection()
         FlySection()
         Section {
-          LabeledContent("Core", value: model.coreUp ? "Running" : "Not answering")
+          LabeledContent("Secrets", value: model.secretsUp ? "Running" : "Not answering")
+          if model.rootGrant == false {
+            // the router holds no root grant (a setup cut short, or a new router volume): New session can't start until
+            // root's ⊤ on the sink is back, signed with this iPhone's root key behind its warning screen
+            LabeledContent { StatusPill(text: "Missing", color: .orange) } label: { Text("Root grant") }
+              .accessibilityElement(children: .combine).accessibilityIdentifier("root-grant-missing")
+            Button("Sign the root grant…", systemImage: "exclamationmark.shield") { model.present(.rootGrant) }
+              .accessibilityIdentifier("open-root-grant")
+          }
           Button("Reset or recover…", systemImage: "key.horizontal") { model.showSetup = true }.accessibilityIdentifier("open-setup")
           NavigationLink(value: SettingsRoute.backup) { Label("Encrypted backup", systemImage: "arrow.down.doc") }
             .accessibilityIdentifier("open-backup")

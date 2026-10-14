@@ -1,11 +1,14 @@
 // Reset or recover: the only two ways to set Jarvis 2 up, both Deyao's alone (Deyao, 2026-10-10).
 //   Reset    this page makes the master key pair and shows the recovery kit (the ONE string Deyao saves); once he says
-//            it is saved, it sets the empty core up with it. The stores start empty.
+//            it is saved, it sets the empty secrets up with it. The stores start empty.
 //   Recover  Deyao pastes his kit; the page reads the backups through the router, checks and opens them, and sets the
-//            empty core up with every store.
-// Before either, the page checks the core itself: the box key (keys/box.pub, from GitHub) signed its keys, and the core
-// signed its state. A core that is set up is ended first, only with the kit it was set up with. The master private key
+//            empty secrets up with every store.
+// Before either, the page checks secrets itself: the box key (keys/box.pub, from GitHub) signed its keys, and secrets
+// signed its state. A secrets that is set up is ended first, only with the kit it was set up with. The master private key
 // lives only in this page's memory and in the kit; a pasted kit is forgotten on leaving and 10 minutes after pasting.
+// Either makes this iPhone's keys fresh (phone, agreement and root: PhoneKeys.renew) and names the phone and root keys in
+// the master-signed claim; then the page asks for root's ⊤ on the sink, signed with the new root key on its own warning
+// screen (RootKeyView) and kept by the router, which every new session's grant is cut from.
 import SwiftUI
 
 /// an error as Deyao reads it: one plain sentence, the technical part behind "Details"
@@ -15,7 +18,7 @@ func plain(_ e: Error, _ message: String) -> Plain {
   if let p = e as? Plain { return p }
   let d = errText(e)
   if case TrustError.badKit(let s) = e { return Plain(message: s, detail: d) }
-  if e is RouterClient.CoreNotRunning { return Plain(message: "Jarvis 2 isn't answering right now. Try again in a minute.", detail: "the router reports no core (503)") }
+  if e is RouterClient.CoreNotRunning { return Plain(message: "Jarvis 2 isn't answering right now. Try again in a minute.", detail: "the router reports no secrets (503)") }
   if e is URLError { return Plain(message: "Couldn't reach Jarvis 2.", detail: d) }
   return Plain(message: message, detail: d)
 }
@@ -36,8 +39,10 @@ struct SetupView: View {
   @State private var showDetail = false
   @State private var doneText = ""
   @State private var wipeTimer: Task<Void, Never>?
-  /// the core says it is set up for this iPhone, but it isn't the one this iPhone pinned
+  /// secrets says it is set up for this iPhone, but it isn't the one this iPhone pinned
   @State private var unpinned = false
+  /// root's ⊤ on the sink went to the router after this setup
+  @State private var rootGranted = false
 
   var body: some View {
     NavigationStack {
@@ -121,6 +126,17 @@ struct SetupView: View {
       }
     case .done:
       Section { Label(doneText, systemImage: "checkmark.seal.fill").foregroundStyle(.green).accessibilityElement(children: .combine).accessibilityIdentifier("setup-done") }
+      Section {
+        if rootGranted {
+          LabeledContent("Root grant") { StatusPill(text: "Signed", color: .green) }
+            .accessibilityElement(children: .combine).accessibilityIdentifier("setup-root-granted")
+        } else {
+          NavigationLink { RootKeyView(onDone: { rootGranted = true }) } label: {
+            Label("Sign the root grant", systemImage: "exclamationmark.shield")
+          }
+          .accessibilityIdentifier("setup-root-grant")
+        }
+      } footer: { if !rootGranted { Text("New sessions start only once the root grant is signed.") } }
     }
   }
 
@@ -160,7 +176,7 @@ struct SetupView: View {
     switch status { case .empty: "empty"; case .mine: "mine"; case .otherPhone: "other-phone"; case .foreign: "foreign" }
   }
   private var statusText: String {
-    if unpinned { return "Not the core this iPhone set up" }
+    if unpinned { return "Not the secrets this iPhone set up" }
     return switch status {
     case .empty: "Empty"
     case .mine: "Set up on this iPhone"
@@ -190,11 +206,11 @@ struct SetupView: View {
     Task { await model.loadLists(); await model.refresh() }
   }
 
-  /// the core as it is now: checked against the box key, its state signed by itself
+  /// secrets as it is now: checked against the box key, its state signed by itself
   private func look() async throws -> (PublicKeys, CoreSetup.State) {
-    let id = try await RouterClient.shared.identity()
+    let x = try await RouterClient.shared.identity()
     let box = try await KeySource.key("box.pub")
-    return try CoreSetup.check(id, boxKey: box)
+    return try CoreSetup.check(x.id, state: x.state, boxKey: box)
   }
   private func load() async {
     failure = nil; step = .loading
@@ -202,8 +218,8 @@ struct SetupView: View {
       let (k, st) = try await look()
       core = k; state = st
       status = CoreSetup.status(st, myMaster: CoreTrust.master, myPhone: try PhoneKeys.shared.publicKeys())
-      // never pinned silently (audit finding 7): a core that says "this iPhone" but isn't the core pinned here could be
-      // an impostor holding the box key (the master and phone keys are public). Only a Reset or Recover pins a core.
+      // never pinned silently (audit finding 7): a secrets that says "this iPhone" but isn't the one pinned here could be
+      // an impostor holding the box key (the master and phone keys are public). Only a Reset or Recover pins one.
       unpinned = status == .mine && CoreTrust.pinned != k
       step = .choose
     } catch is RouterClient.CoreNotRunning { step = .unreachable }
@@ -212,15 +228,15 @@ struct SetupView: View {
       failure = plain(error, error is TrustError ? "This doesn't look like your Jarvis 2, so the app stopped." : "Couldn't reach Jarvis 2.")
     }
   }
-  /// after a wipe: the old core ends and Kubernetes starts a new, empty one (new keys)
+  /// after a wipe: the old secrets ends and Kubernetes starts a new, empty one (new keys)
   private func waitForEmptyCore(after old: PublicKeys) async throws -> (PublicKeys, CoreSetup.State) {
     for _ in 0..<90 {
       try await Task.sleep(for: .seconds(2))
       if let r = try? await look(), r.0 != old, r.1.master.isEmpty { return r }
     }
-    throw Plain(message: "Jarvis 2 didn't come back after the restart. Try again in a few minutes.", detail: "no new, empty core within 3 minutes")
+    throw Plain(message: "Jarvis 2 didn't come back after the restart. Try again in a few minutes.", detail: "no new, empty secrets within 3 minutes")
   }
-  /// end the core that is running, with the kit it was set up with
+  /// end the secrets that is running, with the kit it was set up with
   private func wipe(with m: MasterKey) async throws {
     guard let old = core else { return }
     busy = "Restarting Jarvis 2…"
@@ -228,11 +244,11 @@ struct SetupView: View {
     let (k, st) = try await waitForEmptyCore(after: old)
     core = k; state = st; status = .empty
   }
-  /// the pasted kit; for a core that is set up, it must be the kit it was set up with
+  /// the pasted kit; for a secrets that is set up, it must be the kit it was set up with
   private func pastedKit(mustMatch: Bool) throws -> MasterKey {
     let m = try RecoveryKit.parse(kitText).master
     if mustMatch, let st = state, !m.matches(st.master) {
-      throw Plain(message: "This isn't the recovery kit Jarvis 2 is set up with.", detail: "the kit's master key \(m.publicKey.prefix(16))… ≠ the core's \(st.master.prefix(16))…")
+      throw Plain(message: "This isn't the recovery kit Jarvis 2 is set up with.", detail: "the kit's master key \(m.publicKey.prefix(16))… ≠ secrets' \(st.master.prefix(16))…")
     }
     return m
   }
@@ -251,28 +267,14 @@ struct SetupView: View {
       let setupKey = try await KeySource.key("setup.pub"), boxKey = try await KeySource.key("box.pub")
       let stores = try CoreSetup.readBackups(try await RouterClient.shared.backups(), master: m, setupKey: setupKey, boxKey: boxKey)
       busy = "Restoring…"
-      // a new pairing: fresh phone keys, bound to the faces enrolled now (.biometryCurrentSet)
+      // a new pairing: fresh phone and root keys, bound to the faces enrolled now (.biometryCurrentSet)
       PhoneKeys.shared.renew()
       let phone = try PhoneKeys.shared.publicKeys()
-      let device = try PhoneKeys.shared.devicePublic()
-      // a core whose identity says bundle "keys" gets every key wrapped here on its own (it never sees them in the
-      // clear); a core from before keys.go (until the held core is live) takes blobs, and an earlier core (no store key,
-      // or 400 "bad bundle") the stores sealed to it as before
-      var claimed = false
-      let keys = try await RouterClient.shared.coreTakesKeys()
-      if keys {
-        guard let sk = try await RouterClient.shared.storeKey(coreKey: c.signingKey) else { throw TrustError.stale("store key") }
-        _ = try await RouterClient.shared.claim(try await withDevice(try CoreSetup.claim(core: c, phone: phone, master: m, bundle: try CoreSetup.keysBundle(stores, storeKey: sk), device: device)), core: c)
-        claimed = true
-      } else if let sk = try await RouterClient.shared.storeKey(coreKey: c.signingKey) {
-        do {
-          _ = try await RouterClient.shared.claim(try await withDevice(try CoreSetup.claim(core: c, phone: phone, master: m, bundle: try CoreSetup.blobsBundle(stores, storeKey: sk), device: device)), core: c)
-          claimed = true
-        } catch let e as RouterError where e.status == 400 && e.message.contains("bad bundle") {}
-      }
-      if !claimed {
-        _ = try await RouterClient.shared.claim(try await withDevice(try CoreSetup.claim(core: c, phone: phone, master: m, bundle: try CoreSetup.bundle(stores), device: device)), core: c)
-      }
+      let device = try PhoneKeys.shared.devicePublic(), root = try PhoneKeys.shared.rootPublic()
+      // every key wrapped here on its own to secrets' store key (secrets never sees them in the clear)
+      let sk = try await RouterClient.shared.storeKey(coreKey: c.signingKey)
+      _ = try await RouterClient.shared.claim(try await withDevice(try CoreSetup.claim(core: c, phone: phone, master: m, bundle: try CoreSetup.keysBundle(stores, storeKey: sk),
+                                                                                       root: root, device: device)), core: c)
       finish(c, master: m.publicKey, text: "Recovered")
     } catch {
       busy = nil
@@ -280,7 +282,7 @@ struct SetupView: View {
       failure = plain(error, error is TrustError ? "The backups couldn't be opened with this kit." : "Recovering didn't work.")
     }
   }
-  /// a core that is set up: end it with its current kit, then make the new kit
+  /// a secrets that is set up: end it with its current kit, then make the new kit
   private func authoriseReset() async {
     failure = nil
     do {
@@ -291,7 +293,7 @@ struct SetupView: View {
       newKey = MasterKey.generate(); copied = false; step = .newKit
     } catch { busy = nil; failure = plain(error, "Resetting didn't work.") }
   }
-  /// "I've saved it": the new master key sets the empty core up, with no stores
+  /// "I've saved it": the new master key sets the empty secrets up, with no stores
   private func claimNew() async {
     guard let m = newKey, let c = core else { return }
     failure = nil
@@ -299,14 +301,10 @@ struct SetupView: View {
       busy = "Setting up…"
       PhoneKeys.shared.renew()
       let phone = try PhoneKeys.shared.publicKeys()
-      // a core with a store key takes only the app's blobs form (R2); an earlier core, the older empty bundle
-      // a core whose identity says bundle "keys" takes the keys form; a core from before keys.go (until the held core is
-      // live) the app's blobs form (R2); an earlier core, the older empty bundle
       let sk = try await RouterClient.shared.storeKey(coreKey: c.signingKey)
-      let bundle: Data
-      if try await RouterClient.shared.coreTakesKeys(), let sk { bundle = try CoreSetup.keysBundle([], storeKey: sk) }
-      else { bundle = try sk.map { try CoreSetup.blobsBundle([], storeKey: $0) } ?? CoreSetup.bundle([]) }
-      _ = try await RouterClient.shared.claim(try await withDevice(try CoreSetup.claim(core: c, phone: phone, master: m, bundle: bundle, device: try PhoneKeys.shared.devicePublic())), core: c)
+      let bundle = try CoreSetup.keysBundle([], storeKey: sk)
+      _ = try await RouterClient.shared.claim(try await withDevice(try CoreSetup.claim(core: c, phone: phone, master: m, bundle: bundle, root: try PhoneKeys.shared.rootPublic(),
+                                                                                       device: try PhoneKeys.shared.devicePublic())), core: c)
       finish(c, master: m.publicKey, text: "Reset")
     } catch { busy = nil; failure = plain(error, "Setting up didn't work. Your kit is still the one shown; try again.") }
   }
@@ -323,8 +321,7 @@ struct SetupView: View {
 
   private func finish(_ c: PublicKeys, master: String, text: String) {
     CoreTrust.pin(c, master: master)
-    LinePins.clear()
-    forget(); newKey = nil; busy = nil
+    forget(); newKey = nil; busy = nil; rootGranted = false
     doneText = text
     step = .done
   }

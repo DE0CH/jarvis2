@@ -1,12 +1,13 @@
-// The app's client of the router (docs/API.md) — an ordinary network path: integrity comes from the core's signatures
-// (checked here against the core keys pinned when this iPhone set the core up) and the phone's (made here). Sign-in:
+// The app's client of the router (docs/API.md) — an ordinary network path: integrity comes from the kernel's signatures
+// (secrets' checked here against the keys pinned when this iPhone set secrets up; the other parts' against the box key's
+// word for them, KernelTrust) and the phone's (made here). Sign-in:
 // ASWebAuthenticationSession on /api/auth/start → jarvis2://auth#token=<Access JWT>, kept in the Keychain and sent as
 // `cf-access-token` on every request (never cookies, except into the terminal page's WebView: TerminalView).
 import AuthenticationServices
 import Foundation
 import UIKit
 
-/// a failed request, in words; `status` and `body` for the callers that act on them (a 403 {needsGrant}, a 404)
+/// a failed request, in words; `status` and `body` for the callers that act on them (a 403 {needsTerminal}, a 404)
 struct RouterError: LocalizedError {
   let message: String
   var status = 0
@@ -104,7 +105,7 @@ final class RouterClient: NSObject, ASWebAuthenticationPresentationContextProvid
     }
     throw SignedOut()
   }
-  /// JSON answer; errors (the router's {error} or the core's signed error doc) as their message
+  /// JSON answer; errors (the router's {error} or a kernel part's signed error doc) as their message
   func json<T: Decodable>(_ method: String, _ path: String, _ body: [String: Any]? = nil, as: T.Type = T.self) async throws -> T {
     let (status, data) = try await raw(method, path, body)
     guard (200..<300).contains(status) else { throw Self.failure(method, path, status, data) }
@@ -148,117 +149,81 @@ final class RouterClient: NSObject, ASWebAuthenticationPresentationContextProvid
   }
   static func reason(_ data: Data) -> String? {
     guard let j = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
-    if let p = j["payload"] as? String, let pj = try? JSONSerialization.jsonObject(with: Data(p.utf8)) as? [String: Any], let e = pj["error"] as? String { return "core: " + e }
+    if let p = j["payload"] as? String, let pj = try? JSONSerialization.jsonObject(with: Data(p.utf8)) as? [String: Any], let e = pj["error"] as? String { return e }
     return (j["error"] as? String) ?? (j["message"] as? String)
   }
 
-  // ---- the core, relayed: every answer checked against the pinned core key ----
+  // ---- secrets, relayed (api/secrets/*): every answer checked against the pinned key ----
   func stores() async throws -> [StoreView] { try await storesDoc().stores }
 
   /// the content stores (router/content.go): name, file count, bytes
   struct ContentStoreDTO: Decodable, Identifiable, Hashable { let name: String; let files: Int; let bytes: Int; var id: String { name } }
   private struct ContentList: Decodable { let stores: [ContentStoreDTO] }
   func contentStores() async throws -> [ContentStoreDTO] { try await json("GET", "api/content", as: ContentList.self).stores }
-  /// the signed list itself (also says whether the core takes unlocks for one session)
+  /// secrets' signed store list
   func storesDoc() async throws -> StoresDoc {
     let n = CoreCrypto.nonce()
-    let d = try CoreCrypto.decode(try await json("POST", "api/core/stores", ["nonce": n], as: SignedDoc.self), by: try CoreTrust.key(), as: StoresDoc.self, what: "the store list")
+    let d = try CoreCrypto.decode(try await json("POST", "api/secrets/stores", ["nonce": n], as: SignedDoc.self), by: try CoreTrust.key(), as: StoresDoc.self, what: "the store list")
     guard d.kind == "stores", d.nonce == n else { throw TrustError.stale("store list") }
-    coreVouchesWriters = d.writers == true
     return d
-  }
-  /// the core's signed store list says it names each store's writer (then a missing one is refused); nil = not read yet
-  private var coreVouchesWriters: Bool?
-  private func writersRequired() async throws -> Bool {
-    if let w = coreVouchesWriters { return w }
-    _ = try await storesDoc()
-    return coreVouchesWriters ?? false
   }
   /// the setup key from git, only when a writer needs checking
   private func setupKeyIfNeeded(_ ws: [StoreWriter?]) async throws -> String? {
     ws.contains { $0?.by == "setup" } ? try await KeySource.key("setup.pub") : nil
   }
   private func setupKeyIfNeeded(_ w: StoreWriter?) async throws -> String? { try await setupKeyIfNeeded([w]) }
-  /// the core's identity says it takes stores of keys (core/keys.go); false = a core from before keys.go (until the held
-  /// core is live). Not signed: a wrong word only makes the core refuse what the app sends.
-  func coreTakesKeys() async throws -> Bool { try await identity().takesKeys }
   func unlocked() async throws -> [UnlockRow] {
     let n = CoreCrypto.nonce()
-    let d = try CoreCrypto.decode(try await json("POST", "api/core/unlocked", ["nonce": n], as: SignedDoc.self), by: try CoreTrust.key(), as: UnlockedDoc.self, what: "the unlocked list")
+    let d = try CoreCrypto.decode(try await json("POST", "api/secrets/unlocked", ["nonce": n], as: SignedDoc.self), by: try CoreTrust.key(), as: UnlockedDoc.self, what: "the unlocked list")
     guard d.kind == "unlocked-list", d.nonce == n else { throw TrustError.stale("unlocked list") }
     return d.unlocked
   }
-  /// forNonce: the challenge or cert nonce the unlock is for (the core locks it again once that cert has pulled);
-  /// nil = a standing unlock. A core that predates unlocks for one session answers no "for" (then it is standing).
-  func unlockBegin(_ store: String, for forNonce: String? = nil) async throws -> UnlockBegin {
-    var body: [String: Any] = ["store": store]
-    if let forNonce { body["for"] = forNonce }
-    let b = try CoreCrypto.decode(try await json("POST", "api/core/unlock/begin", body, as: SignedDoc.self), by: try CoreTrust.key(), as: UnlockBegin.self, what: "the unlock")
+  /// an unlock of one store: secrets' signed begin, every key's writer checked (the setup key's signature, a session's
+  /// machine or the router: the page names a session's write, or secrets itself)
+  func unlockBegin(_ store: String) async throws -> UnlockBegin {
+    let b = try CoreCrypto.decode(try await json("POST", "api/secrets/unlock/begin", ["store": store], as: SignedDoc.self), by: try CoreTrust.key(), as: UnlockBegin.self, what: "the unlock")
     guard b.kind == "unlock-begin", b.store == store else { throw TrustError.stale("unlock of \(b.store)") }
-    if let got = b.forNonce, !got.isEmpty, got != (forNonce ?? "") { throw TrustError.stale("unlock of \(b.store) for another session") }
-    if forNonce == nil, let got = b.forNonce, !got.isEmpty { throw TrustError.stale("unlock of \(b.store) for one session") }
-    if let keys = b.keys {
-      // each key's writer: the setup key's signature, a session's machine (the page names it), or the core
-      try Checks.unlockKeys(b, setupKey: try await setupKeyIfNeeded(keys.map(\.writer)))
-    } else {
-      // a core from before keys.go (until the held core is live): the share opens only a blob the core or the setup
-      // session wrote
-      guard let e = b.e else { throw TrustError.mismatch("unlock of \(b.store) names no key") }
-      try Checks.writer(b.writer, store: b.store, e: e, dataSha256: b.dataSha256, setupKey: try await setupKeyIfNeeded(b.writer), required: try await writersRequired())
-    }
+    try Checks.unlockKeys(b, setupKey: try await setupKeyIfNeeded(b.keys.map(\.writer)))
     return b
   }
-  /// this phone's shares x(p·E), one per `b.es` in order, each sealed to the core's one-off key T
+  /// this phone's shares x(p·E), one per `b.es` in order, each sealed to secrets' one-off key T
   func unlockFinish(_ b: UnlockBegin, shares: [Data]) async throws {
     guard shares.count == b.es.count else { throw TrustError.stale("unlock of \(b.store)") }
-    var body: [String: Any] = ["pending": b.pending]
-    if let keys = b.keys {
-      var m: [String: Any] = [:]
-      for (k, x) in zip(keys, shares) { m[k.key] = try CoreCrypto.sealShare(x, to: b.t) }
-      body["shares"] = m
-    } else {
-      body["share"] = try CoreCrypto.sealShare(shares[0], to: b.t) // a core from before keys.go (until the held core is live)
-    }
-    let d = try CoreCrypto.decode(try await json("POST", "api/core/unlock/finish", body, as: SignedDoc.self), by: try CoreTrust.key(), as: KindDoc.self, what: "the unlocked answer")
+    var m: [String: Any] = [:]
+    for (k, x) in zip(b.keys, shares) { m[k.key] = try CoreCrypto.sealShare(x, to: b.t) }
+    let d = try CoreCrypto.decode(try await json("POST", "api/secrets/unlock/finish", ["pending": b.pending, "shares": m], as: SignedDoc.self), by: try CoreTrust.key(), as: KindDoc.self, what: "the unlocked answer")
     guard d.kind == "unlocked", d.store == b.store else { throw TrustError.stale("unlocked \(d.store ?? "?")") }
   }
   func lock(_ id: String) async throws {
-    let d = try CoreCrypto.decode(try await json("POST", "api/core/lock", ["id": id], as: SignedDoc.self), by: try CoreTrust.key(), as: KindDoc.self, what: "the locked answer")
+    let d = try CoreCrypto.decode(try await json("POST", "api/secrets/lock", ["id": id], as: SignedDoc.self), by: try CoreTrust.key(), as: KindDoc.self, what: "the locked answer")
     guard d.kind == "locked", d.id == id else { throw TrustError.stale("lock") }
   }
   func markSensitive(_ name: String) async throws {
-    let d = try CoreCrypto.decode(try await json("POST", "api/core/stores/mark-sensitive", ["name": name], as: SignedDoc.self), by: try CoreTrust.key(), as: KindDoc.self, what: "the mark")
+    let d = try CoreCrypto.decode(try await json("POST", "api/secrets/stores/mark-sensitive", ["name": name], as: SignedDoc.self), by: try CoreTrust.key(), as: KindDoc.self, what: "the mark")
     guard d.kind == "marked-sensitive", d.name == name else { throw TrustError.stale("mark") }
   }
   func createStore(_ name: String) async throws {
-    let d = try CoreCrypto.decode(try await json("POST", "api/core/stores/create", ["name": name], as: SignedDoc.self), by: try CoreTrust.key(), as: KindDoc.self, what: "the new store")
+    let d = try CoreCrypto.decode(try await json("POST", "api/secrets/stores/create", ["name": name], as: SignedDoc.self), by: try CoreTrust.key(), as: KindDoc.self, what: "the new store")
     guard d.kind == "store-created", d.name == name else { throw TrustError.stale("create") }
   }
 
-  // ---- deploy keys: a repo added or removed (core/deploykeys.go) ----
-  /// the core's signed begin document, checked: this action, this repo, its store, the one token store it opens
-  /// A core that takes the app's key (R2): the app makes the ed25519 pair, wraps the private half into the repo's store
-  /// blob to the core's store key, and sends both; the core's signed begin must echo them. An earlier core (no store key)
-  /// makes the key itself.
+  // ---- deploy keys: a repo added or removed (secrets/deploykeys.go) ----
+  /// secrets' signed begin document, checked: this action, this repo, its store, the one token store it opens. An add:
+  /// the app makes the ed25519 pair, wraps the private half into the repo's store keys to secrets' store key, and sends
+  /// both; the signed begin must echo them.
   func deployKeyBegin(action: String, repo: String, sensitive: Bool) async throws -> (doc: SignedDoc, begin: DeployKeyBegin) {
     let store = Checks.repoStore(repo), title = "jarvis2 " + store
     var body: [String: Any] = ["action": action, "repo": repo, "sensitive": sensitive, "store": store, "title": title]
     var sent: DeployKeySent?
-    if action == "add", let sk = try await storeKey(coreKey: try CoreTrust.key()) {
+    if action == "add" {
+      let sk = try await storeKey(coreKey: try CoreTrust.key())
       let kp = try OpenSSH.ed25519(comment: title)
       let values = OpenSSH.storeValues(repo: repo, privateKeyFile: kp.privateKeyFile)
+      // each value under its own data key, "<store>\n<key>" as associated data
+      let keys = try CoreCrypto.wrapKeys(store: store, values: values, storeKey: sk)
       body["publicKey"] = kp.publicKey
-      if try await coreTakesKeys() {
-        // each value under its own data key, "<store>\n<key>" as associated data
-        let keys = try CoreCrypto.wrapKeys(store: store, values: values, storeKey: sk)
-        body["keys"] = keys.map(\.json)
-        sent = DeployKeySent(publicKey: kp.publicKey, keys: keys)
-      } else {
-        // a core from before keys.go (until the held core is live): the whole store as one blob
-        let blob = try CoreCrypto.wrapStore(name: store, values: values, storeKey: sk)
-        body["blob"] = blob.json
-        sent = DeployKeySent(publicKey: kp.publicKey, blob: blob)
-      }
+      body["keys"] = keys.map(\.json)
+      sent = DeployKeySent(publicKey: kp.publicKey, keys: keys)
     }
     let d = try await json("POST", "api/repos/key/begin", body, as: SignedDoc.self)
     let b = try Checks.deployKeyBegin(d, coreKey: try CoreTrust.key(), action: action, repo: repo, sensitive: sensitive, sent: sent)
@@ -266,15 +231,11 @@ final class RouterClient: NSObject, ASWebAuthenticationPresentationContextProvid
     return (d, b)
   }
   /// who wrote the GitHub token the phone's share opens: the setup key (its signature over the token key's writer text)
-  /// or the core; never a session (the core refuses a machine write to that store)
+  /// or secrets; never a session or the router
   private func checkTokenWriter(_ b: DeployKeyBegin) async throws {
-    if let key = b.tokenKey {
-      guard let w = b.tokenWriter, w.by != "machine" else { throw TrustError.mismatch("the GitHub token's writer") }
-      try Checks.keyWriter(w, store: b.tokenStore, key: key, e: b.e, dataSha256: b.tokenDataSha256 ?? "", backupSha256: b.tokenBackupSha256 ?? "",
-                           setupKey: try await setupKeyIfNeeded(w))
-    } else { // a core from before keys.go (until the held core is live)
-      try Checks.writer(b.tokenWriter, store: b.tokenStore, e: b.e, dataSha256: b.tokenDataSha256, setupKey: try await setupKeyIfNeeded(b.tokenWriter), required: try await writersRequired())
-    }
+    guard let key = b.tokenKey, let w = b.tokenWriter, w.by == "setup" || w.by == "core" else { throw TrustError.mismatch("the GitHub token's writer") }
+    try Checks.keyWriter(w, store: b.tokenStore, key: key, e: b.e, dataSha256: b.tokenDataSha256 ?? "", backupSha256: b.tokenBackupSha256 ?? "",
+                         setupKey: try await setupKeyIfNeeded(w))
   }
   /// the phone's signature over the begin document and its share of the token store; the answer, checked
   func deployKeyFinish(_ b: DeployKeyBegin, signature: Data, share: Data) async throws -> DeployKeyAnswer {
@@ -282,36 +243,33 @@ final class RouterClient: NSObject, ASWebAuthenticationPresentationContextProvid
     return try Checks.deployKeyAnswer(try await json("POST", "api/repos/key/finish", body, as: SignedDoc.self), coreKey: try CoreTrust.key(), begin: b)
   }
 
-  /// the core's store key C = P + K for this phone's agreement key, checked against `coreKey`; nil from a core that
-  /// predates it (404: the app then uses the earlier forms)
-  func storeKey(coreKey: String) async throws -> String? {
+  /// secrets' store key C = P + K for this phone's agreement key, checked against `coreKey` (secrets' signing key)
+  func storeKey(coreKey: String) async throws -> String {
     let phone = try PhoneKeys.shared.publicKeys().agreementKey
-    let (status, data) = try await raw("POST", "api/core/store-key", ["phone": phone])
-    if status == 404 { return nil }
-    guard status == 200 else { throw Self.failure("POST", "api/core/store-key", status, data) }
-    return try CoreCrypto.storeKey(try JSONDecoder().decode(SignedDoc.self, from: data), coreKey: coreKey, phone: phone)
+    let d = try await json("POST", "api/secrets/store-key", ["phone": phone], as: SignedDoc.self)
+    return try CoreCrypto.storeKey(d, coreKey: coreKey, phone: phone)
   }
 
   // ---- what each store and key is for (router/storedocs.go): names, writers, explanations; never values ----
-  // ---- a store's earlier versions and putting one back (core/history.go, router/storerestore.go) ----
-  /// the core's signed list of a store's kept versions (checked: the core's key, this call's nonce, this store)
+  // ---- a store's earlier versions and putting one back (secrets/history.go, router/storerestore.go) ----
+  /// secrets' signed list of a store's kept versions (checked: secrets' key, this call's nonce, this store)
   func storeVersions(_ store: String) async throws -> StoreVersionsDoc {
     let n = CoreCrypto.nonce()
-    let d = try CoreCrypto.decode(try await json("POST", "api/core/stores/versions", ["store": store, "nonce": n], as: SignedDoc.self), by: try CoreTrust.key(),
+    let d = try CoreCrypto.decode(try await json("POST", "api/secrets/stores/versions", ["store": store, "nonce": n], as: SignedDoc.self), by: try CoreTrust.key(),
                                   as: StoreVersionsDoc.self, what: "the store's versions")
     guard d.kind == "store-versions", d.nonce == n, d.store == store else { throw TrustError.stale("versions of \(store)") }
     return d
   }
-  /// the core's signed begin document of putting version `seq` back, checked (each key put back has a writer the phone
+  /// secrets' signed begin document of putting version `seq` back, checked (each key put back has a writer the phone
   /// accepts); the payload is what the phone signs
   func restoreBegin(_ store: String, seq: Int) async throws -> (doc: SignedDoc, begin: RestoreBegin) {
-    let doc = try await json("POST", "api/core/stores/restore/begin", ["store": store, "seq": seq], as: SignedDoc.self)
+    let doc = try await json("POST", "api/secrets/stores/restore/begin", ["store": store, "seq": seq], as: SignedDoc.self)
     let b = try CoreCrypto.decode(doc, by: try CoreTrust.key(), as: RestoreBegin.self, what: "the restore")
     try Checks.restoreBegin(b, store: store, seq: seq, setupKey: try await setupKeyIfNeeded(b.put.map { Optional($0.writer) }))
     return (doc, b)
   }
   /// the phone's signature over the begin document and its share of every key put back (in `b.es` order): the router
-  /// writes the core's backups, then the core commits; the committed answer is checked
+  /// writes secrets' backups, then secrets commits; the committed answer is checked
   func restoreFinish(_ b: RestoreBegin, signature: Data, shares: [Data]) async throws -> RestoreDone {
     guard shares.count == b.put.count else { throw TrustError.stale("restore of \(b.store)") }
     var m: [String: Any] = [:]
@@ -334,26 +292,30 @@ final class RouterClient: NSObject, ASWebAuthenticationPresentationContextProvid
     try await call("PUT", "api/stores/\(Self.escaped(store))/docs", body)
   }
 
-  // ---- setting the core up: Reset and Recover ----
-  /// the core's keys, the box key's signature over them and its signed state (the caller checks both: CoreSetup.check).
-  /// Throws CoreNotRunning when there is no core to ask (its pod restarting, e.g. after a wipe: 503 {coreDown}; 502/504
-  /// from the edge mean the same)
-  func identity() async throws -> CoreSetup.Identity {
-    let (status, data) = try await raw("GET", "api/core/identity", nil)
+  // ---- setting secrets up: Reset and Recover ----
+  /// secrets' keys with the box key's signature over them, and its signed state (the caller checks both:
+  /// CoreSetup.check). Throws CoreNotRunning when there is no secrets to ask (its pod restarting, e.g. after a wipe: 503
+  /// {kernelDown}; 502/504 from the edge mean the same)
+  func identity() async throws -> (id: CoreSetup.Identity, state: SignedDoc) {
+    let (status, data) = try await raw("GET", "api/secrets/identity", nil)
     if status == 503 || status == 502 || status == 504 { throw CoreNotRunning() }
-    guard status == 200 else { throw Self.failure("GET", "api/core/identity", status, data) }
-    return try JSONDecoder().decode(CoreSetup.Identity.self, from: data)
+    guard status == 200 else { throw Self.failure("GET", "api/secrets/identity", status, data) }
+    let id = try JSONDecoder().decode(CoreSetup.Identity.self, from: data)
+    let (s2, d2) = try await raw("POST", "api/secrets/state", [:])
+    if s2 == 503 || s2 == 502 || s2 == 504 { throw CoreNotRunning() }
+    guard s2 == 200 else { throw Self.failure("POST", "api/secrets/state", s2, d2) }
+    return (id, try JSONDecoder().decode(SignedDoc.self, from: d2))
   }
   struct CoreNotRunning: Error {}
-  /// POST api/core/claim; the answer must be that core's signed "claimed"
+  /// POST api/secrets/claim; the answer must be that secrets' signed "claimed"
   func claim(_ body: [String: Any], core: PublicKeys) async throws -> Int {
-    let d = try CoreCrypto.decode(try await json("POST", "api/core/claim", body, as: SignedDoc.self), by: core.signingKey, as: KindDoc.self, what: "the core's answer")
+    let d = try CoreCrypto.decode(try await json("POST", "api/secrets/claim", body, as: SignedDoc.self), by: core.signingKey, as: KindDoc.self, what: "secrets' answer")
     guard d.kind == "claimed" else { throw TrustError.stale("claim") }
     return d.stores ?? 0
   }
-  /// POST api/core/wipe; the answer must be that core's signed "wiping" (it then ends; a new, empty core follows)
+  /// POST api/secrets/wipe; the answer must be that secrets' signed "wiping" (it then ends; a new, empty one follows)
   func wipe(_ body: [String: Any], core: PublicKeys) async throws {
-    let d = try CoreCrypto.decode(try await json("POST", "api/core/wipe", body, as: SignedDoc.self), by: core.signingKey, as: KindDoc.self, what: "the core's answer")
+    let d = try CoreCrypto.decode(try await json("POST", "api/secrets/wipe", body, as: SignedDoc.self), by: core.signingKey, as: KindDoc.self, what: "secrets' answer")
     guard d.kind == "wiping", d.core == core.signingKey else { throw TrustError.stale("wipe") }
   }
   /// the locked store backups, as the router reads them from the bucket (the caller checks and opens them)
@@ -368,34 +330,35 @@ final class RouterClient: NSObject, ASWebAuthenticationPresentationContextProvid
     return (b.bucket ?? "", b.objects)
   }
 
-  // ---- approvals ----
-  /// an approval with its signed challenge (checked by Checks.review against the pinned core key)
-  /// imageSig: CI's signature over the image the challenge names (keys/ci.pub; Attestation)
-  struct ApprovalDTO: Decodable { let id: String; let kind: String; let session: String?; let label: String?; let challenge: SignedDoc; let options: [String: String]?; let imageSig: String? }
+  // ---- approvals (docs/API.md "Approvals"): the drafts are checked by Checks.review before anything is signed ----
   struct SessionDTO: Decodable { let id: String; let state: String; let createRequestId: String? }
   struct StateDTO: Decodable { let sessions: [SessionDTO]; let approvals: [ApprovalDTO] }
-  struct RespondDTO: Decodable { let answer: SignedDoc; let session: String }
   func approvalsState() async throws -> StateDTO { try await json("GET", "api/state") }
   func approval(_ id: String) async throws -> ApprovalDTO? { try await approvalsState().approvals.first { $0.id == id } }
-  func respond(_ id: String, signature: Data) async throws -> RespondDTO { try await json("POST", "api/approvals/\(id)/respond", ["signature": signature.base64EncodedString()]) }
+  /// one signature per draft, in order (one Face ID) → the session the approval was for
+  func respond(_ id: String, signatures: [Data]) async throws -> String {
+    struct R: Decodable { let session: String? }
+    return try await json("POST", "api/approvals/\(id)/respond", ["signatures": signatures.map { $0.base64EncodedString() }], as: R.self).session ?? ""
+  }
   func reject(_ id: String) async throws { try await call("POST", "api/approvals/\(id)/reject") }
 
-  // ---- grants (the session's cert is checked against the pinned core key) ----
-  func sessionCert(_ session: String) async throws -> SessionCert {
-    try Checks.cert(try await json("GET", "api/sessions/\(session)/cert", as: SignedDoc.self), coreKey: try CoreTrust.key())
+  // ---- the kernel's documents the router carried (GET api/sessions/:id/chain, api/kernel/*) ----
+  struct ChainDTO: Decodable { let session: String; var main: SignedDoc? = nil; var held: SignedDoc? = nil; var spawn: KNotarized? = nil; var origin: KNotarized? = nil }
+  func chain(_ session: String) async throws -> ChainDTO { try await json("GET", "api/sessions/\(Self.escaped(session))/chain") }
+  /// root's ⊤ on the sink, signed by the root key once at setup (PUT api/kernel/root-grant)
+  func putRootGrant(sig: Data) async throws {
+    try await call("PUT", "api/kernel/root-grant", ["payload": Kernel.rootGrantPayload, "sig": sig.base64EncodedString()])
   }
-  /// the router's features and their public keys (the router owns every one of them)
-  func holders() async throws -> [String: String] {
-    struct H: Decodable { let holders: [String: String] }
-    return try await json("GET", "api/holders", as: H.self).holders
+
+  // ---- add-ons and narrowing (docs/API.md "Requests", "Sessions") ----
+  /// file a terminal (minutes, at most 10), a command or an added store for a session: → the approval's id
+  func requestAddOn(_ intent: String, _ body: [String: Any]) async throws -> String {
+    struct R: Decodable { let id: String }
+    return try await json("POST", "api/requests/\(intent)", body, as: R.self).id
   }
-  func draftGrant(_ session: String, _ body: [String: Any]) async throws -> String {
-    struct T: Decodable { let text: String }
-    return try await json("POST", "api/sessions/\(session)/grants/draft", body, as: T.self).text
-  }
-  struct StoredGrantDTO: Decodable { let id: String; let holder: String; let kind: String; let ends: String }
-  func addGrant(_ session: String, payload: String, sig: Data) async throws -> StoredGrantDTO {
-    try await json("POST", "api/sessions/\(session)/grants", ["payload": payload, "sig": sig.base64EncodedString()])
+  /// keep only `stores` (the main grant moved along the machine's identity edge) → the stores it holds now
+  func narrow(_ session: String, keep stores: [String]) async throws -> [String] {
+    try await call("POST", "api/sessions/\(Self.escaped(session))/narrow", ["stores": stores])["stores"].strings
   }
 
   // ---- the Inbox (docs/API.md "Requests") ----

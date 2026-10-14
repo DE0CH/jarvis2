@@ -95,11 +95,11 @@ private struct Banners: View {
   var body: some View {
     let dead = model.sessions.filter(\.authFailed)
     let b = model.budget
-    if model.loadError != nil || (model.loaded && !model.coreUp) || !dead.isEmpty || b["capped"].bool == true || b["warned"].bool == true || model.fly["error"].text.map({ $0 != "FLY_READ_TOKEN not set" }) == true {
+    if model.loadError != nil || (model.loaded && !model.secretsUp) || !dead.isEmpty || b["capped"].bool == true || b["warned"].bool == true || model.fly["error"].text.map({ $0 != "FLY_READ_TOKEN not set" }) == true {
       Section {
         if let e = model.loadError { ErrorRow(text: "Can't reach the router: \(e)", id: "banner-router") }
-        if model.loaded && !model.coreUp {
-          Label("Core not answering", systemImage: "exclamationmark.triangle").foregroundStyle(.orange)
+        if model.loaded && !model.secretsUp {
+          Label("Secrets not answering", systemImage: "exclamationmark.triangle").foregroundStyle(.orange)
         }
         if !dead.isEmpty {
           LabeledContent {
@@ -140,8 +140,8 @@ struct SessionRow: View {
       }
       if let lock = m.lockedStore {
         HStack(spacing: 6) { StatusPill(text: "Locked store", color: .orange); Text(lock).font(.footnote.monospaced()) }
-      } else if let g = m.needsGrant {
-        HStack(spacing: 6) { StatusPill(text: "Needs approval", color: .orange); Text(Holder.title(g)).font(.footnote) }
+      } else if m.terminalOpen {
+        StatusPill(text: "Terminal open", color: .blue)
       }
     }
     .padding(.vertical, 2)
@@ -191,12 +191,8 @@ struct SessionMenu: View {
         Label("Idle notifications", systemImage: m.notifyIdle ? "checkmark" : "bell")
       }
     }
-    if m.state == "started" || m.state == "paused" {
-      if m.permissionMode == "bypass" {
-        Button("Switch to auto mode", systemImage: "shield") { Task { await model.switchMode(m, to: "auto") } }
-      } else {
-        Button("Switch to bypass mode", systemImage: "shield.slash") { Task { await model.switchMode(m, to: "bypass") } }
-      }
+    if m.state == "started" && !m.terminalOpen {
+      Button("Open a terminal", systemImage: "terminal") { Task { await model.requestTerminal(m) } }
     }
     if m.state == "started", let next = m.memAlert?.nextSize {
       Button(Fmt.upgradeTitle(next), systemImage: "arrow.up.circle") { Task { await model.upgrade(m.id) } }

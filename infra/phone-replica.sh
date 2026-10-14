@@ -13,8 +13,9 @@
 #   repo-added  the throwaway repo has its one deploy key now (the app shows the repo added)
 #   repo-check  …and none left after the app removed it
 #   inbox-setup-add / inbox-setup-remove   infra/setup.py request add-repo / remove-repo for the throwaway repo
-#   inbox-session:<sid>:<holder>           jarvis2-request grant <holder> run inside that session's machine (flyctl exec)
-#   inbox-batch:<sid>                      jarvis2-request batch (two grants, one summary) inside that session's machine
+#   inbox-session:<sid>:<intent>           jarvis2-request terminal (5 minutes) or command (`hostname`) run inside that
+#                                          session's machine (flyctl exec): an add-on approval in the Inbox
+#   inbox-batch:<sid>                      jarvis2-request batch (a terminal and a command, one summary) inside that session's machine
 #   session-file:<sid>:<name>              the image attached on New session is on that session's machine (flyctl exec:
 #                                          the machine's hash-checked copy, or the harness's ~/uploads copy)
 #   done        the end
@@ -172,24 +173,23 @@ while :; do
     inbox-setup-add) : > "$LOGS/inbox.log"; python3 "$ROOT/infra/setup.py" request add-repo "DE0CH/$TREPO" --why "replica: Claude asks for the test repo" > "$LOGS/inbox.log" 2>&1 && answer ok || answer "request failed: $(tail -1 "$LOGS/inbox.log")" ;;
     inbox-setup-remove) : > "$LOGS/inbox.log"; python3 "$ROOT/infra/setup.py" request remove-repo "DE0CH/$TREPO" --why "replica: Claude asks to remove it (deny this)" > "$LOGS/inbox.log" 2>&1 && answer ok || answer "request failed: $(tail -1 "$LOGS/inbox.log")" ;;
     inbox-session:*) # jarvis2-request inside the session's own machine (flyctl exec as the org): the router names the session
-      IFS=: read -r _ sid holder <<<"$msg"; : > "$LOGS/inbox.log"; m=""
+      IFS=: read -r _ sid intent <<<"$msg"; : > "$LOGS/inbox.log"; m=""
+      case "$intent" in command) args="command --cmd hostname" ;; *) intent=terminal; args="terminal --minutes 5" ;; esac
       for _ in $(seq 1 18); do   # up to 90 s: the router's record of the session's current machine
         m=$(python3 "$ROOT/infra/setup.py" sessions 2>>"$LOGS/inbox.log" | awk -v s="$sid" '$1 == s && $2 != "-" {print $2}')
         [ -n "$m" ] && break; sleep 5
       done
       if [ -n "$m" ] && FLY_API_TOKEN="$JARVIS2_FLY_TOKEN" flyctl machine exec "$m" -a jarvis2-sessions \
-           "/usr/local/bin/jarvis2-request grant $holder --minutes 5 --why replica-the-session-asks-for-$holder" >> "$LOGS/inbox.log" 2>&1; then answer ok
+           "/usr/local/bin/jarvis2-request $args --why replica-the-session-asks-for-$intent" >> "$LOGS/inbox.log" 2>&1; then answer ok
       else answer "session request failed (machine ${m:-none}): $(tail -2 "$LOGS/inbox.log" 2>/dev/null)"; fi ;;
-    inbox-batch:*) # a batch from the session (two grants, one summary): the app allows both under one Face ID. Not the
-      # scheduler: the grants step later forgets ITS scheduler grant by the row's identifier, and a second scheduler row
-      # from here kept that identifier on screen ("forgotten" failed, replica run 38350148683)
+    inbox-batch:*) # a batch from the session (a terminal and a command, one summary): the app allows both under one Face ID
       sid=${msg#inbox-batch:}; : > "$LOGS/inbox.log"; m=""
       for _ in $(seq 1 18); do
         m=$(python3 "$ROOT/infra/setup.py" sessions 2>>"$LOGS/inbox.log" | awk -v s="$sid" '$1 == s && $2 != "-" {print $2}')
         [ -n "$m" ] && break; sleep 5
       done
       if [ -n "$m" ] && FLY_API_TOKEN="$JARVIS2_FLY_TOKEN" flyctl machine exec "$m" -a jarvis2-sessions \
-           "/usr/local/bin/jarvis2-request batch --summary replica-the-session-asks-for-two-grants --item grant,holder=status,minutes=5 --item grant,holder=remote,minutes=5" >> "$LOGS/inbox.log" 2>&1 \
+           "/usr/local/bin/jarvis2-request batch --summary replica-the-session-asks-for-two-add-ons --item terminal,minutes=5 --item command,cmd=hostname" >> "$LOGS/inbox.log" 2>&1 \
            && grep -q '"id": "b' "$LOGS/inbox.log"; then answer ok   # flyctl exec exits 0 whatever the command did: the router's batch id is the proof
       else answer "session batch failed (machine ${m:-none}): $(tail -2 "$LOGS/inbox.log" 2>/dev/null)"; fi ;;
     session-file:*) # the machine keeps an attachment only when its bytes match the cert (and the core attested it)

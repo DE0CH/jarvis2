@@ -39,7 +39,7 @@ struct RestoreReviewView: View {
             .accessibilityIdentifier("restore-put-\(p.key)")
           }
           if b.put.isEmpty { Text("None").foregroundStyle(.secondary) }
-        } header: { Text("Put back (signed)") } footer: { Text("Written by: who the core names for each value.") }
+        } header: { Text("Put back (signed)") } footer: { Text("Written by: who secrets names for each value.") }
         if !b.remove.isEmpty {
           Section {
             ForEach(b.remove, id: \.self) { k in
@@ -91,8 +91,8 @@ struct RestoreReviewView: View {
     do {
       busy = "Restoring…"
       let payload = doc.payload, es = b.es, reason = "Restore \(b.store) to version \(b.to.seq)"
-      let out = try await offMain { try PhoneKeys.shared.signAndShares(payload, es: es, reason: reason) }
-      guard let sig = out.signature, out.shares.count == es.count else { throw TrustError.stale("the restore's signature") }
+      let out = try await offMain { try PhoneKeys.shared.signAndShares([payload], es: es, reason: reason) }
+      guard let sig = out.signatures.first, out.shares.count == es.count else { throw TrustError.stale("the restore's signature") }
       _ = try await RouterClient.shared.restoreFinish(b, signature: sig, shares: out.shares)
       busy = nil
       model.say("Store restored")

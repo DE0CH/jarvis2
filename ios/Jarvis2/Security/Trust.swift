@@ -1,31 +1,5 @@
-// Which line each session id is (audit 2026-10-11, findings 3-5). The router maps its session ids to certs; a lying
-// router could answer "session A" with session B's genuine cert and steer a Face ID meant for A to B. The pages show
-// the identity from the cert itself (LineIdentity), and on top of that the app remembers the line it first saw for each
-// session id (a session's line never changes: a resume keeps it, a restore is a new session) and refuses a cert, or a
-// challenge's predecessor, that names another line for the same id. The first sighting is still the router's word.
+// Which stores each harness brings, pinned in the app from git, and the kernel's part keys as the box key vouches for them.
 import Foundation
-
-enum LinePins {
-  private static let key = "line-pins"
-  private static var pins: [String: String] {
-    get { UserDefaults.standard.dictionary(forKey: key) as? [String: String] ?? [:] }
-    set { UserDefaults.standard.set(newValue, forKey: key) }
-  }
-  /// the line for this session id: recorded the first time, refused when it differs later
-  static func check(session: String, line: String) throws {
-    guard !session.isEmpty, !line.isEmpty else { return }
-    if let known = pins[session] {
-      if known != line { throw TrustError.mismatch("the router named another session's cert for this one (line \(line), not \(known))") }
-    } else {
-      var p = pins
-      p[session] = line
-      if p.count > 500 { p = Dictionary(uniqueKeysWithValues: p.suffix(400).map { ($0.key, $0.value) }) }
-      pins = p
-    }
-  }
-  /// a Reset or Recover is a new core: its lines are new
-  static func clear() { UserDefaults.standard.removeObject(forKey: key) }
-}
 
 /// Which stores each harness brings, as this app was built with them (policy/stores.json, bundled from git: the same
 /// push path as the app's code). The router's api/policy is only a hint for hiding stores in pickers; what may be
@@ -43,5 +17,16 @@ enum PinnedPolicy {
     s += router[harness] ?? []
     #endif
     return Array(Set(s)).sorted()
+  }
+}
+
+/// The kernel's parts (log notary, notarizer, mover, merger, spawner, secrets…) as the box key (keys/box.pub, from git)
+/// vouches for them: GET api/kernel/identities, each identity checked against the box key here, never taken from the
+/// router's word. Read afresh for each review page (a part may have restarted with new keys).
+@MainActor
+enum KernelTrust {
+  static func roster() async throws -> KRoster {
+    let ids = try await RouterClient.shared.json("GET", "api/kernel/identities", as: [String: Kernel.Identity?].self)
+    return Kernel.roster(ids, boxKey: try await KeySource.key("box.pub"))
   }
 }

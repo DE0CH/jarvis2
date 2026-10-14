@@ -1,6 +1,7 @@
-// Unlock a session's locked stores (a session waiting at boot on a locked store): what it unlocks comes from the core's
-// signed documents only, the session's cert (its stores) and the store list (which are locked). Allow opens them all
-// under one Face ID, for that session's cert only when the core takes such unlocks.
+// Unlock a session's locked stores (a session waiting on a locked store): which stores the session holds comes from
+// its main grant (made by the grant mover or merger, checked against their keys as the box key vouches for them),
+// which of them are locked from secrets' signed store list. Allow opens them all under one Face ID. An unlock is per
+// store and serves every grant that names it until it is locked (Stores → Lock).
 import SwiftUI
 
 struct UnlockReviewView: View {
@@ -11,13 +12,9 @@ struct UnlockReviewView: View {
   let inbox: String?
   let request: SecureRequest
   @State private var locked: [String]?
-  @State private var certStores: [String] = []
-  /// the session as its core-signed cert names it (audit finding 4)
-  @State private var ident: LineIdentity?
-  @State private var certNonce: String?
+  @State private var held: [String] = []
   /// keys sessions wrote into the locked stores (shown before Face ID; the unlock refuses one not shown)
   @State private var writes: [SessionWrite] = []
-  @State private var scoped = false
   @State private var signed: [SignedFact]?
   @State private var loadError: String?
   @State private var busy: String?
@@ -28,16 +25,13 @@ struct UnlockReviewView: View {
       if let inbox { RequestReviewSection(inboxId: inbox, signed: signed, request: request) }
       if let loadError { Section { ErrorRow(text: loadError, id: "secure-error") } }
       if loadError != nil, let failure { Section { ErrorRow(text: failure, id: "secure-deny-error") } }
-      else if let locked {
+      else if locked != nil {
         if inbox == nil { SignedFactsSection(facts: signed) }
-        Section("Session (as signed)") {
-          if let ident { IdentityRows(ident: ident) }
-          if !label.isEmpty && label != ident?.label {
-            LabeledContent { Text(label) } label: { HStack { Text("Asked for as"); StatusPill(text: "Unverified", color: .orange) } }
-              .accessibilityElement(children: .combine)
-          }
+        Section("Session") {
+          Text(label.isEmpty ? sessionId : label).font(.headline).accessibilityIdentifier("secure-session")
+          LabeledContent("Session id") { Text(sessionId).font(.footnote.monospaced()).textSelection(.enabled) }
         }
-        Section("Stores (signed cert)") { StoreLines(stores: certStores) }
+        Section("Stores (its signed grant)") { StoreLines(stores: held) }
         SessionWritesSection(writes: writes)
         Section {
           if let failure { ErrorRow(text: failure, id: "secure-error") }
@@ -57,6 +51,16 @@ struct UnlockReviewView: View {
     .task { await load() }
   }
 
+  /// the stores a session's main grant names (its finite `store:` strings), the grant checked against the mover's or the
+  /// merger's vouched key and naming this session
+  static func sessionStores(_ sessionId: String) async throws -> [String] {
+    guard let main = try await RouterClient.shared.chain(sessionId).main else { throw TrustError.mismatch("the session has no grant yet") }
+    let g = try Kernel.openGrant(main, roster: try await KernelTrust.roster())
+    guard g.pair.conditions.contains("session:" + sessionId) else { throw TrustError.mismatch("a grant for another session") }
+    guard !g.pair.allowed.cofinite else { throw TrustError.mismatch("a grant that names every store") }
+    return g.pair.allowed.elems.compactMap { $0.hasPrefix("store:") ? String($0.dropFirst(6)) : nil }.filter { $0 != StoreView.coreStore }
+  }
+
   /// Deny: opened from the Inbox, the request is dropped (the session that asked hears "denied") and the page closes;
   /// opened from the app itself, nothing was asked for, so the page just closes. An error stays on the page.
   private func deny() {
@@ -71,19 +75,12 @@ struct UnlockReviewView: View {
 
   private func load() async {
     do {
-      let c = try await RouterClient.shared.sessionCert(sessionId)
-      try LinePins.check(session: sessionId, line: c.line)
-      let id = LineIdentity(cert: c)
-      try Checks.sameSession(id, expectedLabel: model.session(sessionId)?.j["label"].text)
-      ident = id
+      held = try await Self.sessionStores(sessionId)
       let doc = try await RouterClient.shared.storesDoc()
-      scoped = !(c.nonce ?? "").isEmpty  // every core takes unlocks for one session; a cert without a nonce can't be named
-      certNonce = scoped ? c.nonce : nil
-      certStores = (c.stores ?? []).filter { $0 != StoreView.coreStore }
-      let l = certStores.filter { n in doc.stores.contains { $0.name == n && !$0.unlocked && !$0.empty } }
+      let l = held.filter { n in doc.stores.contains { $0.name == n && !$0.unlocked && !$0.empty } }
       writes = await SessionWrites.load(l)
       locked = l
-      signed = SignedAction.unlock(stores: l, session: id, scoped: scoped) + SessionWrites.fact(writes)
+      signed = SignedAction.unlock(stores: l, session: sessionId) + SessionWrites.fact(writes)
     } catch { loadError = errText(error) }
   }
   private func allow() async {
@@ -91,7 +88,7 @@ struct UnlockReviewView: View {
     failure = nil
     do {
       busy = "Unlocking…"
-      try await StoreUnlock.signAndUnlock(payload: nil, stores: locked, reason: "Unlock \(locked.joined(separator: ", "))", for: certNonce, shown: writes)
+      try await StoreUnlock.signAndUnlock(payloads: [], stores: locked, reason: "Unlock \(locked.joined(separator: ", "))", shown: writes)
       model.secureCompleted(true)
     } catch { busy = nil; failure = errText(error) }
   }

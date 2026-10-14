@@ -94,14 +94,16 @@ final class ReplicaUITests: JarvisUITestCase {
     let signed = el("signed-kind")
     _ = signed.waitForExistence(timeout: 30)
     sleep(1); shot("inbox-review-" + what)
-    for id in ["signed-kind", "signed-action", "signed-repo", "signed-store", "signed-feature", "signed-session", "request-caller", "request-call", "request-explanation"] where el(id).exists { note("\(what)-\(id)", said(el(id))) }
+    for id in ["signed-kind", "signed-action", "signed-repo", "signed-store", "signed-d1-to", "secure-session", "request-caller", "request-call", "request-explanation"] where el(id).exists { note("\(what)-\(id)", said(el(id))) }
     XCTAssertFalse(el("request-mismatch").exists, "[\(what)] the request matches the page")
-    XCTAssertTrue(said(signed).contains("Core request") || said(signed).contains("Phone grant"), "[\(what)] what is signed, rendered from the signed content: \(said(signed))")
+    XCTAssertTrue(said(signed).contains("Secrets request") || said(signed).contains("Succession certs"), "[\(what)] what is signed, rendered from the signed content: \(said(signed))")
     return ok
   }
-  func inboxDeny(_ what: String) {
-    guard scrolledTo(el("request-deny"), max: 6) else { XCTFail("[\(what)] no Deny on the review page"); note("tree-deny-\(what)", app.debugDescription); return }
-    el("request-deny").tap()
+  /// a request: its "Deny request"; an approval (an add-on): Reject
+  func inboxDeny(_ what: String, approval: Bool = false) {
+    let deny = el(approval ? "secure-reject" : "request-deny")
+    guard scrolledTo(deny, max: 6) else { XCTFail("[\(what)] no Deny on the review page"); note("tree-deny-\(what)", app.debugDescription); return }
+    deny.tap()
     XCTAssertTrue(gone(el("request-call"), 30), "[\(what)] Deny leaves the page")
     XCTAssertTrue(gone(prefixed("request-review-"), 60), "[\(what)] denied: off the Inbox")
     shot("inbox-denied-" + what)
@@ -135,6 +137,7 @@ final class ReplicaUITests: JarvisUITestCase {
     el("setup-kit-saved").tap()
     try must(wait(el("setup-done"), 240, "reset done"))
     shot("setup-reset-done")
+    try must(signRootGrant(beforeSign: { self.faceIDMatches() }))
     el("secure-back").tap()
     XCTAssertEqual(relay("reset-done"), "filled", "the setup session wrote the stores")
 
@@ -217,34 +220,35 @@ final class ReplicaUITests: JarvisUITestCase {
     shot("after-relaunch")
     el("srow-\(sid)").tap()
 
-    // ---- terminal: the screen shows view only with no grant; typing is turned away → the grant review → Deny, then
-    // Allow with Face ID → a command runs ----
+    // ---- terminal: the screen shows view only with no terminal open; typing is turned away → the terminal's approval →
+    // Reject, then Approve with Face ID (two certs) → a command runs ----
     try must(wait(el("term-\(sid)"), 30, "Terminal"))
     el("term-\(sid)").tap()
     let input = app.webViews.textFields["Terminal input"].firstMatch
     let viewOnly = app.descendants(matching: .any).matching(NSPredicate(format: "label BEGINSWITH 'view only'")).firstMatch
-    if wait(viewOnly, 90, "the session's screen, view only, before any grant") { shot("terminal-view-only") }
+    if wait(viewOnly, 90, "the session's screen, view only, before a terminal") { shot("terminal-view-only") }
     let allow = app.webViews.buttons["Allow terminal for 10 minutes"]
     if wait(input, 30, "the terminal input") {
       input.tap(); input.typeText("x")
       app.webViews.buttons["Send"].tap()
     }
-    if wait(allow, 60, "typing asks for a grant") {
-      shot("terminal-needs-grant")
+    if wait(allow, 60, "typing asks for a terminal") {
+      shot("terminal-needs-terminal")
       allow.tap()
-      if arrives(el("secure-grant-allow"), 30, "the grant review") {
-        XCTAssertTrue(said(el("signed-feature")).contains("Terminal"), "the review names the feature")
-        shot("grant-review")
-        el("secure-back").tap()
-        // denied: the screen stays view only; the next keystroke is turned away again
+      if arrives(el("secure-approve"), 30, "the terminal's approval") {
+        XCTAssertTrue(said(el("secure-action")).contains("Open a terminal"), "the approval names the action: \(said(el("secure-action")))")
+        XCTAssertTrue(el("secure-machine").exists, "the approval names the running machine")
+        shot("terminal-approval")
+        if scrolledTo(el("secure-reject")) { el("secure-reject").tap() }
+        // rejected: the screen stays view only; the next keystroke is turned away again
         if input.waitForExistence(timeout: 20) { input.tap(); input.typeText("x"); app.webViews.buttons["Send"].tap() }
-        if wait(allow, 60, "denied: typing still turned away") {
+        if wait(allow, 60, "rejected: typing still turned away") {
           allow.tap()
-          _ = arrives(el("secure-grant-allow"), 30, "the grant review again")
+          _ = arrives(el("secure-approve"), 30, "the terminal's approval again")
           faceIDMatches()
-          el("secure-grant-allow").tap()
-          XCTAssertTrue(gone(el("secure-grant-allow"), 90), "the review closes after Face ID")
-          XCTAssertTrue(gone(allow, 60), "allowed: the terminal opens")
+          el("secure-approve").tap()
+          XCTAssertTrue(gone(el("secure-approve"), 90), "the approval closes after Face ID")
+          XCTAssertTrue(gone(allow, 60), "approved: the terminal opens")
         }
       }
     }
@@ -261,26 +265,26 @@ final class ReplicaUITests: JarvisUITestCase {
     }
     back()
 
-    // ---- the Inbox, from a session: deny one grant request, allow another with Face ID ----
-    XCTAssertEqual(relay("inbox-session:\(sid):status"), "ok", "the session filed a grant request")
+    // ---- the Inbox, from a session: reject one add-on (a terminal), approve another (a command) with Face ID ----
+    XCTAssertEqual(relay("inbox-session:\(sid):terminal"), "ok", "the session asked for a terminal")
     if inboxReview("session-deny") {
       if scrolledTo(el("request-caller"), max: 4) { XCTAssertTrue(said(el("request-caller")).contains("session"), "the caller is the session: \(said(el("request-caller")))") }
       if scrolledTo(el("request-explanation"), max: 4) {  // the caller's reason sits below the signed rows
         XCTAssertTrue(said(el("request-explanation")).contains("replica-the-session"), "the session's reason is shown")
       } else { XCTFail("the session's reason is shown"); note("tree-reason", app.debugDescription) }
-      inboxDeny("session")
+      inboxDeny("session", approval: true)
     }
-    XCTAssertEqual(relay("inbox-session:\(sid):archive"), "ok", "the session filed another")
-    if inboxReview("session-allow") { inboxAllowed("session", button: "secure-grant-allow") }
+    XCTAssertEqual(relay("inbox-session:\(sid):command"), "ok", "the session asked for a command")
+    if inboxReview("session-allow") { inboxAllowed("session", button: "secure-approve") }
 
-    // ---- a batch from the session: two grants under one summary, one Inbox entry, both allowed with ONE Face ID ----
+    // ---- a batch from the session: two add-ons under one summary, one Inbox entry, both approved with ONE Face ID ----
     XCTAssertEqual(relay("inbox-batch:\(sid)"), "ok", "the session filed a batch")
     tabRoot("Inbox")
     if wait(prefixed("batch-review-"), 90, "the session's batch in the Inbox") {
       shot("inbox-batch")
       prefixed("batch-review-").tap()
       if arrives(el("batch-allow"), 30, "the batch page") {
-        XCTAssertTrue(said(el("batch-summary")).contains("replica-the-session-asks-for-two-grants"), "the session's summary: \(said(el("batch-summary")))")
+        XCTAssertTrue(said(el("batch-summary")).contains("replica-the-session-asks-for-two-add-ons"), "the session's summary: \(said(el("batch-summary")))")
         XCTAssertTrue(said(el("batch-caller")).contains("session"), "the caller is the session: \(said(el("batch-caller")))")
         let until = Date().addingTimeInterval(60)
         while !el("batch-allow").isEnabled && Date() < until { sleep(1) }
@@ -288,36 +292,19 @@ final class ReplicaUITests: JarvisUITestCase {
         shot("batch-review")
         faceIDMatches()
         el("batch-allow").tap()
-        XCTAssertTrue(gone(el("batch-allow"), 120), "both grants signed under one Face ID: the page closes")
+        XCTAssertTrue(gone(el("batch-allow"), 120), "both add-ons signed under one Face ID: the page closes")
         XCTAssertTrue(gone(prefixed("batch-review-"), 60), "the batch is off the Inbox")
         shot("batch-allowed")
       }
     }
 
-    // ---- grants: a 5-minute scheduler grant, then forget it ----
+    // ---- the command's result on the session's page; then drop nothing and leave ----
     sessionsList()
     if wait(el("srow-\(sid)"), 30, "the session") { el("srow-\(sid)").tap() }
-    if wait(el("grants-\(sid)"), 30, "Grants") {
-      el("grants-\(sid)").tap()
-      if wait(el("grant-review"), 30, "grants page") {
-        shot("grants")
-        XCTAssertTrue(el("grant-forget-terminal").exists, "the terminal's grant is listed in force")
-        pick("grant-holder", "Scheduler")
-        pick("grant-len", "5 min")
-        el("grant-review").tap()
-        if arrives(el("secure-grant-allow"), 30, "the grant review (scheduler)") {
-          faceIDMatches()
-          el("secure-grant-allow").tap()
-          XCTAssertTrue(gone(el("secure-grant-allow"), 90), "the review closes after Face ID")
-          if wait(el("grant-forget-scheduler"), 60, "the scheduler's grant listed") {
-            shot("grants-two")
-            el("grant-forget-scheduler").tap()
-            answer("Forget")
-            XCTAssertTrue(gone(el("grant-forget-scheduler"), 30), "forgotten")
-          }
-        }
-        back()
-      }
+    if wait(el("commands-\(sid)"), 120, "the approved command's result") {
+      el("commands-\(sid)").tap()
+      sleep(1); shot("command-results")
+      back()
     }
 
     // ---- repos: add the throwaway repo (its deploy key made by the core on a Face ID), the setup session asks to remove
@@ -447,6 +434,7 @@ final class ReplicaUITests: JarvisUITestCase {
       }
       try must(wait(el("setup-done"), 600, "recovered"))
       shot("setup-recovered")
+      try must(signRootGrant(beforeSign: { self.faceIDMatches() }))
       el("secure-back").tap()
       openStores()
       if wait(el("unlock-rh-plain"), 60, "rh-plain back") {

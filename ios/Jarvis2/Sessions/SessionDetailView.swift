@@ -1,9 +1,10 @@
-// One session: its status, what waits on it (a grant, a locked store, a queued prompt, schedules), its details, and
-// every action Jarvis 1's card had (Terminal or Remote, Pause / Resume, Transcript, Grants, Schedules, the switches,
-// the permission mode, Resume with the latest image, Destroy).
+// One session: its status, what waits on it (a locked store, a queued prompt, schedules), the add-ons in force (a
+// terminal) and the results of approved commands, its details, and every action Jarvis 1's card had (Terminal or
+// Remote, Pause / Resume, Transcript, Schedules, Stores, the switches, Resume with the latest image, Destroy). The
+// permission mode is fixed for the session's life (its source's settings): shown, never switched.
 import SwiftUI
 
-enum SessionRoute: Hashable { case terminal, remote, transcript, grants, schedules }
+enum SessionRoute: Hashable { case terminal, remote, transcript, schedules, stores, commands }
 
 struct SessionDetailView: View {
   @Environment(AppModel.self) private var model
@@ -32,14 +33,11 @@ struct SessionDetailView: View {
           case .remote: RemoteView(sessionId: m.id, title: m.title)
           case .transcript: TranscriptView(title: m.title, noteLabel: "Paused", noteValue: m.pausedAt.map(Fmt.ago) ?? "", path: "api/sessions/\(m.id)/tail",
                                            actionTitle: "Resume", onAction: { Task { await model.resume(m.id) } })
-          case .grants: GrantsView(sessionId: m.id)
           case .schedules: SchedulesView(sessionId: m.id)
+          case .stores: SessionStoresView(sessionId: m.id)
+          case .commands: CommandsView(sessionId: m.id)
           }
         }
-      .task(id: id) {
-        // remember which line this session id is (LinePins), so a later review page can't be handed another's cert
-        if CoreTrust.pinned != nil, let c = try? await RouterClient.shared.sessionCert(id) { try? LinePins.check(session: id, line: c.line) }
-      }
     } else {
       ContentUnavailableView("Session gone", systemImage: "rectangle.stack.badge.minus", description: Text("It was destroyed or isn't listed any more."))
     }
@@ -76,16 +74,24 @@ private struct SessionDetailList: View {
 
       if let a = m.memAlert { MemAlertSection(m: m, a: a, busy: busy) }
 
-      if let h = m.needsGrant {
+      if m.state == "started" {
         Section {
-          LabeledContent("Feature", value: Holder.title(h)).accessibilityIdentifier("turned-away-\(m.id)")
-          LabeledContent("Allows", value: Holder.sub(h))
-          LabeledContent("Why", value: "The session holds a sensitive store, so Jarvis can't do this without your approval.")
-          Button("Allow for 10 minutes", systemImage: "checkmark.shield") { model.requestGrant(m.id, m.title, holder: h) }
-            .accessibilityIdentifier("grant-\(m.id)")
-          Button("Make a standing rule", systemImage: "calendar.badge.clock") { model.requestGrant(m.id, m.title, holder: h, rule: true) }
-            .accessibilityIdentifier("rule-\(m.id)")
-        } header: { Label("Needs your approval", systemImage: "hand.raised") }
+          if m.terminalOpen, let t = m.addOns.filter({ $0.kind == "terminal" }).compactMap(\.until).max() {
+            LabeledContent("Terminal open until", value: t.formatted(date: .omitted, time: .shortened)).accessibilityIdentifier("terminal-open-\(m.id)")
+          } else {
+            LabeledContent("Terminal", value: "Closed").accessibilityIdentifier("terminal-closed-\(m.id)")
+            Button("Open a terminal for 10 minutes", systemImage: "terminal") { Task { await model.requestTerminal(m) } }
+              .accessibilityIdentifier("request-terminal-\(m.id)")
+          }
+          if !m.commands.isEmpty {
+            NavigationLink(value: SessionRoute.commands) {
+              LabeledContent { Text("\(m.commands.count)") } label: { Label("Command results", systemImage: "chevron.left.forwardslash.chevron.right") }
+            }
+            .accessibilityIdentifier("commands-\(m.id)")
+          }
+        } header: { Text("Shell access") } footer: {
+          Text("Typing, the remote page and the changes check need an open terminal.")
+        }
       }
       if let lock = m.lockedStore {
         Section {
@@ -116,8 +122,10 @@ private struct SessionDetailList: View {
           }
         }
         if !["approval", "destroying"].contains(m.state) {
-          NavigationLink(value: SessionRoute.grants) { Label("Grants", systemImage: "checkmark.shield") }.accessibilityIdentifier("grants-\(m.id)")
           NavigationLink(value: SessionRoute.schedules) { Label("Schedules", systemImage: "alarm") }.accessibilityIdentifier("schedules-\(m.id)")
+        }
+        if m.state == "started" {
+          NavigationLink(value: SessionRoute.stores) { Label("Stores", systemImage: "shippingbox") }.accessibilityIdentifier("session-stores-\(m.id)")
         }
         if let ch = m.discordChannel, let u = URL(string: "https://discord.com/channels/1482150592414486748/\(ch)") {
           Link(destination: u) { Label("Discord channel", systemImage: "bubble.left.and.bubble.right") }
@@ -129,7 +137,7 @@ private struct SessionDetailList: View {
         LabeledContent("Stores", value: own.isEmpty ? "none" : own.joined(separator: ", "))
         LabeledContent("Harness", value: Fmt.harness(m.harness))
         if let mo = m.model { LabeledContent("Model", value: model.models.first { $0.id == mo }?.label ?? mo) }
-        LabeledContent("Permission mode", value: m.permissionMode == "bypass" ? "bypass (no prompts)" : "auto")
+        LabeledContent("Permission mode", value: m.permissionMode == "bypass" ? "bypass (no prompts), fixed" : "auto, fixed")
         if let r = m.region { LabeledContent("Region", value: Fmt.region[r] ?? r) }
         let machine = [m.size, m.guest].compactMap { $0 }.joined(separator: " · ")
         if !machine.isEmpty { LabeledContent("Machine", value: machine) }

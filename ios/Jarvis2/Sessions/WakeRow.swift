@@ -1,4 +1,4 @@
-// One wakeup or cron as rows: when (or how often), its name, the next run, and its prompt as written.
+// One wakeup or cron as rows: when (or how often), its name, the next run (its text stays on the machine).
 import SwiftUI
 
 /// a wakeup or cron: when (and how often), its name, the next run, and its prompt as written
@@ -19,7 +19,7 @@ struct WakeRow: View {
         ForEach(tags, id: \.self) { StatusPill(text: $0) }
       }
       if let next { LabeledContent("Next", value: next).font(.footnote) }
-      Text(Fmt.clip(prompt, 200)).font(.subheadline).foregroundStyle(.secondary)
+      if !prompt.isEmpty { Text(Fmt.clip(prompt, 200)).font(.subheadline).foregroundStyle(.secondary) }
     }
     .accessibilityElement(children: .combine)
   }

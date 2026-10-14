@@ -1,16 +1,16 @@
 import CryptoKit
 import XCTest
 
-/// Walks the native Jarvis 2 app on a simulator against the REAL core (fakefly build) and router running on the CI runner,
-/// with the backups on a local S3 stand-in, keeping a screenshot of every step. ios.yml runs it once per appearance
-/// (light, then dark), each against a fresh, empty core and router and a reset simulator keychain:
-/// Reset or recover (an old kit refused; Recover with the public TEST kit) → stores (create, unlock) → the encrypted
-/// backup (download, checked, share sheet) → New session (the
-/// one page; Start also opens the locked harness store) → grants (a 10-minute grant and a standing rule on the Face ID
-/// review, one denied, one forgotten) → schedules → terminal (the router's page in a WebView) → pause → transcript →
-/// resume with a prompt (signed, shown on the approval) → permission mode → resume with the latest image → destroy →
-/// Previous → search → repos (add with its deploy key, Jarvis 2's own repo comes up sensitive, remove; claude-env
-/// pre-selected on New session only when listed) → tasks → Reset (the kit ends the core; a new kit; the stores empty).
+/// Walks the native Jarvis 2 app on a simulator against the REAL secrets (fakefly build) and router running on the CI
+/// runner, with the backups on a local S3 stand-in, keeping a screenshot of every step. ios.yml runs it once per
+/// appearance (light, then dark), each against a fresh, empty secrets and router and a reset simulator keychain:
+/// Reset or recover (an old kit refused; Recover with the public TEST kit; the root grant on its warning screen) →
+/// stores (create, unlock) → the encrypted backup (download, checked, share sheet) → New session (the one page; Start
+/// also opens the locked harness store) → a terminal for 10 minutes (its approval: two certs, the machine named) →
+/// schedules (listed; the app can't arm one) → terminal (the router's page in a WebView) → pause → transcript → resume
+/// with a prompt (signed in the new source's settings) → resume with the latest image → destroy → Previous → search →
+/// repos (add with its deploy key, Jarvis 2's own repo comes up sensitive, remove; claude-env pre-selected on New
+/// session only when listed) → tasks → Reset (the kit ends secrets; a new kit; the stores empty).
 final class Jarvis2UITests: JarvisUITestCase {
 
   /// New session pre-selects DE0CH/claude-env (and its store) only when it is on the repo list (Deyao, 2026-10-11)
@@ -103,7 +103,7 @@ final class Jarvis2UITests: JarvisUITestCase {
         while !el("secure-approve").isEnabled && Date() < until { usleep(500_000) }
         XCTAssertTrue(el("secure-approve").isEnabled, "[\(tag)] Approve is ready on a resume approval opened from the Inbox")
         XCTAssertFalse(el("secure-error").exists, "[\(tag)] the resume approval loads without an error")
-        XCTAssertTrue(scrolledTo(el("signed-once-prompt")), "[\(tag)] the signed resume prompt is shown")
+        XCTAssertTrue(scrolledTo(el("signed-d1-to-settings-prompt")), "[\(tag)] the signed resume prompt is shown (the new source's settings)")
         shot("inbox-resume-approval")
         if scrolledTo(el("secure-reject")) { el("secure-reject").tap() }
         XCTAssertTrue(gone(el("secure-approve"), 30), "[\(tag)] Reject closes the page")
@@ -117,14 +117,14 @@ final class Jarvis2UITests: JarvisUITestCase {
     XCTAssertTrue(wait(el("resume-\(sid)"), 60, "paused after the rejected resume"), "[\(tag)] a rejected resume leaves it paused")
   }
 
-  /// a single request in the Inbox (a grant asked for the session, as a session's jarvis2-request files it), denied each
-  /// way the app offers: the review page's Deny (top left), the page's "Deny request", and a swipe on the row. Each time
-  /// the item leaves the Inbox and the router has dropped it (Deyao, 2026-10-13: the page's Deny only closed the page)
+  /// a single request in the Inbox (a repo's deploy key, as a session's jarvis2-request files it), denied each way the
+  /// app offers: the page's "Deny request" and a swipe on the row. Each time the item leaves the Inbox and the router has
+  /// dropped it (Deyao, 2026-10-13: the page's Deny only closed the page)
   func inboxDenySingle(_ sid: String) {
-    func file(_ holder: String) -> String? {
-      let req: [String: Any] = ["session": sid, "holder": holder, "minutes": 2, "explanation": "deny test (\(holder))"]
-      let (code, out) = routerRaw("POST", "api/requests/grant", body: try? JSONSerialization.data(withJSONObject: req), headers: ["Content-Type": "application/json"])
-      XCTAssertEqual(code, 200, "[\(tag)] grant request for \(holder): \(String(decoding: out, as: UTF8.self))")
+    func file(_ repo: String) -> String? {
+      let req: [String: Any] = ["repo": repo, "explanation": "deny test (\(repo))"]
+      let (code, out) = routerRaw("POST", "api/requests/repo/add", body: try? JSONSerialization.data(withJSONObject: req), headers: ["Content-Type": "application/json"])
+      XCTAssertEqual(code, 200, "[\(tag)] repo request for \(repo): \(String(decoding: out, as: UTF8.self))")
       return (try? JSONSerialization.jsonObject(with: out) as? [String: Any])?["id"] as? String
     }
     func droppedOnRouter(_ id: String, _ how: String) {
@@ -133,11 +133,11 @@ final class Jarvis2UITests: JarvisUITestCase {
       repeat { (code, _) = routerRaw("GET", "api/requests/\(id)"); if code == 404 { break }; usleep(500_000) } while Date() < until
       XCTAssertEqual(code, 404, "[\(tag)] \(how): the router dropped the request")
     }
-    for way in ["toolbar", "button", "swipe"] {
-      guard let id = file(["toolbar": "status", "button": "archive", "swipe": "remote"][way]!) else { continue }
+    for way in ["button", "swipe"] {
+      guard let id = file(["button": "DE0CH/deny-button", "swipe": "DE0CH/deny-swipe"][way]!) else { continue }
       tabRoot("Inbox")
       let row = el("request-review-\(id)")
-      guard wait(row, 60, "the grant request in the Inbox (\(way))") else { continue }
+      guard wait(row, 60, "the repo request in the Inbox (\(way))") else { continue }
       switch way {
       case "swipe":
         row.swipeLeft()
@@ -145,15 +145,10 @@ final class Jarvis2UITests: JarvisUITestCase {
         if wait(b, 10, "the row's swipe Deny") { b.tap() }
       default:
         row.tap()
-        guard arrives(el("signed-feature"), 30, "the grant review from the Inbox (\(way))") else { continue }
-        if way == "toolbar" {
-          XCTAssertTrue(el("secure-back").label.contains("Deny"), "[\(tag)] the page's Deny")
-          shot("inbox-grant-review")
-          el("secure-back").tap()
-        } else {
-          if scrolledTo(el("request-deny")) { el("request-deny").tap() }
-        }
-        XCTAssertTrue(gone(el("signed-feature"), 30), "[\(tag)] Deny (\(way)) closes the page")
+        guard arrives(el("signed-repo"), 30, "the repo review from the Inbox (\(way))") else { continue }
+        shot("inbox-repo-review")
+        if scrolledTo(el("request-deny")) { el("request-deny").tap() }
+        XCTAssertTrue(gone(el("signed-repo"), 30), "[\(tag)] Deny (\(way)) closes the page")
       }
       XCTAssertTrue(gone(row, 30), "[\(tag)] Deny (\(way)): the request leaves the Inbox")
       XCTAssertFalse(app.alerts.firstMatch.exists, "[\(tag)] Deny (\(way)) raised no error")
@@ -225,6 +220,7 @@ final class Jarvis2UITests: JarvisUITestCase {
     el("setup-recover-go").tap()
     guard wait(el("setup-done"), 120, "recovered") else { return }
     shot("setup-recovered")
+    guard signRootGrant() else { return }
     el("secure-back").tap()
     guard arrives(el("newBtn"), 60, "the session list after Done") else { return }
     sleep(2)
@@ -280,7 +276,7 @@ final class Jarvis2UITests: JarvisUITestCase {
 
     // ---- New session: one page; Start signs and opens the locked harness store under one Face ID (and an image from
     // Photos: Start uploads it and checks the signed config names its sha256 + size)
-    XCTAssertEqual(coreStores().first { ($0["name"] as? String) == "claude-login" }?["unlocked"] as? Bool, false, "[\(tag)] the harness store starts locked")
+    XCTAssertEqual(secretsStores().first { ($0["name"] as? String) == "claude-login" }?["unlocked"] as? Bool, false, "[\(tag)] the harness store starts locked")
     tab("Sessions")
     guard wait(el("newBtn"), 10, "list again") else { return }
     el("newBtn").tap()
@@ -311,8 +307,8 @@ final class Jarvis2UITests: JarvisUITestCase {
       if el("secure-error").exists { note("create-error", el("secure-error").label) }
       return
     }
-    XCTAssertTrue(coreUnlocked().contains { ($0["store"] as? String) == "claude-login" }
-                  || coreStores().first { ($0["name"] as? String) == "claude-login" }?["unlocked"] as? Bool == true,
+    XCTAssertTrue(secretsUnlocked().contains { ($0["store"] as? String) == "claude-login" }
+                  || secretsStores().first { ($0["name"] as? String) == "claude-login" }?["unlocked"] as? Bool == true,
                   "[\(tag)] one Start opened the locked harness store")
     let sid = String(row.identifier.dropFirst("srow-".count))
     note("session", sid)
@@ -323,56 +319,27 @@ final class Jarvis2UITests: JarvisUITestCase {
     sleep(2)
     shot("session-created")
     row.tap()
-    guard arrives(el("grants-\(sid)"), 20, "the session's page") else { return }
+    guard arrives(el("schedules-\(sid)"), 20, "the session's page") else { return }
     shot("session-detail")
 
-    // ---- grants: chosen here, reviewed on the Face ID page: a 10-minute grant, a denied one, a standing rule, forget one
-    el("grants-\(sid)").tap()
-    if wait(el("grant-review"), 20, "grants page") {
-      sleep(1)
-      shot("grants-empty")
-      pick("grant-holder", "Terminal")
-      pick("grant-len", "10 min")
-      el("grant-review").tap()
-      if arrives(el("signed-feature"), 15, "the grant review") {
+    // ---- a terminal for 10 minutes: its approval shows both certs (the shell on this session until a time, then the
+    // running machine with its keys) and the session named from its signed source; Approve signs both under one Face ID
+    if scrolledTo(el("request-terminal-\(sid)")) {
+      el("request-terminal-\(sid)").tap()
+      if arrives(el("secure-approve"), 30, "the terminal's approval") {
         sleep(1)
-        for id in ["signed-kind", "signed-feature", "signed-session", "signed-duration", "signed-until"] { note(id, said(el(id))) }
-        XCTAssertTrue(said(el("signed-kind")).contains("Phone grant"), "[\(tag)] a phone grant: \(said(el("signed-kind")))")
-        XCTAssertTrue(said(el("signed-feature")).contains("Terminal") && said(el("signed-duration")).contains("10 minutes"), "[\(tag)] the review says what is asked: \(said(el("signed-feature"))) / \(said(el("signed-duration")))")
-        XCTAssertTrue(said(el("signed-session")).contains("ci session"), "[\(tag)] the session is named from its signed cert: \(said(el("signed-session")))")
-        XCTAssertTrue(el("secure-back").label.contains("Deny"), "[\(tag)] Allow or Deny")
-        shot("grant-review")
-        el("secure-grant-allow").tap()
-        wait(el("grant-forget-terminal"), 60, "terminal grant listed")
-        shot("grants-one")
+        for id in ["signed-action", "secure-session", "secure-until", "secure-machine"] { note(id, said(el(id))) }
+        XCTAssertTrue(said(el("signed-action")).contains("Open a terminal") || said(el("secure-action")).contains("Open a terminal"), "[\(tag)] what is signed: a terminal")
+        XCTAssertTrue(el("secure-session").label.contains("ci session"), "[\(tag)] the session is named from its signed source: \(el("secure-session").label)")
+        XCTAssertTrue(el("secure-machine").exists, "[\(tag)] the running machine it reaches is shown")
+        shot("terminal-approval")
+        el("secure-approve").tap()
+        XCTAssertTrue(gone(el("secure-approve"), 60), "[\(tag)] the approval closes after Face ID")
+        if wait(el("terminal-open-\(sid)"), 60, "the terminal open") {
+          XCTAssertTrue(said(el("terminal-open-\(sid)")).contains("Terminal open until"), "[\(tag)] the session says the terminal is open: \(said(el("terminal-open-\(sid)")))")
+          shot("terminal-open")
+        }
       }
-      pick("grant-holder", "Status")
-      pick("grant-len", "2 min")
-      el("grant-review").tap()
-      if arrives(el("signed-feature"), 15, "the grant review (deny)") {
-        el("secure-back").tap()
-        arrives(el("grant-review"), 10, "the grants page after Deny")
-        XCTAssertFalse(el("grant-forget-status").exists, "[\(tag)] Deny signed nothing")
-      }
-      pick("grant-holder", "Scheduler")
-      pick("grant-len", "Standing rule")
-      pick("grant-days", "30 days")
-      el("grant-review").tap()
-      if arrives(el("signed-feature"), 15, "the grant review (rule)") {
-        sleep(1)
-        XCTAssertTrue(said(el("signed-feature")).contains("Scheduler") && el("signed-until").exists && !el("signed-duration").exists, "[\(tag)] the rule's review: \(said(el("signed-feature"))) / \(said(el("signed-until")))")
-        shot("grant-review-rule")
-        el("secure-grant-allow").tap()
-        wait(el("grant-forget-scheduler"), 60, "standing rule listed")
-        shot("grants-two")
-      }
-      if el("grant-forget-terminal").exists {
-        el("grant-forget-terminal").tap()
-        answer("Forget")
-        XCTAssertTrue(gone(el("grant-forget-terminal"), 30), "[\(tag)] forgotten grant gone")
-        shot("grants-forgot")
-      }
-      back()
     }
 
     // ---- a single Inbox request for this session, denied from the page and from the row; then back to its page
@@ -382,20 +349,11 @@ final class Jarvis2UITests: JarvisUITestCase {
       el("srow-\(sid)").tap()
     }
 
-    // ---- schedules: a wakeup in an hour and a daily cron
+    // ---- schedules: listed only (the session arms them itself; their texts stay on its machine)
     if wait(el("schedules-\(sid)"), 20, "Schedules") {
       el("schedules-\(sid)").tap()
-      if wait(el("sch-prompt"), 20, "schedules page") {
-        el("sch-prompt").tap(); el("sch-prompt").typeText("CI wakeup: check the build")
-        el("sch-save").tap()
-        wait(el("sch-cancel-w-default"), 20, "wakeup armed")
-        app.buttons["Repeating"].firstMatch.tap()
-        el("sch-prompt").tap(); el("sch-prompt").typeText("CI cron: daily summary")
-        el("sch-save").tap()
-        wait(el("sch-cancel-c-daily"), 20, "cron armed")
-        shot("schedules")
-        back()
-      }
+      if wait(el("sch-none"), 20, "schedules page (nothing armed)") { shot("schedules") }
+      back()
     }
 
     // ---- the terminal: the router's page in a WebView (a fake machine answers nothing: the page, its status, its keys)
@@ -428,22 +386,19 @@ final class Jarvis2UITests: JarvisUITestCase {
     if arrives(el("secure-approve"), 90, "the resume-prompt approval") {
       sleep(1)
       shot("approval-resume-prompt")
-      XCTAssertTrue(el("signed-once-prompt").exists && said(el("signed-once-prompt")).contains("carry on"), "[\(tag)] the approval shows the signed resume prompt")
-      XCTAssertTrue(el("secure-session").exists && el("secure-session").label.contains("ci session"), "[\(tag)] the session is named from the signed predecessor: \(el("secure-session").label)")
+      XCTAssertTrue(scrolledTo(el("signed-d1-to-settings-prompt")) && said(el("signed-d1-to-settings-prompt")).contains("carry on"), "[\(tag)] the approval shows the signed resume prompt")
+      XCTAssertTrue(el("secure-session").exists && el("secure-session").label.contains("ci session"), "[\(tag)] the session is named from its signed settings: \(el("secure-session").label)")
       el("secure-approve").tap()
     }
     guard wait(el("pause-\(sid)"), 150, "resumed") else { return }
     shot("resumed")
 
-    // ---- permission mode (signed) and resume with the latest image (the approval opens by itself)
+    // ---- resume with the latest image (the approval opens by itself); the permission mode is fixed: no switch offered
     el("pause-\(sid)").tap()
     guard wait(el("resume-\(sid)"), 120, "paused again") else { return }
     webResumeFromInbox(sid)
     el("more-\(sid)").tap()
-    let toAuto = app.buttons["Switch to auto mode"]
-    XCTAssertTrue(toAuto.waitForExistence(timeout: 10), "[\(tag)] made in bypass: switch to auto offered")
-    if toAuto.exists { toAuto.tap(); answer("Switch"); sleep(2); shot("mode-switched") } else { app.tap() }
-    el("more-\(sid)").tap()
+    XCTAssertFalse(app.buttons["Switch to auto mode"].waitForExistence(timeout: 3), "[\(tag)] the permission mode is fixed for the session's life")
     if wait(app.buttons["Resume with latest image"], 10, "menu: resume latest") {
       app.buttons["Resume with latest image"].tap()
       answer("Resume with latest image")
@@ -596,6 +551,7 @@ final class Jarvis2UITests: JarvisUITestCase {
             el("setup-kit-saved").tap()
             if wait(el("setup-done"), 60, "reset done") {
               shot("reset-done")
+              signRootGrant()
               el("secure-back").tap()
               tabRoot("Settings")
               if wait(el("open-stores"), 15, "stores") {
@@ -648,7 +604,7 @@ extension Jarvis2UITests {
                              ["delete": true, "sig": sig(sk, "jarvis2-store-key\ndefault\n\(key)\n\n\n")])
     XCTAssertEqual(ds, 200, "[\(tag)] \(key) deleted as the setup session: \(String(decoding: db.prefix(200), as: UTF8.self))")
     XCTAssertFalse(storeKeyNames("default").contains(key), "[\(tag)] \(key) is gone from default")
-    let (_, v) = routerJSON("POST", "api/core/stores/versions", #"{"store":"default","nonce":"0123456789abcdef"}"#)
+    let (_, v) = routerJSON("POST", "api/secrets/stores/versions", #"{"store":"default","nonce":"0123456789abcdef"}"#)
     let versions = ((v["payload"] as? String).flatMap { try? JSONSerialization.jsonObject(with: Data($0.utf8)) as? [String: Any] })?["versions"] as? [[String: Any]] ?? []
     guard versions.count >= 2, let seq = versions[1]["seq"] as? Int else { XCTFail("[\(tag)] the core lists the version before the delete: \(versions.count)"); return }
     let link = el("store-versions-default")

@@ -73,18 +73,3 @@ struct Harness: Identifiable, Equatable {
     return all.first { $0.id == h }?.title ?? h
   }
 }
-
-/// the router's features that may hold a grant (router/grants.go holderNames), in words
-struct Holder: Identifiable, Equatable {
-  let id: String, title: String, sub: String, symbol: String
-  static let all = [
-    Holder(id: "terminal", title: "Terminal", sub: "Read the session's screen and type into it", symbol: "terminal"),
-    Holder(id: "scheduler", title: "Scheduler", sub: "Deliver your wakeups and crons as messages", symbol: "alarm"),
-    Holder(id: "status", title: "Status", sub: "Read the screen, press Escape on a prompt left waiting, answer the model-switch dialog", symbol: "waveform.path.ecg"),
-    Holder(id: "login", title: "Login repair", sub: "Write fresh Claude credentials into the session and send “continue”", symbol: "key"),
-    Holder(id: "archive", title: "Archive check", sub: "List uncommitted and unpushed work before a destroy", symbol: "archivebox"),
-    Holder(id: "remote", title: "Remote page", sub: "Read the web UI's link and the pairing offer or gateway token (OpenCode, OpenClaw)", symbol: "link"),
-  ]
-  static func title(_ h: String) -> String { all.first { $0.id == h }?.title ?? h }
-  static func sub(_ h: String) -> String { all.first { $0.id == h }?.sub ?? "a router feature" }
-}

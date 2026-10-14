@@ -3,7 +3,7 @@
 S3 stand-in (rclone serve s3), seeded in exactly infra/setup.py's format by infra/setup.py's own code.
 
   standin.py keys DIR   DIR/keys/{box,setup}.pub (served to the CI build as its key source),
-                        DIR/box-key.pem (the core's BOX_KEY_FILE), DIR/setup-key.pem (signs the backups)
+                        DIR/box-key.pem (secrets' BOX_KEY_FILE), DIR/setup-key.pem (signs the backups)
   standin.py seed DIR   buckets on $HETZNER_S3_ENDPOINT, the backups encrypted to the public TEST master key
                         (e2e/testdata/master-test.pub), as a Recover with the test kit expects them:
                           jarvis2-backup-ci       core, default, gmail (sensitive), claude-login (the claude
@@ -14,11 +14,11 @@ S3 stand-in (rclone serve s3), seeded in exactly infra/setup.py's format by infr
                           jarvis2-backup-keys     key backups only (keys/<store>/<key>.json, router/storedocs.go's
                                                   format), laid over jarvis2-backup-ci's stores at a Recover: default's
                                                   OTHER rewritten (setup), GITHUB_TOKEN deleted, OLD older than the
-                                                  store's backup (ignored), SESSION_KEY written by a session's machine (a
-                                                  stand-in core identity signed by the box key, a cert it signed, the
-                                                  machine's signature), RESTORED put back by a
-                                                  phone-approved restore (a receipt that core signed), and keyed-only's API_KEY (a store no whole-store
-                                                  backup names)
+                                                  store's backup (ignored), SESSION_KEY written by a session's machine
+                                                  (the router's word), RESTORED put back by a phone-approved restore (a
+                                                  receipt signed by a stand-in secrets whose identity the box key signed),
+                                                  claude's CLAUDE_CREDENTIALS written by the router itself, and
+                                                  keyed-only's API_KEY (a store no whole-store backup names)
                         and DIR/backups.json: every bucket's objects as the router serves them ({bucket: [{key, body}]})
 Nothing secret: every key here is made for one run, and the master key is the public test pair.
 """
@@ -116,15 +116,11 @@ def key_backups(d, setup, s3, master, setup_pem, dump):
             raise
     setup_key = s.load_pem_private_key(setup_pem.encode(), None)
     box = s.load_pem_private_key(open(os.path.join(d, "box-key.pem"), "rb").read(), None)
-    # a stand-in core (its identity signed by the box key) and a machine it certified: what a session's write carries
-    core_sig, core_agr, machine = (ec.generate_private_key(ec.SECP256R1()) for _ in range(3))
+    # a stand-in secrets (its identity signed by the box key, as kernel.MakeIdentity): what a key backup names; a
+    # session's write is the router's word (writer "machine" with the machine's id), a restore carries secrets' receipt
+    core_sig, core_agr = (ec.generate_private_key(ec.SECP256R1()) for _ in range(2))
     sk, ak = pub(core_sig), pub(core_agr)
-    state = json.dumps({"kind": "core-state", "master": master, "phone": None})
-    identity = {"signingKey": sk, "agreementKey": ak, "boxSig": sign(box, f"jarvis2-core-identity {sk} {ak}"),
-                "state": {"payload": state, "sig": sign(core_sig, state)}, "bundle": "keys"}
-    cert = json.dumps({"kind": "succession-cert", "nonce": "c" * 64, "line": "fake000042",
-                       "machine": {"id": "fake000042", "image": "ci", "encryptionKey": pub(machine), "signingKey": pub(machine)}})
-    cert_doc = {"payload": cert, "sig": sign(core_sig, cert)}
+    identity = {"role": "secrets", "signingKey": sk, "agreementKey": ak, "boxSig": sign(box, f"jarvis2-secrets-identity {sk} {ak}")}
     now = time.time()
 
     def put(store, key, value, at, writer="setup"):
@@ -138,15 +134,17 @@ def key_backups(d, setup, s3, master, setup_pem, dump):
             data = base64.b64encode(os.urandom(48)).decode()
         dsha = hashlib.sha256(data.encode()).hexdigest() if data else ""
         text = f"jarvis2-store-key\n{store}\n{key}\n{e}\n{dsha}\n{bsha}"
-        w = {"by": "setup", "sig": sign(setup_key, text), "cert": None}
+        w = {"by": "setup", "sig": sign(setup_key, text), "machine": ""}
         if writer == "machine":
-            w = {"by": "machine", "sig": sign(machine, text), "cert": cert_doc}
-        if writer == "restore":  # a phone-approved restore: the core's signed receipt (router/storerestore.go)
+            w = {"by": "machine", "sig": "", "machine": "fake000042"}
+        if writer == "router":
+            w = {"by": "router", "sig": "", "machine": ""}
+        if writer == "restore":  # a phone-approved restore: secrets' signed receipt (router/storerestore.go)
             rc = json.dumps({"kind": "store-restore-approved", "pending": "p", "store": store, "to": 3, "remove": [],
                              "put": [{"key": key, "e": e, "dataSha256": dsha, "backupSha256": bsha}]})
             w = {"by": "restore", "receipt": {"payload": rc, "sig": sign(core_sig, rc)}}
         obj = {"kind": "key-backup", "store": store, "key": key, "deleted": value is None, "sealed": sealed, "backupSha256": bsha,
-               "e": e, "dataSha256": dsha, "writer": w, "core": identity, "explanation": f"what {key} is for", "at": iso(at)}
+               "e": e, "dataSha256": dsha, "writer": w, "secrets": identity, "explanation": f"what {key} is for", "at": iso(at)}
         s3.put_object(Bucket=name, Key=f"keys/{store}/{key}.json", Body=json.dumps(obj).encode())
 
     put("default", "OTHER", "y", now + 60)
@@ -154,6 +152,7 @@ def key_backups(d, setup, s3, master, setup_pem, dump):
     put("default", "OLD", "stale", now - 3600)
     put("default", "SESSION_KEY", "from-a-session", now + 120, writer="machine")
     put("default", "RESTORED", "r1", now + 90, writer="restore")
+    put("claude", "CLAUDE_CREDENTIALS", "{}", now + 60, writer="router")
     put("keyed-only", "API_KEY", "k1", now + 60)
     dump[name] = [{"key": o["Key"], "body": s3.get_object(Bucket=name, Key=o["Key"])["Body"].read().decode()}
                   for o in s3.list_objects_v2(Bucket=name, Prefix="keys/").get("Contents", [])]

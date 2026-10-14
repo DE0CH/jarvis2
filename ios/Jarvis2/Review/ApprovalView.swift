@@ -1,7 +1,10 @@
-// An approval the router holds (a new line made elsewhere: the web page, a restore, a task; a resume on the latest
-// image or in another mode; adding a store to a running machine). The kind comes from the core-signed challenge's own
-// fields, never the router's label; the page shows what the challenge carries and signs it under one Face ID (which
-// also unlocks the stores a new line gets, for that session only); the core's answer must be for this challenge.
+// An approval the router holds (docs/API.md "Approvals"): a new session made elsewhere (the web page, a restore, a task,
+// a session's proposal), a resume from a snapshot with a change (a newer image, a prompt, a rollback), or an add-on for a
+// running session (a terminal, a command, another store). What it is comes from the drafts' own payloads, never the
+// router's label: the page shows every draft as signed (SignedAction.approval: the source's image and settings, the
+// machine object with its keys, every right and condition), checks it for its kind (Checks.review) and, for an add-on,
+// that the machine is the session's (Checks.machineOf, the spawner's spawn cert). Approve signs every draft under ONE
+// Face ID, which also unlocks the stores the session gets that are locked.
 import SwiftUI
 
 struct ApprovalView: View {
@@ -10,18 +13,17 @@ struct ApprovalView: View {
   let approvalId: String
   let inbox: String?
   let request: SecureRequest
-  @State private var a: RouterClient.ApprovalDTO?
-  @State private var r: Checks.Reviewed?
-  /// the session it continues, from the predecessor's core-signed cert (nil for a new line)
-  @State private var ident: LineIdentity?
-  /// whether CI signed the image the challenge names (nil: the challenge names no new image)
+  @State private var a: ApprovalDTO?
+  @State private var r: ReviewedApproval?
+  /// the session's title as signed: a source's settings, or for an add-on the settings of the source its machine came from
+  @State private var signedTitle: String?
+  /// whether CI signed the image a new source names (nil: no new image)
   @State private var attest: ImageAttestation?
   @State private var harnessStores: [String] = []
   @State private var toUnlock: [String] = []
   /// keys sessions wrote into the stores it unlocks (shown before Face ID; the unlock refuses one not shown)
   @State private var writes: [SessionWrite] = []
-  @State private var scoped = false
-  /// sensitive stores: the core's signed store list's marks joined with the challenge's (a newer core drops the latter)
+  /// sensitive stores, from secrets' signed store list
   @State private var sens: [String] = []
   @State private var signed: [SignedFact]?
   @State private var loadError: String?
@@ -29,10 +31,12 @@ struct ApprovalView: View {
   @State private var failure: String?
 
   private var title: String {
-    switch r?.kind {
-    case .resumeUpgrade: "Approve resume"
-    case .addStore: "Add a store"
-    case .newSession: "Approve new session"
+    switch r?.kind ?? a?.kind {
+    case "resume-upgrade": "Approve resume"
+    case "terminal": "Open a terminal"
+    case "command": "Run a command"
+    case "add-store": "Add a store"
+    case "new-session": "Approve new session"
     default: "Approve"
     }
   }
@@ -41,77 +45,24 @@ struct ApprovalView: View {
     Form {
       if let inbox { RequestReviewSection(inboxId: inbox, signed: signed, request: request) }
       if let loadError {
-        // nothing can be signed, but the approval can still be rejected here (Deyao, 2026-10-13: a resume's page showed
-        // no Approve and no way out, so another session had to deny it)
+        // nothing can be signed, but the approval can still be rejected here
         Section {
           ErrorRow(text: loadError, id: "secure-error")
           Text("This page can't be approved on this iPhone. Reject it, or ask for it again after updating the app.")
             .font(.footnote).foregroundStyle(.secondary).accessibilityIdentifier("secure-cant-approve")
         }
-        Section {
-          Button(busy == "Rejecting…" ? "Rejecting…" : "Reject", role: .destructive) { Task { await reject() } }
-            .disabled(busy != nil).accessibilityIdentifier("secure-reject")
-          if let failure { ErrorRow(text: failure, id: "secure-reject-error") }
+        rejectSection
+      } else if let r, let a {
+        summary(r, a)
+        if inbox == nil { SignedFactsSection(facts: signed) }
+        if let cmd = a.cmd, r.kind == "command" {
+          Section("Command (signed by its sha256)") {
+            Text(cmd).font(.body.monospaced()).textSelection(.enabled).accessibilityIdentifier("secure-command")
+          }
         }
-      }
-      else if let r, let a {
-        Section {
-          if let ident { IdentityRows(ident: ident) }
-          else if r.kind == .newSession { Text(Self.signedLabel(r) ?? "Untitled").font(.headline).accessibilityIdentifier("secure-session") }
-          if let l = a.label, !l.isEmpty {
-            LabeledContent { Text(l) } label: { HStack { Text("Router's label"); StatusPill(text: "Unverified", color: .orange) } }
-              .accessibilityElement(children: .combine)
-          }
-          LabeledContent("Action", value: Self.actionName(r.kind)).accessibilityIdentifier("secure-action")
-          if r.kind == .newSession {
-            if let rs = a.options?["restore"], !rs.isEmpty {
-              LabeledContent("Restores") { Text(rs).font(.footnote.monospaced()) }
-                .accessibilityElement(children: .combine).accessibilityIdentifier("secure-restore")
-              if r.config?["restore"] == nil {
-                Label("Snapshot not signed", systemImage: "exclamationmark.triangle.fill").foregroundStyle(.orange)
-              }
-            } else {
-              Label("Requested outside this app", systemImage: "arrow.down.app").foregroundStyle(.secondary)
-            }
-          }
-          if r.kind == .resumeUpgrade { LabeledContent("Stores and harness", value: "Unchanged") }
-          if r.kind == .addStore { LabeledContent("Keeps its keys", value: "Yes") }
-        } header: { Text("Session (as signed)") }
-        if r.kind == .addStore {
-          Section("Add this store") { StoreLines(stores: [r.addedStore ?? ""], sensitive: sens) }
-          Section("It already has") { StoreLines(stores: r.stores.filter { $0 != r.addedStore }, sensitive: sens, harness: harnessStores) }
-        } else {
+        if r.kind == "new-session" || r.kind == "resume-upgrade" {
           Section("Secret stores") { StoreLines(stores: r.stores, sensitive: sens, harness: harnessStores) }
-        }
-        SignedSettingsSection(r: r, session: a.session)
-        let warn = r.kind == .addStore ? sens.filter { $0 == r.addedStore } : r.stores.filter { sens.contains($0) }
-        Section {
-          if !warn.isEmpty {
-            LabeledContent {
-              Text(warn.joined(separator: "\n")).multilineTextAlignment(.trailing)
-            } label: {
-              Label("Sensitive", systemImage: "exclamationmark.triangle.fill")
-            }
-            .foregroundStyle(.orange).accessibilityElement(children: .combine).accessibilityIdentifier("secure-sensitive-warning")
-          }
-          LabeledContent("Harness", value: Harness.name(r.harness))
-          if r.kind != .addStore {
-            LabeledContent {
-              Text(r.permissionMode)
-            } label: {
-              if r.permissionMode == "bypass" { Label("Permission mode", systemImage: "exclamationmark.shield") } else { Text("Permission mode") }
-            }
-            .foregroundStyle(r.permissionMode == "bypass" ? AnyShapeStyle(.orange) : AnyShapeStyle(.primary))
-            .accessibilityElement(children: .combine).accessibilityIdentifier("secure-mode")
-          }
-          LabeledContent("Session image") { Text(r.image).font(.footnote.monospaced()).textSelection(.enabled) }
-          if let attest {
-            LabeledContent("Image build") {
-              StatusPill(text: attest.badge, color: attest == .attested ? .green : .orange)
-            }
-            .accessibilityElement(children: .combine).accessibilityIdentifier("secure-image-attest")
-          }
-          if r.kind == .other { LabeledContent("The challenge", value: r.challenge.request.kind) }
+          SignedAttachmentsSection(r: r, session: a.session)
         }
         SessionWritesSection(writes: writes)
         Section {
@@ -122,7 +73,6 @@ struct ApprovalView: View {
               Label("Also unlocks", systemImage: "lock.open")
             }
             .accessibilityElement(children: .combine).accessibilityIdentifier("secure-unlocks")
-            LabeledContent("Open to", value: "This session only")
           }
           Button("Reject", role: .destructive) { Task { await reject() } }.disabled(busy != nil).accessibilityIdentifier("secure-reject")
           if let failure { ErrorRow(text: failure, id: "secure-error") }
@@ -130,11 +80,7 @@ struct ApprovalView: View {
         }
       } else {
         Section { ProgressView() }
-        Section {
-          Button(busy == "Rejecting…" ? "Rejecting…" : "Reject", role: .destructive) { Task { await reject() } }
-            .disabled(busy != nil).accessibilityIdentifier("secure-reject")
-          if let failure { ErrorRow(text: failure, id: "secure-reject-error") }
-        } footer: { Text("Approve shows once the page has read and checked the approval.") }
+        rejectSection
       }
     }
     .navigationTitle(title)
@@ -149,40 +95,101 @@ struct ApprovalView: View {
     .task { await load() }
   }
 
-  static func actionName(_ k: Checks.Kind) -> String {
+  @ViewBuilder private var rejectSection: some View {
+    Section {
+      Button(busy == "Rejecting…" ? "Rejecting…" : "Reject", role: .destructive) { Task { await reject() } }
+        .disabled(busy != nil).accessibilityIdentifier("secure-reject")
+      if let failure { ErrorRow(text: failure, id: "secure-reject-error") }
+    } footer: { if r == nil && loadError == nil { Text("Approve shows once the page has read and checked the approval.") } }
+  }
+
+  /// the few facts that decide: the action, the session (as signed), what it gets, and what stands out
+  @ViewBuilder private func summary(_ r: ReviewedApproval, _ a: ApprovalDTO) -> some View {
+    Section {
+      Text(signedTitle ?? "Untitled").font(.headline).accessibilityIdentifier("secure-session")
+      if signedTitle == nil { Label("Title not signed", systemImage: "questionmark.circle").font(.footnote).foregroundStyle(.orange) }
+      if let l = a.label, !l.isEmpty, l != signedTitle {
+        LabeledContent { Text(l) } label: { HStack { Text("Router's label"); StatusPill(text: "Unverified", color: .orange) } }
+          .accessibilityElement(children: .combine)
+      }
+      LabeledContent("Action", value: Self.actionName(r.kind)).accessibilityIdentifier("secure-action")
+      LabeledContent("Session") { Text(r.session).font(.footnote.monospaced()).textSelection(.enabled) }
+      switch r.kind {
+      case "new-session", "resume-upgrade":
+        if let rs = a.options?["restore"], !rs.isEmpty {
+          LabeledContent("Restores") { Text(rs).font(.footnote.monospaced()) }
+            .accessibilityElement(children: .combine).accessibilityIdentifier("secure-restore")
+        }
+        if !r.source.snapshot.isEmpty {
+          LabeledContent("Starts from snapshot") { Text(String(r.source.snapshot.prefix(16)) + "…").font(.footnote.monospaced()) }
+        }
+        LabeledContent("Harness", value: Harness.name(r.harness))
+        LabeledContent {
+          Text(r.permissionMode)
+        } label: {
+          if r.permissionMode == "bypass" { Label("Permission mode", systemImage: "exclamationmark.shield") } else { Text("Permission mode") }
+        }
+        .foregroundStyle(r.permissionMode == "bypass" ? AnyShapeStyle(.orange) : AnyShapeStyle(.primary))
+        .accessibilityElement(children: .combine).accessibilityIdentifier("secure-mode")
+        LabeledContent("Session image") { Text(r.source.image).font(.footnote.monospaced()).textSelection(.enabled) }
+        if let attest {
+          LabeledContent("Image build") { StatusPill(text: attest.badge, color: attest == .attested ? .green : .orange) }
+            .accessibilityElement(children: .combine).accessibilityIdentifier("secure-image-attest")
+        }
+      case "add-store":
+        LabeledContent("Store") { Text(a.store ?? "").font(.body.monospaced()) }.accessibilityIdentifier("secure-store")
+      default:
+        if let t = r.until { LabeledContent("Until", value: t.formatted(date: .omitted, time: .shortened)).accessibilityIdentifier("secure-until") }
+        LabeledContent("Runs as", value: "The session's user")
+      }
+      if let m = r.machine {
+        LabeledContent("Running machine") { Text(m.id).font(.footnote.monospaced()) }.accessibilityIdentifier("secure-machine")
+      }
+      let warn = r.kind == "add-store" ? sens.filter { $0 == a.store } : r.stores.filter { sens.contains($0) }
+      if !warn.isEmpty {
+        LabeledContent {
+          Text(warn.joined(separator: "\n")).multilineTextAlignment(.trailing)
+        } label: {
+          Label("Sensitive", systemImage: "exclamationmark.triangle.fill")
+        }
+        .foregroundStyle(.orange).accessibilityElement(children: .combine).accessibilityIdentifier("secure-sensitive-warning")
+      }
+    } header: { Text("Session (as signed)") }
+  }
+
+  static func actionName(_ k: String) -> String {
     switch k {
-    case .newSession: "New session"
-    case .resumeUpgrade: "Continue on a new machine"
-    case .addStore: "Add a store"
-    case .other: "Sign a challenge"
+    case "new-session": "New session"
+    case "resume-upgrade": "Continue from a snapshot"
+    case "terminal": "Open a terminal"
+    case "command": "Run a command"
+    case "add-store": "Add a store"
+    default: k
     }
   }
-  static func signedLabel(_ r: Checks.Reviewed) -> String? { (r.config?["label"] as? String).flatMap { $0.isEmpty ? nil : $0 } }
 
   private func load() async {
     do {
       guard let x = try await RouterClient.shared.approval(approvalId) else { loadError = "This approval is gone (answered or rejected elsewhere)."; return }
-      let rv = try Checks.review(challenge: x.challenge, coreKey: try CoreTrust.key())
-      // which session this continues comes from the signed predecessor, never the router's label (audit findings 1, 5)
-      let id = try Checks.continues(rv, coreKey: try CoreTrust.key())
-      if let id, let sid = x.session {
-        try LinePins.check(session: sid, line: id.line)
-        try Checks.sameSession(id, expectedLabel: model.session(sid)?.j["label"].text)
+      let roster = try await KernelTrust.roster()
+      let rv = try Checks.review(x, notaryKey: roster.keys["notary"])
+      if rv.isAddOn {
+        // the machine it reaches is the session's: the spawner's notarized spawn cert names it, out of this session's source
+        guard let spawn = try await RouterClient.shared.chain(rv.session).spawn else { throw TrustError.mismatch("the session's spawn cert (it doesn't run)") }
+        let st = try Checks.machineOf(rv, spawn: spawn, roster: roster)
+        signedTitle = (st["title"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+      } else {
+        signedTitle = rv.title
+        attest = try await ImageAttestation.check(image: rv.source.image, sig: x.imageSig)
       }
-      if (rv.kind == .resumeUpgrade || rv.kind == .addStore) && id == nil { throw TrustError.mismatch("a resume or added store that names no predecessor") }
-      ident = id
-      if rv.kind == .newSession || rv.kind == .resumeUpgrade { attest = try await ImageAttestation.check(image: rv.image, sig: x.imageSig) }
       harnessStores = PinnedPolicy.stores(rv.harness, router: model.policy)
       let doc = try await RouterClient.shared.storesDoc()
-      // a resume on a new image or mode already asks for Face ID: it brings the line's stores as they are now too
-      let want: [String] = rv.kind == .addStore ? [rv.addedStore ?? ""] : (rv.kind == .newSession || rv.kind == .resumeUpgrade) ? rv.stores : []
-      sens = Array(Set(rv.sensitive + doc.stores.filter(\.sensitive).map(\.name)))
-      scoped = true  // every core takes unlocks for one session (the flag is going away)
-      // only with a core that unlocks for one session (an older core's unlocks would stay open to every session)
-      toUnlock = scoped ? want.filter { n in doc.stores.contains { $0.name == n && !$0.unlocked && !$0.empty } } : []
+      sens = doc.stores.filter(\.sensitive).map(\.name)
+      let want: [String] = rv.kind == "add-store" ? [x.store ?? ""] : rv.isAddOn ? [] : rv.stores
+      toUnlock = want.filter { n in doc.stores.contains { $0.name == n && !$0.unlocked && !$0.empty } }
       writes = await SessionWrites.load(toUnlock)
       r = rv; a = x
-      signed = SignedAction.approval(rv, of: id) + SignedAction.alsoUnlocks(toUnlock, scoped: scoped) + SessionWrites.fact(writes)
+      signed = SignedAction.approval(rv, cmd: x.cmd) + SignedAction.alsoUnlocks(toUnlock) + SessionWrites.fact(writes)
     } catch { loadError = errText(error) }
   }
   private func approve() async {
@@ -190,17 +197,15 @@ struct ApprovalView: View {
     failure = nil
     do {
       busy = "Signing…"
-      let payload = a.challenge.payload, reason = title + (toUnlock.isEmpty ? "" : " and unlock \(toUnlock.joined(separator: ", "))")
-      let sig: Data
+      let payloads = r.drafts.map(\.payload), reason = title + (toUnlock.isEmpty ? "" : " and unlock \(toUnlock.joined(separator: ", "))")
+      let sigs: [Data]
       if toUnlock.isEmpty {
-        sig = try await offMain { try PhoneKeys.shared.sign(payload, reason: reason) }
+        sigs = try await offMain { try PhoneKeys.shared.signAndShares(payloads, es: [], reason: reason).signatures }
       } else {
-        guard let s = try await StoreUnlock.signAndUnlock(payload: payload, stores: toUnlock, reason: reason, for: r.challenge.nonce, shown: writes) else { throw TrustError.stale("signature") }
-        sig = s
+        sigs = try await StoreUnlock.signAndUnlock(payloads: payloads, stores: toUnlock, reason: reason, shown: writes)
       }
       busy = "Approving…"
-      let ans = try await RouterClient.shared.respond(a.id, signature: sig)
-      try Checks.answerFor(r, answer: ans.answer, coreKey: try CoreTrust.key())
+      _ = try await RouterClient.shared.respond(a.id, signatures: sigs)
       model.secureCompleted(true)
     } catch { busy = nil; failure = errText(error) }
   }
@@ -212,75 +217,16 @@ struct ApprovalView: View {
   }
 }
 
-/// the signed settings and one-time inputs of a challenge (core Options.Config / Once), as signed: what the machine takes
-struct SignedSettingsSection: View {
-  let r: Checks.Reviewed
-  /// the session the approval is for: its staged attachments are read back and checked against the signed hashes
+/// the first prompt's images a source's settings name, each read back from the router and hashed against the signed
+/// sha256 and size
+struct SignedAttachmentsSection: View {
+  let r: ReviewedApproval
   var session: String? = nil
   var body: some View {
-    let c = r.config ?? [:], o = r.once ?? [:]
-    let s = { (k: String) -> String in (c[k] as? String) ?? "" }
-    if r.kind == .newSession || !o.isEmpty {
-      Section("What the machine takes (signed)") {
-        if r.kind == .newSession {
-          if !s("label").isEmpty { LabeledContent("Title", value: s("label")).accessibilityIdentifier("signed-label") }
-          if !s("prompt").isEmpty {
-            VStack(alignment: .leading) { Text("First prompt").font(.footnote).foregroundStyle(.secondary); Text(s("prompt")).textSelection(.enabled) }
-              .accessibilityElement(children: .combine).accessibilityIdentifier("signed-prompt")
-          }
-          if let atts = Checks.attachments(c), !atts.isEmpty {
-            Text("Images").font(.footnote).foregroundStyle(.secondary)
-              .accessibilityIdentifier("signed-attachments")
-            ForEach(atts, id: \.name) { SignedAttachmentRow(session: session, ref: $0) }
-          }
-          if let rs = c["restore"] as? [String: Any] {
-            LabeledContent("Restores machine") { Text((rs["machine"] as? String) ?? "?").font(.footnote.monospaced()) }
-              .accessibilityElement(children: .combine).accessibilityIdentifier("signed-restore")
-            LabeledContent("Snapshot sha256") { Text(String(((rs["sha256"] as? String) ?? "").prefix(12)) + "…").font(.footnote.monospaced()) }
-          }
-          if let repos = c["repos"] as? [String], !repos.isEmpty { LabeledContent("Repos", value: repos.joined(separator: "\n")).accessibilityIdentifier("signed-repos") }
-          if let cs = Checks.content(c), !cs.isEmpty { LabeledContent("Content stores", value: cs.joined(separator: "\n")).accessibilityIdentifier("signed-content") }
-          if !s("model").isEmpty { LabeledContent("Model", value: s("model")) }
-          if (c["oneShot"] as? Bool) == true { LabeledContent("One-shot", value: "Yes").accessibilityIdentifier("signed-one-shot") }
-          if (c["apiProxy"] as? Bool) == true { LabeledContent("API proxy log", value: "Yes").accessibilityIdentifier("signed-api-proxy") }
-          if let t = c["task"] as? [String: Any] {
-            LabeledContent("Task", value: (t["name"] as? String) ?? "").accessibilityIdentifier("signed-task")
-            LabeledContent("Task parameters") { Text(Checks.compact(t["params"])).font(.footnote.monospaced()) }
-          }
-          if r.config == nil { LabeledContent("Settings in the cert", value: "None").foregroundStyle(.secondary) }
-        }
-        if let p = o["prompt"] as? String, !p.isEmpty {
-          VStack(alignment: .leading) { Text("Resume prompt").font(.footnote).foregroundStyle(.secondary); Text(p).textSelection(.enabled) }
-            .accessibilityElement(children: .combine).accessibilityIdentifier("signed-once-prompt")
-        }
-        if let m = o["rollback"] as? String, !m.isEmpty {
-          LabeledContent {
-            Text(m)
-          } label: {
-            Label("Roll back from", systemImage: "arrow.uturn.backward")
-          }
-          .foregroundStyle(.orange).accessibilityElement(children: .combine).accessibilityIdentifier("signed-once-rollback")
-        }
-      }
-    }
-  }
-}
-
-/// a session as its core-signed cert names it: the title and first prompt Deyao gave it, its line and machine, when the
-/// cert was issued, and whether it holds a sensitive store
-struct IdentityRows: View {
-  let ident: LineIdentity
-  var body: some View {
-    Text(ident.label ?? "Untitled").font(.headline).accessibilityIdentifier("secure-session")
-    if let p = ident.prompt { LabeledContent("First prompt", value: Fmt.clip(p, 140)) }
-    LabeledContent("Line") { Text(ident.line).font(.footnote.monospaced()).textSelection(.enabled) }
-    if let m = ident.machine, m != ident.line { LabeledContent("Machine") { Text(m).font(.footnote.monospaced()) } }
-    if let at = ident.issuedAt?.isoDate { LabeledContent("Cert issued", value: Fmt.ago(at)) }
-    if ident.sensitive {
-      Label("Holds a sensitive store", systemImage: "exclamationmark.octagon.fill").foregroundStyle(.red).accessibilityElement(children: .combine).accessibilityIdentifier("secure-session-sensitive")
-    }
-    if ident.label == nil {
-      Label("Title not signed", systemImage: "questionmark.circle").font(.footnote).foregroundStyle(.orange)
+    if let c = r.settings, let atts = Checks.attachments(c), !atts.isEmpty {
+      Section {
+        ForEach(atts, id: \.name) { SignedAttachmentRow(session: session, ref: $0) }
+      } header: { Text("Images (signed)").accessibilityIdentifier("signed-attachments") }
     }
   }
 }

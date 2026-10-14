@@ -232,8 +232,8 @@ class JarvisUITestCase: XCTestCase {
     _ = done.wait(timeout: .now() + 20)
     return out
   }
-  func coreStores() -> [[String: Any]] { corePayload("api/core/stores", "stores") }
-  func coreUnlocked() -> [[String: Any]] { corePayload("api/core/unlocked", "unlocked") }
+  func secretsStores() -> [[String: Any]] { corePayload("api/secrets/stores", "stores") }
+  func secretsUnlocked() -> [[String: Any]] { corePayload("api/secrets/unlocked", "unlocked") }
 
   /// any call to the router on the runner: status and body
   func routerRaw(_ method: String, _ path: String, body: Data? = nil, headers: [String: String] = [:]) -> (Int, Data) {
@@ -293,14 +293,29 @@ class JarvisUITestCase: XCTestCase {
     return String(row.identifier.dropFirst("ns-attachment-".count))
   }
 
-  /// Reset or recover at first launch: Recover with the kit (the core is empty)
+  /// on the setup page once it is done: root's ⊤ on the sink, signed with the root key behind its warning screen
+  /// `beforeSign`: what the run does for Face ID (the replica matches it on the simulator)
+  @discardableResult
+  func signRootGrant(beforeSign: (() -> Void)? = nil) -> Bool {
+    guard wait(el("setup-root-grant"), 30, "the root grant's row") else { return false }
+    el("setup-root-grant").tap()
+    guard arrives(el("root-understood"), 15, "the root key's warning screen") else { return false }
+    shot("root-key-warning")
+    el("root-understood").tap()
+    beforeSign?()
+    el("root-sign").tap()
+    return wait(el("setup-root-granted"), 60, "the root grant signed and kept by the router")
+  }
+
+  /// Reset or recover at first launch: Recover with the kit (secrets is empty), then the root grant
   func recoverAtLaunch(_ kit: String) -> Bool {
-    guard wait(el("setup-state-empty"), 90, "setup page: the core is empty") else { return false }
+    guard wait(el("setup-state-empty"), 90, "setup page: secrets is empty") else { return false }
     el("setup-choose-recover").tap()
     guard wait(el("setup-kit-field"), 15, "recovery kit field") else { return false }
     el("setup-kit-field").tap(); el("setup-kit-field").typeText(kit)
     el("setup-recover-go").tap()
     guard wait(el("setup-done"), 120, "recovered") else { return false }
+    guard signRootGrant() else { return false }
     el("secure-back").tap()
     return arrives(el("newBtn"), 60, "the session list after setup")
   }

@@ -1,6 +1,6 @@
-// The core's secret stores, from its signed list (checked against the pinned core key): unlock (Face ID → this phone's
-// share of every key, sealed to the core's one-off key), lock, mark sensitive (one way), and a new empty store. The
-// core's signed list of open unlocks, each with Lock. What each store and key is for comes from the router
+// Secrets' stores, from its signed list (checked against the pinned key): unlock (Face ID → this phone's
+// share of every key, sealed to secrets' one-off key), lock, mark sensitive (one way), and a new empty store.
+// Secrets' signed list of open unlocks, each with Lock. What each store and key is for comes from the router
 // (GET api/stores: each key's name, its writer and its explanation, the store's about text; never values), each text
 // edited in place on the store's own page (PUT api/stores/{store}/docs; app/DECISIONS.md 67, 68). A key a session wrote is always in view with the
 // session's title: Unlock opens only the session-written keys this page shows (StoreUnlock).
@@ -25,7 +25,7 @@ struct StoresView: View {
                    open: { detail = s.name }, reload: reload)
         }
       } header: { Text("Stores") } footer: {
-        Text("Unlocked: open to every session until locked. Tap a store for its keys.")
+        Text("Unlocked: served to every session whose grant names it, until locked. Tap a store for its keys.")
       }
       Section {
         if model.stores.loaded && model.openUnlocks.isEmpty { Text("None").foregroundStyle(.secondary).accessibilityIdentifier("unlocks-none") }
@@ -34,7 +34,6 @@ struct StoresView: View {
             VStack(alignment: .leading, spacing: 3) {
               HStack(spacing: 6) {
                 Text(u.store).font(.headline)
-                StatusPill(text: (u.forNonce ?? "").isEmpty ? "Every session" : "One session", color: (u.forNonce ?? "").isEmpty ? .orange : .blue)
               }
               HStack(spacing: 12) {
                 Label(u.since.isoDate.map { $0.formatted(date: .abbreviated, time: .shortened) } ?? u.since, systemImage: "clock")
@@ -48,7 +47,7 @@ struct StoresView: View {
           }
         }
       } header: { Text("Open unlocks") } footer: {
-        Text("From the core's signed list.")
+        Text("From secrets' signed list.")
       }
     }
     .overlay { if !model.stores.loaded && model.stores.error == nil { ProgressView("Loading stores…") } }
@@ -160,7 +159,7 @@ private struct StoreRow: View {
       .contentShape(Rectangle())
   }
 
-  /// "Unlocking…" lasts until the core's lists show the outcome; the router's key rows are read after it, outside the
+  /// "Unlocking…" lasts until secrets' lists show the outcome; the router's key rows are read after it, outside the
   /// store's key, so the new unlock's Lock works the moment its row shows
   private func unlock() async {
     let key = "store:" + s.name
@@ -168,7 +167,7 @@ private struct StoreRow: View {
       model.pend(key, "Unlocking…")
       defer { model.pend(key, nil) }
       do {
-        try await StoreUnlock.signAndUnlock(payload: nil, stores: [s.name], reason: "Unlock \(s.name)", for: nil, shown: writes)
+        try await StoreUnlock.signAndUnlock(payloads: [], stores: [s.name], reason: "Unlock \(s.name)", shown: writes)
       } catch { model.fail(error) }
       await model.loadStores()
     }
@@ -206,7 +205,7 @@ struct StoreDetailView: View {
           Section {
             NavigationLink { StoreVersionsView(store: store) } label: { Label("Versions", systemImage: "clock.arrow.circlepath") }
               .accessibilityIdentifier("store-versions-\(store)")
-          } footer: { Text("Earlier versions the core keeps. Restore puts one back with Face ID.") }
+          } footer: { Text("Earlier versions secrets keeps. Restore puts one back with Face ID.") }
         }
       } else if error == nil {
         ProgressView()

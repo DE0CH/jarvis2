@@ -2,8 +2,8 @@
 // reviewed on one page and allowed under ONE Face ID. On top, the caller's summary (unverified, its words); below it
 // every item with its own "What you sign (exact)", rendered from that item's signed content exactly as its own page
 // renders it, and the call and reason the router recorded. Allow all: one Face ID (PhoneKeys.authorize), then every
-// item is signed and sent on its own, exactly as from its own page (each approval's own core challenge, each grant's
-// own text, each deploy key's own begin document): the core and the grant store verify each one unchanged. An item
+// item is signed and sent on its own, exactly as from its own page (each approval's own drafts, each unlock's and each
+// deploy key's own begin document): the kernel verifies each one unchanged. The root key never signs in a batch. An item
 // that fails is shown failed; the ones before it already went through (they left the Inbox), so Retry reads the
 // failed ones again and asks for one more Face ID. Deny all drops the batch; an item can be denied on its own.
 import SwiftUI
@@ -22,100 +22,54 @@ enum BatchPrepare {
     guard let req = SecureRequest.fromInbox(it) else { throw TrustError.mismatch("an item this app can't open") }
     switch req {
     case .approval(let id, _): return try await approval(id, model: model)
-    case .grant(let g, _): return try await grant(g, model: model)
     case .unlock(let s, _, _): return try await unlock(s, model: model)
     case .repoKey(let a, let r, let sens, _): return try await repoKey(a, r, sens)
-    case .newSession, .batch, .restore: throw TrustError.mismatch("an item this app can't open")
+    case .newSession, .batch, .restore, .rootGrant: throw TrustError.mismatch("an item this app can't open")
     }
   }
 
   /// as ApprovalView.load / approve
   static func approval(_ approvalId: String, model: AppModel) async throws -> BatchPrepared {
     guard let x = try await RouterClient.shared.approval(approvalId) else { throw TrustError.stale("the approval (answered or rejected elsewhere)") }
-    let rv = try Checks.review(challenge: x.challenge, coreKey: try CoreTrust.key())
-    let id = try Checks.continues(rv, coreKey: try CoreTrust.key())
-    if let id, let sid = x.session {
-      try LinePins.check(session: sid, line: id.line)
-      try Checks.sameSession(id, expectedLabel: model.session(sid)?.j["label"].text)
-    }
-    if (rv.kind == .resumeUpgrade || rv.kind == .addStore) && id == nil { throw TrustError.mismatch("a resume or added store that names no predecessor") }
-    var facts = SignedAction.approval(rv, of: id)
-    if rv.kind == .newSession || rv.kind == .resumeUpgrade {
-      let attest = try await ImageAttestation.check(image: rv.image, sig: x.imageSig)
+    let roster = try await KernelTrust.roster()
+    let rv = try Checks.review(x, notaryKey: roster.keys["notary"])
+    var facts = SignedAction.approval(rv, cmd: x.cmd)
+    if rv.isAddOn {
+      guard let spawn = try await RouterClient.shared.chain(rv.session).spawn else { throw TrustError.mismatch("the session's spawn cert (it doesn't run)") }
+      _ = try Checks.machineOf(rv, spawn: spawn, roster: roster)
+    } else {
+      let attest = try await ImageAttestation.check(image: rv.source.image, sig: x.imageSig)
       facts.append(.init(id: "image-build", label: "Image build", value: attest.badge, style: attest == .attested ? .plain : .warning))
     }
-    if rv.kind == .newSession, let rs = x.options?["restore"], !rs.isEmpty {
+    if let rs = x.options?["restore"], !rs.isEmpty {
       facts.append(.init(id: "restore-router", label: "Restores (router's words)", value: rs, style: .code))
     }
     let doc = try await RouterClient.shared.storesDoc()
-    // a resume on a new image or mode brings the line's stores as they are now (as ApprovalView)
-    let want: [String] = rv.kind == .addStore ? [rv.addedStore ?? ""] : (rv.kind == .newSession || rv.kind == .resumeUpgrade) ? rv.stores : []
+    let want: [String] = rv.kind == "add-store" ? [x.store ?? ""] : rv.isAddOn ? [] : rv.stores
     let toUnlock = want.filter { n in doc.stores.contains { $0.name == n && !$0.unlocked && !$0.empty } }
     let writes = await SessionWrites.load(toUnlock)
-    facts += SignedAction.alsoUnlocks(toUnlock, scoped: true) + SessionWrites.fact(writes)
-    let payload = x.challenge.payload, nonce = rv.challenge.nonce
+    facts += SignedAction.alsoUnlocks(toUnlock) + SessionWrites.fact(writes)
+    let payloads = rv.drafts.map(\.payload)
     return BatchPrepared(facts: facts) { auth in
       let reason = "Approve"
-      let sig: Data
+      let sigs: [Data]
       if toUnlock.isEmpty {
-        sig = try await offMain { try PhoneKeys.shared.sign(payload, reason: reason, auth: auth) }
+        sigs = try await offMain { try PhoneKeys.shared.signAndShares(payloads, es: [], reason: reason, auth: auth).signatures }
       } else {
-        guard let s = try await StoreUnlock.signAndUnlock(payload: payload, stores: toUnlock, reason: reason, for: nonce, shown: writes, auth: auth) else { throw TrustError.stale("signature") }
-        sig = s
+        sigs = try await StoreUnlock.signAndUnlock(payloads: payloads, stores: toUnlock, reason: reason, shown: writes, auth: auth)
       }
-      let ans = try await RouterClient.shared.respond(approvalId, signature: sig)
-      try Checks.answerFor(rv, answer: ans.answer, coreKey: try CoreTrust.key())
-    }
-  }
-
-  /// as GrantReviewView.load / allow
-  static func grant(_ ask: GrantAsk, model: AppModel) async throws -> BatchPrepared {
-    let c = try await RouterClient.shared.sessionCert(ask.session)
-    try LinePins.check(session: ask.session, line: c.line)
-    let id = LineIdentity(cert: c)
-    try Checks.sameSession(id, expectedLabel: model.session(ask.session)?.j["label"].text)
-    let holderKeys = try await RouterClient.shared.holders()
-    let holder = Holder.all.contains { $0.id == ask.holder } ? ask.holder : ""
-    let isRule = ask.kind == "rule"
-    let minutes = (1...10).contains(ask.minutes) ? ask.minutes : 10
-    let asked = ask.until ?? .now.addingTimeInterval(Double(GrantAsk.ruleDays) * 86400)
-    let until = isRule ? min(max(asked, .now.addingTimeInterval(3600)), .now.addingTimeInterval(366 * 86400)) : .now.addingTimeInterval(Double(minutes * 60))
-    var refusal: String?
-    if holder.isEmpty { refusal = "Unknown feature" }
-    else if isRule && c.sensitive == true { refusal = "Sensitive session: no standing rule" }
-    else if holderKeys[holder] == nil { refusal = "No key listed for this feature" }
-    let facts = SignedAction.grant(feature: Holder.title(holder), allows: Holder.sub(holder), minutes: isRule ? nil : minutes, until: until, line: c.line, of: id)
-    return BatchPrepared(facts: facts, refusal: refusal) { auth in
-      guard let hk = holderKeys[holder] else { throw TrustError.stale("the feature's key") }
-      let phone = try PhoneKeys.shared.publicKeys().signingKey
-      var body: [String: Any] = ["holder": holder, "kind": ask.kind]
-      if isRule {
-        let f = ISO8601DateFormatter(); f.formatOptions = [.withInternetDateTime]
-        body["until"] = f.string(from: until)
-      } else { body["minutes"] = minutes }
-      let text = try await RouterClient.shared.draftGrant(ask.session, body)
-      _ = try Checks.reviewGrant(text: text, cert: c, phoneKey: phone, holderKey: hk, kind: ask.kind, minutes: minutes, until: until)
-      let reason = "Allow \(Holder.title(holder))"
-      let sig = try await offMain { try PhoneKeys.shared.sign(text, reason: reason, auth: auth) }
-      let g = try await RouterClient.shared.addGrant(ask.session, payload: text, sig: sig)
-      guard g.holder == holder, g.kind == ask.kind else { throw TrustError.stale("the stored grant") }
+      _ = try await RouterClient.shared.respond(approvalId, signatures: sigs)
     }
   }
 
   /// as UnlockReviewView.load / allow
   static func unlock(_ sessionId: String, model: AppModel) async throws -> BatchPrepared {
-    let c = try await RouterClient.shared.sessionCert(sessionId)
-    try LinePins.check(session: sessionId, line: c.line)
-    let id = LineIdentity(cert: c)
-    try Checks.sameSession(id, expectedLabel: model.session(sessionId)?.j["label"].text)
+    let held = try await UnlockReviewView.sessionStores(sessionId)
     let doc = try await RouterClient.shared.storesDoc()
-    let scoped = !(c.nonce ?? "").isEmpty
-    let nonce = scoped ? c.nonce : nil
-    let certStores = (c.stores ?? []).filter { $0 != StoreView.coreStore }
-    let locked = certStores.filter { n in doc.stores.contains { $0.name == n && !$0.unlocked && !$0.empty } }
+    let locked = held.filter { n in doc.stores.contains { $0.name == n && !$0.unlocked && !$0.empty } }
     let writes = await SessionWrites.load(locked)
-    return BatchPrepared(facts: SignedAction.unlock(stores: locked, session: id, scoped: scoped) + SessionWrites.fact(writes), refusal: locked.isEmpty ? "Nothing locked" : nil) { auth in
-      try await StoreUnlock.signAndUnlock(payload: nil, stores: locked, reason: "Unlock \(locked.joined(separator: ", "))", for: nonce, shown: writes, auth: auth)
+    return BatchPrepared(facts: SignedAction.unlock(stores: locked, session: sessionId) + SessionWrites.fact(writes), refusal: locked.isEmpty ? "Nothing locked" : nil) { auth in
+      try await StoreUnlock.signAndUnlock(payloads: [], stores: locked, reason: "Unlock \(locked.joined(separator: ", "))", shown: writes, auth: auth)
     }
   }
 
@@ -150,9 +104,9 @@ struct BatchReviewView: View {
 
   private var open: [InboxItem] { items.filter { !isDone($0) } }
   private func isDone(_ it: InboxItem) -> Bool { if case .success? = outcome[it.id] { return true }; return false }
-  /// every item still to sign is read and signable, and no approval is still being made
+  /// every item still to sign is read and signable
   private var ready: Bool {
-    !open.isEmpty && (batch?.preparing ?? 0) == 0 && open.allSatisfy { prepared[$0.id] != nil && prepared[$0.id]?.refusal == nil && loadErrors[$0.id] == nil }
+    !open.isEmpty && open.allSatisfy { prepared[$0.id] != nil && prepared[$0.id]?.refusal == nil && loadErrors[$0.id] == nil }
   }
   private var allowTitle: String { outcome.values.contains { if case .failure = $0 { return true }; return false } ? "Retry" : "Allow all" }
 
@@ -166,10 +120,6 @@ struct BatchReviewView: View {
           LabeledContent("Caller", value: batch.callerText).accessibilityIdentifier("batch-caller")
           Text(batch.callLine).font(.footnote.monospaced()).textSelection(.enabled).accessibilityIdentifier("batch-call")
           LabeledContent("Items", value: "\(items.count)").accessibilityIdentifier("batch-count")
-          if batch.preparing > 0 {
-            LabeledContent("Being prepared") { HStack { Text("\(batch.preparing)"); ProgressView() } }
-              .accessibilityElement(children: .combine).accessibilityIdentifier("batch-preparing")
-          }
           if let e = batch.expires { LabeledContent("Expires", value: Fmt.when(e)) }
         } header: { Label("Requested via (router)", systemImage: "arrow.left.arrow.right") }
         Section {
@@ -256,14 +206,7 @@ struct BatchReviewView: View {
   /// the batch and its items; each item still to sign is read and checked as its own page would (again on Retry)
   private func load() async {
     do {
-      // a new session's approval comes a moment after it was filed: wait for it (up to a minute)
-      var got = try await RouterClient.shared.inboxBatch(batchId)
-      let until = Date.now.addingTimeInterval(60)
-      while let g = got, g.batch.preparing > 0, Date.now < until {
-        batch = g.batch; items = g.items
-        try? await Task.sleep(for: .seconds(2))
-        got = try await RouterClient.shared.inboxBatch(batchId)
-      }
+      let got = try await RouterClient.shared.inboxBatch(batchId)
       guard let g = got else { if outcome.isEmpty { gone = true } else { model.secureCompleted(true) }; return }
       batch = g.batch
       // items that went through stay listed (Allowed) until the page closes
@@ -327,15 +270,16 @@ struct BatchReviewView: View {
 }
 
 extension InboxItem {
-  /// the core action (or phone grant) the entry leads to: a fixed name per kind
+  /// the action the entry leads to: a fixed name per kind
   var actionTitle: String {
     let p = params
     switch kind {
     case "repo-key": return p["action"].string == "remove" ? "Remove deploy key" : "Add deploy key"
-    case "grant": return (p["days"].int ?? 0) > 0 ? "Standing rule" : "Grant"
     case "unlock": return "Unlock stores"
     case "add-store": return "Add a store"
-    case "resume-upgrade": return "Resume on the latest image"
+    case "terminal": return "Open a terminal"
+    case "command": return "Run a command"
+    case "resume-upgrade": return "Resume from a snapshot"
     case "api-call": return "API call"
     case "restore": return "Restore store"
     default: return j["options"]["restore"].text != nil ? "Restore" : "New session"
