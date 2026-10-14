@@ -1,0 +1,65 @@
+# The log notary: issues challenges with its own timestamp and logs each one (LOG_FILE, append-only JSON lines, on its
+# own volume). Holds only its key. One replica: the log head is in memory, so two copies would fork the chain.
+#
+# Its image is pinned by the images workflow (main only). jarvis2/kernel-pin: hold — CI builds the image but pins it
+# only while this manifest has none yet (the placeholder sha-000000000000): a restart loses state, so a new image
+# goes live only on Deyao's go (a commit removing the hold, then the images workflow; put it back after).
+# Its key: the Secret kernel-key-notary (infra/kernel-keys.py; SOPS in k8s/secrets), which only this pod mounts.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata: { name: notary-log, namespace: jarvis2-core }
+spec:
+  accessModes: [ReadWriteOnce]
+  resources: { requests: { storage: 1Gi } }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: notary, namespace: jarvis2-core, annotations: { jarvis2/kernel-pin: hold } }
+spec:
+  replicas: 1
+  strategy: { type: Recreate }
+  selector: { matchLabels: { app: notary } }
+  template:
+    # restart: change jarvis2/restart (a commit) to end this pod; for secrets that empties it (Recover follows)
+    metadata: { labels: { app: notary, jarvis2/part: notary }, annotations: { jarvis2/restart: "0" } }
+    spec:
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      securityContext: { fsGroup: 65532 }
+      containers:
+        - name: notary
+          image: ghcr.io/de0ch/jarvis2-notary:sha-000000000000
+          ports: [{ containerPort: 8090 }]
+          env:
+            - { name: KEY_FILE, value: "/key/key.pem" }
+            - { name: BOX_KEY_FILE, value: "/box/box-key.pem" }
+            - { name: ADDR, value: ":8090" }
+            - { name: LOG_FILE, value: "/data/notary.log" }
+          # readiness only: a liveness restart would end a stateful part (an empty secrets, a spawner without its token)
+          readinessProbe: { httpGet: { path: /identity, port: 8090 }, periodSeconds: 10 }
+          volumeMounts: [{ name: key, mountPath: /key, readOnly: true }, { name: box-key, mountPath: /box, readOnly: true }, { name: data, mountPath: /data }]
+          resources: { requests: { cpu: 10m, memory: 16Mi }, limits: { memory: 256Mi } }
+          securityContext: { runAsNonRoot: true, runAsUser: 65532, runAsGroup: 65532, allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: { drop: [ALL] }, seccompProfile: { type: RuntimeDefault } }
+      volumes:
+        - { name: key, secret: { secretName: kernel-key-notary, defaultMode: 0440 } }
+        - { name: box-key, secret: { secretName: core-box-key, defaultMode: 0440 } }
+        - { name: data, persistentVolumeClaim: { claimName: notary-log } }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: notary, namespace: jarvis2-core }
+spec:
+  selector: { app: notary }
+  ports: [{ port: 8090, targetPort: 8090 }]
+---
+# only the router reaches it; it reaches nothing (no egress at all)
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: { name: notary, namespace: jarvis2-core }
+spec:
+  podSelector: { matchLabels: { app: notary } }
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from: [{ namespaceSelector: { matchLabels: { jarvis2/ns: router } }, podSelector: { matchLabels: { app: router } } }]
+      ports: [{ port: 8090 }]
+  egress: []

@@ -1,16 +1,17 @@
 #!/bin/bash
-# fill-stores.sh — after a Reset (docs/RUNBOOK.md "After a Reset"): fill every store in the core and its backup
-# (sealed to the master key the core was set up with), minting or rotating every token whose value lived only in
-# the old stores and backups, then delete the local copies. Values are never printed.
+# fill-stores.sh — after a Reset (docs/RUNBOOK.md "After a Reset"): fill every store in secrets (the kernel part) and its
+# key backups (sealed to the master key secrets was set up with), minting or rotating every token whose value lived only
+# in the old stores and backups, send the spawner a fresh Fly token, then delete the local copies. Values are never printed.
 #
 #   github-deploy-keys GITHUB_DEPLOY_KEYS_TOKEN   a new fine-grained PAT jarvis2-deploy-keys: all repositories, Repository
-#                      "Administration: read and write" only (sensitive). The core makes each repo's deploy key with it
+#                      "Administration: read and write" only (sensitive). Secrets makes each repo's deploy key with it
 #                      when Deyao adds the repo in the app; the repos' own stores (github-<repo>) are made there, one
 #                      Face ID each, never here. Its line is in the layout file, valued from the file minted below.
-#   claude             (no keys)                      a cert naming it gets the router's Claude login; made empty, not
-#                      sensitive
+#   claude             (no keys here)                 the router writes the Claude login into it (CLAUDE_CREDENTIALS,
+#                      CLAUDE_ACCOUNT) right after the claim; made empty, not sensitive
 #   tunnel             CF_ACCESS_CLIENT_ID/SECRET     Access service token jarvis2-tunnel, rotated
-#   core               FLY_API_TOKEN              a fresh infra/fly-token.sh
+#   (the spawner)      FLY_API_TOKEN              a fresh infra/fly-token.sh, sealed to the spawner (not a store: the spawner
+#                      keeps it in memory; `infra/setup.py fly-token` again after a spawner restart)
 #   default, identity, infra, money, devices, work, jarvis1   Deyao's own stores by kind: the keys are listed in
 #                      claude-env .claude/skills/jarvis2/stores.txt (values from this session's env)
 #   openrouter         OPENROUTER_API
@@ -70,8 +71,8 @@ c() { curl -s -o /dev/null -w "%{http_code}" -H "CF-Access-Client-Id: $(cat "$D/
 bash infra/fly-token.sh "$D/fly.tok"
 
 S="python3 infra/setup.py"
-$S identity | grep -q '^set up' || { echo "the core is empty: Reset in the app first"; exit 1; }
-# not sensitive: created first (a store the core never created is sensitive); a store that exists is kept
+$S identity | grep -q '^set up' || { echo "secrets is empty: Reset in the app first"; exit 1; }
+# not sensitive: created first (a store secrets never created is sensitive); a store that exists is kept
 have="$($S stores | cut -d' ' -f1)"
 for n in default openrouter claude tunnel shopping; do
   grep -qx "$n" <<<"$have" || $S create "$n"
@@ -87,6 +88,6 @@ done
 $S write openrouter OPENROUTER_API
 $S stores | grep -q '^claude \[' || $S create claude
 $S write tunnel CF_ACCESS_CLIENT_ID=file:$D/j2tunnel.id CF_ACCESS_CLIENT_SECRET=file:$D/j2tunnel.secret
-$S backup-core "$D/fly.tok"
+$S fly-token "$D/fly.tok"
 $S stores
-echo "ok: every store written to the core and backed up; local copies deleted"
+echo "ok: every store written to secrets and backed up, the spawner has its Fly token; local copies deleted"

@@ -1,0 +1,20 @@
+# The router on the kernel (docs/API.md): one URL per kernel part (router/kernel.go kernelParts), each a Service in
+# jarvis2-core (k8s/apps/kernel/). The router's NetworkPolicy already lets it reach jarvis2-core on 8090; each part's own
+# policy admits only the router.
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: router, namespace: jarvis2-router }
+spec:
+  template:
+    spec:
+      containers:
+        - name: router
+          env:
+            - { name: NOTARY_URL, value: "http://notary.jarvis2-core.svc.cluster.local:8090" }
+            - { name: NOTARIZER_URL, value: "http://notarizer.jarvis2-core.svc.cluster.local:8090" }
+            - { name: MOVER_URL, value: "http://mover.jarvis2-core.svc.cluster.local:8090" }
+            - { name: MERGER_URL, value: "http://merger.jarvis2-core.svc.cluster.local:8090" }
+            - { name: IDENTITY_SIGNER_URL, value: "http://identity-signer.jarvis2-core.svc.cluster.local:8090" }
+            - { name: GULLIBLE_SIGNER_URL, value: "http://gullible-signer.jarvis2-core.svc.cluster.local:8090" }
+            - { name: SPAWNER_URL, value: "http://spawner.jarvis2-core.svc.cluster.local:8090" }
+            - { name: SECRETS_URL, value: "http://secrets.jarvis2-core.svc.cluster.local:8090" }

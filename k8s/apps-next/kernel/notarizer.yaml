@@ -1,0 +1,68 @@
+# The succession notarizer: checks a succession cert against the table and answers the notary's challenge for it.
+# STATE_FILE (the sources already continued, the table's "first successor") is on its own volume: losing it would let
+# a source be continued twice. One replica (the volume is ReadWriteOnce).
+#
+# Its image is pinned by the images workflow (main only). jarvis2/kernel-pin: hold — CI builds the image but pins it
+# only while this manifest has none yet (the placeholder sha-000000000000): a restart loses state, so a new image
+# goes live only on Deyao's go (a commit removing the hold, then the images workflow; put it back after).
+# Its key: the Secret kernel-key-notarizer (infra/kernel-keys.py; SOPS in k8s/secrets), which only this pod mounts.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata: { name: notarizer-state, namespace: jarvis2-core }
+spec:
+  accessModes: [ReadWriteOnce]
+  resources: { requests: { storage: 1Gi } }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: notarizer, namespace: jarvis2-core, annotations: { jarvis2/kernel-pin: hold } }
+spec:
+  replicas: 1
+  strategy: { type: Recreate }
+  selector: { matchLabels: { app: notarizer } }
+  template:
+    # restart: change jarvis2/restart (a commit) to end this pod; for secrets that empties it (Recover follows)
+    metadata: { labels: { app: notarizer, jarvis2/part: notarizer }, annotations: { jarvis2/restart: "0" } }
+    spec:
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      securityContext: { fsGroup: 65532 }
+      containers:
+        - name: notarizer
+          image: ghcr.io/de0ch/jarvis2-notarizer:sha-000000000000
+          ports: [{ containerPort: 8090 }]
+          env:
+            - { name: KEY_FILE, value: "/key/key.pem" }
+            - { name: BOX_KEY_FILE, value: "/box/box-key.pem" }
+            - { name: ADDR, value: ":8090" }
+            - { name: ROSTER_FILE, value: "/roster/roster.json" }
+            - { name: STATE_FILE, value: "/data/state.json" }
+          # readiness only: a liveness restart would end a stateful part (an empty secrets, a spawner without its token)
+          readinessProbe: { httpGet: { path: /identity, port: 8090 }, periodSeconds: 10 }
+          volumeMounts: [{ name: key, mountPath: /key, readOnly: true }, { name: box-key, mountPath: /box, readOnly: true }, { name: roster, mountPath: /roster, readOnly: true }, { name: data, mountPath: /data }]
+          resources: { requests: { cpu: 10m, memory: 16Mi }, limits: { memory: 256Mi } }
+          securityContext: { runAsNonRoot: true, runAsUser: 65532, runAsGroup: 65532, allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: { drop: [ALL] }, seccompProfile: { type: RuntimeDefault } }
+      volumes:
+        - { name: key, secret: { secretName: kernel-key-notarizer, defaultMode: 0440 } }
+        - { name: box-key, secret: { secretName: core-box-key, defaultMode: 0440 } }
+        - { name: roster, configMap: { name: kernel-roster } }
+        - { name: data, persistentVolumeClaim: { claimName: notarizer-state } }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: notarizer, namespace: jarvis2-core }
+spec:
+  selector: { app: notarizer }
+  ports: [{ port: 8090, targetPort: 8090 }]
+---
+# only the router reaches it; it reaches nothing (no egress at all)
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: { name: notarizer, namespace: jarvis2-core }
+spec:
+  podSelector: { matchLabels: { app: notarizer } }
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from: [{ namespaceSelector: { matchLabels: { jarvis2/ns: router } }, podSelector: { matchLabels: { app: router } } }]
+      ports: [{ port: 8090 }]
+  egress: []

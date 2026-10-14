@@ -1,9 +1,10 @@
 #!/bin/bash
-# fly-token.sh OUT — the core's Fly token: JARVIS2_FLY_TOKEN narrowed (Fly macaroon caveats) to app
-# jarvis2-sessions (read, write, create, delete, control — Fly needs write to create a machine) and to ONE
-# command inside a machine: /usr/local/bin/jarvis2-init with no arguments (IfPresent: the command limit applies
-# to exec only). Tested 2026-10-09: create/destroy allowed, `cat` refused (403), jarvis2-init allowed, with an
-# argument refused. Written to OUT (mode 600), never printed; infra/setup.py backup-core puts it in the backup.
+# fly-token.sh OUT — the spawner's Fly token (the kernel part that alone creates and destroys session machines):
+# JARVIS2_FLY_TOKEN narrowed (Fly macaroon caveats) to app jarvis2-sessions (read, write, create, delete, control —
+# Fly needs write to create a machine) and to ONE command inside a machine: /usr/local/bin/jarvis2-init with no
+# arguments (IfPresent: the command limit applies to exec only). Tested 2026-10-09: create/destroy allowed, `cat`
+# refused (403), jarvis2-init allowed, with an argument refused. Written to OUT (mode 600), never printed;
+# `infra/setup.py fly-token OUT` sends it to the spawner, sealed to its key.
 set -euo pipefail
 : "${JARVIS2_FLY_TOKEN:?}"
 OUT="${1:?usage: fly-token.sh OUT}"

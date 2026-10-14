@@ -1,51 +1,52 @@
 #!/usr/bin/env python3
-"""The trusted setup session's side of Jarvis 2 (docs/DESIGN.md, docs/API.md "Setup"), through the router's
-/setup/* (Access service token jarvis2-setup + a signature by the setup key on every call; the router checks
-both). Values never print.
+"""The trusted setup session's side of Jarvis 2 (docs/DESIGN.md "Target design", docs/API.md "Setup"), through the
+router's /setup/* (Access service token jarvis2-setup + a signature by the setup key on every call; the router checks
+both, and relays to the kernel's parts: secrets and the spawner). Values never print.
 
   JARVIS2_SETUP_KEY               the setup key (PEM, P-256); or ~/.jarvis2/setup-key.pem
   JARVIS2_SETUP_ACCESS_ID/SECRET  the Access service token for /setup; or ~/.jarvis2/cloudflare.env
   HETZNER_S3_*                    the backup bucket (jarvis2-backup-de0ch)
 
-  infra/setup.py status                the router's health: secret names present, session image, core up
-  infra/setup.py identity              whether the core is empty or set up (and with which master public key),
-                                       checked against keys/box.pub and the core's own signature
-  infra/setup.py stores [--keys]       every store (the core's signed list) with the key NAMES it holds (--keys: each
+  infra/setup.py status                the router's health: secret names present, session image, which kernel parts
+                                       answer, whether it holds the root grant
+  infra/setup.py identity              whether secrets is empty or set up (and with which master public key), its
+                                       identity checked against keys/box.pub and its state against its own signature
+  infra/setup.py kernel                every kernel part's identity (role, signing key), each checked against keys/box.pub,
+                                       and the roster file they should match (k8s/apps-next/kernel/roster.json)
+  infra/setup.py phone-key             the phone's signing key from secrets' signed state (for the roster's `phone`)
+  infra/setup.py stores [--keys]       every store (secrets' signed list) with the key NAMES it holds (--keys: each
                                        key's explanation and writer)
   infra/setup.py create NAME           a new, empty, NOT sensitive store (once per name)
   infra/setup.py write NAME KEY[=SRC]… [--explain KEY=TEXT]…
                                        write these keys of a store, one by one (the store's other keys are never read
                                        or touched); each value from this session's env var KEY, or SRC: another env var
-                                       name, or file:PATH. Each is sealed to the store key (phone + core) and, for its
-                                       backup, to the master key the core was set up with; the router backs it up first
-                                       (keys/<store>/<key>.json) and asks the phone to refresh the running sessions that
-                                       hold the store. A key name that has no explanation yet needs --explain
-                                       With the live core from before stores were made of keys (it replaces the whole
-                                       store with exactly the keys given), a write that leaves out any key name recorded
-                                       for the store is REFUSED (here and by the router) unless --replace
+                                       name, or file:PATH. Each is sealed three ways: to the store key P + K (phone +
+                                       secrets), to the master key for its backup, and to secrets' agreement key K
+                                       (`live`: served on the next pull), and signed by the setup key (writer `setup`,
+                                       over secrets.WriterText). The router backs it up first (keys/<store>/<key>.json),
+                                       then writes it into secrets and sends `pull` to the running machines whose grant
+                                       names the store. A key name that has no explanation yet needs --explain
   infra/setup.py delete NAME KEY…      delete these keys of a store (the backup keeps their earlier versions)
-  infra/setup.py versions NAME         the store's earlier versions the core keeps (number, time, what made it, key
-                                       names), from the core's signed list; put one back with `request restore`
+  infra/setup.py versions NAME         the store's earlier versions secrets keeps (number, time, what made it, key
+                                       names), from secrets' signed list; put one back with `request restore`
   infra/setup.py docs NAME [--about TEXT] [KEY=TEXT…]
                                        what a store and its keys are for (shown in the app, the web page, `jarvis2 stores
                                        --keys`); KEY= with no text removes one
-  infra/setup.py keys NAME KEY[=SRC]…  a core from before stores were made of keys (until the held core is live): record
-                                       a store's key names at the router only. `keys NAME --forget` drops them
-  infra/setup.py mark-sensitive NAME   the one-way upgrade, in the core and in the backup
+  infra/setup.py mark-sensitive NAME   the one-way upgrade, in secrets and in the backup
   infra/setup.py backup NAME KEY[=SRC]… [--not-sensitive]
                                        a store's backup only, for the next Recover; sensitive unless
                                        --not-sensitive
-  infra/setup.py backup-core FILE      the core's Fly token, FLY_API_TOKEN from FILE (infra/fly-token.sh):
-                                       sent to the core sealed to its key, and backed up as the `core` store
+  infra/setup.py fly-token FILE        the spawner's Fly token, FLY_API_TOKEN from FILE (infra/fly-token.sh), sealed to the
+                                       spawner's agreement key (from its box-signed identity). The spawner keeps it in
+                                       memory only: send it again after every spawner restart
   infra/setup.py claude-login          the Claude login the router holds (no secrets): account, expiry, refresh
                                        state, participants of the refresh protocol
   infra/setup.py repos                 the router's repo list (repo, store, key fingerprint)
   infra/setup.py sessions              the router's sessions: id, current machine, state, title
   infra/setup.py lease take-over|hand-back DEVICE [--note TEXT]
                                        for Deyao: take a shared device over (agents refused) or hand it back
-  infra/setup.py pause SESSION         cancel its wakeups and crons, then pause it (its snapshot if the machine answers)
-  infra/setup.py resume SESSION        resume a paused session on its own image, no prompt (a pre-router-login Claude image:
-                                       a resume-upgrade approval in the Inbox instead, DECISIONS 151)
+  infra/setup.py pause SESSION         cancel its wakeups and crons, then pause it (a kill into a fresh source)
+  infra/setup.py resume SESSION        resume a paused session with no change (a spawn from its source, no phone)
   infra/setup.py restart SESSION       pause + resume as the app's Restart; wakeups and crons stay armed
   infra/setup.py requests              what waits in the phone's Inbox (requests and approvals)
   infra/setup.py jarvis1               Jarvis 1's paused sessions (its index) and each one's import state here
@@ -53,25 +54,28 @@ both). Values never print.
                                        the router hashes each paused Jarvis 1 session's files (in the background)
   infra/setup.py jarvis1 import ID [ID…] --stores a,b [--size S] [--prompt-file F] --why TEXT [--summary TEXT]
                                        a prepared one as a new Jarvis 2 session, waiting in the Inbox for Face ID
-                                       (its cert names the import manifest's sha256; docs/API.md "Jarvis 1 import");
-                                       several IDs (or --summary) file them as ONE batch, allowed under one Face ID
+                                       (docs/API.md "Jarvis 1 import"); several IDs (or --summary) file them as ONE batch
   infra/setup.py request add-repo OWNER/NAME --why TEXT [--sensitive]
   infra/setup.py request remove-repo OWNER/NAME --why TEXT
-  infra/setup.py request grant SESSION HOLDER [--minutes N | --days N] --why TEXT
   infra/setup.py request unlock SESSION --why TEXT
   infra/setup.py request restore STORE VERSION --why TEXT
+  infra/setup.py request terminal SESSION [--minutes N] --why TEXT
+  infra/setup.py request command SESSION --cmd-file FILE --why TEXT
+  infra/setup.py request add-store SESSION STORE --why TEXT
                                        a request in the Inbox of the Jarvis 2 app (docs/API.md "Requests"): Deyao
                                        reviews what would be signed and allows it with Face ID, or denies it. The
                                        router records it as from "Claude (setup session)"; --why is required
   infra/setup.py request batch (--file FILE | --item INTENT,key=value,…) --summary TEXT
                                        several requests as ONE Inbox entry (allowed together under one Face ID, or
                                        denied together): FILE is a JSON list of items, each {"intent": …} plus that
-                                       intent's fields (repo/add, repo/remove, grant, unlock, add-store, new-session,
-                                       jarvis1-import; docs/API.md "Batches"), each with an optional "explanation"
+                                       intent's fields (repo/add, repo/remove, unlock, terminal, command, add-store,
+                                       new-session, jarvis1-import; docs/API.md "Batches"), each with an optional
+                                       "explanation"
+  infra/setup.py pin-master            pin the master key secrets was set up with (only after Deyao's own Recover)
 
-Everything is sealed to the master public key the core was set up with (Reset or Recover in the app), which
-this script reads from the core's signed state, after checking the core's keys against keys/box.pub — so it
-works only once the core is set up. A store the core never created (no `create` first) is sensitive.
+Everything is sealed to the master public key secrets was set up with (Reset or Recover in the app), which this
+script reads from secrets' signed state, after checking secrets' identity against keys/box.pub — so it works only once
+secrets is set up. A store secrets never created (no `create` first) is sensitive.
 """
 import base64, hashlib, json, os, sys, time, urllib.error, urllib.request
 
@@ -84,14 +88,18 @@ BASE = os.environ.get("JARVIS2_URL", "https://jarvis2.deyaochen.com")
 D = os.path.expanduser("~/.jarvis2")
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 BUCKET = os.environ.get("JARVIS2_BACKUP_BUCKET", "jarvis2-backup-de0ch")
+ROSTER = os.path.join(ROOT, "k8s", "apps-next", "kernel", "roster.json")
+# the kernel's parts by the roster's role names (core/kernel/README.md)
+PARTS = ("notary", "notarizer", "mover", "merger", "identity", "gullible", "spawner", "secrets")
 
-# ---- P-256 point addition (the combined key P + K; the cryptography library has no point add) ----------
+# ---- P-256 point addition (P + K; the cryptography library has no point add) ------------------------------------
 _p = 0xffffffff00000001000000000000000000000000ffffffffffffffffffffffff
 
 
 def _pt(b64):
     raw = base64.b64decode(b64)
-    assert len(raw) == 65 and raw[0] == 4
+    if len(raw) != 65 or raw[0] != 4:
+        raise SystemExit("not an uncompressed P-256 point")
     return int.from_bytes(raw[1:33], "big"), int.from_bytes(raw[33:], "big")
 
 
@@ -104,8 +112,8 @@ def _add(P, Q):
     return x3, (l * (x1 - x3) - y1) % _p
 
 
-def _pub(x, y):
-    return ec.EllipticCurvePublicKey.from_encoded_point(ec.SECP256R1(), b"\x04" + x.to_bytes(32, "big") + y.to_bytes(32, "big"))
+def _b64pt(x, y):
+    return base64.b64encode(b"\x04" + x.to_bytes(32, "big") + y.to_bytes(32, "big")).decode()
 
 
 def _kdf(secret, info):
@@ -130,7 +138,25 @@ def _verify(pub_b64, payload, sig_b64):
         return False
 
 
+def opened(pub_b64, doc, kind):
+    """a kernel document {payload, sig}: its payload, only when pub_b64 signed it and it is of this kind"""
+    if not isinstance(doc, dict) or not _verify(pub_b64, (doc.get("payload") or "").encode(), doc.get("sig") or ""):
+        raise SystemExit(f"a {kind} document isn't signed by the part's key")
+    p = json.loads(doc["payload"])
+    if p.get("kind") != kind:
+        raise SystemExit(f"expected a {kind} document, got {p.get('kind')!r}")
+    return p
+
+
 # ---- the router -------------------------------------------------------------------------------------------
+
+class Refused(SystemExit):
+    """an HTTP error from the router or a part (status in .code, the words in .msg)"""
+
+    def __init__(self, path, code, msg):
+        super().__init__(f"{path}: HTTP {code}: {msg}")
+        self.status, self.msg = code, str(msg)
+
 
 def setup_key():
     pem = os.environ.get("JARVIS2_SETUP_KEY") or open(os.path.join(D, "setup-key.pem")).read()
@@ -158,10 +184,10 @@ def call(method, path, body=None):
         b = e.read()
         try:
             d = json.loads(b)
-            msg = json.loads(d["payload"]).get("error") if "payload" in d else d
+            msg = json.loads(d["payload"]).get("error") if "payload" in d else d.get("error", d)
         except Exception:
             msg = b[:200]
-        raise SystemExit(f"{path}: HTTP {e.code}: {msg}")
+        raise Refused(path, e.code, msg)
 
 
 def keyfile(name):
@@ -169,39 +195,75 @@ def keyfile(name):
     return open(os.path.join(os.environ.get("JARVIS2_KEYS_DIR") or os.path.join(ROOT, "keys"), name)).read().strip()
 
 
+def identity_text(role, signing, agreement):
+    """kernel.IdentityText: what the box key signs for a part"""
+    return f"jarvis2-{role}-identity {signing} {agreement}"
+
+
+def checked_identity(role, k):
+    """a part's /identity answer, only when it is that role's and the box key (keys/box.pub) signed it"""
+    if not k or k.get("role") != role:
+        raise SystemExit(f"no {role} identity (got {k and k.get('role')!r})")
+    if not _verify(keyfile("box.pub"), identity_text(role, k["signingKey"], k.get("agreementKey") or "").encode(), k.get("boxSig") or ""):
+        raise SystemExit(f"the {role}'s identity isn't signed by this box's key (keys/box.pub)")
+    return k
+
+
+def part_identities():
+    """every kernel part's /identity, as the router relays them (GET /setup/kernel/identities: {role: identity|null}),
+    each checked against the box key; a part that doesn't answer is None"""
+    try:
+        ids = call("GET", "/setup/kernel/identities")
+    except Refused as e:
+        if e.status == 404:
+            raise SystemExit("the router has no GET /setup/kernel/identities (the setup mirror of GET /api/kernel/identities): "
+                             "it is needed for the spawner's agreement key and the roster check")
+        raise
+    return {role: (checked_identity(role, ids.get(role)) if ids.get(role) else None) for role in PARTS}
+
+
 def identity():
-    """the core's keys (checked against the box key, keys/box.pub) and its own signed state: {signingKey,
-    agreementKey, master: the master public key it was set up with ("" while empty), phone: its keys or None}"""
-    k = call("GET", "/setup/identity")
-    text = f"jarvis2-core-identity {k['signingKey']} {k['agreementKey']}".encode()
-    if not _verify(keyfile("box.pub"), text, k.get("boxSig", "")):
-        raise SystemExit("the core's identity isn't signed by this box's key (keys/box.pub)")
-    d = k.get("state") or {}
-    if not _verify(k["signingKey"], (d.get("payload") or "").encode(), d.get("sig") or ""):
-        raise SystemExit("the core's state isn't signed by the core")
-    st = json.loads(d["payload"])
-    if st.get("kind") != "core-state":
-        raise SystemExit("not the core's state")
-    return {"signingKey": k["signingKey"], "agreementKey": k["agreementKey"], "master": st.get("master") or "", "phone": st.get("phone"),
-            "keys": k.get("bundle") == "keys"}
+    """secrets' keys (checked against the box key) and its own signed state: {signingKey, agreementKey, master: the master
+    public key it was claimed with ("" while empty), phone: its keys or None, storeKey: P + K (None while empty)}"""
+    k = checked_identity("secrets", call("GET", "/setup/identity"))
+    try:
+        t = call("GET", "/setup/store-keys")  # {state, storeKey, agreementKey}: only once secrets is set up
+    except Refused as e:
+        if e.status == 400 and "isn't set up" in e.msg:
+            return {"signingKey": k["signingKey"], "agreementKey": k["agreementKey"], "master": "", "phone": None, "storeKey": None}
+        raise
+    st = opened(k["signingKey"], t.get("state"), "secrets-state")
+    if t.get("agreementKey") != k["agreementKey"]:
+        raise SystemExit("the router named another agreement key than secrets' box-signed identity")
+    phone = st.get("phone")
+    sk = None
+    if st.get("master") and phone:
+        d = opened(k["signingKey"], t.get("storeKey"), "store-key")
+        if d.get("phone") != phone["agreementKey"]:
+            raise SystemExit("secrets' store key is for another phone")
+        if _b64pt(*_add(_pt(phone["agreementKey"]), _pt(k["agreementKey"]))) != d.get("storeKey"):
+            raise SystemExit("secrets' store key isn't P + K for its phone and its agreement key")
+        sk = d["storeKey"]
+    return {"signingKey": k["signingKey"], "agreementKey": k["agreementKey"], "master": st.get("master") or "",
+            "phone": phone, "storeKey": sk}
 
 
 def set_up():
-    """the core, only once it is set up (Reset or Recover in the app) by Deyao: the master key and the phone it names.
-    Claim is first-come, so the core's word isn't enough (R1 audit): its master key must be the one pinned in the
+    """secrets, only once it is set up (Reset or Recover in the app) by Deyao: the master key and the phone it names.
+    Claim is first-come, so secrets' word isn't enough (R1 audit): its master key must be the one pinned in the
     bucket, or its claim must be countersigned by Deyao's pinned device key (a Reset in his app)."""
     me = identity()
     if not me["master"] or not me["phone"]:
-        raise SystemExit("the core is empty: Deyao sets it up in the app first (Reset or Recover)")
+        raise SystemExit("secrets is empty: Deyao sets it up in the app first (Reset or Recover)")
     trust(me)
     return me
 
 
-# ---- whose core it is: the pins (pins.json in the bucket, signed by the setup key) ----------------------------
+# ---- whose secrets it is: the pins (pins.json in the bucket, signed by the setup key) ----------------------------
 #
 # master: the master public key the stores belong to; device: the app's long-lived device key (kept across Reset and
 # Recover). A claim under the pinned master pins the device key it carries; a claim countersigned by the pinned device
-# key moves the master pin (Deyao's Reset). Anything else — a core someone else claimed first — gets nothing from here.
+# key moves the master pin (Deyao's Reset). Anything else — secrets someone else claimed first — gets nothing from here.
 
 def load_pins():
     try:
@@ -225,17 +287,17 @@ def save_pins(master, device):
 
 
 def claim_of(me):
-    """the claim statement the core holds (checked: signed by its master key, naming this core and its phone), the
-    device key it names (the app's long-lived key, inside the master-signed statement) and whether the router kept
-    that device's countersignature over exactly this statement"""
-    cc = call("GET", "/setup/core-cert")
+    """the claim statement the router kept for the running secrets (checked: signed by its master key, naming this
+    secrets — the statement's `core` field — and its phone), the device key it names (the app's long-lived key, inside
+    the master-signed statement) and whether the router kept that device's countersignature over exactly this statement"""
+    cc = call("GET", "/setup/secrets-cert")
     st_text = cc.get("statement") or ""
     if not _verify(me["master"], st_text.encode(), cc.get("masterSig") or ""):
-        raise SystemExit("the core's claim isn't signed by its master key")
+        raise SystemExit("secrets' claim isn't signed by its master key")
     st = json.loads(st_text)
     if st.get("master") != me["master"] or st.get("core", {}).get("signingKey") != me["signingKey"] or \
             st.get("core", {}).get("agreementKey") != me["agreementKey"] or st.get("phone") != me["phone"]:
-        raise SystemExit("the core's claim names another master, core or phone")
+        raise SystemExit("secrets' claim names another master, secrets or phone")
     device = st.get("device") or ""
     countersigned = bool(device) and any(
         d.get("statement") == st_text and d.get("deviceKey") == device and _verify(device, st_text.encode(), d.get("deviceSig") or "")
@@ -246,7 +308,7 @@ def claim_of(me):
 def trust(me):
     pins = load_pins()
     if not pins.get("master"):
-        raise SystemExit("no master key pinned yet: once the core is known to be Deyao's (a Recover by him), "
+        raise SystemExit("no master key pinned yet: once secrets is known to be Deyao's (a Recover by him), "
                          "run `infra/setup.py pin-master` (docs/RUNBOOK.md)")
     device, countersigned = claim_of(me)
     if pins["master"] == me["master"]:
@@ -257,65 +319,49 @@ def trust(me):
         save_pins(me["master"], device)  # Deyao's Reset: a new master, countersigned by his device
         print(f"note: new master key {me['master'][:16]}… pinned (its claim is countersigned by the pinned device key)", file=sys.stderr)
         return
-    raise SystemExit("REFUSED: the core is set up with a master key that isn't the pinned one, and its claim isn't "
+    raise SystemExit("REFUSED: secrets is set up with a master key that isn't the pinned one, and its claim isn't "
                      "countersigned by Deyao's device key. Someone other than Deyao's app may have claimed it: nothing "
-                     "is written, backed up or sent. Restart the core from git (RUNBOOK \"Emptying the core\") and set it up in the app.")
+                     "is written, backed up or sent. Empty secrets from git (RUNBOOK \"Emptying secrets\") and set it up in the app.")
 
 
-# the stores this writer means to be NOT sensitive (created first); every other store it writes is sensitive. The
-# core's open create_store lets anyone (the router) create a name first, so the writer checks the core's word against
-# this list and marks a store sensitive before it writes into it (R1 audit). A change here is a visible commit.
 # ---- stores ---------------------------------------------------------------------------------------------
 
-def store_key(phone_agreement, core_agreement):
-    """P + K, the key every store key is wrapped to (from the core's state, checked against the box key)"""
-    return _pub(*_add(_pt(phone_agreement), _pt(core_agreement)))
-
-
 def writer_text(store, key, e, data, backup_sha):
-    """core.WriterText: what a key's writer signs"""
+    """secrets.WriterText: what a setup writer signs"""
     sum_ = hashlib.sha256(data.encode()).hexdigest() if data else ""
     return f"jarvis2-store-key\n{store}\n{key}\n{e}\n{sum_}\n{backup_sha}"
 
 
+def live_info(store, key):
+    """secrets.LiveInfo: what a write's live copy is sealed under (to secrets' agreement key)"""
+    return f"jarvis2/live-key\n{store}\n{key}"
+
+
 def key_write(store, key, value, me, explanation=""):
-    """router keyWriteIn for one key: the value sealed to the store key (AAD store\nkey), its backup sealed to the master
-    key, both signed by the setup key (value None = a delete)"""
+    """the router's keyWriteIn for one key (value None = a delete): the value under a fresh data key (AAD store\\nkey),
+    the data key wrapped to the store key P + K, the value sealed to the master key for its backup (AAD store\\nkey) and
+    to secrets' agreement key (`live`), and the setup key's signature over WriterText"""
     req = {"delete": value is None, "explanation": explanation}
     e = data = bsha = ""
     if value is not None:
-        dk = os.urandom(32)
-        ek = ec.generate_private_key(ec.SECP256R1())
-        shared_x = ek.exchange(ec.ECDH(), store_key(me["phone"]["agreementKey"], me["agreementKey"]))
-        e = base64.b64encode(_x963(ek.public_key())).decode()
         aad = f"{store}\n{key}".encode()
+        dk = os.urandom(32)
+        w = seal_to(me["storeKey"], dk, "jarvis2/store-data-key")
+        e = w["e"]
         data = base64.b64encode(_gcm(dk, value.encode(), aad)).decode()
         b = seal_to(me["master"], value.encode(), "jarvis2/backup", aad)
         bsha = hashlib.sha256((b["e"] + "\n" + b["data"]).encode()).hexdigest()
-        req.update({"wrapped": {"e": e, "wrapped": base64.b64encode(_gcm(_kdf(shared_x, "jarvis2/store-data-key"), dk)).decode()},
-                    "data": data, "backup": b, "backupSha256": bsha})
-    req["sig"] = base64.b64encode(setup_key().sign(writer_text(store, key, e, data, bsha).encode(), ec.ECDSA(hashes.SHA256()))).decode()
+        req.update({"wrapped": {"e": e, "wrapped": w["data"]}, "data": data, "backup": b, "backupSha256": bsha,
+                    "live": seal_to(me["agreementKey"], value.encode(), live_info(store, key))})
+    text = writer_text(store, key, e, data, bsha)
+    req["writerText"] = text
+    req["sig"] = base64.b64encode(setup_key().sign(text.encode(), ec.ECDSA(hashes.SHA256()))).decode()
     return req
 
 
-def blob(name, values, phone_agreement, core_agreement):
-    """core.StoreBlob: the values under a data key (the name as associated data), the key wrapped to P + K, and the
-    writer's signature, which the phone checks (keys/setup.pub) before it unlocks the blob (core.WriterText)"""
-    dk = os.urandom(32)
-    combined = _pub(*_add(_pt(phone_agreement), _pt(core_agreement)))
-    e = ec.generate_private_key(ec.SECP256R1())
-    shared_x = e.exchange(ec.ECDH(), combined)
-    wrapped = _gcm(_kdf(shared_x, "jarvis2/store-data-key"), dk)
-    E = base64.b64encode(_x963(e.public_key())).decode()
-    data = base64.b64encode(_gcm(dk, json.dumps(values).encode(), name.encode())).decode()
-    text = f"jarvis2-store-blob\n{name}\n{E}\n{hashlib.sha256(data.encode()).hexdigest()}".encode()
-    sig = base64.b64encode(setup_key().sign(text, ec.ECDSA(hashes.SHA256()))).decode()
-    return {"name": name, "wrapped": {"e": E, "wrapped": base64.b64encode(wrapped).decode()}, "data": data, "writerSig": sig}
-
-
 # the stores this writer means to be NOT sensitive (created first); every other store it writes is sensitive. The
-# core's open create_store lets anyone (the router) create a name first, so the writer checks the core's word against
-# this list and marks a store sensitive before it writes into it (R1 audit). A change here is a visible commit.
+# open create_store lets anyone (the router) create a name first, so the writer checks secrets' word against this
+# list and marks a store sensitive before it writes into it (R1 audit). A change here is a visible commit.
 NOT_SENSITIVE = ("default", "openrouter", "claude", "tunnel", "shopping") + tuple(
     n for n in os.environ.get("JARVIS2_NOT_SENSITIVE", "").split(",") if n)  # test boxes add their own (rehearsals)
 
@@ -327,7 +373,8 @@ def s3():
 
 
 def seal_to(pub_b64, plain, info, aad=None):
-    """{e, data}: sealed to a P-256 public key — ECDH with a one-off key, HKDF-SHA256 (info), AES-256-GCM"""
+    """{e, data}: sealed to a P-256 public key — ECDH with a one-off key, HKDF-SHA256 (info), AES-256-GCM
+    (nonce‖ciphertext‖tag), as kernel.SealTo"""
     to = ec.EllipticCurvePublicKey.from_encoded_point(ec.SECP256R1(), base64.b64decode(pub_b64))
     e = ec.generate_private_key(ec.SECP256R1())
     return {"e": base64.b64encode(_x963(e.public_key())).decode(),
@@ -354,18 +401,13 @@ def mark_sensitive_backup(name):
     s3().put_object(Bucket=BUCKET, Key=f"sensitive/{name}.json", Body=json.dumps(signed(doc)).encode())
 
 
-def store_list():
-    d = call("POST", "/setup/stores", {"nonce": "setup-" + str(int(time.time()))})
-    return {s["name"]: s for s in json.loads(d["payload"])["stores"]}
-
-
-def recorded_keys(name):
-    """the key names the router lists for a store (the core's own list, or the names recorded for a core before
-    stores were made of keys); None when none are known"""
-    for st in call("GET", "/setup/stores/keys")["stores"]:
-        if st["name"] == name:
-            return st["keys"]
-    return None
+def store_list(me):
+    """secrets' signed store list (checked against its key), by name"""
+    nonce = "setup-" + os.urandom(8).hex()
+    d = opened(me["signingKey"], call("POST", "/setup/stores", {"nonce": nonce}), "stores")
+    if d.get("nonce") != nonce:
+        raise SystemExit("secrets' store list answers another nonce")
+    return {s["name"]: s for s in d["stores"]}
 
 
 def value(spec):
@@ -378,6 +420,24 @@ def value(spec):
     return key, os.environ[src]
 
 
+def roster_check(ids):
+    """the parts' answering keys against the committed roster (k8s/apps-next/kernel/roster.json); lines to print"""
+    out = []
+    try:
+        roster = json.load(open(ROSTER))
+    except FileNotFoundError:
+        return [f"no roster file at {os.path.relpath(ROSTER, ROOT)}"]
+    for role in PARTS:
+        k = ids.get(role)
+        have = k["signingKey"] if k else ""
+        want = roster.get(role) or ""
+        out.append(f"{role}: " + ("not answering" if not k else "matches the roster" if have == want else
+                                  f"DIFFERS from the roster ({want[:16] or 'empty'}… vs {have[:16]}…)"))
+    for role in ("phone", "root"):
+        out.append(f"{role}: " + ("set in the roster" if roster.get(role) else "EMPTY in the roster"))
+    return out
+
+
 def main():
     if len(sys.argv) < 2:
         raise SystemExit(__doc__)
@@ -387,11 +447,21 @@ def main():
     elif cmd == "identity":
         me = identity()
         print(f"set up with master key {me['master'][:16]}…" if me["master"] else "empty: waiting for Reset or Recover in the app")
+    elif cmd == "kernel":
+        ids = part_identities()
+        for role in PARTS:
+            k = ids[role]
+            print(f"{role}: " + (f"{k['signingKey'][:24]}… (box-signed)" if k else "not answering"))
+        print("\n".join(roster_check(ids)))
+    elif cmd == "phone-key":
+        me = identity()
+        if not me["phone"]:
+            raise SystemExit("secrets is empty: no phone yet")
+        print(me["phone"]["signingKey"])
     elif cmd == "stores":
         for s in call("GET", "/setup/stores/keys")["stores"]:
             flags = ["sensitive" if s["sensitive"] else "not-sensitive"] + (["empty"] if s["empty"] else []) + (["unlocked"] if s["unlocked"] else [])
-            keys = " ".join(s["keys"]) if s["keys"] is not None else "(key names not recorded)"
-            print(f"{s['name']} [{', '.join(flags)}]: {keys}")
+            print(f"{s['name']} [{', '.join(flags)}]: {' '.join(s.get('keys') or [])}")
             if "--keys" in args:
                 if s.get("about"):
                     print("  " + s["about"])
@@ -411,19 +481,13 @@ def main():
         print(f"ok: {args[0]}: {len(body['keys'])} explanation(s)" + (" and its about text" if about is not None else "") + " kept")
     elif cmd == "delete":
         me = set_up()
-        if not me["keys"]:
-            raise SystemExit("this core predates stores made of keys: `write` the store without those keys instead")
         for k in args[1:]:
             out = call("POST", f"/setup/stores/{args[0]}/keys/{k}", key_write(args[0], k, None, me))
-            print(f"ok: {args[0]}: {k} deleted; refresh asked of {len(out.get('refreshAsked') or [])} running session(s)")
-    elif cmd == "keys":
-        names = None if args[1:] == ["--forget"] else [a.partition("=")[0] for a in args[1:]]
-        call("POST", "/setup/store-keys", {"name": args[0], "keys": names})
-        print(f"ok: {args[0]}: key names forgotten" if names is None else f"ok: {args[0]}: {len(names)} key names recorded")
+            print(f"ok: {args[0]}: {k} deleted; pull sent to {len(out.get('pulled') or [])} running session(s)")
     elif cmd == "pin-master":
         me = identity()
         if not me["master"]:
-            raise SystemExit("the core is empty")
+            raise SystemExit("secrets is empty")
         device, _ = claim_of(me)
         save_pins(me["master"], device or load_pins().get("device"))
         print(f"ok: master key {me['master'][:16]}… pinned" + (" with the app's device key" if device else ""))
@@ -432,7 +496,7 @@ def main():
             raise SystemExit(f"{args[0]} isn't in NOT_SENSITIVE (infra/setup.py): a store not listed there stays sensitive")
         me = set_up()
         call("POST", "/setup/stores/create", {"name": args[0]})
-        # the backup says so too: a store with only key backups reads as sensitive offline and at a Recover (the core
+        # the backup says so too: a store with only key backups reads as sensitive offline and at a Recover (secrets
         # makes a store sensitive on its first key unless it was created like this). Empty, and a second early, so a key
         # written in the same second still lays over it (tools/decrypt-backup.py skips key backups not after it)
         backup(args[0], {}, False, me["master"], at=int(time.time()) - 1)
@@ -444,51 +508,29 @@ def main():
             k, _, t = args[i + 1].partition("=")
             explain[k] = t
             del args[i:i + 2]
-        replace = "--replace" in args
-        args = [a for a in args if a != "--replace"]
+        if "--replace" in args:
+            raise SystemExit("--replace means nothing: secrets writes keys one by one and never drops one; "
+                             "remove a key with `infra/setup.py delete`")
         name, vals = args[0], dict(value(a) for a in args[1:])
         me = set_up()
         want_sensitive = name not in NOT_SENSITIVE
-        have = store_list().get(name)
+        have = store_list(me).get(name)
         if want_sensitive and have is not None and not have["sensitive"]:
             # created not sensitive by someone else (the open create_store): upgraded before anything is in it
             call("POST", "/setup/stores/mark-sensitive", {"name": name})
             mark_sensitive_backup(name)
             print(f"note: {name} existed as not sensitive; marked sensitive before writing", file=sys.stderr)
-        if me["keys"]:
-            if replace:
-                raise SystemExit("--replace means nothing here: this core writes keys one by one and never drops one; "
-                                 "remove a key with `infra/setup.py delete`")
-            for k in sorted(vals):
-                out = call("POST", f"/setup/stores/{name}/keys/{k}", key_write(name, k, vals[k], me, explain.get(k, "")))
-                print(f"ok: {name}: {k} written (backed up first); refresh asked of {len(out.get('refreshAsked') or [])} running session(s)")
-            if want_sensitive and not store_list()[name]["sensitive"]:
-                raise SystemExit(f"the core calls {name} not sensitive after the write")
-            if explain:
-                call("POST", "/setup/store-docs", {"store": name, "keys": explain})
-            return
-        # a core from before stores were made of keys (until the held core is live): the whole store at once, which
-        # REPLACES it — so never with fewer keys than it is recorded to hold, unless --replace (2026-10-13: a write
-        # of 2 keys wiped 24)
-        recorded = recorded_keys(name)
-        missing = sorted(set(recorded or ()) - set(vals))
-        if missing and not replace:
-            raise SystemExit(f"REFUSED: this core replaces the whole store {name}, and these {len(missing)} recorded key(s) "
-                             f"aren't in this write: {', '.join(missing)}. Write every key (or, to drop them on purpose, add --replace).")
-        b = blob(name, vals, me["phone"]["agreementKey"], me["agreementKey"])
-        d = call("POST", "/setup/stores/write", {"store": b, "keys": sorted(vals), "replace": replace})
-        sens = json.loads(d["payload"])["sensitive"]
-        if want_sensitive and not sens:
-            raise SystemExit(f"the core still calls {name} not sensitive after the write: no backup made")
-        backup(name, vals, sens, me["master"])
-        call("POST", "/setup/store-keys", {"name": name, "keys": sorted(vals)})
-        print(f"ok: store {name} written with {len(vals)} keys (sensitive={sens}), backed up, key names recorded")
+        for k in sorted(vals):
+            out = call("POST", f"/setup/stores/{name}/keys/{k}", key_write(name, k, vals[k], me, explain.get(k, "")))
+            print(f"ok: {name}: {k} written (backed up first); pull sent to {len(out.get('pulled') or [])} running session(s)")
+        if want_sensitive and not store_list(me)[name]["sensitive"]:
+            raise SystemExit(f"secrets calls {name} not sensitive after the write")
     elif cmd == "versions":
         me = identity()
-        d = call("POST", "/setup/stores/versions", {"store": args[0], "nonce": "setup-" + str(int(time.time()))})
-        if not _verify(me["signingKey"], d["payload"].encode(), d["sig"]):
-            raise SystemExit("the versions aren't signed by the core")
-        v = json.loads(d["payload"])
+        nonce = "setup-" + os.urandom(8).hex()
+        v = opened(me["signingKey"], call("POST", "/setup/stores/versions", {"store": args[0], "nonce": nonce}), "store-versions")
+        if v.get("nonce") != nonce or v.get("store") != args[0]:
+            raise SystemExit("secrets' versions answer another store or nonce")
         for x in v["versions"]:
             c = x["cause"]
             what = c["kind"] + (f" {c['key']}" if c.get("key") else "") + (f" by {c['writer']['by']}" if c.get("writer") else "") + \
@@ -499,18 +541,20 @@ def main():
         set_up()
         call("POST", "/setup/stores/mark-sensitive", {"name": args[0]})
         mark_sensitive_backup(args[0])
-        print(f"ok: {args[0]} is sensitive, in the core and in the backup")
+        print(f"ok: {args[0]} is sensitive, in secrets and in the backup")
     elif cmd == "backup":
         plain = "--not-sensitive" in args
         args = [a for a in args if a != "--not-sensitive"]
         backup(args[0], dict(value(a) for a in args[1:]), not plain, set_up()["master"])
         print(f"ok: backup of {args[0]} written (sensitive={not plain}); it comes in at the next Recover")
-    elif cmd == "backup-core":
-        me = set_up()
+    elif cmd == "fly-token":
+        sp = part_identities()["spawner"]
+        if not sp or not sp.get("agreementKey"):
+            raise SystemExit("the spawner isn't answering (or has no agreement key)")
         tok = {"FLY_API_TOKEN": open(os.path.expanduser(args[0])).read().strip()}
-        call("POST", "/setup/fly-token", {"sealed": seal_to(me["agreementKey"], json.dumps(tok).encode(), "jarvis2/fly-token")})
-        backup("core", tok, True, me["master"])
-        print("ok: the core has its Fly token, and the core store's backup is written")
+        out = call("POST", "/setup/fly-token", {"sealed": seal_to(sp["agreementKey"], json.dumps(tok).encode(), "jarvis2/fly-token")})
+        opened(sp["signingKey"], out, "fly-token-set")
+        print("ok: the spawner has its Fly token (sealed to its agreement key, confirmed by its signature)")
     elif cmd == "claude-login":
         print(json.dumps(call("GET", "/setup/claude-login"), indent=1))
     elif cmd == "repos":
@@ -527,11 +571,8 @@ def main():
         act, dev = args[0], args[1]
         note = opt(args, "--note")
         print(json.dumps(call("POST", f"/setup/leases/{dev}/{act}", {"note": note} if note is not None else {}), indent=1))
-    elif cmd in ("resume", "restart"):
+    elif cmd in ("pause", "resume", "restart"):
         print(json.dumps(call("POST", "/setup/sessions/" + args[0] + "/" + cmd, {})))
-    elif cmd == "pause":
-        # pause (the snapshot if the machine answers) and cancel its wakeups and crons first
-        print(json.dumps(call("POST", "/setup/sessions/" + args[0] + "/pause", {})))
     elif cmd == "requests":
         out = call("GET", "/setup/requests")
         for q in out["requests"]:
@@ -590,7 +631,7 @@ def file_request(args):
     why = opt(args, "--why")
     sensitive = "--sensitive" in args
     args = [a for a in args if a != "--sensitive"]
-    minutes, days = opt(args, "--minutes"), opt(args, "--days")
+    minutes, cmd_file = opt(args, "--minutes"), opt(args, "--cmd-file")
     if not args or not why:
         raise SystemExit("request KIND … --why TEXT (see infra/setup.py without arguments)")
     kind, rest = args[0], args[1:]
@@ -599,17 +640,19 @@ def file_request(args):
         if kind == "add-repo" and sensitive:
             body["sensitive"] = True
         return call("POST", "/setup/requests/repo/" + ("add" if kind == "add-repo" else "remove"), body)
-    if kind == "grant" and len(rest) == 2:
-        body = {"session": rest[0], "holder": rest[1], "explanation": why}
-        if days:
-            body["days"] = int(days)
-        elif minutes:
-            body["minutes"] = int(minutes)
-        return call("POST", "/setup/requests/grant", body)
     if kind == "restore" and len(rest) == 2 and rest[1].isdigit():
         return call("POST", "/setup/requests/restore", {"store": rest[0], "seq": int(rest[1]), "explanation": why})
     if kind == "unlock" and len(rest) == 1:
         return call("POST", "/setup/requests/unlock", {"session": rest[0], "explanation": why})
+    if kind == "terminal" and len(rest) == 1:
+        body = {"session": rest[0], "explanation": why}
+        if minutes:
+            body["minutes"] = int(minutes)
+        return call("POST", "/setup/requests/terminal", body)
+    if kind == "command" and len(rest) == 1 and cmd_file:
+        return call("POST", "/setup/requests/command", {"session": rest[0], "cmd": open(os.path.expanduser(cmd_file)).read(), "explanation": why})
+    if kind == "add-store" and len(rest) == 2:
+        return call("POST", "/setup/requests/add-store", {"session": rest[0], "store": rest[1], "explanation": why})
     raise SystemExit(f"unknown request: {' '.join(args)} (see infra/setup.py without arguments)")
 
 

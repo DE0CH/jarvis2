@@ -1,0 +1,54 @@
+# The identity signer: signs (M, M, P) for any P (narrowing a running machine's grant). Stateless: two replicas,
+# rolled one at a time.
+#
+# Its image is pinned by the images workflow (main only) whenever core/kernel or core/cmd/identity-signer changed.
+# Its key: the Secret kernel-key-identity-signer (infra/kernel-keys.py; SOPS in k8s/secrets), which only this pod mounts.
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: identity-signer, namespace: jarvis2-core }
+spec:
+  replicas: 2
+  strategy: { type: RollingUpdate, rollingUpdate: { maxUnavailable: 0, maxSurge: 1 } }
+  selector: { matchLabels: { app: identity-signer } }
+  template:
+    # restart: change jarvis2/restart (a commit) to end this pod; for secrets that empties it (Recover follows)
+    metadata: { labels: { app: identity-signer, jarvis2/part: identity }, annotations: { jarvis2/restart: "0" } }
+    spec:
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      securityContext: { fsGroup: 65532 }
+      containers:
+        - name: identity-signer
+          image: ghcr.io/de0ch/jarvis2-identity-signer:sha-000000000000
+          ports: [{ containerPort: 8090 }]
+          env:
+            - { name: KEY_FILE, value: "/key/key.pem" }
+            - { name: BOX_KEY_FILE, value: "/box/box-key.pem" }
+            - { name: ADDR, value: ":8090" }
+          # readiness only: a liveness restart would end a stateful part (an empty secrets, a spawner without its token)
+          readinessProbe: { httpGet: { path: /identity, port: 8090 }, periodSeconds: 10 }
+          volumeMounts: [{ name: key, mountPath: /key, readOnly: true }, { name: box-key, mountPath: /box, readOnly: true }]
+          resources: { requests: { cpu: 10m, memory: 16Mi }, limits: { memory: 256Mi } }
+          securityContext: { runAsNonRoot: true, runAsUser: 65532, runAsGroup: 65532, allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: { drop: [ALL] }, seccompProfile: { type: RuntimeDefault } }
+      volumes:
+        - { name: key, secret: { secretName: kernel-key-identity-signer, defaultMode: 0440 } }
+        - { name: box-key, secret: { secretName: core-box-key, defaultMode: 0440 } }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: identity-signer, namespace: jarvis2-core }
+spec:
+  selector: { app: identity-signer }
+  ports: [{ port: 8090, targetPort: 8090 }]
+---
+# only the router reaches it; it reaches nothing (no egress at all)
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: { name: identity-signer, namespace: jarvis2-core }
+spec:
+  podSelector: { matchLabels: { app: identity-signer } }
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from: [{ namespaceSelector: { matchLabels: { jarvis2/ns: router } }, podSelector: { matchLabels: { app: router } } }]
+      ports: [{ port: 8090 }]
+  egress: []

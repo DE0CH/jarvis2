@@ -1,0 +1,43 @@
+# k8s/apps-next: what k8s/apps becomes at the kernel switchover (docs/RUNBOOK.md "Switching to the kernel"). Flux applies
+# only ./k8s/apps (k8s/flux/sync.yaml), so nothing here runs until infra/kernel-switchover.sh folds it into k8s/apps:
+# the eight kernel parts (kernel/*.yaml, namespace jarvis2-core: the namespace Flux may write, holding the box key), their
+# public roster (kernel/roster.json, infra/kernel-keys.py), the router's part URLs (router-kernel.yaml), and the old core
+# gone. `kubectl kustomize k8s/apps-next` renders the result for checking.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../apps
+  - kernel/notary.yaml
+  - kernel/notarizer.yaml
+  - kernel/mover.yaml
+  - kernel/merger.yaml
+  - kernel/identity-signer.yaml
+  - kernel/gullible-signer.yaml
+  - kernel/spawner.yaml
+  - kernel/secrets.yaml
+patches:
+  - path: router-kernel.yaml
+  # the old core goes (its image stays in GHCR for the rollback)
+  - patch: |-
+      $patch: delete
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata: { name: core, namespace: jarvis2-core }
+  - patch: |-
+      $patch: delete
+      apiVersion: v1
+      kind: Service
+      metadata: { name: core, namespace: jarvis2-core }
+  - patch: |-
+      $patch: delete
+      apiVersion: networking.k8s.io/v1
+      kind: NetworkPolicy
+      metadata: { name: core, namespace: jarvis2-core }
+# every kernel part's public key, the phone's and the root key's: ROSTER_FILE for the parts that check signatures, and
+# the roster the spawner puts in every machine's Fly config. No name hash: a roster change must not restart secrets
+# (an empty secrets) by itself; the parts read it at start (RUNBOOK "Kernel operations").
+configMapGenerator:
+  - name: kernel-roster
+    namespace: jarvis2-core
+    files: [roster.json=kernel/roster.json]
+    options: { disableNameSuffixHash: true }

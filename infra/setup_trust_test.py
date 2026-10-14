@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""R1 audit: infra/setup.py writes nothing to a core someone else claimed first, and keeps the writer's sensitivity.
+"""R1 audit: infra/setup.py writes nothing to a secrets someone else claimed first, and keeps the writer's sensitivity.
 Runs offline (the router, S3 and the keys stubbed): python3 infra/setup_trust_test.py"""
 import base64, importlib.util, json, os, sys, tempfile
 
@@ -46,7 +46,7 @@ def claimed_by(master, dev=None, signer=None):
                  devs=[{"statement": st, "deviceKey": pub(signer), "deviceSig": sig(signer, st)}] if signer else [])
 
 S.identity = lambda: state["me"]
-S.call = lambda m, p, b=None: {"/setup/core-cert": state.get("cert"), "/setup/claim-device": state.get("devs")}[p]
+S.call = lambda m, p, b=None: {"/setup/secrets-cert": state.get("cert"), "/setup/claim-device": state.get("devs")}[p]
 
 def refused(what):
     try:
@@ -57,17 +57,17 @@ def refused(what):
     raise AssertionError("trusted: " + what)
 
 claimed_by(deyao_master, device)
-refused("a core with nothing pinned")
+refused("a secrets with nothing pinned")
 S.save_pins(pub(deyao_master), None)               # pin-master on Deyao's Recovered core
 S.set_up()
 assert S.load_pins()["device"] == pub(device), "the device key of a claim under the pinned master isn't pinned"
 
-claimed_by(router_master)                            # the router claims an emptied core first
-refused("a core claimed by another master")
+claimed_by(router_master)                            # the router claims an emptied secrets first
+refused("a secrets claimed by another master")
 claimed_by(router_master, router_device)             # …with its own device key
-refused("a core claimed by another master with another device key")
+refused("a secrets claimed by another master with another device key")
 claimed_by(router_master, device, signer=router_device)  # names Deyao's device, can't sign as it
-refused("a core claimed by another master naming Deyao's device key")
+refused("a secrets claimed by another master naming Deyao's device key")
 claimed_by(deyao_master, signer=router_device)       # the router attaches its own device signature to Deyao's claim
 S.set_up()
 assert S.load_pins()["device"] == pub(device), "the router re-pinned the device key"
@@ -81,9 +81,4 @@ try:
 except SystemExit:
     pass
 
-# the writer's signature over the blob, as core.WriterText
-b = S.blob("default", {"A": "1"}, pub(phone_k), pub(core_k))
-import hashlib
-text = f"jarvis2-store-blob\ndefault\n{b['wrapped']['e']}\n{hashlib.sha256(b['data'].encode()).hexdigest()}"
-assert S._verify(pub(setup_k), text.encode(), b["writerSig"]), "the blob's writer signature doesn't verify"
-print("ok: setup.py trusts only the pinned master or a claim countersigned by the pinned device; blobs carry the writer's signature")
+print("ok: setup.py trusts only the pinned master or a claim countersigned by the pinned device")
