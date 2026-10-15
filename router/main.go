@@ -107,7 +107,7 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	r := NewRouter(cfg, st, &CoreClient{base: cfg.CoreURL, http: &http.Client{Timeout: 15 * time.Minute}}, policy)
+	r := NewRouter(cfg, st, &CoreClient{base: cfg.CoreURL, http: &http.Client{}}, policy) // each core call has its own deadline (core.go coreCallTimeout)
 	r.startFeatures()
 	ld := &leadership{lock: lock, self: self, handler: public}
 	log.Printf("router on %s (core %s), leader at %s", addr, cfg.CoreURL, self)

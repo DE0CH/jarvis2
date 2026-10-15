@@ -26,6 +26,14 @@ type v2Core struct {
 	mu     sync.Mutex
 	bodies map[string][]map[string]any
 	refuse string // approve_by_dead_machine answers 403 with this (the core's refusal)
+	// /kill answers these first, one per call (failedsession_test.go): status and the core's error
+	killErrs []coreRefusal
+	order    []string // every path, in the order called
+}
+
+type coreRefusal struct {
+	status int
+	msg    string
 }
 
 func (c *v2Core) last(path string) map[string]any {
@@ -47,6 +55,7 @@ func (c *v2Core) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		c.bodies = map[string][]map[string]any{}
 	}
 	c.bodies[req.URL.Path] = append(c.bodies[req.URL.Path], b)
+	c.order = append(c.order, req.URL.Path)
 	c.mu.Unlock()
 	switch req.URL.Path {
 	case "/input-log":
@@ -62,6 +71,18 @@ func (c *v2Core) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 			return
 		}
 		writeJSON(w, 403, c.key.doc(map[string]any{"error": refuse}))
+	case "/kill":
+		c.mu.Lock()
+		var e *coreRefusal
+		if len(c.killErrs) > 0 {
+			e, c.killErrs = &c.killErrs[0], c.killErrs[1:]
+		}
+		c.mu.Unlock()
+		if e != nil {
+			writeJSON(w, e.status, c.key.doc(map[string]any{"error": e.msg}))
+			return
+		}
+		writeJSON(w, 200, c.key.doc(map[string]any{"kind": "killed", "id": b["machine"]}))
 	case "/attest":
 		writeJSON(w, 200, c.key.doc(map[string]any{"kind": "input", "machine": b["machine"], "input": b["input"], "sha256": b["sha256"]}))
 	default:

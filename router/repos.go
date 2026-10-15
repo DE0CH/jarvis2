@@ -22,6 +22,8 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
+	"sort"
 	"strings"
 	"time"
 )
@@ -205,15 +207,21 @@ func (r *Router) registerDeployKeys(app appRoute) {
 		b, _ := json.Marshal(body)
 		r.relayDeployKey(w, "/deploy-keys/begin", b, false)
 	})
+	// ?inbox=ID: the Inbox request this page answers; when a session asked for the repo, the answer names the add-store
+	// approval that puts the repo's store into that session (followups), for the phone to sign under the same Face ID
 	app("POST /api/repos/key/finish", func(w http.ResponseWriter, req *http.Request) {
 		b, _ := io.ReadAll(io.LimitReader(req.Body, 1<<16))
-		r.relayDeployKey(w, "/deploy-keys/finish", b, true)
+		r.relayDeployKeyFor(w, "/deploy-keys/finish", b, true, req.URL.Query().Get("inbox"))
 	})
 }
 
 // relayDeployKey: the core's answer unchanged; a finished add or remove also updates the list. A core from
 // before deploy keys answers its mux's plain-text 404: say so plainly.
 func (r *Router) relayDeployKey(w http.ResponseWriter, path string, body []byte, finish bool) {
+	r.relayDeployKeyFor(w, path, body, finish, "")
+}
+
+func (r *Router) relayDeployKeyFor(w http.ResponseWriter, path string, body []byte, finish bool, inbox string) {
 	status, b, err := r.core.Raw("POST", path, body)
 	if err != nil {
 		log.Printf("core %s: %v", path, err)
@@ -237,14 +245,85 @@ func (r *Router) relayDeployKey(w http.ResponseWriter, path string, body []byte,
 	if finish && status == 200 && json.Unmarshal(b, &d) == nil {
 		var a keyAnswer
 		if d.Decode(&a) == nil && (a.Kind == "deploy-key-added" || a.Kind == "deploy-key-removed") {
+			asked := r.repoAskers(a) // before the answer drops the requests
 			if err := r.applyKeyAnswer(a, &d); err != nil {
 				log.Printf("repos: %v", err)
+			}
+			if f := r.repoFollowups(a, asked, inbox); len(f) > 0 {
+				// beside the core's document, not under its signature: the phone checks each approval itself
+				writeJSON(w, 200, map[string]any{"payload": d.Payload, "sig": d.Sig, "followups": f})
+				return
 			}
 		}
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	w.Write(b)
+}
+
+// repoAsker: a session that asked for the repo (its request, as filed)
+type repoAsker struct {
+	request string
+	session string
+	origin  Origin
+	expl    string
+}
+
+// repoAskers: the sessions whose pending requests an added key answers (each gets the repo's store)
+func (r *Router) repoAskers(a keyAnswer) []repoAsker {
+	repo := parseGitHubRepo(a.Repo)
+	if a.Kind != "deploy-key-added" || repo == "" {
+		return nil
+	}
+	out := []repoAsker{}
+	r.st.Do(func(d *persisted) {
+		for _, q := range d.Inbox {
+			if q.Kind == requestKindRepo && q.Params.Action == "add" && q.Params.Session != "" && strings.EqualFold(q.Params.Repo, repo) {
+				out = append(out, repoAsker{request: q.ID, session: q.Params.Session, origin: q.Origin, expl: q.Explanation})
+			}
+		}
+	})
+	sort.Slice(out, func(i, j int) bool { return out[i].request < out[j].request })
+	return out
+}
+
+// repoFollowups: the repo's store into each session that asked for the repo (Deyao, 2026-10-15: "one Face ID, not a
+// repo-key approval followed by a separate add-store"; DECISIONS 171). An add-store approval per running session that
+// doesn't hold the store yet, filed at once now that the store exists (the core makes a challenge only for a store it
+// has). The one for the request this page answered (inbox) is returned: the phone showed it before Face ID ("then adds
+// the store to session …") and signs it under the same Face ID, after checking it is exactly that. Any other asking
+// session's approval waits in the Inbox on its own. A session that isn't running gets nothing (it asks for the store
+// again when it runs). The approval's origin is the request's caller and call, without its signed filing: the
+// session already hears the outcome of what it filed (the repo's), and its waiter pulls the store.
+func (r *Router) repoFollowups(a keyAnswer, asked []repoAsker, inbox string) []string {
+	store := repoStore(parseGitHubRepo(a.Repo))
+	out := []string{}
+	for _, q := range asked {
+		var machine string
+		held := false
+		r.st.Do(func(d *persisted) {
+			if s := d.Sessions[q.session]; s != nil && s.State == "started" && s.Cert != nil {
+				machine, held = s.MachineID, slices.Contains(s.Stores, store)
+			}
+		})
+		if machine == "" || held {
+			log.Printf("repos: %s asked for %s; it isn't running (or holds %s already): no add-store", q.session, a.Repo, store)
+			continue
+		}
+		o := q.origin
+		o.Signed, o.Item, o.Batch = nil, 0, ""
+		o.Call = APICall{Method: "POST", Path: "/api/repos/key/finish", Args: map[string]any{"repo": a.Repo, "store": store, "for": q.request}}
+		id, err := r.addStoreApproval(machine, store, o, q.expl, "")
+		if err != nil {
+			log.Printf("repos: the add-store of %s for %s: %v", store, q.session, err)
+			continue
+		}
+		log.Printf("repos: %s asked for %s: add-store %s filed (%s)", q.session, a.Repo, store, id)
+		if q.request == inbox {
+			out = append(out, id)
+		}
+	}
+	return out
 }
 
 // ---- the GitHub picker -------------------------------------------------------------------------------------

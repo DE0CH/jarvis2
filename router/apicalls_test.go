@@ -122,3 +122,78 @@ func TestReplayedCallKeepsItsCaller(t *testing.T) {
 		t.Fatalf("%+v", got)
 	}
 }
+
+// an API call goes in a batch beside the session's other asks (Deyao, 2026-10-15; DECISIONS 172): checked as alone,
+// filed as the batch's item, approved on its own (no Face ID), its result read by the session like its actions' own
+func TestAnAPICallInABatch(t *testing.T) {
+	r := newTestRouter(t)
+	r.cfg.NoAccess = true
+	addSession(r, "sR", "started", "mR", false)
+	addSession(r, "sO", "started", "mO", false)
+	m, o, mh := newTestMachine(r, "mR"), newTestMachine(r, "mO"), r.MachineHandler()
+
+	// a bad call refuses the whole batch, nothing filed
+	for _, item := range []string{
+		`{"intent":"call","method":"POST","path":"/api/requests/x/approve"}`,
+		`{"intent":"call","method":"TRACE","path":"/api/sizes"}`,
+		`{"intent":"call","method":"GET","path":"/api/nothing-here"}`,
+	} {
+		if code, out := m.do(t, mh, "POST", "/m/api/requests/batch", `{"summary":"s","items":[{"intent":"grant","holder":"status","minutes":5},`+item+`]}`); code != 400 {
+			t.Fatalf("%s: %d %v", item, code, out)
+		}
+	}
+	if n := len(r.Inbox()); n != 0 {
+		t.Fatalf("filed %d", n)
+	}
+	// the setup session and Deyao's own page don't ask for calls
+	if code, out := inboxDo(t, r, "POST", "/api/requests/batch", `{"summary":"s","items":[{"intent":"call","method":"GET","path":"/api/sizes"}]}`, true); code != 403 {
+		t.Fatalf("%d %v", code, out)
+	}
+
+	code, out := m.do(t, mh, "POST", "/m/api/requests/batch", `{"summary":"keep sO up and watch it","items":[
+		{"intent":"grant","holder":"status","minutes":5},
+		{"intent":"call","method":"post","path":"/api/sessions/sO/auto-pause","body":{"on":false},"explanation":"keep sO up"}]}`)
+	if code != 200 {
+		t.Fatalf("%d %v", code, out)
+	}
+	bid := out["id"].(string)
+	id := out["items"].([]any)[1].(map[string]any)["id"].(string)
+	it, ok := r.InboxItem(id)
+	if !ok || it.Kind != requestKindCall || it.Batch != bid || it.Params.Method != "POST" || it.Params.Body != `{"on":false}` ||
+		it.Explanation != "keep sO up" || it.Call.Args["route"] != "POST /api/sessions/{id}/auto-pause" || it.Session != "sR" {
+		t.Fatalf("%+v", it)
+	}
+	full, _ := r.InboxBatchFull(bid, nil)
+	if items := full["items"].([]InboxItem); len(items) != 2 || items[1].ID != id {
+		t.Fatalf("batch items %+v", items)
+	}
+	// its result is the session's to read (its actions' route), not another session's
+	if code, out := m.do(t, mh, "GET", "/m/api/actions/requests/call/"+id, ""); code != 200 || out["state"] != "pending" {
+		t.Fatalf("%d %v", code, out)
+	}
+	if code, _ := o.do(t, mh, "GET", "/m/api/actions/requests/call/"+id, ""); code != 404 {
+		t.Fatal("another session read it")
+	}
+	if code, out := inboxDo(t, r, "POST", "/api/requests/"+id+"/approve", "", true); code != 200 || out["state"] != "done" || out["status"] != float64(200) {
+		t.Fatalf("approve: %d %v", code, out)
+	}
+	if code, out := m.do(t, mh, "GET", "/m/api/actions/requests/call/"+id, ""); code != 200 || out["state"] != "done" {
+		t.Fatalf("%d %v", code, out)
+	}
+	// the session hears it as the batch's item 2
+	var oc *Outcome
+	r.st.Do(func(d *persisted) {
+		for _, x := range d.Outcomes["sR"] {
+			if x.Ref == id {
+				oc = x
+			}
+		}
+	})
+	if oc == nil || oc.Item != 1 || oc.Batch != bid || oc.Outcome != outcomeApproved || oc.Status != 200 {
+		t.Fatalf("outcome %+v", oc)
+	}
+	// the batch's other item still waits in it
+	if b, ok := r.InboxBatchFull(bid, nil); !ok || len(b["items"].([]InboxItem)) != 1 {
+		t.Fatalf("%v", b)
+	}
+}

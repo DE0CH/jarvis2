@@ -206,13 +206,7 @@ func TestAFailedStartResumes(t *testing.T) {
 	if a.Kind != "resume-upgrade" {
 		t.Fatalf("%+v", a)
 	}
-	// a session that may still have a machine (a pause cut off) is not resumed
-	rg2, _ := v2Rig(t)
-	pausedOnAPin(rg2)
-	rg2.r.st.Do(func(d *persisted) { d.Sessions["s1"].State, d.Sessions["s1"].MachineID = "failed", "m1" })
-	if err := rg2.r.Resume("s1", false); err == nil {
-		t.Fatal("resumed a failed session that still has a machine")
-	}
+	// (a failed session that still has a machine finishes its pause first: failedsession_test.go)
 }
 
 // a new line whose first start failed gets its new-session approval again; Deny leaves it failed

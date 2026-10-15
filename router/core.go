@@ -5,11 +5,13 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"strings"
+	"time"
 )
 
 type Doc struct {
@@ -33,8 +35,28 @@ type CoreError struct {
 
 func (e *CoreError) Error() string { return e.Msg }
 
+// coreCallMax: how long the router waits for one core call. The default covers every call that answers from memory or
+// makes one Fly request. The running core (sha-06ab2452f8ad, from before R2; held by core-pin) waits INSIDE /start
+// and /kill: its start is a Fly create, up to 10 waits for "started" and up to 10 init execs, each Fly request bounded
+// by its own 90 s client (≈ 34 min at worst), and its kill a destroy plus up to 20 confirming reads (≈ 32 min). A
+// router that gave up sooner (15 min, 2026-10-15: "start: core /start: … Client.Timeout exceeded") failed a start the
+// core was still carrying out, which then left a started machine nobody knew of. So those two wait past the core's
+// own worst case and always hear its answer (DECISIONS 170).
+var coreCallMax = map[string]time.Duration{"/start": 40 * time.Minute, "/kill": 40 * time.Minute}
+
+const coreCallDefault = 15 * time.Minute
+
+func coreCallTimeout(path string) time.Duration {
+	if d, ok := coreCallMax[path]; ok {
+		return d
+	}
+	return coreCallDefault
+}
+
 func (c *CoreClient) Raw(method, path string, body []byte) (int, []byte, error) {
-	req, _ := http.NewRequest(method, strings.TrimSuffix(c.base, "/")+path, bytes.NewReader(body))
+	ctx, cancel := context.WithTimeout(context.Background(), coreCallTimeout(path))
+	defer cancel()
+	req, _ := http.NewRequestWithContext(ctx, method, strings.TrimSuffix(c.base, "/")+path, bytes.NewReader(body))
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}

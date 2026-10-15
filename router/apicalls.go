@@ -113,30 +113,23 @@ func callNoWhy(pattern string) string {
 	return "it would hand out Deyao's own login, or it can't run on the router"
 }
 
-// fileCall: an API-call request into the Inbox → {id, duplicate, expires}
-func (r *Router) fileCall(w http.ResponseWriter, c Caller, path string, b []byte, signed *SignedRequest) {
-	var in callIn
-	if err := json.Unmarshal(b, &in); err != nil {
-		writeJSON(w, 400, map[string]string{"error": "bad JSON: " + err.Error()})
-		return
-	}
+// checkCall: a requested call as the Inbox keeps it (method, path, body) and the arguments shown as its call, or why
+// it can't be requested
+func (r *Router) checkCall(in callIn) (RequestParams, map[string]any, error) {
 	in.Method = strings.ToUpper(strings.TrimSpace(in.Method))
 	switch in.Method {
 	case "GET", "POST", "PUT", "PATCH", "DELETE":
 	default:
-		writeJSON(w, 400, map[string]string{"error": "method: GET, POST, PUT, PATCH or DELETE"})
-		return
+		return RequestParams{}, nil, errors.New("method: GET, POST, PUT, PATCH or DELETE")
 	}
 	p := RequestParams{Method: in.Method, Path: strings.TrimSpace(in.Path)}
 	switch {
 	case len(in.Body) > 0 && string(in.Body) != "null" && in.BodyText != "":
-		writeJSON(w, 400, map[string]string{"error": "body (JSON) or bodyText, not both"})
-		return
+		return p, nil, errors.New("body (JSON) or bodyText, not both")
 	case len(in.Body) > 0 && string(in.Body) != "null":
 		var compact bytes.Buffer
 		if err := json.Compact(&compact, in.Body); err != nil {
-			writeJSON(w, 400, map[string]string{"error": "body: " + err.Error()})
-			return
+			return p, nil, errors.New("body: " + err.Error())
 		}
 		p.Body, p.ContentType = compact.String(), "application/json"
 	case in.BodyText != "":
@@ -146,17 +139,30 @@ func (r *Router) fileCall(w http.ResponseWriter, c Caller, path string, b []byte
 		}
 	}
 	if len(p.Body) > callBodyMax {
-		writeJSON(w, 400, map[string]string{"error": fmt.Sprintf("body over %d KB", callBodyMax>>10)})
-		return
+		return p, nil, fmt.Errorf("body over %d KB", callBodyMax>>10)
 	}
 	pattern, _, err := r.callRoute(p.Method, p.Path)
 	if err != nil {
-		writeJSON(w, 400, map[string]string{"error": err.Error()})
-		return
+		return p, nil, err
 	}
 	args := map[string]any{"method": p.Method, "path": p.Path, "route": pattern}
 	if p.Body != "" {
 		args["body"] = p.Body
+	}
+	return p, args, nil
+}
+
+// fileCall: an API-call request into the Inbox → {id, duplicate, expires}
+func (r *Router) fileCall(w http.ResponseWriter, c Caller, path string, b []byte, signed *SignedRequest) {
+	var in callIn
+	if err := json.Unmarshal(b, &in); err != nil {
+		writeJSON(w, 400, map[string]string{"error": "bad JSON: " + err.Error()})
+		return
+	}
+	p, args, err := r.checkCall(in)
+	if err != nil {
+		writeJSON(w, 400, map[string]string{"error": err.Error()})
+		return
 	}
 	q, dup, err := r.FileRequest(requestKindCall, p, in.Explanation, Origin{Caller: c, Call: APICall{Method: "POST", Path: path, Args: args}, Signed: signed})
 	if err != nil {
@@ -164,6 +170,13 @@ func (r *Router) fileCall(w http.ResponseWriter, c Caller, path string, b []byte
 		return
 	}
 	writeJSON(w, 200, map[string]any{"id": q.ID, "duplicate": dup, "expires": q.Expires})
+}
+
+// sameSessionCaller: the session's own two credentials (its requests and its actions, both its machine key) are one
+// caller for reading a call's result: a call filed in a session's batch (jarvis2-request) is read like its actions' own
+func sameSessionCaller(a, b Caller) bool {
+	own := func(c Caller) bool { return (c.Kind == "session" || c.Kind == "actions") && c.Session != "" }
+	return a == b || own(a) && own(b) && a.Session == b.Session
 }
 
 // callerRunning: an actions caller's session still runs (its key is live)
@@ -377,9 +390,9 @@ func (r *Router) serveCallResult(w http.ResponseWriter, c Caller, id string) {
 		now := time.Now().UTC()
 		pruneRequests(d, now)
 		pruneCallResults(d, now)
-		if q := d.Inbox[id]; q != nil && q.Kind == requestKindCall && q.Origin.Caller == c {
+		if q := d.Inbox[id]; q != nil && q.Kind == requestKindCall && sameSessionCaller(q.Origin.Caller, c) {
 			out = map[string]any{"id": id, "state": "pending", "expires": q.Expires}
-		} else if x := d.CallResults[id]; x != nil && x.Caller == c {
+		} else if x := d.CallResults[id]; x != nil && sameSessionCaller(x.Caller, c) {
 			out = x
 		}
 	})
