@@ -7,6 +7,8 @@ struct Session: Identifiable, Equatable, Hashable {
   let j: JSON
   var id: String { j["id"].string ?? "" }
   var state: String { j["state"].string ?? "" }
+  /// Resume brings it back: paused, or failed with no machine (a failed or cut-off start; router Resume)
+  var resumable: Bool { state == "paused" || (state == "failed" && j["machineId"].text == nil) }
   var status: String? { j["status"].text }
   var harness: String { j["harness"].text ?? "claude" }
   var model: String? { j["model"].text }

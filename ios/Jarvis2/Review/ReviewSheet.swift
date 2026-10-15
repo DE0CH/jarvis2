@@ -16,6 +16,7 @@ struct ReviewSheet: View {
       case .repoKey(let a, let r, let sens, let inbox): RepoKeyView(action: a, repo: r, sensitiveAsked: sens, inbox: inbox, request: request)
       case .batch(let id): BatchReviewView(batchId: id)
       case .restore(let st, let q, let inbox): RestoreReviewView(store: st, seq: q, inbox: inbox, request: request)
+      case .apiCall(let id): APICallReviewView(callId: id)
       }
     }
     .interactiveDismissDisabled(false)

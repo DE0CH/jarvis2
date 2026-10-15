@@ -1,16 +1,17 @@
 // The Inbox tab: everything waiting for the phone's Face ID that was asked for elsewhere (a session, the web page,
 // Claude's setup session) — requests (repo keys, grants, unlocks) and the router's approvals (new session, resume on
-// the latest image, add a store), and API calls a session's actions ask to run as Deyao (approved right on the card,
-// web page or app). Each card: the action as its title (what will be signed, in short), who called
+// the latest image, add a store), and API calls a session's actions ask to run as Deyao (Review opens the call's own
+// page, pages/APICall.tsx: Approve runs it, and the page stays for the approvals the call brings about). Each card: the action as its title (what will be signed, in short), who called
 // which endpoint, and the caller's own reason (their words, unverified). Review opens the shell's secure page,
 // which renders what is signed from the signed content itself; Deny drops it. The web page lists them and can deny.
 import { ago, when, type InboxBatch, type InboxItem } from "../lib/api";
-import { approveCall, denyBatch, denyRequest, inboxCall, inboxRows, inboxTitle } from "../lib/inbox";
+import { denyBatch, denyRequest, inboxCall, inboxRows, inboxTitle } from "../lib/inbox";
 import { useStore, refresh, settle, pendUntil, inboxLoose, useInboxCount } from "../lib/store";
 import { hasShell, requestSecure } from "../lib/shell";
 import { Box, Button, Card, Flex, Heading, Lbl, Muted, Pill, P, Quote, Row, Rows } from "../ui/kit";
 import { PButton } from "../ui/bits";
 import { Cards } from "../ui/cards";
+import { openPage } from "../ui/page";
 
 const KIND: Record<string, string> = { "repo-key": "Repo key", grant: "Grant", unlock: "Unlock", "new-session": "New session", "resume-upgrade": "Resume", "add-store": "Add a store", "api-call": "API call", restore: "Restore store" };
 
@@ -59,7 +60,6 @@ function BatchCard({ b }: { b: InboxBatch }) {
 function RequestCard({ it }: { it: InboxItem }) {
   const approvals = useStore((s) => s.state.approvals), policy = useStore((s) => s.policy);
   const deny = () => pendUntil("q:" + it.id, "Denying…", () => denyRequest(it), (s) => !(s.inbox || []).some((x) => x.id === it.id), 30000);
-  const approve = () => pendUntil("a:" + it.id, "Running…", () => approveCall(it), (s) => !(s.inbox || []).some((x) => x.id === it.id), 30000);
   return (
     <Card data={{ request: it.id, requestKind: it.kind }}>
       <Flex justify="space-between" align="flex-start" gap={2} mb={1}>
@@ -75,7 +75,7 @@ function RequestCard({ it }: { it: InboxItem }) {
       </Rows>
       {!!it.explanation && <Quote by={"Reason (from " + it.callerText + ", unverified)"} color="amber" lines={4} id={"request-reason-" + it.id}>{it.explanation}</Quote>}
       <Flex gap={2} pt={3} align="center">
-        {it.kind === "api-call" ? <PButton pkey={"a:" + it.id} onPress={approve} label="Approve" id={"request-approve-" + it.id} />
+        {it.kind === "api-call" ? <Button id={"request-review-" + it.id} onPress={() => openPage("call", { item: it })}>Review</Button>
           : hasShell ? <Button id={"request-review-" + it.id} onPress={() => reviewRequest(it)}>Review</Button>
           : <Muted style={{ flex: 1 }}>Approve in the iPhone app.</Muted>}
         <PButton pkey={"q:" + it.id} variant="soft" color="gray" onPress={deny} label="Deny" id={"request-deny-" + it.id} />

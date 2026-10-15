@@ -151,7 +151,7 @@ struct SessionRow: View {
       if busy == nil {
         if m.state == "started" || m.state == "initialising" {
           Button("Pause", systemImage: "pause") { Task { await model.pause(m.id) } }.tint(.orange)
-        } else if m.state == "paused" {
+        } else if m.resumable {
           Button("Resume", systemImage: "play") { Task { await model.resume(m.id) } }.tint(.green)
         }
       }

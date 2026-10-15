@@ -176,6 +176,7 @@ export type InboxItem = {
   call: { method: string; path: string; args?: Record<string, unknown> }; explanation: string; created: string; expires?: string;
   options?: Record<string, string>; open: { kind: string; options: Record<string, unknown> };
   batch?: string; // router/batches.go: filed in this batch
+  viaCall?: string; // router/apicalls.go: the API-call request whose approved call brought this approval about
 };
 // several Inbox items a caller filed together (router/batches.go): one entry, allowed together on the phone under one
 // Face ID, denied together here or there. `summary` is the caller's words (unverified).

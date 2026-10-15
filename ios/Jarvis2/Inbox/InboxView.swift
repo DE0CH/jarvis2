@@ -3,7 +3,8 @@
 // feature, session: the router's record; the review page renders the exact facts from the signed content), who asked,
 // when, the call, and the caller's reason in its own words.
 // Review opens the page for it; Deny (a swipe or the page's button) drops it. An API call a session's actions asked
-// for (router/apicalls.go) has no secure page: tapping it asks to run it, as Deyao, with no Face ID.
+// for (router/apicalls.go) opens its own sheet (APICallReviewView): the call, who asked, the reason; Approve runs it as
+// Deyao (no Face ID), and the sheet stays up for the approvals the call brings about.
 import SwiftUI
 
 struct InboxView: View {
@@ -46,10 +47,9 @@ struct InboxView: View {
 private struct InboxRow: View {
   @Environment(AppModel.self) private var model
   let it: InboxItem
-  @State private var confirmCall = false
 
   var body: some View {
-    Button(action: { if it.kind == "api-call" { confirmCall = true } else { review() } }) {
+    Button(action: review) {
       VStack(alignment: .leading, spacing: 4) {
         HStack(alignment: .firstTextBaseline) {
           Text(action).font(.headline).foregroundStyle(Color.primary).accessibilityIdentifier("request-title-\(it.id)")
@@ -72,21 +72,11 @@ private struct InboxRow: View {
       }
     }
     .accessibilityIdentifier("request-review-\(it.id)")
-    .confirmationDialog("Run \(callTarget) as you?", isPresented: $confirmCall, titleVisibility: .visible) {
-      Button("Approve") { Task { await model.approveCall(it) } }.accessibilityIdentifier("request-approve-\(it.id)")
-      Button("Deny", role: .destructive) { Task { await model.deny(it) } }
-    } message: {
-      Text("Asked by \(it.callerText).")
-    }
     .swipeActions {
       Button("Deny", role: .destructive) { Task { await model.deny(it) } }
     }
     .contextMenu {
-      if it.kind == "api-call" {
-        Button("Approve", systemImage: "checkmark") { Task { await model.approveCall(it) } }
-      } else {
-        Button("Review", systemImage: "faceid", action: review)
-      }
+      Button("Review", systemImage: it.kind == "api-call" ? "arrow.up.forward.app" : "faceid", action: review)
       Button("Deny", systemImage: "xmark", role: .destructive) { Task { await model.deny(it) } }
     }
   }

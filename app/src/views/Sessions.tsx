@@ -92,7 +92,8 @@ export const resumeSession = (id: string) => exclusive("s:" + id, async () => {
     await api("POST", `api/sessions/${id}/resume`, { upgrade: false, ...(prompt ? { prompt } : {}) });
     // a resume in another permission mode than the line's cert is a change the iPhone approves (signed)
     let a: Approval | undefined;
-    await refreshUntil((s) => !!(a = s.approvals.find((x) => x.kind === "resume-upgrade" && x.session === id)) || ["started", "initialising", "failed"].includes(find(s, id)?.state || ""), 120000);
+    // (or one the core won't answer by itself; a failed new line's start asked again is a new-session approval)
+    await refreshUntil((s) => !!(a = s.approvals.find((x) => (x.kind === "resume-upgrade" || x.kind === "new-session") && x.session === id)) || ["started", "initialising", "failed", "paused"].includes(find(s, id)?.state || ""), 120000);
     if (a) review(a);
     settle(30000);
   } catch (e: any) { failed(e); await refresh(false); }
@@ -307,7 +308,7 @@ export function Sessions() {
           {inGroup.map((m) => {
             const busy = pending.get("s:" + m.id) || serverBusy(m);
             const moving = !!MOVING[m.state] && m.state !== "initialising";
-            const paused = m.state === "paused";
+            const paused = m.state === "paused", resumable = paused || (m.state === "failed" && !m.machineId);
             const own = storesOf(m, policy);
             const modelName = models.find((x) => x.id === m.model)?.label || m.model;
             // auto-pause: off / counting down / the default (a running, non-one-shot session only)
@@ -350,7 +351,7 @@ export function Sessions() {
                       {m.state === "started" && hasRemote(m) ? <Button id={"remote-" + m.id} onPress={() => openPage("remote", { id: m.id, title: sessionTitle(m) })}>Remote</Button>
                         : (m.state === "started" || m.state === "initialising") && <Button id={"term-" + m.id} onPress={() => openPage("terminal", { id: m.id, title: sessionTitle(m) })}>Terminal</Button>}
                       {(m.state === "started" || m.state === "initialising") && <PButton pkey={"s:" + m.id} id={"pause-" + m.id} variant="soft" onPress={() => pause(m.id)} label="Pause" />}
-                      {paused && <PButton pkey={"s:" + m.id} id={"resume-" + m.id} color="green" onPress={() => resumeSession(m.id)} label="Resume" />}
+                      {resumable && <PButton pkey={"s:" + m.id} id={"resume-" + m.id} color="green" onPress={() => resumeSession(m.id)} label="Resume" />}
                       {paused && <Button variant="soft" color="gray" id={"tail-" + m.id} onPress={() => openPage("transcript", { title: sessionTitle(m), note: ["Paused", m.pausedAt ? ago(m.pausedAt) : "—"], path: `api/sessions/${m.id}/tail`, action: { label: "Resume", run: () => resumeSession(m.id) } })}>Transcript</Button>}
                       <MoreButton m={m} cool={cool} />
                     </>}

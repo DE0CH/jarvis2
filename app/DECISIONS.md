@@ -313,6 +313,17 @@ fixes, 34–40 carried over from the old app and still true, 41–43 the web pag
     on the web and in the iPhone footer). The "Already the biggest size" row and
     callout are gone. A refused step (Fly can't make the guest) shows as the job's failure with Fly's error, as before.
 
+## API calls (2026-10-15)
+
+70. **An API call opens its own review sheet** (docs/DECISIONS.md 166; Deyao, 2026-10-15). iPhone: tapping an "API call"
+    row (or its context menu's Review) opens `APICallReviewView`: "Runs as you" (Method, Path, Body as indented JSON with
+    its content type), "Who asked" (Caller, Asked, Expires), "Reason (unverified)"; Approve in the toolbar (no Face ID),
+    Deny below, Cancel. After Approve the sheet shows the Result (HTTP status) and "What it brings about": each open
+    follow-up as a row that pushes its approval page (the same `ApprovalView`, "What you sign (exact)", Face ID) and
+    comes back when signed or rejected; answered ones as "Answered, denied or lapsed"; while the router awaits one, a
+    spinner with its deadline; then "Nothing more to approve." and Done. Web: the card's Review opens the `call` page
+    with the same sections; follow-ups show their rows and "Approve in the iPhone app", with Deny.
+
 ## Unfinished / known gaps
 
 - Free text (prompt, title) reaches the machine signed only with a core that vouches (the held core doesn't).

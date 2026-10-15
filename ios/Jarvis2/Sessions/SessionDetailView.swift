@@ -110,8 +110,10 @@ private struct SessionDetailList: View {
           if m.state == "started" || m.state == "initialising" {
             Button("Pause", systemImage: "pause.circle") { Task { await model.pause(m.id) } }.accessibilityIdentifier("pause-\(m.id)")
           }
-          if m.state == "paused" {
+          if m.resumable {
             Button("Resume", systemImage: "play.circle") { Task { await model.resume(m.id) } }.accessibilityIdentifier("resume-\(m.id)")
+          }
+          if m.state == "paused" {
             NavigationLink(value: SessionRoute.transcript) { Label("Transcript", systemImage: "text.alignleft") }.accessibilityIdentifier("tail-\(m.id)")
           }
         }

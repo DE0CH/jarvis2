@@ -79,6 +79,17 @@ export async function approveCall(it: InboxItem) {
   const r = await api<{ ok: boolean; state: string; status: number; error?: string }>("POST", `api/requests/${it.id}/approve`);
   if (r.ok) toast(`Ran ${it.params.method} ${it.params.path}: HTTP ${r.status}`, r.status < 400 ? "ok" : "error");
   else toast(r.error || "The call didn't run", "error");
+  return r;
+}
+/** an approved call's follow-ups (router/apicalls.go): the core requests it brought about (each Inbox item while it
+ * waits) and, while one may still come, until when */
+export type CallFollowups = {
+  id: string; state: string; status?: number; error?: string;
+  followups: { id: string; open: boolean; item?: InboxItem }[]; awaiting?: { session?: string; until: string } | null;
+};
+export async function callFollowups(id: string): Promise<CallFollowups | null> {
+  try { return await api<CallFollowups>("GET", `api/requests/calls/${id}`); }
+  catch (e: any) { if (e?.status === 404) return null; throw e; }
 }
 /** Deny a whole batch: its requests leave, its approvals are rejected */
 export const denyBatch = (id: string) => api("DELETE", `api/requests/batches/${id}`);

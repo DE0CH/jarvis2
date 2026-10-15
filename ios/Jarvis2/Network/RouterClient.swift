@@ -420,4 +420,12 @@ final class RouterClient: NSObject, ASWebAuthenticationPresentationContextProvid
   func inboxDone(_ id: String) async { _ = try? await raw("POST", "api/requests/\(id)/done") }
   /// an api-call request (router/apicalls.go): the router runs the call now as Deyao → its outcome
   func inboxApproveCall(_ id: String) async throws -> JSON { try await call("POST", "api/requests/\(id)/approve") }
+  /// an approved call's follow-ups (GET api/requests/calls/:id): the core requests it brought about and whether one
+  /// may still come; nil when the router no longer keeps it
+  func callFollowups(_ id: String) async throws -> JSON? {
+    let (status, data) = try await raw("GET", "api/requests/calls/\(id)")
+    if status == 404 { return nil }
+    guard status == 200 else { throw Self.failure("GET", "api/requests/calls/\(id)", status, data) }
+    return JSON.parse(data)
+  }
 }

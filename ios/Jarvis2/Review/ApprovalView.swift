@@ -10,6 +10,9 @@ struct ApprovalView: View {
   let approvalId: String
   let inbox: String?
   let request: SecureRequest
+  /// opened inside another sheet (an API call's, APICallReviewView): it is told, and this page goes back to it,
+  /// instead of closing the whole sheet
+  var onFinish: ((Bool) -> Void)? = nil
   @State private var a: RouterClient.ApprovalDTO?
   @State private var r: Checks.Reviewed?
   /// the session it continues, from the predecessor's core-signed cert (nil for a new line)
@@ -201,13 +204,16 @@ struct ApprovalView: View {
       busy = "Approving…"
       let ans = try await RouterClient.shared.respond(a.id, signature: sig)
       try Checks.answerFor(r, answer: ans.answer, coreKey: try CoreTrust.key())
-      model.secureCompleted(true)
+      finish(true)
     } catch { busy = nil; failure = errText(error) }
+  }
+  private func finish(_ ok: Bool) {
+    if let onFinish { onFinish(ok); dismiss() } else { model.secureCompleted(ok) }
   }
   /// Reject needs no signature: it works even when the page couldn't read or check the approval
   private func reject() async {
     failure = nil
-    do { busy = "Rejecting…"; try await RouterClient.shared.reject(a?.id ?? approvalId); model.secureCompleted(false) }
+    do { busy = "Rejecting…"; try await RouterClient.shared.reject(a?.id ?? approvalId); finish(false) }
     catch { busy = nil; failure = errText(error) }
   }
 }
