@@ -66,8 +66,12 @@ func waitPrepared(t *testing.T, r *Router) *j1Prep {
 func TestJarvis1ImportPrepareAndImport(t *testing.T) {
 	rg := newRig(t)
 	files := j1Snapshot(t, rg)
-	if _, err := rg.r.ImportJarvis1(j1TestID, J1ImportIn{Stores: []string{"default"}}, Origin{}); err == nil || !strings.Contains(err.Error(), "isn't prepared") {
-		t.Fatalf("imported before a prepare: %v", err)
+	// an import nobody prepared prepares it first (rather than refusing)
+	if err := rg.r.ensurePreparedJarvis1(j1TestID); err != nil {
+		t.Fatalf("an import's own prepare: %v", err)
+	}
+	if _, _, _, err := rg.r.preparedJarvis1(j1TestID); err != nil {
+		t.Fatalf("not prepared by the import: %v", err)
 	}
 	if _, err := rg.r.PrepareJarvis1("../etc"); err == nil {
 		t.Fatal("prepared a bad id")

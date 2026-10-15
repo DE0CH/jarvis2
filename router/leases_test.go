@@ -279,3 +279,13 @@ func leasePendingCount(r *Router) int {
 	r.leaseTx(func(st *LeaseState) error { n = len(st.pendingNotifications()); return nil })
 	return n
 }
+
+// describing a lease the session neither holds nor waits for changes nothing and isn't refused
+func TestLeaseDescribeWithNothingHeld(t *testing.T) {
+	st := newLeases()
+	st.acquire("p", "A", LeaseOpts{Purpose: sp("map")}, lt0)
+	o, err := st.describe("p", "B", LeaseOpts{Purpose: sp("other")}, lt0)
+	if err != nil || o.Status != "none" || st.Resources["p"].Holder.Sid != "A" {
+		t.Fatalf("%+v %v", o, err)
+	}
+}

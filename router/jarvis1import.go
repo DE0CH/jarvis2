@@ -309,6 +309,39 @@ func writeFileAtomic(p string, b []byte) error {
 	return os.Rename(p+".tmp", p)
 }
 
+// j1PrepareWait: how long an import waits for the prepare it starts itself
+var j1PrepareWait = 10 * time.Minute
+
+// ensurePreparedJarvis1: an import of a session nobody prepared prepares it first (rather than refusing): the prepare
+// starts (or the running one is joined) and the import waits for it
+func (r *Router) ensurePreparedJarvis1(id string) error {
+	if !j1SessionIDRE.MatchString(id) {
+		return bad("not a Jarvis 1 session id: %q", id)
+	}
+	if _, err := os.Stat(filepath.Join(r.j1Dir(id), j1ManifestFile)); err == nil {
+		return nil
+	}
+	if _, err := r.PrepareJarvis1(id); err != nil {
+		return err
+	}
+	for end := time.Now().Add(j1PrepareWait); time.Now().Before(end); time.Sleep(200 * time.Millisecond) {
+		j1Preps.Lock()
+		p := j1Preps.m[id]
+		var st, msg string
+		if p != nil {
+			st, msg = p.State, p.Error
+		}
+		j1Preps.Unlock()
+		switch st {
+		case "ready":
+			return nil
+		case "failed":
+			return fmt.Errorf("Jarvis 1 session %s couldn't be prepared: %s", id, msg)
+		}
+	}
+	return fmt.Errorf("Jarvis 1 session %s is still being prepared after %s: ask again once GET …/jarvis1/%s says ready", id, j1PrepareWait, id)
+}
+
 // preparedJarvis1: the prepared manifest (its bytes and sha256) and record, or an error saying what's missing
 func (r *Router) preparedJarvis1(id string) ([]byte, string, *j1Record, error) {
 	if !j1SessionIDRE.MatchString(id) {
@@ -361,12 +394,12 @@ var j1SizeMap = map[string]string{"small": "small", "medium": "medium", "large":
 // ImportJarvis1: the prepared Jarvis 1 session as a new session waiting for the phone (approval kind new-session,
 // options.restore names it). The same import asked again answers the session it already made (requestId).
 func (r *Router) ImportJarvis1(id string, in J1ImportIn, o Origin) (string, error) {
+	if err := r.ensurePreparedJarvis1(id); err != nil {
+		return "", err
+	}
 	_, sum, rec, err := r.preparedJarvis1(id)
 	if err != nil {
 		return "", err
-	}
-	if len(in.Stores) == 0 {
-		return "", bad("stores are required (the Jarvis 2 stores the session gets)")
 	}
 	var kept []string // the shared login's old store comes as the Claude account
 	for _, n := range in.Stores {
@@ -655,7 +688,13 @@ func (r *Router) registerJarvis1Import(app appRoute, m machineRoute, public publ
 			cancelled = append(cancelled, "cron "+c.Name)
 		}
 		if err := r.Pause(id); err != nil {
-			writeJSON(w, 400, map[string]any{"error": err.Error(), "cancelled": cancelled})
+			status := 400
+			if errors.Is(err, errBusy) {
+				status = 409 // another action holds it: try again (as writeErr)
+			} else if errors.Is(err, errDraining) {
+				status = 503
+			}
+			writeJSON(w, status, map[string]any{"error": err.Error(), "cancelled": cancelled})
 			return
 		}
 		writeJSON(w, 202, map[string]any{"ok": true, "phase": "pausing", "cancelled": cancelled})
@@ -665,7 +704,7 @@ func (r *Router) registerJarvis1Import(app appRoute, m machineRoute, public publ
 	// (flows.go legacyLoginImage), so the phone decides; wakeups and crons stay armed
 	public("POST /setup/sessions/{id}/resume", setupOnly(func(w http.ResponseWriter, req *http.Request, _ []byte) {
 		if err := r.Resume(req.PathValue("id"), false); err != nil {
-			writeJSON(w, 400, map[string]string{"error": err.Error()})
+			writeErr(w, err)
 			return
 		}
 		writeJSON(w, 202, map[string]any{"ok": true})
@@ -673,7 +712,7 @@ func (r *Router) registerJarvis1Import(app appRoute, m machineRoute, public publ
 	public("POST /setup/sessions/{id}/restart", setupOnly(func(w http.ResponseWriter, req *http.Request, _ []byte) {
 		out, err := r.Restart(req.PathValue("id"), RestartRequest{})
 		if err != nil {
-			writeJSON(w, 400, map[string]string{"error": err.Error()})
+			writeErr(w, err)
 			return
 		}
 		writeJSON(w, 202, out)

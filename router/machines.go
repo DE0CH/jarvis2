@@ -150,9 +150,14 @@ func orphanRefusal(d *persisted, m flyMachineDetail, now time.Time) string {
 	if mapped && d.Sessions[sid] != nil {
 		return "it belongs to session " + sid + ": pause or destroy the session"
 	}
-	// a destroyed session's machine whose kill failed (Destroy anyway, flows.go): an orphan like any other
+	// a machine the router started that no session names now (a destroyed session's machine whose kill failed:
+	// Destroy anyway, flows.go) is an orphan like any other; one a live session still names is that session's
 	if !mapped && (d.Started[m.ID] != nil || d.Certs[m.ID] != nil) {
-		return "the router started it for a session"
+		for _, s := range d.Sessions {
+			if s.MachineID == m.ID || s.Booted == m.ID {
+				return "it belongs to session " + s.ID + ": pause or destroy the session"
+			}
+		}
 	}
 	if t, err := time.Parse(time.RFC3339, m.CreatedAt); err != nil || now.Sub(t) < orphanMinAge {
 		return fmt.Sprintf("it is less than %d minutes old and may be a session still starting", int(orphanMinAge.Minutes()))

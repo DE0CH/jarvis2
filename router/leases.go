@@ -343,8 +343,8 @@ func (st *LeaseState) describe(name, sid string, o LeaseOpts, now int64) (*Lease
 	} else if i := indexOf(r.Queue, sid); i >= 0 {
 		x, status = r.Queue[i], "queued"
 	}
-	if x == nil {
-		return nil, leaseErrf(409, "this session neither holds nor waits for %q", name)
+	if x == nil { // nothing of this session's to describe: the lease as it is
+		return &LeaseOut{Status: "none", Lease: leaseView(r, name, now)}, nil
 	}
 	x.setText(o, now)
 	return &LeaseOut{Status: status, Lease: leaseView(r, name, now)}, nil

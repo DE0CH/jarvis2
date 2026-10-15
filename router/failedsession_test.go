@@ -220,6 +220,18 @@ func TestAMachineOfALiveSessionIsNoOrphan(t *testing.T) {
 	})
 }
 
+// a machine the router started that no session names any more (its cert still kept) is an orphan Deyao may destroy
+func TestAnUnnamedStartedMachineIsAnOrphan(t *testing.T) {
+	rg, _ := v2Rig(t)
+	rg.r.st.Do(func(d *persisted) {
+		d.Certs["m-left"] = &Doc{Payload: "{}"}
+		old := time.Now().Add(-time.Hour).UTC().Format(time.RFC3339)
+		if why := orphanRefusal(d, flyMachineDetail{ID: "m-left", State: "stopped", CreatedAt: old}, time.Now()); why != "" {
+			t.Fatalf("%q", why)
+		}
+	})
+}
+
 // 2026-10-15 "start: core /start: … Client.Timeout exceeded": the running core waits inside /start and /kill for up
 // to ≈ 34 min; the router waits longer, so it always hears the core's answer
 func TestTheRouterOutwaitsTheRunningCoresStartAndKill(t *testing.T) {

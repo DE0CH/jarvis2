@@ -67,7 +67,7 @@ func TestDestroyOrphanOnlyKillsMachinesWithNoSession(t *testing.T) {
 	defer func() { listFlyMachines, orphanKill = oldList, oldKill }()
 	listFlyMachines = func() ([]flyMachineDetail, error) { return fleet, nil }
 	orphanKill = func(r *Router, id string) error { killed = append(killed, id); return nil }
-	for _, id := range []string{"m-cur", "m-started", "m-new"} {
+	for _, id := range []string{"m-cur", "m-new"} {
 		if err := r.DestroyOrphan(id); err == nil || !errors.Is(err, errBusy) {
 			t.Fatalf("%s: %v", id, err)
 		}
@@ -80,5 +80,10 @@ func TestDestroyOrphanOnlyKillsMachinesWithNoSession(t *testing.T) {
 	}
 	if err := r.DestroyOrphan("m-orphan"); err != nil || len(killed) != 1 || killed[0] != "m-orphan" {
 		t.Fatalf("orphan: %v %v", err, killed)
+	}
+	// one the router started that no session names (Started and Machines are set together at a start, so this is a
+	// destroyed session's machine left behind): an orphan too
+	if err := r.DestroyOrphan("m-started"); err != nil || len(killed) != 2 {
+		t.Fatalf("left behind: %v %v", err, killed)
 	}
 }
