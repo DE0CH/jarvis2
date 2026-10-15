@@ -73,7 +73,7 @@ def login():
     u, p = os.environ["HETZNER_USER"], os.environ["HETZNER_PASSWORD"]
     with sync_playwright() as pw:
         pg = page(pw)
-        pg.goto(URL, wait_until="domcontentloaded")
+        pg.goto(URL, wait_until="commit", timeout=120000)
         for _ in range(6):
             time.sleep(4)
             f = pg.locator("#_username")
@@ -85,7 +85,7 @@ def login():
             if "console.hetzner.com/projects/2827255" in pg.url and "Log in to your account" not in pg.locator("body").inner_text()[:300]:
                 print("ok: logged in"); return
             if "accounts.hetzner.com" in pg.url:
-                pg.goto(URL, wait_until="domcontentloaded")
+                pg.goto(URL, wait_until="commit", timeout=120000)
         raise SystemExit("not logged in: " + pg.url.split("?")[0])
 
 
@@ -96,7 +96,7 @@ def generate():
     os.makedirs(os.path.dirname(FILE), mode=0o700, exist_ok=True)
     with sync_playwright() as pw:
         pg = page(pw)
-        pg.goto(URL, wait_until="domcontentloaded"); time.sleep(6)
+        pg.goto(URL, wait_until="commit", timeout=120000); pg.get_by_role("button", name="Generate credentials").first.wait_for(timeout=120000)
         pg.get_by_role("button", name="Generate credentials").first.click(); time.sleep(2)
         inp = pg.locator('[data-test="create-s3-credentials-description"] [data-test="input"]')
         inp.click(); inp.type(NAME, delay=40); time.sleep(1)
@@ -230,7 +230,7 @@ def delete_old():
     old, (new, _) = open(OLD).read().strip(), newkey()
     with sync_playwright() as pw:
         pg = page(pw)
-        pg.goto(URL, wait_until="domcontentloaded"); time.sleep(8)
+        pg.goto(URL, wait_until="commit", timeout=120000); time.sleep(8)
         row = pg.locator("hc-data-view-multi-select-row").filter(has_text=old)
         if row.count() == 0:
             print("ok: the old credential is already gone"); return
@@ -239,7 +239,7 @@ def delete_old():
         mclick(pg, row.locator('[data-test="dropdown-trigger"]')); time.sleep(1.5)
         mclick(pg, row.locator("a.dropdown__link--red")); time.sleep(2)
         mclick(pg, pg.get_by_role("button", name="OK", exact=True).locator("visible=true").last); time.sleep(6)
-        pg.goto(URL, wait_until="domcontentloaded"); time.sleep(8)
+        pg.goto(URL, wait_until="commit", timeout=120000); time.sleep(8)
         texts = [r.inner_text() for r in pg.locator("hc-data-view-multi-select-row").all()]
         if any(old in t for t in texts) or not any(new in t for t in texts):
             raise SystemExit("the Console still lists the old credential (or not the new one)")
