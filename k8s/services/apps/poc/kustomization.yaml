@@ -3,4 +3,4 @@
 # namespace (1.5 GiB, one core), so an experiment can't take the box from search, watch or the iCloud index either.
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
-resources: []
+resources: [bridge-test.yaml]
