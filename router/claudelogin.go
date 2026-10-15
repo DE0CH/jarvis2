@@ -1,7 +1,7 @@
 package main
 
 // The Claude login of one Claude account (Jarvis 1's lib/oauth.js, lib/claudelogin.js, /api/credentials, /api/usage
-// and its Re-login, moved here; docs/DECISIONS.md 115-121, 169). Each account is a Claude key store of the router's
+// and its Re-login, moved here; docs/DECISIONS.md 115-121, 181). Each account is a Claude key store of the router's
 // own, `claude-<name>` (claudeaccounts.go): one hub per account, its pair on the router's volume
 // (claude-accounts/<store>.json, 0600), and this router is its ONLY refresher. A refresh revokes the previous access
 // token at once, so there is one refresher: this router. Jarvis 1, while it still runs, only follows one account
@@ -820,6 +820,13 @@ func nullIfZeroTime(t time.Time) any {
 		return nil
 	}
 	return t
+}
+
+// drainLogins: waits for every account's refresh in flight (SIGTERM, a move's freeze): its answer must reach the volume
+func (r *Router) drainLogins(d time.Duration) {
+	for _, h := range r.accounts().all() {
+		h.drain(d)
+	}
 }
 
 // ---- loops ----------------------------------------------------------------------------------------------------------

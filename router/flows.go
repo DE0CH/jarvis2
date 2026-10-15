@@ -1181,7 +1181,7 @@ func (r *Router) addStoreApproval(machine, store string, o Origin, explanation, 
 		return "", fmt.Errorf("this machine isn't a running session")
 	}
 	if store == legacyClaudeStore {
-		return bad("the store claude is gone: a session's Claude account is fixed when it is made")
+		return "", bad("the store claude is gone: a session's Claude account is fixed when it is made")
 	}
 	stores, err := r.withHarnessStores(append(append([]string{}, s.Stores...), store), nil)
 	if err != nil {

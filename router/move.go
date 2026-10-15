@@ -258,7 +258,7 @@ func (s *moveSender) freeze(finalizeCore bool) (*freezeAnswer, error) {
 		setMove(func(m *moveStatus) { m.Role, m.Phase, m.Error = "sender", "freezing", "" })
 		log.Printf("[move] freeze: draining")
 		s.r.Drain(s.drain)
-		s.r.loginHub().drain(20 * time.Second)
+		s.r.drainLogins(20 * time.Second)
 		s.r.stopDeliveries(90 * time.Second) // movegate.go: no wakeup is lost or made twice across the move
 		// the gap starts here: requests wait in the held proxy for the new router
 		s.heldAt = time.Now()

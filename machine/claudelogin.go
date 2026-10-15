@@ -8,7 +8,7 @@ package main
 // (~/.claude/.oauth_refresh.lock, lessons/74) until the new pair is written, so a claude process that gets a 401 in
 // between waits and adopts it instead of burning its refresh token.
 //
-// The router's pair is taken whatever its account (DECISIONS 116, 169: trust the router). When the pair on disk
+// The router's pair is taken whatever its account (DECISIONS 116, 181: trust the router). When the pair on disk
 // belongs to another account than the router's (a session from before accounts whose shared login was re-logged),
 // the router's wins even if it expires sooner, the account record (~/.claude.json oauthAccount) is handed to the
 // supervisor (~/.claude/.account-switch.json, merged at the host's next start), and the claude host is restarted as

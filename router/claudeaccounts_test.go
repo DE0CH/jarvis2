@@ -22,7 +22,7 @@ func signIn(t *testing.T, r *Router, startPath, startBody string) (int, map[stri
 	return appDo(t, r, "POST", "/api/claude-accounts/"+store+"/code", `{"code":"abc#`+u.Query().Get("state")+`"}`)
 }
 
-// Add, Re-login, Make default, Remove (DECISIONS 169)
+// Add, Re-login, Make default, Remove (DECISIONS 181)
 func TestClaudeAccountsManage(t *testing.T) {
 	f := newFakeAnthropic(t)
 	r := newTestRouter(t)
@@ -187,4 +187,10 @@ func TestNewSessionClaudeAccount(t *testing.T) {
 	if id, err = r.CreateSession(ns); err != nil || acct(id) != "claude-work" {
 		t.Fatal(err, acct(id))
 	}
+	// every made session's approval is filed in the background: let them land before the temp dir goes
+	waitFor(t, "the approvals", func() bool {
+		n := 0
+		r.st.Do(func(d *persisted) { n = len(d.Approvals) })
+		return n >= 5
+	})
 }

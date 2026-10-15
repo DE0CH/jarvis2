@@ -206,9 +206,7 @@ func main() {
 	}
 	r.Drain(time.Duration(drainMax) * time.Second)
 	r.BackupState("drain")
-	for _, h := range r.accounts().all() {
-		h.drain(20 * time.Second)
-	}
+	r.drainLogins(20 * time.Second)
 	if r.lines != nil {
 		r.lines.flush() // linestate.go: the newest line state into the bucket before the router goes
 	}
