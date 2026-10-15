@@ -25,7 +25,7 @@ enum BatchPrepare {
     case .grant(let g, _): return try await grant(g, model: model)
     case .unlock(let s, _, _): return try await unlock(s, model: model)
     case .repoKey(let a, let r, let sens, _): return try await repoKey(a, r, sens)
-    case .newSession, .batch, .restore: throw TrustError.mismatch("an item this app can't open")
+    case .newSession, .batch, .restore, .apiCall: throw TrustError.mismatch("an item this app can't open")
     }
   }
 
