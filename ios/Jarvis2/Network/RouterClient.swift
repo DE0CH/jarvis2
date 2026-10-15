@@ -105,8 +105,8 @@ final class RouterClient: NSObject, ASWebAuthenticationPresentationContextProvid
     throw SignedOut()
   }
   /// JSON answer; errors (the router's {error} or the core's signed error doc) as their message
-  func json<T: Decodable>(_ method: String, _ path: String, _ body: [String: Any]? = nil, as: T.Type = T.self) async throws -> T {
-    let (status, data) = try await raw(method, path, body)
+  func json<T: Decodable>(_ method: String, _ path: String, _ body: [String: Any]? = nil, as: T.Type = T.self, headers: [String: String] = [:]) async throws -> T {
+    let (status, data) = try await raw(method, path, body, headers: headers)
     guard (200..<300).contains(status) else { throw Self.failure(method, path, status, data) }
     return try JSONDecoder().decode(T.self, from: data)
   }
@@ -181,7 +181,9 @@ final class RouterClient: NSObject, ASWebAuthenticationPresentationContextProvid
   private func setupKeyIfNeeded(_ w: StoreWriter?) async throws -> String? { try await setupKeyIfNeeded([w]) }
   /// the core's identity says it takes stores of keys (core/keys.go); false = a core from before keys.go (until the held
   /// core is live). Not signed: a wrong word only makes the core refuse what the app sends.
-  func coreTakesKeys() async throws -> Bool { try await identity().takesKeys }
+  func coreTakesKeys(next: Bool = false) async throws -> Bool { try await identity(next: next).takesKeys }
+  /// the router relays a core call to the NEXT core (blue/green, router/nextcore.go) when it carries this header
+  static func coreHeaders(_ next: Bool) -> [String: String] { next ? ["X-Jarvis2-Core": "next"] : [:] }
   func unlocked() async throws -> [UnlockRow] {
     let n = CoreCrypto.nonce()
     let d = try CoreCrypto.decode(try await json("POST", "api/core/unlocked", ["nonce": n], as: SignedDoc.self), by: try CoreTrust.key(), as: UnlockedDoc.self, what: "the unlocked list")
@@ -293,11 +295,11 @@ final class RouterClient: NSObject, ASWebAuthenticationPresentationContextProvid
   /// the core's store key C = P + K for this phone's agreement key, checked against `coreKey`; nil from a core that
   /// predates it (404: the app then uses the earlier forms)
   /// core: the core point K to add (a Recover's derived K, CoreContinuity), nil = the answering core's own
-  func storeKey(coreKey: String, core: String? = nil) async throws -> String? {
+  func storeKey(coreKey: String, core: String? = nil, next: Bool = false) async throws -> String? {
     let phone = try PhoneKeys.shared.publicKeys().agreementKey
     var body: [String: Any] = ["phone": phone]
     if let core { body["core"] = core }
-    let (status, data) = try await raw("POST", "api/core/store-key", body)
+    let (status, data) = try await raw("POST", "api/core/store-key", body, headers: Self.coreHeaders(next))
     if status == 404 { return nil }
     guard status == 200 else { throw Self.failure("POST", "api/core/store-key", status, data) }
     return try CoreCrypto.storeKey(try JSONDecoder().decode(SignedDoc.self, from: data), coreKey: coreKey, phone: phone, core: core)
@@ -358,8 +360,9 @@ final class RouterClient: NSObject, ASWebAuthenticationPresentationContextProvid
   /// the core's keys, the box key's signature over them and its signed state (the caller checks both: CoreSetup.check).
   /// Throws CoreNotRunning when there is no core to ask (its pod restarting, e.g. after a wipe: 503 {coreDown}; 502/504
   /// from the edge mean the same)
-  func identity() async throws -> CoreSetup.Identity {
-    let (status, data) = try await raw("GET", "api/core/identity", nil)
+  /// next: the next core's (blue/green), through the same route with the header
+  func identity(next: Bool = false) async throws -> CoreSetup.Identity {
+    let (status, data) = try await raw("GET", "api/core/identity", nil, headers: Self.coreHeaders(next))
     if status == 503 || status == 502 || status == 504 { throw CoreNotRunning() }
     guard status == 200 else { throw Self.failure("GET", "api/core/identity", status, data) }
     return try JSONDecoder().decode(CoreSetup.Identity.self, from: data)
@@ -367,14 +370,16 @@ final class RouterClient: NSObject, ASWebAuthenticationPresentationContextProvid
   struct CoreNotRunning: Error {}
   /// POST api/core/claim; the answer must be that core's signed "claimed" — signed with the derived key when the claim
   /// brought a seed (`answeredBy`: the core the claim made, core/continuity.go)
-  func claim(_ body: [String: Any], core: PublicKeys, answeredBy: String? = nil) async throws -> Int {
-    let d = try CoreCrypto.decode(try await json("POST", "api/core/claim", body, as: SignedDoc.self), by: answeredBy ?? core.signingKey, as: KindDoc.self, what: "the core's answer")
+  func claim(_ body: [String: Any], core: PublicKeys, answeredBy: String? = nil, next: Bool = false) async throws -> Int {
+    let d = try CoreCrypto.decode(try await json("POST", "api/core/claim", body, as: SignedDoc.self, headers: Self.coreHeaders(next)), by: answeredBy ?? core.signingKey,
+                                  as: KindDoc.self, what: "the core's answer")
     guard d.kind == "claimed" else { throw TrustError.stale("claim") }
     return d.stores ?? 0
   }
   /// POST api/core/wipe; the answer must be that core's signed "wiping" (it then ends; a new, empty core follows)
-  func wipe(_ body: [String: Any], core: PublicKeys) async throws {
-    let d = try CoreCrypto.decode(try await json("POST", "api/core/wipe", body, as: SignedDoc.self), by: core.signingKey, as: KindDoc.self, what: "the core's answer")
+  func wipe(_ body: [String: Any], core: PublicKeys, next: Bool = false) async throws {
+    let d = try CoreCrypto.decode(try await json("POST", "api/core/wipe", body, as: SignedDoc.self, headers: Self.coreHeaders(next)), by: core.signingKey,
+                                  as: KindDoc.self, what: "the core's answer")
     guard d.kind == "wiping", d.core == core.signingKey else { throw TrustError.stale("wipe") }
   }
   /// the locked store backups, as the router reads them from the bucket (the caller checks and opens them)

@@ -315,6 +315,16 @@ enum CoreTrust {
     Keychain.setString("master-public", master)
   }
   static func key() throws -> String { guard let p = pinned else { throw TrustError.notSetUp }; return p.signingKey }
+  /// a next core Recovered alongside with keys other than the pinned core's (the running core wasn't seeded): its keys
+  /// (derived from the kit, so trusted as the kit is) are pinned once it is the core that serves (AppModel.adoptNext)
+  static var pendingNext: (keys: PublicKeys, master: String)? {
+    guard let k = Keychain.get("next-core-keys").flatMap({ try? JSONDecoder().decode(PublicKeys.self, from: $0) }), let m = Keychain.string("next-core-master") else { return nil }
+    return (k, m)
+  }
+  static func setPendingNext(_ k: PublicKeys?, master: String?) {
+    Keychain.set("next-core-keys", k.flatMap { try? JSONEncoder().encode($0) })
+    Keychain.setString("next-core-master", master)
+  }
 }
 
 /// The highest record of the sessions (the core's lineSeq, core/continuity.go) this iPhone has seen from each core,

@@ -36,6 +36,9 @@ final class AppModel {
   /// batches (router/batches.go): several Inbox items filed together, reviewed on one page under one Face ID
   var inboxBatches: [InboxBatch] = []
   var coreUp = false
+  /// the next core (blue/green, router/nextcore.go): {up, serving: empty | standby | serving | handed-off, signingKey};
+  /// .null while the router runs none
+  var coreNext: JSON = .null
   var budget: JSON = .null
   var fly: JSON = .null
   var flyApp: String?
@@ -73,6 +76,8 @@ final class AppModel {
   @ObservationIgnored private var secureFinished = false
   /// Reset or recover (at first launch, after a core change, or from Settings)
   var showSetup = false
+  /// Reset or recover for the next core (Recover alongside)
+  var showNextSetup = false
   var signedOut = false
   var harnessHidden: Set<String> { Set(policy.values.flatMap { $0 }) }
   /// the Inbox's entries: each batch counts once
@@ -113,6 +118,7 @@ final class AppModel {
     if CoreTrust.pinned == nil {
       showSetup = true
     } else if let x = try? await RouterClient.shared.identity() {
+      adoptNext(x)
       if x.signingKey != CoreTrust.pinned?.signingKey {
         // a restarted core is empty (its boot keys): until it is set up again nothing can be signed
         showSetup = true
@@ -131,6 +137,18 @@ final class AppModel {
     LineWitness.saw(x.signingKey, st.lineSeq)
   }
 
+  /// the next core this iPhone Recovered alongside now serves (the router flipped): pin its keys — they come from the kit
+  /// (CoreTrust.pendingNext) — once the core answering is that one, set up with that master key and serving
+  private func adoptNext(_ x: CoreSetup.Identity) {
+    guard let p = CoreTrust.pendingNext, x.signingKey == p.keys.signingKey, x.agreementKey == p.keys.agreementKey,
+          let st = try? CoreCrypto.decode(x.state, by: x.signingKey, as: CoreSetup.State.self, what: "the core's state"),
+          st.kind == "core-state", MasterKey.same(st.master, p.master), (st.serving ?? "serving") == "serving" else { return }
+    if CoreTrust.pinned != p.keys { LinePins.clear() }
+    CoreTrust.pin(p.keys, master: p.master)
+    CoreTrust.setPendingNext(nil, master: nil)
+    showSetup = false
+  }
+
   private func start() {
     guard pollTask == nil else { return }
     Task { await loadLists() }
@@ -139,7 +157,7 @@ final class AppModel {
         guard let self else { return }
         if Date.now.timeIntervalSince(self.witnessedAt) >= 60 {
           self.witnessedAt = .now
-          if let x = try? await RouterClient.shared.identity() { self.witness(x) }
+          if let x = try? await RouterClient.shared.identity() { self.adoptNext(x); self.witness(x) }
         }
         if Date.now < self.fastUntil || Date.now.timeIntervalSince(self.lastPoll) >= 15 {
           self.lastPoll = .now
@@ -178,6 +196,7 @@ final class AppModel {
       inbox = j["inbox"].array.map(InboxItem.init)
       inboxBatches = j["inboxBatches"].array.map(InboxBatch.init)
       coreUp = j["core"]["up"].bool == true
+      coreNext = j["core"]["next"]
       budget = j["budget"]
       fly = j["fly"]
       flyApp = j["flyApp"].text

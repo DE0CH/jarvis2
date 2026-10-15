@@ -369,6 +369,10 @@ extension CoreSetup {
   struct LineStateDoc: Codable, Equatable { let head: SignedDoc; let sealed: String }
   struct LineHead: Decodable { let kind: String; let seq: Int; let sha256: String }
 
+  /// the record's head is signed by this core key (one another core signed is not this core's record: none)
+  static func lineStateSigned(_ d: LineStateDoc, coreKey: String) -> Bool {
+    (try? CoreCrypto.decode(d.head, by: coreKey, as: LineHead.self, what: "the record of the sessions")) != nil
+  }
   /// the record's number, once checked: signed by the derived core key, its hash, at least `atLeast`
   static func checkLineState(_ d: LineStateDoc, coreKey: String, atLeast: Int) throws -> Int {
     let h = try CoreCrypto.decode(d.head, by: coreKey, as: LineHead.self, what: "the record of the sessions")

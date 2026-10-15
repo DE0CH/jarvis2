@@ -15,6 +15,7 @@ struct RootView: View {
       }
     }
     .fullScreenCover(isPresented: $model.showSetup) { SetupView() }
+    .fullScreenCover(isPresented: $model.showNextSetup) { SetupView(next: true) }
     .sheet(item: $model.secure, onDismiss: model.secureDismissed) { req in ReviewSheet(request: req) }
     .alert(model.question?.title ?? "", isPresented: Binding(get: { model.question != nil }, set: { if !$0 { model.question = nil } }), presenting: model.question) { q in
       QuestionActions(question: q)

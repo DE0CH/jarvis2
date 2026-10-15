@@ -37,6 +37,7 @@ struct SettingsView: View {
         } header: { Text("Jarvis 2") } footer: {
           Text("Either pairs this iPhone again.")
         }
+        if model.coreNext != .null { NextCoreSection() }
       }
       .navigationTitle("Settings")
       .refreshable { await model.refresh(); await model.loadStores() }
@@ -51,6 +52,34 @@ struct SettingsView: View {
         case .pairedApps: PairedAppsView()
         }
       }
+    }
+  }
+}
+
+/// the next core (blue/green, router/nextcore.go): a core release runs next to the serving core; it is Recovered alongside
+/// with the same kit (a standby) and serves once the router flips to it
+private struct NextCoreSection: View {
+  @Environment(AppModel.self) private var model
+  private var serving: String { model.coreNext["up"].bool == true ? (model.coreNext["serving"].text ?? "empty") : "down" }
+  private var label: String {
+    switch serving {
+    case "empty": "Empty"
+    case "standby": "Standby"
+    case "serving": "Serving"
+    case "handed-off": "Handed off"
+    case "down": "Not answering"
+    default: serving
+    }
+  }
+  var body: some View {
+    Section {
+      LabeledContent("Next core") { StatusPill(text: label, color: serving == "standby" || serving == "serving" ? .green : serving == "empty" ? .orange : .secondary) }
+        .accessibilityElement(children: .combine).accessibilityIdentifier("next-core-\(serving)")
+      if serving == "empty" {
+        Button("Recover alongside…", systemImage: "arrow.left.arrow.right") { model.showNextSetup = true }.accessibilityIdentifier("open-next-setup")
+      }
+    } header: { Text("Next core") } footer: {
+      if serving == "standby" { Text("Waiting for the running core to hand over.") }
     }
   }
 }

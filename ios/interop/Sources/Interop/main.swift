@@ -325,6 +325,7 @@ check(lsDoc.map { d in (try? CoreSetup.checkLineState(d, coreKey: coreKey, atLea
 check(lsDoc.map { d in throwsErr { _ = try CoreSetup.checkLineState(d, coreKey: coreKey, atLeast: 1_000_000) } } == true, "…and the app refuses one older than it saw")
 check(lsDoc.map { d in throwsErr { _ = try CoreSetup.checkLineState(CoreSetup.LineStateDoc(head: d.head, sealed: Data("x".utf8).base64EncodedString()), coreKey: coreKey, atLeast: 0) } } == true, "…or one that isn't what its head names")
 check(lsDoc.map { d in throwsErr { _ = try CoreSetup.checkLineState(d, coreKey: coreKeys.signingKey, atLeast: 0) } } == true, "…or one another core signed")
+check(lsDoc.map { d in !CoreSetup.lineStateSigned(d, coreKey: coreKeys.signingKey) && CoreSetup.lineStateSigned(d, coreKey: coreKey) } == true, "…and the Recover takes one another core signed as none")
 
 // ---- restore: a store put back to an earlier version (core/history.go, router/storerestore.go): the phone signs the
 // core's begin document and shares the keys put back; no kit. The core's backups (writer "restore") check at Recover.

@@ -42,6 +42,10 @@ struct SetupView: View {
   @State private var takesSeed = false
   /// the Recover asked for is alongside the serving core (standby until it hands over)
   @State private var alongside = false
+  /// this page sets up the NEXT core (blue/green, router/nextcore.go): every core call carries X-Jarvis2-Core: next, and
+  /// the only setup is a Recover alongside; its keys are pinned once it serves (AppModel.adoptNext)
+  let next: Bool
+  init(next: Bool = false) { self.next = next }
 
   var body: some View {
     NavigationStack {
@@ -58,7 +62,7 @@ struct SetupView: View {
         }
         Section { SigningFooter() }
       }
-      .navigationTitle(step == .done ? "Jarvis 2" : "Reset or recover")
+      .navigationTitle(next ? "Next core" : step == .done ? "Jarvis 2" : "Reset or recover")
       .navigationBarTitleDisplayMode(.inline)
       .toolbar { toolbar }
       .interactiveDismissDisabled(busy != nil)
@@ -76,6 +80,8 @@ struct SetupView: View {
         Text("Jarvis 2 isn't answering right now.")
         Button("Try again") { Task { await load() } }.accessibilityIdentifier("setup-retry")
       }
+    case .choose where next:
+      nextChoose
     case .choose:
       Section {
         LabeledContent("Jarvis 2") { StatusPill(text: statusText, color: unpinned || status == .foreign ? .orange : status == .mine ? .green : .secondary) }
@@ -92,9 +98,6 @@ struct SetupView: View {
             icon: { Image(systemName: "arrow.counterclockwise") }
         }
         .accessibilityIdentifier("setup-choose-recover")
-        // blue/green (core/continuity.go): this core is Recovered while the one before it still serves, and takes over
-        // when that one hands over; only a core that takes a seed, and only an empty one (the router shows it)
-        if takesSeed && status == .empty { alongsideButton }
       } footer: {
         if status != .empty {
           if state?.derived == true { Text("Both need the current recovery kit. Recover keeps the sessions; Reset ends them.") }
@@ -105,7 +108,9 @@ struct SetupView: View {
       kitField(header: "Recovery kit")
     case .confirmRestart:
       Section {
-        if state?.derived == true {
+        if next {
+          Label("Restarts the next core · the running core keeps serving", systemImage: "arrow.clockwise").foregroundStyle(.orange)
+        } else if state?.derived == true {
           Label("Restarts Jarvis 2 · sessions carry on", systemImage: "arrow.clockwise").foregroundStyle(.orange)
         } else {
           Label("Restarts Jarvis 2 · running sessions end", systemImage: "exclamationmark.triangle.fill").foregroundStyle(.orange)
@@ -139,6 +144,31 @@ struct SetupView: View {
       } footer: {
         if state?.serving == "standby" { Text("Waiting for the running core to hand over.") }
       }
+    }
+  }
+
+  /// the next core: its state, and Recover alongside while it is empty (or a standby set up again)
+  @ViewBuilder private var nextChoose: some View {
+    Section {
+      LabeledContent("Next core") { StatusPill(text: nextLabel, color: nextServing == "standby" ? .green : nextServing == "empty" ? .orange : .secondary) }
+        .accessibilityElement(children: .combine).accessibilityIdentifier("setup-next-state-\(nextServing)")
+    }
+    Section {
+      if takesSeed && (nextServing == "empty" || nextServing == "standby") { alongsideButton }
+    } footer: {
+      if nextServing == "standby" { Text("Waiting for the running core to hand over.") }
+      else if !takesSeed { Text("This core can't be Recovered alongside.") }
+    }
+  }
+  /// what the next core's signed state says it does
+  private var nextServing: String { (state?.master ?? "").isEmpty ? "empty" : (state?.serving ?? "serving") }
+  private var nextLabel: String {
+    switch nextServing {
+    case "empty": "Empty"
+    case "standby": "Standby"
+    case "serving": "Serving"
+    case "handed-off": "Handed off"
+    default: nextServing
     }
   }
 
@@ -203,7 +233,7 @@ struct SetupView: View {
     failure = nil
     if reset {
       if status == .empty { newKey = MasterKey.generate(); copied = false; step = .newKit } else { step = .resetAuth }
-    } else { alongside = false; step = .recover }
+    } else { alongside = next; step = .recover }
   }
   /// forget a pasted kit (it never outlives the page, and goes after 10 minutes)
   private func forget() { kitText = ""; wipeTimer?.cancel(); wipeTimer = nil }
@@ -216,13 +246,13 @@ struct SetupView: View {
     }
   }
   private func finishPage() {
-    model.showSetup = false
+    if next { model.showNextSetup = false } else { model.showSetup = false }
     Task { await model.loadLists(); await model.refresh() }
   }
 
   /// the core as it is now: checked against the box key, its state signed by itself
   private func look() async throws -> (PublicKeys, CoreSetup.State) {
-    let id = try await RouterClient.shared.identity()
+    let id = try await RouterClient.shared.identity(next: next)
     let box = try await KeySource.key("box.pub")
     let (k, st) = try CoreSetup.check(id, boxKey: box)
     if k == CoreTrust.pinned { LineWitness.saw(k.signingKey, st.lineSeq) }
@@ -257,7 +287,7 @@ struct SetupView: View {
   private func wipe(with m: MasterKey) async throws {
     guard let old = core else { return }
     busy = "Restarting Jarvis 2…"
-    try await RouterClient.shared.wipe(try await withDevice(try CoreSetup.wipe(core: old, master: m, device: try PhoneKeys.shared.devicePublic())), core: old)
+    try await RouterClient.shared.wipe(try await withDevice(try CoreSetup.wipe(core: old, master: m, device: try PhoneKeys.shared.devicePublic())), core: old, next: next)
     let (k, st) = try await waitForEmptyCore(after: old)
     core = k; state = st; status = .empty
   }
@@ -286,43 +316,50 @@ struct SetupView: View {
       busy = "Restoring…"
       // the phone keeps its keys: the sessions' certs name them (grants), and the deploy-key stores the core brings back
       // are wrapped to them. Keys the Enclave would refuse (other faces enrolled since) are made again: a new pairing.
-      PhoneKeys.shared.keepOrRenew()
+      // (never renewed for the next core: the running core still checks this phone's keys)
+      if !next { PhoneKeys.shared.keepOrRenew() }
       let phone = try PhoneKeys.shared.publicKeys()
       let device = try PhoneKeys.shared.devicePublic()
       // a core that takes a seed (core/continuity.go) becomes the core the kit derives, with the record of the
       // sessions the router kept from the earlier one: the sessions carry on
       var seed: Data?, derived: PublicKeys?, line: CoreSetup.LineStateDoc?
+      if next && !takesSeed { throw Plain(message: "This core can't be Recovered alongside.", detail: "the next core's identity has no continuity") }
       if takesSeed {
         let sd = CoreContinuity.seed(m)
         let dk = try CoreContinuity.keys(seed: sd)
         seed = sd; derived = dk
         if let l = try await RouterClient.shared.lineState() {
-          do { _ = try CoreSetup.checkLineState(l, coreKey: dk.signingKey, atLeast: LineWitness.seen(dk.signingKey)); line = l }
-          catch { throw Plain(message: "The router served an older or altered record of the sessions.", detail: errText(error)) }
+          // a record another core signed (another kit's, e.g. after a Reset) isn't this core's: as if there were none
+          if CoreSetup.lineStateSigned(l, coreKey: dk.signingKey) {
+            do { _ = try CoreSetup.checkLineState(l, coreKey: dk.signingKey, atLeast: LineWitness.seen(dk.signingKey)); line = l }
+            catch { throw Plain(message: "The router served an older or altered record of the sessions.", detail: errText(error)) }
+          }
         }
       }
       // a core whose identity says bundle "keys" gets every key wrapped here on its own (it never sees them in the
       // clear); a core from before keys.go (until the held core is live) takes blobs, and an earlier core (no store key,
       // or 400 "bad bundle") the stores sealed to it as before
       var claimed = false
-      let keys = try await RouterClient.shared.coreTakesKeys()
+      let keys = try await RouterClient.shared.coreTakesKeys(next: next)
+      let standby = (alongside || next) && derived != nil
       if keys {
-        guard let sk = try await RouterClient.shared.storeKey(coreKey: c.signingKey, core: derived?.agreementKey) else { throw TrustError.stale("store key") }
+        guard let sk = try await RouterClient.shared.storeKey(coreKey: c.signingKey, core: derived?.agreementKey, next: next) else { throw TrustError.stale("store key") }
         let bundle = try CoreSetup.keysBundle(stores, storeKey: sk, coreSeed: seed, lineState: line)
-        let standby = alongside && derived != nil
         _ = try await RouterClient.shared.claim(try await withDevice(try CoreSetup.claim(core: c, phone: phone, master: m, bundle: bundle, device: device, identity: derived, standby: standby)),
-                                                core: c, answeredBy: derived?.signingKey)
+                                                core: c, answeredBy: derived?.signingKey, next: next)
         claimed = true
-      } else if let sk = try await RouterClient.shared.storeKey(coreKey: c.signingKey) {
+      } else if let sk = try await RouterClient.shared.storeKey(coreKey: c.signingKey, next: next) {
         do {
-          _ = try await RouterClient.shared.claim(try await withDevice(try CoreSetup.claim(core: c, phone: phone, master: m, bundle: try CoreSetup.blobsBundle(stores, storeKey: sk), device: device)), core: c)
+          _ = try await RouterClient.shared.claim(try await withDevice(try CoreSetup.claim(core: c, phone: phone, master: m, bundle: try CoreSetup.blobsBundle(stores, storeKey: sk), device: device)), core: c, next: next)
           claimed = true
         } catch let e as RouterError where e.status == 400 && e.message.contains("bad bundle") {}
       }
       if !claimed {
-        _ = try await RouterClient.shared.claim(try await withDevice(try CoreSetup.claim(core: c, phone: phone, master: m, bundle: try CoreSetup.bundle(stores), device: device)), core: c)
+        _ = try await RouterClient.shared.claim(try await withDevice(try CoreSetup.claim(core: c, phone: phone, master: m, bundle: try CoreSetup.bundle(stores), device: device)), core: c, next: next)
       }
-      finish(try await settled(c, derived: derived, master: m), master: m.publicKey, text: alongside && derived != nil ? "Recovered alongside" : "Recovered")
+      let keysNow = try await settled(c, derived: derived, master: m)
+      if next { busy = "Waiting for the next core…"; try await waitForStandby() }
+      finish(keysNow, master: m.publicKey, text: standby ? "Recovered alongside" : "Recovered")
     } catch {
       busy = nil
       if step == .confirmRestart { step = .recover }
@@ -392,7 +429,27 @@ struct SetupView: View {
     return derived
   }
 
+  /// the next core, after its claim: until its signed state says standby (it serves nothing until the router flips)
+  private func waitForStandby() async throws {
+    for i in 0..<30 {
+      if i > 0 { try await Task.sleep(for: .seconds(2)) }
+      guard let r = try? await look(), r.0 == core else { continue }
+      state = r.1
+      if r.1.serving == "standby" { return }
+    }
+    throw Plain(message: "The next core didn't say it is standing by.", detail: "its state isn't standby after a minute (\(state?.serving ?? "none"))")
+  }
+
   private func finish(_ c: PublicKeys, master: String, text: String) {
+    if next {
+      // the next core serves only after the router flips: the running core stays pinned; keys that aren't the pinned
+      // ones (the running core wasn't seeded) are pinned once that core serves (AppModel.adoptNext)
+      CoreTrust.setPendingNext(CoreTrust.pinned == c ? nil : c, master: CoreTrust.pinned == c ? nil : master)
+      forget(); newKey = nil; busy = nil
+      doneText = text
+      step = .done
+      return
+    }
     // the lines this iPhone knows stay pinned when the core is the one it had (a Recover with the same kit)
     if CoreTrust.pinned != c { LinePins.clear() }
     CoreTrust.pin(c, master: master)
