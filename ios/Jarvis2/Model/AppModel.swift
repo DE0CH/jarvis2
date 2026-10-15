@@ -87,6 +87,7 @@ final class AppModel {
   @ObservationIgnored private var pollTask: Task<Void, Never>?
   @ObservationIgnored private var fastUntil = Date.distantPast
   @ObservationIgnored private var lastPoll = Date.distantPast
+  @ObservationIgnored private var witnessedAt = Date.distantPast
   @ObservationIgnored private var machinesAt = Date.distantPast
   @ObservationIgnored private var tasksAt = Date.distantPast
   @ObservationIgnored private var running: Set<String> = []
@@ -111,11 +112,23 @@ final class AppModel {
     Keychain.set("held-master", nil); Keychain.set("held-master-public", nil)
     if CoreTrust.pinned == nil {
       showSetup = true
-    } else if let x = try? await RouterClient.shared.identity(), x.signingKey != CoreTrust.pinned?.signingKey {
-      // a restarted core is a new, empty core: until it is set up again nothing can be signed
-      showSetup = true
+    } else if let x = try? await RouterClient.shared.identity() {
+      if x.signingKey != CoreTrust.pinned?.signingKey {
+        // a restarted core is empty (its boot keys): until it is set up again nothing can be signed
+        showSetup = true
+      } else {
+        witness(x)
+      }
     }
     start()
+  }
+
+  /// the pinned core's own signed word on its newest record of the sessions, remembered (LineWitness): a Recover never
+  /// takes an older one from the router
+  private func witness(_ x: CoreSetup.Identity) {
+    guard x.signingKey == CoreTrust.pinned?.signingKey,
+          let st = try? CoreCrypto.decode(x.state, by: x.signingKey, as: CoreSetup.State.self, what: "the core's state"), st.kind == "core-state" else { return }
+    LineWitness.saw(x.signingKey, st.lineSeq)
   }
 
   private func start() {
@@ -124,6 +137,10 @@ final class AppModel {
     pollTask = Task { [weak self] in
       while !Task.isCancelled {
         guard let self else { return }
+        if Date.now.timeIntervalSince(self.witnessedAt) >= 60 {
+          self.witnessedAt = .now
+          if let x = try? await RouterClient.shared.identity() { self.witness(x) }
+        }
         if Date.now < self.fastUntil || Date.now.timeIntervalSince(self.lastPoll) >= 15 {
           self.lastPoll = .now
           await self.refresh()

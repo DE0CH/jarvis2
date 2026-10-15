@@ -284,12 +284,24 @@ final class RouterClient: NSObject, ASWebAuthenticationPresentationContextProvid
 
   /// the core's store key C = P + K for this phone's agreement key, checked against `coreKey`; nil from a core that
   /// predates it (404: the app then uses the earlier forms)
-  func storeKey(coreKey: String) async throws -> String? {
+  /// core: the core point K to add (a Recover's derived K, CoreContinuity), nil = the answering core's own
+  func storeKey(coreKey: String, core: String? = nil) async throws -> String? {
     let phone = try PhoneKeys.shared.publicKeys().agreementKey
-    let (status, data) = try await raw("POST", "api/core/store-key", ["phone": phone])
+    var body: [String: Any] = ["phone": phone]
+    if let core { body["core"] = core }
+    let (status, data) = try await raw("POST", "api/core/store-key", body)
     if status == 404 { return nil }
     guard status == 200 else { throw Self.failure("POST", "api/core/store-key", status, data) }
-    return try CoreCrypto.storeKey(try JSONDecoder().decode(SignedDoc.self, from: data), coreKey: coreKey, phone: phone)
+    return try CoreCrypto.storeKey(try JSONDecoder().decode(SignedDoc.self, from: data), coreKey: coreKey, phone: phone, core: core)
+  }
+  /// the record of the sessions the router kept from the core (core/continuity.go); nil when it has none (the caller
+  /// checks it: CoreSetup.checkLineState)
+  func lineState() async throws -> CoreSetup.LineStateDoc? {
+    let (status, data) = try await raw("GET", "api/core/line-state", nil)
+    if status == 404 { return nil }
+    guard status == 200 else { throw Self.failure("GET", "api/core/line-state", status, data) }
+    // anything else than a record is the router withholding one (which it may: the sessions then end, as before)
+    return try? JSONDecoder().decode(CoreSetup.LineStateDoc.self, from: data)
   }
 
   // ---- what each store and key is for (router/storedocs.go): names, writers, explanations; never values ----
@@ -345,9 +357,10 @@ final class RouterClient: NSObject, ASWebAuthenticationPresentationContextProvid
     return try JSONDecoder().decode(CoreSetup.Identity.self, from: data)
   }
   struct CoreNotRunning: Error {}
-  /// POST api/core/claim; the answer must be that core's signed "claimed"
-  func claim(_ body: [String: Any], core: PublicKeys) async throws -> Int {
-    let d = try CoreCrypto.decode(try await json("POST", "api/core/claim", body, as: SignedDoc.self), by: core.signingKey, as: KindDoc.self, what: "the core's answer")
+  /// POST api/core/claim; the answer must be that core's signed "claimed" — signed with the derived key when the claim
+  /// brought a seed (`answeredBy`: the core the claim made, core/continuity.go)
+  func claim(_ body: [String: Any], core: PublicKeys, answeredBy: String? = nil) async throws -> Int {
+    let d = try CoreCrypto.decode(try await json("POST", "api/core/claim", body, as: SignedDoc.self), by: answeredBy ?? core.signingKey, as: KindDoc.self, what: "the core's answer")
     guard d.kind == "claimed" else { throw TrustError.stale("claim") }
     return d.stores ?? 0
   }

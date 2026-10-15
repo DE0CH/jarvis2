@@ -36,9 +36,14 @@ enum CoreSetup {
   struct Identity: Decodable {
     let signingKey: String; let agreementKey: String; let boxSig: String; let state: SignedDoc
     var bundle: String? = nil
+    /// continuity: 1 = the core takes a seed and a line state in the claim bundle (core/continuity.go)
+    var continuity: Int? = nil
     var takesKeys: Bool { bundle == "keys" }
+    var takesSeed: Bool { takesKeys && continuity == 1 }
   }
-  struct State: Decodable { let kind: String; let master: String; let phone: PublicKeys? }
+  /// lineSeq: the newest record of the sessions the core keeps (this iPhone remembers the highest it saw: LineWitness);
+  /// derived: the core's keys come from the master key, so a Recover with the same kit brings this core back
+  struct State: Decodable { let kind: String; let master: String; let phone: PublicKeys?; var lineSeq: Int? = nil; var derived: Bool? = nil }
   /// the core as this iPhone sees it
   enum Status: Equatable {
     case empty                // waiting for Reset or Recover
@@ -221,15 +226,18 @@ enum CoreSetup {
   /// the claim statement: this master key sets up this core for this iPhone, with this bundle
   /// `device`: this install's long-lived device key (PhoneKeys.devicePublic), inside the master-signed text so the setup
   /// session takes it only from there (a router can't attach its own); the core ignores the field
-  static func statement(master: String, core: PublicKeys, phone: PublicKeys, bundle: Data, device: String? = nil) throws -> String {
-    struct St: Encodable { let kind = "claim"; let master: String; let core: PublicKeys; let phone: PublicKeys; let bundleSha256: String; let device: String? }
+  /// `identity`: the keys the bundle's seed derives (CoreContinuity), which the core takes on from the claim (nil = no seed)
+  static func statement(master: String, core: PublicKeys, phone: PublicKeys, bundle: Data, device: String? = nil, identity: PublicKeys? = nil) throws -> String {
+    struct St: Encodable {
+      let kind = "claim"; let master: String; let core: PublicKeys; let phone: PublicKeys; let bundleSha256: String; let device: String?; let identity: PublicKeys?
+    }
     let e = JSONEncoder(); e.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
-    return String(decoding: try e.encode(St(master: master, core: core, phone: phone, bundleSha256: CoreCrypto.sha256hex(bundle), device: device)), as: UTF8.self)
+    return String(decoding: try e.encode(St(master: master, core: core, phone: phone, bundleSha256: CoreCrypto.sha256hex(bundle), device: device, identity: identity)), as: UTF8.self)
   }
 
   /// the body of POST /api/core/claim
-  static func claim(core: PublicKeys, phone: PublicKeys, master: MasterKey, bundle: Data, device: String? = nil) throws -> [String: Any] {
-    let st = try statement(master: master.publicKey, core: core, phone: phone, bundle: bundle, device: device)
+  static func claim(core: PublicKeys, phone: PublicKeys, master: MasterKey, bundle: Data, device: String? = nil, identity: PublicKeys? = nil) throws -> [String: Any] {
+    let st = try statement(master: master.publicKey, core: core, phone: phone, bundle: bundle, device: device, identity: identity)
     return ["statement": st, "masterSig": try master.sign(st), "bundle": try CoreCrypto.seal(bundle, to: core.agreementKey, info: CoreCrypto.claimInfo)]
   }
 
@@ -247,15 +255,19 @@ extension CoreSetup {
   /// the bundle a core whose identity says bundle "keys" reads: every store's name but `core`, every key of them
   /// wrapped to the store key (its value's raw bytes, "<store>\n<key>" as associated data), the core store's Fly token
   /// on its own, which stores are not sensitive, which repo owns each deploy-key store
-  static func keysBundle(_ stores: [RecoveredStore], storeKey: String) throws -> Data {
+  /// coreSeed / lineState: a core that takes them (Identity.takesSeed): the seed the core's keys come from, and the record
+  /// of the sessions an earlier core from the same kit left (checked first: checkLineState)
+  static func keysBundle(_ stores: [RecoveredStore], storeKey: String, coreSeed: Data? = nil, lineState: LineStateDoc? = nil) throws -> Data {
     struct B: Encodable {
-      let flyToken: String?; let format = "keys"; let keys: [KeyEntry]; let notSensitive: [String]; let owners: [String: String]; let stores: [String]
+      let coreSeed: String?; let flyToken: String?; let format = "keys"; let keys: [KeyEntry]; let lineState: LineStateDoc?
+      let notSensitive: [String]; let owners: [String: String]; let stores: [String]
     }
     let rest = stores.filter { $0.name != StoreView.coreStore }
     let keys = try rest.flatMap { try CoreCrypto.wrapKeys(store: $0.name, values: $0.values, storeKey: storeKey) }
     let fly = stores.first { $0.name == StoreView.coreStore }?.values["FLY_API_TOKEN"]
     let e = JSONEncoder(); e.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
-    return try e.encode(B(flyToken: fly, keys: keys, notSensitive: rest.filter { !$0.sensitive }.map(\.name), owners: owners(rest), stores: rest.map(\.name)))
+    return try e.encode(B(coreSeed: coreSeed?.base64EncodedString(), flyToken: fly, keys: keys, lineState: lineState,
+                          notSensitive: rest.filter { !$0.sensitive }.map(\.name), owners: owners(rest), stores: rest.map(\.name)))
   }
   /// a deploy-key store → its repo (from its GITHUB_DEPLOY_REPO_ key)
   static func owners(_ stores: [RecoveredStore]) -> [String: String] {
@@ -336,5 +348,24 @@ extension CoreSetup {
     let f = DateFormatter()
     f.locale = Locale(identifier: "en_US_POSIX"); f.timeZone = TimeZone(identifier: "UTC"); f.dateFormat = "yyyy-MM-dd-HHmm"
     return "jarvis2-backup-\(f.string(from: at)).json"
+  }
+}
+
+// ---- the record of the sessions (core/continuity.go): what a Recover hands back to the core ------------------------
+// The core seals its line state (each machine's newest cert, the killed and used sets, the input log's head, the
+// deploy-key stores) under a key only a core from the same kit has, and signs a head over it; the router keeps the
+// newest. The app checks the head with the derived core key and that it isn't older than the newest this iPhone saw,
+// so the router can't hand back an earlier record (which could revive a line that has since ended or dropped a store).
+extension CoreSetup {
+  struct LineStateDoc: Codable, Equatable { let head: SignedDoc; let sealed: String }
+  struct LineHead: Decodable { let kind: String; let seq: Int; let sha256: String }
+
+  /// the record's number, once checked: signed by the derived core key, its hash, at least `atLeast`
+  static func checkLineState(_ d: LineStateDoc, coreKey: String, atLeast: Int) throws -> Int {
+    let h = try CoreCrypto.decode(d.head, by: coreKey, as: LineHead.self, what: "the record of the sessions")
+    guard h.kind == "line-state-head" else { throw TrustError.mismatch("not a record of the sessions") }
+    guard let raw = Data(base64Encoded: d.sealed), CoreCrypto.sha256hex(raw) == h.sha256 else { throw TrustError.mismatch("the record of the sessions isn't the one its head names") }
+    guard h.seq >= atLeast else { throw TrustError.stale("record of the sessions \(h.seq), this iPhone saw \(atLeast)") }
+    return h.seq
   }
 }

@@ -674,15 +674,17 @@ struct SessionWrite: Hashable {
   func hash(into h: inout Hasher) { h.combine(store); h.combine(key); h.combine(line) }
 }
 /// the core's signed answer to POST /store-key: C = P + K for this phone
-struct StoreKeyDoc: Codable { let kind: String; let phone: String; let storeKey: String }
+/// core: the core point the store key was made for when the app named one (a Recover's derived K: CoreContinuity)
+struct StoreKeyDoc: Codable { let kind: String; let phone: String; let storeKey: String; var core: String? = nil }
 
 extension CoreCrypto {
   static let storeDataKeyInfo = "jarvis2/store-data-key"
 
   /// the store key for this phone's agreement key, from the core's signed answer (`coreKey`: that core's signing key)
-  static func storeKey(_ doc: SignedDoc, coreKey: String, phone: String) throws -> String {
+  static func storeKey(_ doc: SignedDoc, coreKey: String, phone: String, core: String? = nil) throws -> String {
     let d = try decode(doc, by: coreKey, as: StoreKeyDoc.self, what: "the store key")
     guard d.kind == "store-key", MasterKey.same(d.phone, phone) else { throw TrustError.stale("store key") }
+    if let core { guard let got = d.core, MasterKey.same(got, core) else { throw TrustError.stale("store key for another core") } }
     guard let b = Data(base64Encoded: d.storeKey), (try? P256.KeyAgreement.PublicKey(x963Representation: b)) != nil else { throw TrustError.badSignature("the store key") }
     return d.storeKey
   }
@@ -760,5 +762,36 @@ enum OpenSSH {
   static func storeValues(repo: String, privateKeyFile: String) -> [String: String] {
     let s = slug(repo)
     return ["GITHUB_DEPLOY_REPO_\(s)": repo, "GITHUB_DEPLOY_KEY_\(s)": Data(privateKeyFile.utf8).base64EncodedString()]
+  }
+}
+
+// ---- core continuity (core/continuity.go) ----------------------------------------------------------------------
+// The core's keys come from the master key: the app derives a seed from the kit's master private key and sends it in
+// the claim bundle; the core derives its signing key, its store share K and its other keys from it. So a Recover with
+// the same kit brings back the same core, and the sessions' certs, carried secrets and store keys stay valid. The
+// derivation here must match core/continuity.go exactly (the core refuses a claim whose statement names other keys).
+enum CoreContinuity {
+  static let seedInfo = "jarvis2/core-seed", keyInfo = "jarvis2/core/"
+
+  /// HKDF-SHA256 with no salt, 32 bytes
+  static func hkdf(_ ikm: Data, info: String) -> Data {
+    let k = HKDF<SHA256>.deriveKey(inputKeyMaterial: SymmetricKey(data: ikm), salt: Data(), info: Data(info.utf8), outputByteCount: 32)
+    return k.withUnsafeBytes { Data($0) }
+  }
+  /// the seed: from the master private key's 32-byte scalar
+  static func seed(_ master: MasterKey) -> Data { hkdf(master.signing.rawRepresentation, info: seedInfo) }
+  /// the first of label, label/1, label/2, … that is a valid P-256 scalar
+  static func scalar(_ seed: Data, _ label: String) throws -> Data {
+    for i in 0..<16 {
+      let d = hkdf(seed, info: keyInfo + label + (i > 0 ? "/\(i)" : ""))
+      if (try? P256.Signing.PrivateKey(rawRepresentation: d)) != nil { return d }
+    }
+    throw TrustError.mismatch("no core key from the seed")
+  }
+  /// the public keys of the core the seed derives
+  static func keys(seed: Data) throws -> PublicKeys {
+    let s = try P256.Signing.PrivateKey(rawRepresentation: try scalar(seed, "signing"))
+    let a = try P256.KeyAgreement.PrivateKey(rawRepresentation: try scalar(seed, "agreement"))
+    return PublicKeys(signingKey: s.publicKey.x963Representation.base64EncodedString(), agreementKey: a.publicKey.x963Representation.base64EncodedString())
   }
 }

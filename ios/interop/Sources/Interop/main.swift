@@ -173,40 +173,58 @@ if let out = env["INTEROP_EXPORT_OUT"] { try! exported.write(to: URL(fileURLWith
 // ---- Recover: the claim, signed with the kit's master key ----
 let phoneSigning = P256.Signing.PrivateKey(), phoneAgreement = P256.KeyAgreement.PrivateKey()
 let phone = PublicKeys(signingKey: phoneSigning.publicKey.x963Representation.base64EncodedString(), agreementKey: phoneAgreement.publicKey.x963Representation.base64EncodedString())
-// R2: the app wraps every store itself to the core's signed store key (P + K), so the core never sees their plaintext
-let (sks, skd) = call("/store-key", ["phone": phone.agreementKey])
-let recoverStoreKey = (try? CoreCrypto.storeKey(doc(skd), coreKey: coreKeys.signingKey, phone: phone.agreementKey)) ?? ""
-check(sks == 200 && !recoverStoreKey.isEmpty, "an empty core signs the store key for this phone (HTTP \(sks))")
+// continuity (core/continuity.go): the core's keys come from the kit's master key — the app derives them, the claim
+// names them, and the core becomes that core
+let seed = CoreContinuity.seed(kitMaster)
+let derived = try! CoreContinuity.keys(seed: seed)
+check(id0.takesSeed, "the core's identity says it takes a seed (continuity \(id0.continuity ?? 0))")
+check(derived != coreKeys && PublicKeys.valid(derived), "the kit derives valid core keys, not the empty core's boot keys")
+check((try? CoreContinuity.keys(seed: CoreContinuity.seed(kitMaster))) == derived && (try? CoreContinuity.keys(seed: CoreContinuity.seed(fresh))) != derived,
+      "the same kit derives the same keys, another kit others")
+// R2: the app wraps every store itself to the core's signed store key (P + K), so the core never sees their plaintext;
+// with a seed, K is the derived core's (the empty core adds the point the app names)
+let (sks, skd) = call("/store-key", ["phone": phone.agreementKey, "core": derived.agreementKey])
+let recoverStoreKey = (try? CoreCrypto.storeKey(doc(skd), coreKey: coreKeys.signingKey, phone: phone.agreementKey, core: derived.agreementKey)) ?? ""
+check(sks == 200 && !recoverStoreKey.isEmpty, "an empty core signs the store key for this phone and the derived core (HTTP \(sks))")
 check(throwsErr { _ = try CoreCrypto.storeKey(doc(skd), coreKey: coreKeys.signingKey, phone: coreKeys.agreementKey) }, "…and the app refuses one for another phone")
+check(throwsErr { _ = try CoreCrypto.storeKey(doc(call("/store-key", ["phone": phone.agreementKey]).1), coreKey: coreKeys.signingKey, phone: phone.agreementKey, core: derived.agreementKey) },
+      "…and one for the boot core's K when it asked for the derived one")
 check(id0.takesKeys, "the core's identity says it takes stores of keys (bundle \(id0.bundle ?? "none"))")
-let bundle = try! CoreSetup.keysBundle(merged, storeKey: recoverStoreKey)
+let bundle = try! CoreSetup.keysBundle(merged, storeKey: recoverStoreKey, coreSeed: seed)
 let bundleText = String(decoding: bundle, as: UTF8.self)
 check(!bundleText.contains("FLY_API_TOKEN") && !bundleText.contains("from-a-session") && bundleText.contains(#""format":"keys""#), "the keys bundle carries no value in the clear (the Fly token goes as flyToken)")
 check(call("/claim", try! CoreSetup.claim(core: coreKeys, phone: phone, master: kitMaster, bundle: try! CoreSetup.blobsBundle(stores, storeKey: recoverStoreKey))).0 == 400, "the core refuses a bundle in the format from before keys.go")
 func claim(_ body: [String: Any]) -> (Int, Data) { call("/claim", body) }
-var bad = try! CoreSetup.claim(core: coreKeys, phone: phone, master: kitMaster, bundle: bundle)
+var bad = try! CoreSetup.claim(core: coreKeys, phone: phone, master: kitMaster, bundle: bundle, identity: derived)
 bad["masterSig"] = try! fresh.sign(bad["statement"] as! String)
 check(claim(bad).0 == 403, "a claim signed by another key than the master key it names is refused")
-bad = try! CoreSetup.claim(core: phone, phone: phone, master: kitMaster, bundle: bundle)
+bad = try! CoreSetup.claim(core: phone, phone: phone, master: kitMaster, bundle: bundle, identity: derived)
 bad["bundle"] = try! CoreCrypto.seal(bundle, to: coreKeys.agreementKey, info: CoreCrypto.claimInfo)
 check(claim(bad).0 == 403, "a claim naming another core is refused")
-bad = try! CoreSetup.claim(core: coreKeys, phone: phone, master: kitMaster, bundle: bundle)
+bad = try! CoreSetup.claim(core: coreKeys, phone: phone, master: kitMaster, bundle: bundle, identity: derived)
 bad["bundle"] = try! CoreCrypto.seal(bundle + Data(" ".utf8), to: coreKeys.agreementKey, info: CoreCrypto.claimInfo)
 check(claim(bad).0 == 403, "a bundle other than the signed one is refused")
+check(claim(try! CoreSetup.claim(core: coreKeys, phone: phone, master: kitMaster, bundle: bundle, identity: PublicKeys(signingKey: derived.signingKey, agreementKey: phone.agreementKey))).0 == 403,
+      "a claim whose identity isn't what its seed derives is refused")
+check(claim(try! CoreSetup.claim(core: coreKeys, phone: phone, master: kitMaster, bundle: bundle)).0 == 403, "…and a seed with no identity")
 check(call("/wipe", try! CoreSetup.wipe(core: coreKeys, master: kitMaster)).0 == 409, "an empty core can't be wiped")
-let (rs, rb) = claim(try! CoreSetup.claim(core: coreKeys, phone: phone, master: kitMaster, bundle: bundle))
+let (rs, rb) = claim(try! CoreSetup.claim(core: coreKeys, phone: phone, master: kitMaster, bundle: bundle, identity: derived))
 check(rs == 200, "the core is set up (HTTP \(rs) \(String(decoding: rb.prefix(200), as: UTF8.self)))")
-let rec = try? CoreCrypto.decode(doc(rb), by: coreKeys.signingKey, as: KindDoc.self, what: "claimed")
+// the answer comes from the core the seed made (signed with the derived key)
+let rec = try? CoreCrypto.decode(doc(rb), by: derived.signingKey, as: KindDoc.self, what: "claimed")
 check(rec?.kind == "claimed" && rec?.stores == 6, "the answer is the core's signed 'claimed' (6 stores, the core's own excluded)")
-check(claim(try! CoreSetup.claim(core: coreKeys, phone: phone, master: kitMaster, bundle: bundle)).0 == 409, "a second claim is refused")
+check(claim(try! CoreSetup.claim(core: coreKeys, phone: phone, master: kitMaster, bundle: bundle, identity: derived)).0 == 409, "a second claim is refused")
 check(claim(try! CoreSetup.claim(core: coreKeys, phone: phone, master: fresh, bundle: try! CoreSetup.keysBundle([], storeKey: recoverStoreKey))).0 == 409, "…and a Reset's claim with a new key too")
-let st1 = (try? CoreSetup.check(identity(), boxKey: boxKey))?.state
+let after1 = try? CoreSetup.check(identity(), boxKey: boxKey), after2 = try? CoreSetup.check(identity(), boxKey: boxKey)
+check(after1?.keys == derived && after2?.keys == derived, "the core now answers with the derived keys, vouched for by the box key (twice: \(after1?.keys.signingKey.prefix(12) ?? "none")…)")
+check(after1?.state.derived == true && (after1?.state.lineSeq ?? 0) >= 1, "…its state says its keys are derived and names its record of the sessions (\(after1?.state.lineSeq ?? 0))")
+let st1 = after1?.state
 check(st1 != nil && CoreSetup.status(st1!, myMaster: kitMaster.publicKey, myPhone: phone) == .mine, "the core's state now names this master key and this phone (mine)")
 check(st1 != nil && CoreSetup.status(st1!, myMaster: fresh.publicKey, myPhone: phone) == .foreign, "…a phone with another master key sees it as foreign")
 check(st1 != nil && CoreSetup.status(st1!, myMaster: kitMaster.publicKey, myPhone: PublicKeys(signingKey: phone.agreementKey, agreementKey: phone.signingKey)) == .otherPhone, "…and another phone with the same kit as set up for another iPhone")
 check(st1 != nil && CoreSetup.status(st1!, myMaster: nil, myPhone: phone) == .foreign, "…and a phone with no master key as foreign")
 
-let coreKey = coreKeys.signingKey
+let coreKey = derived.signingKey
 
 // ---- stores (signed, with the caller's nonce) ----
 func list() -> [StoreView] {
@@ -300,6 +318,13 @@ let wObj = servedNow.first { $0.key == "keys/default/WRITTEN.json" }
 check(wObj.map { x in !throwsErr { _ = try CoreSetup.checkKeyBackup(x, setupKey: setupKey, boxKey: boxKey) } } == true, "the router wrote the key's backup first (keys/default/WRITTEN.json) and it checks")
 check((try? CoreSetup.readBackups(servedNow, master: kitMaster, setupKey: setupKey, boxKey: boxKey))?.first { $0.name == "default" }?.values["WRITTEN"] == "w1",
       "…and opens with the kit, laid over the store's whole-store backup")
+// the record of the sessions (core/continuity.go): the router keeps the newest (fetched when the write above came back with a higher X-Line-Seq); the app checks it before a Recover
+let (lss, lsd) = call("/api/core/line-state", base: need("INTEROP_ROUTER"))
+let lsDoc = lss == 200 ? try? JSONDecoder().decode(CoreSetup.LineStateDoc.self, from: lsd) : nil
+check(lsDoc.map { d in (try? CoreSetup.checkLineState(d, coreKey: coreKey, atLeast: 1)) != nil } == true, "the router serves the core's record of the sessions, signed by the derived key (HTTP \(lss))")
+check(lsDoc.map { d in throwsErr { _ = try CoreSetup.checkLineState(d, coreKey: coreKey, atLeast: 1_000_000) } } == true, "…and the app refuses one older than it saw")
+check(lsDoc.map { d in throwsErr { _ = try CoreSetup.checkLineState(CoreSetup.LineStateDoc(head: d.head, sealed: Data("x".utf8).base64EncodedString()), coreKey: coreKey, atLeast: 0) } } == true, "…or one that isn't what its head names")
+check(lsDoc.map { d in throwsErr { _ = try CoreSetup.checkLineState(d, coreKey: coreKeys.signingKey, atLeast: 0) } } == true, "…or one another core signed")
 
 // ---- restore: a store put back to an earlier version (core/history.go, router/storerestore.go): the phone signs the
 // core's begin document and shares the keys put back; no kit. The core's backups (writer "restore") check at Recover.
@@ -724,16 +749,16 @@ let lk = try? CoreCrypto.decode(doc(call("/lock", ["id": u?.id ?? ""]).1), by: c
 check(lk?.kind == "locked", "lock releases the unlock id")
 
 // ---- the Fly token, sealed to the core (infra/setup.py backup-core) ----
-let tok = try! CoreCrypto.seal(Data(#"{"FLY_API_TOKEN":"ci-token"}"#.utf8), to: coreKeys.agreementKey, info: "jarvis2/fly-token")
+let tok = try! CoreCrypto.seal(Data(#"{"FLY_API_TOKEN":"ci-token"}"#.utf8), to: derived.agreementKey, info: "jarvis2/fly-token")
 let ft = try? CoreCrypto.decode(doc(call("/fly-token", ["sealed": tok]).1), by: coreKey, as: KindDoc.self, what: "fly token")
 check(ft?.kind == "fly-token-set", "the core takes a Fly token sealed to it")
-check(call("/fly-token", ["sealed": try! CoreCrypto.seal(Data(#"{"FLY_API_TOKEN":"x"}"#.utf8), to: coreKeys.agreementKey, info: CoreCrypto.shareInfo)]).0 == 400, "…not one sealed for something else")
+check(call("/fly-token", ["sealed": try! CoreCrypto.seal(Data(#"{"FLY_API_TOKEN":"x"}"#.utf8), to: derived.agreementKey, info: CoreCrypto.shareInfo)]).0 == 400, "…not one sealed for something else")
 
 // ---- Reset on a set-up core: only the master key it was set up with ends it ----
-check(call("/wipe", try! CoreSetup.wipe(core: coreKeys, master: fresh)).0 == 403, "a wipe signed by another key is refused")
+check(call("/wipe", try! CoreSetup.wipe(core: derived, master: fresh)).0 == 403, "a wipe signed by another key is refused")
 var w2 = try! CoreSetup.wipe(core: phone, master: kitMaster)
 check(call("/wipe", w2).0 == 403, "a wipe naming another core is refused")
-w2 = try! CoreSetup.wipe(core: coreKeys, master: kitMaster)
+w2 = try! CoreSetup.wipe(core: derived, master: kitMaster)
 let (ws, wd) = call("/wipe", w2)
 let wiping = try? CoreCrypto.decode(doc(wd), by: coreKey, as: KindDoc.self, what: "wiping")
 check(ws == 200 && wiping?.kind == "wiping" && wiping?.core == coreKey, "the master key ends the core (a signed 'wiping')")

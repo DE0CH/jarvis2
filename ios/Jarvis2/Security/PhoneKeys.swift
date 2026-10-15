@@ -71,12 +71,27 @@ final class PhoneKeys: @unchecked Sendable {
     return ac
   }
 
-  /// New key pairs (Reset and Recover pair the phone again, so its keys are made fresh there): the Enclave keys are
-  /// bound to the faces enrolled NOW (.biometryCurrentSet, audit finding 6): enrolling another face or an alternate
-  /// appearance (which needs only the passcode) makes them unusable, and the phone is paired again with a Recover.
+  /// New key pairs (a Reset pairs the phone again, so its keys are made fresh there; a Recover keeps them unless the
+  /// enrolled faces changed: core/continuity.go): the Enclave keys are bound to the faces enrolled NOW
+  /// (.biometryCurrentSet, audit finding 6): enrolling another face or an alternate appearance (which needs only the
+  /// passcode) makes them unusable, and the phone is paired again with a Recover.
   func renew() {
     for k in ["signing-se", "agreement-se", "signing-sw", "agreement-sw"] { Keychain.set(k, nil) }
     _ = try? publicKeys()
+    Keychain.set("biometry-state", Self.biometryState())
+  }
+  /// the faces enrolled now, as LocalAuthentication names them (nil: no biometry)
+  private static func biometryState() -> Data? {
+    let c = LAContext()
+    var e: NSError?
+    guard c.canEvaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, error: &e) else { return nil }
+    return c.evaluatedPolicyDomainState
+  }
+  /// the keys a Recover keeps: renewed only when they can't be read or the enrolled faces changed since they were made
+  /// (then the Enclave refuses them)
+  func keepOrRenew() {
+    let saved = Keychain.get("biometry-state")
+    if (try? publicKeys()) == nil || (saved != nil && saved != Self.biometryState()) { renew() }
   }
 
   // ---- the public halves (no Face ID needed); made on first use ----
@@ -300,4 +315,15 @@ enum CoreTrust {
     Keychain.setString("master-public", master)
   }
   static func key() throws -> String { guard let p = pinned else { throw TrustError.notSetUp }; return p.signingKey }
+}
+
+/// The highest record of the sessions (the core's lineSeq, core/continuity.go) this iPhone has seen from each core,
+/// by the core's signing key: a Recover refuses an older one from the router (CoreSetup.checkLineState).
+enum LineWitness {
+  private static func account(_ core: String) -> String { "line-seq-" + String(CoreCrypto.sha256hex(Data(core.utf8)).prefix(32)) }
+  static func seen(_ core: String) -> Int { Keychain.string(account(core)).flatMap(Int.init) ?? 0 }
+  static func saw(_ core: String, _ seq: Int?) {
+    guard let seq, seq > seen(core) else { return }
+    Keychain.setString(account(core), String(seq))
+  }
 }
