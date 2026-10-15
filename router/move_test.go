@@ -307,3 +307,28 @@ func TestMovedRouterIsOnlyAProxy(t *testing.T) {
 		t.Fatalf("got %q", b)
 	}
 }
+
+// A standby's move listener passes the calls on to the leader's (one Service may select every router pod).
+func TestStandbyMoveListenerProxiesToLeader(t *testing.T) {
+	leaderMove := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, "leader "+r.URL.Path+" "+r.Header.Get("Authorization"))
+	}))
+	defer leaderMove.Close()
+	port := leaderMove.URL[strings.LastIndex(leaderMove.URL, ":")+1:]
+	t.Setenv("MOVE_ADDR", ":"+port)
+	dir := t.TempDir()
+	lock, _ := openLeaderLock(dir)
+	lock.setAddr("http://127.0.0.1:1") // the leader's public address: same host, the move port
+	srv := httptest.NewServer(moveLeaderProxy(lock, "http://127.0.0.2:8080"))
+	defer srv.Close()
+	req, _ := http.NewRequest("GET", srv.URL+"/move/files", nil)
+	req.Header.Set("Authorization", "Bearer k")
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, _ := io.ReadAll(res.Body)
+	if string(b) != "leader /move/files Bearer k" {
+		t.Fatalf("got %q", b)
+	}
+}

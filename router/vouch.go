@@ -357,6 +357,11 @@ func (r *Router) deliverVouchedRunning(sid string, d Delivery) error {
 }
 
 func (r *Router) deliverVouchedOpts(sid string, d Delivery, boot bool) error {
+	done, err := r.beginDelivery() // movegate.go: none begins once a handover started; the next leader makes it
+	if err != nil {
+		return err
+	}
+	defer done()
 	state, _ := r.sessionState(sid)
 	if !boot && state != "started" {
 		if state == "" {
