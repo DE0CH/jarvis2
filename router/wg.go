@@ -180,9 +180,7 @@ func serveWG(path string, port int, h http.Handler) (*wgServer, error) {
 			ipc += "allowed_ip=" + a + "\n"
 		}
 	}
-	if c.Keepalive != "" {
-		ipc += "persistent_keepalive_interval=" + c.Keepalive + "\n"
-	}
+
 	drop := &atomic.Bool{}
 	dev := device.NewDevice(&synFilter{Device: tdev, drop: drop, port: uint16(port)}, conn.NewDefaultBind(), device.NewLogger(device.LogLevelError, "wg: "))
 	if err := dev.IpcSet(ipc); err != nil {
@@ -190,6 +188,16 @@ func serveWG(path string, port int, h http.Handler) (*wgServer, error) {
 	}
 	if err := dev.Up(); err != nil {
 		return nil, err
+	}
+	// the keepalive set only now, on a device that is up, makes wireguard-go send one at once: the handshake starts
+	// now, not at the first packet or keepalive interval, so Fly's gateway routes the peer's address here at once (a
+	// handover's gap). Without a keepalive in the config, one anyway, once.
+	ka := c.Keepalive
+	if ka == "" || ka == "0" {
+		ka = "25"
+	}
+	if err := dev.IpcSet(fmt.Sprintf("public_key=%s\npersistent_keepalive_interval=%s\n", pub, ka)); err != nil {
+		log.Printf("wg: keepalive: %v", err)
 	}
 	l, err := tnet.ListenTCP(&net.TCPAddr{IP: pfx.Addr().AsSlice(), Port: port})
 	if err != nil {

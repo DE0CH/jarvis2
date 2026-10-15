@@ -143,6 +143,20 @@ func main() {
 		}
 	}
 	maybeRestore(cfg.DataDir) // backup.go: a rebuilt box (ROUTER_RESTORE=1)
+	// the machines' peer comes up first, before the state loads: a handover's gap for the machines is then only the time
+	// between the old peer going and this one's handshake (wg.go); its requests wait in the holding handler meanwhile
+	var earlyPeer *wgServer
+	var earlyHold *holdHandler
+	if joiner == nil {
+		if p := wgConfigPath(cfg.DataDir); p != "" {
+			earlyHold = newHoldHandler()
+			peer, err := serveWG(p, 8081, earlyHold)
+			if err != nil {
+				log.Fatal(err)
+			}
+			earlyPeer = peer
+		}
+	}
 
 	st, err := LoadState(cfg.DataDir) // after the lock: the previous leader's last save
 	if err != nil {
@@ -186,11 +200,8 @@ func main() {
 			}
 			return p.Stop, p.Quiesce, nil
 		}
-		stop, quiesce, err := startWG()
-		if err != nil {
-			log.Fatal(err)
-		}
-		ld.stopWG, ld.quiesce = stop, quiesce
+		ld.stopWG, ld.quiesce = earlyPeer.Stop, earlyPeer.Quiesce
+		earlyHold.serve(r.MachineHandler())
 		log.Printf("machines: WireGuard peer from %s, port 8081", wgPath)
 	} else {
 		go func() { log.Fatal(http.ListenAndServe(maddr, r.MachineHandler())) }()
