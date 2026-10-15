@@ -1670,3 +1670,19 @@ snapshot failed with "no space left on device", the machine was destroyed anyway
      live state (`workers` in /api/state). *Subagents apart, other jobs by Claude Code's own type label.* *`bgTasks` stays
      as it was* (the process count the autopilot's idle and nudge rules use): changing what auto-pause sees is another
      decision. The hook never fails a turn: any error exits 0 with no output. New sessions only (the session image).
+
+## A handover ends long polls at once and loses no delivery, 2026-10-15
+
+189. **Every handover (rollout or box move) stops deliveries, quiesces the machines' peer and ends the requests in
+     flight before the state freezes** (Deyao, 2026-10-15: running sessions keep reaching the router throughout, only
+     the seconds of the gap may interrupt, no wakeup dropped; `router/movegate.go`). Claude's choices: *deliveries
+     finish before the freeze* (a wakeup delivered and not yet cleared would otherwise fire again on the next leader);
+     *the peer drops SYNs rather than refusing them* (the machine binary on running sessions doesn't retry: a refused
+     dial is a failed call, a dropped SYN is retried by TCP until the next peer answers); *the next leader's peer comes
+     up before it serves, with a handler that holds* (the dials land early, the SYN retry is the first one);
+     *an app `exec` waiting for the machine's answer ends with "run it again"* (its answer goes to the next leader, and
+     running a command twice by itself is worse); *the scheduler sleeps until the next item is due* (at most its 30 s
+     tick), so a wakeup is late by the gap, not by a tick. Measured with `E2E_ONLY=move` on Fly (two runs): 396 ms / 1.36 s gap,
+     450–550 probe calls per path (session API, lease, search) with none failed, an exec through `/m/commands` 0.8 s
+     after the move, a wakeup due in the gap delivered once, 3.7 s after it was due. *Not chosen*: retries in the machine (running sessions keep their image until a restart).
+

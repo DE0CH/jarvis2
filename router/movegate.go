@@ -163,8 +163,14 @@ func (r *Router) frozenNow() bool {
 	return g.frozen
 }
 
-// gated: every request of the public and the machines' listener passes here
-func (r *Router) gated(h http.Handler) http.Handler {
+// gated: every request of the public listener passes here
+func (r *Router) gated(h http.Handler) http.Handler { return r.gatedAs(h, true) }
+
+// gatedMachine: the machines' listener: a request the handover ended unanswered gets 503 and a closed connection,
+// never the fallback (that is the public listener's next leader, which has no /m)
+func (r *Router) gatedMachine(h http.Handler) http.Handler { return r.gatedAs(h, false) }
+
+func (r *Router) gatedAs(h http.Handler, fallbackOK bool) http.Handler {
 	g := &r.gate
 	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		g.mu.Lock()
@@ -199,7 +205,7 @@ func (r *Router) gated(h http.Handler) http.Handler {
 		g.mu.Lock()
 		fb := g.fallback
 		g.mu.Unlock()
-		if fb != nil && (req.Method == http.MethodGet || req.Method == http.MethodHead) && req.Context().Err() == nil {
+		if fb != nil && fallbackOK && (req.Method == http.MethodGet || req.Method == http.MethodHead) && req.Context().Err() == nil {
 			fb.ServeHTTP(w, req)
 			return
 		}

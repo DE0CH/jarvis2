@@ -272,7 +272,7 @@ func main() {
 	held := os.Getenv("E2E_HELD_CORE") == "1"
 	newBody := map[string]any{"label": "e2e test", "stores": []string{"e2e"}, "size": "small", "harness": "claude"}
 	legacy := os.Getenv("E2E_ONLY") == "legacy"
-	if !held && os.Getenv("E2E_ONLY") != "drain" && !continuity && !legacy {
+	if !held && os.Getenv("E2E_ONLY") != "drain" && os.Getenv("E2E_ONLY") != "move" && !continuity && !legacy {
 		contentSetupStep(secret) // nojarvis1.go
 		newBody["content"] = []string{"e2e-content"}
 	}
@@ -308,6 +308,10 @@ func main() {
 	}
 	if legacy {
 		legacyStep(p, master, phoneAgreement, recovered, id, m1, secret)
+		return
+	}
+	if os.Getenv("E2E_ONLY") == "move" { // move.go: the router moves to another box under a running session
+		moveStep(id, m1)
 		return
 	}
 	expectOnMachine(m1, "echo marker-"+secret+" > /home/claude/artifacts/e2e-marker && chown claude /home/claude/artifacts/e2e-marker && echo ok", "ok")

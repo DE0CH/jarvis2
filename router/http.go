@@ -58,7 +58,7 @@ func writeErr(w http.ResponseWriter, err error) {
 // MachineHandler: /m only, for the listener that only Fly's private network reaches
 func (r *Router) MachineHandler() http.Handler {
 	r.handlers()
-	return r.gated(r.machineMux) // movegate.go
+	return r.gatedMachine(r.machineMux) // movegate.go
 }
 
 // Handler: the public listener behind cloudflared — the app, the web page and setup

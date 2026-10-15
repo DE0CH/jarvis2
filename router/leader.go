@@ -186,6 +186,7 @@ type leadership struct {
 	handler  *swapHandler
 	mu       sync.Mutex
 	stopWG   func()
+	quiesce  func() // wg.go: no new machine connection opens here (a handover begins)
 	released bool
 }
 

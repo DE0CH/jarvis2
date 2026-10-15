@@ -135,6 +135,7 @@ func main() {
 	joiner := moveJoinerFromEnv(cfg.DataDir)
 	if joiner != nil {
 		joiner.handoff, joiner.core = httpHandoff{}, coreClient
+		joiner.serveWG = func(path string, h http.Handler) (*wgServer, error) { return serveWG(path, 8081, h) }
 		listen()
 		if !joiner.candidate(lock, self, public, sig) {
 			time.Sleep(time.Duration(handoverLingerSeconds()) * time.Second)
@@ -163,15 +164,33 @@ func main() {
 	// Fly's private network reaches (the WireGuard peer); /m exists only on the second. The peer that came with a
 	// move (/data/wg.conf) wins over the box's own (move.go).
 	wgPath := wgConfigPath(cfg.DataDir)
-	var startWG func() (func(), error)
-	if wgPath != "" {
+	var startWG func() (stop, quiesce func(), err error)
+	if joiner != nil && joiner.peer != nil {
+		// move.go: the moved peer is up already, holding the machines' requests; from now on they are served
+		ld.stopWG, ld.quiesce = joiner.peer.Stop, joiner.peer.Quiesce
+		startWG = func() (func(), func(), error) {
+			p, err := serveWG(wgPath, 8081, r.MachineHandler())
+			if err != nil {
+				return nil, nil, err
+			}
+			return p.Stop, p.Quiesce, nil
+		}
+		joiner.machine.serve(r.MachineHandler())
+		log.Printf("machines: the moved WireGuard peer (%s) serves, port 8081", wgPath)
+	} else if wgPath != "" {
 		// production: only on the Fly private network (wg.go)
-		startWG = func() (func(), error) { return serveWG(wgPath, 8081, r.MachineHandler()) }
-		stop, err := startWG()
+		startWG = func() (func(), func(), error) {
+			p, err := serveWG(wgPath, 8081, r.MachineHandler())
+			if err != nil {
+				return nil, nil, err
+			}
+			return p.Stop, p.Quiesce, nil
+		}
+		stop, quiesce, err := startWG()
 		if err != nil {
 			log.Fatal(err)
 		}
-		ld.stopWG = stop
+		ld.stopWG, ld.quiesce = stop, quiesce
 		log.Printf("machines: WireGuard peer from %s, port 8081", wgPath)
 	} else {
 		go func() { log.Fatal(http.ListenAndServe(maddr, r.MachineHandler())) }()
@@ -213,6 +232,9 @@ func main() {
 	// movegate.go: deliveries in flight finish here, long polls end at once (an unanswered GET goes to the next leader)
 	r.stopDeliveries(90 * time.Second)
 	public.set(newLeaderProxy(lock, self, nil))
+	if ld.quiesce != nil {
+		ld.quiesce() // wg.go: the machines' next dials wait for the next leader's peer
+	}
 	r.freezeRequests(newLeaderProxy(lock, self, nil), 10*time.Second)
 	ld.handOver(st)
 	time.Sleep(time.Duration(handoverLingerSeconds()) * time.Second)

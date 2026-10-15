@@ -431,6 +431,18 @@ on proxying. **The core moves along:** when the new box's core is a standby (Rec
 old router: `NEXT_CORE_URL`), the freeze also hands the old core off (`POST /handoff`) and the joiner's core takes over
 (`POST /takeover`) before the new router serves.
 
+**A handover never makes a running session wait longer than its gap (`router/movegate.go`; Deyao, 2026-10-15).**
+Both handovers — a rollout's and a move's — do the same before the state freezes: deliveries stop (the ones in flight
+finish, so a wakeup is neither lost nor made twice; one coming due waits for the next leader, whose scheduler ticks at
+once and then sleeps until the next item is due); the machines' peer is quiesced (its SYNs to 8081 dropped, so a
+machine's new dial waits in TCP's retries for the next peer instead of being refused; idle connections closed with a
+FIN); requests in flight end at once (the machine's `/m/commands` answers "nothing" and polls again, the Claude login's
+long poll answers what it has, an unanswered app GET goes to the next leader, anything else 503 with
+`Connection: close`). The next leader's peer comes up during the delta and holds the machines' connections until it
+serves. Measured on Fly (`E2E_ONLY=move`, two runs): a 396 ms / 1.36 s gap with no failed call from the session; RUNBOOK "Moving to the
+two boxes: what a running session sees". A standby's move port proxies to the leader's, so one Service with both ports
+may select every router pod.
+
 **The router's state is backed up to the Storage Box (`router/backup.go`).** Every 15 minutes (and at a drain or a
 move's freeze) a tar.gz of `/data` without the snapshots, `tmp/`, uploads over 200 MB and the lock, encrypted with age
 to `ROUTER_BACKUP_AGE_PUB` (the private half, `ROUTER_BACKUP_AGE_KEY`, lives in the `infra` store, not on the box), as

@@ -152,7 +152,7 @@ type moveSender struct {
 	dir     string
 	key     string
 	wgPath  string
-	startWG func() (func(), error)
+	startWG func() (stop, quiesce func(), err error)
 	drain   time.Duration
 	handoff coreHandoff // nextcore.go: the current core's FINAL line state, when the joiner asks for it
 
@@ -265,6 +265,9 @@ func (s *moveSender) freeze(finalizeCore bool) (*freezeAnswer, error) {
 		s.held = s.public.current()
 		hold := &leaderProxy{self: s.self, wait: 120 * time.Second, tr: newLeaderProxy(s.lock, s.self, nil).tr, fixed: s.target}
 		s.public.set(hold)
+		if s.ld.quiesce != nil {
+			s.ld.quiesce() // wg.go: no new machine connection opens here; the machines' dials wait for the new peer
+		}
 		s.r.freezeRequests(hold, 10*time.Second) // movegate.go: long polls in flight end at once
 		if s.ld.stopWG != nil {
 			s.ld.stopWG() // graceful: the machines' pooled connections get their FIN first (wg.go)
@@ -347,11 +350,11 @@ func (s *moveSender) abort() error {
 		return nil
 	}
 	if s.startWG != nil {
-		stop, err := s.startWG()
+		stop, quiesce, err := s.startWG()
 		if err != nil {
 			log.Printf("[move] abort: WireGuard peer: %v", err)
 		} else {
-			s.ld.stopWG = stop
+			s.ld.stopWG, s.ld.quiesce = stop, quiesce
 		}
 	}
 	s.st.mu.Unlock()
@@ -424,6 +427,11 @@ type moveJoiner struct {
 	lastSync time.Time   // when the last complete sync began
 	// what the freeze answered, for the leader start
 	wg string
+	// serveWG starts the moved peer (wg.go serveWG at port 8081; nil in tests): its machines' handler holds every
+	// request until the router serves (machine.ready)
+	serveWG func(path string, h http.Handler) (*wgServer, error)
+	machine *holdHandler
+	peer    *wgServer
 }
 
 func moveJoinerFromEnv(dir string) *moveJoiner {
@@ -500,18 +508,45 @@ func (j *moveJoiner) sync(files []moveFile, final ...bool) (fetched int, bytes i
 		have[f.Path] = f
 	}
 	want := map[string]bool{}
+	var todo []moveFile
 	for _, f := range files {
 		want[f.Path] = true
 		if h, ok := have[f.Path]; ok && h.Size == f.Size && h.Mtime == f.Mtime &&
 			!(len(final) > 0 && final[0] && (f.Size < 1<<20 || !time.Unix(0, f.Mtime).Before(since))) {
 			continue
 		}
-		n, err := j.fetch(f)
-		if err != nil {
-			return fetched, bytes, fmt.Errorf("%s: %w", f.Path, err)
-		}
-		fetched++
-		bytes += n
+		todo = append(todo, f)
+	}
+	// 8 at a time: the final delta is mostly many small files, and it is inside the gap
+	var mu sync.Mutex
+	var firstErr error
+	work := make(chan moveFile)
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for f := range work {
+				n, err := j.fetch(f)
+				mu.Lock()
+				if err != nil && firstErr == nil {
+					firstErr = fmt.Errorf("%s: %w", f.Path, err)
+				}
+				if err == nil {
+					fetched++
+					bytes += n
+				}
+				mu.Unlock()
+			}
+		}()
+	}
+	for _, f := range todo {
+		work <- f
+	}
+	close(work)
+	wg.Wait()
+	if firstErr != nil {
+		return fetched, bytes, firstErr
 	}
 	for _, f := range local {
 		if !want[f.Path] {
@@ -602,7 +637,11 @@ func (j *moveJoiner) candidate(lock *leaderLock, self string, public *swapHandle
 			}
 			j.at = time.Time{} // failed: no retry by itself (a new MOVE_AT does it)
 		}
-		tick.Reset(j.every)
+		next := j.every
+		if !j.at.IsZero() && time.Until(j.at) < next {
+			next = max(0, time.Until(j.at)) // the move starts at MOVE_AT, not at the next minute's copy
+		}
+		tick.Reset(next)
 	}
 }
 
@@ -632,12 +671,33 @@ func (j *moveJoiner) move(self string, public *swapHandler) bool {
 	public.set(hold)                                                         // from here requests wait for this router to serve
 	fail := func(what string, err error) bool {
 		log.Printf("[move] %s FAILED, aborting the move, still proxying: %v", what, err)
+		if j.peer != nil { // the sender brings its own peer back
+			j.peer.Stop()
+			j.peer, j.machine = nil, nil
+			os.Remove(filepath.Join(j.dir, wgDataFile))
+		}
 		public.set(proxyTo(self, j.public))
 		if aerr := j.call("POST", "/move/abort", nil, nil); aerr != nil {
 			log.Printf("[move] abort: %v", aerr)
 		}
 		setMove(func(m *moveStatus) { m.Phase, m.Error = "failed", what+": "+err.Error() })
 		return false
+	}
+	// the peer comes up at once, in parallel with the delta and the leader's start: the machines' connections are
+	// taken and wait in the holding handler until the router serves (their dials no longer wait for SYN retries)
+	if fz.WG != "" {
+		if err := os.WriteFile(filepath.Join(j.dir, wgDataFile), []byte(fz.WG), 0o600); err != nil {
+			return fail("wg.conf", err)
+		}
+		if j.serveWG != nil {
+			j.machine = newHoldHandler()
+			peer, err := j.serveWG(filepath.Join(j.dir, wgDataFile), j.machine)
+			if err != nil {
+				os.Remove(filepath.Join(j.dir, wgDataFile))
+				return fail("the WireGuard peer", err)
+			}
+			j.peer = peer
+		}
 	}
 	n, b, err := j.sync(fz.Files, true)
 	if err != nil {
@@ -650,11 +710,6 @@ func (j *moveJoiner) move(self string, public *swapHandler) bool {
 			os.WriteFile(filepath.Join(j.dir, "core-final.json"), fz.CoreFinal, 0o600)
 			log.Printf("[move] THIS BOX'S CORE REFUSED THE TAKEOVER: NO CORE SERVES; the final state is in core-final.json")
 			return fail("this box's core taking the old core's final state over", err)
-		}
-	}
-	if fz.WG != "" {
-		if err := os.WriteFile(filepath.Join(j.dir, wgDataFile), []byte(fz.WG), 0o600); err != nil {
-			return fail("wg.conf", err)
 		}
 	}
 	if err := os.WriteFile(filepath.Join(j.dir, movedInFile), []byte(time.Now().UTC().Format(time.RFC3339)+" from "+j.from+"\n"), 0o600); err != nil {
@@ -682,6 +737,30 @@ func (j *moveJoiner) finish() {
 	}
 	setMove(func(m *moveStatus) { m.Phase, m.GapMs = "serving", gap.Milliseconds() })
 	log.Printf("[move] MOVED: serving here; gap (sender frozen → this router serving) %s", gap.Round(time.Millisecond))
+}
+
+// holdHandler: the moved peer's handler until the router serves: every request waits (up to 2 min) for ready
+type holdHandler struct {
+	once  sync.Once
+	ready chan struct{}
+	h     http.Handler
+}
+
+func newHoldHandler() *holdHandler { return &holdHandler{ready: make(chan struct{})} }
+
+func (h *holdHandler) serve(next http.Handler) {
+	h.once.Do(func() { h.h = next; close(h.ready) })
+}
+
+func (h *holdHandler) ServeHTTP(w http.ResponseWriter, req *http.Request) {
+	select {
+	case <-h.ready:
+		h.h.ServeHTTP(w, req)
+	case <-req.Context().Done():
+	case <-time.After(2 * time.Minute):
+		w.Header().Set("Connection", "close")
+		writeJSON(w, 503, map[string]any{"error": "router moving, try again shortly", "retry": true})
+	}
 }
 
 // wgConfigPath: the peer that came with a move wins over the box's own

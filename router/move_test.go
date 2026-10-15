@@ -74,7 +74,10 @@ func newMoveRig(t *testing.T) *moveRig {
 	ld := &leadership{lock: g.lockA, self: g.srvA.URL, handler: g.pubA, stopWG: func() { g.wgStopped.Add(1) }}
 	g.sender = &moveSender{r: g.r, st: g.r.st, ld: ld, lock: g.lockA, self: g.srvA.URL, public: g.pubA, dir: g.dirA, key: "k",
 		wgPath: g.wgPath, drain: time.Second,
-		startWG: func() (func(), error) { g.wgStarted.Add(1); return func() { g.wgStopped.Add(1) }, nil }}
+		startWG: func() (func(), func(), error) {
+			g.wgStarted.Add(1)
+			return func() { g.wgStopped.Add(1) }, func() {}, nil
+		}}
 	g.srvMove = httptest.NewServer(g.sender.Handler())
 	t.Cleanup(g.srvMove.Close)
 	g.joiner = &moveJoiner{dir: g.dirB, from: g.srvMove.URL, public: g.srvA.URL, self: g.srvB.URL, key: "k",
@@ -330,5 +333,26 @@ func TestStandbyMoveListenerProxiesToLeader(t *testing.T) {
 	b, _ := io.ReadAll(res.Body)
 	if string(b) != "leader /move/files Bearer k" {
 		t.Fatalf("got %q", b)
+	}
+}
+
+func TestIsSynTo(t *testing.T) {
+	v6 := func(flags byte, port uint16) []byte {
+		p := make([]byte, 60)
+		p[0], p[6] = 0x60, 6
+		p[42], p[43], p[53] = byte(port>>8), byte(port), flags
+		return p
+	}
+	if !isSynTo(v6(0x02, 8081), 8081) {
+		t.Fatal("a SYN to 8081")
+	}
+	if isSynTo(v6(0x12, 8081), 8081) || isSynTo(v6(0x10, 8081), 8081) || isSynTo(v6(0x02, 22), 8081) {
+		t.Fatal("SYN-ACK, ACK or another port are not dropped")
+	}
+	v4 := make([]byte, 40)
+	v4[0], v4[9] = 0x45, 6
+	v4[22], v4[23], v4[33] = 0x1f, 0x91, 0x02
+	if !isSynTo(v4, 8081) {
+		t.Fatal("an IPv4 SYN to 8081")
 	}
 }

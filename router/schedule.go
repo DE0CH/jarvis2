@@ -650,8 +650,30 @@ var errSkip = errors.New("busy")
 func (r *Router) scheduleLoop() {
 	for {
 		r.scheduleTick(time.Now()) // at once at start: what came due during a handover fires right after it
-		time.Sleep(scheduleTick)
+		time.Sleep(r.untilNextDue(time.Now(), scheduleTick))
 	}
+}
+
+// untilNextDue: how long until the next wakeup or cron comes due, at most max: a wakeup fires when it is due, not at
+// the next 30 s tick. Only what is still ahead counts (one overdue and failing retries on the ticks, with its backoff).
+func (r *Router) untilNextDue(now time.Time, max time.Duration) time.Duration {
+	ms := now.UnixMilli()
+	next := now.Add(max).UnixMilli()
+	r.st.Do(func(d *persisted) {
+		for _, s := range d.Schedules {
+			for _, w := range s.Wakeups {
+				if w.At > ms {
+					next = min(next, w.At)
+				}
+			}
+			for _, c := range s.Crons {
+				if c.NextAt > ms {
+					next = min(next, c.NextAt)
+				}
+			}
+		}
+	})
+	return time.Duration(next-ms)*time.Millisecond + 10*time.Millisecond
 }
 
 // scheduleTick: one pass; non-reentrant, each item re-read inside its busy section before it fires

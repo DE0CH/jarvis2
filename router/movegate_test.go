@@ -177,3 +177,22 @@ func TestScheduleTicksAtStart(t *testing.T) {
 		t.Fatalf("a wakeup due at start must fire at once (delivered %d)", delivered.Load())
 	}
 }
+
+func TestScheduleSleepsUntilNextDue(t *testing.T) {
+	r := newTestRouter(t)
+	addSession(r, "s1", "started", "m1", false)
+	now := time.Now()
+	if d := r.untilNextDue(now, 30*time.Second); d < 30*time.Second || d > 31*time.Second {
+		t.Fatalf("nothing armed: %s", d)
+	}
+	r.st.Do(func(d *persisted) {
+		sched(d, "s1").Wakeups["w"] = &Wakeup{Name: "w", At: now.Add(5 * time.Second).UnixMilli(), ArmedAt: 1}
+	})
+	if d := r.untilNextDue(now, 30*time.Second); d < 5*time.Second || d > 5100*time.Millisecond {
+		t.Fatalf("a wakeup in 5 s: sleep %s", d)
+	}
+	r.st.Do(func(d *persisted) { sched(d, "s1").Wakeups["w"].At = now.Add(-time.Minute).UnixMilli() })
+	if d := r.untilNextDue(now, 30*time.Second); d < 30*time.Second {
+		t.Fatalf("one overdue retries on the ticks: %s", d)
+	}
+}

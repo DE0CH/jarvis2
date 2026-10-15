@@ -16,6 +16,8 @@
 #     restarted and Recovered with the same kit and the router's line state: the sessions go on (e2e/continuity.go)
 #   E2E_ONLY=legacy + E2E_CORE_REF=<production's core commit>: sessions on that core (random keys), then the restart to
 #     this tree's core, Recovered with the seed: a running and a paused session are taken over and resume (e2e/legacy.go)
+#   E2E_ONLY=move: a second router (its own /data, ports ${PP}180/${PP}181) moves the router over from the first while
+#     a session machine runs, the WireGuard peer moving along (router/move.go; e2e/move.go): the gaps are measured
 # Always with Jarvis 1 unreachable (e2e/nojarvis1.go): the router runs in its own mount namespace (sudo unshare) whose
 #   /etc/hosts sends jarvis.deyaochen.com to a listener that fails the test on any connection; each machine gets it
 #   blackholed too; search, the watch runner and the Storage Box are local stand-ins
@@ -56,6 +58,7 @@ cleanup() {
   for p in "${PIDS[@]}"; do kill "$p" 2>/dev/null || true; done
   [ -s "$W/core.pid" ] && kill "$(cat "$W/core.pid")" 2>/dev/null || true
   for p in "${SUDO_PIDS[@]}"; do sudo -n pkill -P "$p" 2>/dev/null || true; sudo -n kill "$p" 2>/dev/null || true; done
+  [ -e "$W/router-b" ] && { pkill -f "$W/router-b" 2>/dev/null; sudo -n pkill -f "$W/router-b" 2>/dev/null; } || true
   sweep
   FLY_API_TOKEN="$JARVIS2_FLY_TOKEN" flyctl wireguard remove jarvis2-370 "$PEER" >/dev/null 2>&1 || true
   rm -rf "$W"
@@ -118,6 +121,12 @@ cat /etc/ssl/certs/ca-certificates.crt "$W/dav.crt" > "$W/roots.pem"
 mkdir -p "$W/s3/jarvis2-backup-de0ch"
 S3_SECRET="$(openssl rand -hex 16)"
 rclone serve s3 --addr 127.0.0.1:${PP}074 --auth-key "e2e,$S3_SECRET" "$W/s3" > "$W/s3.log" 2>&1 & PIDS+=($!)
+# E2E_ONLY=move: the first router is the sender (its move listener on ${PP}082), the second (router-b) the joiner
+MOVE_ENV=""
+if [ "${E2E_ONLY:-}" = move ]; then
+  MOVE_KEY="$(openssl rand -hex 16)"
+  MOVE_ENV="MOVE_KEY=$MOVE_KEY MOVE_ADDR=127.0.0.1:${PP}082"
+fi
 cat > "$W/router-env" <<ENV
 #!/bin/sh
 exec env -i PATH="$PATH" HOME="$HOME" \\
@@ -127,7 +136,7 @@ exec env -i PATH="$PATH" HOME="$HOME" \\
   STORAGEBOX_HOST=127.0.0.1:${PP}073 STORAGEBOX_USER=e2e STORAGEBOX_PASSWORD=e2e SSL_CERT_FILE="$W/roots.pem" \\
   SEARCH_URL=http://127.0.0.1:${PP}071 WATCH_URL=http://127.0.0.1:${PP}072 \\
   BACKUP_ENDPOINT=http://127.0.0.1:${PP}074 BACKUP_READ_ACCESS_KEY=e2e BACKUP_READ_SECRET_KEY="$S3_SECRET" \\
-  "$W/router"
+  $MOVE_ENV "$W/router"
 ENV
 chmod 700 "$W/router-env"
 # Jarvis 2 runs without Jarvis 1: the router runs in its own mount namespace whose /etc/hosts sends every Jarvis 1
@@ -163,8 +172,33 @@ for h in $J1_HOSTS; do
   grep -qx "127.0.0.2 $h" "/proc/$ROUTER_PID/root/etc/hosts" || { echo "the router's /etc/hosts doesn't blackhole $h"; exit 1; }
 done
 grep -q 'jarvis.deyaochen.com' /etc/hosts && { echo "the blackhole leaked into this session's own /etc/hosts"; exit 1; }
+if [ "${E2E_ONLY:-}" = move ]; then
+  cp "$W/router" "$W/router-b"; mkdir -p "$W/data-b"
+  # router-b-start MOVE_AT: the joiner, in the same blackholed namespace; its peer comes with the move (no WG_CONFIG)
+  cat > "$W/router-b-env" <<ENV
+#!/bin/sh
+exec env -i PATH="$PATH" HOME="$HOME" \\
+  CORE_URL=http://127.0.0.1:${PP}090 NO_ACCESS=1 RECORDS_OFF=1 LIVE_SYNC_SECONDS=20 ADDR=127.0.0.1:${PP}180 MACHINE_ADDR=127.0.0.1:${PP}181 \\
+  DATA_DIR="$W/data-b" WEB_DIR="$W/web" MACHINE_URL="http://$PEER._peer.internal:8081" POLICY_FILE="$W/policy.json" TASKS_DIR="$ROOT/tasks" \\
+  SESSION_IMAGE="$E2E_SESSION_IMAGE" JARVIS1_PAUSED_URL="http://127.0.0.1:${PP}070/" \\
+  STORAGEBOX_HOST=127.0.0.1:${PP}073 STORAGEBOX_USER=e2e STORAGEBOX_PASSWORD=e2e SSL_CERT_FILE="$W/roots.pem" \\
+  SEARCH_URL=http://127.0.0.1:${PP}071 WATCH_URL=http://127.0.0.1:${PP}072 \\
+  BACKUP_ENDPOINT=http://127.0.0.1:${PP}074 BACKUP_READ_ACCESS_KEY=e2e BACKUP_READ_SECRET_KEY="$S3_SECRET" \\
+  MOVE_FROM=http://127.0.0.1:${PP}082 MOVE_PUBLIC=http://127.0.0.1:${PP}080 MOVE_SELF=http://127.0.0.1:${PP}180 MOVE_KEY=$MOVE_KEY \\
+  MOVE_AT="\$(cat "$W/move-at")" "$W/router-b"
+ENV
+  chmod 700 "$W/router-b-env"
+  cat > "$W/router-b-start" <<SH
+#!/bin/sh
+echo "\$1" > "$W/move-at"
+sudo -n unshare -m --propagation private sh -c 'mount --bind "\$0" /etc/hosts && exec setpriv --reuid="\$1" --regid="\$2" --clear-groups "\$3"' \
+  "$W/hosts" "$(id -u)" "$(id -g)" "$W/router-b-env" > "$W/router-b.log" 2>&1 &
+SH
+  chmod 700 "$W/router-b-start"
+  : > "$W/router-b.log"
+fi
 sleep 3
-(cd "$ROOT/e2e" && E2E_CORE_RESTART="$W/core-restart" E2E_ROUTER_PID="$ROUTER_PID" E2E_ROUTER_LOG="$W/router.log" E2E_DATA_DIR="$W/data" E2E_ROUTER=http://127.0.0.1:${PP}080 E2E_CORE=http://127.0.0.1:${PP}090 E2E_MASTER_KEY_FILE="$ROOT/e2e/testdata/master-test.pem" E2E_BOX_PUB="$(cat "$W/box.pub")" \
+(cd "$ROOT/e2e" && E2E_ROUTER_B_START="$W/router-b-start" E2E_ROUTER_B=http://127.0.0.1:${PP}180 E2E_ROUTER_B_LOG="$W/router-b.log" E2E_CORE_RESTART="$W/core-restart" E2E_ROUTER_PID="$ROUTER_PID" E2E_ROUTER_LOG="$W/router.log" E2E_DATA_DIR="$W/data" E2E_ROUTER=http://127.0.0.1:${PP}080 E2E_CORE=http://127.0.0.1:${PP}090 E2E_MASTER_KEY_FILE="$ROOT/e2e/testdata/master-test.pem" E2E_BOX_PUB="$(cat "$W/box.pub")" \
   E2E_JARVIS1_ADDR=127.0.0.1:${PP}070 E2E_FLY_TOKEN="$JARVIS2_FLY_TOKEN" E2E_CORE_FLY_TOKEN="${E2E_CORE_FLY_TOKEN:-$JARVIS2_FLY_TOKEN}" \
   E2E_PEER="$PEER" E2E_J1_HITS="$W/j1-hits.log" E2E_SEARCH_ADDR=127.0.0.1:${PP}071 E2E_WATCH_ADDR=127.0.0.1:${PP}072 \
   E2E_DAV_ADDR=127.0.0.1:${PP}073 E2E_DAV_CERT="$W/dav.crt" E2E_DAV_KEY="$W/dav.key" E2E_S3_DIR="$W/s3/jarvis2-backup-de0ch" go run .) || { echo "--- router log"; tail -40 "$W/router.log"; exit 1; }

@@ -69,6 +69,26 @@ The move is git only (`router/move.go`, DESIGN "The box"); the boxes reach each 
    (`/data/router.moved`); scale its cloudflared to 0 and retire it.
 5. A failed move logs `[move] … FAILED` and aborts: the old box serves again. A new `MOVE_AT` tries again.
 
+### Moving to the two boxes: what a running session sees
+
+Measured with `E2E_ONLY=move infra/e2e.sh` (two routers on one host, a real session machine on Fly over Fly's private
+network, the WireGuard peer moving between them, 2026-10-15; two runs, the second on a host at load 30): gap **396 ms /
+1.36 s**, no failed call in either. Step by step:
+
+| Step | What a running session sees | How long |
+|---|---|---|
+| The new router is a candidate (pre-copying `/data` every minute) | nothing: every app request is proxied to the old router; the machine still talks to the old peer | until `MOVE_AT` |
+| The old router drains (as for a rollout) | a new lifecycle action (pause, resume, destroy, restart) asked for now gets 503 "router updating, try again shortly"; everything else is served | until the running actions end: seconds, up to a pause's snapshot wait |
+| Deliveries stop on the old router | a wakeup, cron, watch, lease or outcome delivery in flight finishes; one coming due now waits for the new router (`busy: the router is handing over — next tick`) | — |
+| Freeze (the gap starts): requests held, the old peer quiesced and taken down | the machine's `/m/commands` long poll answers "nothing" (it polls again at once); its new connection's SYN is dropped, so the dial waits in TCP's retries for the new peer — no error; pooled connections were closed with a FIN first. The app's requests wait in the old router's proxy. An app `exec` waiting for the machine's answer ends with 400 "the router is moving: run it again" (the answer goes to the new router) | the gap: 396 ms / 1.36 s (freeze 235 / 480 ms, the delta of 9 files, the new router's start) |
+| The new router serves (its peer came up during the delta and held the machines' connections) | every call goes through; the session API, a lease and transcript search never failed (450–550 calls each per run, every 200 ms across the move; the longest call 1.2–1.6 s, i.e. one SYN retry); an exec through `/m/commands` answered 0.8 s after the move (both runs) | — |
+| Wakeups and crons | the new router's scheduler ticks at once and then sleeps until the next one is due: one due inside the gap fires right after it (exactly once: the old router stopped before, the new one has its state; measured 3.7 s after it was due) | the gap + its delivery |
+| Status reports | the machine reports on a change or its heartbeat; the first one after the move reached the new router 3 s / 37 s later | its own cadence |
+| Remote Control | unaffected: the `claude --remote-control` host talks to claude.ai directly, never through the router; only the Claude login's credentials come through the router (`/m/claude-login`, a long poll that answers what it has at the freeze), and the old router lets a refresh in flight finish before it freezes | none |
+
+The session is never restarted, paused or destroyed: the same Fly machine, boot and supervisor before and after (the
+e2e checks it).
+
 ### Flipping to the next core
 
 With `NEXT_CORE_URL` set and the next core Recovered alongside (a standby): `POST /setup/core/flip` (setup-signed),
