@@ -1738,7 +1738,12 @@ snapshot failed with "no space left on device", the machine was destroyed anyway
      delivery with some items already delivered delivers the others; one bad attachment no longer drops the good ones;
      pull-secrets and content-sync work in a grant shell (the local proxy's address and token are fixed) and print the
      proxy's error; setup.py's delete, mark-sensitive and `--replace` stop demanding what they don't use, and a store
-     the core calls not sensitive after a write is marked so and still backed up. *Kept, with Deyao's call*: every ask
+     the core calls not sensitive after a write is marked so and still backed up. Also: a wakeup in the past fires
+     at once, wakeups reach 400 days like a cron's until, a cron whose first firing passed takes its next slot; arming
+     one from the app is refused at once (it could never be delivered: the machine takes only the session's own signed
+     request), not accepted to fail at every firing; a task's change of stores files the new line itself, and a run on
+     a gone, waiting or dying line is queued behind its new line; a Jarvis 1 import prepares itself; a machine no session
+     names any more can be destroyed from the Machines tab. *Kept, with Deyao's call*: every ask
      carries a reason (`--why`) and every new key an explanation; approvals lapse after 10 minutes, Deyao's own too; a
      session's actions stop once it starts pausing; the Fly budget cap pauses everything with no override.
 
