@@ -283,6 +283,17 @@ function MemAlert({ m, busy }: { m: Session; busy: string | null }) {
   );
 }
 const gb = (mb: number) => (mb / 1024).toFixed(1);
+// "2 subagents · 1 background shell": Claude Code's type labels in words (the iPhone's Fmt.workers says the same)
+const JOB_WORD: Record<string, [string, string]> = { shell: ["background shell", "background shells"], monitor: ["monitor", "monitors"], workflow: ["workflow", "workflows"], teammate: ["teammate", "teammates"] };
+export function workersText(w: NonNullable<Session["workers"]>): string {
+  const n = (k: number, one: string, many: string) => `${k} ${k === 1 ? one : many}`;
+  const parts = w.subagents > 0 ? [n(w.subagents, "subagent", "subagents")] : [];
+  for (const [t, k] of Object.entries(w.jobs || {}).sort(([a], [b]) => a.localeCompare(b))) {
+    const [one, many] = JOB_WORD[t] || [`${t} job`, `${t} jobs`];
+    if (k > 0) parts.push(n(k, one, many));
+  }
+  return parts.join(" · ") || "None";
+}
 // a low-disk episode: what is short, and More disk (or why it can't grow)
 function DiskAlert({ m, busy }: { m: Session; busy: string | null }) {
   const a = m.diskAlert;
@@ -437,6 +448,7 @@ export function Sessions() {
                   <Row label="Machine">{[REGION[m.region || ""] || m.region, m.guest, m.state === "started" && m.memory && m.memory.totalMb > 0 ? `${gb(m.memory.availMb)} of ${gb(m.memory.totalMb)} GB free` : "", m.state === "started" && m.disk && m.disk.totalMb > 0 ? `${gb(m.disk.availMb)} of ${gb(m.disk.totalMb)} GB disk free` : ""].filter(Boolean).join(" · ") || "—"}</Row>
                   <Row label="Created">{m.created ? ago(m.created) : "—"}</Row>
                   {paused && <Row label="Paused">{m.pausedAt ? ago(m.pausedAt) : "—"}</Row>}
+                  {m.state === "started" && <Row label="Workers" id={"workers-" + m.id}>{m.workers ? workersText(m.workers) : "—"}</Row>}
                   {!paused && <Row label="Auto-pause" id={"autopause-" + m.id}>{autoPause || (m.oneShot ? "One-shot" : "—")}</Row>}
                 </Rows>
                 {!!m.resumePrompt && <Quote by={paused ? "Queued for the next resume" : "Queued prompt"} lines={3}>{clip(m.resumePrompt)}</Quote>}

@@ -132,6 +132,10 @@ export type Session = {
   // the Upgrade button moves it to (always one: the next size doubles the memory, router/sizes.go), its memory and its
   // Fly guest ("8×performance · 32 GB"); absent outside an episode
   memAlert?: { since: string; reason: string; detail: string; nextSize: string; nextGb: number; nextGuest: string } | null;
+  // what a running session's harness has running besides itself (router/registry.go Workers, from Claude Code's
+  // hooks): subagents, and every other background job by Claude Code's type label (shell, monitor, workflow, …);
+  // absent when the machine doesn't count them (an image from before)
+  workers?: { subagents: number; jobs: Record<string, number>; at: number } | null;
   // a running session's latest memory sample
   memory?: { totalMb: number; availMb: number; at: string } | null;
   // a running session's latest disk sample (router/disk.go): its volume when it has one (volume true), else the root disk

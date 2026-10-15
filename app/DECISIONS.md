@@ -341,6 +341,12 @@ fixes, 34–40 carried over from the old app and still true, 41–43 the web pag
     backups" lists the newest three backups on the card (snapshot id, volume id, taken, kept until, whether the machine
     also signed its own snapshot, size; Copy buttons where the clipboard works). No action restores from a backup.
 
+73. **Workers on the session card** (docs/DECISIONS.md 188; Deyao, 2026-10-15). Web: a running session's card has a
+    "Workers" row: "2 subagents · 1 background shell" (subagents first, then every other job by Claude Code's type
+    label in words: background shell, monitor, workflow, teammate, else "<type> job"), "None" when nothing runs, "—"
+    while the machine doesn't count them (an image from before). A row, not a pill: the status pill keeps saying
+    working / idle; `bgTasks` in the idle pill is unchanged.
+
 ## Unfinished / known gaps
 
 - Free text (prompt, title) reaches the machine signed only with a core that vouches (the held core doesn't).
