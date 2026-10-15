@@ -1112,10 +1112,12 @@ func (r *Router) destroy(id string, o destroyOpts) error {
 		for _, h := range onDestroy {
 			h(r, s)
 		}
+		liveKept := r.clearArchivedLive(id, archived, aerr) // livearchive.go: only what the archive holds
 		r.finish(id)
 		r.st.Do(func(d *persisted) {
 			if len(d.Records) > 0 && d.Records[0].ID == id {
 				d.Records[0].Archive = archived
+				d.Records[0].LiveKept = liveKept
 				if aerr != nil {
 					d.Records[0].ArchiveError = aerr.Error()
 				}

@@ -8,7 +8,8 @@ package main
 // transcript search indexes it:
 //
 //	claude-records/<yyyy-mm-dd> <title>/
-//	  transcript-<id>.jsonl         every ~/.claude/projects/*/*.jsonl in the snapshot
+//	  transcript-<id>.jsonl         every ~/.claude/projects/*/*.jsonl in the snapshot, and every live copy
+//	                                (.live/<session id>/) the snapshot doesn't hold byte-identical (livearchive.go)
 //	  artifacts/**                  everything under ~/artifacts (symlinks followed inside the snapshot)
 //	  session.json                  what the session was (title, stores, repos, model, …)
 //	  restore-<session id>.json     which of the files are this session's (the dir may be shared)
@@ -71,6 +72,10 @@ type ArchiveInfo struct {
 	// the snapshot wasn't named in the kill (Session.SnapshotNote): kept, but not restorable until the core vouches
 	Unverified string       `json:"unverified,omitempty"`
 	Last       *TailMessage `json:"last,omitempty"`
+	// Live: the session's .live transcripts, each in the snapshot or copied into Dir (livearchive.go)
+	Live []LiveCopy `json:"live,omitempty"`
+	// NoSnapshot: why the record has no signed snapshot, or why the snapshot isn't the last machine's
+	NoSnapshot string `json:"noSnapshot,omitempty"`
 }
 
 type RestoreMark struct {
@@ -212,18 +217,29 @@ var flyMachineGone = func(id string) (bool, error) {
 	return true, nil
 }
 
-// archive: the session's latest snapshot onto the Storage Box (layout at the top). nil when there is
-// nothing to archive (no snapshot: the session never ran or never snapshotted) or records are off. Then the
-// destroy hooks run (the Discord export into the same dir).
+// archive: the session's latest snapshot onto the Storage Box (layout at the top), with every live copy it doesn't
+// hold. With no snapshot, the live copies alone (archiveLiveOnly). nil when there is nothing to archive (no snapshot
+// and no live copy: the session never ran) or records are off. Then the destroy hooks run (the Discord export into
+// the same dir).
 func (r *Router) archive(id string) (*ArchiveInfo, error) {
 	if recordsOff() {
 		return nil, nil
 	}
-	if m, _, _ := r.latestSnapshot(id); m == "" {
-		log.Printf("session %s: no snapshot to archive", id)
-		return nil, nil
-	}
 	box := r.box()
+	if m, _, _ := r.latestSnapshot(id); m == "" {
+		if box == nil {
+			log.Printf("session %s: no snapshot to archive", id)
+			return nil, nil
+		}
+		live, err := box.List(liveDir(id))
+		if err != nil {
+			return nil, fmt.Errorf("listing the live copies: %w", err)
+		}
+		if len(live) == 0 {
+			log.Printf("session %s: no snapshot and no live copy to archive", id)
+			return nil, nil
+		}
+	}
 	if box == nil {
 		return nil, errNoStorageBox
 	}
@@ -237,6 +253,9 @@ func (r *Router) archive(id string) (*ArchiveInfo, error) {
 		return nil, fmt.Errorf("no session %s", id)
 	}
 	info, err := r.archiveSnapshot(box, &s)
+	if err == nil && info == nil {
+		info, err = r.archiveLiveOnly(box, &s)
+	}
 	if err == nil && info != nil {
 		r.st.Do(func(d *persisted) {
 			if x := d.Sessions[id]; x != nil {
@@ -278,6 +297,15 @@ func (r *Router) archiveSnapshot(box *StorageBox, s *Session) (*ArchiveInfo, err
 	if err != nil {
 		return nil, err
 	}
+	taken := map[string]bool{}
+	for _, t := range up.transcripts {
+		taken[t] = true
+	}
+	live, liveAdded, err := r.archiveLive(box, s.ID, dir, up.sums, taken)
+	if err != nil {
+		return nil, err
+	}
+	up.transcripts = append(liveAdded, up.transcripts...) // older conversations first; the snapshot's newest stays last
 	// the signed snapshot and what verifies it
 	sig, err := os.ReadFile(snap + ".sig")
 	if err != nil {
@@ -299,7 +327,7 @@ func (r *Router) archiveSnapshot(box *StorageBox, s *Session) (*ArchiveInfo, err
 		}
 	}
 	info := &ArchiveInfo{Dir: dir, Title: title, Transcripts: up.transcripts, Artifacts: up.artifacts, Signer: machine, SnapshotAt: at.UTC(),
-		Unverified: s.SnapshotNote}
+		Unverified: s.SnapshotNote, Live: live, NoSnapshot: s.NoSnapshot}
 	if facts.Tail != nil {
 		info.Last = snippet(*facts.Tail)
 	}
@@ -309,7 +337,10 @@ func (r *Router) archiveSnapshot(box *StorageBox, s *Session) (*ArchiveInfo, err
 		"destroyedAt": now, "archiveDir": dir, "environment": strings.Join(s.Stores, ","), "stores": s.Stores,
 		"repos": s.Repos, "model": s.Model, "permissionMode": s.PermissionMode, "size": s.Size, "harness": s.Harness,
 		"image": s.Image, "line": certField(cert, "line"), "snapshotMachine": machine, "snapshotAt": info.SnapshotAt,
-		"unresolvedArtifactLinks": up.unresolved,
+		"unresolvedArtifactLinks": up.unresolved, "live": live,
+	}
+	if s.NoSnapshot != "" {
+		meta["noSnapshot"] = s.NoSnapshot + "; this is the newest signed snapshot the router had"
 	}
 	if s.SnapshotNote != "" {
 		meta["snapshotUnverified"] = s.SnapshotNote
@@ -343,7 +374,8 @@ func (r *Router) archiveSnapshot(box *StorageBox, s *Session) (*ArchiveInfo, err
 }
 
 type uploaded struct {
-	transcripts   []string // archive names, oldest first
+	transcripts   []string           // archive names, oldest first
+	sums          map[string]fileSum // transcript file name (<uuid>.jsonl) → its size and sha256
 	artifacts     int
 	artifactNames []string
 	unresolved    []string
@@ -373,7 +405,7 @@ func uploadSnapshotFiles(box *StorageBox, dir, snap, tmp string) (*uploaded, err
 	if err != nil {
 		return nil, err
 	}
-	out := &uploaded{}
+	out := &uploaded{sums: map[string]fileSum{}}
 	dests := map[string][]string{} // snapshot name → archive names
 	var transcripts []string
 	for name := range regular {
@@ -434,6 +466,13 @@ func uploadSnapshotFiles(box *StorageBox, dir, snap, tmp string) (*uploaded, err
 		}
 		if err != nil {
 			return err
+		}
+		if isTranscript(name) {
+			sum, err := sumFile(f.Name())
+			if err != nil {
+				return err
+			}
+			out.sums[path.Base(name)] = sum
 		}
 		for _, d := range ds {
 			if p := path.Dir(d); p != "." && !made[p] {

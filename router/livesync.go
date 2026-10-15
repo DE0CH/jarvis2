@@ -8,7 +8,8 @@ package main
 //
 // — Jarvis 1's layout, so Jarvis 1's transcript search (its indexer reads .live/<id>/) covers Jarvis 2 sessions
 // that are still running. The session id is the router's (s…), stable across the session's machines. On
-// destroy the archive supersedes the copy and the router deletes the folder.
+// destroy the archive takes every copy the snapshot doesn't hold, and only then does the router delete the copies it
+// archived (livearchive.go); one it didn't archive stays.
 //
 // No grant: the machine sends its own transcripts (as it sends its status report and its pause snapshots, which
 // hold the same transcripts), so no router feature runs anything in it; Storage Box credentials stay on the
@@ -52,8 +53,6 @@ func init() {
 			e["JARVIS2_LIVE_SYNC_SECONDS"] = strconv.Itoa(n)
 		}
 	})
-	// the archive supersedes the live copy (Jarvis 1 archive.clearLive)
-	onDestroy = append(onDestroy, func(r *Router, s Session) { r.clearLive(s.ID) })
 }
 
 // liveTranscript: POST /m/live-transcript, header X-Name = the file's name, body = the whole file
@@ -113,16 +112,4 @@ func (r *Router) liveTranscript(w http.ResponseWriter, req *http.Request, machin
 		return
 	}
 	writeJSON(w, 200, map[string]any{"ok": true, "stored": stored})
-}
-
-// clearLive: the session's live copies go (best effort; the indexer drops them on its next crawl)
-func (r *Router) clearLive(sid string) {
-	liveDirs.Delete(sid)
-	box := r.box()
-	if box == nil || recordsOff() {
-		return
-	}
-	if err := box.Delete(liveDir(sid) + "/"); err != nil {
-		log.Printf("[livesync] %s: removing the live copy: %v", sid, err)
-	}
 }

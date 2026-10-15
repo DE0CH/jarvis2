@@ -12,7 +12,8 @@ package main
 //     session lists it (backups) for recovery by hand. No resume or restore reads a backup (Deyao, 2026-10-15).
 //   - A line whose last machine left no signed snapshot (while an earlier machine of it did, or it had booted) is
 //     marked noSnapshot: Resume refuses (it would start the session empty), says why on the session, and Deyao gets a
-//     DM naming the backup. Destroy still archives the newest signed snapshot it has.
+//     DM naming the backup. Destroy still archives the newest signed snapshot it has (and every live transcript copy
+//     it doesn't hold, livearchive.go), never DMs about it, and notes the missing snapshot in the record.
 //   - A kill that doesn't finish (the core still can't destroy it after killMax) leaves the session failed with its
 //     machine, and DMs too.
 
@@ -100,7 +101,7 @@ func (r *Router) finalSnapshotAndKillFor(id, machine string, destroying, force b
 		}
 		return false
 	}
-	r.recordKill(id, machine, kd, serr)
+	r.recordKill(id, machine, kd, serr, destroying)
 	return true
 }
 
@@ -141,8 +142,9 @@ func (r *Router) killFailed(id, machine string, hasVolume bool, err error) {
 }
 
 // recordKill: the kill's record — the backup goes on the session's list; a kill that names no snapshot of a line
-// that had state marks it noSnapshot (Resume refuses) and DMs
-func (r *Router) recordKill(id, machine string, kd *Doc, serr error) {
+// that had state marks it noSnapshot (Resume refuses) and DMs. A destroy's kill never DMs: a destroy isn't a resume,
+// so there is nothing to refuse; the reason goes into its record (ArchiveInfo.NoSnapshot, the archive's session.json).
+func (r *Router) recordKill(id, machine string, kd *Doc, serr error, destroying bool) {
 	var k struct {
 		Snapshot string `json:"snapshot"`
 		Backup   *struct {
@@ -192,6 +194,10 @@ func (r *Router) recordKill(id, machine string, kd *Doc, serr error) {
 		s.NoSnapshot, s.noSnapshotDMed = reason, true
 	})
 	if reason == "" {
+		return
+	}
+	if destroying {
+		log.Printf("session %s: %s; destroying, so the archive notes it (no DM)", id, reason)
 		return
 	}
 	log.Printf("session %s: %s; it won't resume", id, reason)

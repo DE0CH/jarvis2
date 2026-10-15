@@ -160,10 +160,20 @@ func TestLiveTranscriptSync(t *testing.T) {
 		t.Fatalf("%d %v", code, out)
 	}
 	t.Setenv("RECORDS_OFF", "")
-	// destroy: the archive supersedes the live copy
-	r.clearLive("s2")
-	if len(rg.dav.under("claude-records/.live/s2")) != 0 {
-		t.Fatalf("live copy kept: %v", rg.dav.under("claude-records/.live/s2"))
+	// destroy: the copies the archive holds go (livearchive.go), and only those
+	if kept := r.clearArchivedLive("s2", nil, nil); kept == "" || len(rg.dav.under("claude-records/.live/s2")) == 0 {
+		t.Fatalf("live copies with no archive deleted: %q", kept)
+	}
+	held := &ArchiveInfo{}
+	listed, err := rg.r.box().List("claude-records/.live/s2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for n, size := range listed {
+		held.Live = append(held.Live, LiveCopy{Name: n, Size: size, In: "transcript-" + n})
+	}
+	if kept := r.clearArchivedLive("s2", held, nil); kept != "" || len(rg.dav.under("claude-records/.live/s2")) != 0 {
+		t.Fatalf("archived live copies kept: %q %v", kept, rg.dav.under("claude-records/.live/s2"))
 	}
 	// env: the interval reaches the machine
 	t.Setenv("LIVE_SYNC_SECONDS", "20")

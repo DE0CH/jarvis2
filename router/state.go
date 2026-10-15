@@ -95,6 +95,7 @@ type Record struct {
 	DestroyedAt  time.Time     `json:"destroyedAt"`
 	Archive      *ArchiveInfo  `json:"archive,omitempty"`      // archive.go
 	ArchiveError string        `json:"archiveError,omitempty"` // a forced destroy whose archive failed
+	LiveKept     string        `json:"liveKept,omitempty"`     // livearchive.go: live copies kept because the archive doesn't hold them
 	Restored     []RestoreMark `json:"restored,omitempty"`
 }
 

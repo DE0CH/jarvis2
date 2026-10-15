@@ -45,7 +45,7 @@ snapshots, live transcripts, task results).
 - Fly budget cap and "Also on Fly": present (`router/budget.go`, read-only `FLY_READ_TOKEN`).
 - Browserbase budget DM: present (`router/bbbudget.go`, Jarvis 1's lib/bbbudget.js: the month re-priced from the session list, one DM at USD 8 and one at USD 10 overage; `BROWSERBASE_API_KEY` in the router's SOPS part `browserbase`; `/api/state` `browserbaseBudget`).
 - Discord channel per session (DT, SB): present (`router/discord.go`, lobster, category "Jarvis 2"), named by the title above and renamed as it changes (2 edits per 10 min), exported to `claude-records/<date> <title>/discord/` and deleted on destroy. Topic has no Remote Control link.
-- **Live transcript sync to SB**: present. The machine sends changed transcripts every 5 min (`machine/livesync.go`); the router writes `claude-records/.live/<session id>/` with its own creds, so transcript search indexes running Jarvis 2 sessions; removed on destroy. No grant (the machine pushes; DECISIONS 38).
+- **Live transcript sync to SB**: present. The machine sends changed transcripts every 5 min (`machine/livesync.go`); the router writes `claude-records/.live/<session id>/` with its own creds, so transcript search indexes running Jarvis 2 sessions; on destroy each copy goes only once the archive holds it (router/livearchive.go). No grant (the machine pushes; DECISIONS 38).
 
 ## Scheduling and devices
 - Wakeups, crons: present (router/schedule.go; Jarvis 1's shapes, under `/api` and `/m/api`; delivery through the `scheduler` grant).
