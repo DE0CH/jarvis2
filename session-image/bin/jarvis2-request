@@ -3,7 +3,11 @@
 Jarvis 2 app (docs/API.md "Requests"). He sees exactly what would be signed, the call this made (the router names
 this session as the caller, from the machine's key) and the reason given here, and allows or denies it.
 
-  jarvis2-request add-repo OWNER/NAME --why TEXT [--sensitive]   a deploy key (read + push) for a repo, in its own store
+  jarvis2-request add-repo OWNER/NAME --why TEXT [--sensitive] [--no-store]
+                                    a deploy key (read + push) for a repo, in its own store (github-NAME), which comes
+                                    into THIS session in the same approval (one Face ID); a waiter pulls it into
+                                    ~/.secrets and sets up its SSH key. --no-store: only make the key (e.g. for a
+                                    proposed session's repos)
   jarvis2-request grant HOLDER [--minutes N | --days N] --why TEXT
                                     let a router feature into THIS session (terminal, scheduler, status, login,
                                     archive, remote): 1-10 minutes, or a standing rule for N days
@@ -15,14 +19,18 @@ this session as the caller, from the machine's key) and the reason given here, a
                   [--size small|medium|large] [--harness claude] [--request-id ID] --why TEXT
                                     propose a NEW session: it appears in the Inbox like the app's New session and starts
                                     only when Deyao approves it with Face ID (no attachments; at most 3 waiting)
-  jarvis2-request batch (--file FILE | --item ITEM…) --summary TEXT
+  jarvis2-request batch (--file FILE | --item ITEM… | --item-json JSON…) --summary TEXT
                                     several of the above as ONE Inbox entry, allowed together under one Face ID (or
                                     denied together). FILE: a JSON list of items, each {"intent": …} plus that
                                     intent's fields: {"intent":"repo/add","repo":"OWNER/NAME"},
                                     {"intent":"grant","holder":"terminal","minutes":5}, {"intent":"unlock"},
                                     {"intent":"add-store","store":"gmail"},
+                                    {"intent":"call","method":"POST","path":"/api/sessions/ID/resume","body":{…}}
+                                    (an app API call run as Deyao, as `jarvis2-actions.py request call`; read its result
+                                    with `jarvis2-actions.py call-result ID`),
                                     {"intent":"new-session","label":…,"prompt":…,"stores":[…],"repos":…};
-                                    or --item INTENT,key=value,… once per item (e.g. --item grant,holder=status,minutes=5);
+                                    or --item INTENT,key=value,… once per item (e.g. --item grant,holder=status,minutes=5),
+                                    or --item-json '{"intent":…}' for an item with a JSON body or commas;
                                     an item may carry its own "explanation"; --summary (required) says what the
                                     whole batch is for. At most 20 items; a batch counts as one of the 3 waiting
                                     proposals. Every item is checked first: one bad item and nothing is filed
@@ -80,6 +88,18 @@ def opt(args, name):
         del args[i:i + 2]
         return v
     return None
+
+
+def repo_store(repo):
+    """the repo's store, as the router and core name it: github-<name> for DE0CH's repos, else github-<owner>-<name>"""
+    r = repo.strip().lower()
+    for p in ("https://github.com/", "git@github.com:"):
+        r = r[len(p):] if r.startswith(p) else r
+    r = r.rstrip("/")
+    r = r[:-4] if r.endswith(".git") else r
+    owner, _, name = r.partition("/")
+    slug = name if owner == "de0ch" else owner + "-" + name
+    return "github-" + "".join(c if c.isalnum() and c.isascii() else "-" for c in slug).strip("-")
 
 
 def start_await(store):
@@ -156,20 +176,24 @@ def main():
         inline = []
         while "--item" in rest:
             inline.append(parse_item(opt(rest, "--item")))
+        while "--item-json" in rest:
+            inline.append(json.loads(opt(rest, "--item-json")))
         if (not f and not inline) or not summary or rest:
-            raise SystemExit("batch (--file FILE | --item INTENT,key=value,…) --summary TEXT (see --help)")
+            raise SystemExit("batch (--file FILE | --item INTENT,key=value,… | --item-json JSON) --summary TEXT (see --help)")
+        items = []
         if f:
             with open(f) as fh:
                 items = json.load(fh)
-        else:
-            items = inline
         if not isinstance(items, list):
             raise SystemExit("FILE must hold a JSON list of items")
+        items = items + inline
         out = call("POST", "/api/requests/batch", {"summary": summary, "items": items})
         # the added stores are pulled by a waiter each, as for a single add-store
         for x in items:
             if x.get("intent") == "add-store" and x.get("store"):
                 start_await(x["store"])
+            elif x.get("intent") == "repo/add" and x.get("repo") and not x.get("noStore"):
+                start_await(repo_store(x["repo"]))  # its store comes in the same approval
         print(json.dumps(out))
         print("Waiting in Deyao's Inbox as one batch (the Jarvis 2 app); nothing happens until he allows it. The outcome of "
               f"every item arrives in this session as a message once decided (or block: jarvis2-request wait {out.get('id')}).",
@@ -193,8 +217,8 @@ def main():
         if repos:
             new_session["repos"] = ",".join(r for r in repos.split(",") if r)
     minutes, days = opt(args, "--minutes"), opt(args, "--days")
-    sensitive = "--sensitive" in args
-    args = [a for a in args if a != "--sensitive"]
+    sensitive, no_store = "--sensitive" in args, "--no-store" in args
+    args = [a for a in args if a not in ("--sensitive", "--no-store")]
     if not why:
         raise SystemExit("--why TEXT is required: say why this is needed")
     kind, rest = args[0], args[1:]
@@ -202,7 +226,11 @@ def main():
         body = {"repo": rest[0], "explanation": why}
         if sensitive:
             body["sensitive"] = True
+        if no_store:
+            body["noStore"] = True
         out = call("POST", "/api/requests/repo/add", body)
+        if not no_store:
+            start_await(repo_store(rest[0]))
     elif kind == "grant" and len(rest) == 1:
         body = {"holder": rest[0], "explanation": why}
         if days:

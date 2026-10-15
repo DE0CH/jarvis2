@@ -78,6 +78,7 @@ type outcomeAsked struct {
 	Path      string `json:"path"`
 	Summary   string `json:"summary"`
 	Sensitive bool   `json:"sensitive"`
+	NoStore   bool   `json:"noStore"` // repo/add: the store isn't to come into this session
 }
 
 // short: the session's own words, on one line and capped
@@ -250,7 +251,10 @@ func outcomeResult(a outcomeAsked, it OutcomeItem, cert Cert) (string, error) {
 			return "", errors.New("the proof isn't the core's key answer for that repo")
 		}
 		if a.Intent == "repo/add" {
-			return "Checked: the core's signed answer says the deploy key was added. It is in a store of its own, which no session holds until it is added to one (`jarvis2-request add-store <that store>`; the app's Repos list names it).", nil
+			if a.NoStore {
+				return "Checked: the core's signed answer says the deploy key was added. It is in a store of its own, which no session holds until it is added to one (`jarvis2-request add-store <that store>`; the app's Repos list names it).", nil
+			}
+			return "Checked: the core's signed answer says the deploy key was added, in a store of its own. That store comes into this session in the same approval (while it runs): the waiter `jarvis2-request add-repo` started pulls it into ~/.secrets and sets up the repo's SSH key by itself (~/.jarvis2-await-github-*.log). If it hasn't arrived (this session wasn't running, or the app asked for it separately and it lapsed), ask for it with `jarvis2-request add-store <that store>`.", nil
 		}
 		return "Checked: the core's signed answer says the deploy key was removed.", nil
 	case "unlock":

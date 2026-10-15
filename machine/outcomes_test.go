@@ -104,6 +104,15 @@ func TestRequestOutcomes(t *testing.T) {
 	if err != nil || !strings.Contains(s, "decided 2 of the 3 items") || !strings.Contains(s, "\n1. LAPSED: unlocking") || !strings.Contains(s, "\n2. APPROVED: a deploy key") {
 		t.Fatalf("%q %v", s, err)
 	}
+	// the repo's store comes into this session in the same approval (router DECISIONS 171), unless it said noStore
+	if !strings.Contains(s, "comes into this session in the same approval") {
+		t.Fatalf("%q", s)
+	}
+	nb := signedRequest(mine, "m1", "POST", "/m/api/requests/batch", []byte(`{"summary":"s","items":[{"intent":"repo/add","repo":"DE0CH/yyc","noStore":true}]}`))
+	if s, _, err := deliveryText(Delivery{Kind: "request-outcome", Request: nb, Outcomes: []OutcomeItem{{Item: 0, Outcome: "approved", Ref: "q3", Proof: key}}}, keys); err != nil ||
+		!strings.Contains(s, "no session holds until") {
+		t.Fatalf("%q %v", s, err)
+	}
 	// once
 	if err := notReplayed(bd, time.Now()); err != nil {
 		t.Fatal(err)
