@@ -86,7 +86,11 @@ func TestHandoverEndsLongPollsAtOnce(t *testing.T) {
 	if a.code != 503 || a.hdr.Get("Connection") != "close" || !strings.Contains(a.body, "router moving") {
 		t.Fatalf("an unanswered POST: %d %v %s", a.code, a.hdr, a.body)
 	}
-	// a request that reaches a handler after the freeze goes to the next leader too
+	// the machines' listener still serves what reaches it after the freeze (until its peer goes); its long poll answers
+	if code, out := m.do(t, mh, "GET", "/m/commands", ""); code != 200 || !strings.Contains(toJSON(out), `"commands":[]`) {
+		t.Fatalf("/m/commands after the freeze: %d %v", code, out)
+	}
+	// a request that reaches a public handler after the freeze goes to the next leader
 	w := httptest.NewRecorder()
 	r.gated(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { io.WriteString(w, "x") })).ServeHTTP(w, httptest.NewRequest("GET", "/x", nil))
 	if w.Body.String() != "next leader" {

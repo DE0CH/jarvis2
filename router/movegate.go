@@ -190,7 +190,10 @@ func (r *Router) gatedAs(h http.Handler, fallbackOK bool) http.Handler {
 		}
 		defer leave()
 		tw := &gateWriter{ResponseWriter: w, r: r}
-		if !frozen {
+		// the machines' listener keeps serving after the freeze began, until its peer goes (the state is saved after
+		// that, so what is served here is in what the next leader loads); only its long polls end at once (their
+		// context is cancelled). A refusal here would be a failed call: the machine's proxy doesn't retry.
+		if !frozen || !fallbackOK {
 			ctx, cancel := context.WithCancel(req.Context())
 			stop := context.AfterFunc(fctx, cancel)
 			h.ServeHTTP(tw, req.WithContext(ctx))
