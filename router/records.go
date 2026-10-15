@@ -132,17 +132,20 @@ func (r *Router) IndexArchive(in IndexInput) (*Record, error) {
 		DestroyedAt: destroyed,
 		Archive:     &ArchiveInfo{Dir: dir, Title: title, Transcripts: in.Transcripts, Artifacts: len(in.Artifacts)},
 	}
-	var dup bool
+	var existing *Record
 	r.st.Do(func(d *persisted) {
 		for _, x := range d.Records {
-			dup = dup || x.ID == id
+			if x.ID == id {
+				c := *x
+				existing = &c
+			}
 		}
-		if !dup {
+		if existing == nil {
 			d.Records = append([]*Record{rec}, d.Records...)
 		}
 	})
-	if dup {
-		return nil, errors.New("already on the list: " + id)
+	if existing != nil { // already on the list: that record is the answer
+		return existing, nil
 	}
 	entry := map[string]any{"id": id, "jarvis": 2, "indexedByHand": true, "title": title, "label": title, "archiveDir": dir,
 		"created": in.Created, "destroyedAt": destroyed, "transcripts": len(in.Transcripts), "artifacts": len(in.Artifacts),

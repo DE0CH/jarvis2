@@ -16,7 +16,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -36,8 +35,7 @@ func (r *Router) registerSessionAPI(app appRoute, m machineRoute) {
 	app("GET /api/sessions/{id}/wakeups", func(w http.ResponseWriter, req *http.Request) { r.getWakeups(w, req.PathValue("id"), false) })
 	for _, p := range []string{"POST /api/sessions/{id}/wakeup", "POST /api/sessions/{id}/wakeups"} {
 		app(p, func(w http.ResponseWriter, req *http.Request) {
-			b, _ := io.ReadAll(io.LimitReader(req.Body, 1<<20))
-			r.postWakeup(w, req.PathValue("id"), b, nil)
+			appArmRefused(w, "wakeup", "scripts/schedule-wakeup.sh")
 		})
 	}
 	app("DELETE /api/sessions/{id}/wakeup", func(w http.ResponseWriter, req *http.Request) {
@@ -47,10 +45,7 @@ func (r *Router) registerSessionAPI(app appRoute, m machineRoute) {
 		r.deleteWakeups(w, req.PathValue("id"), req.PathValue("name"), false)
 	})
 	app("GET /api/sessions/{id}/crons", func(w http.ResponseWriter, req *http.Request) { r.getCrons(w, req.PathValue("id")) })
-	app("POST /api/sessions/{id}/crons", func(w http.ResponseWriter, req *http.Request) {
-		b, _ := io.ReadAll(io.LimitReader(req.Body, 1<<20))
-		r.postCron(w, req.PathValue("id"), b, nil)
-	})
+	app("POST /api/sessions/{id}/crons", func(w http.ResponseWriter, req *http.Request) { appArmRefused(w, "cron", "scripts/schedule-cron.sh") })
 	app("DELETE /api/sessions/{id}/crons/{name}", func(w http.ResponseWriter, req *http.Request) {
 		r.deleteCron(w, req.PathValue("id"), req.PathValue("name"))
 	})
@@ -210,6 +205,13 @@ func (r *Router) getWakeups(w http.ResponseWriter, sid string, single bool) {
 		first = views[0]
 	}
 	writeJSON(w, 200, map[string]any{"wakeup": first, "wakeups": views})
+}
+
+// appArmRefused: arming from the app. Nothing would vouch for its delivery into the session (only the session's own
+// signed request does, machine/deliver.go), so a wakeup or cron armed here could never fire: it was accepted and then
+// failed at every firing. Refused upfront instead, saying what works (like watches.go).
+func appArmRefused(w http.ResponseWriter, kind, script string) {
+	writeJSON(w, 400, map[string]string{"error": fmt.Sprintf("a %s is armed by the session itself (%s): only its own signed request can be delivered into it. Ask the session to arm it (message it in its chat)", kind, script)})
 }
 
 func (r *Router) postWakeup(w http.ResponseWriter, sid string, body []byte, signed *SignedRequest) {

@@ -31,7 +31,7 @@ import (
 const (
 	wakeupDefault      = "default"
 	scheduleMaxPrompt  = 3500
-	wakeupMaxDelay     = 90 * 24 * time.Hour
+	wakeupMaxDelay     = 400 * 24 * time.Hour // as far as a cron's until
 	cronMinEvery       = 15 * 60
 	cronDefaultEvery   = 24 * 60 * 60
 	cronMaxEvery       = 90 * 24 * 60 * 60
@@ -185,8 +185,8 @@ func normalizeWakeup(b map[string]any, now time.Time) (*Wakeup, error) {
 	} else {
 		return nil, bad("give at (ISO time) or delaySeconds")
 	}
-	if at <= ms {
-		return nil, bad("the wakeup time is in the past")
+	if at < ms { // a time already past: due now, it fires at once
+		at = ms
 	}
 	if at-ms > wakeupMaxDelay.Milliseconds() {
 		return nil, bad("the wakeup is more than %d days away", int(wakeupMaxDelay.Hours()/24))
@@ -265,8 +265,8 @@ func normalizeCron(b map[string]any, now time.Time) (*Cron, error) {
 		if next, ok = parseTime(b["at"]); !ok {
 			return nil, bad("at must be an ISO-8601 time or ms epoch")
 		}
-		if next <= ms {
-			return nil, bad("the first firing is in the past")
+		if next <= ms && every > 0 { // a first firing already past: the next slot of its period
+			next += ((ms-next)/(every*1000) + 1) * every * 1000
 		}
 	default:
 		next = ms + every*1000

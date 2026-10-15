@@ -48,9 +48,17 @@ func TestNormalizeWakeup(t *testing.T) {
 	if w, err = normalizeWakeup(body(`{"at": 1791633600000, "prompt": "x"}`), now); err != nil || w.At != 1791633600000 {
 		t.Fatalf("ms epoch: %+v %v", w, err)
 	}
+	// a time already past is due now: it fires at once
+	if w, err = normalizeWakeup(body(`{"at": "2026-10-01T00:00:00Z", "prompt": "x"}`), now); err != nil || w.At != now.UnixMilli() {
+		t.Fatalf("past: %+v %v", w, err)
+	}
+	// up to 400 days, as far as a cron's until
+	if _, err = normalizeWakeup(body(`{"delaySeconds": 8000000, "prompt": "x"}`), now); err != nil {
+		t.Fatalf("93 days: %v", err)
+	}
 	for _, b := range []string{
-		`{"delaySeconds": 60}`, `{"prompt": "x"}`, `{"delaySeconds": -1, "prompt": "x"}`, `{"at": "2026-10-01T00:00:00Z", "prompt": "x"}`,
-		`{"delaySeconds": 8000000, "prompt": "x"}`, `{"delaySeconds": 60, "prompt": "x", "name": "bad name"}`, `{"at": "tomorrow", "prompt": "x"}`,
+		`{"delaySeconds": 60}`, `{"prompt": "x"}`, `{"delaySeconds": -1, "prompt": "x"}`,
+		`{"delaySeconds": 40000000, "prompt": "x"}`, `{"delaySeconds": 60, "prompt": "x", "name": "bad name"}`, `{"at": "tomorrow", "prompt": "x"}`,
 		`{"delaySeconds": 60, "prompt": "` + strings.Repeat("a", 3501) + `"}`,
 	} {
 		if _, err := normalizeWakeup(body(b), now); err == nil {
@@ -75,6 +83,11 @@ func TestNormalizeCronAndAdvance(t *testing.T) {
 		if _, err := normalizeCron(body(b), now); err == nil {
 			t.Fatalf("%s should be refused", b)
 		}
+	}
+	// a first firing already past: the next slot of its period
+	c, err = normalizeCron(body(`{"name": "d", "prompt": "p", "everySeconds": 3600, "at": "`+now.Add(-90*time.Minute).Format(time.RFC3339)+`"}`), now)
+	if err != nil || c.NextAt != now.Add(30*time.Minute).UnixMilli() {
+		t.Fatalf("past first firing: %+v %v", c, err)
 	}
 	// a session unreachable for 3.5 periods fires once and moves to the next occurrence after now
 	c = &Cron{Every: 3600, NextAt: now.UnixMilli()}

@@ -185,9 +185,18 @@ func TestAppWakeupRoutesAndResumePrompt(t *testing.T) {
 		json.Unmarshal(w.Body.Bytes(), &out)
 		return w.Code, out
 	}
-	if code, out := call("POST", "/api/sessions/sA/wakeups", `{"delaySeconds": 60, "prompt": "x"}`); code != 200 || out["ok"] != true {
-		t.Fatalf("%d %v", code, out)
+	// arming from the app could never be delivered (nothing vouches for it): refused upfront, saying what works
+	for _, p := range []string{"/api/sessions/sA/wakeups", "/api/sessions/sA/crons"} {
+		if code, out := call("POST", p, `{"delaySeconds": 60, "prompt": "x"}`); code != 400 || !strings.Contains(fmt.Sprint(out["error"]), "Ask the session") {
+			t.Fatalf("%s: %d %v", p, code, out)
+		}
 	}
+	r.st.Do(func(d *persisted) {
+		if d.Schedules == nil {
+			d.Schedules = map[string]*Schedule{}
+		}
+		d.Schedules["sA"] = &Schedule{Wakeups: map[string]*Wakeup{"default": {Name: "default", At: time.Now().Add(time.Hour).UnixMilli(), Prompt: "x"}}}
+	})
 	if code, out := call("DELETE", "/api/sessions/sA/wakeup?all=1", ""); code != 200 || len(out["cancelled"].([]any)) != 1 {
 		t.Fatalf("%d %v", code, out)
 	}

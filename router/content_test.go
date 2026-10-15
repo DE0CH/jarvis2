@@ -47,7 +47,7 @@ func TestContentStoresAppAndSession(t *testing.T) {
 	if code, out, _ := contentDo(t, h, "POST", "/api/content", `{"name": "notes"}`); code != 200 || out["ok"] != true {
 		t.Fatalf("create: %d %v", code, out)
 	}
-	if code, _, _ := contentDo(t, h, "POST", "/api/content", `{"name": "notes"}`); code != 409 {
+	if code, _, _ := contentDo(t, h, "POST", "/api/content", `{"name": "notes"}`); code != 200 { // already there: done
 		t.Fatalf("create twice: %d", code)
 	}
 	contentDo(t, h, "POST", "/api/content", `{"name": "other"}`)
@@ -121,7 +121,7 @@ func TestContentStoresAppAndSession(t *testing.T) {
 	if code, _, _ := contentDo(t, h, "DELETE", "/api/content/other", ""); code != 200 {
 		t.Fatalf("delete store: %d", code)
 	}
-	if code, _, _ := contentDo(t, h, "DELETE", "/api/content/other", ""); code != 404 {
+	if code, _, _ := contentDo(t, h, "DELETE", "/api/content/other", ""); code != 200 { // already gone: done
 		t.Fatalf("delete again: %d", code)
 	}
 }

@@ -390,8 +390,8 @@ func (r *Router) createContentStore(name string) error {
 	if err != nil {
 		return err
 	}
-	if ok {
-		return contentFail(409, "content store %q already exists", n)
+	if ok { // already there: what was asked for holds
+		return nil
 	}
 	b, _ := r.contentBox()
 	defer invalidateContent()
@@ -407,8 +407,8 @@ func (r *Router) deleteContentStore(name string) error {
 	if err != nil {
 		return err
 	}
-	if !ok {
-		return contentFail(404, "no content store %q", n)
+	if !ok { // already gone: what was asked for holds
+		return nil
 	}
 	b, _ := r.contentBox()
 	defer invalidateContent()
@@ -480,8 +480,8 @@ func (r *Router) deleteContentFile(name, p string) error {
 	}
 	resp.Body.Close()
 	invalidateContent()
-	if resp.StatusCode == 404 {
-		return contentFail(404, "no such file")
+	if resp.StatusCode == 404 { // already gone: what was asked for holds
+		return nil
 	}
 	if resp.StatusCode >= 300 {
 		return fmt.Errorf("DELETE %s/%s: HTTP %d", name, p, resp.StatusCode)
