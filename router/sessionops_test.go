@@ -510,7 +510,7 @@ func addGrant(r *Router, session, holder, kind string) {
 }
 
 // TestWebRequestTakesSensitiveStores: the web page proposes any store, sensitive ones included (Deyao, 2026-10-13;
-// docs/DECISIONS.md 161): the request becomes an approval holding them, filed as the web's, for the phone to review;
+// docs/DECISIONS.md 164): the request becomes an approval holding them, filed as the web's, for the phone to review;
 // the core's own store and the deploy-key token's store are still refused.
 func TestWebRequestTakesSensitiveStores(t *testing.T) {
 	rg, _ := newOpsRig(t)

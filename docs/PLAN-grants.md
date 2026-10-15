@@ -1,6 +1,6 @@
 # PLAN: grants, the notary, the succession signer, secrets and the guard
 
-Status: plan only. Nothing here is built. Sources: DESIGN "Target design" (docs/DESIGN.md:635-701) and DECISIONS 163 (docs/DECISIONS.md:1225-1254). Deyao has since decided six more things (2026-10-14). The plan treats them as fixed:
+Status: plan only. Nothing here is built. Sources: DESIGN "Target design" (docs/DESIGN.md:635-701) and DECISIONS 166 (docs/DECISIONS.md:1225-1254). Deyao has since decided six more things (2026-10-14). The plan treats them as fixed:
 
 - **D1.** A key written to ANY store reaches the next pull without a new phone unlock. The "stale" rule goes.
 - **D2.** Secrets never locks by itself. No release after a pull, no 30-minute `scopedUnlockTTL`.
@@ -446,7 +446,7 @@ Also API.md, RUNBOOK ("Releasing the held core", replica core image), PARITY.
 
 - Both need a Recover and destroy every session. Two back-to-back releases cost Deyao two Recovers and two session wipes.
 - The held core's code (keys, history, restore, deploy keys) *is* the secrets component. Shipping it first would mean a third compatibility layer in the router and app (live core / held core / grants).
-- Cost: the restore feature waits for this release. The whole-store-write footgun it fixes is already guarded at both ends (DECISIONS 162).
+- Cost: the restore feature waits for this release. The whole-store-write footgun it fixes is already guarded at both ends (DECISIONS 165).
 
 **Why the router, image and app can't be partly on main.**
 

@@ -34,7 +34,7 @@ type coreHandoff interface {
 	Adopt(c *CoreClient, final json.RawMessage) error
 }
 
-// httpHandoff: the core's endpoints (core continuity, DESIGN "Core continuity", DECISIONS 170):
+// httpHandoff: the core's endpoints (core continuity, DESIGN "Core continuity", DECISIONS 173):
 //
 //	POST /handoff  (no body) to the serving core → the FINAL line state {head, sealed}; head is core-signed
 //	               {"kind": "line-state-head", seq, final: true, sha256, at}. From then on that core answers 409

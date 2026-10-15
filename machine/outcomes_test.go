@@ -104,7 +104,7 @@ func TestRequestOutcomes(t *testing.T) {
 	if err != nil || !strings.Contains(s, "decided 2 of the 3 items") || !strings.Contains(s, "\n1. LAPSED: unlocking") || !strings.Contains(s, "\n2. APPROVED: a deploy key") {
 		t.Fatalf("%q %v", s, err)
 	}
-	// the repo's store comes into this session in the same approval (router DECISIONS 179), unless it said noStore
+	// the repo's store comes into this session in the same approval (router DECISIONS 182), unless it said noStore
 	if !strings.Contains(s, "comes into this session in the same approval") {
 		t.Fatalf("%q", s)
 	}

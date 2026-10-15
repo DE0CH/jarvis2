@@ -81,7 +81,7 @@ WantedBy=multi-user.target
 UNIT
   systemctl daemon-reload && systemctl enable --now jarvis2-private-guard.service
   # NodePorts only on the private address; memory kept back for the system so the kubelet evicts before the kernel
-  # thrashes (DECISIONS 168's lesson)
+  # thrashes (DECISIONS 171's lesson)
   cat >> /etc/rancher/k3s/config.yaml <<'K3S'
 kube-proxy-arg:
   - nodeport-addresses=10.77.0.0/24

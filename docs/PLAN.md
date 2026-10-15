@@ -40,8 +40,8 @@ every store back from the backups). docs/DESIGN.md "Setting a core up".
 - Session image: `session-image/` (its base in `session-image/base/`, no longer Jarvis 1's image) + `machine/`, built by CI.
 - End-to-end test on real Fly with a software phone: passed (every flow).
 - iOS app: `ios/`; web page: `app/` — see app/DECISIONS.md.
-- Held core (`jarvis2/core-pin: hold`, waiting for Deyao's go and a Recover): stores made of keys (DECISIONS 160) and
-  store versions with the phone-signed restore (DECISIONS 162), one release (RUNBOOK "Deploying"). Router, setup.py,
+- Held core (`jarvis2/core-pin: hold`, waiting for Deyao's go and a Recover): stores made of keys (DECISIONS 163) and
+  store versions with the phone-signed restore (DECISIONS 165), one release (RUNBOOK "Deploying"). Router, setup.py,
   web page and app work with either core.
 - Decisions to review: docs/DECISIONS.md.
 
@@ -55,6 +55,6 @@ every store back from the backups). docs/DESIGN.md "Setting a core up".
   Machines tab's org personal are the router's own (DECISIONS 132-139); the apps' server URL is this host since 2026-10-13 (PARITY "Device pairing"). Done 2026-10-13 (Deyao: "make sure Jarvis 2 runs fully without Jarvis 1"):
   nothing in the router, the machine or the session image calls Jarvis 1 any more (the login's `follow` mode and the
   image's jarvis.deyaochen.com defaults are gone), and the end-to-end test runs with every Jarvis 1 hostname
-  unreachable (RUNBOOK "Testing", DECISIONS 152). Jarvis 1 → Jarvis 2 (its `/peer/claude-login` follower) stays until Deyao
+  unreachable (RUNBOOK "Testing", DECISIONS 155). Jarvis 1 → Jarvis 2 (its `/peer/claude-login` follower) stays until Deyao
   sets Jarvis 1 to 0.
 

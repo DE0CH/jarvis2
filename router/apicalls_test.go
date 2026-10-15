@@ -123,7 +123,7 @@ func TestReplayedCallKeepsItsCaller(t *testing.T) {
 	}
 }
 
-// an API call goes in a batch beside the session's other asks (Deyao, 2026-10-15; DECISIONS 180): checked as alone,
+// an API call goes in a batch beside the session's other asks (Deyao, 2026-10-15; DECISIONS 183): checked as alone,
 // filed as the batch's item, approved on its own (no Face ID), its result read by the session like its actions' own
 func TestAnAPICallInABatch(t *testing.T) {
 	r := newTestRouter(t)

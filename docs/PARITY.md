@@ -41,7 +41,7 @@ snapshots, live transcripts, task results).
 
 ## Automatic behaviour
 - Auto-pause, Escape-cancel of a stale prompt (holder `status`), "needs you"/idle/dead DMs (+ `notify-idle` mute), model-downgrade DM (holder `status`), stall nudge, one-shot destroy: present (`router/autopilot.go`, `router/oneshot.go`). Refused commands set `needsGrant`.
-- Claude credential refresh: present (`router/claudelogin.go`): the router keeps the one shared pair on its volume and is its only refresher (Jarvis 2 never calls Jarvis 1), with lessons/74's refresh lock as a long-poll protocol that every session machine with the store `claude` (and Jarvis 1, while it still runs and follows) takes part in. A paused session on an image from before this (whose machine fetched the login from Jarvis 1) resumes on the newest image (DECISIONS 151). Login repair + "continue": present (holder `login`, for a session without it).
+- Claude credential refresh: present (`router/claudelogin.go`): the router keeps the one shared pair on its volume and is its only refresher (Jarvis 2 never calls Jarvis 1), with lessons/74's refresh lock as a long-poll protocol that every session machine with the store `claude` (and Jarvis 1, while it still runs and follows) takes part in. A paused session on an image from before this (whose machine fetched the login from Jarvis 1) resumes on the newest image (DECISIONS 154). Login repair + "continue": present (holder `login`, for a session without it).
 - Fly budget cap and "Also on Fly": present (`router/budget.go`, read-only `FLY_READ_TOKEN`).
 - Browserbase budget DM: present (`router/bbbudget.go`, Jarvis 1's lib/bbbudget.js: the month re-priced from the session list, one DM at USD 8 and one at USD 10 overage; `BROWSERBASE_API_KEY` in the router's SOPS part `browserbase`; `/api/state` `browserbaseBudget`).
 - Discord channel per session (DT, SB): present (`router/discord.go`, lobster, category "Jarvis 2"), named by the title above and renamed as it changes (2 edits per 10 min), exported to `claude-records/<date> <title>/discord/` and deleted on destroy. Topic has no Remote Control link.
@@ -56,7 +56,7 @@ snapshots, live transcripts, task results).
 ## Stores, repos, content
 - Store editor in the app: partial — the shell's Stores page creates, unlocks, locks and marks stores sensitive; values are written only by the setup session (`infra/setup.py`). Copy keys between stores: missing (design question 12).
 - Restoring a store to an earlier version (no Jarvis 1 counterpart: its stores were plain SOPS files in git): present
-  with the held core (`core/history.go`, `router/storerestore.go`, DECISIONS 162): the core keeps each store's last 50
+  with the held core (`core/history.go`, `router/storerestore.go`, DECISIONS 165): the core keeps each store's last 50
   versions; a phone-signed restore (the app's Stores → a store → Versions → Restore…, or an Inbox request from the web
   page / the setup session) puts one back with no kit. A whole-store write on the live core never silently drops recorded
   keys (setup.py and the router refuse it without `--replace`).
@@ -64,7 +64,7 @@ snapshots, live transcripts, task results).
 - Content stores: present (`router/content.go`; DECISIONS 132-133): Jarvis 1's `claude-records/.content/<name>/` folders, used in place with the router's Storage Box creds; the app's Content tab (web) manages them; New session (web and iPhone) and task fields pick them, signed in the line's config (`content`); `content-sync` on the machine goes through the local proxy to `/m/api/sessions/:id/content…`, only for the cert's stores, each downloaded file with the core's attestation. Drop tokens: missing.
 
 ## Account and apps
-- Re-login: present (Settings → Claude account in the web page and the app: the CLI's sign-in page, paste the code; `POST /api/claude-login/start|code`). Usage quota: present (the router reads it with its own pair). Device pairing for OpenClaw/Paseo apps: present (`router/devices.go`; "Device pairing" below); both apps name this host (DECISIONS 158).
+- Re-login: present (Settings → Claude account in the web page and the app: the CLI's sign-in page, paste the code; `POST /api/claude-login/start|code`). Usage quota: present (the router reads it with its own pair). Device pairing for OpenClaw/Paseo apps: present (`router/devices.go`; "Device pairing" below); both apps name this host (DECISIONS 161).
 - Dashboard (app/DECISIONS.md 23–38): Sessions (live status, auto-pause/idle switches, resume prompt, destroy with the changes check, transcript, Discord link, needsGrant one-tap, permission mode, copy id), Grants (secure page, phone-signed), Terminal, Remote (with copy), per-session wakeups/crons, **Search** (conversations of both Jarvises, iCloud files), Previous (restore/tail/remove/delete), Tasks, Schedules, Stores, Repos, Settings (usage, Fly spend, core keys with copy), New session (one-shot, auto-pause, repos, API proxy, permission mode), banners, "Also on Fly": present. Paired apps (Settings, web), Content (web tab; iPhone Settings → Content without uploads), lease pills, first-prompt attachments, the per-tab transcript filter on Sessions/Previous: missing.
 
 ## Harnesses and image
@@ -72,7 +72,7 @@ snapshots, live transcripts, task results).
 - Session image: Jarvis 2 builds all of it. The base (tools, harnesses, entrypoint, supervisor, workspace layer, api-proxy,
   content-sync, pull-secrets) is `session-image/base/`, carried over from Jarvis 1's `selfhost/session-image/` (DECISIONS 100-102);
   Jarvis 1's image is no longer used. Fork pins (Jarvis 1's `fork-pin.yml`): present (`.github/workflows/fork-pin.yml`; the
-  forks run it on every build, DECISIONS 153).
+  forks run it on every build, DECISIONS 156).
 - Workspace layer: to verify. on-start hooks: present.
 - Peer-message delivery: present (`r.Deliver`, router/peer.go; Jarvis 1's lib/peer.js run through the `scheduler` grant).
 - Session-facing API (`$JARVIS_URL`): present — the machine's local proxy signs to `/m/api`; pull-secrets and changes answered on the machine; notify-idle and self-retire on the router; watches and leases on the router.
@@ -105,4 +105,4 @@ path-scoped Access app "Jarvis 2 devices" (Deyao's email, or any service token; 
 a service token only when its client id is a paired device's. The same token passes the session hosts' Access
 (`<id>-s.deyaochen.com`). Settings → Paired apps lists and removes them. Both forks name jarvis2.deyaochen.com
 (DE0CH/openclaw `apps/ios/Sources/Jarvis/JarvisModels.swift` `JarvisConfig.baseURL`, DE0CH/paseo `packages/app/app.config.js`
-`jarvis.url`; 2026-10-13, DECISIONS 158): each app pairs once with Jarvis 2 (RUNBOOK "Paired apps").
+`jarvis.url`; 2026-10-13, DECISIONS 161): each app pairs once with Jarvis 2 (RUNBOOK "Paired apps").

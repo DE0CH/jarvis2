@@ -66,7 +66,7 @@ type RequestParams struct {
 	Repo      string `json:"repo,omitempty"`   // repo-key: owner/name
 	Sensitive bool   `json:"sensitive,omitempty"`
 	// grant, unlock: the session it is for. repo-key add from a session: the session that asked, which gets the repo's
-	// store in the same approval (repos.go repoFollowups; DECISIONS 179)
+	// store in the same approval (repos.go repoFollowups; DECISIONS 182)
 	Session string `json:"session,omitempty"`
 	Holder  string `json:"holder,omitempty"`  // grant
 	Minutes int    `json:"minutes,omitempty"` // grant: 1–10

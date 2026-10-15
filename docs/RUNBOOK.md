@@ -24,7 +24,7 @@ DE0CH/openclaw (`de0ch-package.yml`) publish release `de0ch-<sha12>` and run `gh
 DE0CH/jarvis2 -f name=claw|openclaw -f url=… -f sha=…` with `JARVIS2_DISPATCH_TOKEN` (fine-grained PAT
 `jarvis2-fork-dispatch`: Actions write on DE0CH/jarvis2 only). `fork-pin.yml` checks the inputs, pins the asset with its
 sha256 (claw: `session-image/base/forks.json`, so the base rebuilds; OpenClaw: `session-image/openclaw-runtime.json`)
-and pushes with its deploy key, which runs `images`. By hand: the same `gh workflow run` line (DECISIONS 153).
+and pushes with its deploy key, which runs `images`. By hand: the same `gh workflow run` line (DECISIONS 156).
 
 GitHub settings (R1 audit, 2026-10-11; `gh api`): ruleset "main: only admins and deploy keys update it" (deletion,
 non_fast_forward, update; bypass: the admin role and deploy keys); environment `release` (deployment branches: main only)
@@ -302,7 +302,7 @@ on the box with the age key the box got in user-data. Four Secrets, each rewritt
   secret `JARVIS2_TUNNEL_KEY` — without it no OpenCode/OpenClaw web UI) (the read-only Fly token:
   `infra/fly-read-token.sh`). The file written 2026-10-09 still carries four keys the router no longer reads
   (`JARVIS1_CREDENTIALS_ID/SECRET`, `JARVIS1_SERVICES_ID/SECRET`, Jarvis 1 Access service tokens) and the stale
-  `GITHUB_READ_TOKEN` (DECISIONS 150): the next rewrite of this part leaves all five out. That rewrite needs every value
+  `GITHUB_READ_TOKEN` (DECISIONS 153): the next rewrite of this part leaves all five out. That rewrite needs every value
   above, and nobody can read the old `JARVIS2_TUNNEL_KEY` back: mint a new one and set it on the Worker in the same step
   (`wrangler secret put JARVIS2_TUNNEL_KEY` in claude-env `cf-tunnel/`); running OpenCode/OpenClaw sessions keep their
   old proof until they restart.
@@ -413,7 +413,7 @@ and "iCloud index" for the calls. Check them from any Jarvis 2 session:
   the new one before an old one goes (`maxUnavailable: 0`), and the writer lease (`services/search/lib/lease.js`)
   passes on SIGTERM or lapses 45 s after a kill. `GET /api/search/status` names the writer, this replica's start,
   memory and Kubernetes restarts (`replica`), and how the previous copy ended (`previousReplica`).
-- **The iCloud index has the same pattern** (`services/icloud-index/icloud_index/lease.py`, DECISIONS 171): two
+- **The iCloud index has the same pattern** (`services/icloud-index/icloud_index/lease.py`, DECISIONS 174): two
   replicas on the one volume, every replica answers searches, only the writer-lease holder lists iCloud, reads files,
   spends the AI budget, embeds and backs up (every write and AI call checks the lease first, so a replica that lost
   it writes nothing). `GET /ready` (port 8091) turns 503 at SIGTERM; the replica serves `DRAIN_MS` more, stops its
@@ -499,7 +499,7 @@ Jarvis 1 token is there, it only installs and launches the app.
 
 ## The box's network: IPv6-only, IPv4 out through WARP
 
-Every box has no public IPv4 (Deyao, 2026-10-13: the Hetzner account is at its limit of 10 primary IPs; DECISIONS 156).
+Every box has no public IPv4 (Deyao, 2026-10-13: the Hetzner account is at its limit of 10 primary IPs; DECISIONS 159).
 `infra/warp-host.sh` (run by cloud-init, and by the unit `jarvis2-warp-host.service` on a converted box) installs
 Cloudflare's WARP client in mode `tunnel_only` with IPv6 excluded (`tunnel ip add-range ::/0`): IPv4 (GitHub, GHCR,
 Fly's WireGuard gateways, 1.1.1.1 for CoreDNS) goes through WARP, IPv6 stays native. k3s's node IP is `10.254.254.1`
@@ -514,7 +514,7 @@ rebuilt. The same WARP steps for every other Hetzner server Claude makes: claude
 wait): graceful shutdown, the primary IPv4 unassigned and deleted, a single-use rescue boot (throwaway SSH key, over
 IPv6) that writes `warp-host.sh` and its boot unit onto the disk, then a boot into the box's own system; it waits until
 the core answers through the tunnel. About 10 minutes of downtime. The box keeps its keys, Secrets and Flux state, but
-it reboots, so the core starts empty: Deyao Recovers in the app (as after a power failure). DECISIONS 157.
+it reboots, so the core starts empty: Deyao Recovers in the app (as after a power failure). DECISIONS 160.
 
 ## Rebuilding the box
 
@@ -543,7 +543,7 @@ it reboots, so the core starts empty: Deyao Recovers in the app (as after a powe
 - The web page: the `web` workflow (typecheck + export of `app/`).
 - End to end on real Fly with a software phone and the public TEST master key: `infra/e2e.sh` (a local core
   and router, a throwaway WireGuard peer, the session image; set `E2E_SESSION_IMAGE` to a pinned tag). It sets its
-  own core up and never touches the production core. It always runs with Jarvis 1 unreachable (DECISIONS 152; needs
+  own core up and never touches the production core. It always runs with Jarvis 1 unreachable (DECISIONS 155; needs
   passwordless sudo, which sessions have): the router in its own mount namespace whose /etc/hosts sends
   jarvis.deyaochen.com to a listener that fails the test on any connection, each machine with it blackholed; search, the
   watch runner and the Storage Box are local stand-ins, so it also covers a search, a device lease, a watch, a content

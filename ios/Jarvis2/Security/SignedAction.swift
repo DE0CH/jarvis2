@@ -7,7 +7,7 @@
 // from the real core's documents too.
 import Foundation
 
-/// a repo a session asked for: its store comes into that session in the same approval (router repos.go, DECISIONS 179)
+/// a repo a session asked for: its store comes into that session in the same approval (router repos.go, DECISIONS 182)
 struct RepoInto: Equatable, Hashable {
   let session: String
   let label: String

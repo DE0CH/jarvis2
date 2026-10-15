@@ -9,7 +9,7 @@ package main
 // FLY_BUDGET_USD (default 30; 0 = off) → pause every running session (r.Pause: snapshot, then the core's
 // kill) and DM, and keep pausing anything started while the month stays over the cap.
 //
-// Volume snapshots count too (DECISIONS 176): the sessions' volumes are backed up at every kill (core/volumes.go) and
+// Volume snapshots count too (DECISIONS 179): the sessions' volumes are backed up at every kill (core/volumes.go) and
 // Fly bills their snapshots' stored size, including those of volumes already deleted (kept for their retention). Every
 // snapshotEvery the router lists the snapshots of each volume Fly still has and of each volume a session or record
 // names a backup of (still within its retention), sums their sizes once each, takes off Fly's free 10 GB and adds that

@@ -10,7 +10,7 @@ package main
 //
 // The backup is data for recovery by hand (Deyao, 2026-10-15): no resume or restore reads it. A successor always gets
 // a new, empty volume and its state from the predecessor's signed snapshot, exactly as before, so a volume never
-// carries one line's data into another machine. Retention (DECISIONS 174): backupRetentionDays when the machine
+// carries one line's data into another machine. Retention (DECISIONS 177): backupRetentionDays when the machine
 // signed its own snapshot (the backup is a second copy), noSnapshotRetentionDays when it didn't (the backup is then
 // the only copy of the machine's last state). Fly keeps a deleted volume's snapshots for their retention, reachable
 // by the volume id the record names.

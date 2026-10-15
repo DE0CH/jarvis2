@@ -157,7 +157,7 @@ fixes, 34–40 carried over from the old app and still true, 41–43 the web pag
 
 41. **Web only**: no iOS build, no shell bridge; the `.native.*` files, the React Native extension and the Radix-to-Swift
     generator are gone.
-42. It can view everything, request a new session (any stores, sensitive ones badged; docs/DECISIONS.md 161), reject approvals, pause, resume and destroy;
+42. It can view everything, request a new session (any stores, sensitive ones badged; docs/DECISIONS.md 164), reject approvals, pause, resume and destroy;
     where the app would open a review, it files an Inbox request ("approve it in the Jarvis 2 app").
 43. `web.yml` typechecks and exports it; the router serves the export at `/`.
 
@@ -296,7 +296,7 @@ fixes, 34–40 carried over from the old app and still true, 41–43 the web pag
     claims with the `keys` bundle when the core's identity says so; Settings → Encrypted backup counts and checks key
     backups too. Until the held core is live the app also speaks the earlier whole-store formats (each branch marked).
 
-69. **Restoring a store** (docs/DECISIONS.md 162; Deyao, 2026-10-13). iPhone: a store's page (Settings → Stores → the
+69. **Restoring a store** (docs/DECISIONS.md 165; Deyao, 2026-10-13). iPhone: a store's page (Settings → Stores → the
     store) ends with **Versions** (not for a repo's deploy-key store): the core's signed list, newest first, each row
     "Version N", a Current pill, what made it as a pill (Recover, Key written, Key deleted, Restore + From N, Session
     when a session wrote it), when, and its key names; every other row has **Restore…**, which opens the restore review
@@ -306,7 +306,7 @@ fixes, 34–40 carried over from the old app and still true, 41–43 the web pag
     keys put back under one Face ID; Cancel (Deny from the Inbox). Web: each store card has **Versions** (the same list,
     unverified) with **Propose restore**, which files the Inbox request; the Inbox lists it as "Restore store" with Store
     and Version rows. Walkthrough: a key of default deleted as the setup session, then put back through Versions.
-70. **Upgrade has no last size** (docs/DECISIONS.md 164; Deyao, 2026-10-15). A memory alert always offers Upgrade: the
+70. **Upgrade has no last size** (docs/DECISIONS.md 167; Deyao, 2026-10-15). A memory alert always offers Upgrade: the
     router's `memAlert` names the next size, its memory and its guest (`nextSize`, `nextGb`, `nextGuest`), and the apps
     print those rather than a table of their own. Button: "Upgrade to Large (8 GB)" for the named sizes, "Upgrade to
     16 GB" past them (iPhone `Fmt.upgradeTitle`, web `sizeName`); the notice names the guest ("…back on a bigger machine (8×performance · 32 GB)…"
@@ -315,7 +315,7 @@ fixes, 34–40 carried over from the old app and still true, 41–43 the web pag
 
 ## API calls (2026-10-15)
 
-70. **An API call opens its own review sheet** (docs/DECISIONS.md 166; Deyao, 2026-10-15). iPhone: tapping an "API call"
+70. **An API call opens its own review sheet** (docs/DECISIONS.md 169; Deyao, 2026-10-15). iPhone: tapping an "API call"
     row (or its context menu's Review) opens `APICallReviewView`: "Runs as you" (Method, Path, Body as indented JSON with
     its content type), "Who asked" (Caller, Asked, Expires), "Reason (unverified)"; Approve in the toolbar (no Face ID),
     Deny below, Cancel. After Approve the sheet shows the Result (HTTP status) and "What it brings about": each open
@@ -323,7 +323,7 @@ fixes, 34–40 carried over from the old app and still true, 41–43 the web pag
     comes back when signed or rejected; answered ones as "Answered, denied or lapsed"; while the router awaits one, a
     spinner with its deadline; then "Nothing more to approve." and Done. Web: the card's Review opens the `call` page
     with the same sections; follow-ups show their rows and "Approve in the iPhone app", with Deny.
-71. **Failed sessions, a session's repo, API calls in a batch** (docs/DECISIONS.md 178-180; Deyao, 2026-10-15). Both apps
+71. **Failed sessions, a session's repo, API calls in a batch** (docs/DECISIONS.md 181-183; Deyao, 2026-10-15). Both apps
     show Resume for every failed session (one with a machine finishes its pause first, router-side), and a destroy that
     ends "kill: …" asks "The machine wasn't destroyed" → Destroy anyway (`?force=1`), like a failed archive. A repo
     request a session made shows "Then: Add store github-… to the session that asked" and the session under "What you
@@ -333,7 +333,7 @@ fixes, 34–40 carried over from the old app and still true, 41–43 the web pag
     signature)"): Allow all approves it; what it brings about shows below as "What the API calls bring about", each
     opening the call's sheet already approved (its follow-ups under their own Face ID), then Done. The web page's batch
     card has "Review call" for its API calls.
-72. **Disk, More disk, kept machines and volume backups** (docs/DECISIONS.md 172–175; 2026-10-15). Web: the card's Machine
+72. **Disk, More disk, kept machines and volume backups** (docs/DECISIONS.md 175–178; 2026-10-15). Web: the card's Machine
     row adds "X of Y GB disk free" (the volume when the machine has one). A low-disk episode is a red callout like the
     memory one, with "More disk (N GB)" (POST …/disk, busy label "Adding disk…", then the job's phases) or, on a machine
     without a volume, why it can't grow. A kept machine (`snapshotFailed`) gets a red callout with Pause again and Destroy

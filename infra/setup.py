@@ -45,7 +45,7 @@ both). Values never print.
                                        for Deyao: take a shared device over (agents refused) or hand it back
   infra/setup.py pause SESSION         cancel its wakeups and crons, then pause it (its snapshot if the machine answers)
   infra/setup.py resume SESSION        resume a paused session on its own image, no prompt (a pre-router-login Claude image:
-                                       a resume-upgrade approval in the Inbox instead, DECISIONS 151)
+                                       a resume-upgrade approval in the Inbox instead, DECISIONS 154)
   infra/setup.py restart SESSION       pause + resume as the app's Restart; wakeups and crons stay armed
   infra/setup.py requests              what waits in the phone's Inbox (requests and approvals)
   infra/setup.py jarvis1               Jarvis 1's paused sessions (its index) and each one's import state here

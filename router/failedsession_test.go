@@ -1,6 +1,6 @@
 package main
 
-// A failed session comes back with one tap and can always be destroyed (Deyao, 2026-10-15; DECISIONS 178): Resume of
+// A failed session comes back with one tap and can always be destroyed (Deyao, 2026-10-15; DECISIONS 181): Resume of
 // a failed session that still has a machine finishes its pause first; a kill that failed on the way is tried again; a
 // destroy goes past a snapshot the core refuses, a machine Fly no longer has, and (Destroy anyway) any kill failure;
 // the core calls that wait inside the running core outlast its own worst case.

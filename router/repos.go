@@ -288,7 +288,7 @@ func (r *Router) repoAskers(a keyAnswer) []repoAsker {
 }
 
 // repoFollowups: the repo's store into each session that asked for the repo (Deyao, 2026-10-15: "one Face ID, not a
-// repo-key approval followed by a separate add-store"; DECISIONS 179). An add-store approval per running session that
+// repo-key approval followed by a separate add-store"; DECISIONS 182). An add-store approval per running session that
 // doesn't hold the store yet, filed at once now that the store exists (the core makes a challenge only for a store it
 // has). The one for the request this page answered (inbox) is returned: the phone showed it before Face ID ("then adds
 // the store to session …") and signs it under the same Face ID, after checking it is exactly that. Any other asking

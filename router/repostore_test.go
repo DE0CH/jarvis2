@@ -1,6 +1,6 @@
 package main
 
-// A repo a session asks for lands in that session in the same approval (Deyao, 2026-10-15; DECISIONS 179): the
+// A repo a session asks for lands in that session in the same approval (Deyao, 2026-10-15; DECISIONS 182): the
 // request names the asking session; the finished deploy key files the add-store approval at once and names it to the
 // phone, which signs it under the same Face ID.
 

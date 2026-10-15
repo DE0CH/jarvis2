@@ -247,7 +247,7 @@ func flyMachineLimit(err error) bool {
 // killUntilDestroyed: the core's kill (one Fly destroy) again until Fly reports the machine destroyed (409 before).
 // A core from before R2 waited inside its kill. A kill that failed on the way (Fly's API timing out, 502, or the core
 // not answering) is tried again too, a few times over a few minutes: on 2026-10-15 one Fly destroy timeout left
-// "Draft reply to image" failed for good (DECISIONS 178). A refusal (403, 400) is final.
+// "Draft reply to image" failed for good (DECISIONS 181). A refusal (403, 400) is final.
 func (r *Router) killUntilDestroyed(in map[string]any) (*Doc, error) {
 	deadline := time.Now().Add(killMax)
 	transient := 0
@@ -854,7 +854,7 @@ func (r *Router) Resume(id string, upgrade bool) error {
 	// paused, or failed. With no machine (a start or certify that failed, or a start cut off by a router restart) the
 	// line is where its last pause left it (the core marks a predecessor used only at certify). With one (a pause or
 	// destroy whose kill failed, or one cut off) the pause is finished first: the machine's final snapshot (the same
-	// one again if it took it already), the kill, then the resume, all on this one tap (DECISIONS 178).
+	// one again if it took it already), the kill, then the resume, all on this one tap (DECISIONS 181).
 	if s.ID == "" || !(s.State == "paused" || s.State == "failed") {
 		unlock()
 		return fmt.Errorf("session %s isn't paused or failed", id)

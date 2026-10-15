@@ -15,7 +15,7 @@ The admin key HETZNER_S3_* does the bucket policies and the cleanup. The new key
                                  the old access key is kept in ~/.jarvis2/backup-read.old for delete-old
   backup-read-key.py allow-put   the key may add object versions to the backup bucket (s3:PutObject leaves its Deny):
                                  the router writes each key's backup as the key is written (router/storedocs.go);
-                                 delete, version, policy, lifecycle and ACL changes stay refused (DECISIONS 160)
+                                 delete, version, policy, lifecycle and ACL changes stay refused (DECISIONS 163)
   backup-read-key.py test        what the new key may do (wait ~1 min after `policies`: a multi-delete went through
                                  once seconds after a policy write); throwaway names only, cleaned up by the admin key
   backup-read-key.py delete-old  delete the old credential in the Console (its row's ⋯ → Delete → OK)
@@ -184,7 +184,7 @@ def test():
     check("get stores/default.json", "allowed", lambda: s3.get_object(Bucket=B, Key="stores/default.json")["Body"].read())
     check("list versions", "allowed", lambda: s3.list_object_versions(Bucket=B, MaxKeys=5))
     check("get the bucket policy", "allowed", lambda: s3.get_bucket_policy(Bucket=B))
-    check("put (a new version: key backups, DECISIONS 160)", "allowed", lambda: s3.put_object(Bucket=B, Key=t, Body=b"x"))
+    check("put (a new version: key backups, DECISIONS 163)", "allowed", lambda: s3.put_object(Bucket=B, Key=t, Body=b"x"))
     check("plain delete", "refused", lambda: s3.delete_object(Bucket=B, Key=t + "-real"))
     check("delete a version", "refused", lambda: s3.delete_object(Bucket=B, Key=t + "-real", VersionId=vid))
     check("multi delete", "refused", lambda: s3.delete_objects(Bucket=B, Delete={"Objects": [{"Key": t + "-real"}]}))

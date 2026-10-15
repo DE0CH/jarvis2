@@ -8,7 +8,7 @@ struct Session: Identifiable, Equatable, Hashable {
   var id: String { j["id"].string ?? "" }
   var state: String { j["state"].string ?? "" }
   /// Resume brings it back: paused, or failed with no machine (a failed or cut-off start; router Resume)
-  /// a failed session with a machine finishes its pause first (router Resume, DECISIONS 178); not one whose last
+  /// a failed session with a machine finishes its pause first (router Resume, DECISIONS 181); not one whose last
   /// machine left no snapshot (the router refuses: it would start empty — router/snapsafe.go)
   var resumable: Bool { (state == "paused" || state == "failed") && noSnapshot == nil }
   var status: String? { j["status"].text }

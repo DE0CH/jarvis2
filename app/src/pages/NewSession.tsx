@@ -1,5 +1,5 @@
 // New session on the WEB page: the form only files a pending request (POST api/sessions) with any stores,
-// sensitive ones included (Deyao, 2026-10-13; docs/DECISIONS.md 161); the approval happens in the app, whose review
+// sensitive ones included (Deyao, 2026-10-13; docs/DECISIONS.md 164); the approval happens in the app, whose review
 // page marks each sensitive store from the core-signed store list before Face ID. In the app New session is one page in the shell (lib/sessions.ts,
 // Shell/SecurePages.swift SecureNewSession), where everything is chosen and Start signs it.
 // Images (docs/DECISIONS.md 94-95): picked or pasted here, uploaded to the router (api/uploads) before the request; the

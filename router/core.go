@@ -61,7 +61,7 @@ func (e *CoreError) Error() string { return e.Msg }
 // by its own 90 s client (≈ 34 min at worst), and its kill a destroy plus up to 20 confirming reads (≈ 32 min). A
 // router that gave up sooner (15 min, 2026-10-15: "start: core /start: … Client.Timeout exceeded") failed a start the
 // core was still carrying out, which then left a started machine nobody knew of. So those two wait past the core's
-// own worst case and always hear its answer (DECISIONS 178).
+// own worst case and always hear its answer (DECISIONS 181).
 var coreCallMax = map[string]time.Duration{"/start": 40 * time.Minute, "/kill": 40 * time.Minute}
 
 const coreCallDefault = 15 * time.Minute

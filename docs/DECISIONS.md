@@ -55,7 +55,7 @@ made around it; the app's own list is `app/DECISIONS.md`.
 16. **Box**: Hetzner cx23 (2 vCPU, 4 GB, 40 GB) in fsn1, EUR 6.588/month gross, IPv6-only (DECISIONS 156), in the
     `jarvis2-mock` project (renaming a Hetzner project needs the console).
 17. **Fly**: app `jarvis2-sessions` in org `jarvis2-370`, region `lhr`, sizes small/medium/large = 2/4/8 shared
-    CPUs with 2/4/8 GB, then every doubling past large, named by its memory (16gb, 32gb, …; DECISIONS 164). The router's budget cap (Jarvis 1's: DM at USD 25, pause all at USD 30) reads the app with a
+    CPUs with 2/4/8 GB, then every doubling past large, named by its memory (16gb, 32gb, …; DECISIONS 167). The router's budget cap (Jarvis 1's: DM at USD 25, pause all at USD 30) reads the app with a
     read-only Fly token (`infra/fly-read-token.sh`).
 18. **Images** on GHCR (public, like the repo), with GitHub build attestations (the phone doesn't check them
     yet).
@@ -273,7 +273,7 @@ shouldnt unlock the whole infra [store] for that one task."
     env var).
 65. **New session pre-selects a picked repo's store** when it isn't sensitive; a sensitive one (github-jarvis2) is
     ticked on the secure page, as every sensitive store. The web page adds a picked repo's store either way and marks a
-    sensitive one (161).
+    sensitive one (164).
 66. **The production core is held, not restarted** (`jarvis2/core-pin: hold` on the core Deployment; `images.yml` builds
     the core image but doesn't pin it while the annotation is there). A restart would empty the core and only Deyao's
     Recover brings the stores back, so the deploy-key core waits for his go: remove the annotation (a commit), run the
@@ -327,7 +327,7 @@ for unattended resumes he chose "the session carries its secrets" (DESIGN "Carri
     stores, image, options); before, it only needed the store left unlocked. Change: leave sensitive stores out of
     the blob, so a sensitive session's resume waits for an Unlock… each time.
 73. **A resume gets the values its line last pulled**; an unlock open to the cert wins (fresh values). A store
-    written since reaches it only with a new unlock, which the router asks the phone for (160).
+    written since reaches it only with a new unlock, which the router asks the phone for (163).
 74. **Approvals made outside the app also unlock under their one Face ID** (the web page's new session, a restore, a
     task's first line, an add-store), for that session only, as New session does; a resume on a new image or mode
     unlocks nothing (it carries its secrets). With a core that predates scoped unlocks (the held core) these pages
@@ -521,7 +521,7 @@ session setting (`Checks.configKeys`) if a session should keep its screen from t
     session went "Can't reach your computer"; he picked "alert + Upgrade"). The machine reports its RAM itself
     (`POST /m/memory`, every 10 s) because the router has no exec of its own; a machine that stops reporting while short
     is counted as starving, as Jarvis 1 counted one that stopped answering its exec. The watch lives in the router's
-    memory only (a restart starts it afresh). Each Upgrade doubles the memory, with no last size (DECISIONS 164).
+    memory only (a restart starts it afresh). Each Upgrade doubles the memory, with no last size (DECISIONS 167).
 99. **`free` is a router command the machine obeys without a voucher.** It is not an input to the agent: it only stops
     processes, which the router can already do more bluntly by pausing or destroying the machine, and the snapshot that
     follows is still the machine's own, signed. The harness (the machine's main process) is SIGSTOPped, not killed, so
@@ -548,7 +548,7 @@ session setting (`Checks.configKeys`) if a session should keep its screen from t
     jarvis2-machine always sets `JARVIS_URL` to its local proxy), `sync-live-transcripts` (runs only when a store carries
     STORAGEBOX_*; goes with the transcript-search port), and the entrypoint's handling of SESSION_SECRETS_JSON and
     CLAUDE_* (jarvis2-machine relies on it). The forks' builds are pinned here by `fork-pin.yml`
-    (entry 153).
+    (entry 156).
 102. **The image checks moved with it**: the build job fails, so nothing pins, when the session image isn't anonymously
     pullable or needs more than 8.0e9 bytes on disk unpacked (Jarvis 1's limit and script, `infra/image-unpacked-size.py`).
     A too-big session image therefore also holds back a router or core pin in the same run, which is louder than Jarvis
@@ -834,19 +834,19 @@ iCloud index and leases (decided while Deyao was away; the safe, reversible defa
 139. **The apps' server URL changes at retirement, not now.** Both forks name jarvis.deyaochen.com in one constant; moving
      them now would cut Deyao's apps off Jarvis 1's sessions while he still uses it. At the freeze: change the constant,
      ship each through its TestFlight workflow, pair each app once (RUNBOOK "Paired apps").
-132. **A start waits out Fly's org machine limit** (up to 3 hours, a try a minute; `router/flows.go` startMachine):
+140. **A start waits out Fly's org machine limit** (up to 3 hours, a try a minute; `router/flows.go` startMachine):
      the limit counts every machine object (lessons/58: 20 in Jarvis 1's org), and the import starts 16 lines at once
      next to the running ones. A refused create made nothing and the phone's approval isn't spent until certify, so
      the router keeps it and tries again as sessions pause, instead of failing a line Deyao already approved (which
      would cost him another Face ID). The session shows `starting` meanwhile. Change: ask Fly to raise the org's limit.
-133. **A successor with no snapshot takes the line's Jarvis 1 import again** (2026-10-13: the imported sessions' Fly
+141. **A successor with no snapshot takes the line's Jarvis 1 import again** (2026-10-13: the imported sessions' Fly
      machines were stopped by hand right after boot, so their rootfs and keys were gone and no snapshot could be signed;
      their kills named none). A successor whose cert names no snapshot, on a line whose signed config names a restore that
      is a Jarvis 1 import, fetches that manifest and its files again and checks them as the first machine did
      (`machine/restore.go` reimportJarvis1; the router serves them to such a successor). The cost: a router that withholds
      a later snapshot can bring the line back to the imported state instead of an empty one; both were already in its power
      (withholding, and the import's bytes are what Deyao signed). A destroyed Jarvis 2 session's archive is not taken again.
-134. **`/setup/sessions/{id}/pause` cancels the session's wakeups and crons first** (they would resume it by themselves);
+142. **`/setup/sessions/{id}/pause` cancels the session's wakeups and crons first** (they would resume it by themselves);
      the imports' re-armed ones are armed again by the re-import at the next resume.
 
 ## Batch approvals in the Inbox, 2026-10-13
@@ -854,66 +854,66 @@ iCloud index and leases (decided while Deyao was away; the safe, reversible defa
 Deyao: several actions approved together with ONE Face ID; the caller groups them through the API and gives a summary
 (its unverified words, shown above every item's signed details); nothing excluded; Deny works on the whole batch.
 
-140. **One Face ID, every item signed as alone; no core change** (supersedes 124). The app evaluates Face ID once
+143. **One Face ID, every item signed as alone; no core change** (supersedes 124). The app evaluates Face ID once
      (`PhoneKeys.authorize`: `LAContext.evaluatePolicy(.deviceOwnerAuthenticationWithBiometrics)`) and passes that context
      to every Secure Enclave use of the batch (`SecureEnclave.P256…PrivateKey(dataRepresentation:authenticationContext:)`),
      so the Enclave asks no second time; the keys stay `.biometryCurrentSet`. Each item is then signed and sent exactly as
      from its own page (approvals' core challenges, grant texts, deploy-key begin documents, unlocks' shares), so the core
      verifies each one unchanged. The simulator does its Face ID stand-in once per batch. The replica proves the one-Face-ID
      path on the simulator (software keys) only; on Deyao's iPhone the evaluated context opened the keys for every item
-     (169: batch b986f9a3177e8d687, two deploy keys signed 1.3 s apart under one Face ID). 0e1f12f's guess that it
-     opened them for the first item only was wrong and is reverted (169). Change: a core primitive approving N
+     (172: batch b986f9a3177e8d687, two deploy keys signed 1.3 s apart under one Face ID). 0e1f12f's guess that it
+     opened them for the first item only was wrong and is reverted (172). Change: a core primitive approving N
      challenges from one signature (a Recover).
-141. **Items are read and checked before Face ID; each is signed and sent in order after it.** A batch page reads every
+144. **Items are read and checked before Face ID; each is signed and sent in order after it.** A batch page reads every
      item as its own page would (the same Checks: the core key, line pins, the session's cert, CI's image signature, the
      grant's draft checked field for field before signing) and offers Allow all only when every item is readable and
      signable and no approval is still being made. An item that fails mid-batch is shown failed; the ones before it went
      through and left the Inbox (approvals leave when answered, requests on `done`), so Retry is idempotent: it reads only
      what is left and asks for one more Face ID. Grants and deploy keys draft/begin again on Retry.
-142. **Deny: the whole batch, or one item.** Deny all drops every request and rejects every approval (a new session
+145. **Deny: the whole batch, or one item.** Deny all drops every request and rejects every approval (a new session
      disappears); an item can also be denied (or allowed) on its own, which takes it out of the batch. The web page shows
      batches and denies them; approving stays on the phone.
-143. **Limits count a batch once.** A batch is one of the caller's 20 waiting requests and, when it proposes any new
+146. **Limits count a batch once.** A batch is one of the caller's 20 waiting requests and, when it proposes any new
      session, one of its 3 waiting proposals (a session or the actions key); a batch holds at most 20 items. So a session
      can have at most 3 proposal entries in the Inbox, as before, each still needing Deyao's Face ID per entry. The setup
      session's imports, as before, aren't limited beyond the 20 items per batch.
-144. **The batch is checked whole before anything is filed** (an item the caller may not ask for, a bad argument, the same
+147. **The batch is checked whole before anything is filed** (an item the caller may not ask for, a bad argument, the same
      item twice: 400/403 and nothing filed). Filing itself can still fail per item (the core refusing a challenge): that
      item is reported with its error and the others stand, since undoing filed approvals would be a Deny the caller didn't
      ask for. A request already waiting alone joins the batch; one already in another batch stays there. Per-item
      explanations are optional in a batch (the summary is required).
-145. **The whole batch expires 10 minutes after filing** (its requests carry the batch's end; an approval goes at the
+148. **The whole batch expires 10 minutes after filing** (its requests carry the batch's end; an approval goes at the
      sooner of its own 10 minutes and the batch's). Imports and proposed sessions come in a moment after filing (the core's
      challenge); the batch shows them as `preparing` and the phone waits for them before Allow all.
 
-146. **Router rollouts drain; nothing is redone after a crash** (Deyao, 2026-10-13: drain on SIGTERM, remove the
+149. **Router rollouts drain; nothing is redone after a crash** (Deyao, 2026-10-13: drain on SIGTERM, remove the
      save-to-disk-and-redo). Tracking lives in the lifecycle lock (`lock` begins a tracked action, its unlock ends it) plus
      the approval answer (`Respond`); a restart or upgrade job is tracked as a whole and its own pause/resume steps still
      begin during a drain, so a drain between its steps doesn't leave the session paused half way. Creating a session
      (only an approval, no machine) is not refused; the phone's answer is, before the core uses the approval up, so it
      stays in the Inbox. Preparing a Jarvis 1 import (hashing, no machine) isn't tracked.
-147. **A drain doesn't wait out Fly's machine limit.** A start in the limit wait (up to 3 h) when the drain begins, or one
+150. **A drain doesn't wait out Fly's machine limit.** A start in the limit wait (up to 3 h) when the drain begins, or one
      that would begin it during a drain, ends `failed` with "the Fly org is at its machine limit and the router is
      updating: start it again". Change: let it wait in the next pod (it would need the saved state we just removed).
-148. **Grace 30 min, not 15.** `terminationGracePeriodSeconds: 1800`, `DRAIN_SECONDS` 1740: the longest tracked job is a
+151. **Grace 30 min, not 15.** `terminationGracePeriodSeconds: 1800`, `DRAIN_SECONDS` 1740: the longest tracked job is a
      restart/upgrade (a pause's 600 s snapshot wait + the kill, then a resume's machine init, up to 12 min). Flux applies
      with `wait: false` and no workflow waits on the rollout, so the long grace delays only the new pod. A drain past it is
      cut off like a crash.
-149. **After a crash: `paused` for a cut-off resume, `failed` otherwise.** A resume cut off before certify keeps its line
+152. **After a crash: `paused` for a cut-off resume, `failed` otherwise.** A resume cut off before certify keeps its line
      (the core marks the predecessor used only at certify), so the session goes back to `paused` with the reason and a
      plain Resume works. A new line's start (its phone approval is spent), a pause and a destroy become `failed` with the
      reason; Pause and Destroy both run from `failed`. The cut-off start's machine, if the core had made one, isn't known
      any more: it holds no secret (never certified) and the Machines tab flags it as having no session. Old state.json's
      `pendingStart` is dropped on load.
 
-150. **The router's default secret part keeps four dead Jarvis 1 keys until its next rewrite.** The router no longer reads
+153. **The router's default secret part keeps four dead Jarvis 1 keys until its next rewrite.** The router no longer reads
      `JARVIS1_CREDENTIALS_*` / `JARVIS1_SERVICES_*` (nor the stale `GITHUB_READ_TOKEN`), but `router.enc.yaml` is rewritten
      whole and nobody can read `JARVIS2_TUNNEL_KEY` back: dropping them now means a new tunnel key on the Worker and the
      router at once, and every running OpenCode/OpenClaw session's web UI would fail on its next reconnect until it
      restarts. The values are inert (no code reads them); their Access service tokens can be revoked on Cloudflare when
      Jarvis 1 goes to 0, which kills them for good. Change: rotate the tunnel key in a quiet moment and rewrite the part
      (RUNBOOK "The router's secrets").
-151. **A paused Claude session on a pre-router-login image resumes on the newest image.** Images pinned before
+154. **A paused Claude session on a pre-router-login image resumes on the newest image.** Images pinned before
      `sha-c5427052a542` (2026-10-13 01:39) fetched the Claude login from Jarvis 1 with the store `claude`'s
      `JARVIS1_CREDENTIALS_*`; those keys leave the store, so such a line would boot logged out. The router's Resume (the
      app, the actions key, a wakeup, a lease or watch wake) of a line with the store `claude` whose image comes before that
@@ -921,7 +921,7 @@ Deyao: several actions approved together with ONE Face ID; the caller groups the
      approval in the Inbox, so the phone approves it; nothing boots before. A wakeup that resumes such a line waits on
      that approval (and lapses with it after 10 minutes, leaving the line paused). (The old-image route through the
      router's login repair went with DECISIONS 116's 2026-10-14 change.)
-152. **The end-to-end test runs with Jarvis 1 unreachable, always.** The router runs in its own mount namespace (`sudo
+155. **The end-to-end test runs with Jarvis 1 unreachable, always.** The router runs in its own mount namespace (`sudo
      unshare`) whose /etc/hosts sends jarvis.deyaochen.com to 127.0.0.2, where a root listener logs every connection; any
      line fails the test. Each session machine gets `0.0.0.0 jarvis.deyaochen.com` in /etc/hosts through Fly exec as soon
      as Fly lists it started; the machine boots on its own, so the first boot can finish before that (the test logs
@@ -930,7 +930,7 @@ Deyao: several actions approved together with ONE Face ID; the caller groups the
      SSL_CERT_FILE); the watch stand-in doesn't run scripts (the real runner kills every other process in its
      container). The router's own refresh against Anthropic isn't run (it would need a real login); the test covers a
      newer pair reaching a running machine by itself.
-153. **The forks pin their builds with a `workflow_dispatch`, not a `repository_dispatch`.** DE0CH/claw-code and
+156. **The forks pin their builds with a `workflow_dispatch`, not a `repository_dispatch`.** DE0CH/claw-code and
      DE0CH/openclaw run `gh workflow run fork-pin.yml -R DE0CH/jarvis2` with a fine-grained token that has only
      Actions write on this repo (`JARVIS2_DISPATCH_TOKEN` in each fork). A `repository_dispatch` needs Contents write,
      which as Deyao's token (an admin, whom main's ruleset lets through) could push main from a fork's CI. The workflow
@@ -943,7 +943,7 @@ Deyao: several actions approved together with ONE Face ID; the caller groups the
 
 ## Two add-stores pending for one session, 2026-10-13
 
-154. **An add-store is always answered onto the machine's newest cert** (Deyao, 2026-10-13: "The race shouldn't happen.
+157. **An add-store is always answered onto the machine's newest cert** (Deyao, 2026-10-13: "The race shouldn't happen.
      Fix the root issue."). What happened: a session filed `jarvis2-request add-store identity` and, 20 minutes later,
      `… yyc`; Deyao approved both close together (the waiters logged "added yyc" 05:29:47, "added identity" 05:29:59
      UTC) and the session ended with identity only. Each challenge is made from the cert the machine has when it is
@@ -990,7 +990,7 @@ Deyao: several actions approved together with ONE Face ID; the caller groups the
      *Deploy*: router and machine (session image) go live with the push; the core change waits for Deyao's go (the core
      is held: a new core is a Recover, and destroys the earlier core's sessions once paused, DECISIONS 69).
 
-155. **A session's actions run on its own machine key, and can ask for any app API call** (Deyao, 2026-10-13: "the
+158. **A session's actions run on its own machine key, and can ask for any app API call** (Deyao, 2026-10-13: "the
      action key can request anything … action keys should be scoped and minted for each session, so i can see and log
      where that comes from … and they should be disabled with each session pausing/destroying").
      *Per session*: the shared Access service token `jarvis2-actions` (in the `default` store) is gone, with its Access
@@ -1000,7 +1000,7 @@ Deyao: several actions approved together with ONE Face ID; the caller groups the
      also refuse a session that is pausing, destroying or paused (`actionsSession`), and its pending call requests
      leave the Inbox, so no action outlives the session's run.
      *Any call*: `POST /m/api/actions/requests/call` files an `api-call` request naming one app route's method, path and
-     body. Deyao approves it on its own review sheet (app or web page, 166); the router runs it through its own public mux with
+     body. Deyao approves it on its own review sheet (app or web page, 169); the router runs it through its own public mux with
      the approving request's Access headers, so the route checks Deyao exactly as when he calls it, and keeps the
      result 10 min for that session alone. No Face ID for the approval: Face ID signs only what the core verifies, and
      a call that needs it (a switch to bypass needs the terminal grant) asks for that separately.
@@ -1013,7 +1013,7 @@ Deyao: several actions approved together with ONE Face ID; the caller groups the
 
 ## The box is IPv6-only, 2026-10-13
 
-156. **Every Jarvis 2 box is IPv6-only, with Cloudflare's free WARP client for the outgoing IPv4** (Deyao, 2026-10-13:
+159. **Every Jarvis 2 box is IPv6-only, with Cloudflare's free WARP client for the outgoing IPv4** (Deyao, 2026-10-13:
      every Hetzner server, because the account is at its limit of 10 primary IPs). `infra/create.sh` creates with
      `public_net: {enable_ipv4: false, enable_ipv6: true}`; `infra/warp-host.sh` (ahead of `cloud-init.sh` in the
      user-data) installs WARP from Cloudflare's apt repo (reachable over IPv6), registers, `mode tunnel_only` and
@@ -1032,7 +1032,7 @@ Deyao: several actions approved together with ONE Face ID; the caller groups the
      in an IPv4-only pod, so its edge connection goes through WARP too) until it's back; nothing is lost, it reconnects. Tested on throwaway boxes in project runners: curl -4
      api.github.com, git ls-remote, GHCR pulls, Flux, the core through the tunnel, the router through the WireGuard
      peer, a reboot.
-157. **The production box keeps its IPv4 (Deyao, 2026-10-13: "no need", a primary IP was free again); if it is ever converted, it converts in place** (`infra/convert-ipv6.sh`): shutdown → the primary IPv4
+160. **The production box keeps its IPv4 (Deyao, 2026-10-13: "no need", a primary IP was free again); if it is ever converted, it converts in place** (`infra/convert-ipv6.sh`): shutdown → the primary IPv4
      unassigned (Hetzner allows it only while the server is off) and deleted → a single-use rescue boot with a
      throwaway SSH key writes `warp-host.sh` and a oneshot unit (before k3s) onto the disk → reboot. The disk keeps the
      box key, age key, Secrets and Flux state, so nothing is re-minted (a rebuild would need every router-secrets part
@@ -1043,7 +1043,7 @@ Deyao: several actions approved together with ONE Face ID; the caller groups the
      the reboot WARP installed by the unit, the node Ready on 10.254.254.1, every pod Running, Flux fetching GitHub,
      a new GHCR image pulled and a pod reaching api.github.com.
 
-158. **The apps' server URL moved to Jarvis 2 now, not at retirement** (Deyao, 2026-10-13: "make sure Jarvis 2 runs fully
+161. **The apps' server URL moved to Jarvis 2 now, not at retirement** (Deyao, 2026-10-13: "make sure Jarvis 2 runs fully
      without Jarvis 1"; supersedes 139). OpenClaw and Paseo name jarvis2.deyaochen.com from their next TestFlight build;
      Deyao pairs each once. They no longer see Jarvis 1's OpenClaw/OpenCode sessions (Jarvis 1 is frozen). Paseo's CI
      e2e token is a Jarvis 1 device: Jarvis 2 admits only devices paired through `/api/devices/pair` (Deyao's Access
@@ -1053,7 +1053,7 @@ Deyao: several actions approved together with ONE Face ID; the caller groups the
 
 ## A session hears what became of its Inbox requests, 2026-10-13
 
-159. **The requesting session is told every decision on what it filed** (Deyao, 2026-10-13: "Approving an Inbox
+162. **The requesting session is told every decision on what it filed** (Deyao, 2026-10-13: "Approving an Inbox
      request should send a message or something to notify the session that requested it"; `router/outcomes.go`,
      `machine/outcomes.go`). Approved, denied, lapsed (10 minutes), dropped (left without a decision) or failed (an
      approved API call that couldn't run), per item, for everything a session files on its machine key (requests,
@@ -1088,13 +1088,13 @@ Deyao: several actions approved together with ONE Face ID; the caller groups the
      an unlock's "approved" rests on it. A grant or deploy key is told from the signed answer when it is stored, before
      the app's done arrives.
 
-160. **A store is a set of keys; any running session writes one key with no approval; a written key reaches a session
+163. **A store is a set of keys; any running session writes one key with no approval; a written key reaches a session
      only through the phone** (Deyao, 2026-10-13: "make sure that writing one key by name is allowed, and it doesn't
      just overwrite the whole key store (with the public half of the key)"; "any session with a valid machine key, this
      is part of the api endpoints they can use, and since writing a key is perfectly safe (has backup, so can't
      overwrite, and also can't read), no approval is needed"; "pulling keys for newly written keys require my approval
      on iphone"; the explanations of each key surfaced on the web and iPhone portal, kept in Jarvis 2).
-     *What happened*: after the add-store race (154) the YYC session was restarted (a phone-approved resume to bypass);
+     *What happened*: after the add-store race (157) the YYC session was restarted (a phone-approved resume to bypass);
      `yyc` had gained keys since its last unlock (`YYC_CLUSTER_SSH_KEY` and others, written by another session with
      `store-put.py`, which rewrote the whole store from its own copy), and the resumed session came back with the old
      copy until an unlock. That is not the race: the core can't open a rewritten store without the phone's share (the
@@ -1137,7 +1137,7 @@ Deyao: several actions approved together with ONE Face ID; the caller groups the
        identity (signed by the box key), so the app checks the chain box key → core → cert → machine → value; a
        setup-written key carries the setup signature; both cover the backup's hash. A store's whole-store backup (from
        before keys) is the base and its key backups written after it are applied.
-     - The core still doesn't decide (154): write_key is one operation that does exactly its job or refuses; the
+     - The core still doesn't decide (157): write_key is one operation that does exactly its job or refuses; the
        refresh is the router's choice, and only an unlock (the phone) changes what a session holds.
      *Restart*: correct behaviour, not part of the race: a resume can't carry anything newer than what the phone last
      released. Now it isn't silent: the resumed session's first pull reports the store behind and the phone is asked.
@@ -1151,7 +1151,7 @@ Deyao: several actions approved together with ONE Face ID; the caller groups the
      new core is a Recover, and it destroys the earlier core's sessions once paused, 69). Before that, the router's
      bucket credential gets PutObject on `keys/*` (infra/backup-read-key.py policies).
 
-161. **The web page picks any store, sensitive ones included** (Deyao, 2026-10-13: "make it so that I can select
+164. **The web page picks any store, sensitive ones included** (Deyao, 2026-10-13: "make it so that I can select
      secret stores on web"). *Why it was restricted*: the design kept the choice of a sensitive store with Deyao
      himself on the phone's secure page (DESIGN "Sensitive stores"), since the web page is served by the router and
      is not trusted: a compromised router or page could slip a sensitive store into a request it files. *Lifted*: the
@@ -1171,7 +1171,7 @@ Deyao: several actions approved together with ONE Face ID; the caller groups the
 
 ## Restoring a store to an earlier version, 2026-10-13
 
-162. **The core keeps each store's last 50 versions; a phone-signed restore puts one back, with no kit and no
+165. **The core keeps each store's last 50 versions; a phone-signed restore puts one back, with no kit and no
      plaintext outside the core** (Deyao, 2026-10-13, after two whole-store writes of 2 keys wiped 24 keys of `identity`
      and `yyc`: "it needs to go through the core and be signed, because I don't want to randomly lose my master key").
      *Built* (DESIGN "Restoring a store"; `core/history.go`, `router/storerestore.go`, the app's Stores → a store →
@@ -1216,7 +1216,7 @@ Deyao: several actions approved together with ONE Face ID; the caller groups the
      *Release*: the core part is behind `jarvis2/core-pin: hold` with 6fc20f8 (stores made of keys); both ship in the
      same release (RUNBOOK "Releasing the held core"). The router, setup.py, the web page and the app work with either
      core (a core without versions answers 404 and the Versions page says so).
-163. **Succession certs with permission pairs, grants moved by meet, a kernel of small parts; the guard is the one
+166. **Succession certs with permission pairs, grants moved by meet, a kernel of small parts; the guard is the one
      entry point** (Deyao, 2026-10-14; DESIGN "Target design"; build: docs/PLAN-grants.md). Not built yet.
      *Why*: switching the Claude account on 2026-10-14 broke every running session, and the repair took store writes,
      per-session unlocks, login grants, pauses and resumes. Behind it: router features got a general shell on
@@ -1234,7 +1234,7 @@ Deyao: several actions approved together with ONE Face ID; the caller groups the
      *How it was reached*: policy as data over control flow; structure (ideal objects: sources, the sink, identity edges,
      a signer that signs anything) instead of special branches; the kernel checks only ⊆/⊇ and a table, everything
      needing the clock, a hash or memory belongs to the guard.
-164. **Upgrade is a ladder with no top: each step doubles the memory** (Deyao, 2026-10-15: "keep tapping Upgrade to go
+167. **Upgrade is a ladder with no top: each step doubles the memory** (Deyao, 2026-10-15: "keep tapping Upgrade to go
      to 16 GB, 32 GB and beyond"; no "biggest size", no fixed last rung). Sizes are small (2 GB), medium (4), large (8),
      then `16gb`, `32gb`, `64gb`, … (`router/sizes.go`; the same block is in `core/fly.go`, which makes the guest, and
      `machine/deliver.go`, which names the sizes in the `upgraded` text; `TestSizeBlocksMatch` keeps them equal).
@@ -1260,7 +1260,7 @@ Deyao: several actions approved together with ONE Face ID; the caller groups the
      *No invented limit*: a size Fly can't make fails at Fly; the Upgrade job then ends with Fly's own error and the
      session resumes on its old size (`resumeBigger`), so it isn't left down (the line's last machine is unused until a
      cert names a successor, so the core answers the second resume as it did the first).
-     *Release*: the core's part is behind `jarvis2/core-pin: hold` with the held core (162); until it is live, the
+     *Release*: the core's part is behind `jarvis2/core-pin: hold` with the held core (165); until it is live, the
      running core refuses sizes past large ("size: small, medium or large"), and an Upgrade from large ends with that
      error and the session back on large. The `upgraded` text of images from before this names only the three sizes, so a
      session on such an image moved past large gets no `upgraded` message (the router logs the refusal).
@@ -1269,7 +1269,7 @@ Deyao: several actions approved together with ONE Face ID; the caller groups the
 
 ## Resume and API calls, 2026-10-15
 
-165. **A resume the core won't answer by itself becomes the resume-upgrade approval in the Inbox** (Deyao, 2026-10-15:
+168. **A resume the core won't answer by itself becomes the resume-upgrade approval in the Inbox** (Deyao, 2026-10-15:
      "Resume just works with my single tap"). *Root cause*: the core's `approve_by_dead_machine` compares the predecessor
      cert's image string with the challenge's, byte for byte, and a cert names what Fly reported its machine runs
      (`registry/repository@sha256:…`). Since 692658e the router named CI's pinned ref for that digest
@@ -1293,9 +1293,9 @@ Deyao: several actions approved together with ONE Face ID; the caller groups the
      *Not chosen*: matching by digest in the core (a core change behind the
      `core-pin: hold`, and the router-side fix suffices); retrying on the newest image (that changes the image, which
      Deyao didn't ask for). The match is on the core's refusal text; the core's text changes only with a core release.
-166. **An API call has its own review sheet, which stays up for the core requests the call brings about** (Deyao,
+169. **An API call has its own review sheet, which stays up for the core requests the call brings about** (Deyao,
      2026-10-15). The `api-call` Inbox item opens a sheet (iPhone app `APICallReviewView`, web page `pages/APICall.tsx`)
-     with the call (method, path, body), who asked and the reason; Approve runs it (no Face ID, 155). The router links an
+     with the call (method, path, body), who asked and the reason; Approve runs it (no Face ID, 158). The router links an
      approval to the call that made it: the call runs with its request id in the context (`viaCallKey`), the handler's
      origin carries it (`Origin.ViaCall`), and filing the approval adds it to the call's kept result (`Followups`). A
      handler whose work may file one later (a resume asking the core) says so before the work starts
@@ -1308,7 +1308,7 @@ Deyao: several actions approved together with ONE Face ID; the caller groups the
 
 ## Downgrade names its mode, 2026-10-15
 
-167. **`jarvis2 downgrade` takes `--keep STORE…`, `--drop STORE…` or `--none`; bare store names are refused**
+170. **`jarvis2 downgrade` takes `--keep STORE…`, `--drop STORE…` or `--none`; bare store names are refused**
      (Deyao, 2026-10-15). Twice a session meant one of keep/drop and ran the other (the command read its names as
      the keep-set, the claude-env skill's `downgrade.sh` as the drop-set), and the session lost every store it wanted.
      Now the mode is always spelled out, every name must be a store the session's newest cert holds (a typo or a
@@ -1318,7 +1318,7 @@ Deyao: several actions approved together with ONE Face ID; the caller groups the
 
 ## The control plane owns 2 GiB of the box, 2026-10-15
 
-168. **Core, router and cloudflared hold 2 GiB and 0.9 CPU of the box as their own; everything else is capped**
+171. **Core, router and cloudflared hold 2 GiB and 0.9 CPU of the box as their own; everything else is capped**
      (Deyao, 2026-10-15, after the box thrashed and took the control plane down with it). Memory requests equal limits
      for the control plane (router 1536 Mi, core 256 Mi, cloudflared 2 × 128 Mi = 2048 Mi), so the scheduler keeps that
      memory free for them and the kernel kills a pod over its request before them; CPU is requested (router 500m, core
@@ -1331,7 +1331,7 @@ Deyao: several actions approved together with ONE Face ID; the caller groups the
 
 ## Batch Allow all: every add-store after the first failed, 2026-10-15
 
-169. **A waiting add-store is made again from the session's new cert, and the batch page signs it as it is then**
+172. **A waiting add-store is made again from the session's new cert, and the batch page signs it as it is then**
      (Deyao, 2026-10-15: "batch approval is buggy, sometimes only the first request succeeds signing"). *The cause*,
      from the router's own outcomes: the failed items were add-stores for one session. Batch b820f7dcea03177ee
      (5 add-stores for s9bda92994266c781, 02:11 UTC) went in over several rounds (item 5 alone at 02:11:50; at 02:12:15
@@ -1356,7 +1356,7 @@ Deyao: several actions approved together with ONE Face ID; the caller groups the
      those the reviewed challenge named or this batch just added), once more if the router made it again during the
      signing; an unlock reads the session's cert again for the nonce it is for (an add-store before it gives the
      session a new cert). "What you sign (exact)" shows "Stores when asked" of the challenge reviewed; the one signed
-     may also name the stores this batch added before it (the R1 core's addOnto answers so anyway, 154). Works with
+     may also name the stores this batch added before it (the R1 core's addOnto answers so anyway, 157). Works with
      either core. (3) `PhoneKeys.authorize` is `evaluatePolicy` again (0e1f12f reverted: no throwaway signature with the
      phone key). *Not chosen*: an app-only fix that re-signs after the router's "approve it again" — it works, but
      every extra store costs a stale core answer the router throws away; a core release (the held core already answers
@@ -1365,7 +1365,7 @@ Deyao: several actions approved together with ONE Face ID; the caller groups the
 
 ## Core continuity: the same kit makes the same core, 2026-10-15
 
-170. **The core's keys come from the master key; its line state comes back at a Recover; the cores hand over to each
+173. **The core's keys come from the master key; its line state comes back at a Recover; the cores hand over to each
      other** (Deyao, 2026-10-15: a hard reset and then a resources change each forced a Recover, and each cut every
      session off; "even the current design allows my iPhone to sign arbitrary certs"; supersedes 69's "a new core
      destroys the earlier core's sessions" for a Recover with the same kit; DESIGN "Core continuity").
@@ -1406,7 +1406,7 @@ Deyao: several actions approved together with ONE Face ID; the caller groups the
        running core's key didn't sign, and only once the core is set up.
 ## The iCloud index rolls out without a gap, 2026-10-15
 
-171. **The iCloud index runs search's pattern: two replicas on one volume, a writer lease in the database** (Deyao,
+174. **The iCloud index runs search's pattern: two replicas on one volume, a writer lease in the database** (Deyao,
      2026-10-15: the box redesign brings the index back on the services box, and "deploy" means zero downtime).
      `services/icloud-index/icloud_index/lease.py` is the twin of `services/search/lib/lease.js`: kv `writer`
      {holder, since, until}, renewed every `TICK_S` (5 s) inside BEGIN IMMEDIATE, released on SIGTERM, lapsing 45 s
@@ -1427,7 +1427,7 @@ Deyao: several actions approved together with ONE Face ID; the caller groups the
 After session sb8e0273d6c308894 ("k-matrix clone: interactive 5") lost its conversation: its disk was full, the final
 snapshot failed with "no space left on device", the machine was destroyed anyway and the resume started empty.
 
-172. **The final snapshot streams to the router; the machine needs no free disk for it** (`machine/snapstream.go`,
+175. **The final snapshot streams to the router; the machine needs no free disk for it** (`machine/snapstream.go`,
      `router/snapstream.go`). The tar.gz is made straight into the request body (`POST /m/snapshot-stream`, signed over
      the marker `stream` because the hash isn't known before the bytes, and checked before the router takes a byte); the
      router answers the hash of what it stored, the machine compares it with its own, signs it and commits. The R1 rule
@@ -1437,7 +1437,7 @@ snapshot failed with "no space left on device", the machine was destroyed anyway
      without streaming gets the old whole-file upload. *Not chosen*: HTTP trailers for the signature (proxies drop them);
      compressing to a tmpfs (RAM is the next thing to run out).
 
-173. **A machine whose final snapshot fails and that has no volume is kept, never destroyed; Deyao gets a "needs you"
+176. **A machine whose final snapshot fails and that has no volume is kept, never destroyed; Deyao gets a "needs you"
      DM** (`router/snapsafe.go`). Failure = an error the machine reports, no snapshot within `SNAPSHOT_WAIT`, or a booted
      machine silent for 3 min (it can't send one). The session goes `failed` with its machine and `snapshotFailed`; Pause
      again retries, Destroy anyway (`force`) goes on without it. A kill that can't finish (the core's backup or destroy,
@@ -1445,7 +1445,7 @@ snapshot failed with "no space left on device", the machine was destroyed anyway
      cert names it; the machine has no state of its own yet) and the router links that file, so a pause during boot no
      longer leaves the line without a snapshot. *Not chosen*: retrying the snapshot in a loop (a full disk stays full).
 
-174. **Each machine keeps its state on its own Fly volume, and the core backs the volume up at every kill**
+177. **Each machine keeps its state on its own Fly volume, and the core backs the volume up at every kill**
      (Deyao, 2026-10-15; `core/volumes.go`, `machine/volume.go`). The core (the only Fly token holder) makes a new, empty
      volume with each machine (`/data`, default 10 GB, encrypted, Fly's daily snapshots on); the machine bind-mounts the
      snapshot's directories from it (paths unchanged, so Claude's project names don't move) and copies the single files
@@ -1458,7 +1458,7 @@ snapshot failed with "no space left on device", the machine was destroyed anyway
      resume (`noSnapshot`: it would start empty): the session says why, Deyao gets a DM naming the backup, and Destroy
      still archives the newest signed snapshot. Fly keeps a deleted volume's snapshots for their retention, reachable by
      the volume id the record keeps. The live volumes and the backup records go in the core's line state
-     (DECISIONS 170), so a core that takes the line over still backs up and deletes those machines' volumes. **Retention: 3 days when the machine also signed its own snapshot** (the backup is a
+     (DECISIONS 173), so a core that takes the line over still backs up and deletes those machines' volumes. **Retention: 3 days when the machine also signed its own snapshot** (the backup is a
      second copy), **60 days (Fly's longest) when it didn't** (then the backup is the only copy of that state); the
      retention is set on the volume just before the snapshot. *Price* (fly.io/docs/about/pricing, 2026-10: volumes USD
      0.15/GB-month provisioned, snapshots USD 0.08/GB-month stored, the first 10 GB of snapshots free): a 10 GB volume
@@ -1466,14 +1466,14 @@ snapshot failed with "no space left on device", the machine was destroyed anyway
      average that is about USD 4.50/month, which `router/budget.go` already counts (it bills provisioned volumes).
      Backups: about 10 pauses a day × 3 days × ~3 GB of state ≈ 90 GB stored → about USD 6/month after the free 10 GB
      (less if Fly's incremental storage shares blocks); each failed-snapshot backup adds ~3 GB × 2 months ≈ USD 0.50
-     once. The budget cap counts both (177). Needs the
+     once. The budget cap counts both (180). Needs the
      held core release (the `core-pin: hold`), and the core's narrowed Fly token must allow volume calls: its caveat is
      `Apps {jarvis2-sessions: rwcdC}` with no per-resource limit, which should cover volumes; check on the first start
      after the release (a refusal shows as `start: fly create: volume: … 403`). *Not chosen*: restoring from the backup
      automatically or from Fly's daily snapshots (Deyao: recovery from them is his decision, by hand); one volume per
      session kept across pauses (it would bill while paused, and a router could then start any machine on it).
 
-175. **Disk is reported like memory, warned about before it fills, and grown with More disk** (`machine/disk.go`,
+178. **Disk is reported like memory, warned about before it fills, and grown with More disk** (`machine/disk.go`,
      `router/disk.go`). Every 30 s the machine reports its root disk and its volume; the volume is the disk that counts
      when there is one. Under 10 % or 1 GB free starts an episode: one DM, `diskAlert` on the session, ending at 20 % and
      2 GB free. More disk (`POST /api/sessions/:id/disk`, a button on the session in the app and web page) has the core
@@ -1482,13 +1482,13 @@ snapshot failed with "no space left on device", the machine was destroyed anyway
      a volume (until the held core is live) can't grow: the alert says so. *Not chosen*: Fly's automatic volume extension
      (`auto_extend_size_*`): a runaway build would grow the bill without anyone seeing it; and a bigger root disk
      (Fly `config.rootfs.size_gb`, the earlier unpushed attempt on branch snapshot-fix): the state must live on a volume
-     anyway for the core's outside backup (174), a volume grows in place (often with no restart) where a root disk needs
+     anyway for the core's outside backup (177), a volume grows in place (often with no restart) where a root disk needs
      a new machine, and one disk to watch and grow is simpler than two. That branch's phone-approved resume fallback
-     (newest line snapshot + live transcript) is dropped too: Deyao wants no resume fallback (173, 174).
+     (newest line snapshot + live transcript) is dropped too: Deyao wants no resume fallback (176, 177).
 
 ## The router moves between boxes, its state is backed up, the core flips, 2026-10-15
 
-176. **The router moves to another box by the same handover as a rollout, over the private network; the core moves
+179. **The router moves to another box by the same handover as a rollout, over the private network; the core moves
      with it as a flip** (Deyao, 2026-10-15: layout A, a box of its own for the control plane, the move with "as little
      downtime as possible"; `router/move.go`). The new box's router is a candidate that proxies to the old one and
      copies `/data` every minute; at `MOVE_AT` the old one drains, freezes and hands over its files and its WireGuard
@@ -1510,7 +1510,7 @@ snapshot failed with "no space left on device", the machine was destroyed anyway
      Storage Box at the cut (minutes of downtime).
 ## The budget cap counts everything Fly bills for the sessions, 2026-10-15
 
-177. **Volume snapshots are in the Fly budget estimate, beside machines and provisioned volumes** (`router/budget.go`).
+180. **Volume snapshots are in the Fly budget estimate, beside machines and provisioned volumes** (`router/budget.go`).
      Prices from fly.io/docs/about/pricing, read 2026-10-15: started machines per its calculator (unchanged), volumes
      USD 0.15 per provisioned GB-month (already counted), volume snapshots USD 0.08 per stored GB-month with the first
      10 GB free. Every 30 min the router lists the snapshots of each volume Fly still has and of each deleted volume a
@@ -1524,11 +1524,11 @@ snapshot failed with "no space left on device", the machine was destroyed anyway
 
 ## Failed sessions, repo stores and API calls in a batch, 2026-10-15
 
-178. **A failed session comes back with one tap and can always be destroyed** (Deyao, 2026-10-15). Stuck that day:
+181. **A failed session comes back with one tap and can always be destroyed** (Deyao, 2026-10-15). Stuck that day:
      "Jarvis Core rebuild" (start: core /start timed out), "Jarvis 2" (start cut off by a router restart), "Draft reply
      to image" (kill: a Fly destroy timed out), and five sessions whose kill the core refused ("the snapshot isn't signed
      by machine …'s current key": machines certified by the core from before the 2026-10-15 Recover, for which this
-     core has no key, so it refuses every snapshot claim). *Resume* takes any failed session: with no machine as 165
+     core has no key, so it refuses every snapshot claim). *Resume* takes any failed session: with no machine as 168
      says; with one, it first finishes the pause (the final snapshot, the same one again if the machine took it, then
      the kill) and resumes from it, on the same tap. A kill the core refuses (403) leaves it failed with the error.
      *Kills* that fail on the way (502: Fly's API timing out; the core not answering) are tried again 4 times, 30 s
@@ -1536,18 +1536,18 @@ snapshot failed with "no space left on device", the machine was destroyed anyway
      without one: the core still destroys the machine, the router's own copy of the snapshot (checked against the
      machine's key when it arrived) is archived to the Storage Box as usual, and the record (`snapshotNote`,
      `archive.unverified`, `session.json` `snapshotUnverified`) says "from an earlier core, not verified by this core";
-     restoring such a record is refused until the core release that carries old lines. (Restored on top of 172-177 after 51b7bbd
+     restoring such a record is refused until the core release that carries old lines. (Restored on top of 175-180 after 51b7bbd
      dropped it: the kill path is snapsafe.go's, these fallbacks only on a destroy.) A destroy whose kill still
      fails goes on when Fly (the router's read token) has no such machine; otherwise it is failed with "… (Destroy anyway
      removes the session; the machine is then on the Machines tab)", and Destroy anyway (`?force=1`) destroys it: the
      router stops taking the machine's calls (its `started` key goes) and the Machines tab treats a destroyed session's
-     machine as an orphan, whose Destroy tries the kill again. *The /start timeout was ours* (165 said the box): the
+     machine as an orphan, whose Destroy tries the kill again. *The /start timeout was ours* (168 said the box): the
      running core (sha-06ab2452f8ad, from before R2) waits inside /start (a create, up to 10 waits for "started", up to
      10 init execs, each Fly call bounded by its own 90 s client: ≈ 34 min at worst) and /kill (≈ 32 min), and the router
      gave up after 15 min, failing a start the core was still carrying out (and leaving any machine it then made unknown
      to anyone). The router now waits 40 min for /start and /kill (`coreCallTimeout`); other calls keep 15 min. The held
      core's start is one Fly call, so this matters only until it is live.
-179. **A repo a session asks for lands in that session in the same approval** (Deyao, 2026-10-15: one Face ID). A
+182. **A repo a session asks for lands in that session in the same approval** (Deyao, 2026-10-15: one Face ID). A
      session's `repo/add` (alone or in a batch, through its requests or its actions) names the asking session
      (`params.session`; `noStore: true` opts out, for a repo meant for a proposed session); the Inbox shows it
      (`open.options.into`, `intoLabel`, `store`) and the call's args carry `into`. When the key is finished
@@ -1559,16 +1559,16 @@ snapshot failed with "no space left on device", the machine was destroyed anyway
      running gets none. The add-store's origin is the request's caller and call without its signed filing (the session
      hears the repo's outcome; `jarvis2-request add-repo` starts the store's waiter). An app from before this signs the
      add-store as a second item, as before.
-180. **An API call can be an item of a batch** (`{"intent": "call", "method", "path", "body" | "bodyText"}`), from a
+183. **An API call can be an item of a batch** (`{"intent": "call", "method", "path", "body" | "bodyText"}`), from a
      session's requests or its actions only, checked exactly as a single call request (callRules) before anything is
      filed. It is an `api-call` request in the batch; the phone's Allow all approves it with the others (no Face ID of
-     its own, 155) and then shows what the call brought about, each follow-up on its own page with its own Face ID
-     (166: it wasn't shown before the batch's Face ID). Its result is read by the session through either of its
+     its own, 158) and then shows what the call brought about, each follow-up on its own page with its own Face ID
+     (169: it wasn't shown before the batch's Face ID). Its result is read by the session through either of its
      credentials (`GET /m/api/actions/requests/call/:id`), and its outcome arrives as the batch's item.
 
 ## The release of core continuity keeps today's sessions, 2026-10-15
 
-181. **An earlier core's sessions are taken over at their kill, not destroyed** (Deyao, 2026-10-15: "he's doing real
+184. **An earlier core's sessions are taken over at their kill, not destroyed** (Deyao, 2026-10-15: "he's doing real
      work in his running sessions": no session destroyed by the release, each moves over at its own next pause; DESIGN
      "Core continuity"). `POST /kill` takes `legacy: {cert, coreCert}`: a cert of a core the running core's master key
      claimed (the claim the router kept; it now also keeps the running core's own claim when it has none:

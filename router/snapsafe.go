@@ -70,7 +70,7 @@ func (r *Router) finalSnapshotAndKill(id, machine string, force bool) bool {
 	return r.finalSnapshotAndKillFor(id, machine, false, force)
 }
 
-// finalSnapshotAndKillFor: destroying = a destroy's (archive.go snapshotAndKill: its kill falls back, DECISIONS 178)
+// finalSnapshotAndKillFor: destroying = a destroy's (archive.go snapshotAndKill: its kill falls back, DECISIONS 181)
 func (r *Router) finalSnapshotAndKillFor(id, machine string, destroying, force bool) bool {
 	serr := r.lastSnapshot(id, machine)
 	vol := r.machineVolume(machine)
@@ -256,7 +256,7 @@ func orEmptyBackups(b []Backup) []Backup {
 	return b
 }
 
-// destroyKillFallback: a destroy's kill that failed (DECISIONS 178). A refused snapshot claim (a machine from an
+// destroyKillFallback: a destroy's kill that failed (DECISIONS 181). A refused snapshot claim (a machine from an
 // earlier core: this core has no key for it) is killed without the claim, the session marked so its archive says
 // so; a kill still failing is no obstacle when Fly no longer has the machine, or with force (the router stops taking
 // the machine's calls; it is an orphan on the Machines tab, whose Destroy tries the kill again)

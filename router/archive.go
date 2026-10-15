@@ -172,7 +172,7 @@ func (r *Router) latestSnapshot(sessionID string) (machine string, cert *Doc, at
 // destroy ends the line, so nothing will restore the snapshot through the core: when the core refuses the kill for the
 // snapshot's signature (a machine certified by an earlier core), it kills without naming one and the router's copy is
 // archived as is, marked; it goes on when Fly no longer has the machine, or with force whatever the kill said (the
-// router then stops serving the machine, which shows on the Machines tab with no session). DECISIONS 178.
+// router then stops serving the machine, which shows on the Machines tab with no session). DECISIONS 181.
 func (r *Router) snapshotAndKill(id, machine string, force bool) bool {
 	if !r.finalSnapshotAndKillFor(id, machine, true, force) {
 		return false

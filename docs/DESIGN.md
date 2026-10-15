@@ -410,7 +410,7 @@ Sensitivity lives in the core and only grows: `create_store` makes the only non-
 a Recover), `mark_sensitive` takes one out of the set for good, a store the core never created is sensitive.
 The core marks sensitive stores in every challenge it signs, so the phone learns them from the core, never
 from the router: a sensitive store is never pre-selected, may be picked on the secure page or proposed by the web
-page (DECISIONS 161; the web only files a request), and any approval that includes one marks it and shows an
+page (DECISIONS 164; the web only files a request), and any approval that includes one marks it and shows an
 obvious warning before Face ID.
 Which stores a harness brings is the router's business (`policy/stores.json`); the app hides them.
 
@@ -604,7 +604,7 @@ like a lease wake: the text is built in the image from the session's own signed 
 texts for the outcome; the router names only the outcome word, an id, a status number and a proof per item. An
 approval that leaves a signed trace must carry it and the machine checks it (the phone's grant, the machine's new
 core-signed cert, the core's phone approval of the proposal, the core's deploy-key answer); an unlock, an API call and
-every non-approval are the router's word and the text says so (docs/DECISIONS.md 159). Deyao's own words never travel.
+every non-approval are the router's word and the text says so (docs/DECISIONS.md 162). Deyao's own words never travel.
 A batch is told once, all items together; a paused session hears at its next start (nothing boots it for this).
 
 ## Machine side (in the image)
@@ -777,7 +777,7 @@ any of the line's stores is sensitive, and the **line id** (the line's first mac
 
 ## Target design: succession certs, grants and the kernel (Deyao, 2026-10-14)
 
-Not built yet; DECISIONS 163 has the why, docs/PLAN-grants.md the build. It replaces the core's succession-cert options,
+Not built yet; DECISIONS 166 has the why, docs/PLAN-grants.md the build. It replaces the core's succession-cert options,
 the holders' shell grants ("Grants" above), the core's automatic locks and the Claude login's own channel.
 
 **Layers**
