@@ -42,7 +42,7 @@ subjects: [{ kind: ServiceAccount, name: forensics, namespace: jarvis2-edge }]
 ---
 apiVersion: batch/v1
 kind: Job
-metadata: { name: forensics-20261015, namespace: jarvis2-edge }
+metadata: { name: forensics-20261015b, namespace: jarvis2-edge }
 spec:
   backoffLimit: 2
   template:
@@ -56,7 +56,7 @@ spec:
           image: docker.io/alpine/k8s:1.31.13@sha256:8bbc91da39ec2d230bbee9b17aa379ca5f33084f69659f7185adcdf971e6f596
           env:
             - { name: HOME, value: /tmp }
-            - { name: PUT_URL, value: "https://fsn1.your-objectstorage.com/de0ch-claude-6fdff6/forensics/2026-10-15-search-outage-673a98be610a1570.tar.gz?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=19PFHRXEKVHHPJIG46HH%2F20261015%2Ffsn1%2Fs3%2Faws4_request&X-Amz-Date=20261015T024530Z&X-Amz-Expires=7200&X-Amz-SignedHeaders=host&X-Amz-Signature=2facf07f0a51a8ba15fa2886bc47b47618cae19aac914a9b0f86bc74ea03ac58" }
+            - { name: PUT_URL, value: "https://fsn1.your-objectstorage.com/de0ch-claude-6fdff6/forensics/2026-10-15-search-outage-e56a820b79d6f22b.tar.gz?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=19PFHRXEKVHHPJIG46HH%2F20261015%2Ffsn1%2Fs3%2Faws4_request&X-Amz-Date=20261015T030139Z&X-Amz-Expires=7200&X-Amz-SignedHeaders=host&X-Amz-Signature=4e3f952daf2a20e785ed40bf3fa6fdd5cfd26e8518325e0c3f3d8d2fc496af97" }
           command: [/bin/bash, -c]
           args:
             - |
