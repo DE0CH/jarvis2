@@ -13,7 +13,7 @@ spec:
       containers:
         - name: bridge
           image: docker.io/alpine/socat:1.8.1.1@sha256:1d5bf74274add851167dbda0c67d6fabb7772f5b4bc9bc02beca3e12a1071f74
-          args: [-d, -d, TCP-LISTEN:8090,fork,reuseaddr, "TCP:10.77.0.3:30090"]
+          args: [-d, -d, "TCP-LISTEN:8090,fork,reuseaddr", "TCP:10.77.0.3:30090"]
           ports: [{ containerPort: 8090 }]
           readinessProbe: { tcpSocket: { port: 8090 }, periodSeconds: 5 }
           resources: { requests: { cpu: 10m, memory: 16Mi }, limits: { cpu: 200m, memory: 64Mi } }
