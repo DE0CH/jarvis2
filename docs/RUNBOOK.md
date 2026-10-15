@@ -69,6 +69,38 @@ The move is git only (`router/move.go`, DESIGN "The box"); the boxes reach each 
    (`/data/router.moved`); scale its cloudflared to 0 and retire it.
 5. A failed move logs `[move] … FAILED` and aborts: the old box serves again. A new `MOVE_AT` tries again.
 
+### Moving to the two boxes (one time, at a moment Deyao picks)
+
+The control plane leaves the old single box (`jarvis2`, 10.77.0.9 on the Network) for the control box (`jarvis2-control`,
+10.77.0.2), and the core release happens in the same event (Deyao, 2026-10-15): the control box's core-green runs the
+new-design core, empty; production's core 06ab245 is never restarted, it just stops being used.
+
+Ready (each step done without more than a router rollout's handover for sessions):
+
+1. **Services off the old box:** it joined the Network (hot attach, no reboot); socat bridges (`k8s/apps/services-bridge.yaml`)
+   keep the old service names and pass them on to the services box; the old box's own search, watch and iCloud index are gone.
+2. **The old router** rolls with one pod plus a surge standby, has the move key and port 8082 and backs its state up.
+3. **The move path:** the old box's kube-proxy serves NodePorts only on its node IP, so the control router reaches the old
+   one's move port through the old box's tunnel, `jarvis2.deyaochen.com/move/*`, behind its own Access app (service token
+   `jarvis2-move`; `infra/cloudflare.py --move`, `--move-off` afterwards). The way back (`MOVE_SELF`,
+   `http://10.77.0.2:30080`) is the control box's private NodePort, which admits only the old box.
+4. **The control router is a candidate** pre-copying `/data` every minute (0.27 GB on 2026-10-15; 15 MB/s through the
+   tunnel); its cloudflared stays at 0, so no request reaches it before the move.
+
+The moment:
+
+5. One commit: `MOVE_AT` (a few minutes ahead) in `k8s/control/apps/router/router.yaml`, `CORE_URL` → core-green and
+   `NEXT_CORE_URL` → core-blue, `k8s/control/apps/core/active.txt` = green. At `MOVE_AT` the move runs as the table below
+   shows; the old routers proxy to the new one from then on.
+6. Right after `MOVED`: the control box's cloudflared to 2 and the old box's to 0 (one commit).
+7. **Deyao Recovers** in the app (the ordinary Reset-or-Recover page, now on the control box's empty core). Until then
+   the core is empty: running sessions go on (the table), but anything that needs the core waits: a store pull or
+   add-store, a resume, a new session. After the Recover the router takes production's sessions over (DECISIONS 184):
+   paused ones at once (their first resume waits on one unlock it files), running ones at their next pause.
+8. After: `infra/cloudflare.py --move-off`; `keys/box-next.pub` → `keys/box.pub`; `backup-read-key.py policies` (drops
+   the old box's read key); the old box deleted a day later with `k8s/apps`, `k8s/bootstrap`, `k8s/secrets`,
+   `k8s/flux/sync.yaml`, `infra/cloud-init.sh`'s single-box path and the bridges.
+
 ### Moving to the two boxes: what a running session sees
 
 Measured with `E2E_ONLY=move infra/e2e.sh` (two routers on one host, a real session machine on Fly over Fly's private
