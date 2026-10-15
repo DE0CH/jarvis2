@@ -1620,7 +1620,7 @@ snapshot failed with "no space left on device", the machine was destroyed anyway
      otherwise) instead of looking for the store in their cert. A new box with no account starts sessions logged out.
 ## Two boxes, logs in Grafana Cloud, 2026-10-15
 
-187. **The control plane gets a box of its own; shared services and experiments get another** (Deyao, 2026-10-15,
+186. **The control plane gets a box of its own; shared services and experiments get another** (Deyao, 2026-10-15,
      layout A of the redesign, after the thrash: "an unimportant job must never bring down the control plane").
      Two cx33 (EUR 10.188/month gross each, Hetzner API), separate k3s and Flux, joined by a Hetzner Network (free).
      DESIGN "The boxes". Claude's choices inside it: *cx33 for the control box*, not cx23: two routers at 1536 Mi plus a
