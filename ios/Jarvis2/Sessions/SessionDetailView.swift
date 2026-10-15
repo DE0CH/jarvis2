@@ -180,19 +180,15 @@ private struct MemAlertSection: View {
       if busy == nil, m.wakeKind == "upgrade", m.wakePhase == "failed" {
         ErrorRow(text: "Upgrade failed" + (m.wakeError.map { ": \($0)" } ?? ""), id: "upgrade-error-\(m.id)")
       }
-      if let next = a.nextSize {
-        if busy == nil {
-          Button(Fmt.upgradeTitle(next), systemImage: "arrow.up.circle") { Task { await model.upgrade(m.id) } }
-            .tint(.red)
-            .accessibilityIdentifier("upgrade-\(m.id)")
-        }
-      } else {
-        LabeledContent("Upgrade", value: "Already the biggest size")
+      if a.nextSize != nil, busy == nil {
+        Button(Fmt.upgradeTitle(a), systemImage: "arrow.up.circle") { Task { await model.upgrade(m.id) } }
+          .tint(.red)
+          .accessibilityIdentifier("upgrade-\(m.id)")
       }
     } header: {
       Label("Memory", systemImage: "memorychip")
     } footer: {
-      if a.nextSize != nil { Text("Upgrade stops Claude and everything it runs, then brings the same conversation back on the bigger machine.") }
+      if a.nextSize != nil { Text("Upgrade stops Claude and everything it runs, then brings the same conversation back on the bigger machine" + (a.nextGuest.map { " (\($0))" } ?? "") + ".") }
     }
   }
 }

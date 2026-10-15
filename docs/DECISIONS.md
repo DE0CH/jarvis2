@@ -55,7 +55,7 @@ made around it; the app's own list is `app/DECISIONS.md`.
 16. **Box**: Hetzner cx23 (2 vCPU, 4 GB, 40 GB) in fsn1, EUR 6.588/month gross, IPv6-only (DECISIONS 156), in the
     `jarvis2-mock` project (renaming a Hetzner project needs the console).
 17. **Fly**: app `jarvis2-sessions` in org `jarvis2-370`, region `lhr`, sizes small/medium/large = 2/4/8 shared
-    CPUs with 2/4/8 GB. The router's budget cap (Jarvis 1's: DM at USD 25, pause all at USD 30) reads the app with a
+    CPUs with 2/4/8 GB, then every doubling past large, named by its memory (16gb, 32gb, …; DECISIONS 164). The router's budget cap (Jarvis 1's: DM at USD 25, pause all at USD 30) reads the app with a
     read-only Fly token (`infra/fly-read-token.sh`).
 18. **Images** on GHCR (public, like the repo), with GitHub build attestations (the phone doesn't check them
     yet).
@@ -453,7 +453,7 @@ entry points only ("if I decide to break it later then it's fine").
     - *Fly*: the core makes single calls (create; init = one look at the state and one jarvis2-init; kill = one destroy
       and one look); the router waits, retries and kills a machine that never comes up. The core keeps the image a
       created machine was asked for and each live machine's current signing key; everything else is in its signed
-      `started` document, which certify takes. Sizes outside small/medium/large are refused, not defaulted.
+      `started` document, which certify takes. A size that isn't one of the ladder's (small, medium, large, 16gb, 32gb, …) is refused, not defaulted.
     - *Logs*: no free-text log; the input log leaves in the answers (attest's; beside each cert) and the router keeps it.
       The core keeps head and length. A new core starts its chain at seq 0 instead of `chain_from` (the router's file
       shows the seam; the router's word either way).
@@ -528,14 +528,13 @@ session setting (`Checks.configKeys`) if a session should keep its screen from t
     session went "Can't reach your computer"; he picked "alert + Upgrade"). The machine reports its RAM itself
     (`POST /m/memory`, every 10 s) because the router has no exec of its own; a machine that stops reporting while short
     is counted as starving, as Jarvis 1 counted one that stopped answering its exec. The watch lives in the router's
-    memory only (a restart starts it afresh). The Upgrade goes small → medium → large; there is no xlarge because the
-    core's sizes would change, and a core change waits for Deyao (the core holds stores).
+    memory only (a restart starts it afresh). Each Upgrade doubles the memory, with no last size (DECISIONS 164).
 99. **`free` is a router command the machine obeys without a voucher.** It is not an input to the agent: it only stops
     processes, which the router can already do more bluntly by pausing or destroying the machine, and the snapshot that
     follows is still the machine's own, signed. The harness (the machine's main process) is SIGSTOPped, not killed, so
     the Fly machine stays up for the snapshot. The list of what was stopped is written inside the snapshot, and the
     successor reads it, so the router's word never reaches the agent; the `upgraded` message itself is an image text
-    over two size words. Change: make Upgrade phone-approved if Deyao wants a Face ID on it.
+    over two sizes. Change: make Upgrade phone-approved if Deyao wants a Face ID on it.
 
 ## The session image's base moves into Jarvis 2, 2026-10-13
 
@@ -1243,3 +1242,35 @@ Deyao: several actions approved together with ONE Face ID; the caller groups the
      *How it was reached*: policy as data over control flow; structure (ideal objects: sources, the sink, identity edges,
      a signer that signs anything) instead of special branches; the kernel checks only ⊆/⊇ and a table, everything
      needing the clock, a hash or memory belongs to the guard.
+164. **Upgrade is a ladder with no top: each step doubles the memory** (Deyao, 2026-10-15: "keep tapping Upgrade to go
+     to 16 GB, 32 GB and beyond"; no "biggest size", no fixed last rung). Sizes are small (2 GB), medium (4), large (8),
+     then `16gb`, `32gb`, `64gb`, … (`router/sizes.go`; the same block is in `core/fly.go`, which makes the guest, and
+     `machine/deliver.go`, which names the sizes in the `upgraded` text; `TestSizeBlocksMatch` keeps them equal).
+     *Guests* follow Fly's rules (fly.io/docs/machines/guides-examples/machine-sizing: ≤ 2 GB per shared CPU, 2–8 GB per
+     performance CPU): up to 16 GB shared (16 GB = 8 shared CPUs, the most a shared guest holds); past it performance,
+     keeping large's 8 CPUs, or memory/8 CPUs once the memory needs more. A step never lowers the CPU count, so 32 GB is
+     performance-8x rather than the cheaper performance-4x.
+     *Prices* in lhr (fly.io/docs/about/pricing, its calculator read 2026-10-15: a vCPU-second shared 8.465e-7 /
+     performance 1.2732e-5 with 0.25 / 2 GB included per CPU, a further GB-second 2.316e-6, lhr markup 1.134615385):
+
+     | size | guest | USD/hour | hours to the USD 30 cap |
+     |---|---|---|---|
+     | small | 2×shared · 2 GB | 0.0211 | 1421 |
+     | medium | 4×shared · 4 GB | 0.0422 | 711 |
+     | large | 8×shared · 8 GB | 0.0844 | 355 |
+     | 16gb | 8×shared · 16 GB | 0.1601 | 187 |
+     | 32gb | 8×performance · 32 GB | 0.5674 | 53 |
+     | 64gb | 8×performance · 64 GB | 0.8701 | 34 |
+     | 128gb | 16×performance · 128 GB | 1.7402 | 17 |
+     | 256gb | 32×performance · 256 GB | 3.4805 | 8.6 (Fly's preset list ends at performance-16x; Fly decides) |
+
+     The budget's rates (`router/budget.go`) are now that calculator's, so the cap counts big rungs right.
+     *No invented limit*: a size Fly can't make fails at Fly; the Upgrade job then ends with Fly's own error and the
+     session resumes on its old size (`resumeBigger`), so it isn't left down (the line's last machine is unused until a
+     cert names a successor, so the core answers the second resume as it did the first).
+     *Release*: the core's part is behind `jarvis2/core-pin: hold` with the held core (162); until it is live, the
+     running core refuses sizes past large ("size: small, medium or large"), and an Upgrade from large ends with that
+     error and the session back on large. The `upgraded` text of images from before this names only the three sizes, so a
+     session on such an image moved past large gets no `upgraded` message (the router logs the refusal).
+     *Not chosen*: a fixed list of rungs; a guest set by the router on a running machine (the core alone holds the Fly
+     token and makes machines).

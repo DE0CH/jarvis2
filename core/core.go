@@ -563,7 +563,7 @@ func (c *Core) Stores(nonce string) (SignedDoc, error) {
 type StartRequest struct {
 	Image  string `json:"image"`
 	Region string `json:"region"`
-	Size   string `json:"size"` // small | medium | large (sizes, fly.go)
+	Size   string `json:"size"` // small | medium | large | 16gb | 32gb … (sizeGuest, fly.go)
 }
 
 // Start: anyone may ask (normally the router): one Fly create, nothing more — a machine without a cert gets no
@@ -573,10 +573,11 @@ func (c *Core) Start(r StartRequest) (SignedDoc, error) {
 	if imageDigest(r.Image) == "" {
 		return SignedDoc{}, fail(400, "start needs an image of %s pinned by digest", SessionRepo)
 	}
-	guest, ok := sizes[r.Size]
-	if !ok {
-		return SignedDoc{}, fail(400, "size: small, medium or large")
+	kind, cpus, memoryMB := sizeGuest(r.Size)
+	if kind == "" {
+		return SignedDoc{}, fail(400, "size: small, medium, large or a doubling past it (16gb, 32gb, …)")
 	}
+	guest := map[string]any{"cpu_kind": kind, "cpus": cpus, "memory_mb": memoryMB}
 	env := c.machineEnv() // the machine's trust anchor and the router's address, set by the core, never the caller
 	if env == nil {
 		return SignedDoc{}, fail(503, "this core has no MACHINE_URL (its deployment's router address): it starts no machine")

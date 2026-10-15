@@ -7,11 +7,12 @@ enum Fmt {
     "hkg": "Hong Kong", "syd": "Sydney"]
   static let busyLabel: [String: String] = ["starting": "Starting…", "restarting": "Restarting…", "pausing": "Pausing…", "destroying": "Destroying…", "mode": "Switching mode…",
                                               "upgrading": "Upgrading…", "upgrade": "Upgrading…"]
-  /// a machine size's memory in GB (router/http.go guests)
-  static let sizeGB: [String: Int] = ["small": 2, "medium": 4, "large": 8]
-  /// "Upgrade to Large (8 GB)"
-  static func upgradeTitle(_ size: String) -> String {
-    "Upgrade to \(size.capitalized)" + (sizeGB[size].map { " (\($0) GB)" } ?? "")
+  /// "Upgrade to Large (8 GB)"; past the named sizes, which are named by their memory ("16gb"), "Upgrade to 16 GB"
+  /// (router/sizes.go: every next size doubles the memory)
+  static func upgradeTitle(_ a: MemAlert) -> String {
+    guard let size = a.nextSize else { return "Upgrade" }
+    let gb = a.nextGB.map { "\($0) GB" } ?? size
+    return size.hasSuffix("gb") ? "Upgrade to \(gb)" : "Upgrade to \(size.capitalized) (\(gb))"
   }
 
   /// "just now" / "5 min ago" / "3 h ago" / "2 d ago"

@@ -9,8 +9,8 @@ package main
 //   - the kernel OOM-killed something since the last sample (oom_kill went up),
 //   - memory pressure: PSI "full" avg60 ≥ memPSIFullPct, or MemAvailable < memLowAvailPct of MemTotal,
 //   - or the machine stopped reporting (memSilent) while its last sample was already short (< memShortAvailPct).
-// An episode is DMed once, shown on the session as memAlert {since, reason, detail, nextSize} with an Upgrade
-// button, and ends after memClear of healthy samples (or with the machine: an upgrade replaces it).
+// An episode is DMed once, shown on the session as memAlert {since, reason, detail, nextSize, nextGb, nextGuest}
+// with an Upgrade button, and ends after memClear of healthy samples (or with the machine: an upgrade replaces it).
 //
 // Upgrade (POST /api/sessions/:id/upgrade): the machine's agent frees memory first (command "free": the harness
 // SIGSTOPped, every other process of the session SIGKILLed, the list kept in the snapshot), then the usual pause
@@ -19,6 +19,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -33,12 +34,8 @@ const (
 	memClear         = 15 * time.Minute
 	memSilent        = 90 * time.Second // no memory report for this long = not answering
 	memFreeWait      = 5 * time.Second  // after "free", before the snapshot
+	upgradeStartWait = 30 * time.Minute // a start's longest road: Fly's machine-limit wait, then the image pull
 )
-
-// the next size up for the Upgrade button ("" = already the biggest); a session with no size runs medium
-var nextSize = map[string]string{"small": "medium", "medium": "large", "": "large"}
-
-var sizeGB = map[string]int{"small": 2, "medium": 4, "large": 8}
 
 type MemProc struct {
 	RssKb int64  `json:"rssKb"`
@@ -138,15 +135,12 @@ func memMessage(name, size string, a *MemAlert) string {
 	if a.Detail != "" {
 		msg += " Now " + a.Detail + "."
 	}
-	if next := nextSize[size]; next != "" {
-		return msg + fmt.Sprintf("\nOne tap moves it to %s (%d GB): the Upgrade button on its card in the Jarvis 2 app.", next, sizeGB[next])
-	}
-	return msg + "\nIt is already on the biggest size."
+	return msg + fmt.Sprintf("\nOne tap moves it to %s: the Upgrade button on its card in the Jarvis 2 app.", sizeText(nextSize(size)))
 }
 
 // upgradedText: the "upgraded" delivery's text; machine/deliver.go builds the same and checks both sizes
 func upgradedText(from, to string) string {
-	return fmt.Sprintf("Jarvis: this session ran out of memory and was moved from a %s (%d GB) to a %s (%d GB) machine. ", from, sizeGB[from], to, sizeGB[to]) +
+	return fmt.Sprintf("Jarvis: this session ran out of memory and was moved from a %s to a %s machine. ", sizeText(from), sizeText(to)) +
 		"To free memory for the move, every process of the old machine was stopped: Claude itself, background jobs, builds, dev servers, browsers. " +
 		"Their list is in ~/artifacts/jarvis2-upgrade-freed.txt. Check which of them the task still needs, restart only those (and keep an eye on memory: run fewer heavy things at once), then carry on with the task. " +
 		"This is an automated message from Jarvis, not from Deyao, and not an answer to any open question."
@@ -159,7 +153,8 @@ func memView(s *Session, v map[string]any) {
 	}
 	m := s.Live.mem
 	if m.alert != nil {
-		v["memAlert"] = map[string]any{"since": m.alert.Since, "reason": m.alert.Reason, "detail": m.alert.Detail, "nextSize": nextSize[s.Size]}
+		next := nextSize(s.Size)
+		v["memAlert"] = map[string]any{"since": m.alert.Since, "reason": m.alert.Reason, "detail": m.alert.Detail, "nextSize": next, "nextGb": sizeMemGB(next), "nextGuest": sizeLabel(next)}
 	}
 	if m.last != nil && time.Since(m.lastAt) < memSilent {
 		v["memory"] = map[string]any{"totalMb": m.last.TotalKb / 1024, "availMb": m.last.AvailKb / 1024, "at": m.lastAt}
@@ -243,10 +238,7 @@ func (r *Router) Upgrade(id string) (map[string]any, error) {
 	if from == "" {
 		from = "medium"
 	}
-	to := nextSize[s.Size]
-	if to == "" {
-		return nil, fmt.Errorf("session is already on the biggest size (%s)", from)
-	}
+	to := nextSize(s.Size)
 	// the whole job is one tracked lifecycle action (drain.go): its pause and resume go on during a drain
 	endJob, err := r.beginJob(id, "upgrade")
 	if err != nil {
@@ -277,12 +269,8 @@ func (r *Router) Upgrade(id string) (map[string]any, error) {
 			fail(err)
 			return
 		}
-		if err := r.applyResumeOptions(id, ResumeOptions{Size: to}); err != nil {
-			fail(err)
-			return
-		}
 		r.ops.phase(j, "resuming", nil)
-		if err := r.resumeWithPrompt(id, false, ""); err != nil {
+		if err := r.resumeBigger(id, from, to); err != nil {
 			fail(err)
 			return
 		}
@@ -293,4 +281,70 @@ func (r *Router) Upgrade(id string) (map[string]any, error) {
 		}
 	}()
 	return map[string]any{"started": true, "kind": "upgrade", "from": from, "to": to}, nil
+}
+
+// resumeBigger: the paused session resumes on the next size. A start refused on it (Fly can't make that guest, or
+// the core doesn't know the size) ends with that error, word for word, and the session comes back on its old size
+// rather than staying down.
+func (r *Router) resumeBigger(id, from, to string) error {
+	if err := r.applyResumeOptions(id, ResumeOptions{Size: to}); err != nil {
+		return err
+	}
+	if err := r.resumeWithPrompt(id, false, ""); err != nil {
+		return err
+	}
+	msg := r.waitStartOutcome(id, upgradeStartWait)
+	if msg == "" {
+		return nil
+	}
+	if err := r.resumeOnSize(id, from); err != nil {
+		return fmt.Errorf("%s: %s; resuming it on %s failed too: %v", to, msg, from, err)
+	}
+	return fmt.Errorf("%s: %s; it is back on %s", to, msg, from)
+}
+
+// waitStartOutcome: "" once the resumed session got its machine (or waits on the phone), else the start's error
+// (state "failed" with "start: …": nothing was created or certified, so the line's last machine is still unused)
+func (r *Router) waitStartOutcome(id string, timeout time.Duration) string {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		var st, msg string
+		r.st.Do(func(d *persisted) {
+			if x := d.Sessions[id]; x != nil {
+				st, msg = x.State, x.Error
+			}
+		})
+		switch {
+		case st == "failed" && strings.HasPrefix(msg, "start: "):
+			return strings.TrimPrefix(msg, "start: ")
+		case st == "failed", st == "paused" && msg != "":
+			return msg
+		case st == "", st == "started", st == "initialising", st == "approval":
+			return ""
+		}
+		time.Sleep(opsPoll)
+	}
+	return ""
+}
+
+// resumeOnSize: a session whose start on the bigger size failed goes back to its old size and resumes there
+func (r *Router) resumeOnSize(id, size string) error {
+	r.st.Do(func(d *persisted) {
+		if x := d.Sessions[id]; x != nil && (x.State == "failed" || x.State == "paused") && x.MachineID == "" {
+			x.Size, x.State = size, "paused"
+		}
+	})
+	err := errBusy
+	for i := 0; i < 60 && errors.Is(err, errBusy); i++ { // the failed resume still holds the session's lock for a moment
+		if err = r.resumeWithPrompt(id, false, ""); errors.Is(err, errBusy) {
+			time.Sleep(opsPoll)
+		}
+	}
+	if err != nil {
+		return err
+	}
+	if msg := r.waitStartOutcome(id, upgradeStartWait); msg != "" {
+		return errors.New(msg)
+	}
+	return nil
 }

@@ -306,6 +306,12 @@ fixes, 34–40 carried over from the old app and still true, 41–43 the web pag
     keys put back under one Face ID; Cancel (Deny from the Inbox). Web: each store card has **Versions** (the same list,
     unverified) with **Propose restore**, which files the Inbox request; the Inbox lists it as "Restore store" with Store
     and Version rows. Walkthrough: a key of default deleted as the setup session, then put back through Versions.
+70. **Upgrade has no last size** (docs/DECISIONS.md 164; Deyao, 2026-10-15). A memory alert always offers Upgrade: the
+    router's `memAlert` names the next size, its memory and its guest (`nextSize`, `nextGb`, `nextGuest`), and the apps
+    print those rather than a table of their own. Button: "Upgrade to Large (8 GB)" for the named sizes, "Upgrade to
+    16 GB" past them (iPhone `Fmt.upgradeTitle`, web `sizeName`); the notice names the guest ("…back on a bigger machine (8×performance · 32 GB)…"
+    on the web and in the iPhone footer). The "Already the biggest size" row and
+    callout are gone. A refused step (Fly can't make the guest) shows as the job's failure with Fly's error, as before.
 
 ## Unfinished / known gaps
 

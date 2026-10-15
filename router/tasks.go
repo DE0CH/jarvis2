@@ -321,7 +321,7 @@ func withOptions(t *TaskTemplate) *TaskTemplate {
 	for i, f := range c.Fields {
 		switch f.OptionsFrom {
 		case "sizes":
-			c.Fields[i].Options = []TaskOption{{"small", "2×shared · 2 GB", ""}, {"medium", "4×shared · 4 GB", ""}, {"large", "8×shared · 8 GB", ""}}
+			c.Fields[i].Options = []TaskOption{{"small", sizeLabel("small"), ""}, {"medium", sizeLabel("medium"), ""}, {"large", sizeLabel("large"), ""}}
 		case "models":
 			c.Fields[i].Options = nil
 			for _, m := range modelCatalog {

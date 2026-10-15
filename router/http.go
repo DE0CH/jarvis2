@@ -253,7 +253,7 @@ func (r *Router) buildHandlers() {
 	})
 	app("GET /api/sizes", func(w http.ResponseWriter, req *http.Request) {
 		writeJSON(w, 200, map[string]any{"sizes": []map[string]string{
-			{"id": "small", "label": "2×shared · 2 GB"}, {"id": "medium", "label": "4×shared · 4 GB"}, {"id": "large", "label": "8×shared · 8 GB"}}})
+			{"id": "small", "label": sizeLabel("small")}, {"id": "medium", "label": sizeLabel("medium")}, {"id": "large", "label": sizeLabel("large")}}})
 	})
 	app("GET /api/records", func(w http.ResponseWriter, req *http.Request) {
 		var recs []*Record
@@ -717,7 +717,7 @@ func (r *Router) checkSetupSig(method, path, t, sig string, body []byte) error {
 }
 
 func sessionView(s *Session, d *persisted) map[string]any {
-	guest := map[string]string{"small": "2×shared · 2 GB", "medium": "4×shared · 4 GB", "large": "8×shared · 8 GB"}[s.Size]
+	guest := sizeLabel(s.Size)
 	name := s.Label
 	if name == "" {
 		name = s.Title

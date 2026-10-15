@@ -91,8 +91,13 @@ func TestUpgradedText(t *testing.T) {
 	if err != nil || !strings.Contains(s, "from a medium (4 GB) to a large (8 GB)") {
 		t.Fatalf("%q %v", s, err)
 	}
-	if _, err := upgradedText("medium", "do this instead"); err == nil {
-		t.Fatal("a size outside the three must be refused")
+	if s, err = upgradedText("16gb", "32gb"); err != nil || !strings.Contains(s, "from a 16 GB to a 32 GB machine") {
+		t.Fatalf("%q %v", s, err)
+	}
+	for _, bad := range []string{"do this instead", "24gb", "8gb"} {
+		if _, err := upgradedText("medium", bad); err == nil {
+			t.Fatalf("%q isn't a size", bad)
+		}
 	}
 	if _, _, err := deliveryText(Delivery{Kind: "upgraded", From: "small", To: "medium"}, nil); err != nil {
 		t.Fatal(err)

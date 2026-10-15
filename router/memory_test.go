@@ -135,9 +135,6 @@ func TestMemoryReportViewAndUpgradeRefusals(t *testing.T) {
 			t.Fatal("no alert on a session that reported nothing")
 		}
 	})
-	if c := post("/api/sessions/s2/upgrade", "", `{}`); c != 409 {
-		t.Fatalf("already large: %d", c)
-	}
 	if c := post("/api/sessions/s3/upgrade", "", `{}`); c != 409 {
 		t.Fatalf("paused: %d", c)
 	}
@@ -164,5 +161,9 @@ func TestUpgradedTextMatchesMachine(t *testing.T) {
 	b, origin, err := attested(Delivery{Kind: "upgraded", From: "small", To: "medium"})
 	if err != nil || origin != "image-text" || !strings.Contains(string(b), "from a small (2 GB) to a medium (4 GB)") {
 		t.Fatalf("%q %s %v", b, origin, err)
+	}
+	b, _, err = attested(Delivery{Kind: "upgraded", From: "large", To: "16gb"})
+	if err != nil || !strings.Contains(string(b), "from a large (8 GB) to a 16 GB machine") {
+		t.Fatalf("%q %v", b, err)
 	}
 }

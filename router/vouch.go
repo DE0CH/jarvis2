@@ -335,7 +335,7 @@ func attested(d Delivery) ([]byte, string, error) {
 	case "nudge":
 		return []byte(nudgeText(d.Jobs, time.Duration(d.Minutes)*time.Minute)), "image-text", nil
 	case "upgraded":
-		if sizeGB[d.From] == 0 || sizeGB[d.To] == 0 {
+		if sizeMemGB(d.From) == 0 || sizeMemGB(d.To) == 0 {
 			return nil, "", errors.New("upgraded: not a machine size")
 		}
 		return []byte(upgradedText(d.From, d.To)), "image-text", nil

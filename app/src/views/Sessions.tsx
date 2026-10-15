@@ -63,20 +63,21 @@ const pause = (id: string) => pendUntil("s:" + id, "Pausing…", () => api("POST
 // started, snapshots, and brings the session back on the next size up with the same conversation
 // (POST …/upgrade → 202, then busy "upgrading" + wake {kind:"upgrade"} until done / failed). No question first —
 // the notice already says what it does. Two-phase: the label stays until the router reports the job's end.
-const SIZE_GB: Record<string, number> = { medium: 4, large: 8 };
-const SIZE_NAME: Record<string, string> = { medium: "Medium", large: "Large" };
+// "Large (8 GB)" for the named sizes, "16 GB" past them (router/sizes.go: every doubling, named by its memory)
+const sizeName = (a: { nextSize: string; nextGb: number }) =>
+  /^\d+gb$/.test(a.nextSize) ? `${a.nextGb} GB` : `${a.nextSize.charAt(0).toUpperCase()}${a.nextSize.slice(1)} (${a.nextGb} GB)`;
 const upgradeDone = (x: Session | undefined) => !x || x.state === "failed" || x.state === "paused"
   || (!x.busy && x.wake?.kind === "upgrade" && ["done", "failed"].includes(x.wake.phase));
 export const upgradeSession = (id: string) => exclusive("s:" + id, async () => {
-  const next = find(getStore().state, id)?.memAlert?.nextSize;
-  if (!next) return;
+  const a = find(getStore().state, id)?.memAlert;
+  if (!a?.nextSize) return;
   pend("s:" + id, "Upgrading…");
   try {
     await api("POST", `api/sessions/${id}/upgrade`, {});
     await refreshUntil((s) => upgradeDone(find(s, id)), 30 * 60 * 1000);
     const x = find(getStore().state, id);
     if (x?.wake?.kind === "upgrade" && x.wake.phase === "failed") toast("Upgrade failed: " + (x.wake.error || "no reason given"));
-    else if (x?.wake?.kind === "upgrade" && x.wake.phase === "done") { toast(`Upgraded to ${SIZE_NAME[next] || next}.`, "ok"); settle(30000); }
+    else if (x?.wake?.kind === "upgrade" && x.wake.phase === "done") { toast(`Upgraded to ${sizeName(a)}.`, "ok"); settle(30000); }
   } catch (e: any) { failed(e); await refresh(false); }
   finally { pend("s:" + id, null); }
 });
@@ -231,7 +232,7 @@ function Schedules({ m }: { m: Session }) {
     </Callout>
   );
 }
-// a memory-starvation episode: what is short, and the Upgrade button (none when already on the biggest size)
+// a memory-starvation episode: what is short, and the Upgrade button to the next size
 function MemAlert({ m, busy }: { m: Session; busy: string | null }) {
   const a = m.memAlert;
   const failedUpgrade = m.wake?.kind === "upgrade" && m.wake.phase === "failed" ? m.wake.error || "no reason given" : "";
@@ -239,10 +240,10 @@ function MemAlert({ m, busy }: { m: Session; busy: string | null }) {
   return (
     <Callout color="red" variant="surface" mt={2} data={{ memAlert: "1" }} id={"mem-alert-" + m.id}>
       {!!a && <CalloutText color="red">{`Running out of memory: ${a.reason}.${a.detail ? " " + a.detail + (/[.!?]$/.test(a.detail) ? "" : ".") : ""}`}</CalloutText>}
-      {!!a && (a.nextSize ? <>
-        <CalloutText color="red">{`Upgrade stops Claude and everything it is running, then brings the session back on the ${SIZE_NAME[a.nextSize]} machine (${SIZE_GB[a.nextSize]} GB) with the same conversation.`}</CalloutText>
-        {!busy && m.state === "started" && <Flex mt={2}><PButton pkey={"s:" + m.id} color="red" id={"upgrade-" + m.id} onPress={() => upgradeSession(m.id)} label={`Upgrade to ${SIZE_NAME[a.nextSize]} (${SIZE_GB[a.nextSize]} GB)`} /></Flex>}
-      </> : <CalloutText color="red">It is already on the biggest size.</CalloutText>)}
+      {!!a && <>
+        <CalloutText color="red">{`Upgrade stops Claude and everything it is running, then brings the session back on a bigger machine (${a.nextGuest}) with the same conversation.`}</CalloutText>
+        {!busy && m.state === "started" && <Flex mt={2}><PButton pkey={"s:" + m.id} color="red" id={"upgrade-" + m.id} onPress={() => upgradeSession(m.id)} label={`Upgrade to ${sizeName(a)}`} /></Flex>}
+      </>}
       {!!failedUpgrade && <CalloutText color="red">{"Upgrade failed: " + failedUpgrade}</CalloutText>}
     </Callout>
   );

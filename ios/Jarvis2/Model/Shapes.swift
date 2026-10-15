@@ -74,8 +74,11 @@ struct MemAlert: Equatable, Hashable {
   var since: Date? { j["since"].string?.isoDate }
   var reason: String { j["reason"].text ?? "memory is short" }
   var detail: String? { j["detail"].text }
-  /// nil = already the biggest size
+  /// the size Upgrade moves to: always one (the memory doubles each step)
   var nextSize: String? { j["nextSize"].text }
+  var nextGB: Int? { j["nextGb"].int }
+  /// its Fly guest, "8×performance · 32 GB"
+  var nextGuest: String? { j["nextGuest"].text }
 }
 
 struct Wakeup: Identifiable, Equatable, Hashable {

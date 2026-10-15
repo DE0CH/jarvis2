@@ -341,11 +341,9 @@ type ResumeOptions struct {
 	APIProxy *bool  `json:"apiProxy"`
 }
 
-var sizeIDs = map[string]bool{"small": true, "medium": true, "large": true}
-
 func (o ResumeOptions) check() error {
-	if o.Size != "" && !sizeIDs[o.Size] {
-		return fmt.Errorf("size is small, medium or large")
+	if o.Size != "" && sizeMemGB(o.Size) == 0 {
+		return fmt.Errorf("size is small, medium, large or a doubling past it (16gb, 32gb, …)")
 	}
 	return nil
 }

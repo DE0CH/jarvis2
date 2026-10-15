@@ -33,10 +33,18 @@ const (
 	sessionsApp   = "jarvis2-sessions"
 )
 
-// rates (USD), fly.io/docs/about/pricing, as Jarvis 1 uses them
-var rates = struct{ sharedCPUPerHour, performanceCPUPerHour, ramPerGBHour, volumePerGBHour float64 }{
-	0.0015, 0.0315, 5.0 / hoursPerMonth, 0.15 / hoursPerMonth,
+// rates (USD) from fly.io/docs/about/pricing (its "Started Fly Machines" calculator, read 2026-10-15): a vCPU-second
+// shared 8.465e-7 / performance 1.2732e-5, each CPU with 0.25 GB (shared) or 2 GB (performance) of RAM included, every
+// further GB-second 2.316e-6, all times the region's markup (lhr, where sessions run: 1.134615385)
+var rates = struct {
+	sharedCPUPerHour, performanceCPUPerHour, ramPerGBHour, volumePerGBHour float64
+	sharedRAMIncluded, performanceRAMIncluded                              float64
+}{
+	8.465e-7 * 3600 * lhrMarkup, 1.2732e-5 * 3600 * lhrMarkup, 2.316e-6 * 3600 * lhrMarkup, 0.15 / hoursPerMonth,
+	0.25, 2,
 }
+
+const lhrMarkup = 1.134615385
 
 type flyGuest struct {
 	CPUKind  string `json:"cpu_kind"`
@@ -74,11 +82,11 @@ func hourlyMachineCost(g *flyGuest) float64 {
 	if cpus == 0 {
 		cpus = 1
 	}
-	rate := rates.sharedCPUPerHour
+	rate, included := rates.sharedCPUPerHour, rates.sharedRAMIncluded
 	if g.CPUKind == "performance" {
-		rate = rates.performanceCPUPerHour
+		rate, included = rates.performanceCPUPerHour, rates.performanceRAMIncluded
 	}
-	return cpus*rate + float64(g.MemoryMB)/1024*rates.ramPerGBHour
+	return cpus*rate + max(0, float64(g.MemoryMB)/1024-cpus*included)*rates.ramPerGBHour
 }
 
 func hourlyVolumeCost(sizeGB int) float64 { return float64(sizeGB) * rates.volumePerGBHour }

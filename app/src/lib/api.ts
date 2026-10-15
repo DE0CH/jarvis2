@@ -127,8 +127,9 @@ export type Session = {
   lockedStore?: string;
   busy?: { kind: string; since?: string } | null; wake?: { kind: string; phase: string; error?: string } | null; apiProxy?: "on" | "off";
   // a memory-starvation episode (router, mirrors Jarvis 1's lib/memory.js): why, the memory now, and the size
-  // the Upgrade button moves it to ("" = already the biggest, no Upgrade); absent outside an episode
-  memAlert?: { since: string; reason: string; detail: string; nextSize: "medium" | "large" | "" } | null;
+  // the Upgrade button moves it to (always one: the next size doubles the memory, router/sizes.go), its memory and its
+  // Fly guest ("8×performance · 32 GB"); absent outside an episode
+  memAlert?: { since: string; reason: string; detail: string; nextSize: string; nextGb: number; nextGuest: string } | null;
   // a running session's latest memory sample
   memory?: { totalMb: number; availMb: number; at: string } | null;
 };

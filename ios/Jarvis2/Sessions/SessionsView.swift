@@ -198,8 +198,8 @@ struct SessionMenu: View {
         Button("Switch to bypass mode", systemImage: "shield.slash") { Task { await model.switchMode(m, to: "bypass") } }
       }
     }
-    if m.state == "started", let next = m.memAlert?.nextSize {
-      Button(Fmt.upgradeTitle(next), systemImage: "arrow.up.circle") { Task { await model.upgrade(m.id) } }
+    if m.state == "started", let a = m.memAlert, a.nextSize != nil {
+      Button(Fmt.upgradeTitle(a), systemImage: "arrow.up.circle") { Task { await model.upgrade(m.id) } }
     }
     if m.state == "paused" {
       Button("Resume with latest image", systemImage: "arrow.up.circle") { Task { await model.resumeLatest(m.id) } }

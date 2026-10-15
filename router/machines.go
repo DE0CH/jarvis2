@@ -78,20 +78,24 @@ func guestText(g *flyGuest) string {
 	return fmt.Sprintf("%d×%s · %d GB", g.CPUs, g.CPUKind, int(math.Round(float64(g.MemoryMB)/1024)))
 }
 
-// the sizes the router starts machines with (core/fly.go sizes)
+// the size whose guest this is (sizes.go sizeGuest), "" = none of them
 func sizeOf(g *flyGuest) string {
-	if g == nil || g.CPUKind != "shared" {
+	if g == nil || g.MemoryMB%1024 != 0 {
 		return ""
 	}
-	switch {
-	case g.CPUs == 2 && g.MemoryMB == 2048:
-		return "small"
-	case g.CPUs == 4 && g.MemoryMB == 4096:
-		return "medium"
-	case g.CPUs == 8 && g.MemoryMB == 8192:
-		return "large"
+	size := ""
+	for name, gb := range namedSizes {
+		if gb*1024 == g.MemoryMB {
+			size = name
+		}
 	}
-	return ""
+	if size == "" {
+		size = fmt.Sprintf("%dgb", g.MemoryMB/1024)
+	}
+	if kind, cpus, mb := sizeGuest(size); kind != g.CPUKind || cpus != g.CPUs || mb != g.MemoryMB {
+		return ""
+	}
+	return size
 }
 
 func isTestRouter(u string) bool {

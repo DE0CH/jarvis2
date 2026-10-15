@@ -12,12 +12,20 @@ func near(a, b float64) bool { return math.Abs(a-b) < 1e-9 }
 
 func TestCosts(t *testing.T) {
 	small := &flyGuest{CPUKind: "shared", CPUs: 2, MemoryMB: 2048}
-	if !near(hourlyMachineCost(small), 2*0.0015+2*5.0/730) {
+	// Fly's calculator (fly.io/docs/about/pricing, London): shared-cpu-2x 2 GB, performance-2x 4 GB (RAM included)
+	if math.Abs(hourlyMachineCost(small)-0.0211) > 0.00005 {
 		t.Fatal(hourlyMachineCost(small))
 	}
 	perf := &flyGuest{CPUKind: "performance", CPUs: 2, MemoryMB: 4096}
-	if !near(hourlyMachineCost(perf), 2*0.0315+4*5.0/730) {
+	if math.Abs(hourlyMachineCost(perf)-0.1040) > 0.00005 {
 		t.Fatal(hourlyMachineCost(perf))
+	}
+	// the Upgrade's sizes (sizes.go): 16 GB shared, 32 GB on 8 performance CPUs
+	for size, perHour := range map[string]float64{"large": 0.0844, "16gb": 0.1601, "32gb": 0.5674, "64gb": 0.8701, "128gb": 1.7402} {
+		kind, cpus, mb := sizeGuest(size)
+		if got := hourlyMachineCost(&flyGuest{CPUKind: kind, CPUs: cpus, MemoryMB: mb}); math.Abs(got-perHour) > 0.00005 {
+			t.Fatalf("%s: %.4f an hour, Fly says %.4f", size, got, perHour)
+		}
 	}
 	if hourlyMachineCost(nil) != 0 || !near(hourlyVolumeCost(10), 1.5/730) {
 		t.Fatal("nil guest / volume")
