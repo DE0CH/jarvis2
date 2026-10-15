@@ -253,9 +253,15 @@ func TestActionsKey(t *testing.T) {
 	addSession(r, "sR", "started", "mR", false)
 	addSession(r, "sP", "paused", "", false)
 	m, mh := newTestMachine(r, "mR"), r.MachineHandler()
-	if code, out := m.do(t, mh, "POST", "/m/api/actions/sessions/sR/resume", ""); code == 200 {
-		t.Fatalf("a running session was resumed: %d %v", code, out)
+	// a running session's resume: already what was asked, nothing done
+	if code, out := m.do(t, mh, "POST", "/m/api/actions/sessions/sR/resume", ""); code != 200 {
+		t.Fatalf("a running session's resume: %d %v", code, out)
 	}
+	r.st.Do(func(d *persisted) {
+		if s := d.Sessions["sR"]; s.State != "started" || s.MachineID != "mR" {
+			t.Fatalf("the running session was touched: %+v", s)
+		}
+	})
 	if code, out := m.do(t, mh, "GET", "/m/api/actions/sessions", ""); code != 200 || len(out["sessions"].([]any)) != 2 {
 		t.Fatalf("%d %v", code, out)
 	}
@@ -300,12 +306,12 @@ func TestInboxItemsGoAfterTenMinutes(t *testing.T) {
 	if len(r.Inbox()) != 3 {
 		t.Fatalf("%+v", r.Inbox())
 	}
-	// eleven minutes on: every item is gone; the new session's approval went like a Deny (no session left)
+	// eleven minutes on: every item is gone; Deyao's own new session is kept as failed, so Start again asks again
 	later := time.Now().UTC().Add(11 * time.Minute)
 	r.expireApprovals(later)
 	r.st.Do(func(d *persisted) {
 		pruneRequests(d, later)
-		if len(d.Approvals) != 0 || len(d.Inbox) != 0 || d.Sessions["sN"] != nil || d.Sessions["sA"] == nil {
+		if len(d.Approvals) != 0 || len(d.Inbox) != 0 || d.Sessions["sN"] == nil || d.Sessions["sN"].State != "failed" || d.Sessions["sA"] == nil {
 			t.Fatalf("approvals %d inbox %d sN %v", len(d.Approvals), len(d.Inbox), d.Sessions["sN"])
 		}
 	})

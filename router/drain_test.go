@@ -38,7 +38,7 @@ func TestDrainLetsInFlightFinishAndRefusesNew(t *testing.T) {
 		"resume":  r.Resume("s2", false),
 		"destroy": r.Destroy("s3"),
 	} {
-		if !errors.Is(err, errDraining) || err.Error() != "router updating, try again shortly" {
+		if !errors.Is(err, errDraining) || err.Error() != drainingMsg {
 			t.Fatalf("%s during the drain: %v", name, err)
 		}
 	}
@@ -58,7 +58,7 @@ func TestDrainLetsInFlightFinishAndRefusesNew(t *testing.T) {
 	}
 	rg.core.mu.Unlock()
 	code, out := appDo(t, r, "POST", "/api/sessions/s3/pause", "")
-	if code != 503 || out["error"] != "router updating, try again shortly" {
+	if code != 503 || out["error"] != drainingMsg {
 		t.Fatalf("HTTP pause during the drain: %d %v", code, out)
 	}
 	// automatic callers (scheduler, tasks, watches) see a busy session and try again later

@@ -135,9 +135,15 @@ func TestMemoryReportViewAndUpgradeRefusals(t *testing.T) {
 			t.Fatal("no alert on a session that reported nothing")
 		}
 	})
-	if c := post("/api/sessions/s3/upgrade", "", `{}`); c != 409 {
+	// paused: its next start is on the bigger size
+	if c := post("/api/sessions/s3/upgrade", "", `{}`); c != 200 && c != 202 {
 		t.Fatalf("paused: %d", c)
 	}
+	r.st.Do(func(d *persisted) {
+		if d.Sessions["s3"].Size != nextSize("small") {
+			t.Fatalf("paused: next size %q", d.Sessions["s3"].Size)
+		}
+	})
 	if c := post("/api/sessions/nope/upgrade", "", `{}`); c != 404 {
 		t.Fatalf("no session: %d", c)
 	}

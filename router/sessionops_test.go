@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -134,7 +135,7 @@ func TestBusyInState(t *testing.T) {
 	if b == nil || b["kind"] != "pausing" {
 		t.Fatalf("%v", ss[0])
 	}
-	if _, err := r.lock("sA", "starting"); err != errBusy {
+	if _, err := r.lock("sA", "starting"); !errors.Is(err, errBusy) || !strings.Contains(err.Error(), "pausing") {
 		t.Fatal("a second action got the lock")
 	}
 	unlock()

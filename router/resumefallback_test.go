@@ -179,8 +179,8 @@ func TestAFailedCallAwaitsNothing(t *testing.T) {
 	r.cfg.NoAccess = true
 	addSession(r, "sR", "started", "mR", false)
 	m, mh := newTestMachine(r, "mR"), r.MachineHandler()
-	// s1 is running, not paused: the resume is refused at once
-	r.st.Do(func(d *persisted) { d.Sessions["s1"].State = "started" })
+	// s1 is being destroyed: the resume is refused at once
+	r.st.Do(func(d *persisted) { d.Sessions["s1"].State = "destroying" })
 	_, out := m.do(t, mh, "POST", "/m/api/actions/requests/call", `{"method": "POST", "path": "/api/sessions/s1/resume", "explanation": "x"}`)
 	id := out["id"].(string)
 	code, out := inboxDo(t, r, "POST", "/api/requests/"+id+"/approve", "", true)

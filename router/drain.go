@@ -31,7 +31,13 @@ var errDraining error = drainingErr{}
 
 type drainingErr struct{}
 
-func (drainingErr) Error() string        { return "router updating, try again shortly" }
+func (drainingErr) Error() string {
+	return drainingMsg
+}
+
+// drainingMsg: what a refused action hears during a drain (its start is matched by e2e and leader.go's own 503)
+const drainingMsg = "router updating, try again shortly: the actions already running finish first, then the new router takes new ones (usually within a minute or two, at most 29 minutes behind a long pause)"
+
 func (drainingErr) Is(target error) bool { return target == errBusy }
 
 type drainState struct {

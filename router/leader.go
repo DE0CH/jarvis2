@@ -144,7 +144,7 @@ func (p *leaderProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	for attempt := 0; ; attempt++ {
 		a, err := p.target(r.Context(), failed)
 		if err != nil {
-			http.Error(w, `{"error":"router updating, try again shortly"}`, http.StatusServiceUnavailable)
+			http.Error(w, `{"error":"`+drainingMsg+`"}`, http.StatusServiceUnavailable)
 			return
 		}
 		if a == "" {
@@ -172,7 +172,7 @@ func (p *leaderProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if (!retriable && r.ContentLength != 0) || attempt >= 3 {
-			http.Error(w, `{"error":"router updating, try again shortly"}`, http.StatusServiceUnavailable)
+			http.Error(w, `{"error":"`+drainingMsg+`"}`, http.StatusServiceUnavailable)
 			return
 		}
 		failed = a

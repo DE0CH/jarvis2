@@ -243,8 +243,20 @@ func (r *Router) Upgrade(id string) (map[string]any, error) {
 	if s.ID == "" {
 		return nil, errNoSession
 	}
-	if s.State != "started" || s.MachineID == "" {
-		return nil, fmt.Errorf("session is %s, not running", s.State) // "session is …" → 409
+	if s.MachineID == "" && (s.State == "paused" || s.State == "failed") {
+		// no machine to free: the next start is on the bigger size
+		from, to := s.Size, nextSize(s.Size)
+		if from == "" {
+			from = "medium"
+		}
+		if err := r.applyResumeOptions(id, ResumeOptions{Size: to}); err != nil {
+			return nil, err
+		}
+		return map[string]any{"ok": true, "kind": "upgrade", "from": from, "to": to, "nextStart": true}, nil
+	}
+	// running, or failed with its machine kept (an out-of-memory machine whose pause couldn't finish): freed, paused, resumed bigger
+	if s.MachineID == "" || (s.State != "started" && s.State != "failed") {
+		return nil, fmt.Errorf("session is %s: Upgrade once it is running, paused or failed", s.State) // "session is …" → 409
 	}
 	from := s.Size
 	if from == "" {

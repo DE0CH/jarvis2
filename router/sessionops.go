@@ -259,9 +259,9 @@ func (r *Router) SetPermissionMode(id, mode string) (map[string]any, error) {
 	if s.PermissionMode == mode {
 		return map[string]any{"ok": true, "permissionMode": mode, "unchanged": true}, nil
 	}
-	if s.MachineID == "" {
-		if s.State != "paused" {
-			return nil, fmt.Errorf("session is %s", s.State)
+	if s.MachineID == "" { // no machine: the mode applies at its next start (a paused or failed session)
+		if s.State != "paused" && s.State != "failed" {
+			return nil, fmt.Errorf("session is %s: set the mode once it is running, paused or failed", s.State)
 		}
 		r.st.Do(func(d *persisted) {
 			if x := d.Sessions[id]; x != nil {
@@ -371,8 +371,8 @@ func (r *Router) applyResumeOptions(id string, o ResumeOptions) error {
 		switch {
 		case s == nil:
 			err = errNoSession
-		case s.State != "paused":
-			err = fmt.Errorf("session %s isn't paused", id)
+		case s.State != "paused" && s.State != "failed":
+			err = fmt.Errorf("session %s is %s: its next start's options are set while it is paused or failed", id, s.State)
 		case o.Model != "" && resumeModel(s.Harness, o.Model) != nil:
 			err = resumeModel(s.Harness, o.Model)
 		default:
@@ -489,8 +489,9 @@ func (r *Router) Restart(id string, in RestartRequest) (map[string]any, error) {
 	if s.ID == "" {
 		return nil, errNoSession
 	}
-	if s.State != "paused" && (s.MachineID == "" || (s.State != "started" && s.State != "initialising")) {
-		return nil, fmt.Errorf("session is %s", s.State)
+	// paused or failed (Resume finishes a failed one's pause first), or running on its machine
+	if s.State != "paused" && s.State != "failed" && (s.MachineID == "" || (s.State != "started" && s.State != "initialising")) {
+		return nil, fmt.Errorf("session is %s: restart it once it is running, paused or failed", s.State)
 	}
 	// the whole job is one tracked lifecycle action (drain.go): its pause and resume go on during a drain
 	endJob, err := r.beginJob(id, "restart")
@@ -522,8 +523,8 @@ func (r *Router) Restart(id string, in RestartRequest) (map[string]any, error) {
 		var perr error
 		r.st.Do(func(d *persisted) {
 			x := d.Sessions[id]
-			if x == nil || x.State != "paused" {
-				perr = errors.New("the session isn't paused any more")
+			if x == nil || (x.State != "paused" && x.State != "failed") {
+				perr = errors.New("the session isn't paused any more (another action started it): restart it again")
 				return
 			}
 			if x.Ops == nil {

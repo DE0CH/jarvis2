@@ -171,8 +171,12 @@ func TestNewSessionClaudeAccount(t *testing.T) {
 	if _, err := r.CreateSession(NewSession{Label: "z", Harness: "claude", Account: "nope"}); err == nil {
 		t.Fatal("an unknown account was taken")
 	}
-	if _, err := r.CreateSession(NewSession{Label: "z", Harness: "claude", Stores: []string{"claude"}}); err == nil || !strings.Contains(err.Error(), "store claude is gone") {
-		t.Fatal("the old store was taken", err)
+	// the old shared store is dropped, not refused: the session gets its account instead
+	id, err = r.CreateSession(NewSession{Label: "z", Harness: "claude", Stores: []string{"claude"}})
+	var zs []string
+	r.st.Do(func(d *persisted) { zs = d.Sessions[id].Stores })
+	if err != nil || containsStr(zs, "claude") || acct(id) == "" {
+		t.Fatal("the old store: ", err, zs, acct(id))
 	}
 	id, err = r.CreateSession(NewSession{Label: "o", Harness: "opencode"})
 	if err != nil || acct(id) != "" {

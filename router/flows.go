@@ -78,6 +78,9 @@ func (r *Router) lock(id, kind string) (func(), error) {
 	mu := m.(*sync.Mutex)
 	if !mu.TryLock() {
 		done()
+		if b := r.ops.busyOf(id); b != nil && b.Kind != "" {
+			return nil, fmt.Errorf("%w: %s, running since %s; try again once it ends (/api/state shows it as busy)", errBusy, b.Kind, b.Since.Format("15:04:05 UTC"))
+		}
 		return nil, errBusy
 	}
 	r.ops.setBusy(id, kind)
@@ -489,10 +492,14 @@ func (r *Router) CreateSession(in NewSession) (string, error) {
 		in.PermissionMode = "auto"
 	}
 	// the harness's stores come with it (the policy document); the app doesn't list them
-	if containsStr(in.Stores, legacyClaudeStore) {
-		return "", bad("the store claude is gone: a session's Claude account is picked as its account (Settings → Claude accounts)")
+	// the shared login's old store is gone: dropped (its account comes as the session's account), as a restore does
+	var picked []string
+	for _, n := range in.Stores {
+		if n != legacyClaudeStore {
+			picked = append(picked, n)
+		}
 	}
-	stores, err := r.withHarnessStores(in.Stores, h.Stores)
+	stores, err := r.withHarnessStores(picked, h.Stores)
 	if err != nil {
 		return "", err
 	}
@@ -808,6 +815,9 @@ func (r *Router) RejectAs(id, outcome string) error {
 		case s == nil:
 		case a.Kind == "new-session" && a.Again:
 			s.State, s.Error = "failed", "the start again was "+outcome // a failed line asked to start again stays
+		case a.Kind == "new-session" && outcome == outcomeLapsed && deyaosOwn(a.Origin):
+			// Deyao's own New session that nobody answered in time: kept, so Start again asks again (no machine yet)
+			s.State, s.Error = "failed", "the approval lapsed (nobody answered within 10 minutes): Start again asks again"
 		case a.Kind == "new-session":
 			delete(d.Sessions, a.Session) // no machine was made
 		case a.Kind == "resume-upgrade":
@@ -815,6 +825,19 @@ func (r *Router) RejectAs(id, outcome string) error {
 		}
 	})
 	return nil
+}
+
+// deyaosOwn: an approval Deyao asked for himself (the app or the web page), not one a session or the router filed
+func deyaosOwn(o *Origin) bool {
+	return o == nil || o.Caller.Kind == "" || o.Caller.Kind == "app" || o.Caller.Kind == "web"
+}
+
+// orState: a session's state for a message ("gone" when there is none)
+func orState(state string) string {
+	if state == "" {
+		return "gone"
+	}
+	return state
 }
 
 // ---- pause ---------------------------------------------------------------------------------------------
@@ -830,9 +853,13 @@ func (r *Router) Pause(id string) error {
 			s = *x
 		}
 	})
+	if s.ID != "" && s.State == "paused" {
+		unlock()
+		return nil // already what was asked for
+	}
 	if s.ID == "" || s.MachineID == "" || s.Cert == nil {
 		unlock()
-		return fmt.Errorf("session %s isn't running", id)
+		return fmt.Errorf("session %s isn't running (it is %s): nothing to pause", id, orState(s.State))
 	}
 	r.setState(id, "pausing", "")
 	go func() {
@@ -867,20 +894,26 @@ func (r *Router) Resume(id string, upgrade bool) error {
 	// line is where its last pause left it (the core marks a predecessor used only at certify). With one (a pause or
 	// destroy whose kill failed, or one cut off) the pause is finished first: the machine's final snapshot (the same
 	// one again if it took it already), the kill, then the resume, all on this one tap (DECISIONS 181).
+	if s.ID != "" && (s.State == "started" || s.State == "initialising" || s.State == "starting" || s.State == "resuming") {
+		unlock()
+		return nil // already running (or on its way): what was asked for
+	}
+	if s.ID != "" && s.State == "approval" {
+		unlock()
+		return fmt.Errorf("session %s waits for Deyao's approval in the Inbox: it starts once he allows it", id)
+	}
 	if s.ID == "" || !(s.State == "paused" || s.State == "failed") {
 		unlock()
-		return fmt.Errorf("session %s isn't paused or failed", id)
+		return fmt.Errorf("session %s is %s, so it can't resume now: resume it once it is paused or failed", id, orState(s.State))
 	}
 	if err := r.resumeRefusal(id); err != nil { // snapsafe.go: its last machine left no snapshot
 		unlock()
 		return err
 	}
 	if s.Cert == nil {
-		if s.State != "failed" || s.MachineID != "" {
-			unlock()
-			return fmt.Errorf("session %s has no line to resume", id)
-		}
-		return r.startAgain(s, unlock) // a new line whose first start failed
+		// a new line whose first start failed (a machine left over from it holds no cert, so no secret: the start
+		// again leaves it to the Machines tab)
+		return r.startAgain(s, unlock)
 	}
 	r.setState(id, "resuming", "")
 	go func() {
@@ -1087,7 +1120,7 @@ func (r *Router) destroy(id string, o destroyOpts) error {
 		}
 		archived, aerr := r.archive(id)
 		if aerr != nil && !force {
-			r.setState(id, "paused", "archive: "+aerr.Error())
+			r.setState(id, "paused", "archive: "+aerr.Error()+" — nothing was lost (the session is paused): Destroy again once the Storage Box answers, or Destroy anyway (it goes without its archive)")
 			return
 		}
 		if s.Cert != nil {

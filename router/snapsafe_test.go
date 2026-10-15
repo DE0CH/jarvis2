@@ -317,9 +317,11 @@ func TestDiskReportsWarnAndMoreDiskExtends(t *testing.T) {
 	if code, _ := m.do(t, h, "POST", "/m/disk", `{"root":{"totalKb":0,"availKb":4}}`); code != 400 {
 		t.Fatal(code)
 	}
-	if _, err := rg.r.MoreDisk("s1"); err == nil || !strings.Contains(err.Error(), "without a volume") {
-		t.Fatalf("more disk without a volume: %v", err)
+	// a machine without a volume: the next start gets the bigger disk
+	if out, err := rg.r.MoreDisk("s1"); err != nil || out["nextStart"] != true {
+		t.Fatalf("more disk without a volume: %v %v", out, err)
 	}
+	rg.r.st.Do(func(d *persisted) { d.Sessions["s1"].DiskGB = 0 })
 	m.do(t, h, "POST", "/m/disk", `{"root":{"totalKb":8000000,"availKb":200000}}`)
 	m.do(t, h, "POST", "/m/disk", `{"root":{"totalKb":8000000,"availKb":100000}}`) // the same episode: no second DM
 	if len(*dms) != 1 || !strings.Contains((*dms)[0], "running out of disk: 0.2 GB free of 7.6 GB on its machine's disk") || !strings.Contains((*dms)[0], "no volume") {

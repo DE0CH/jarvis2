@@ -91,7 +91,7 @@ func (r *Router) finalSnapshotAndKillFor(id, machine string, destroying, force b
 	}
 	r.setWaiting(id, "")
 	if err != nil {
-		r.killFailed(id, machine, vol != nil, err)
+		r.killFailed(id, machine, vol != nil, destroying, err)
 		if destroying {
 			r.st.Do(func(d *persisted) {
 				if s := d.Sessions[id]; s != nil {
@@ -132,13 +132,17 @@ func (r *Router) keepMachine(id, machine string, serr error) {
 }
 
 // killFailed: the core still refuses or can't finish the kill: the machine (with its volume) stays
-func (r *Router) killFailed(id, machine string, hasVolume bool, err error) {
+func (r *Router) killFailed(id, machine string, hasVolume, destroying bool, err error) {
 	what := "its machine is kept"
 	if hasVolume {
 		what = "its machine (perhaps stopped) and its volume are kept"
 	}
-	r.setState(id, "failed", "kill: "+err.Error()+" — "+what+": Pause again to retry")
-	r.DM(fmt.Sprintf("🔴 Session “%s” needs you — its pause couldn't finish (%v); %s, nothing was destroyed. Pause it again to retry.", r.dmName(id), err, what))
+	action, retry := "pause", "Pause again to retry"
+	if destroying {
+		action, retry = "destroy", "Destroy again to retry"
+	}
+	r.setState(id, "failed", "kill: "+err.Error()+" — "+what+": "+retry)
+	r.DM(fmt.Sprintf("🔴 Session “%s” needs you — its %s couldn't finish (%v); %s, nothing was destroyed. %s.", r.dmName(id), action, err, what, retry))
 }
 
 // recordKill: the kill's record — the backup goes on the session's list; a kill that names no snapshot of a line

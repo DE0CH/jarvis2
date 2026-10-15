@@ -197,12 +197,27 @@ func (r *Router) MoreDisk(id string) (map[string]any, error) {
 	if s.ID == "" {
 		return nil, errNoSession
 	}
-	if s.State != "started" || s.MachineID == "" {
-		return nil, fmt.Errorf("session is %s, not running", s.State) // "session is …" → 409
+	// a running session's volume grows now; a failed one whose machine was kept (its snapshot ran out of space) too,
+	// then Pause again; one with no machine (paused, failed) or no volume gets the bigger disk at its next start
+	live := s.MachineID != "" && (s.State == "started" || s.State == "failed")
+	var vol *Volume
+	if live {
+		vol = r.machineVolume(s.MachineID)
 	}
-	vol := r.machineVolume(s.MachineID)
 	if vol == nil {
-		return nil, fmt.Errorf("session is on a machine without a volume: More disk comes with the core release that adds volumes")
+		if s.State != "paused" && s.State != "failed" && s.State != "started" {
+			return nil, fmt.Errorf("session is %s: More disk once it is running, paused or failed", s.State) // "session is …" → 409
+		}
+		to := nextDisk(s.DiskGB)
+		if to <= s.DiskGB {
+			return nil, fmt.Errorf("session is at the largest disk (%d GB)", maxDiskGB)
+		}
+		r.st.Do(func(d *persisted) {
+			if x := d.Sessions[id]; x != nil {
+				x.DiskGB = to
+			}
+		})
+		return map[string]any{"ok": true, "kind": "disk", "fromGb": max(s.DiskGB, defaultDisk), "toGb": to, "nextStart": true}, nil
 	}
 	from := max(vol.SizeGB, s.DiskGB)
 	to := nextDisk(from)
@@ -241,7 +256,7 @@ func (r *Router) MoreDisk(id string) (map[string]any, error) {
 				x.DiskGB = to // every later machine of the line gets the new size
 			}
 		})
-		if ext.NeedsRestart {
+		if ext.NeedsRestart && s.State == "started" {
 			r.ops.phase(j, "snapshotting", nil)
 			if err := r.Pause(id); err != nil {
 				fail(err)
