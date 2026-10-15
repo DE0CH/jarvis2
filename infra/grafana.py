@@ -3,7 +3,7 @@
 
     GRAFANA_ADMIN_TOKEN=… GRAFANA_DISCORD_WEBHOOK=… infra/grafana.py apply [--boxes control,services]
     GRAFANA_ADMIN_TOKEN=… infra/grafana.py show
-    GRAFANA_SM_TOKEN=… HEALTH_PROBE_ID=… HEALTH_PROBE_SECRET=… infra/grafana.py probe
+    GRAFANA_SM_TOKEN=… HEALTH_PROBE_ID=… HEALTH_PROBE_SECRET=… infra/grafana.py probe [--disabled]
 
 Stack jumboshortbread1389 (EU Germany, prod-eu-west-2). GRAFANA_ADMIN_TOKEN is the stack's service account token
 `jarvis2-admin`; GRAFANA_DISCORD_WEBHOOK is the webhook "Grafana" of the Discord channel #jarvis2-alerts (both in the
@@ -127,9 +127,9 @@ def sm(method, path, body=None):
         return e.code, e.read().decode()[:400]
 
 
-def probe():
+def probe(enabled=True):
     check = {"job": "jarvis2-healthz", "target": "https://jarvis2.deyaochen.com/healthz", "frequency": 60000,
-             "timeout": 10000, "enabled": True, "probes": [1, 14], "alertSensitivity": "none", "basicMetricsOnly": True,
+             "timeout": 10000, "enabled": enabled, "probes": [1, 14], "alertSensitivity": "none", "basicMetricsOnly": True,
              "labels": [{"name": "system", "value": "jarvis2"}],
              "settings": {"http": {"method": "GET", "ipVersion": "Any", "noFollowRedirects": True, "failIfNotSSL": True,
                                    "validStatusCodes": [200],
@@ -161,7 +161,7 @@ if __name__ == "__main__":
             boxes = [b for b in a[a.index("--boxes") + 1].split(",") if b]
         apply(boxes)
     elif a[:1] == ["probe"]:
-        probe()
+        probe(enabled="--disabled" not in a)
     elif a[:1] == ["show"]:
         show()
     else:
