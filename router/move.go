@@ -161,6 +161,7 @@ type moveSender struct {
 	doneTo string
 	to     atomic.Value // doneTo for the held requests (read without mu: a freeze holds mu while it drains)
 	held   http.Handler // the public handler before the freeze (an abort puts it back)
+	heldAt time.Time    // when requests began to be held (the gap's start)
 }
 
 func (s *moveSender) auth(h http.HandlerFunc) http.Handler {
@@ -242,6 +243,7 @@ type freezeAnswer struct {
 	Files     []moveFile      `json:"files"`
 	WG        string          `json:"wg,omitempty"`
 	CoreFinal json.RawMessage `json:"coreFinal,omitempty"`
+	HeldMs    int64           `json:"heldMs"` // how long requests have been held here when this answer went
 }
 
 // freeze: drain, the login's refresh in flight, peer down, state saved and frozen. Requests that reach this pod from
@@ -257,18 +259,25 @@ func (s *moveSender) freeze(finalizeCore bool) (*freezeAnswer, error) {
 		log.Printf("[move] freeze: draining")
 		s.r.Drain(s.drain)
 		s.r.loginHub().drain(20 * time.Second)
+		s.r.stopDeliveries(90 * time.Second) // movegate.go: no wakeup is lost or made twice across the move
+		// the gap starts here: requests wait in the held proxy for the new router
+		s.heldAt = time.Now()
 		s.held = s.public.current()
-		s.public.set(&leaderProxy{self: s.self, wait: 120 * time.Second, tr: newLeaderProxy(s.lock, s.self, nil).tr,
-			fixed: s.target})
+		hold := &leaderProxy{self: s.self, wait: 120 * time.Second, tr: newLeaderProxy(s.lock, s.self, nil).tr, fixed: s.target}
+		s.public.set(hold)
+		s.r.freezeRequests(hold, 10*time.Second) // movegate.go: long polls in flight end at once
 		if s.ld.stopWG != nil {
-			s.ld.stopWG()
+			s.ld.stopWG() // graceful: the machines' pooled connections get their FIN first (wg.go)
 			s.ld.stopWG = nil
 		}
 		s.st.mu.Lock() // held until an abort; for good after done
 		s.st.save()
+		if s.r.lines != nil {
+			go s.r.lines.flush() // linestate.go: the newest line state into the bucket too
+		}
 		s.frozen = true
 		setMove(func(m *moveStatus) { m.Phase = "frozen" })
-		log.Printf("[move] frozen: state saved, peer down, requests held")
+		log.Printf("[move] frozen in %s: state saved, peer down, requests held", time.Since(s.heldAt).Round(time.Millisecond))
 		go s.r.BackupState("move freeze") // backup.go: the state as it leaves this box
 	}
 	files, err := listData(s.dir)
@@ -276,6 +285,7 @@ func (s *moveSender) freeze(finalizeCore bool) (*freezeAnswer, error) {
 		return nil, err
 	}
 	out := &freezeAnswer{Files: files}
+	defer func() { out.HeldMs = time.Since(s.heldAt).Milliseconds() }() // the gap so far, by this box's clock
 	if s.wgPath != "" {
 		if b, err := os.ReadFile(s.wgPath); err == nil {
 			out.WG = string(b)
@@ -332,6 +342,7 @@ func (s *moveSender) abort() error {
 		return errors.New("already moved to " + s.doneTo)
 	}
 	if !s.frozen {
+		s.r.resumeDeliveries()
 		s.r.Undrain()
 		return nil
 	}
@@ -348,10 +359,35 @@ func (s *moveSender) abort() error {
 	if s.held != nil {
 		s.public.set(s.held)
 	}
+	s.r.thawRequests()
+	s.r.resumeDeliveries()
 	s.r.Undrain()
 	setMove(func(m *moveStatus) { m.Phase = "aborted" })
 	log.Printf("[move] aborted: serving again")
 	return nil
+}
+
+// moveLeaderProxy: a standby's move listener — every call to the leader's (its public address, the move port)
+func moveLeaderProxy(lock *leaderLock, self string) *leaderProxy {
+	port := strings.TrimPrefix(env("MOVE_ADDR", ":8082"), ":")
+	if i := strings.LastIndex(port, ":"); i >= 0 {
+		port = port[i+1:]
+	}
+	withPort := func(u string) string {
+		if i := strings.LastIndex(u, ":"); i > len("http://") {
+			return u[:i+1] + port
+		}
+		return u
+	}
+	p := newLeaderProxy(lock, withPort(self), nil)
+	p.fixed = func() string {
+		a := lock.leaderAddr()
+		if a == "" || a == self {
+			return "" // no leader, or this pod leads and its sender takes the listener over in a moment
+		}
+		return withPort(a)
+	}
+	return p
 }
 
 // ---- a router that moved: only a proxy --------------------------------------------------------------------------
@@ -592,8 +628,8 @@ func (j *moveJoiner) move(self string, public *swapHandler) bool {
 		setMove(func(m *moveStatus) { m.Phase, m.Error = "failed", "freeze: "+err.Error() })
 		return false
 	}
-	frozenAt := time.Now()
-	public.set(hold) // from here requests wait for this router to serve
+	frozenAt := time.Now().Add(-time.Duration(fz.HeldMs) * time.Millisecond) // the sender's hold began then
+	public.set(hold)                                                         // from here requests wait for this router to serve
 	fail := func(what string, err error) bool {
 		log.Printf("[move] %s FAILED, aborting the move, still proxying: %v", what, err)
 		public.set(proxyTo(self, j.public))

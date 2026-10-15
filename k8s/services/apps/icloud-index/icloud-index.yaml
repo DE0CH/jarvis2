@@ -33,7 +33,7 @@ spec:
   strategy: { type: RollingUpdate, rollingUpdate: { maxUnavailable: 0, maxSurge: 1 } }
   selector: { matchLabels: { app: icloud-index } }
   template:
-    metadata: { labels: { app: icloud-index }, annotations: { jarvis2/secrets-rev-icloud-index: "086032f683ba", jarvis2/secrets-rev-icloud-session: "7cf46526e59e" } }
+    metadata: { labels: { app: icloud-index }, annotations: { jarvis2/secrets-rev-icloud-index: "98f8d911e7fd", jarvis2/secrets-rev-icloud-session: "90333f996b3e" } }
     spec:
       automountServiceAccountToken: false
       enableServiceLinks: false

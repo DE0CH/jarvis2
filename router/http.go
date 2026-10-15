@@ -58,13 +58,13 @@ func writeErr(w http.ResponseWriter, err error) {
 // MachineHandler: /m only, for the listener that only Fly's private network reaches
 func (r *Router) MachineHandler() http.Handler {
 	r.handlers()
-	return r.machineMux
+	return r.gated(r.machineMux) // movegate.go
 }
 
 // Handler: the public listener behind cloudflared — the app, the web page and setup
 func (r *Router) Handler() http.Handler {
 	r.handlers()
-	return r.publicMux
+	return r.gated(r.publicMux) // movegate.go
 }
 
 func (r *Router) handlers() {
@@ -617,6 +617,10 @@ func (r *Router) buildHandlers() {
 		case <-time.After(50 * time.Second):
 			writeJSON(w, 200, map[string]any{"commands": []string{}, "execs": []execItem{}})
 		case <-req.Context().Done():
+			if r.frozenNow() { // movegate.go: a handover — "nothing", so the machine polls again at once (the next leader)
+				w.Header().Set("Connection", "close")
+				writeJSON(w, 200, map[string]any{"commands": []string{}, "execs": []execItem{}})
+			}
 		}
 	})
 	m("POST /m/exec-result", func(w http.ResponseWriter, req *http.Request, machine string, body []byte) {

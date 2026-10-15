@@ -6,6 +6,7 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
@@ -15,6 +16,7 @@ import (
 	"net/netip"
 	"os"
 	"strings"
+	"time"
 
 	"golang.zx2c4.com/wireguard/conn"
 	"golang.zx2c4.com/wireguard/device"
@@ -122,5 +124,14 @@ func serveWG(path string, port int, h http.Handler) (stop func(), err error) {
 			log.Printf("wg: serve: %v", err)
 		}
 	}()
-	return func() { srv.Close(); dev.Close() }, nil
+	// stop: graceful (movegate.go): idle connections get a FIN that still reaches the machines before the device goes, so
+	// their next call dials anew (and waits in SYN retries for the next peer) instead of failing on a dead connection
+	return func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		srv.Shutdown(ctx)
+		cancel()
+		srv.Close()
+		time.Sleep(300 * time.Millisecond)
+		dev.Close()
+	}, nil
 }
