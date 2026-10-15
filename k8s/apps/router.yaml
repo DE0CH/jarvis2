@@ -110,13 +110,11 @@ spec:
   podSelector: {}
   policyTypes: [Ingress, Egress]
   ingress:
+    # cloudflared: the app and web (8080), and the move port (8082) at jarvis2.deyaochen.com/move/* (Access: jarvis2-move)
     - from: [{ namespaceSelector: { matchLabels: { jarvis2/ns: edge } } }]
-      ports: [{ port: 8080 }]
+      ports: [{ port: 8080 }, { port: 8082 }]
     # the standby's proxy to the leader (pod to pod)
     - from: [{ podSelector: { matchLabels: { app: router } } }]
-      ports: [{ port: 8080 }, { port: 8082 }]
-    # the control box's router during the move (and, TEMPORARILY, a probe pod on the services box)
-    - from: [{ ipBlock: { cidr: 10.77.0.2/32 } }, { ipBlock: { cidr: 10.77.0.3/32 } }]
       ports: [{ port: 8080 }, { port: 8082 }]
   egress:
     - to: [{ namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: kube-system } }, podSelector: { matchLabels: { k8s-app: kube-dns } } }]
