@@ -58,6 +58,8 @@ func TestTheLadderKeepsGoing(t *testing.T) {
 	if sizeLabel("16gb") != "8×shared · 16 GB" || sizeLabel("32gb") != "8×performance · 32 GB" || sizeText("16gb") != "16 GB" || sizeText("large") != "large (8 GB)" {
 		t.Fatal(sizeLabel("16gb"), sizeLabel("32gb"), sizeText("16gb"))
 	}
+	noteCoreSizes(true)
+	t.Cleanup(func() { noteCoreSizes(false) })
 	if !strings.Contains(memMessage("x", "large", &MemAlert{Reason: "r"}), "moves it to 16 GB") {
 		t.Fatal(memMessage("x", "large", &MemAlert{Reason: "r"}))
 	}

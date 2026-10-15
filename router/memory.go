@@ -130,12 +130,20 @@ func (m *memState) observe(sample *MemSample, now time.Time) bool {
 	return false
 }
 
+// memMessage: the DM; it offers Upgrade only to a size the running core starts (sizes.go upgradeTarget)
 func memMessage(name, size string, a *MemAlert) string {
 	msg := fmt.Sprintf("🔴 Session “%s” is running out of memory: %s.", name, a.Reason)
 	if a.Detail != "" {
 		msg += " Now " + a.Detail + "."
 	}
-	return msg + fmt.Sprintf("\nOne tap moves it to %s: the Upgrade button on its card in the Jarvis 2 app.", sizeText(nextSize(size)))
+	if next := upgradeTarget(size); next != "" {
+		return msg + fmt.Sprintf("\nOne tap moves it to %s: the Upgrade button on its card in the Jarvis 2 app.", sizeText(next))
+	}
+	cur := size
+	if sizeMemGB(cur) == 0 {
+		cur = "medium"
+	}
+	return msg + fmt.Sprintf("\nIt is on %s, the largest size the running core starts (%s needs the new core), so there is no Upgrade for it now: free memory in the session (fewer heavy jobs at once).", sizeText(cur), sizeText(nextSize(size)))
 }
 
 // upgradedText: the "upgraded" delivery's text; machine/deliver.go builds the same and checks both sizes
@@ -153,8 +161,11 @@ func memView(s *Session, v map[string]any) {
 	}
 	m := s.Live.mem
 	if m.alert != nil {
-		next := nextSize(s.Size)
-		v["memAlert"] = map[string]any{"since": m.alert.Since, "reason": m.alert.Reason, "detail": m.alert.Detail, "nextSize": next, "nextGb": sizeMemGB(next), "nextGuest": sizeLabel(next)}
+		a := map[string]any{"since": m.alert.Since, "reason": m.alert.Reason, "detail": m.alert.Detail, "nextSize": nil, "nextGb": nil, "nextGuest": nil}
+		if next := upgradeTarget(s.Size); next != "" { // none: the running core can't start the next size, so no Upgrade button
+			a["nextSize"], a["nextGb"], a["nextGuest"] = next, sizeMemGB(next), sizeLabel(next)
+		}
+		v["memAlert"] = a
 	}
 	if m.last != nil && time.Since(m.lastAt) < memSilent {
 		v["memory"] = map[string]any{"totalMb": m.last.TotalKb / 1024, "availMb": m.last.AvailKb / 1024, "at": m.lastAt}
@@ -187,6 +198,7 @@ func (r *Router) registerMemory(app appRoute, m machineRoute) {
 			writeJSON(w, 400, map[string]string{"error": "bad memory sample"})
 			return
 		}
+		r.refreshCoreSizes() // sizes.go: what the DM may offer (at most one /identity a minute)
 		dm := ""
 		r.st.Do(func(d *persisted) {
 			s := d.Sessions[d.Machines[machine]]
@@ -239,6 +251,12 @@ func (r *Router) Upgrade(id string) (map[string]any, error) {
 		from = "medium"
 	}
 	to := nextSize(s.Size)
+	if !coreTakesSize(to) {
+		r.refreshCoreSizes()
+		if !coreTakesSize(to) {
+			return nil, fmt.Errorf("session is on %s, the largest size the running core starts: %s needs the new core", sizeText(from), sizeText(to)) // → 409
+		}
+	}
 	// the whole job is one tracked lifecycle action (drain.go): its pause and resume go on during a drain
 	endJob, err := r.beginJob(id, "upgrade")
 	if err != nil {

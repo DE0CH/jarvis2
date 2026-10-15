@@ -131,7 +131,7 @@ export type Session = {
   // a memory-starvation episode (router, mirrors Jarvis 1's lib/memory.js): why, the memory now, and the size
   // the Upgrade button moves it to (always one: the next size doubles the memory, router/sizes.go), its memory and its
   // Fly guest ("8×performance · 32 GB"); absent outside an episode
-  memAlert?: { since: string; reason: string; detail: string; nextSize: string; nextGb: number; nextGuest: string } | null;
+  memAlert?: { since: string; reason: string; detail: string; nextSize: string | null; nextGb: number | null; nextGuest: string | null } | null; // nextSize null: the running core starts no bigger size (no Upgrade)
   // what a running session's harness has running besides itself (router/registry.go Workers, from Claude Code's
   // hooks): subagents, and every other background job by Claude Code's type label (shell, monitor, workflow, …);
   // absent when the machine doesn't count them (an image from before)

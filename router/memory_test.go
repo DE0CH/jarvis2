@@ -167,3 +167,58 @@ func TestUpgradedTextMatchesMachine(t *testing.T) {
 		t.Fatalf("%q %v", b, err)
 	}
 }
+
+// sizes past large need the new core (it reports sizeLadder in /identity): until it runs, the memory DM, memAlert
+// and Upgrade offer only what the running core starts
+func TestMemUpgradeOffersOnlySizesTheCoreStarts(t *testing.T) {
+	ladder := false
+	cs := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		id := map[string]any{"signingKey": "k", "agreementKey": "a"}
+		if ladder {
+			id["sizeLadder"] = 1
+		}
+		writeJSON(w, 200, id)
+	}))
+	defer cs.Close()
+	t.Cleanup(func() { noteCoreSizes(false) })
+	c := &CoreClient{base: cs.URL, http: http.DefaultClient}
+	if _, err := c.Key(); err != nil {
+		t.Fatal(err)
+	}
+	a := &MemAlert{Reason: "r"}
+	if !coreTakesSize("large") || coreTakesSize("16gb") || upgradeTarget("large") != "" || upgradeTarget("medium") != "large" {
+		t.Fatal("the running core (no sizeLadder) starts only the named sizes")
+	}
+	if msg := memMessage("x", "large", a); strings.Contains(msg, "Upgrade button") || strings.Contains(msg, "moves it to") ||
+		!strings.Contains(msg, "large (8 GB), the largest size the running core starts") {
+		t.Fatalf("%q", msg)
+	}
+	if msg := memMessage("x", "medium", a); !strings.Contains(msg, "One tap moves it to large (8 GB)") {
+		t.Fatalf("%q", msg)
+	}
+	s := &Session{ID: "s1", State: "started", MachineID: "m1", Size: "large", Live: &Liveness{mem: &memState{machine: "m1", alert: a}}}
+	v := map[string]any{}
+	memView(s, v)
+	if m := v["memAlert"].(map[string]any); m["nextSize"] != nil || m["nextGb"] != nil {
+		t.Fatalf("an Upgrade the core can't start: %v", m)
+	}
+	r := newTestRouter(t)
+	r.core = c
+	r.st.Do(func(d *persisted) { d.Sessions["s1"] = s; d.Machines["m1"] = "s1" })
+	if _, err := r.Upgrade("s1"); err == nil || !strings.Contains(err.Error(), "needs the new core") {
+		t.Fatalf("upgrade past large on the old core: %v", err)
+	}
+	// the new core says it starts the ladder: 16 GB is offered
+	ladder = true
+	if _, err := c.Key(); err != nil {
+		t.Fatal(err)
+	}
+	if upgradeTarget("large") != "16gb" || !strings.Contains(memMessage("x", "large", a), "One tap moves it to 16 GB") {
+		t.Fatal(memMessage("x", "large", a))
+	}
+	v = map[string]any{}
+	memView(s, v)
+	if m := v["memAlert"].(map[string]any); m["nextSize"] != "16gb" || m["nextGb"] != 16 {
+		t.Fatalf("%v", m)
+	}
+}

@@ -67,8 +67,9 @@ const pause = (id: string) => pendUntil("s:" + id, "Pausing…", () => api("POST
 // (POST …/upgrade → 202, then busy "upgrading" + wake {kind:"upgrade"} until done / failed). No question first —
 // the notice already says what it does. Two-phase: the label stays until the router reports the job's end.
 // "Large (8 GB)" for the named sizes, "16 GB" past them (router/sizes.go: every doubling, named by its memory)
-const sizeName = (a: { nextSize: string; nextGb: number }) =>
-  /^\d+gb$/.test(a.nextSize) ? `${a.nextGb} GB` : `${a.nextSize.charAt(0).toUpperCase()}${a.nextSize.slice(1)} (${a.nextGb} GB)`;
+const sizeName = (a: { nextSize: string | null; nextGb: number | null }) =>
+  !a.nextSize ? "a bigger machine"
+  : /^\d+gb$/.test(a.nextSize) ? `${a.nextGb} GB` : `${a.nextSize.charAt(0).toUpperCase()}${a.nextSize.slice(1)} (${a.nextGb} GB)`;
 const upgradeDone = (x: Session | undefined) => !x || x.state === "failed" || x.state === "paused"
   || (!x.busy && x.wake?.kind === "upgrade" && ["done", "failed"].includes(x.wake.phase));
 export const upgradeSession = (id: string) => exclusive("s:" + id, async () => {
@@ -274,7 +275,8 @@ function MemAlert({ m, busy }: { m: Session; busy: string | null }) {
   return (
     <Callout color="red" variant="surface" mt={2} data={{ memAlert: "1" }} id={"mem-alert-" + m.id}>
       {!!a && <CalloutText color="red">{`Running out of memory: ${a.reason}.${a.detail ? " " + a.detail + (/[.!?]$/.test(a.detail) ? "" : ".") : ""}`}</CalloutText>}
-      {!!a && <>
+      {!!a && !a.nextSize && <CalloutText color="red">{"It is on the largest size the running core starts, so there is no Upgrade for it now: free memory in the session."}</CalloutText>}
+      {!!a && !!a.nextSize && <>
         <CalloutText color="red">{`Upgrade stops Claude and everything it is running, then brings the session back on a bigger machine (${a.nextGuest}) with the same conversation.`}</CalloutText>
         {!busy && m.state === "started" && <Flex mt={2}><PButton pkey={"s:" + m.id} color="red" id={"upgrade-" + m.id} onPress={() => upgradeSession(m.id)} label={`Upgrade to ${sizeName(a)}`} /></Flex>}
       </>}

@@ -154,9 +154,11 @@ func (c *CoreClient) Key() (map[string]string, error) {
 	var id struct {
 		SigningKey   string `json:"signingKey"`
 		AgreementKey string `json:"agreementKey"`
+		SizeLadder   int    `json:"sizeLadder"`
 	}
 	if err := json.Unmarshal(b, &id); err != nil {
 		return nil, err
 	}
+	noteCoreSizes(id.SizeLadder >= 1) // sizes.go
 	return map[string]string{"signingKey": id.SigningKey, "agreementKey": id.AgreementKey}, nil
 }

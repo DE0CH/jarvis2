@@ -1708,3 +1708,20 @@ snapshot failed with "no space left on device", the machine was destroyed anyway
      reaches no session without the phone); `github-*` names stay reserved for repo deploy keys (squatting one would
      block that repo's key). *The router writes the Claude account stores* (writer `router`, `claude-<name>` only,
      below). Messages of the kept refusals say what to do next.
+
+## A destroy deletes no live copy it hasn't archived, 2026-10-15
+
+191. **The archive takes every `.live` transcript the snapshot doesn't hold, verified, before any `.live` file goes**
+     (2026-10-15: destroying sb8e0273d6c308894 deleted its original conversation, which only `.live` still had;
+     `router/livearchive.go`). Claude's choices: *byte-identical means the same size and sha256* as the snapshot's file of
+     that name; *another version of a conversation the snapshot has is kept beside it* as `transcript-<uuid>.live.jsonl`
+     (not dropped as "older": it may hold what the snapshot lost); *each copy is read back from the Storage Box and
+     checked* before it counts; *a copy that fails is an archive failure* (the session stays paused, as before), and a
+     forced destroy then keeps every `.live` file and says so in the record (`liveKept`); *the clear deletes file by
+     file*, only names and sizes the archive accounted for, and the dir only once empty; *no snapshot but live copies =
+     a record of those alone* (indexed, not restorable). **A destroy never DMs that a session won't resume** (it isn't a
+     resume): its missing snapshot goes into the record (`archive.noSnapshot`, `session.json`). **The memory DM offers only
+     a size the running core starts**: the core reports `sizeLadder: 1` in `/identity` (the held core does; the one live
+     until the box move doesn't), the router keeps its last answer (refreshed at most once a minute) and offers no Upgrade
+     past large without it (`nextSize` null; Upgrade itself refuses with 409). *Not chosen*: a hard-coded "8 GB until the
+     move" (it would outlive the move).

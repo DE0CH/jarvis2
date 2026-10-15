@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"sync"
+	"time"
 )
 
 // ---- machine sizes (the same block is in router/sizes.go, core/fly.go and machine/deliver.go; TestSizeBlocksMatch) ----
@@ -73,4 +75,58 @@ func sizeLabel(size string) string {
 		return ""
 	}
 	return fmt.Sprintf("%d×%s · %d GB", cpus, kind, mb/1024)
+}
+
+// ---- what the running core starts ------------------------------------------------------------------------
+//
+// Sizes past large need a core that reports sizeLadder in /identity (core/core.go Identity); the core before it
+// (live until the box move) starts only small, medium and large. So an Upgrade past large is offered (the memory DM,
+// memAlert.nextSize) only while the running core says it takes it. What the core said is kept here (one core per
+// router process), noted by every /identity read (core.go Key, e.g. each GET /api/state).
+
+var coreSizes struct {
+	sync.Mutex
+	ladder bool
+	at     time.Time
+}
+
+// coreSizeTTL: how long a /identity answer about sizes is used before refreshCoreSizes asks again
+const coreSizeTTL = time.Minute
+
+func noteCoreSizes(ladder bool) {
+	coreSizes.Lock()
+	coreSizes.ladder, coreSizes.at = ladder, time.Now()
+	coreSizes.Unlock()
+}
+
+// coreTakesSize: the running core starts this size, by its last /identity (no call: safe under the state lock).
+// The named three always; past large only when the core said so (not known yet = no).
+func coreTakesSize(size string) bool {
+	if sizeMemGB(size) == 0 {
+		return false
+	}
+	if namedSizes[size] != 0 {
+		return true
+	}
+	coreSizes.Lock()
+	defer coreSizes.Unlock()
+	return coreSizes.ladder
+}
+
+// refreshCoreSizes: asks the core's /identity when the last answer is older than coreSizeTTL (outside the state lock)
+func (r *Router) refreshCoreSizes() {
+	coreSizes.Lock()
+	fresh := !coreSizes.at.IsZero() && time.Since(coreSizes.at) < coreSizeTTL
+	coreSizes.Unlock()
+	if !fresh && r.core != nil {
+		r.core.Key() // notes sizeLadder
+	}
+}
+
+// upgradeTarget: the size Upgrade moves to, "" when the running core can't start it (nothing to offer)
+func upgradeTarget(size string) string {
+	if next := nextSize(size); coreTakesSize(next) {
+		return next
+	}
+	return ""
 }
