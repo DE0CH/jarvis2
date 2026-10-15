@@ -862,14 +862,17 @@ iCloud index and leases (decided while Deyao was away; the safe, reversible defa
 Deyao: several actions approved together with ONE Face ID; the caller groups them through the API and gives a summary
 (its unverified words, shown above every item's signed details); nothing excluded; Deny works on the whole batch.
 
-140. **One Face ID, every item signed as alone; no core change** (supersedes 124). The app evaluates Face ID once
-     (`PhoneKeys.authorize`: `LAContext.evaluatePolicy(.deviceOwnerAuthenticationWithBiometrics)`) and passes that context
+140. **One Face ID, every item signed as alone; no core change** (supersedes 124). The app takes Face ID once
+     (`PhoneKeys.authorize`: both Enclave keys used once on a fresh `LAContext`, a signature over a fixed text no
+     verifier accepts and a share with a throwaway key, both discarded) and passes that context
      to every Secure Enclave use of the batch (`SecureEnclave.P256…PrivateKey(dataRepresentation:authenticationContext:)`),
      so the Enclave asks no second time; the keys stay `.biometryCurrentSet`. Each item is then signed and sent exactly as
      from its own page (approvals' core challenges, grant texts, deploy-key begin documents, unlocks' shares), so the core
      verifies each one unchanged. The simulator does its Face ID stand-in once per batch. The replica proves the one-Face-ID
-     path on the simulator (software keys); the Enclave's reuse of an evaluated context is Apple's documented behaviour,
-     first exercised on Deyao's iPhone. Change: a core primitive approving N challenges from one signature (a Recover).
+     path on the simulator (software keys) only. On Deyao's iPhone a context that had only run
+     `evaluatePolicy(.deviceOwnerAuthenticationWithBiometrics)` signed the batch's first item and the rest failed
+     (2026-10-15); a context the keys themselves authenticated is what one page's `signAndShares` (New session's Start:
+     a signature and several shares under one Face ID) has always reused. Change: a core primitive approving N challenges from one signature (a Recover).
 141. **Items are read and checked before Face ID; each is signed and sent in order after it.** A batch page reads every
      item as its own page would (the same Checks: the core key, line pins, the session's cert, CI's image signature, the
      grant's draft checked field for field before signing) and offers Allow all only when every item is readable and

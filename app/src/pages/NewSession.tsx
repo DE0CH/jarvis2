@@ -8,10 +8,8 @@ import { useEffect, useRef, useState } from "react";
 import { Image, Platform, Pressable, View } from "react-native";
 import { api, newId, uploadFile, CORE_STORE, DEPLOY_KEY_TOKEN_STORE, harnessStoreSet } from "../lib/api";
 import { useStore, loadStores, refresh, settle, toast, failed } from "../lib/store";
-
 import { BadgeList, Button, CheckboxCards, Flex, Lbl, Muted, P, Pill, RadioCards, Row, Rows, Segmented, Spinner, Text, TextArea, TextField } from "../ui/kit";
 import { BtnLabel } from "../ui/bits";
-import { StoreDocs } from "../ui/storedocs";
 import { Page, useDone } from "../ui/page";
 import { loadContentStores, type ContentStore } from "../views/Content";
 
@@ -165,9 +163,8 @@ export function NewSession() {
       <Lbl>Session title (optional)</Lbl>
       <TextField id="ns-title" autoComplete="off" autoCorrect={false} autoCapitalize="sentences" placeholder="e.g. refactor billing module" value={label} onChangeText={setLabel} />
       <Lbl>Secret stores</Lbl>
-      {plain.length ? <CheckboxCards id="ns-stores" value={picked} onChange={(v) => { touched.current = true; setPicked(v); }} options={plain.map((s) => ({ value: s.name, title: s.name, sub: <>
-          <Flex gap={1} align="center" wrap>{s.sensitive && <Pill kind="bad">sensitive</Pill>}<P size={1} color="gray">{[s.empty ? "empty" : "", s.unlocked ? "" : "locked"].filter(Boolean).join(" · ") || "unlocked"}</P></Flex>
-          <StoreDocs store={s} /></> }))} />
+      {plain.length ? <CheckboxCards id="ns-stores" value={picked} onChange={(v) => { touched.current = true; setPicked(v); }} options={plain.map((s) => ({ value: s.name, title: s.name, sub:
+          <Flex gap={1} align="center" wrap>{s.sensitive && <Pill kind="bad">sensitive</Pill>}<P size={1} color="gray">{[s.empty ? "empty" : "", s.unlocked ? "" : "locked"].filter(Boolean).join(" · ") || "unlocked"}</P></Flex> }))} />
         : stores.loaded ? <Muted>No stores.</Muted>
         : stores.err ? <Muted>{"Could not list the stores: " + stores.err}</Muted>
         : <Flex gap={2} align="center"><Spinner /><Muted>Loading stores…</Muted></Flex>}

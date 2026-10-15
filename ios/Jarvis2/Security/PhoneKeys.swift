@@ -43,9 +43,9 @@ enum KeyError: LocalizedError {
 }
 
 /// One Face ID for several uses (a batch from the Inbox: every item signed under one Face ID). On an iPhone it is an
-/// LAContext that has evaluated Face ID once; every Enclave key use given it runs on that context, so the Secure
-/// Enclave asks for no second Face ID (the keys stay .biometryCurrentSet: a context evaluated for a face enrolled after
-/// pairing doesn't open them). On the simulator it records that the stand-in check passed. Each item is still signed
+/// LAContext that both Enclave keys have already been used on once (authorize), so every later key use given it runs
+/// on that context and the Secure Enclave asks for no second Face ID, as on one page's signAndShares (the keys stay
+/// .biometryCurrentSet: a face enrolled after pairing doesn't open them). On the simulator it records that the stand-in check passed. Each item is still signed
 /// exactly as alone; only the Face ID is shared. Dropped (invalidated) when the batch is done.
 final class PhoneAuth: @unchecked Sendable {
   let context: LAContext?
@@ -166,19 +166,21 @@ final class PhoneKeys: @unchecked Sendable {
   }
 
   /// ONE Face ID for a batch of uses (blocking: call it off the main thread). The returned PhoneAuth goes to every
-  /// sign/share call of the batch.
+  /// sign/share call of the batch. On an iPhone the Face ID comes from using both Enclave keys on a fresh context (a
+  /// signature over a fixed text no verifier accepts, and a share with a throwaway key; both discarded), the way one
+  /// page's signAndShares uses them: a context that only ran evaluatePolicy opened the keys for the batch's first item
+  /// and not the rest (Deyao, 2026-10-15).
   func authorize(reason: String) throws -> PhoneAuth {
     if usesEnclave {
+      _ = try signingPublic(); _ = try agreementPublic()
       let ctx = LAContext()
       ctx.localizedReason = reason
-      let sem = DispatchSemaphore(value: 0)
-      nonisolated(unsafe) var err: Error?
-      ctx.evaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, localizedReason: reason) { ok, error in
-        if !ok { err = error ?? LAError(.authenticationFailed) }
-        sem.signal()
+      try guarded {
+        let s = try SecureEnclave.P256.Signing.PrivateKey(dataRepresentation: Keychain.get("signing-se")!, authenticationContext: ctx)
+        _ = try s.signature(for: Data("jarvis2 batch face id: not a request".utf8))
+        let a = try SecureEnclave.P256.KeyAgreement.PrivateKey(dataRepresentation: Keychain.get("agreement-se")!, authenticationContext: ctx)
+        _ = try a.sharedSecretFromKeyAgreement(with: P256.KeyAgreement.PrivateKey().publicKey)
       }
-      sem.wait()
-      if let err { throw err }
       return PhoneAuth(context: ctx)
     }
     try simulatorFaceID(reason)

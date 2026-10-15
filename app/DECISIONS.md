@@ -278,8 +278,9 @@ fixes, 34–40 carried over from the old app and still true, 41–43 the web pag
     store's about text and every key (name in mono, explanation, "Written by session" + the session's title for a key a
     session wrote); each text has an inline Edit (a text box with Save / Cancel, Saving… and the router's error under
     it, "Saved" for a moment; saving an empty text removes it) that `PUT`s `api/stores/{store}/docs`. Keys with none
-    show "no explanation yet"; a store whose key names aren't known says so. New session's store picker shows the same
-    read-only and compact (key and explanation on one line, at most two lines). The iOS app: 68.
+    show "no explanation yet"; a store whose key names aren't known says so. New session's store picker on the web page
+    shows only each store's name and status pills, no about text or keys (Deyao, 2026-10-15: they took too much
+    space). The iOS app: 68.
 68. **Stores of keys in the iOS app** (core/keys.go; Deyao, 2026-10-13). Settings → Stores keeps one row per store (pills, the
     number of keys, Unlock); tapping the row opens the store's page: its about text and its keys (name in mono, how long
     ago it was written, "Written by session <title>" in orange for a key a session wrote, its explanation), each text
