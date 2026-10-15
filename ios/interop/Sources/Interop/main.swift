@@ -404,8 +404,8 @@ func routerWrite(_ store: String) -> Int {
   return call("/stores/write-key", ["store": store, "key": "CLAUDE_CREDENTIALS", "wrapped": ["e": x.wrapped.e, "wrapped": x.wrapped.wrapped], "data": x.data, "writer": "router"]).0
 }
 check(routerWrite("claude-interop") == 200, "the router writes a Claude account store")
-let (rws, rwb) = begin("claude-interop")
-check(rws == 200 && rwb?.keys?.first?.writer.by == "router" && rwb.map { x in !throwsErr { try Checks.unlockKeys(x, setupKey: setupKey) } } == true,
+let (routerBeginStatus, routerBegin) = begin("claude-interop")
+check(routerBeginStatus == 200 && routerBegin?.keys?.first?.writer.by == "router" && routerBegin.map { x in !throwsErr { try Checks.unlockKeys(x, setupKey: setupKey) } } == true,
       "…the unlock names the router as its writer, and the app takes it")
 check(routerWrite("default") == 403, "…and the core refuses the router any other store")
 check(throwsErr { try Checks.keyWriter(StoreWriter(by: "router"), store: "default", key: "K", e: "", dataSha256: "", backupSha256: "", setupKey: nil) },
