@@ -414,9 +414,10 @@ def main():
         call("POST", "/setup/store-docs", body)
         print(f"ok: {args[0]}: {len(body['keys'])} explanation(s)" + (" and its about text" if about is not None else "") + " kept")
     elif cmd == "delete":
-        me = set_up()
+        me = identity()  # a delete seals nothing (only the setup key signs it), so no master pin is needed
         if not me["keys"]:
-            raise SystemExit("this core predates stores made of keys: `write` the store without those keys instead")
+            raise SystemExit("this core predates stores made of keys, so one key can't be deleted alone: "
+                             f"`infra/setup.py write {args[0]} <every key it keeps> --replace` writes the store without them")
         for k in args[1:]:
             out = call("POST", f"/setup/stores/{args[0]}/keys/{k}", key_write(args[0], k, None, me))
             print(f"ok: {args[0]}: {k} deleted; refresh asked of {len(out.get('refreshAsked') or [])} running session(s)")
@@ -461,13 +462,16 @@ def main():
             print(f"note: {name} existed as not sensitive; marked sensitive before writing", file=sys.stderr)
         if me["keys"]:
             if replace:
-                raise SystemExit("--replace means nothing here: this core writes keys one by one and never drops one; "
-                                 "remove a key with `infra/setup.py delete`")
+                print("note: --replace means nothing here (this core writes keys one by one and never drops one): "
+                      f"the keys are written; remove one with `infra/setup.py delete {name} KEY`", file=sys.stderr)
             for k in sorted(vals):
                 out = call("POST", f"/setup/stores/{name}/keys/{k}", key_write(name, k, vals[k], me, explain.get(k, "")))
                 print(f"ok: {name}: {k} written (backed up first); refresh asked of {len(out.get('refreshAsked') or [])} running session(s)")
             if want_sensitive and not store_list()[name]["sensitive"]:
-                raise SystemExit(f"the core calls {name} not sensitive after the write")
+                # the one-way upgrade, at once (it only adds protection), rather than stopping with it undone
+                call("POST", "/setup/stores/mark-sensitive", {"name": name})
+                mark_sensitive_backup(name)
+                print(f"note: the core called {name} not sensitive after the write: marked sensitive now", file=sys.stderr)
             if explain:
                 call("POST", "/setup/store-docs", {"store": name, "keys": explain})
             return
@@ -483,7 +487,11 @@ def main():
         d = call("POST", "/setup/stores/write", {"store": b, "keys": sorted(vals), "replace": replace})
         sens = json.loads(d["payload"])["sensitive"]
         if want_sensitive and not sens:
-            raise SystemExit(f"the core still calls {name} not sensitive after the write: no backup made")
+            # the one-way upgrade, then the backup as sensitive: skipping the backup would protect nothing
+            call("POST", "/setup/stores/mark-sensitive", {"name": name})
+            mark_sensitive_backup(name)
+            print(f"note: the core called {name} not sensitive after the write: marked sensitive now", file=sys.stderr)
+            sens = True
         backup(name, vals, sens, me["master"])
         call("POST", "/setup/store-keys", {"name": name, "keys": sorted(vals)})
         print(f"ok: store {name} written with {len(vals)} keys (sensitive={sens}), backed up, key names recorded")
@@ -500,7 +508,7 @@ def main():
             cur = " (current)" if x["version"] == v["current"] else ""
             print(f"{x['seq']}{cur} {x['at']} {what}: {len(x['keys'])} keys: {' '.join(k['name'] for k in x['keys'])}")
     elif cmd == "mark-sensitive":
-        set_up()
+        # no trust check: the one-way upgrade only adds protection, whoever answers
         call("POST", "/setup/stores/mark-sensitive", {"name": args[0]})
         mark_sensitive_backup(args[0])
         print(f"ok: {args[0]} is sensitive, in the core and in the backup")
@@ -662,8 +670,7 @@ def jarvis1(args):
             print(json.dumps(call("POST", f"/setup/jarvis1/paused/{ids[0]}/import", body), indent=1))
             return
         # several: one batch (docs/API.md "Batches"), every import checked before any is filed
-        if not summary:
-            raise SystemExit("several imports are one batch: --summary TEXT says what the batch is for")
+        summary = summary or f"Jarvis 1 import of {len(ids)} sessions: {', '.join(ids)}"
         items = [dict(body, intent="jarvis1-import", id=i) for i in ids]
         print(json.dumps(call("POST", "/setup/requests/batch", {"summary": summary, "items": items}), indent=1))
     else:

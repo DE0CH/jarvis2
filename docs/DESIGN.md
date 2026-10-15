@@ -785,7 +785,8 @@ store key P + K and the deploy-key stores stay valid: "Core continuity"); a long
 - **A session waiting on a locked store says so:** the router notes the core's 423 on the machine's secrets pull
   (`lockedStore`); the session's page and the terminal show "Waiting for store X to be unlocked" with Unlock…, a review
   that unlocks exactly the locked stores of the session's core-signed cert, for that cert only. The machine retries every
-  2 s.
+  2 s for 10 minutes, then starts the session without any secrets (the core seals all of a cert's stores or none; running
+  without them is the lower-privilege state); the unlock then brings them (refresh-secrets rewrites `~/.secrets`).
 
 ## Guarantees
 

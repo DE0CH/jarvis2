@@ -284,7 +284,8 @@ grant, unlock, add-store, new-session, jarvis1-import); at most 20 items; every 
 
 - Setup session: `infra/setup.py request batch --summary "…" --item repo/add,repo=DE0CH/x --item
   grant,session=sID,holder=terminal,minutes=5` (or `--file items.json`, a JSON list of `{"intent": …, …}`);
-  several Jarvis 1 imports: `infra/setup.py jarvis1 import ID1 ID2 … --stores a,b --why "…" --summary "…"`.
+  several Jarvis 1 imports: `infra/setup.py jarvis1 import ID1 ID2 … --stores a,b --why "…" [--summary "…"]` (the
+  summary defaults to the ids).
 - Inside a session: `jarvis2-request batch --summary "…" --item grant,holder=scheduler,minutes=5 --item
   add-store,store=gmail` (or `--file`); `--item new-session,label=…,prompt=…,stores=a|b` (lists with `|`; a long
   prompt goes in a `--file` item). A batch counts as one of the session's 3 waiting proposals.

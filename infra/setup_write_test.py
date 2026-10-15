@@ -48,6 +48,12 @@ w = [b for p, b in sent if p == "/setup/stores/write"][0]
 assert w["keys"] == ["A"] and w["replace"] is True, w
 
 core["keys"] = True  # a core whose stores are made of keys: a write never drops one, --replace means nothing
-err = write("identity", "A", "--replace")
-assert err and "--replace means nothing" in err, err
+S.key_write = lambda *a, **k: {}
+assert write("identity", "A", "--replace") is None  # --replace is ignored there (noted), the key still written
+assert any(p == "/setup/stores/identity/keys/A" for p, _ in sent), sent
+# a store the core calls not sensitive after the write is marked sensitive at once, not left so
+S.store_list = lambda: {"identity": {"name": "identity", "sensitive": False}}
+S.mark_sensitive_backup = lambda n: sent.append(("marker", n))
+assert write("identity", "A") is None
+assert ("marker", "identity") in sent and any(p == "/setup/stores/mark-sensitive" for p, _ in sent), sent
 print("setup_write_test: ok")
