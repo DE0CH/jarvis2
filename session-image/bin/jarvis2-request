@@ -16,9 +16,11 @@ this session as the caller, from the machine's key) and the reason given here, a
                                     one more store for this running session (its machine keeps its keys); once
                                     approved (within 1 h) it is pulled into ~/.secrets by a background waiter
   jarvis2-request new-session --label TEXT --prompt-file FILE [--stores a,b] [--repos URL,URL] [--model M]
-                  [--size small|medium|large] [--harness claude] [--request-id ID] --why TEXT
+                  [--size small|medium|large] [--harness claude] [--account NAME] [--request-id ID] --why TEXT
                                     propose a NEW session: it appears in the Inbox like the app's New session and starts
-                                    only when Deyao approves it with Face ID (no attachments; at most 3 waiting)
+                                    only when Deyao approves it with Face ID (no attachments; at most 3 waiting).
+                                    --account: its Claude account (claude-<name> or <name>; Settings → Claude
+                                    accounts lists them), kept for the session's life; default: Deyao's default one
   jarvis2-request batch (--file FILE | --item ITEM… | --item-json JSON…) --summary TEXT
                                     several of the above as ONE Inbox entry, allowed together under one Face ID (or
                                     denied together). FILE: a JSON list of items, each {"intent": …} plus that
@@ -207,7 +209,7 @@ def main():
             raise SystemExit("new-session needs --label and --prompt-file")
         with open(pf) as f:
             new_session = {"label": label, "prompt": f.read()}
-        for flag, key in (("--model", "model"), ("--size", "size"), ("--harness", "harness"), ("--request-id", "requestId")):
+        for flag, key in (("--model", "model"), ("--size", "size"), ("--harness", "harness"), ("--account", "account"), ("--request-id", "requestId")):
             v = opt(args, flag)
             if v:
                 new_session[key] = v

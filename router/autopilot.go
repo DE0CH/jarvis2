@@ -9,8 +9,8 @@ package main
 //   attention DMs   idle / waiting / dead for 5 min → one DM per episode; the idle one can be muted
 //   downgrade DM    a new safeguard refusal or refusal fallback in a transcript, or the "switch model?" dialog
 //   stall nudge     idle with background jobs for 15 min → Jarvis 1's watchdog text as a peer message
-//   login           a session holding the store `claude` stopped on "Please run /login" and its own pair is in
-//                   step again → deliver "continue" (the router never writes a login)
+//   login           a session with a Claude account stopped on "Please run /login" and its pair is in step with
+//                   its account's again → deliver "continue" (the router never writes a login)
 //
 // One tick at a time (a single loop). The decisions are made under the state lock by planTick (pure, tested);
 // the actions run outside it. A command the machine refuses (no grant) is recorded as the session's
@@ -23,7 +23,6 @@ import (
 	"log"
 	"net/http"
 	"regexp"
-	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -279,7 +278,7 @@ type pilotAction struct {
 	Session string
 	Text    string // dm, nudge
 	Repair  string // login: the uuid of the "Please run /login" reply being repaired
-	// login: the machine keeps its own pair in step (store `claude`, machine/claudelogin.go): no write, only
+	// login: the machine keeps its account's pair in step (machine/claudelogin.go): no write, only
 	// "continue" for a session stuck on "Please run /login"
 	Name    string
 	Jobs    int // nudge: the numbers its text is built from (the image builds the same text: vouch.go)
@@ -304,10 +303,7 @@ func (r *Router) autopilotTick() {
 	if !running {
 		return
 	}
-	storedExp := int64(0)
-	if l, err := r.sharedLogin(); err == nil {
-		storedExp = l.ExpiresAt
-	}
+	storedExp := r.loginExpiries()
 	var acts []pilotAction
 	r.st.Do(func(d *persisted) {
 		acts = planTick(d, time.Now(), storedExp, defaultPilot, r.busy, func(id string) bool { return autoPauseVeto != nil && autoPauseVeto(d, id) })
@@ -382,7 +378,7 @@ func (l *Liveness) mayExec(holder string, now time.Time) bool {
 }
 
 // planTick: one pass over the sessions; it moves the clocks and returns what to do. Called under the state lock.
-func planTick(d *persisted, now time.Time, storedExp int64, c pilotConfig, busy, veto func(string) bool) []pilotAction {
+func planTick(d *persisted, now time.Time, storedExp map[string]int64, c pilotConfig, busy, veto func(string) bool) []pilotAction {
 	var out []pilotAction
 	add := func(a pilotAction) { out = append(out, a) }
 	for id, s := range d.Sessions {
@@ -467,11 +463,11 @@ func planTick(d *persisted, now time.Time, storedExp int64, c pilotConfig, busy,
 			add(pilotAction{Kind: "nudge", Session: id, Text: nudgeText(g.BgTasks, stalled), Jobs: g.BgTasks, Minutes: int(stalled.Round(time.Minute) / time.Minute)})
 		}
 
-		// Claude login: a session holding the store `claude` keeps its pair in step by itself (machine/claudelogin.go),
-		// whatever the account; the router writes nothing (Deyao, 2026-10-14: no login repair). A turn that stopped on
+		// Claude login: a session with a Claude account keeps that account's pair in step by itself
+		// (machine/claudelogin.go); the router writes nothing (Deyao, 2026-10-14: no login repair). A turn that stopped on
 		// "Please run /login" gets "continue" once the session's pair is in step again.
-		if g != nil && !operating && !l.loginBusy && s.Harness != "opencode" && slices.Contains(s.Stores, "claude") &&
-			storedExp > now.UnixMilli() && g.CredsExpiresAt >= storedExp && g.Status == "idle" {
+		if exp := storedExp[s.ClaudeAccount]; g != nil && !operating && !l.loginBusy && s.ClaudeAccount != "" &&
+			exp > now.UnixMilli() && g.CredsExpiresAt >= exp && g.Status == "idle" {
 			if u := g.AuthFailed; u != "" && (l.loginRepaired == nil || (l.loginRepaired.uuid != u && now.Sub(l.loginRepaired.at) >= c.RepairEvery)) {
 				l.loginRepaired = &repairMark{uuid: u, at: now}
 				l.loginBusy = true

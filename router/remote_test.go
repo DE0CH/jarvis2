@@ -30,9 +30,7 @@ func TestSessionModel(t *testing.T) {
 
 func TestModelsList(t *testing.T) {
 	r := newTestRouter(t)
-	r.policy.Harnesses = map[string]struct {
-		Stores []string `json:"stores"`
-	}{"claude": {}, "opencode": {}}
+	r.policy.Harnesses = map[string]HarnessPolicy{"claude": {}, "opencode": {}}
 	get := func(q string) map[string]any {
 		w := httptest.NewRecorder()
 		r.Handler().ServeHTTP(w, httptest.NewRequest("GET", "/api/models"+q, nil))

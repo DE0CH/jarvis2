@@ -66,7 +66,21 @@ func (r *Router) RestoreRecord(recordID, requestID string) (string, error) {
 	if !ok {
 		return "", fmt.Errorf("no harness %s in the policy", rec.Harness)
 	}
-	stores, err := r.withHarnessStores(rec.Stores, h.Stores)
+	var kept []string // the record's stores, less the shared login's old store (its account comes as the account)
+	for _, n := range rec.Stores {
+		if n != legacyClaudeStore {
+			kept = append(kept, n)
+		}
+	}
+	stores, err := r.withHarnessStores(kept, h.Stores)
+	if err != nil {
+		return "", err
+	}
+	named := rec.ClaudeAccount // the account it ran on, while it exists; else the default
+	if r.accounts().hub(named) == nil {
+		named = ""
+	}
+	account, err := r.accounts().resolve(named, h.ClaudeAccount)
 	if err != nil {
 		return "", err
 	}
@@ -107,7 +121,7 @@ func (r *Router) RestoreRecord(recordID, requestID string) (string, error) {
 		label = rec.Archive.Title
 	}
 	s := &Session{ID: sid, State: "approval", Created: time.Now().UTC(), Label: label, Model: rec.Model, PermissionMode: rec.PermissionMode,
-		Size: rec.Size, Harness: rec.Harness, Stores: stores, Repos: rec.Repos, RequestID: requestID, RestoreFrom: recordID, RestoreCert: cert, RestoreCoreCert: coreCert}
+		Size: rec.Size, Harness: rec.Harness, Stores: stores, ClaudeAccount: account, Repos: rec.Repos, RequestID: requestID, RestoreFrom: recordID, RestoreCert: cert, RestoreCoreCert: coreCert}
 	r.st.Do(func(d *persisted) { d.Sessions[sid] = s })
 	config, err := r.sessionConfig(s) // vouch.go: names the snapshot this line restores (machine + sha256)
 	if err != nil {

@@ -1,25 +1,27 @@
 package main
 
-// The Claude login: one OAuth pair shared by every Claude session (Jarvis 1's lib/oauth.js, lib/claudelogin.js,
-// /api/credentials, /api/usage and its Re-login, moved here; docs/DECISIONS.md 115-121). The router keeps the pair on its
-// volume (claude-login.json, 0600) and is its ONLY refresher. A refresh revokes the previous access token at once,
-// so there is one refresher: this router. Jarvis 1, while it still runs, only follows (reads the pair from here).
+// The Claude login of one Claude account (Jarvis 1's lib/oauth.js, lib/claudelogin.js, /api/credentials, /api/usage
+// and its Re-login, moved here; docs/DECISIONS.md 115-121, 169). Each account is a Claude key store of the router's
+// own, `claude-<name>` (claudeaccounts.go): one hub per account, its pair on the router's volume
+// (claude-accounts/<store>.json, 0600), and this router is its ONLY refresher. A refresh revokes the previous access
+// token at once, so there is one refresher: this router. Jarvis 1, while it still runs, only follows one account
+// (reads its pair from here).
 //
-// Who takes the pair, all with the same long poll (GET …/claude-login?have=&ack=&wait=):
-//   - a session machine whose cert names the store `claude` (/m/claude-login, signed with its machine key;
-//     machine/claudelogin.go checks every pair against the account in its store before writing it);
+// Who takes an account's pair, all with the same long poll (GET …/claude-login?have=&ack=&wait=):
+//   - a session machine whose session uses that account (Session.ClaudeAccount, fixed when the session is made;
+//     /m/claude-login, signed with its machine key);
 //   - Jarvis 1, while it still runs, for its own sessions (/peer/claude-login, behind a path-scoped Access app that
 //     admits one service token, JARVIS1_LOGIN_CLIENT_ID). Jarvis 2 never calls Jarvis 1.
 // The refresh protocol keeps lessons/74's guarantee (a session that gets a 401 mid-refresh waits for the new pair
-// instead of burning its refresh token): before refreshing, the router answers every waiting poll with
+// instead of burning its refresh token): before refreshing, the hub answers every waiting poll with
 // {preparing, gen}; each participant takes the CLI's refresh lock (~/.claude/.oauth_refresh.lock) and polls again
-// with ack=gen; the router waits for every participant seen in the last 2 minutes (at most 10 s), refreshes,
+// with ack=gen; the hub waits for every participant seen in the last 2 minutes (at most 10 s), refreshes,
 // writes the pair to its volume, then answers every poll with it; a participant writes the file and releases the
 // lock. A failed refresh answers {preparing: false}: participants release.
 //
 // Pushes (a participant whose claude refreshed by itself, e.g. while the router was down): newer expiresAt wins,
-// and the pair's account must be the stored one (checked with Anthropic's profile endpoint), except for a
-// Re-login (Deyao's own action in the app).
+// and the pair's account must be the hub's (checked with Anthropic's profile endpoint). A Re-login (Deyao's own
+// action) must be the hub's account too, once it has one (claudeaccounts.go checks it).
 
 import (
 	"bytes"
@@ -35,7 +37,6 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -99,6 +100,7 @@ type loginFile struct {
 
 type loginHub struct {
 	path      string
+	store     string // the account's key store, claude-<name>
 	mu        sync.Mutex
 	f         loginFile
 	changed   chan struct{} // closed and replaced on every change (pair, phase, acks)
@@ -112,29 +114,19 @@ type loginHub struct {
 		body map[string]any
 	}
 	dm func(string)
+	// check: a Re-login's account (uuid) may land in this hub (claudeaccounts.go: the hub's own account, and no other
+	// hub's); nil = any
+	check func(uuid string) error
 }
 
-func newLoginHub(dir string) *loginHub {
-	h := &loginHub{path: filepath.Join(dir, "claude-login.json"), changed: make(chan struct{}), acks: map[string]int64{}, seen: map[string]time.Time{}}
+func newLoginHub(path, store string) *loginHub {
+	h := &loginHub{path: path, store: store, changed: make(chan struct{}), acks: map[string]int64{}, seen: map[string]time.Time{}}
 	if b, err := os.ReadFile(h.path); err == nil {
 		if err := json.Unmarshal(b, &h.f); err != nil {
 			log.Printf("[login] %s unreadable: %v", h.path, err)
 		}
 	}
 	return h
-}
-
-// loginHub: the router's one hub (lazily, so tests that build a Router by hand get one in their data dir)
-func (r *Router) loginHub() *loginHub {
-	r.loginOnce.Do(func() {
-		dir := r.cfg.DataDir
-		if dir == "" {
-			dir = os.TempDir()
-		}
-		r.login = newLoginHub(dir)
-		r.login.dm = r.DM
-	})
-	return r.login
 }
 
 // save: atomic, 0600, synced (a refreshed pair must survive a crash right after: the old refresh token is dead)
@@ -385,7 +377,7 @@ func (h *loginHub) offer(credentials, account, source string, switchOK, force bo
 	}
 	h.usage.body = nil
 	h.broadcastLocked()
-	log.Printf("[login] stored a newer Claude pair from %s (valid until %s)", source, time.UnixMilli(p.ExpiresAt).UTC().Format(time.RFC3339))
+	log.Printf("[login] %s: stored a newer Claude pair from %s (valid until %s)", h.store, source, time.UnixMilli(p.ExpiresAt).UTC().Format(time.RFC3339))
 	return true, nil
 }
 
@@ -486,11 +478,11 @@ func (h *loginHub) refresh(force bool) (bool, error) {
 	if err != nil {
 		h.f.Fail = &loginFail{At: time.Now().UTC(), Error: err.Error(), ExpiresAt: exp, Rejected: rejected}
 		h.save()
-		log.Printf("[login] refresh failed (%d/%d participants locked): %v", acked, len(want), err)
+		log.Printf("[login] %s: refresh failed (%d/%d participants locked): %v", h.store, acked, len(want), err)
 		if rejected && h.dm != nil {
 			h.f.Fail.Notified = true
 			h.save()
-			go h.dm(deadLoginMessage(err.Error()))
+			go h.dm(deadLoginMessage(h.store, accountEmail(h.f.Account), err.Error()))
 		}
 		return false, err
 	}
@@ -502,15 +494,19 @@ func (h *loginHub) refresh(force bool) (bool, error) {
 		log.Printf("[login] writing the refreshed pair to the volume failed: %v", err)
 	}
 	h.usage.body = nil
-	log.Printf("[login] refreshed (%d/%d participants locked); valid until %s", acked, len(want), time.UnixMilli(credsExpiry(newCreds)).UTC().Format(time.RFC3339))
+	log.Printf("[login] %s: refreshed (%d/%d participants locked); valid until %s", h.store, acked, len(want), time.UnixMilli(credsExpiry(newCreds)).UTC().Format(time.RFC3339))
 	return true, nil
 }
 
-func deadLoginMessage(why string) string {
+func deadLoginMessage(store, email, why string) string {
 	if len(why) > 200 {
 		why = why[:200]
 	}
-	return "🔑 The Claude login has run out: refreshing it was refused (" + why + "). Only a new sign-in fixes it: Jarvis 2 → Settings → Claude account → Re-login. Sessions stuck on “Please run /login” are resumed once that is done."
+	who := store
+	if email != "" {
+		who += " (" + email + ")"
+	}
+	return "🔑 The Claude login of " + who + " has run out: refreshing it was refused (" + why + "). Only a new sign-in fixes it: Jarvis 2 → Settings → Claude accounts → " + store + " → Re-login. Its sessions stuck on “Please run /login” are resumed once that is done."
 }
 
 // waitAcks: until every participant in want acknowledged gen, or d passed; returns how many did
@@ -590,7 +586,7 @@ func (h *loginHub) finishLogin(pasted string) (string, error) {
 	p := h.f.Pending
 	h.mu.Unlock()
 	if p == nil || time.Since(p.At) > loginPendingTTL {
-		return "", errors.New("no Re-login in progress (or it is older than 15 minutes): press Re-login again")
+		return "", errors.New("no sign-in in progress (or it is older than 15 minutes): press Re-login again")
 	}
 	if code == "" || state == "" {
 		return "", errors.New("paste the whole code shown after sign-in (it has a # in it)")
@@ -634,7 +630,7 @@ func (h *loginHub) finishLogin(pasted string) (string, error) {
 		}
 		acct["oauthAccount"] = oa
 	} else {
-		log.Printf("[login] Re-login: profile: %v (stored without the account record)", err)
+		log.Printf("[login] %s: Re-login: profile: %v (stored without the account record)", h.store, err)
 		if a, _ := j["account"].(map[string]any); a != nil {
 			oa := map[string]any{"accountUuid": a["uuid"], "emailAddress": a["email_address"]}
 			if org, _ := j["organization"].(map[string]any); org != nil {
@@ -648,6 +644,11 @@ func (h *loginHub) finishLogin(pasted string) (string, error) {
 	if len(acct) > 0 {
 		b, _ := json.Marshal(acct)
 		account = string(b)
+	}
+	if h.check != nil {
+		if err := h.check(accountUUID(account)); err != nil {
+			return "", err
+		}
 	}
 	h.mu.Lock()
 	h.f.Pending = nil
@@ -793,7 +794,7 @@ func (h *loginHub) status() map[string]any {
 		}
 	}
 	sort.Slice(parts, func(i, j int) bool { return parts[i]["id"].(string) < parts[j]["id"].(string) })
-	out := map[string]any{"hasLogin": h.f.Credentials != "", "expiresAt": nullIfZero(exp),
+	out := map[string]any{"store": h.store, "hasLogin": h.f.Credentials != "", "expiresAt": nullIfZero(exp),
 		"expired": exp != 0 && exp < time.Now().UnixMilli(), "email": accountEmail(h.f.Account), "accountUuid": accountUUID(h.f.Account), "source": h.f.Source,
 		"updatedAt": nullIfZeroTime(h.f.UpdatedAt), "refreshedAt": nullIfZeroTime(h.f.RefreshedAt), "participants": parts,
 		"loginInProgress": h.f.Pending != nil && time.Since(h.f.Pending.At) < loginPendingTTL, "preparing": h.preparing}
@@ -823,12 +824,13 @@ func nullIfZeroTime(t time.Time) any {
 
 // ---- loops ----------------------------------------------------------------------------------------------------------
 
-// loginLoop: refresh when due (checked every minute)
+// loginLoop: refresh every account's login when due (checked every minute)
 func (r *Router) loginLoop() {
-	h := r.loginHub()
 	for {
-		if _, err := h.refresh(false); err != nil && !errors.Is(err, errNoPair) {
-			log.Printf("[login] %v", err)
+		for _, h := range r.accounts().all() {
+			if _, err := h.refresh(false); err != nil && !errors.Is(err, errNoPair) {
+				log.Printf("[login] %s: %v", h.store, err)
+			}
 		}
 		time.Sleep(time.Minute)
 	}
@@ -844,19 +846,19 @@ func pollArgs(req *http.Request) (have, ack int64, wait time.Duration) {
 	return have, ack, time.Duration(ws) * time.Second
 }
 
-// machineHasClaude: the session this machine runs, if its cert names the store `claude`
-func (r *Router) machineHasClaude(machine string) (string, bool) {
-	var sid string
-	ok := false
+// machineAccount: the session this machine runs and the hub of its Claude account; nil when the session has none (or
+// the account was removed)
+func (r *Router) machineAccount(machine string) (string, *loginHub) {
+	var sid, store string
 	r.st.Do(func(d *persisted) {
 		if s := d.Sessions[d.Machines[machine]]; s != nil && s.MachineID == machine {
-			sid = s.ID
-			for _, st := range s.Stores {
-				ok = ok || st == "claude"
-			}
+			sid, store = s.ID, s.ClaudeAccount
 		}
 	})
-	return sid, sid != "" && ok
+	if sid == "" || store == "" {
+		return sid, nil
+	}
+	return sid, r.accounts().hub(store)
 }
 
 type pushBody struct {
@@ -904,11 +906,15 @@ func (r *Router) pushAnswer(w http.ResponseWriter, h *loginHub, body []byte, sou
 }
 
 func (r *Router) registerClaudeLogin(app appRoute, m machineRoute, public publicRoute) {
-	h := r.loginHub()
-	// ---- session machines (store `claude` in the cert) ----
+	acc := r.accounts()
+	noAccount := func(w http.ResponseWriter) {
+		writeJSON(w, 404, map[string]any{"error": "this session has no Claude account", "noAccount": true})
+	}
+	// ---- session machines (the session's own account) ----
 	machinePoll := func(w http.ResponseWriter, req *http.Request, machine string, _ []byte) {
-		if _, ok := r.machineHasClaude(machine); !ok {
-			writeJSON(w, 403, map[string]string{"error": "this machine's cert doesn't name the store claude"})
+		_, h := r.machineAccount(machine)
+		if h == nil {
+			noAccount(w)
 			return
 		}
 		have, ack, wait := pollArgs(req)
@@ -916,9 +922,9 @@ func (r *Router) registerClaudeLogin(app appRoute, m machineRoute, public public
 		writeJSON(w, 200, h.poll(req.Context(), "m:"+machine, have, ack, wait))
 	}
 	machinePush := func(w http.ResponseWriter, req *http.Request, machine string, body []byte) {
-		sid, ok := r.machineHasClaude(machine)
-		if !ok {
-			writeJSON(w, 403, map[string]string{"error": "this machine's cert doesn't name the store claude"})
+		sid, h := r.machineAccount(machine)
+		if h == nil {
+			noAccount(w)
 			return
 		}
 		r.pushAnswer(w, h, body, "session "+sid, false)
@@ -927,8 +933,9 @@ func (r *Router) registerClaudeLogin(app appRoute, m machineRoute, public public
 	m("POST /m/claude-login", machinePush)
 	// session images from before 2026-10-13 (their push-claude-credentials, through the machine's $JARVIS_URL proxy)
 	m("GET /m/api/credentials", func(w http.ResponseWriter, req *http.Request, machine string, _ []byte) {
-		if _, ok := r.machineHasClaude(machine); !ok {
-			writeJSON(w, 403, map[string]string{"error": "this machine's cert doesn't name the store claude"})
+		_, h := r.machineAccount(machine)
+		if h == nil {
+			noAccount(w)
 			return
 		}
 		cur := h.current()
@@ -941,72 +948,35 @@ func (r *Router) registerClaudeLogin(app appRoute, m machineRoute, public public
 	})
 	m("POST /m/api/credentials", machinePush)
 
-	// ---- Jarvis 1 (its sessions take the pair from here once it follows): one Access service token ----
+	// ---- Jarvis 1 (its sessions take the pair from here once it follows): one Access service token, one account ----
 	peer := r.requireClient(os.Getenv("ACCESS_PEER_AUD"), os.Getenv("JARVIS1_LOGIN_CLIENT_ID"))
+	peerHub := func(w http.ResponseWriter) *loginHub {
+		h := acc.jarvis1Hub()
+		if h == nil {
+			writeJSON(w, 409, map[string]any{"error": "no Claude account is followed by Jarvis 1", "needLogin": true})
+		}
+		return h
+	}
 	public("GET /peer/claude-login", peer(func(w http.ResponseWriter, req *http.Request) {
-		have, ack, wait := pollArgs(req)
-		w.Header().Set("Cache-Control", "no-store")
-		writeJSON(w, 200, h.poll(req.Context(), "jarvis1", have, ack, wait))
+		if h := peerHub(w); h != nil {
+			have, ack, wait := pollArgs(req)
+			w.Header().Set("Cache-Control", "no-store")
+			writeJSON(w, 200, h.poll(req.Context(), "jarvis1", have, ack, wait))
+		}
 	}))
 	public("POST /peer/claude-login", peer(func(w http.ResponseWriter, req *http.Request) {
 		b, _ := io.ReadAll(io.LimitReader(req.Body, 1<<20))
-		r.pushAnswer(w, h, b, "jarvis1", false)
+		if h := peerHub(w); h != nil {
+			r.pushAnswer(w, h, b, "jarvis1", false)
+		}
 	}))
-	public("GET /peer/claude-login/status", peer(func(w http.ResponseWriter, req *http.Request) { writeJSON(w, 200, h.status()) }))
+	public("GET /peer/claude-login/status", peer(func(w http.ResponseWriter, req *http.Request) {
+		if h := peerHub(w); h != nil {
+			writeJSON(w, 200, h.status())
+		}
+	}))
 
-	// ---- the app (Deyao) ----
-	app("GET /api/claude-login", func(w http.ResponseWriter, req *http.Request) { writeJSON(w, 200, h.status()) })
-	app("POST /api/claude-login/refresh", func(w http.ResponseWriter, req *http.Request) {
-		ok, err := h.refresh(true)
-		if err != nil {
-			status := 502
-			if errors.Is(err, errNoPair) {
-				status = 409
-			}
-			writeJSON(w, status, map[string]any{"error": err.Error(), "needLogin": errors.Is(err, errNoPair) || strings.Contains(err.Error(), "Re-login")})
-			return
-		}
-		writeJSON(w, 200, map[string]any{"ok": true, "refreshed": ok, "expiresAt": h.current().ExpiresAt})
-	})
-	app("POST /api/claude-login/start", func(w http.ResponseWriter, req *http.Request) {
-		u, err := h.startLogin()
-		if err != nil {
-			writeJSON(w, 500, map[string]string{"error": err.Error()})
-			return
-		}
-		writeJSON(w, 200, map[string]string{"url": u})
-	})
-	app("POST /api/claude-login/code", func(w http.ResponseWriter, req *http.Request) {
-		var b struct {
-			Code string `json:"code"`
-		}
-		json.NewDecoder(io.LimitReader(req.Body, 1<<16)).Decode(&b)
-		email, err := h.finishLogin(b.Code)
-		if err != nil {
-			writeJSON(w, 400, map[string]string{"error": err.Error()})
-			return
-		}
-		cur := h.current()
-		go r.resumeStuckLogins()
-		writeJSON(w, 200, map[string]any{"ok": true, "email": email, "expiresAt": cur.ExpiresAt})
-	})
-	app("GET /api/usage", func(w http.ResponseWriter, req *http.Request) {
-		status, body := h.usageQuota(req.URL.Query().Get("refresh") == "1")
-		writeJSON(w, status, body)
-	})
-
-	// ---- the setup session: the status ----
-	setupSigned := func(fn func(w http.ResponseWriter, req *http.Request, body []byte)) http.Handler {
-		return r.requireSetup(func(w http.ResponseWriter, req *http.Request) {
-			b, _ := io.ReadAll(io.LimitReader(req.Body, 1<<20))
-			if err := r.checkSetupSig(req.Method, req.URL.Path, req.Header.Get("X-Setup-Time"), req.Header.Get("X-Setup-Sig"), b); err != nil {
-				writeJSON(w, 401, map[string]string{"error": err.Error()})
-				return
-			}
-			fn(w, req, b)
-		})
-	}
-	public("GET /setup/claude-login", setupSigned(func(w http.ResponseWriter, req *http.Request, _ []byte) { writeJSON(w, 200, h.status()) }))
+	r.registerClaudeAccounts(app, public) // claudeaccounts.go: the app's and the setup session's routes
 }
 
 // requireClient: exactly one Access service token (its client id = the JWT's common_name) on a path-scoped Access

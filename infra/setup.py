@@ -37,8 +37,10 @@ both). Values never print.
                                        --not-sensitive
   infra/setup.py backup-core FILE      the core's Fly token, FLY_API_TOKEN from FILE (infra/fly-token.sh):
                                        sent to the core sealed to its key, and backed up as the `core` store
-  infra/setup.py claude-login          the Claude login the router holds (no secrets): account, expiry, refresh
-                                       state, participants of the refresh protocol
+  infra/setup.py claude-accounts       the router's Claude accounts (no secrets): per account its email, expiry,
+                                       refresh state, participants of the refresh protocol, the sessions using it,
+                                       and which is the default (router/claudeaccounts.go)
+  infra/setup.py claude-login          the same for the default account only
   infra/setup.py repos                 the router's repo list (repo, store, key fingerprint)
   infra/setup.py sessions              the router's sessions: id, current machine, state, title
   infra/setup.py lease take-over|hand-back DEVICE [--note TEXT]
@@ -318,7 +320,7 @@ def blob(name, values, phone_agreement, core_agreement):
 # the stores this writer means to be NOT sensitive (created first); every other store it writes is sensitive. The
 # core's open create_store lets anyone (the router) create a name first, so the writer checks the core's word against
 # this list and marks a store sensitive before it writes into it (R1 audit). A change here is a visible commit.
-NOT_SENSITIVE = ("default", "openrouter", "claude", "tunnel", "shopping") + tuple(
+NOT_SENSITIVE = ("default", "openrouter", "tunnel", "shopping") + tuple(
     n for n in os.environ.get("JARVIS2_NOT_SENSITIVE", "").split(",") if n)  # test boxes add their own (rehearsals)
 
 
@@ -515,6 +517,8 @@ def main():
         print("ok: the core has its Fly token, and the core store's backup is written")
     elif cmd == "claude-login":
         print(json.dumps(call("GET", "/setup/claude-login"), indent=1))
+    elif cmd == "claude-accounts":
+        print(json.dumps(call("GET", "/setup/claude-accounts"), indent=1))
     elif cmd == "repos":
         for r in call("GET", "/setup/repos")["repos"]:
             print(r["repo"], r["store"], r.get("fingerprint") or "no key yet", "sensitive" if r.get("sensitive") else "")

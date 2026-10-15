@@ -125,7 +125,7 @@ func TestJarvis1ImportPrepareAndImport(t *testing.T) {
 	})
 	if s.State != "approval" || s.ImportFrom != j1TestID || s.ImportSha != sum || s.Label != "OWCS ticket cron" || s.Size != "large" ||
 		s.PermissionMode != "bypass" || s.Model != "claude-opus-5-5" || s.Repos != "https://github.com/de0ch/claude-env.git,https://github.com/DE0CH/YCC.git" ||
-		strings.Join(s.Stores, ",") != "claude,default" || s.Live == nil || s.Live.AutoPauseOff {
+		strings.Join(s.Stores, ",") != "default,tunnel" || s.Live == nil || s.Live.AutoPauseOff {
 		t.Fatalf("session %+v", s)
 	}
 	if !strings.Contains(s.Prompt, "moved from Jarvis 1 to Jarvis 2") || !strings.Contains(s.Prompt, j1TestID) {

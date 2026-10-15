@@ -21,7 +21,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
-	"slices"
 	"sort"
 	"strings"
 	"syscall"
@@ -281,12 +280,11 @@ func pruneLogs(dir string) {
 	}
 }
 
-// claudeLoginForPrompt: a prompt task needs a Claude login: the router's shared pair (store `claude`, as a
-// session's, claudelogin.go), else the store's CLAUDE_CREDENTIALS. Returns what was written, to push a refreshed
-// pair back afterwards.
-func claudeLoginForPrompt(secrets map[string]string, stores []string) []byte {
-	var creds []byte
-	if slices.Contains(stores, "claude") {
+// claudeLoginForPrompt: a prompt task needs a Claude login: the pair of the line's Claude account (as a session's,
+// claudelogin.go), else the store's CLAUDE_CREDENTIALS. Returns what was written, to push a refreshed pair back
+// afterwards, and whether it is the router's (then a refreshed pair goes back to it).
+func claudeLoginForPrompt(secrets map[string]string) (creds []byte, fromRouter bool) {
+	{
 		c, err := newClient()
 		var l routerLogin
 		if err == nil {
@@ -296,12 +294,12 @@ func claudeLoginForPrompt(secrets map[string]string, stores []string) []byte {
 			err = errors.New("the router holds no Claude login")
 		}
 		if err == nil {
-			creds = []byte(l.Credentials)
+			creds, fromRouter = []byte(l.Credentials), true
 			home, _ := os.UserHomeDir()
 			if _, err := os.Stat(filepath.Join(home, ".claude.json")); err != nil && l.Account != "" {
 				os.WriteFile(filepath.Join(home, ".claude.json"), []byte(l.Account), 0o600)
 			}
-		} else {
+		} else if !errors.Is(err, errNoAccount) {
 			log.Printf("task: Claude login: %v", err)
 		}
 	}
@@ -312,7 +310,7 @@ func claudeLoginForPrompt(secrets map[string]string, stores []string) []byte {
 		os.MkdirAll(filepath.Dir(credsPath()), 0o700)
 		os.WriteFile(credsPath(), creds, 0o600)
 	}
-	return creds
+	return creds, fromRouter
 }
 
 // runTask: the task line's boot after the checks (prepare): run the template once for JARVIS2_TASK_RUN (none:
@@ -373,8 +371,9 @@ func doRun(template, run string, secrets map[string]string, stores []string, mod
 		return fail(err.Error())
 	}
 	var creds []byte
+	credsFromRouter := false
 	if spec.Prompt != "" {
-		creds = claudeLoginForPrompt(secrets, stores)
+		creds, credsFromRouter = claudeLoginForPrompt(secrets)
 	}
 	env := taskEnviron(os.Environ(), secrets, map[string]string{"TASK_DIR": dir, "TASK_TEMPLATE": template, "TASK_RUN": run,
 		"TASK_OUTPUT": outPath, "TASK_STATE_DIR": state, "TASK_WORK": work, "TASK_TIMEOUT": fmt.Sprint(int(timeout.Seconds()))})
@@ -386,7 +385,7 @@ func doRun(template, run string, secrets map[string]string, stores []string, mod
 		res.Error = "could not run: " + err.Error()
 	}
 	if creds != nil { // claude may have refreshed (rotated) the pair: the router keeps the newest
-		if now, err := os.ReadFile(credsPath()); err == nil && !bytes.Equal(now, creds) && slices.Contains(stores, "claude") {
+		if now, err := os.ReadFile(credsPath()); err == nil && !bytes.Equal(now, creds) && credsFromRouter {
 			var out map[string]any
 			c, err := newClient()
 			if err == nil {

@@ -28,6 +28,7 @@ type Session struct {
 	Size           string     `json:"size"`
 	Harness        string     `json:"harness"`
 	Stores         []string   `json:"stores"`
+	ClaudeAccount  string     `json:"claudeAccount,omitempty"` // claudeaccounts.go: the Claude account it uses, fixed when made
 	Repos          string     `json:"repos"`
 	Content        []string   `json:"content,omitempty"` // content.go: the content stores the line gets (signed in its config)
 	Image          string     `json:"image"`             // what the current line runs (ref@digest), pinned on resume

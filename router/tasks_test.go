@@ -549,8 +549,8 @@ func TestTaskLinesSkipAutopilot(t *testing.T) {
 	d := running("sT", &Liveness{})
 	d.Sessions["sT"].Harness = "task:job"
 	// no live claude in a task machine: no "dead" DM, no auto-pause
-	acts := planTick(d, now, 0, defaultPilot, fakeLocks{}.busy, func(string) bool { return false })
-	acts = append(acts, planTick(d, now.Add(time.Hour), 0, defaultPilot, fakeLocks{}.busy, func(string) bool { return false })...)
+	acts := planTick(d, now, nil, defaultPilot, fakeLocks{}.busy, func(string) bool { return false })
+	acts = append(acts, planTick(d, now.Add(time.Hour), nil, defaultPilot, fakeLocks{}.busy, func(string) bool { return false })...)
 	if len(acts) != 0 {
 		t.Fatalf("%v", kinds(acts))
 	}

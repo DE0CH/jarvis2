@@ -27,6 +27,7 @@ type fakeLoginRouter struct {
 	answers []routerLogin // served in turn, the last one repeated
 	polls   []string      // the query of each poll
 	pushes  []string
+	none    bool // the session has no Claude account (404 noAccount)
 }
 
 func newFakeLoginRouter(t *testing.T) (*fakeLoginRouter, *client) {
@@ -46,6 +47,9 @@ func newFakeLoginRouter(t *testing.T) (*fakeLoginRouter, *client) {
 			}
 		}
 		switch {
+		case req.URL.Path == "/m/claude-login" && req.Method == "GET" && f.none:
+			w.WriteHeader(404)
+			w.Write([]byte(`{"error":"this session has no Claude account","noAccount":true}`))
 		case req.URL.Path == "/m/claude-login" && req.Method == "GET":
 			f.polls = append(f.polls, req.URL.RawQuery)
 			a := f.answers[0]
@@ -70,7 +74,8 @@ const acctRecord = `{"oauthAccount":{"accountUuid":"acct-1","emailAddress":"x"}}
 
 const acct2Record = `{"oauthAccount":{"accountUuid":"acct-2","emailAddress":"y"},"userID":"u2"}`
 
-// a new session's Claude login comes from the router at boot, whatever its account: no grant, no store key
+// a new session's Claude login comes from the router at boot (its Claude account's), whatever the account: no grant,
+// no store key; a session the router names no account for gets none
 func TestSessionClaudeLoginAtBoot(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	f, c := newFakeLoginRouter(t)
@@ -80,10 +85,15 @@ func TestSessionClaudeLoginAtBoot(t *testing.T) {
 	started := 0
 	startCredsSync = func() { started++ }
 
-	if acct := sessionClaudeLogin(c, []string{"default"}); acct != "" || started != 0 {
-		t.Fatal("no claude store in the cert: nothing to do")
+	f.none = true
+	if acct := sessionClaudeLogin(c); acct != "" || started != 0 {
+		t.Fatal("no Claude account for the session: nothing to do")
 	}
-	acct := sessionClaudeLogin(c, []string{"claude"})
+	if _, err := os.Stat(credsPath()); err == nil {
+		t.Fatal("a session with no account got a credentials file")
+	}
+	f.none = false
+	acct := sessionClaudeLogin(c)
 	if started != 1 || !strings.Contains(acct, "acct-1") {
 		t.Fatalf("started %d account %q", started, acct)
 	}
@@ -99,14 +109,14 @@ func TestSessionClaudeLoginAtBoot(t *testing.T) {
 	}
 	// a resumed pair of the same account that expires later is kept
 	os.WriteFile(credsPath(), []byte(pairJSON(3000)), 0o600)
-	sessionClaudeLogin(c, []string{"claude"})
+	sessionClaudeLogin(c)
 	if b, _ := os.ReadFile(credsPath()); expiresAt(b) != 3000 {
 		t.Fatalf("a later pair was replaced: %s", b)
 	}
 	// a resume after a Re-login to another account: the restored ~/.claude.json takes the new account, other keys kept
 	os.WriteFile(home(t)+"/.claude.json", []byte(`{"oauthAccount":{"accountUuid":"acct-1"},"projects":{"x":1}}`), 0o600)
 	f.answers = []routerLogin{{Credentials: pairJSON(2500), Account: acct2Record, ExpiresAt: 2500}}
-	sessionClaudeLogin(c, []string{"claude"})
+	sessionClaudeLogin(c)
 	j, _ := os.ReadFile(home(t) + "/.claude.json")
 	if localAccount() != "acct-2" || !strings.Contains(string(j), `"projects"`) || !strings.Contains(string(j), `"u2"`) {
 		t.Fatalf("~/.claude.json: %s", j)

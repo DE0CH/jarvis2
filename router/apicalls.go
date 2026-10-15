@@ -410,6 +410,14 @@ var callRules = map[string]callRule{
 	"POST /api/approvals/{id}/respond":          callNo,     // the Inbox
 	"GET /api/auth/start":                       callNo,     // hands out Deyao's Access login (a jarvis2:// redirect carrying it)
 	"GET /api/backups":                          callStatus, // every store's sealed backup
+	"DELETE /api/claude-accounts/{store}":       callBody,
+	"GET /api/claude-accounts":                  callBody,
+	"GET /api/claude-accounts/{store}/usage":    callBody,
+	"POST /api/claude-accounts":                 callStatus, // the OAuth sign-in URL with its state and PKCE challenge
+	"POST /api/claude-accounts/{store}/code":    callBody,
+	"POST /api/claude-accounts/{store}/default": callBody,
+	"POST /api/claude-accounts/{store}/login":   callStatus, // the OAuth sign-in URL with its state and PKCE challenge
+	"POST /api/claude-accounts/{store}/refresh": callBody,
 	"GET /api/claude-login":                     callBody,
 	"POST /api/claude-login/code":               callBody,
 	"POST /api/claude-login/refresh":            callBody,

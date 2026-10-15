@@ -247,7 +247,7 @@ func TestAStaleAnswerFromTheHeldCoreDropsNoStore(t *testing.T) {
 // the cert the first one replaced. Now each answer makes the others' challenges again from the new cert, so every
 // item goes in on the first Allow all, with either core and in any order.
 func TestABatchOfAddStoresForOneSessionAllGoInAtOnce(t *testing.T) {
-	stores := []string{"identity", "claude", "tunnel", "github-claude-env", "yyc"}
+	stores := []string{"identity", "gmail", "tunnel", "github-claude-env", "yyc"}
 	for _, held := range []bool{true, false} {
 		for _, reverse := range []bool{false, true} {
 			r, cc := addStoreRouterCore(t, held)

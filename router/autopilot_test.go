@@ -90,48 +90,48 @@ func TestAutoPause(t *testing.T) {
 	none := fakeLocks{}
 	veto := func(string) bool { return false }
 	report(l, now, idle)
-	if a := planTick(d, now, 0, c, none.busy, veto); kinds(a) != "" {
+	if a := planTick(d, now, nil, c, none.busy, veto); kinds(a) != "" {
 		t.Fatalf("first idle tick: %s", kinds(a))
 	}
 	now2 := now.Add(c.IdlePause)
 	report(l, now2, idle)
-	if a := planTick(d, now2, 0, c, none.busy, veto); !strings.Contains(kinds(a), "pause") {
+	if a := planTick(d, now2, nil, c, none.busy, veto); !strings.Contains(kinds(a), "pause") {
 		t.Fatalf("after an hour: %s", kinds(a))
 	}
 	// a lifecycle action holds it: no pause
-	if a := planTick(d, now2, 0, c, fakeLocks{"s1": true}.busy, veto); strings.Contains(kinds(a), "pause") {
+	if a := planTick(d, now2, nil, c, fakeLocks{"s1": true}.busy, veto); strings.Contains(kinds(a), "pause") {
 		t.Fatal("paused a busy session")
 	}
 	// busy resets the clock
 	report(l, now2, &Registry{Status: "busy"})
-	planTick(d, now2, 0, c, none.busy, veto)
+	planTick(d, now2, nil, c, none.busy, veto)
 	if !l.IdleSince.IsZero() {
 		t.Fatal("busy should reset the idle clock")
 	}
 	// background jobs are work
 	report(l, now2, &Registry{Status: "idle", BgTasks: 1})
-	planTick(d, now2, 0, c, none.busy, veto)
+	planTick(d, now2, nil, c, none.busy, veto)
 	if !l.IdleSince.IsZero() {
 		t.Fatal("background jobs should reset the idle clock")
 	}
 	// switched off
 	l.AutoPauseOff = true
 	report(l, now, idle)
-	planTick(d, now, 0, c, none.busy, veto)
+	planTick(d, now, nil, c, none.busy, veto)
 	report(l, now2, idle)
-	if a := planTick(d, now2, 0, c, none.busy, veto); strings.Contains(kinds(a), "pause") {
+	if a := planTick(d, now2, nil, c, none.busy, veto); strings.Contains(kinds(a), "pause") {
 		t.Fatal("auto-pause off but paused")
 	}
 	// vetoed (a wakeup due soon)
 	l.AutoPauseOff = false
 	l.IdleSince = now
-	if a := planTick(d, now2, 0, c, none.busy, func(string) bool { return true }); strings.Contains(kinds(a), "pause") {
+	if a := planTick(d, now2, nil, c, none.busy, func(string) bool { return true }); strings.Contains(kinds(a), "pause") {
 		t.Fatal("vetoed but paused")
 	}
 	// paused sessions forget their clocks and their report
 	l.IdleSince = now
 	d.Sessions["s1"].State, d.Sessions["s1"].MachineID = "paused", ""
-	planTick(d, now2, 0, c, none.busy, veto)
+	planTick(d, now2, nil, c, none.busy, veto)
 	if !l.IdleSince.IsZero() || l.Reg != nil {
 		t.Fatal("paused session kept its clock or report")
 	}
@@ -143,10 +143,10 @@ func TestOneShotDestroysOnce(t *testing.T) {
 	d := running("s1", l)
 	report(l, now, &Registry{OneShotDone: true})
 	no := func(string) bool { return false }
-	if a := planTick(d, now, 0, defaultPilot, no, no); kinds(a) != "destroy" {
+	if a := planTick(d, now, nil, defaultPilot, no, no); kinds(a) != "destroy" {
 		t.Fatalf("got %s", kinds(a))
 	}
-	if a := planTick(d, now, 0, defaultPilot, no, no); kinds(a) != "" {
+	if a := planTick(d, now, nil, defaultPilot, no, no); kinds(a) != "" {
 		t.Fatalf("second tick: %s", kinds(a))
 	}
 }
@@ -159,20 +159,20 @@ func TestStaleWaitingEscapeOnce(t *testing.T) {
 	no := func(string) bool { return false }
 	w := &Registry{Status: "waiting", StatusUpdatedAt: 7}
 	report(l, now, w)
-	planTick(d, now, 0, c, no, no)
+	planTick(d, now, nil, c, no, no)
 	later := now.Add(c.WaitingCancel)
 	report(l, later, w)
-	a := planTick(d, later, 0, c, no, no)
+	a := planTick(d, later, nil, c, no, no)
 	if !strings.Contains(kinds(a), "escape") {
 		t.Fatalf("got %s", kinds(a))
 	}
-	if a := planTick(d, later, 0, c, no, no); strings.Contains(kinds(a), "escape") {
+	if a := planTick(d, later, nil, c, no, no); strings.Contains(kinds(a), "escape") {
 		t.Fatal("escaped twice in one episode")
 	}
 	// refused before: backing off
 	l.waiting.cancelled = false
 	l.grantRetry = map[string]time.Time{"status": later.Add(time.Minute)}
-	if a := planTick(d, later, 0, c, no, no); strings.Contains(kinds(a), "escape") {
+	if a := planTick(d, later, nil, c, no, no); strings.Contains(kinds(a), "escape") {
 		t.Fatal("escaped while backing off from a refusal")
 	}
 }
@@ -185,27 +185,27 @@ func TestAttentionDM(t *testing.T) {
 	no := func(string) bool { return false }
 	idle := &Registry{Status: "idle", StatusUpdatedAt: 1}
 	report(l, now, idle)
-	planTick(d, now, 0, c, no, no)
+	planTick(d, now, nil, c, no, no)
 	t5 := now.Add(c.Attention)
 	report(l, t5, idle)
-	a := planTick(d, t5, 0, c, no, no)
+	a := planTick(d, t5, nil, c, no, no)
 	if len(a) != 1 || a[0].Kind != "dm" || !strings.Contains(a[0].Text, "is idle") {
 		t.Fatalf("got %+v", a)
 	}
-	if a := planTick(d, t5, 0, c, no, no); strings.Contains(kinds(a), "dm") {
+	if a := planTick(d, t5, nil, c, no, no); strings.Contains(kinds(a), "dm") {
 		t.Fatal("pinged twice")
 	}
 	// muted idle ping
 	l.settled, l.NotifyIdleOff = nil, true
-	planTick(d, now, 0, c, no, no)
-	if a := planTick(d, t5, 0, c, no, no); strings.Contains(kinds(a), "dm") {
+	planTick(d, now, nil, c, no, no)
+	if a := planTick(d, t5, nil, c, no, no); strings.Contains(kinds(a), "dm") {
 		t.Fatal("idle ping is muted")
 	}
 	// no report for a while = dead, which still pings
 	l.LastReport = now.Add(-time.Hour)
 	l.settled = nil
-	planTick(d, now, 0, c, no, no)
-	a = planTick(d, t5, 0, c, no, no)
+	planTick(d, now, nil, c, no, no)
+	a = planTick(d, t5, nil, c, no, no)
 	if len(a) != 1 || !strings.Contains(a[0].Text, "isn't running a live Claude session") {
 		t.Fatalf("dead: %+v", a)
 	}
@@ -218,11 +218,11 @@ func TestStallNudgeRepeats(t *testing.T) {
 	no := func(string) bool { return false }
 	g := &Registry{Status: "idle", BgTasks: 2, StatusUpdatedAt: 3}
 	report(l, now, g)
-	planTick(d, now, 0, c, no, no)
+	planTick(d, now, nil, c, no, no)
 	for i := 1; i <= 2; i++ {
 		at := now.Add(time.Duration(i) * c.StallNudge)
 		report(l, at, g)
-		a := planTick(d, at, 0, c, no, no)
+		a := planTick(d, at, nil, c, no, no)
 		found := false
 		for _, x := range a {
 			if x.Kind == "nudge" && strings.HasPrefix(x.Text, "Jarvis watchdog: this session has been idle for 15 min while 2 background jobs have") {
@@ -237,22 +237,23 @@ func TestStallNudgeRepeats(t *testing.T) {
 	g2 := &Registry{Status: "idle", BgTasks: 2, StatusUpdatedAt: 4}
 	at := now.Add(3 * c.StallNudge)
 	report(l, at, g2)
-	if a := planTick(d, at, 0, c, no, no); strings.Contains(kinds(a), "nudge") {
+	if a := planTick(d, at, nil, c, no, no); strings.Contains(kinds(a), "nudge") {
 		t.Fatal("nudged right after a turn")
 	}
 }
 
-// the router never writes a login (Deyao, 2026-10-14); a session holding the store `claude` stuck on "Please run
-// /login" gets "continue" once, after its own pair is in step
+// the router never writes a login (Deyao, 2026-10-14); a session with a Claude account stuck on "Please run /login"
+// gets "continue" once, after its pair is in step with its account's
 func TestLoginContinueOnly(t *testing.T) {
 	c, now := defaultPilot, time.Now()
-	stored := now.Add(time.Hour).UnixMilli()
+	exp := now.Add(time.Hour).UnixMilli()
+	stored := map[string]int64{"claude-a": exp, "claude-b": now.Add(-time.Minute).UnixMilli()}
 	l := &Liveness{AutoPauseOff: true}
 	d := running("s1", l)
-	d.Sessions["s1"].Stores = []string{"claude", "default"}
+	d.Sessions["s1"].ClaudeAccount = "claude-a"
 	no := func(string) bool { return false }
 	// behind the shared pair: nothing (the machine catches up by itself)
-	report(l, now, &Registry{Status: "busy", CredsExpiresAt: stored - 1})
+	report(l, now, &Registry{Status: "busy", CredsExpiresAt: exp - 1})
 	if a := planTick(d, now, stored, c, no, no); strings.Contains(kinds(a), "login") {
 		t.Fatalf("a login action for a session behind: %+v", a)
 	}
@@ -262,7 +263,7 @@ func TestLoginContinueOnly(t *testing.T) {
 		t.Fatalf("continue before the pair caught up: %+v", a)
 	}
 	// in step and stuck: "continue", once per error
-	report(l, now, &Registry{Status: "idle", CredsExpiresAt: stored, AuthFailed: "u1"})
+	report(l, now, &Registry{Status: "idle", CredsExpiresAt: exp, AuthFailed: "u1"})
 	a := planTick(d, now, stored, c, no, no)
 	if len(a) != 1 || a[0].Kind != "login" || a[0].Repair != "u1" {
 		t.Fatalf("continue: %+v", a)
@@ -271,17 +272,18 @@ func TestLoginContinueOnly(t *testing.T) {
 	if a := planTick(d, now.Add(time.Hour), stored, c, no, no); strings.Contains(kinds(a), "login") {
 		t.Fatal("continued the same error twice")
 	}
-	// the shared pair itself expired: nothing
-	report(l, now, &Registry{Status: "idle", CredsExpiresAt: stored, AuthFailed: "u2"})
-	if a := planTick(d, now, now.Add(-time.Minute).UnixMilli(), c, no, no); strings.Contains(kinds(a), "login") {
-		t.Fatal("acted on an expired shared pair")
+	// its account's pair itself expired: nothing
+	report(l, now, &Registry{Status: "idle", CredsExpiresAt: exp, AuthFailed: "u2"})
+	d.Sessions["s1"].ClaudeAccount = "claude-b"
+	if a := planTick(d, now, stored, c, no, no); strings.Contains(kinds(a), "login") {
+		t.Fatal("acted on an expired account pair")
 	}
-	// no store `claude`: no login at all, nothing to continue
+	// no Claude account: no login at all, nothing to continue
 	l2 := &Liveness{AutoPauseOff: true}
 	d2 := running("s2", l2)
-	report(l2, now, &Registry{Status: "idle", CredsExpiresAt: stored, AuthFailed: "u3"})
+	report(l2, now, &Registry{Status: "idle", CredsExpiresAt: exp, AuthFailed: "u3"})
 	if a := planTick(d2, now, stored, c, no, no); strings.Contains(kinds(a), "login") {
-		t.Fatalf("a session without the claude store: %+v", a)
+		t.Fatalf("a session without a Claude account: %+v", a)
 	}
 }
 
@@ -293,26 +295,26 @@ func TestDowngradeOnceAndDialog(t *testing.T) {
 	no := func(string) bool { return false }
 	ev := []Refusal{{Kind: "refusal", At: now.UnixMilli(), UUID: "u1", Model: "Opus 5.5"}}
 	report(l, now, &Registry{Status: "busy", Refusals: ev})
-	a := planTick(d, now, 0, c, no, no)
+	a := planTick(d, now, nil, c, no, no)
 	if len(a) != 1 || !strings.Contains(a[0].Text, "safeguards flagged") {
 		t.Fatalf("got %+v", a)
 	}
-	if a := planTick(d, now, 0, c, no, no); len(a) != 0 {
+	if a := planTick(d, now, nil, c, no, no); len(a) != 0 {
 		t.Fatal("reported twice")
 	}
 	// an old event (before the lookback) isn't reported
 	l2 := &Liveness{AutoPauseOff: true}
 	d2 := running("s2", l2)
 	report(l2, now, &Registry{Status: "busy", Refusals: []Refusal{{Kind: "refusal", At: routerStarted.Add(-time.Hour).UnixMilli()}}})
-	if a := planTick(d2, now, 0, c, no, no); len(a) != 0 {
+	if a := planTick(d2, now, nil, c, no, no); len(a) != 0 {
 		t.Fatal("reported an old refusal")
 	}
 	// waiting: the pane is checked once per waiting episode
 	report(l2, now, &Registry{Status: "waiting", StatusUpdatedAt: 9})
-	if a := planTick(d2, now, 0, c, no, no); kinds(a) != "dialog" {
+	if a := planTick(d2, now, nil, c, no, no); kinds(a) != "dialog" {
 		t.Fatalf("dialog check: %s", kinds(a))
 	}
-	if a := planTick(d2, now, 0, c, no, no); kinds(a) != "" {
+	if a := planTick(d2, now, nil, c, no, no); kinds(a) != "" {
 		t.Fatal("checked the pane twice")
 	}
 	if !promptOnScreen("\x1b[1mOpus 5.5's Safeguards flagged\x1b[0m this message") {
@@ -388,9 +390,9 @@ func TestAttentionDMNamesTheAppTitle(t *testing.T) {
 	no := func(string) bool { return false }
 	idle := &Registry{Status: "idle", StatusUpdatedAt: 1, LiveName: "workspace-c1", NameSource: "derived"}
 	report(l, now, idle)
-	planTick(d, now, 0, c, no, no)
+	planTick(d, now, nil, c, no, no)
 	report(l, now.Add(c.Attention), idle)
-	a := planTick(d, now.Add(c.Attention), 0, c, no, no)
+	a := planTick(d, now.Add(c.Attention), nil, c, no, no)
 	if len(a) != 1 || !strings.Contains(a[0].Text, "“Bilingual Japanese news”") {
 		t.Fatalf("got %+v", a)
 	}
@@ -406,9 +408,9 @@ func TestAttentionDMNotRepeatedAfterRestart(t *testing.T) {
 	no := func(string) bool { return false }
 	idle := &Registry{Status: "idle", StatusUpdatedAt: 7}
 	report(l, now, idle)
-	planTick(d, now, 0, c, no, no)
+	planTick(d, now, nil, c, no, no)
 	report(l, now.Add(c.Attention), idle)
-	if a := planTick(d, now.Add(c.Attention), 0, c, no, no); !strings.Contains(kinds(a), "dm") {
+	if a := planTick(d, now.Add(c.Attention), nil, c, no, no); !strings.Contains(kinds(a), "dm") {
 		t.Fatalf("no first ping: %+v", a)
 	}
 	// a router restart: only the persisted fields survive
@@ -416,18 +418,18 @@ func TestAttentionDMNotRepeatedAfterRestart(t *testing.T) {
 	d2 := running("s1", l2)
 	for _, at := range []time.Time{now.Add(2 * c.Attention), now.Add(4 * c.Attention)} {
 		report(l2, at, idle)
-		if a := planTick(d2, at, 0, c, no, no); strings.Contains(kinds(a), "dm") {
+		if a := planTick(d2, at, nil, c, no, no); strings.Contains(kinds(a), "dm") {
 			t.Fatalf("same idle episode pinged again after a restart: %+v", a)
 		}
 	}
 	// a new turn that settles again is a new episode
 	report(l2, now.Add(5*c.Attention), &Registry{Status: "busy", StatusUpdatedAt: 8})
-	planTick(d2, now.Add(5*c.Attention), 0, c, no, no)
+	planTick(d2, now.Add(5*c.Attention), nil, c, no, no)
 	idle2 := &Registry{Status: "idle", StatusUpdatedAt: 9}
 	report(l2, now.Add(6*c.Attention), idle2)
-	planTick(d2, now.Add(6*c.Attention), 0, c, no, no)
+	planTick(d2, now.Add(6*c.Attention), nil, c, no, no)
 	report(l2, now.Add(7*c.Attention), idle2)
-	if a := planTick(d2, now.Add(7*c.Attention), 0, c, no, no); !strings.Contains(kinds(a), "dm") {
+	if a := planTick(d2, now.Add(7*c.Attention), nil, c, no, no); !strings.Contains(kinds(a), "dm") {
 		t.Fatalf("a new idle episode wasn't pinged: %+v", a)
 	}
 }
@@ -439,25 +441,25 @@ func TestAutoPauseClockSurvivesRestart(t *testing.T) {
 	d := running("s1", l)
 	idle := &Registry{Status: "idle", StatusUpdatedAt: 3}
 	report(l, now, idle)
-	planTick(d, now, 0, c, no, no)
+	planTick(d, now, nil, c, no, no)
 	// restarts every few minutes: only the persisted fields survive each one
 	for at := now; at.Before(now.Add(c.IdlePause)); at = at.Add(10 * time.Minute) {
 		l = &Liveness{IdleSince: l.IdleSince, IdleStatusAt: l.IdleStatusAt, AttentionSent: l.AttentionSent}
 		d = running("s1", l)
 		report(l, at, idle)
-		if strings.Contains(kinds(planTick(d, at, 0, c, no, no)), "pause") {
+		if strings.Contains(kinds(planTick(d, at, nil, c, no, no)), "pause") {
 			t.Fatal("paused early")
 		}
 	}
 	report(l, now.Add(c.IdlePause), idle)
-	if !strings.Contains(kinds(planTick(d, now.Add(c.IdlePause), 0, c, no, no)), "pause") {
+	if !strings.Contains(kinds(planTick(d, now.Add(c.IdlePause), nil, c, no, no)), "pause") {
 		t.Fatal("an hour idle across restarts didn't pause")
 	}
 	// a turn the router never saw (busy and idle again between reports) restarts the hour
 	l2 := &Liveness{IdleSince: now.Add(-2 * c.IdlePause), IdleStatusAt: 3}
 	d2 := running("s1", l2)
 	report(l2, now, &Registry{Status: "idle", StatusUpdatedAt: 4})
-	if strings.Contains(kinds(planTick(d2, now, 0, c, no, no)), "pause") {
+	if strings.Contains(kinds(planTick(d2, now, nil, c, no, no)), "pause") {
 		t.Fatal("paused right after an unseen turn")
 	}
 }
@@ -470,20 +472,20 @@ func TestStatusRefusalClearsAfterWaiting(t *testing.T) {
 	d := running("s1", l)
 	no := func(string) bool { return false }
 	report(l, now, &Registry{Status: "waiting", StatusUpdatedAt: 3})
-	planTick(d, now, 0, c, no, no)
+	planTick(d, now, nil, c, no, no)
 	l.NeedsGrant, l.grantRetry = "status", map[string]time.Time{"status": now.Add(time.Hour)}
-	planTick(d, now, 0, c, no, no)
+	planTick(d, now, nil, c, no, no)
 	if l.NeedsGrant != "status" {
 		t.Fatal("cleared while still waiting")
 	}
 	report(l, now, &Registry{Status: "busy", StatusUpdatedAt: 4})
-	planTick(d, now, 0, c, no, no)
+	planTick(d, now, nil, c, no, no)
 	if l.NeedsGrant != "" || !l.mayExec("status", now) {
 		t.Fatalf("still offered: %q", l.NeedsGrant)
 	}
 	// another holder's refusal stays
 	l.NeedsGrant = "archive"
-	planTick(d, now, 0, c, no, no)
+	planTick(d, now, nil, c, no, no)
 	if l.NeedsGrant != "archive" {
 		t.Fatal("cleared another holder's refusal")
 	}
@@ -498,18 +500,18 @@ func TestStallClockSurvivesRestart(t *testing.T) {
 	d := running("s1", l)
 	stuck := &Registry{Status: "idle", BgTasks: 1, StatusUpdatedAt: 5}
 	report(l, now, stuck)
-	planTick(d, now, 0, c, no, no)
+	planTick(d, now, nil, c, no, no)
 	for at := now.Add(5 * time.Minute); at.Before(now.Add(c.StallNudge)); at = at.Add(5 * time.Minute) {
 		l = &Liveness{AutoPauseOff: true, Stall: l.Stall} // a restart: only the persisted fields survive
 		d = running("s1", l)
 		report(l, at, stuck)
-		if strings.Contains(kinds(planTick(d, at, 0, c, no, no)), "nudge") {
+		if strings.Contains(kinds(planTick(d, at, nil, c, no, no)), "nudge") {
 			t.Fatal("nudged early")
 		}
 	}
 	at := now.Add(c.StallNudge)
 	report(l, at, stuck)
-	if !strings.Contains(kinds(planTick(d, at, 0, c, no, no)), "nudge") {
+	if !strings.Contains(kinds(planTick(d, at, nil, c, no, no)), "nudge") {
 		t.Fatal("15 min stalled across restarts didn't nudge")
 	}
 }
@@ -531,27 +533,27 @@ func TestStallNudgeWhileBusyWithJobs(t *testing.T) {
 	push := func(m int, sc string) { l.screen = &pushedScreen{snap: TermSnap{Screen: sc}, at: at(m)} }
 	push(0, idleScreen)
 	report(l, now, busy)
-	planTick(d, now, 0, c, no, no)
+	planTick(d, now, nil, c, no, no)
 	push(15, idleScreen)
 	report(l, at(15), busy)
-	if !strings.Contains(kinds(planTick(d, at(15), 0, c, no, no)), "nudge") {
+	if !strings.Contains(kinds(planTick(d, at(15), nil, c, no, no)), "nudge") {
 		t.Fatal("busy with jobs and no turn on screen for 15 min: no nudge")
 	}
 	// a turn running restarts the clock
 	push(20, turnScreen)
 	report(l, at(20), busy)
-	planTick(d, at(20), 0, c, no, no)
+	planTick(d, at(20), nil, c, no, no)
 	if l.Stall != nil {
 		t.Fatal("a running turn kept the clock")
 	}
 	// no fresh screen (a router restart): the clock is kept, nothing decided
 	push(21, idleScreen)
 	report(l, at(21), busy)
-	planTick(d, at(21), 0, c, no, no)
+	planTick(d, at(21), nil, c, no, no)
 	kept := l.Stall
 	l.screen = nil
 	report(l, at(22), busy)
-	planTick(d, at(22), 0, c, no, no)
+	planTick(d, at(22), nil, c, no, no)
 	if l.Stall != kept || kept == nil {
 		t.Fatal("no screen dropped the clock")
 	}

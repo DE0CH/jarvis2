@@ -73,7 +73,7 @@ S="python3 infra/setup.py"
 $S identity | grep -q '^set up' || { echo "the core is empty: Reset in the app first"; exit 1; }
 # not sensitive: created first (a store the core never created is sensitive); a store that exists is kept
 have="$($S stores | cut -d' ' -f1)"
-for n in default openrouter claude tunnel shopping; do
+for n in default openrouter tunnel shopping; do
   grep -qx "$n" <<<"$have" || $S create "$n"
 done
 # Deyao's own stores, by kind, from the layout file (key names only; private, in claude-env): each line is
@@ -85,7 +85,6 @@ grep -v '^#' "$LAYOUT" | while read -r store keys; do
   $S write "$store" $keys
 done
 $S write openrouter OPENROUTER_API
-$S stores | grep -q '^claude \[' || $S create claude
 $S write tunnel CF_ACCESS_CLIENT_ID=file:$D/j2tunnel.id CF_ACCESS_CLIENT_SECRET=file:$D/j2tunnel.secret
 $S backup-core "$D/fly.tok"
 $S stores

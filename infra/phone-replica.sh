@@ -8,7 +8,7 @@
 # This script is the setup session and the person's mailbox around the phone, answering the UI test through a piping
 # relay (ppng.io, a random path; only "otp", "reset-done", "repo-check", "done" and their answers cross it):
 #   otp         the Access login's one-time PIN, read from the bot's mailbox (bot@deyaochen.com, BOT_EMAIL_PASSWORD)
-#   reset-done  after the app's Reset: the stores written with infra/setup.py (dummy values; the harness's claude and
+#   reset-done  after the app's Reset: the stores written with infra/setup.py (dummy values; the harness's
 #               tunnel; github-deploy-keys = a 7-day PAT for the throwaway repo only; the core's Fly token, 6 h)
 #   repo-added  the throwaway repo has its one deploy key now (the app shows the repo added)
 #   repo-check  …and none left after the app removed it
@@ -137,7 +137,7 @@ PY
 fill_stores() {
   local rnd; rnd=$(python3 -c "import secrets;print(secrets.token_hex(6))")
   local S="python3 $ROOT/infra/setup.py"
-  RH_PLAIN="plain-$rnd" RH_SECRET="secret-$rnd" RH_CLAUDE="claude-$rnd" \
+  RH_PLAIN="plain-$rnd" RH_SECRET="secret-$rnd" \
   CF_ACCESS_CLIENT_ID="tunnel-id-$rnd" CF_ACCESS_CLIENT_SECRET="tunnel-secret-$rnd" bash -c "
     set -e
     export JARVIS2_NOT_SENSITIVE=rh-plain
@@ -145,7 +145,6 @@ fill_stores() {
     $S create rh-plain
     $S write rh-plain RH_PLAIN --explain 'RH_PLAIN=replica test value (not secret)'
     $S write rh-secret RH_SECRET --explain 'RH_SECRET=replica test value in a sensitive store'
-    $S write claude RH_CLAUDE --explain 'RH_CLAUDE=replica dummy value'
     $S write tunnel CF_ACCESS_CLIENT_ID CF_ACCESS_CLIENT_SECRET --explain 'CF_ACCESS_CLIENT_ID=replica dummy tunnel id' --explain 'CF_ACCESS_CLIENT_SECRET=replica dummy tunnel secret'
     $S write github-deploy-keys GITHUB_DEPLOY_KEYS_TOKEN=file:$W/deploy-keys.tok --explain 'GITHUB_DEPLOY_KEYS_TOKEN=7-day PAT for the replica throwaway repo only (deploy keys)'
     $S backup-core $W/fly.tok

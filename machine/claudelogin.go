@@ -1,18 +1,19 @@
 package main
 
-// The Claude login: one OAuth pair shared by every Claude session, kept and refreshed by the router
-// (router/claudelogin.go; Jarvis 1 reads it from there too). A session whose cert names the store `claude` takes
-// the pair at boot over the signed /m channel and keeps in step for the machine's life (credsSync, its own
-// process): a long poll that answers with a newer pair, or with "a refresh is coming" — then credsSync takes
-// the CLI's own refresh lock (~/.claude/.oauth_refresh.lock, lessons/74) until the new pair is written, so a
-// claude process that gets a 401 in between waits and adopts it instead of burning its refresh token.
+// The Claude login: the OAuth pair of the session's Claude account, kept and refreshed by the router
+// (router/claudelogin.go, claudeaccounts.go: one account per session, picked when it is made and fixed). A session
+// with an account (the router says so: /m/claude-login answers 404 noAccount otherwise) takes the pair at boot over the
+// signed /m channel and keeps in step for the machine's life (credsSync, its own process): a long poll that answers
+// with a newer pair, or with "a refresh is coming" — then credsSync takes the CLI's own refresh lock
+// (~/.claude/.oauth_refresh.lock, lessons/74) until the new pair is written, so a claude process that gets a 401 in
+// between waits and adopts it instead of burning its refresh token.
 //
-// The router's pair is taken whatever its account (DECISIONS 116, Deyao 2026-10-14): a Re-login to another Claude
-// account reaches every running and new session within a minute, with no store write and no grant. When the pair
-// on disk belongs to another account than the router's, the router's wins even if it expires sooner, the account
-// record (~/.claude.json oauthAccount) is handed to the supervisor (~/.claude/.account-switch.json, merged at the
-// host's next start), and the claude host is restarted as soon as it is idle, so its Remote Control comes up under
-// the new account (a running host keeps the account it connected with).
+// The router's pair is taken whatever its account (DECISIONS 116, 169: trust the router). When the pair on disk
+// belongs to another account than the router's (a session from before accounts whose shared login was re-logged),
+// the router's wins even if it expires sooner, the account record (~/.claude.json oauthAccount) is handed to the
+// supervisor (~/.claude/.account-switch.json, merged at the host's next start), and the claude host is restarted as
+// soon as it is idle, so its Remote Control comes up under the new account (a running host keeps the account it
+// connected with).
 
 import (
 	"bytes"
@@ -23,7 +24,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"slices"
 	"syscall"
 	"time"
 )
@@ -104,6 +104,9 @@ func takeRouterPair(l routerLogin) (took, switched bool, err error) {
 	return true, true, writeAtomic(credsPath(), []byte(l.Credentials))
 }
 
+// errNoAccount: the router says this session has no Claude account (404; 403 from a router before accounts)
+var errNoAccount = errors.New("this session has no Claude account")
+
 // fetchLogin: one poll; the path is signed as every /m call, the query (numbers only) travels beside it as on the
 // session API proxy (apiproxy.go)
 func fetchLogin(c *client, have, ack int64, wait time.Duration) (routerLogin, error) {
@@ -111,6 +114,9 @@ func fetchLogin(c *client, have, ack int64, wait time.Duration) (routerLogin, er
 	status, _, b, err := c.signedDo("GET", "/m/claude-login", "/m/claude-login", fmt.Sprintf("have=%d&ack=%d&wait=%d", have, ack, int(wait.Seconds())), nil, "")
 	if err != nil {
 		return l, err
+	}
+	if status == 404 || status == 403 {
+		return l, errNoAccount
 	}
 	if status != 200 {
 		return l, fmt.Errorf("GET /m/claude-login: HTTP %d", status)
@@ -120,21 +126,22 @@ func fetchLogin(c *client, have, ack int64, wait time.Duration) (routerLogin, er
 
 // sessionClaudeLogin: a session's first Claude login, at boot, before the harness starts (Deyao, 2026-10-11: a new
 // session logs in by itself, no grant, no Face ID). Returns the account record (~/.claude.json oauthAccount) for
-// CLAUDE_ACCOUNT, "" when there is none.
-func sessionClaudeLogin(c *client, stores []string) string {
-	if !slices.Contains(stores, "claude") {
-		return ""
-	}
+// CLAUDE_ACCOUNT, "" when there is none. A session the router names no account for (opencode, a run task) skips it.
+func sessionClaudeLogin(c *client) string {
 	var l routerLogin
 	var err error
 	for i := 0; i < 3; i++ { // a short retry: the harness starts right after, logged in or not (credsSync catches up)
 		if l, err = fetchLogin(c, 0, 0, 0); err == nil && l.Credentials == "" {
-			err = errors.New("the router holds no Claude login")
+			err = errors.New("the router holds no Claude login for this session's account")
 		}
-		if err == nil {
+		if err == nil || errors.Is(err, errNoAccount) {
 			break
 		}
 		time.Sleep(2 * time.Second)
+	}
+	if errors.Is(err, errNoAccount) {
+		log.Printf("claude login: none (the session has no Claude account)")
+		return ""
 	}
 	if err != nil {
 		log.Printf("claude login: at boot: %v (credsSync keeps trying)", err)

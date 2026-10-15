@@ -1,7 +1,7 @@
 package main
 
-// The stored Claude pair is the router's own (claudelogin.go); a session with the store `claude` takes it and keeps
-// in step by itself (machine/claudelogin.go), so the router never writes credentials into a session (Deyao,
+// Each Claude account's pair is the router's own (claudelogin.go, claudeaccounts.go); a session takes its account's and
+// keeps in step by itself (machine/claudelogin.go), so the router never writes credentials into a session (Deyao,
 // 2026-10-14: no login repair). A turn that stopped on "Please run /login" only gets "continue" once its pair is in
 // step.
 
@@ -10,19 +10,15 @@ import (
 	"strings"
 )
 
-type sharedPair struct {
-	Credentials string `json:"credentials"`
-	Account     string `json:"account"`
-	ExpiresAt   int64  `json:"expiresAt"`
-}
-
-// sharedLogin: the stored pair (claudelogin.go)
-func (r *Router) sharedLogin() (sharedPair, error) {
-	cur := r.loginHub().current()
-	if cur.Credentials == "" {
-		return sharedPair{}, errNoPair
+// loginExpiries: each Claude account's stored pair's expiry (claudeaccounts.go), by store; accounts with no pair are left out
+func (r *Router) loginExpiries() map[string]int64 {
+	out := map[string]int64{}
+	for _, h := range r.accounts().all() {
+		if cur := h.current(); cur.Credentials != "" {
+			out[h.store] = cur.ExpiresAt
+		}
 	}
-	return sharedPair{Credentials: cur.Credentials, Account: cur.Account, ExpiresAt: cur.ExpiresAt}, nil
+	return out
 }
 
 func (r *Router) repairLogin(a pilotAction) {

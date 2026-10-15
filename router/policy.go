@@ -1,7 +1,8 @@
 package main
 
-// The router's policy (policy/stores.json, baked into its image): which stores each harness brings. The router
-// adds them to a session's stores; the app hides them. The core knows nothing about it.
+// The router's policy (policy/stores.json, baked into its image): which stores each harness brings, and whether it
+// runs on a Claude account. The router adds the stores to a session's; the app hides them. The core knows nothing
+// about it.
 
 import (
 	"encoding/json"
@@ -13,9 +14,13 @@ import (
 const flyStore = "core"
 
 type Policy struct {
-	Harnesses map[string]struct {
-		Stores []string `json:"stores"`
-	} `json:"harnesses"`
+	Harnesses map[string]HarnessPolicy `json:"harnesses"`
+}
+
+type HarnessPolicy struct {
+	Stores []string `json:"stores"`
+	// ClaudeAccount: its sessions run on a Claude account (claudeaccounts.go): the one picked, else the default
+	ClaudeAccount bool `json:"claudeAccount,omitempty"`
 }
 
 func LoadPolicy(path string) (Policy, error) {

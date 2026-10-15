@@ -519,9 +519,10 @@ type TaskInstance struct {
 	Name      string         `json:"name"`
 	Params    map[string]any `json:"params"`
 	Size      string         `json:"size"`
-	Stores    []string       `json:"stores"`            // the line's stores (template + picked), fixed for the line
-	Content   []string       `json:"content,omitempty"` // the content stores picked, fixed for the line (signed in its config)
-	Session   string         `json:"session"`           // the line; "" once it is gone
+	Stores    []string       `json:"stores"`                  // the line's stores (template + picked), fixed for the line
+	Content   []string       `json:"content,omitempty"`       // the content stores picked, fixed for the line (signed in its config)
+	Account   string         `json:"claudeAccount,omitempty"` // a prompt template's Claude account (claudeaccounts.go), fixed
+	Session   string         `json:"session"`                 // the line; "" once it is gone
 	CreatedAt time.Time      `json:"createdAt"`
 	UpdatedAt *time.Time     `json:"updatedAt,omitempty"`
 	Active    string         `json:"active,omitempty"` // the run in progress
@@ -680,7 +681,7 @@ func instanceState(i *TaskInstance, s *Session) (state, detail string) {
 func instanceView(i *TaskInstance, d *persisted) map[string]any {
 	s := d.Sessions[i.Session]
 	state, detail := instanceState(i, s)
-	v := map[string]any{"id": i.ID, "template": i.Template, "name": i.Name, "params": i.Params, "size": i.Size,
+	v := map[string]any{"id": i.ID, "template": i.Template, "name": i.Name, "params": i.Params, "size": i.Size, "claudeAccount": nullIfEmpty(i.Account),
 		"stores": i.Stores, "content": orEmptyS(i.Content), "session": nullIfEmpty(i.Session), "createdAt": i.CreatedAt, "updatedAt": i.UpdatedAt,
 		"state": state, "detail": detail, "lastRun": nil, "activeRun": nil, "schedules": 0, "image": nil}
 	if s != nil {
@@ -820,6 +821,7 @@ type instanceIn struct {
 	Size      string         `json:"size"`
 	Hide      []string       `json:"hide"`
 	RequestID string         `json:"requestId"`
+	Account   string         `json:"account"` // a prompt template's Claude account; "" = the default
 }
 
 func readJSON(req *http.Request, v any) error {
@@ -856,8 +858,12 @@ func (r *Router) CreateTask(in instanceIn) (map[string]any, error) {
 	if !validSize(size) {
 		return nil, bad("size must be small, medium or large")
 	}
+	account, err := r.accounts().resolve(in.Account, t.Prompt != "") // claude -p runs on a Claude account
+	if err != nil {
+		return nil, bad("%v", err)
+	}
 	inst := &TaskInstance{ID: randID()[:8], Template: t.Name, Name: name, Params: params, Size: size,
-		Stores: lineStores(t, params), Content: lineContent(t, params), CreatedAt: time.Now().UTC(), Runs: []*TaskRun{}}
+		Stores: lineStores(t, params), Content: lineContent(t, params), Account: account, CreatedAt: time.Now().UTC(), Runs: []*TaskRun{}}
 	if in.RequestID != "" {
 		var dup *TaskInstance
 		r.st.Do(func(d *persisted) {
@@ -893,7 +899,8 @@ func (r *Router) newTaskLine(inst *TaskInstance, requestID string) error {
 		tc.Params[k] = v
 	}
 	sid, err := taskOps.create(r, NewSession{RequestID: requestID, Label: "Task: " + inst.Name, Harness: taskHarnessPrefix + inst.Template,
-		Stores: inst.Stores, Content: inst.Content, Size: inst.Size, AutoPause: &off, PermissionMode: "auto", Task: tc})
+		Stores: inst.Stores, Content: inst.Content, Account: inst.Account, NeedsAccount: inst.Account != "", Size: inst.Size, AutoPause: &off,
+		PermissionMode: "auto", Task: tc})
 	if err != nil {
 		return err
 	}

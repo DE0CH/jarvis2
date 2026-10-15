@@ -212,6 +212,8 @@ func main() {
 		}
 	}
 
+	claudeAccountStep()
+
 	step("stores: e2e not sensitive, e2e-extra sensitive; a created store is not; the upgrade is one-way")
 	stores := func() map[string]bool {
 		var d Doc
@@ -560,24 +562,24 @@ func main() {
 	step("one-shot: once the supervisor marks the prompt done the router destroys it by itself, forcefully, and DMs the work lost")
 	// no stores: a new line with the same stores, options and image as the first session would get the same
 	// challenge nonce (the core derives it from the request), which the core refuses to certify twice
-	// stores [claude]: the machine logs into Claude by itself at boot, with no grant (machine/claudelogin.go), from
-	// the router's pair (seeded here as Jarvis 1 would push a Re-login: the test router has no Access in front)
-	must2(call(router, "POST", "/peer/claude-login", map[string]any{"credentials": fakePair,
-		"account": `{"oauthAccount":{"accountUuid":"e2e-account","emailAddress":"e2e@example.com"}}`, "relogin": true}, nil))
-	s, b = call(router, "POST", "/api/sessions", map[string]any{"label": "e2e one-shot", "stores": []string{"claude"}, "size": "small", "harness": "claude",
-		"oneShot": true, "prompt": "e2e: nothing to do"}, nil)
+	// no stores, the Claude account claude-e2e (claudeAccountStep): the machine logs into Claude by itself at boot,
+	// with no grant (machine/claudelogin.go), from that account's pair at the router
+	s, b = call(router, "POST", "/api/sessions", map[string]any{"label": "e2e one-shot", "stores": []string{}, "size": "small", "harness": "claude",
+		"oneShot": true, "prompt": "e2e: nothing to do", "account": "claude-e2e"}, nil)
 	must(s, b, "create one-shot")
 	a = waitApproval("new-session", "")
-	checkChallenge(a, []string{"claude"}, "")
-	unlock(p, "claude", nonceOf(*a.Challenge))
+	checkChallenge(a, []string{}, "")
 	os1 := approve(p, a)
+	if acct, _ := session(os1)["claudeAccount"].(string); acct != "claude-e2e" {
+		log.Fatalf("the one-shot session's Claude account is %q", acct)
+	}
 	waitState(os1, "started", 6*time.Minute)
 	om := machineOf(os1)
-	step("a new session's Claude is logged in with no grant: the machine took the router's pair at boot, checked against the store's account")
+	step("a new session's Claude is logged in with no grant: the machine took its account's pair from the router at boot")
 	expectOnMachine(om, "grep -c e2e-fake-refresh /home/claude/.claude/.credentials.json; stat -c %a /home/claude/.claude/.credentials.json", "1\n600")
 	expectOnMachine(om, "for p in /proc/[0-9]*; do tr '\\0' ' ' < $p/cmdline 2>/dev/null; echo; done | grep -c '^/proc/self/exe creds-sync $'", "1")
 	if ng, _ := session(os1)["needsGrant"].(string); ng != "" {
-		log.Fatalf("a new session with the claude store asks for a grant: %q", ng)
+		log.Fatalf("a new session with a Claude account asks for a grant: %q", ng)
 	}
 	loginRefreshStep(om) // nojarvis1.go
 	// a repo with an uncommitted file and no upstream, then the supervisor's marker (no Claude login here, so
@@ -760,6 +762,23 @@ var unlockIDs []string
 var lastUnlockWriters = map[string]string{}
 
 // fakePair: the Claude login the test router holds (a fake pair, public; never refreshed: it expires in 2100)
+// claudeAccountStep: the Claude account claude-e2e, the default, its pair seeded as Jarvis 1 would push a Re-login
+// (Jarvis 1 follows the default account; the test router has no Access in front)
+func claudeAccountStep() {
+	step("a Claude account: claude-e2e, the default (its sign-in started, its pair pushed as Jarvis 1's Re-login)")
+	must2(call(router, "POST", "/api/claude-accounts", map[string]any{"name": "e2e"}, nil))
+	must2(call(router, "POST", "/peer/claude-login", map[string]any{"credentials": fakePair,
+		"account": `{"oauthAccount":{"accountUuid":"e2e-account","emailAddress":"e2e@example.com"}}`, "relogin": true}, nil))
+	var l struct {
+		Default  string           `json:"default"`
+		Accounts []map[string]any `json:"accounts"`
+	}
+	must2(call(router, "GET", "/api/claude-accounts", nil, &l))
+	if l.Default != "claude-e2e" || len(l.Accounts) != 1 || l.Accounts[0]["hasLogin"] != true {
+		log.Fatalf("claude accounts: %+v", l)
+	}
+}
+
 const fakePair = `{"claudeAiOauth": {"accessToken": "e2e-fake-access", "refreshToken": "e2e-fake-refresh", "expiresAt": 4102444800000, "scopes": ["user:inference"], "subscriptionType": "max"}}`
 
 // unlock: forNonce = the challenge or cert nonce the unlock is for (what the app's Start, add-store and Unlock…

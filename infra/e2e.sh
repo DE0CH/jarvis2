@@ -84,8 +84,8 @@ w = sys.argv[1]
 open(f"{w}/box-key.pem", "wb").write(k.private_bytes(s.Encoding.PEM, s.PrivateFormat.PKCS8, s.NoEncryption()))
 open(f"{w}/box.pub", "w").write(base64.b64encode(k.public_key().public_bytes(s.Encoding.X962, s.PublicFormat.UncompressedPoint)).decode())
 PY
-# the test's policy: harnesses bring no stores (the production policy's would need a Claude login store)
-echo '{"harnesses":{"claude":{"stores":[]},"opencode":{"stores":[]}}}' > "$W/policy.json"
+# the test's policy: harnesses bring no stores; claude runs on a Claude account (the e2e seeds claude-e2e)
+echo '{"harnesses":{"claude":{"stores":[],"claudeAccount":true},"opencode":{"stores":[]}}}' > "$W/policy.json"
 FLY_API_TOKEN="$JARVIS2_FLY_TOKEN" flyctl wireguard remove jarvis2-370 "$PEER" >/dev/null 2>&1 || true
 (umask 077; FLY_API_TOKEN="$JARVIS2_FLY_TOKEN" flyctl wireguard create jarvis2-370 lhr "$PEER" "$W/wg.conf" >/dev/null)
 

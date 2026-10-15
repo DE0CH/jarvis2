@@ -336,7 +336,8 @@ type J1ImportIn struct {
 	Prompt      string   `json:"prompt"` // typed into the resumed conversation once it is up ("" = j1DefaultPrompt)
 	Size        string   `json:"size"`   // "" = Jarvis 1's size (xlarge → large)
 	Explanation string   `json:"explanation"`
-	Batch       string   `json:"-"` // batches.go: filed in this batch
+	Account     string   `json:"account"` // its Claude account (claudeaccounts.go); "" = the default
+	Batch       string   `json:"-"`       // batches.go: filed in this batch
 }
 
 // J1ImportRef: on NewSession, the import a new line restores
@@ -367,6 +368,13 @@ func (r *Router) ImportJarvis1(id string, in J1ImportIn, o Origin) (string, erro
 	if len(in.Stores) == 0 {
 		return "", bad("stores are required (the Jarvis 2 stores the session gets)")
 	}
+	var kept []string // the shared login's old store comes as the Claude account
+	for _, n := range in.Stores {
+		if n != legacyClaudeStore {
+			kept = append(kept, n)
+		}
+	}
+	in.Stores = kept
 	label := firstNonEmpty(rec.Title, rec.Label, "Jarvis 1 "+id)
 	harness := firstNonEmpty(rec.Harness, "claude")
 	if _, ok := r.policy.Harnesses[harness]; !ok {
@@ -399,7 +407,7 @@ func (r *Router) ImportJarvis1(id string, in J1ImportIn, o Origin) (string, erro
 	}
 	ns := NewSession{
 		RequestID: "jarvis1-import:" + id + ":" + sum[:16], Label: label, Prompt: prompt, Model: rec.Model, PermissionMode: rec.PermissionMode,
-		Size: size, Harness: harness, Stores: in.Stores, Repos: strings.Join(repos, ","), AutoPause: &auto,
+		Size: size, Harness: harness, Stores: in.Stores, Account: in.Account, Repos: strings.Join(repos, ","), AutoPause: &auto,
 		Origin: &o, Explanation: in.Explanation, Batch: in.Batch,
 		Import: &J1ImportRef{Session: id, Sha256: sum, Shown: fmt.Sprintf("Jarvis 1 session “%s” (%s, paused %s)", label, id, paused)},
 	}

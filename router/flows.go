@@ -41,7 +41,7 @@ type Router struct {
 	setupMu   sync.Mutex
 	setupSeen map[string]time.Time
 
-	login     *loginHub // claudelogin.go: the Claude login
+	claude    *claudeAccounts // claudeaccounts.go: the Claude accounts and their logins
 	loginOnce sync.Once
 
 	muxOnce               sync.Once
@@ -108,6 +108,8 @@ type NewSession struct {
 	Stores         []string       `json:"stores"`
 	Repos          string         `json:"repos"`
 	Content        []string       `json:"content"`     // content stores (content.go), signed with the line
+	Account        string         `json:"account"`     // claudeaccounts.go: the Claude account (claude-<name> or <name>); "" = the default
+	NeedsAccount   bool           `json:"-"`           // tasks.go: a prompt task's line runs claude -p
 	OneShot        bool           `json:"oneShot"`     // destroyed once its prompt is done (autopilot.go)
 	AutoPause      *bool          `json:"autoPause"`   // default on
 	APIProxy       bool           `json:"apiProxy"`    // SESSION_API_PROXY (sessionops.go)
@@ -487,9 +489,16 @@ func (r *Router) CreateSession(in NewSession) (string, error) {
 		in.PermissionMode = "auto"
 	}
 	// the harness's stores come with it (the policy document); the app doesn't list them
+	if containsStr(in.Stores, legacyClaudeStore) {
+		return "", bad("the store claude is gone: a session's Claude account is picked as its account (Settings → Claude accounts)")
+	}
 	stores, err := r.withHarnessStores(in.Stores, h.Stores)
 	if err != nil {
 		return "", err
+	}
+	account, err := r.accounts().resolve(in.Account, h.ClaudeAccount || in.NeedsAccount)
+	if err != nil {
+		return "", bad("%v", err)
 	}
 	content, err := r.checkContentStores(in.Content) // content.go: each an existing store
 	if err != nil {
@@ -497,7 +506,7 @@ func (r *Router) CreateSession(in NewSession) (string, error) {
 	}
 	s := &Session{ID: "s" + randID(), State: "approval", Created: time.Now().UTC(), Label: in.Label, Prompt: in.Prompt, Model: in.Model,
 		PermissionMode: in.PermissionMode, Size: in.Size, Harness: in.Harness, Stores: stores, Repos: in.Repos, Content: content,
-		RequestID: in.RequestID, Live: newLiveness(in)}
+		ClaudeAccount: account, RequestID: in.RequestID, Live: newLiveness(in)}
 	if in.Import != nil {
 		s.ImportFrom, s.ImportSha = in.Import.Session, in.Import.Sha256
 	}
@@ -522,6 +531,9 @@ func (r *Router) CreateSession(in NewSession) (string, error) {
 		return "", err
 	}
 	opts := map[string]string{"model": s.Model, "size": s.Size, "permissionMode": s.PermissionMode, "repos": s.Repos}
+	if s.ClaudeAccount != "" {
+		opts["claudeAccount"] = s.ClaudeAccount // the router's word, shown beside the signed challenge
+	}
 	if len(s.Content) > 0 {
 		opts["content"] = strings.Join(s.Content, ",")
 	}
@@ -1167,6 +1179,9 @@ func (r *Router) addStoreApproval(machine, store string, o Origin, explanation, 
 	})
 	if s.ID == "" || s.MachineID != machine || s.Cert == nil {
 		return "", fmt.Errorf("this machine isn't a running session")
+	}
+	if store == legacyClaudeStore {
+		return bad("the store claude is gone: a session's Claude account is fixed when it is made")
 	}
 	stores, err := r.withHarnessStores(append(append([]string{}, s.Stores...), store), nil)
 	if err != nil {

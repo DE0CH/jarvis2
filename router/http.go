@@ -750,7 +750,7 @@ func sessionView(s *Session, d *persisted) map[string]any {
 		"environment": strings.Join(s.Stores, ","), "stores": s.Stores, "content": orEmptyS(s.Content), "harness": s.Harness, "label": s.Label, "aiTitle": s.Title,
 		"model": s.Model, "permissionMode": s.PermissionMode, "guest": guest, "size": s.Size, "pausedAt": s.PausedAt,
 		"image": s.Image, "createRequestId": s.RequestID, "repos": s.Repos, "discordChannel": s.DiscordChannel,
-		"waiting": s.Waiting, "lockedStore": s.LockedStore, "carryLost": s.CarryLost, "oldCore": s.OldCore,
+		"waiting": s.Waiting, "lockedStore": s.LockedStore, "carryLost": s.CarryLost, "oldCore": s.OldCore, "claudeAccount": nullIfEmpty(s.ClaudeAccount),
 	}
 	liveView(s, v)
 	backupsView(s, v) // snapsafe.go

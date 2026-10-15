@@ -122,8 +122,8 @@ func TestMachineAPINothingGoesToJarvis1(t *testing.T) {
 	m := newTestMachine(r, "mA")
 	h := r.MachineHandler()
 
-	// the Claude login is the router's own (claudelogin.go): a machine without the store claude gets nothing
-	if code, _ := m.do(t, h, "POST", "/m/api/credentials", `{"credentials":"{}"}`); code != 403 || seen != nil {
+	// the Claude login is the router's own (claudelogin.go): a machine whose session has no Claude account gets nothing
+	if code, _ := m.do(t, h, "POST", "/m/api/credentials", `{"credentials":"{}"}`); code != 404 || seen != nil {
 		t.Fatalf("%d %v", code, seen)
 	}
 	_ = seenBody

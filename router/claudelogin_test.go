@@ -87,9 +87,14 @@ func newFakeAnthropic(t *testing.T) *fakeAnthropic {
 
 const acct1 = `{"oauthAccount":{"accountUuid":"acct-1","emailAddress":"acct-1@example.com"}}`
 
+// ownRouter: a router with one Claude account, claude-a (the default)
 func ownRouter(t *testing.T) (*Router, *loginHub) {
 	r := newTestRouter(t)
-	return r, r.loginHub()
+	h, err := r.accounts().add("a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return r, h
 }
 
 func TestLoginOfferNewerWinsAndAccount(t *testing.T) {
@@ -117,7 +122,7 @@ func TestLoginOfferNewerWinsAndAccount(t *testing.T) {
 	if err != nil || fi.Mode().Perm() != 0o600 {
 		t.Fatalf("%v %v", err, fi)
 	}
-	h2 := newLoginHub(strings.TrimSuffix(h.path, "/claude-login.json"))
+	h2 := newLoginHub(h.path, h.store)
 	if c := h2.current(); c.ExpiresAt != now+3000 {
 		t.Fatalf("%+v", c)
 	}
@@ -275,7 +280,7 @@ func TestLoginRelogin(t *testing.T) {
 	}
 }
 
-// machines: only one whose cert names the store claude gets the pair; its push is account-checked
+// machines: only one whose session uses the account gets its pair; its push is account-checked
 func TestLoginMachineRoutes(t *testing.T) {
 	f := newFakeAnthropic(t)
 	r, h := ownRouter(t)
@@ -283,11 +288,11 @@ func TestLoginMachineRoutes(t *testing.T) {
 	h.offer(pairOf("a", exp), acct1, "seed", true, false)
 	addSession(r, "sA", "started", "mA", false)
 	addSession(r, "sB", "started", "mB", false)
-	r.st.Do(func(d *persisted) { d.Sessions["sA"].Stores = []string{"claude", "default"} })
+	r.st.Do(func(d *persisted) { d.Sessions["sA"].ClaudeAccount = "claude-a" })
 	ma, mb := newTestMachine(r, "mA"), newTestMachine(r, "mB")
 	mh := r.MachineHandler()
-	if code, _ := mb.do(t, mh, "GET", "/m/claude-login?have=0", ""); code != 403 {
-		t.Fatal("a machine without the store claude got the pair")
+	if code, out := mb.do(t, mh, "GET", "/m/claude-login?have=0", ""); code != 404 || out["noAccount"] != true {
+		t.Fatal("a machine whose session has no account got a pair", code, out)
 	}
 	code, out := ma.do(t, mh, "GET", "/m/claude-login?have=0", "")
 	if code != 200 || !strings.Contains(out["credentials"].(string), "at-a") || accountUUID(out["account"].(string)) != "acct-1" {
@@ -348,7 +353,7 @@ func TestLoginPollSignedWithQuery(t *testing.T) {
 	r, h := ownRouter(t)
 	h.offer(pairOf("a", time.Now().Add(8*time.Hour).UnixMilli()), acct1, "seed", true, false)
 	addSession(r, "sA", "started", "mA", false)
-	r.st.Do(func(d *persisted) { d.Sessions["sA"].Stores = []string{"claude"} })
+	r.st.Do(func(d *persisted) { d.Sessions["sA"].ClaudeAccount = "claude-a" })
 	m := newTestMachine(r, "mA")
 	req := httptest.NewRequest("GET", "/m/claude-login?have=0&ack=0&wait=0", nil)
 	ts := strconv.FormatInt(time.Now().Unix(), 10)
