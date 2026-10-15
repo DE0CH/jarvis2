@@ -53,6 +53,7 @@ UD="$(mktemp)"; KEY="$(mktemp -d)"; trap 'rm -rf "$UD" "$KEY"' EXIT; chmod 600 "
 : > "$KEY/wg.conf"
 if [ "$BOX_KIND" != services ] && [ "$PEER" != none ]; then
   FLY_API_TOKEN="$JARVIS2_FLY_TOKEN" flyctl wireguard remove jarvis2-370 "$PEER" >/dev/null 2>&1 || true
+  rm -f "$KEY/wg.conf" # flyctl refuses to write over a file, even an empty one
   (umask 077; FLY_API_TOKEN="$JARVIS2_FLY_TOKEN" flyctl wireguard create jarvis2-370 lhr "$PEER" "$KEY/wg.conf" >/dev/null)
 fi
 # the box key: it vouches for every core this box starts. Its private half goes only into the box (user-data);
