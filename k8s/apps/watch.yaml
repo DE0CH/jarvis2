@@ -11,7 +11,7 @@ metadata: { name: watch, namespace: jarvis2-edge }
 # Zero-downtime: two replicas (it holds no state), rolled one at a time; on SIGTERM a replica leaves readiness and
 # finishes its running checks (at most 90 s) before it exits (runner.py drain_and_stop).
 spec:
-  replicas: 0  # off until the control plane is back after the 2026-10-15 reboot (Deyao)
+  replicas: 2
   minReadySeconds: 3
   strategy: { type: RollingUpdate, rollingUpdate: { maxUnavailable: 0, maxSurge: 1 } }
   selector: { matchLabels: { app: watch } }
@@ -31,7 +31,7 @@ spec:
           volumeMounts: [{ name: tmp, mountPath: /tmp }]
           livenessProbe: { httpGet: { path: /healthz, port: 8095 }, periodSeconds: 10, timeoutSeconds: 5, failureThreshold: 6 }
           readinessProbe: { httpGet: { path: /readyz, port: 8095 }, initialDelaySeconds: 1, periodSeconds: 2, failureThreshold: 1 }
-          resources: { requests: { cpu: 10m, memory: 32Mi }, limits: { cpu: 500m, memory: 256Mi, ephemeral-storage: 256Mi } }
+          resources: { requests: { cpu: 10m, memory: 32Mi }, limits: { cpu: 250m, memory: 192Mi, ephemeral-storage: 256Mi } }  # outside the control plane: hard memory and CPU caps (DECISIONS 168)
           securityContext: { runAsNonRoot: true, runAsUser: 65532, runAsGroup: 65532, allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: { drop: [ALL] }, seccompProfile: { type: RuntimeDefault } }
       volumes:
         - { name: tmp, emptyDir: { sizeLimit: 128Mi } }

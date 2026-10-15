@@ -494,15 +494,8 @@ fill the gaps (decided while Deyao was away, ~/artifacts/away/decisions.md).
 
 ## The hk-news-stream PoC, 2026-10-12
 
-96. **The hk-news-stream proof of concept runs on the box** (2026-10-12, Deyao asked for it on the Jarvis 2 cluster,
-    with OpenRouter for the model and nothing heavy on the box). Code and image in DE0CH/hk-news-stream (public);
-    here only `k8s/apps/news.yaml`, its Secret `k8s/secrets/news.enc.yaml` (OPENROUTER_API, `router-secrets.py --part
-    news`) and the hostname hknews.deyaochen.com on the production tunnel (`infra/cloudflare.py --news`, Access on
-    Deyao's email). It sits in `jarvis2-edge` because the bootstrap gives Flux no other namespace and a new one would
-    need a rebuild; the cloudflared policy is narrowed to cloudflared's own pod (it was every pod in the namespace),
-    and the news pod's own policy allows only cloudflared in and DNS plus public 80/443 out, so it can't reach the
-    router, the core or cloudflared's token. Its image is pinned by digest and changes only by a commit here, so the
-    other repo can't change what the box runs. Remove all four pieces together when the PoC ends.
+96. *(Removed 2026-10-15: Deyao ended the proof of concept; its manifest, Secret, tunnel route, Access app and DNS
+    record are gone.)*
 
 ## Image attachments in the app, 2026-10-12
 
@@ -1323,3 +1316,16 @@ Deyao: several actions approved together with ONE Face ID; the caller groups the
      store already gone changes nothing), and `--drop` that would leave nothing is refused (that is `--none`). The
      keep-set is worked out from the cert inside each try, so a retry after an add-store uses the new list.
      Session images from before this keep the old reading (names = keep); the claude-env skill's `downgrade.sh` is gone.
+
+## The control plane owns 2 GiB of the box, 2026-10-15
+
+168. **Core, router and cloudflared hold 2 GiB and 0.9 CPU of the box as their own; everything else is capped**
+     (Deyao, 2026-10-15, after the box thrashed and took the control plane down with it). Memory requests equal limits
+     for the control plane (router 1536 Mi, core 256 Mi, cloudflared 2 × 128 Mi = 2048 Mi), so the scheduler keeps that
+     memory free for them and the kernel kills a pod over its request before them; CPU is requested (router 500m, core
+     200m, cloudflared 2 × 100m) but not limited, so under contention they get their share and are never throttled.
+     Every other service has a hard memory and CPU limit (search 2 × 448 Mi / 500m, watch 2 × 192 Mi / 250m), so a
+     runaway job is killed at its cap instead of pushing the node into swapless thrash. icloud-index is off (0
+     replicas): at up to 2 GiB with ffmpeg it can't sit beside the control plane on a 4 GiB box. *Not chosen*: a
+     PriorityClass or a ResourceQuota for the other services — both need permissions the bootstrap doesn't give Flux
+     (admin in the three namespaces only, nothing cluster-scoped; a change means a box rebuild).

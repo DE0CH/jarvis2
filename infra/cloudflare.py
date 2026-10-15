@@ -8,7 +8,6 @@ The apps' audiences are not secret: they are in k8s/apps/router.yaml (the script
   CLOUDFLARE_API          only to mint the setup service token (the scoped token can't)
 
   infra/cloudflare.py OUT
-  infra/cloudflare.py --news   only the news page: its Access app, the tunnel's ingress, its DNS record (CF_JARVIS2_INFRA_TOKEN)
   infra/cloudflare.py --peer OUT
                                Jarvis 1's way to the Claude login (router/claudelogin.go /peer/*): the service token
                                jarvis1-claude-login (kept unless ROTATE=1; a new one's JARVIS2_LOGIN_ID/SECRET go to
@@ -19,7 +18,6 @@ The apps' audiences are not secret: they are in k8s/apps/router.yaml (the script
 Access apps (created Access first, then DNS, so the hostname is never reachable ungated):
   "Jarvis 2"        jarvis2.deyaochen.com         Deyao's email only (the app + web page)
   "Jarvis 2 setup"  jarvis2.deyaochen.com/setup   service token jarvis2-setup only (the setup session)
-  "HK news stream"  hknews.deyaochen.com          Deyao's email only (k8s/apps/news.yaml, on the same tunnel)
   "Jarvis 2 peer"   jarvis2.deyaochen.com/peer    service token jarvis1-claude-login only (Jarvis 1 reads the Claude login)
   "Jarvis 2 devices" jarvis2.deyaochen.com/api/remotes and /api/sessions/*/start: Deyao's email, or ANY service token
                     of the account (Deyao's paired OpenClaw/Paseo apps); the router admits a token only when it is a
@@ -45,8 +43,6 @@ ZONE = "f51ca95ee5e6c664372000f887c96a92"
 HOST = "jarvis2.deyaochen.com"
 EMAIL = "chendeyao000@gmail.com"
 ORIGIN = "http://router.jarvis2-router.svc.cluster.local:8080"
-NEWS_HOST = "hknews.deyaochen.com"
-NEWS_ORIGIN = "http://news.jarvis2-edge.svc.cluster.local:8080"
 API = "https://api.cloudflare.com/client/v4"
 
 
@@ -96,14 +92,6 @@ def tunnel_and_dns(host, name, extra=()):
     token = call("GET", f"/accounts/{ACCOUNT}/cfd_tunnel/{tun['id']}/token")
     dns(host, tun["id"], name)
     return tun["id"], token
-
-
-def news():
-    """the news page on the production tunnel: Access app first, then the ingress rule, then DNS"""
-    access_app("HK news stream", NEWS_HOST, {"name": "Deyao", "decision": "allow", "include": [{"email": {"email": EMAIL}}]})
-    tid, _ = tunnel_and_dns(HOST, "jarvis2", [(NEWS_HOST, NEWS_ORIGIN)])
-    dns(NEWS_HOST, tid, "jarvis2")
-    print(f"ok: https://{NEWS_HOST}/ → {NEWS_ORIGIN} on tunnel {tid}, behind Access")
 
 
 def peer(out):
@@ -190,8 +178,6 @@ def rehearsal(name, out):
 
 
 def main():
-    if sys.argv[1:] == ["--news"]:
-        return news()
     if sys.argv[1:2] == ["--peer"]:
         return peer(sys.argv[2])
     if sys.argv[1:] == ["--devices"]:
@@ -224,9 +210,7 @@ def main():
     print(f"audiences (k8s/apps/router.yaml): ACCESS_APP_AUD={aud} ACCESS_SETUP_AUD={setup_aud}")
 
     # 3. the tunnel (remotely managed) and its ingress, then DNS last
-    access_app("HK news stream", NEWS_HOST, {"name": "Deyao", "decision": "allow", "include": [{"email": {"email": EMAIL}}]})
-    tid, vals["TUNNEL_TOKEN"] = tunnel_and_dns(HOST, "jarvis2", [(NEWS_HOST, NEWS_ORIGIN)])
-    dns(NEWS_HOST, tid, "jarvis2")
+    tid, vals["TUNNEL_TOKEN"] = tunnel_and_dns(HOST, "jarvis2")
     devices()
 
     write_out(out, vals)

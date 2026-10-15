@@ -63,7 +63,7 @@ spec:
           # key in several envFrom sources the last one wins, and the default part still holds an old GITHUB_READ_TOKEN
           envFrom: [{ secretRef: { name: router-secrets, optional: true } }, { secretRef: { name: router-secrets-backup, optional: true } }, { secretRef: { name: router-secrets-github, optional: true } }, { secretRef: { name: router-secrets-flyorgs, optional: true } }, { secretRef: { name: router-secrets-flypersonal, optional: true } }, { secretRef: { name: router-secrets-browserbase, optional: true } }, { secretRef: { name: router-secrets-devices, optional: true } }]
           volumeMounts: [{ name: data, mountPath: /data }, { name: wg, mountPath: /wg, readOnly: true }, { name: sigs, mountPath: /sigs, readOnly: true }]
-          resources: { requests: { cpu: 20m, memory: 64Mi }, limits: { memory: 1Gi } }
+          resources: { requests: { cpu: 500m, memory: 1536Mi }, limits: { memory: 1536Mi } }  # the control plane holds 2 GiB of the 4 GiB box as its own (DECISIONS 168)
           securityContext: { runAsNonRoot: true, runAsUser: 65532, runAsGroup: 65532, allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: { drop: [ALL] }, seccompProfile: { type: RuntimeDefault } }
       volumes:
         - { name: data, persistentVolumeClaim: { claimName: router-data } }

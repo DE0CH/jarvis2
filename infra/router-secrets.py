@@ -2,7 +2,7 @@
 """router-secrets.py — write the router's non-sensitive secrets into git, SOPS-encrypted to the box's age key
 (keys/box-age.pub); Flux decrypts them on the box (k8s/flux/sync.yaml, Kustomization jarvis2-secrets).
 
-    infra/router-secrets.py [--part backup|github|flyorgs|flypersonal|browserbase|devices|news|search|icloud-index|icloud-session] KEY[=SRC] …
+    infra/router-secrets.py [--part backup|github|flyorgs|flypersonal|browserbase|devices|search|icloud-index|icloud-session] KEY[=SRC] …
 
 SRC is `env:VAR` (default `env:KEY`) or `file:PATH`. A part is one Secret, rewritten whole each run, so name
 every key of that part (nobody can read the old values back: only the box holds the age key):
@@ -20,8 +20,6 @@ every key of that part (nobody can read the old values back: only the box holds 
                  spend DM reads the session list)
   --part devices k8s/secrets/router-devices.enc.yaml — CF_DEVICE_TOKENS_API only: the Cloudflare token "jarvis2-device-tokens"
                  (Access: Service Tokens read/write, nothing else) that mints and deletes the paired apps' tokens (router/devices.go)
-  --part news    k8s/secrets/news.enc.yaml, Secret news-secrets in jarvis2-edge — OPENROUTER_API and HKEJ_PROXY
-                 for the hk-news-stream pod (k8s/apps/news.yaml), not the router
   --part search  k8s/secrets/search.enc.yaml, Secret search-secrets in jarvis2-edge — STORAGEBOX_HOST/USER/PASSWORD
                  and OPENROUTER_API for transcript search (k8s/apps/search.yaml)
   --part icloud-index    k8s/secrets/icloud-index.enc.yaml, Secret icloud-index-secrets in jarvis2-edge — OPENROUTER_API,
@@ -42,7 +40,6 @@ PARTS = {  # part → (file, Secret name, annotation, namespace, manifest carryi
     "flypersonal": ("router-flypersonal.enc.yaml", "router-secrets-flypersonal", "jarvis2/secrets-rev-flypersonal", "jarvis2-router", "router.yaml"),
     "browserbase": ("router-browserbase.enc.yaml", "router-secrets-browserbase", "jarvis2/secrets-rev-browserbase", "jarvis2-router", "router.yaml"),
     "devices": ("router-devices.enc.yaml", "router-secrets-devices", "jarvis2/secrets-rev-devices", "jarvis2-router", "router.yaml"),
-    "news": ("news.enc.yaml", "news-secrets", "jarvis2/secrets-rev-news", "jarvis2-edge", "news.yaml"),
     "search": ("search.enc.yaml", "search-secrets", "jarvis2/secrets-rev-search", "jarvis2-edge", "search.yaml"),
     "icloud-index": ("icloud-index.enc.yaml", "icloud-index-secrets", "jarvis2/secrets-rev-icloud-index", "jarvis2-edge", "icloud-index.yaml"),
     "icloud-session": ("icloud-session.enc.yaml", "icloud-index-session", "jarvis2/secrets-rev-icloud-session", "jarvis2-edge", "icloud-index.yaml"),

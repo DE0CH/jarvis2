@@ -28,7 +28,7 @@ metadata: { name: search, namespace: jarvis2-edge }
 # the event loop for tens of seconds); live numbers in GET /api/search/status (replica.memory) and the pod's logs.
 # 768Mi leaves room for the writer's transcript parsing and for the index to triple.
 spec:
-  replicas: 0  # off until the control plane is back after the 2026-10-15 reboot (Deyao)
+  replicas: 2
   minReadySeconds: 5
   strategy: { type: RollingUpdate, rollingUpdate: { maxUnavailable: 0, maxSurge: 1 } }
   selector: { matchLabels: { app: search } }
@@ -59,7 +59,7 @@ spec:
           startupProbe: { httpGet: { path: /healthz, port: 8090 }, periodSeconds: 5, failureThreshold: 180 }
           livenessProbe: { httpGet: { path: /healthz, port: 8090 }, periodSeconds: 10, timeoutSeconds: 5, failureThreshold: 6 }
           readinessProbe: { httpGet: { path: /readyz, port: 8090 }, periodSeconds: 2, timeoutSeconds: 3, failureThreshold: 2 }
-          resources: { requests: { cpu: 50m, memory: 320Mi }, limits: { memory: 768Mi } }
+          resources: { requests: { cpu: 50m, memory: 256Mi }, limits: { cpu: 500m, memory: 448Mi } }  # outside the control plane: hard memory and CPU caps (DECISIONS 168)
           securityContext: { runAsNonRoot: true, runAsUser: 65532, runAsGroup: 65532, allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: { drop: [ALL] }, seccompProfile: { type: RuntimeDefault } }
       volumes:
         - { name: data, persistentVolumeClaim: { claimName: search-data } }

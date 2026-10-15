@@ -25,7 +25,7 @@ metadata: { name: icloud-index, namespace: jarvis2-edge }
 spec:
   # 0 TEMPORARILY (2026-10-15 03:45): the 4 GB box went into full memory thrash (CPU 195 %, 1.4 GB/s of reads) when ~40 min
   # of held-back rollouts landed at once; this pod is the biggest memory user. Back to 1 once the box has recovered.
-  replicas: 0
+  replicas: 0  # off (Deyao, 2026-10-15): too heavy for the 4 GiB box beside the control plane (DECISIONS 168)
   strategy: { type: Recreate }  # one writer on the volume
   selector: { matchLabels: { app: icloud-index } }
   template:

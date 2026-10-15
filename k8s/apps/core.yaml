@@ -28,7 +28,7 @@ spec:
             - { name: BOX_KEY_FILE, value: /box/box-key.pem }
             - { name: MACHINE_URL, value: "http://jarvis2-box._peer.internal:8081" }
           volumeMounts: [{ name: box-key, mountPath: /box, readOnly: true }]
-          resources: { requests: { cpu: 20m, memory: 32Mi }, limits: { memory: 256Mi } }
+          resources: { requests: { cpu: 200m, memory: 256Mi }, limits: { memory: 256Mi } }  # the control plane holds 2 GiB of the 4 GiB box as its own (DECISIONS 168)
           securityContext: { runAsNonRoot: true, runAsUser: 65532, runAsGroup: 65532, allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: { drop: [ALL] }, seccompProfile: { type: RuntimeDefault } }
       securityContext: { fsGroup: 65532 }
       volumes: [{ name: box-key, secret: { secretName: core-box-key, defaultMode: 0440 } }]
