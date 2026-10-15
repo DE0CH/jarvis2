@@ -34,7 +34,8 @@ EOF
   --service-account-issuer https://kubernetes.default.svc --service-account-key-file "$W/sa.pub" \
   --service-account-signing-key-file "$W/sa.key" --service-cluster-ip-range 10.43.0.0/16 > "$W/apiserver.log" 2>&1 &
 K="kubectl --kubeconfig $W/kubeconfig"
-for _ in $(seq 1 60); do $K get ns >/dev/null 2>&1 && break; sleep 1; done
+# up, and its default RBAC roles bootstrapped (they appear a moment after the API answers)
+for _ in $(seq 1 90); do $K get clusterrole system:aggregate-to-view >/dev/null 2>&1 && break; sleep 1; done
 $K create ns flux-system >/dev/null
 $K apply -k k8s/bootstrap >/dev/null
 $K get clusterrole system:aggregate-to-admin system:aggregate-to-edit system:aggregate-to-view -o json \
