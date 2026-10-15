@@ -19,12 +19,14 @@ jobs:
           base="${{ github.event.before }}"
           git cat-file -e "$base^{commit}" 2>/dev/null || base=HEAD~1
           PATH="$PATH:$(go env GOPATH)/bin" infra/flux-dryrun.sh "$base"
+          # and as a NEW box meets it (a rehearsal, a rebuild): nothing applied before
+          FRESH=1 PATH="$PATH:$(go env GOPATH)/bin" infra/flux-dryrun.sh "$base"
           # the services box (docs/DESIGN.md "The boxes"): its own bootstrap, one Flux Kustomization per app
-          BOOTSTRAP=k8s/bootstrap-services TREES="$(ls -d k8s/services/apps/*/ | sed 's#/$##' | tr '\n' ' ')" \
+          FRESH=1 BOOTSTRAP=k8s/bootstrap-services TREES="$(ls -d k8s/services/apps/*/ | sed 's#/$##' | tr '\n' ' ')" \
             PATH="$PATH:$(go env GOPATH)/bin" infra/flux-dryrun.sh "$base"
           # the control box, once its tree exists
           if [ -d k8s/control/apps ]; then
-            BOOTSTRAP=k8s/bootstrap-control TREES="$(ls -d k8s/control/apps/*/ | sed 's#/$##' | tr '\n' ' ')" \
+            FRESH=1 BOOTSTRAP=k8s/bootstrap-control TREES="$(ls -d k8s/control/apps/*/ | sed 's#/$##' | tr '\n' ' ')" \
               PATH="$PATH:$(go env GOPATH)/bin" infra/flux-dryrun.sh "$base"
           fi
       - run: |

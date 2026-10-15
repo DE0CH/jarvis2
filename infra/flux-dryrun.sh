@@ -10,7 +10,9 @@
 # rules (a bare apiserver has no controller-manager to aggregate them), applies BASE_REF's k8s/apps for real as
 # flux-applier (the box as it is), then server-side dry-runs this tree's k8s/apps as flux-applier. Exit 1 on any
 # refusal. BASE_REF defaults to HEAD~1. BOOTSTRAP (default k8s/bootstrap) and TREES (default k8s/apps; space-separated)
-# pick a box: the services box is BOOTSTRAP=k8s/bootstrap-services TREES="k8s/services/apps/search …".
+# pick a box: the services box is BOOTSTRAP=k8s/bootstrap-services TREES="k8s/services/apps/search …". FRESH=1 skips
+# BASE_REF: the tree on an empty cluster, as a NEW box's Flux meets it (2026-10-15: every rehearsal box failed on a
+# RoleBinding whose Role was in the same apply, which the box built long ago never noticed).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 BASE="${1:-HEAD~1}"
@@ -46,6 +48,7 @@ $K delete clusterrole admin >/dev/null; $K apply -f "$W/admin.json" >/dev/null
 AS=(--server-side --field-manager=kustomize-controller --as=system:serviceaccount:flux-system:flux-applier)
 mkdir -p "$W/base"
 for T in $TREES; do
+  [ -n "${FRESH:-}" ] && break
   if git archive "$BASE" "$T" 2>/dev/null | tar -x -C "$W/base" 2>/dev/null && kubectl kustomize "$W/base/$T" > "$W/base.yaml" 2>/dev/null; then
     $K apply "${AS[@]}" -f "$W/base.yaml" > "$W/base.out" 2>&1 || { echo "note: $BASE's $T doesn't apply cleanly:"; grep -v serverside-applied "$W/base.out" | head -5; }
   fi

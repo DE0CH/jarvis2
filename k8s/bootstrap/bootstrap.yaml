@@ -40,3 +40,16 @@ kind: RoleBinding
 metadata: { name: flux-applier, namespace: jarvis2-edge }
 roleRef: { apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: admin }
 subjects: [{ kind: ServiceAccount, name: flux-applier, namespace: flux-system }]
+---
+# search reads its own pod's restarts (k8s/apps/search.yaml). In the bootstrap: a fresh box's Flux refuses a RoleBinding
+# to a Role made in the same apply (the RBAC escalation check needs the Role to exist), so k8s/apps can't carry it.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata: { name: search-self, namespace: jarvis2-edge }
+rules: [{ apiGroups: [""], resources: [pods], verbs: [get] }]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata: { name: search-self, namespace: jarvis2-edge }
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: Role, name: search-self }
+subjects: [{ kind: ServiceAccount, name: search, namespace: jarvis2-edge }]

@@ -12,7 +12,7 @@ SID="${1:?usage: box-logs.sh SERVER_ID}"
 : "${HCLOUD_PROJECT_TOKEN:?}"
 [ "${CONFIRM:-}" = yes ] || { echo "the box resets (twice); CONFIRM=yes to go"; exit 2; }
 API=https://api.hetzner.cloud/v1
-hz() { curl -sS -f -X "$1" "$API$2" -H "Authorization: Bearer $HCLOUD_PROJECT_TOKEN" -H "Content-Type: application/json" ${3:+-d "$3"}; }
+hz() { curl -sS --fail-with-body -X "$1" "$API$2" -H "Authorization: Bearer $HCLOUD_PROJECT_TOKEN" -H "Content-Type: application/json" ${3:+-d "$3"}; }
 j() { python3 -c "import json,sys;d=json.load(sys.stdin);print($1)"; }
 wait_action() { for i in $(seq 1 120); do st=$(hz GET "/actions/$1" | j "d['action']['status']"); [ "$st" = success ] && return 0; [ "$st" = error ] && { echo "action $1 failed"; return 1; }; sleep 3; done; return 1; }
 V6=$(hz GET "/servers/$SID" | j "d['server']['public_net']['ipv6']['ip'].split('/')[0]+'1'")
@@ -28,7 +28,7 @@ FWS=$(hz GET "/servers/$SID" | j "' '.join(str(f['id']) for f in d['server']['pu
 for f in $FWS; do
   RULES=$(hz GET "/firewalls/$f" | python3 -c "import json,sys;print(json.dumps(json.load(sys.stdin)['firewall']['rules']))")
   echo "$f $RULES" >> "$K/fw"
-  hz POST "/firewalls/$f/actions/set_rules" "{\"rules\":$(python3 -c "import json,sys;r=json.loads(sys.argv[1]);r.append({'direction':'in','protocol':'tcp','port':'22','source_ips':['::/0']});print(json.dumps(r))" "$RULES")}" >/dev/null
+  hz POST "/firewalls/$f/actions/set_rules" "{\"rules\":$(python3 -c "import json,sys;r=json.loads(sys.argv[1]);r=r if any(x.get('port')=='22' for x in r) else r+[{'direction':'in','protocol':'tcp','port':'22','source_ips':['::/0']}];print(json.dumps(r))" "$RULES")}" >/dev/null
 done
 restore_fw() { [ -f "$K/fw" ] && while read -r f r; do hz POST "/firewalls/$f/actions/set_rules" "{\"rules\":$r}" >/dev/null; done < "$K/fw"; }
 trap 'restore_fw; cleanup' EXIT
@@ -40,6 +40,7 @@ for i in $(seq 1 60); do "${S[@]}" true 2>/dev/null && break; sleep 5; done
 echo "===== /var/log/jarvis2-bootstrap.log (last 120 lines)"; tail -n 120 /mnt/r/var/log/jarvis2-bootstrap.log 2>&1 || true
 echo "===== bootstrap done marker"; cat /mnt/r/var/log/jarvis2-bootstrap.done 2>&1 || true
 echo "===== cloud-init-output.log (last 60)"; tail -n 60 /mnt/r/var/log/cloud-init-output.log 2>&1 || true
+for p in /mnt/r/var/log/pods/flux-system_kustomize-controller* /mnt/r/var/log/pods/jarvis2-*; do [ -d "$p" ] || continue; echo "===== pod log $(basename $p) (last 30)"; tail -q -n 30 $p/*/*.log 2>/dev/null | cut -c1-3000; done
 if [ -d /mnt/r/var/log/journal ]; then for u in k3s warp-svc alloy jarvis2-private-guard; do echo "===== journal $u (last 40)"; journalctl -D /mnt/r/var/log/journal -u $u -n 40 --no-pager 2>&1 || true; done; fi'
 echo "rebooting into the box's own system"
 wait_action "$(hz POST "/servers/$SID/actions/reset" | j "d['action']['id']")"
