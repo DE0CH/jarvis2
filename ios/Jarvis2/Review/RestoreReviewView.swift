@@ -27,7 +27,7 @@ struct RestoreReviewView: View {
         Section {
           ForEach(b.put, id: \.key) { p in
             LabeledContent {
-              Text(p.writer.by == "machine" ? "Session" : p.writer.by == "setup" ? "Setup" : "Core")
+              Text(p.writer.by == "machine" ? "Session" : p.writer.by == "setup" ? "Setup" : p.writer.by == "router" ? "Router" : "Core")
                 .foregroundStyle(p.writer.by == "machine" ? Color.orange : Color.secondary)
             } label: {
               VStack(alignment: .leading, spacing: 2) {

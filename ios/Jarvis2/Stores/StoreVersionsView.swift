@@ -66,6 +66,7 @@ private struct VersionRow: View {
         if let k = v.cause.key { Text(k).font(.footnote.monospaced()) }
         if let f = v.cause.from { StatusPill(text: "From \(f)", color: .blue) }
         if v.cause.writer?.by == "machine" { StatusPill(text: "Session", color: .orange) }
+        if v.cause.writer?.by == "router" { StatusPill(text: "Router", color: .secondary) }
       }
       if let at = v.at.isoDate { Text(Fmt.ago(at)).font(.caption).foregroundStyle(.secondary) }
       Text(v.keys.isEmpty ? "No keys" : v.keys.map(\.name).joined(separator: " "))

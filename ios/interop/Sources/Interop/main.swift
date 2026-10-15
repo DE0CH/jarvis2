@@ -207,7 +207,7 @@ check(claim(bad).0 == 403, "a bundle other than the signed one is refused")
 check(claim(try! CoreSetup.claim(core: coreKeys, phone: phone, master: kitMaster, bundle: bundle, identity: PublicKeys(signingKey: derived.signingKey, agreementKey: phone.agreementKey))).0 == 403,
       "a claim whose identity isn't what its seed derives is refused")
 check(claim(try! CoreSetup.claim(core: coreKeys, phone: phone, master: kitMaster, bundle: bundle)).0 == 403, "…and a seed with no identity")
-check(call("/wipe", try! CoreSetup.wipe(core: coreKeys, master: kitMaster)).0 == 409, "an empty core can't be wiped")
+check(call("/wipe", try! CoreSetup.wipe(core: coreKeys, master: kitMaster)).0 == 200, "an empty core's wipe is answered (it already is empty; nothing ends)")
 let (rs, rb) = claim(try! CoreSetup.claim(core: coreKeys, phone: phone, master: kitMaster, bundle: bundle, identity: derived))
 check(rs == 200, "the core is set up (HTTP \(rs) \(String(decoding: rb.prefix(200), as: UTF8.self)))")
 // the answer comes from the core the seed made (signed with the derived key)
@@ -243,7 +243,8 @@ l = list()
 check(l.first { $0.name == "notes" }.map { !$0.sensitive && $0.empty } == true, "a created store is empty and not sensitive")
 let mk = try? CoreCrypto.decode(doc(call("/stores/mark-sensitive", ["name": "notes"]).1), by: coreKey, as: KindDoc.self, what: "mark")
 check(mk?.kind == "marked-sensitive" && mk?.name == "notes", "mark sensitive")
-check(call("/stores/mark-sensitive", ["name": "notes"]).0 == 409, "…one way")
+let mk2 = try? CoreCrypto.decode(doc(call("/stores/mark-sensitive", ["name": "notes"]).1), by: coreKey, as: KindDoc.self, what: "mark again")
+check(mk2?.kind == "marked-sensitive" && list().first { $0.name == "notes" }?.sensitive == true, "…a second mark is answered, still sensitive (one way)")
 
 // ---- split-key unlock: one share per key, each key's writer checked ----
 func begin(_ store: String, for f: String? = nil) -> (Int, UnlockBegin?) {
@@ -396,6 +397,19 @@ check(coreWrite("moved", "A", sealedAs: ("moved", "B")) == 200 && unlock("moved"
 check(coreWrite("moved2", "A", sealedAs: ("default", "A")) == 200 && unlock("moved2").0 == 403, "…nor one sealed under another store's name")
 check(coreWrite("forged", "A", sealedAs: ("forged", "A"), signer: P256.Signing.PrivateKey()) == 200, "the core passes on a setup writer's signature unchecked")
 check(begin("forged").1.map { x in throwsErr { try Checks.unlockKeys(x, setupKey: setupKey) } } == true, "…and the app refuses a key the setup key didn't sign")
+
+// the router writes a Claude account's store (unsigned, named "router"), and nothing else (DECISIONS 190)
+func routerWrite(_ store: String) -> Int {
+  let x = try! CoreCrypto.wrapKey(store: store, key: "CLAUDE_CREDENTIALS", value: Data("{}".utf8), storeKey: sk0)
+  return call("/stores/write-key", ["store": store, "key": "CLAUDE_CREDENTIALS", "wrapped": ["e": x.wrapped.e, "wrapped": x.wrapped.wrapped], "data": x.data, "writer": "router"]).0
+}
+check(routerWrite("claude-interop") == 200, "the router writes a Claude account store")
+let (rws, rwb) = begin("claude-interop")
+check(rws == 200 && rwb?.keys?.first?.writer.by == "router" && rwb.map { x in !throwsErr { try Checks.unlockKeys(x, setupKey: setupKey) } } == true,
+      "…the unlock names the router as its writer, and the app takes it")
+check(routerWrite("default") == 403, "…and the core refuses the router any other store")
+check(throwsErr { try Checks.keyWriter(StoreWriter(by: "router"), store: "default", key: "K", e: "", dataSha256: "", backupSha256: "", setupKey: nil) },
+      "…as does the app")
 
 // a key a session's machine wrote: shown on the page or refused before Face ID (the core checked the machine itself)
 func synthetic(_ w: StoreWriter, key: String = "S") -> UnlockBegin {

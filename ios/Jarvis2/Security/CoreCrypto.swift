@@ -586,19 +586,28 @@ extension Checks {
 
   /// A key the phone's share opens: written by the setup session (its key's signature over writerText, checked here
   /// against keys/setup.pub), by a session's machine (the core checked that machine's signature; the page must name
-  /// the session: StoreUnlock refuses one it didn't show), or vouched for by the core (a Recover's key, a deploy key).
+  /// the session: StoreUnlock refuses one it didn't show), by the router (a Claude account store's pair only), or
+  /// vouched for by the core (a Recover's key, a deploy key).
   /// Anything else is refused.
   static func keyWriter(_ w: StoreWriter, store: String, key: String, e: String, dataSha256: String, backupSha256: String, setupKey: String?) throws {
     switch w.by {
     case "core": return
     case "machine":
       guard let l = w.line, !l.isEmpty else { throw TrustError.mismatch("key \(key) of \(store) was written by a machine the core doesn't name") }
+    case "router":
+      // the router writes only the Claude account stores (core/keys.go, DECISIONS 190): their pair, which it holds anyway
+      guard Checks.isClaudeAccountStore(store) else { throw TrustError.mismatch("key \(key) of \(store) was written by the router, which writes only the Claude account stores") }
     case "setup":
       guard let sig = w.sig, let k = setupKey else { throw TrustError.mismatch("key \(key) of \(store)'s writer can't be checked") }
       let text = writerText(store: store, key: key, e: e, dataSha256: dataSha256, backupSha256: backupSha256)
       guard CoreCrypto.valid(Data(text.utf8), sig: sig, by: k) else { throw TrustError.badSignature("key \(key) of \(store)'s writer (not the setup key)") }
     default: throw TrustError.mismatch("key \(key) of \(store) was written by \(w.by)")
     }
+  }
+
+  /// claude-<name>: a Claude account's store, the only kind the router writes (core/keys.go routerStoreRE)
+  static func isClaudeAccountStore(_ store: String) -> Bool {
+    store.range(of: "^claude-[a-z0-9]+(-[a-z0-9]+)*$", options: .regularExpression) != nil
   }
 
   /// every key of an unlock: its writer checked (an unlock of an empty store is refused: there is nothing to open)
