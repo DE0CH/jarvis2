@@ -28,7 +28,7 @@ metadata: { name: search, namespace: jarvis2-edge }
 # the event loop for tens of seconds); live numbers in GET /api/search/status (replica.memory) and the pod's logs.
 # 768Mi leaves room for the writer's transcript parsing and for the index to triple.
 spec:
-  replicas: 1  # TEMPORARILY 1 while the box recovers from memory thrash (2026-10-15); 2 again after
+  replicas: 0  # off until the control plane is back after the 2026-10-15 reboot (Deyao)
   minReadySeconds: 5
   strategy: { type: RollingUpdate, rollingUpdate: { maxUnavailable: 0, maxSurge: 1 } }
   selector: { matchLabels: { app: search } }

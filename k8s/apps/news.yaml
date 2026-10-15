@@ -17,7 +17,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata: { name: news, namespace: jarvis2-edge }
 spec:
-  replicas: 1
+  replicas: 0  # off until the control plane is back after the 2026-10-15 reboot (Deyao)
   strategy: { type: Recreate }
   selector: { matchLabels: { app: news } }
   template:
