@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 )
 
 type Doc struct {
@@ -21,11 +22,26 @@ type Doc struct {
 func (d *Doc) Decode(out any) error { return json.Unmarshal([]byte(d.Payload), out) }
 
 type CoreClient struct {
+	mu   sync.RWMutex
 	base string
 	http *http.Client
 	// onLineSeq: every answer's X-Line-Seq (linestate.go keeps the core's line state when it moved), called before
 	// the answer goes back to the caller
 	onLineSeq func(int)
+}
+
+// URL: the core this client talks to now
+func (c *CoreClient) URL() string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.base
+}
+
+// SetURL: point the client at another core (nextcore.go: a flip), for every later call
+func (c *CoreClient) SetURL(u string) {
+	c.mu.Lock()
+	c.base = u
+	c.mu.Unlock()
 }
 
 // CoreError: the core refused; Body is its signed error document (relayed as is)
@@ -52,7 +68,7 @@ func (c *CoreClient) rawNoHook(method, path string, body []byte) (int, []byte, e
 }
 
 func (c *CoreClient) raw(method, path string, body []byte) (int, []byte, int, error) {
-	req, _ := http.NewRequest(method, strings.TrimSuffix(c.base, "/")+path, bytes.NewReader(body))
+	req, _ := http.NewRequest(method, strings.TrimSuffix(c.URL(), "/")+path, bytes.NewReader(body))
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}

@@ -5,6 +5,7 @@ go 1.25.1
 require golang.zx2c4.com/wireguard v0.0.0-20261006164505-2631ce99a06f
 
 require (
+	filippo.io/age v1.2.1 // indirect
 	github.com/google/btree v1.1.2 // indirect
 	golang.org/x/crypto v0.37.0 // indirect
 	golang.org/x/net v0.39.0 // indirect

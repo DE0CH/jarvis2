@@ -101,6 +101,7 @@ func (r *Router) buildHandlers() {
 	r.registerStoreDocs(app, m, mux) // storedocs.go: every store's keys, what they are for, and writing one key
 	r.registerRestore(app, mux)      // storerestore.go: a store's versions and putting one back (phone-signed)
 	r.registerActions(m)             // actions.go: each session's actions, on its machine key
+	r.registerNextCore(mux)          // nextcore.go: the flip to the next core
 	// the router's own health, for an operator with no way into the box: secret NAMES present, image, core up
 	mux.Handle("GET /setup/status", r.requireSetup(func(w http.ResponseWriter, req *http.Request) {
 		if err := r.checkSetupSig(req.Method, req.URL.Path, req.Header.Get("X-Setup-Time"), req.Header.Get("X-Setup-Sig"), nil); err != nil {
@@ -144,7 +145,8 @@ func (r *Router) buildHandlers() {
 			flyOrgs = append(flyOrgs, map[string]any{"org": o.Org, "via": o.Via, "error": o.Error, "apps": apps, "machines": machines,
 				"attention": flyAttentionCount([]flyOrgView{o})})
 		}
-		writeJSON(w, 200, map[string]any{"secrets": present, "sessionImage": r.cfg.SessionImage, "coreUp": coreErr == nil, "version": os.Getenv("VERSION"), "githubRepos": gh, "flyOrgs": flyOrgs})
+		writeJSON(w, 200, map[string]any{"secrets": present, "sessionImage": r.cfg.SessionImage, "coreUp": coreErr == nil, "version": os.Getenv("VERSION"), "githubRepos": gh, "flyOrgs": flyOrgs,
+			"move": moveStatusNow(), "backup": backupStatus(), "core": r.nextCoreStatus()})
 	}))
 	setup("GET /setup/identity", "GET", "/identity")
 	setup("POST /setup/stores", "POST", "/stores")
@@ -154,7 +156,7 @@ func (r *Router) buildHandlers() {
 	setup("POST /setup/fly-token", "POST", "/fly-token")
 
 	// ---- setting the core up: Reset and Recover (the app, with the master key) -----------------------------
-	app("GET /api/core/identity", func(w http.ResponseWriter, req *http.Request) { r.relay(w, "GET", "/identity", nil) })
+	app("GET /api/core/identity", func(w http.ResponseWriter, req *http.Request) { r.relayFor(w, req, "GET", "/identity", nil) })
 	// claim and wipe come only from the app's own device login (the cf-access-token header the shell sends),
 	// not from a browser tab
 	device := func(pattern, corePath string) {
@@ -164,7 +166,7 @@ func (r *Router) buildHandlers() {
 				return
 			}
 			b, _ := io.ReadAll(io.LimitReader(req.Body, 16<<20))
-			r.relay(w, "POST", corePath, b)
+			r.relayFor(w, req, "POST", corePath, b) // nextcore.go: ?core=next sets the next core up
 		})
 	}
 	// the claim also carries the app's device-key countersignature (deviceKey, deviceSig over the statement): the
@@ -177,7 +179,12 @@ func (r *Router) buildHandlers() {
 		}
 		b, _ := io.ReadAll(io.LimitReader(req.Body, 16<<20))
 		r.keepClaimDevice(b)
-		status, out, err := r.core.Raw("POST", "/claim", b)
+		c := r.coreFor(req) // nextcore.go: ?core=next Recovers the next core
+		if c == nil {
+			writeJSON(w, 404, map[string]string{"error": "there is no next core"})
+			return
+		}
+		status, out, err := c.Raw("POST", "/claim", b)
 		if err != nil {
 			log.Printf("core POST /claim: %v", err)
 			writeJSON(w, 503, map[string]any{"error": "the core isn't running", "coreDown": true})

@@ -122,6 +122,7 @@ type persisted struct {
 	CoreKey     string                   `json:"coreKey,omitempty"`     // corechange.go: the signing key of the core the sessions' lines belong to
 	Leases      *LeaseState              `json:"leases,omitempty"`      // leases.go: shared-device leases (holder + queue per device)
 	Outcomes    map[string][]*Outcome    `json:"outcomes,omitempty"`    // outcomes.go: session id → decisions on its Inbox filings, until delivered
+	ActiveCore  string                   `json:"activeCore,omitempty"`  // nextcore.go: the core URL that serves after a flip
 }
 
 type State struct {

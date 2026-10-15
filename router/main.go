@@ -41,6 +41,10 @@ func env(k, def string) string {
 }
 
 func main() {
+	if len(os.Args) > 2 && os.Args[1] == "restore-backup" {
+		restoreCommand(os.Args[2:]) // backup.go
+		return
+	}
 	wait, _ := strconv.Atoi(env("SNAPSHOT_WAIT_SECONDS", "600"))
 	cfg := Config{
 		CoreURL:         env("CORE_URL", "http://core.jarvis2-core.svc.cluster.local:8090"),
@@ -76,7 +80,27 @@ func main() {
 	}
 	self := selfURL(addr)
 	public := &swapHandler{}
-	listen := func() { go func() { log.Fatal(http.ListenAndServe(addr, public)) }() }
+	listening := false
+	listen := func() {
+		if !listening {
+			listening = true
+			go func() { log.Fatal(http.ListenAndServe(addr, public)) }()
+		}
+	}
+	sig := make(chan os.Signal, 1)
+	signal.Notify(sig, syscall.SIGTERM, syscall.SIGINT)
+	// move.go: this box's router moved to another box: only a proxy to it, whoever holds the lock
+	proxyOnly := func(to string) {
+		log.Printf("[move] this router moved to %s: proxying everything there, no state loaded", to)
+		public.set(proxyTo(self, to))
+		listen()
+		<-sig
+		time.Sleep(time.Duration(handoverLingerSeconds()) * time.Second)
+		os.Exit(0)
+	}
+	if to := movedTo(cfg.DataDir); to != "" {
+		proxyOnly(to)
+	}
 	standby := !lock.tryLock()
 	if standby {
 		// listening (and so ready: a TCP probe) at once, every request proxied to the leader
@@ -85,8 +109,6 @@ func main() {
 		listen()
 	}
 	// a standby stopped before it leads (a rollout replaced again) just goes
-	sig := make(chan os.Signal, 1)
-	signal.Notify(sig, syscall.SIGTERM, syscall.SIGINT)
 	got := make(chan error, 1)
 	go func() { got <- lock.lock() }() // immediate for the leader (flock is re-entrant per open file)
 	select {
@@ -98,6 +120,21 @@ func main() {
 		log.Printf("standby stopped before leading")
 		os.Exit(0)
 	}
+	if to := movedTo(cfg.DataDir); to != "" {
+		proxyOnly(to) // the leader that moved is gone, its lock with it: this pod stays a proxy too
+	}
+	coreClient := &CoreClient{base: cfg.CoreURL, http: &http.Client{Timeout: 15 * time.Minute}}
+	// move.go: the new box's router copies the old one's /data and proxies to it until it moves
+	joiner := moveJoinerFromEnv(cfg.DataDir)
+	if joiner != nil {
+		joiner.handoff, joiner.core = httpHandoff{}, coreClient
+		listen()
+		if !joiner.candidate(lock, self, public, sig) {
+			time.Sleep(time.Duration(handoverLingerSeconds()) * time.Second)
+			os.Exit(0)
+		}
+	}
+	maybeRestore(cfg.DataDir) // backup.go: a rebuilt box (ROUTER_RESTORE=1)
 
 	st, err := LoadState(cfg.DataDir) // after the lock: the previous leader's last save
 	if err != nil {
@@ -107,37 +144,61 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	r := NewRouter(cfg, st, &CoreClient{base: cfg.CoreURL, http: &http.Client{Timeout: 15 * time.Minute}}, policy)
+	r := NewRouter(cfg, st, coreClient, policy)
+	r.applyActiveCore() // nextcore.go: the core a flip left serving
 	r.startFeatures()
+	r.startStateBackups()
+	drainMax, _ := strconv.Atoi(env("DRAIN_SECONDS", "1740"))
+	go r.nextCoreLoop(30*time.Second, time.Duration(drainMax)*time.Second)
 	ld := &leadership{lock: lock, self: self, handler: public}
-	log.Printf("router on %s (core %s), leader at %s", addr, cfg.CoreURL, self)
+	log.Printf("router on %s (core %s), leader at %s", addr, coreClient.URL(), self)
 	// two listeners: the public one (cloudflared → app, web, setup) and the machines' one, which only
-	// Fly's private network reaches (the WireGuard peer); /m exists only on the second
-	if wg := os.Getenv("WG_CONFIG"); wg != "" {
+	// Fly's private network reaches (the WireGuard peer); /m exists only on the second. The peer that came with a
+	// move (/data/wg.conf) wins over the box's own (move.go).
+	wgPath := wgConfigPath(cfg.DataDir)
+	var startWG func() (func(), error)
+	if wgPath != "" {
 		// production: only on the Fly private network (wg.go)
-		stop, err := serveWG(wg, 8081, r.MachineHandler())
+		startWG = func() (func(), error) { return serveWG(wgPath, 8081, r.MachineHandler()) }
+		stop, err := startWG()
 		if err != nil {
 			log.Fatal(err)
 		}
 		ld.stopWG = stop
-		log.Printf("machines: WireGuard peer from %s, port 8081", wg)
+		log.Printf("machines: WireGuard peer from %s, port 8081", wgPath)
 	} else {
 		go func() { log.Fatal(http.ListenAndServe(maddr, r.MachineHandler())) }()
 	}
 	public.set(r.Handler())
-	if !standby {
-		listen() // the first leader listens once it serves (ready from here)
-	}
+	listen() // the first leader listens once it serves (ready from here)
 	lock.setAddr(self)
+	if joiner != nil {
+		joiner.finish() // move.go: the old box proxies here from now on
+	}
+	// move.go: the old box's side of a move (only with MOVE_KEY)
+	var sender *moveSender
+	if key := os.Getenv("MOVE_KEY"); key != "" && joiner == nil {
+		sender = &moveSender{r: r, st: st, ld: ld, lock: lock, self: self, public: public, dir: cfg.DataDir, key: key,
+			wgPath: wgPath, startWG: startWG, drain: time.Duration(drainMax) * time.Second, handoff: httpHandoff{}}
+		setMove(func(m *moveStatus) { m.Role, m.Phase = "sender", "serving" })
+		go func() { log.Fatal(http.ListenAndServe(env("MOVE_ADDR", ":8082"), sender.Handler())) }()
+	}
 	// SIGTERM (a rollout): drain (drain.go): new lifecycle actions get 503 "router updating, try again shortly", the
 	// running ones finish, while both listeners keep serving reads, the machines' reports and the login's long
 	// polls (directly, and through the next pod's standby proxy). Then a Claude login refresh in flight is let
 	// finish, so its answer reaches the volume (the old refresh token is dead the moment the token endpoint answers).
 	// Then the handover (leader.go): the next pod leads, and what still reaches this one is proxied there.
 	// DRAIN_SECONDS stays under the pod's terminationGracePeriodSeconds (k8s/apps/router.yaml).
-	drainMax, _ := strconv.Atoi(env("DRAIN_SECONDS", "1740"))
 	<-sig
+	if sender != nil && sender.moved() {
+		time.Sleep(time.Duration(handoverLingerSeconds()) * time.Second)
+		os.Exit(0) // moved: the state stays frozen, the lock is released by the exit (the next pod sees router.moved)
+	}
+	if sender != nil {
+		sender.abort() // a frozen move that never finished: serve again for the drain below
+	}
 	r.Drain(time.Duration(drainMax) * time.Second)
+	r.BackupState("drain")
 	r.loginHub().drain(20 * time.Second)
 	if r.lines != nil {
 		r.lines.flush() // linestate.go: the newest line state into the bucket before the router goes

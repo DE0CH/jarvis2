@@ -101,6 +101,7 @@ type leaderProxy struct {
 	local *swapHandler // this pod's listener: once it leads, a request still waiting here is served locally
 	wait  time.Duration
 	tr    http.RoundTripper
+	fixed func() string // move.go: a router that moved, or a move's candidate: always this address, not the lock's
 }
 
 func newLeaderProxy(l *leaderLock, self string, local *swapHandler) *leaderProxy {
@@ -114,7 +115,12 @@ func newLeaderProxy(l *leaderLock, self string, local *swapHandler) *leaderProxy
 func (p *leaderProxy) target(ctx context.Context, not string) (string, error) {
 	deadline := time.Now().Add(p.wait)
 	for {
-		a := p.lock.leaderAddr()
+		var a string
+		if p.fixed != nil {
+			a = p.fixed()
+		} else {
+			a = p.lock.leaderAddr()
+		}
 		if a != "" && a == p.self && p.local != nil && p.local.current() != http.Handler(p) {
 			return "", nil
 		}

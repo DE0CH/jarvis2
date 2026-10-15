@@ -96,6 +96,18 @@ func (r *Router) beginJob(session, what string) (done func(), err error) {
 	}, nil
 }
 
+// Undrain: lifecycle actions are taken again (move.go: a move that was aborted after its freeze had drained)
+func (r *Router) Undrain() {
+	d := &r.drain
+	d.mu.Lock()
+	if d.draining {
+		d.draining = false
+		d.started = nil
+		log.Printf("drain ended: lifecycle actions are taken again")
+	}
+	d.mu.Unlock()
+}
+
 func (d *drainState) startedCh() chan struct{} {
 	if d.started == nil {
 		d.started = make(chan struct{})
