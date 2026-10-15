@@ -240,7 +240,7 @@ enum Checks {
 
   /// the keys a session's settings may have (machine/vouch.go SessionConfig) and a one-time input (OnceInputs);
   /// a challenge with anything else is refused: the phone must show all that it signs
-  static let configKeys: Set<String> = ["v", "label", "prompt", "model", "repos", "content", "oneShot", "apiProxy", "attachments", "restore", "task"]
+  static let configKeys: Set<String> = ["v", "label", "prompt", "model", "repos", "content", "oneShot", "apiProxy", "attachments", "restore", "task", "claudeAccount"]
   static let onceKeys: Set<String> = ["prompt", "rollback"]
 
   static func checkKnown(_ r: Reviewed) throws {
@@ -301,6 +301,8 @@ enum Checks {
     var label: String; var prompt: String; var model: String; var repos: [String]; var oneShot: Bool; var apiProxy: Bool
     var attachments: [Attachment] = []
     var content: [String] = []
+    /// the Claude account picked (router/claudeaccounts.go; "" = none picked here): a config that names one must name it
+    var claudeAccount: String = ""
   }
 
   static func matchesSettings(_ r: Reviewed, _ s: Settings) throws {
@@ -317,6 +319,7 @@ enum Checks {
     guard ((c["apiProxy"] as? Bool) ?? false) == s.apiProxy else { throw TrustError.mismatch("API proxy") }
     guard attachments(c) == s.attachments else { throw TrustError.mismatch("attachments") }
     guard content(c) == s.content.sorted() else { throw TrustError.mismatch("content stores") }
+    if !s.claudeAccount.isEmpty, let a = c["claudeAccount"] { guard (a as? String) == s.claudeAccount else { throw TrustError.mismatch("Claude account") } }
     for k in ["restore", "task"] where c[k] != nil { throw TrustError.mismatch(k) }
     guard r.once == nil else { throw TrustError.mismatch("one-time inputs") }
   }

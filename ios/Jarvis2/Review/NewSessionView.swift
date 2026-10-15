@@ -333,7 +333,7 @@ struct NewSessionView: View {
                                        sensitive: signedList.stores.filter(\.sensitive).map(\.name))
       // …and, with a core that vouches, exactly these settings: the cert carries them to the machine (DESIGN "Inputs")
       try Checks.matchesSettings(r, .init(label: title, prompt: trimmedPrompt, model: modelId, repos: chosen.map(\.url), oneShot: oneShot, apiProxy: apiProxy,
-                                              attachments: attached, content: content.sorted()))
+                                              attachments: attached, content: content.sorted(), claudeAccount: takesAccount ? account : ""))
       // the stores the challenge carries that are locked now (fresh from the core): opened under the same Face ID
       let now = try await RouterClient.shared.stores()
       let locked = r.stores.filter { n in now.contains { $0.name == n && !$0.unlocked && !$0.empty } }

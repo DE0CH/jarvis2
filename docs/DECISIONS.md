@@ -1605,9 +1605,11 @@ snapshot failed with "no space left on device", the machine was destroyed anyway
      *Why the router's stores, not the core's*: the pair rotates every 8 hours with nobody there (115), and the core's
      stores take keys only from the setup session or a session, so the router can't write one; an empty core store can't
      be put in a cert or unlocked. The account is therefore the router's word (Session.ClaudeAccount), like the pair
-     itself: Deyao, 2026-10-15, "trust the router", no machine-side account check. Not signed in the cert's config: the
-     phone app refuses settings it can't show, so that waits for an app that renders it (it is shown beside the approval
-     as `options.claudeAccount`).
+     itself: Deyao, 2026-10-15, "trust the router", no machine-side account check. Signed in the cert's config
+     (`claudeAccount`, shown on the phone's review page and checked against New session's pick) only once the router
+     runs with `SIGN_CLAUDE_ACCOUNT=1`: phone app builds before the one that knows the key refuse settings they can't
+     show, so the switch is set after that build is on Deyao's phone (until then it is shown beside the approval as
+     `options.claudeAccount`). New prompt-task instances on the iPhone pick the account too.
      *A broken login*: no automatic action (Deyao, 2026-10-15): its sessions stop on "Please run /login" when their
      token runs out; the dead-login DM names the account; Deyao re-logs it in, and "continue" follows as before.
      *The clean cut* (CLAUDE.md "Migrations: clean cuts"): every reference to the core's store `claude` changes at once,

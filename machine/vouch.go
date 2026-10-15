@@ -148,6 +148,9 @@ type SessionConfig struct {
 	Attachments []AttachmentRef `json:"attachments,omitempty"`
 	Restore     *RestoreRef     `json:"restore,omitempty"`
 	Task        *TaskConfig     `json:"task,omitempty"`
+	// the session's Claude account (router/claudeaccounts.go), signed for the phone to show; the login itself comes
+	// from the router (claudelogin.go), which this doesn't check (DECISIONS 185)
+	ClaudeAccount string `json:"claudeAccount,omitempty"`
 }
 
 type AttachmentRef struct {

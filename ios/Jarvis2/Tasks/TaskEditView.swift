@@ -16,6 +16,9 @@ struct TaskEditView: View {
   @State private var started = false
   @State private var busy = false
   @State private var error: String?
+  /// a prompt template runs claude -p on a Claude account (router/claudeaccounts.go): the default pre-picked, fixed
+  @State private var accounts: [JSON] = []
+  @State private var account = ""
 
   private var inst: TaskInstance? { instanceId.flatMap { id in model.tasks.instances.first { $0.id == id } } }
   private var t: TaskTemplate? { model.tasks.templates.first { $0.name == (inst?.template ?? template) } }
@@ -38,6 +41,19 @@ struct TaskEditView: View {
             }
           }
         }
+        if t.hasPrompt && inst == nil && !accounts.isEmpty {
+          Section {
+            ForEach(accounts, id: \.self) { a in
+              let store = a["store"].string ?? ""
+              CheckRow(on: account == store, id: "te-account-\(store)", action: { account = store }) {
+                VStack(alignment: .leading) {
+                  Text(store + (a["default"].bool == true ? " (default)" : ""))
+                  Text(a["email"].text ?? "not signed in").font(.footnote).foregroundStyle(Color.secondary)
+                }
+              }
+            }
+          } header: { Text("Claude account") } footer: { Text("Fixed once approved.") }
+        }
         Section {
           LabeledContent("Template stores") { Text(t.stores.isEmpty ? "None" : t.stores.joined(separator: "\n")).font(.footnote.monospaced()).multilineTextAlignment(.trailing) }
           if let error { ErrorRow(text: error, id: "te-err") }
@@ -52,7 +68,7 @@ struct TaskEditView: View {
           Button(busy ? "Saving…" : (inst == nil ? "Make task" : "Save")) { Task { await save(t) } }.disabled(busy).accessibilityIdentifier("te-save")
         }
       }
-      .task { start(t) }
+      .task { start(t); await loadAccounts(t) }
     } else {
       ContentUnavailableView(instanceId != nil && inst == nil ? "This task no longer exists" : "Template “\(template ?? "")” is not in tasks/", systemImage: "checklist")
     }
@@ -88,7 +104,7 @@ struct TaskEditView: View {
   private func options(_ f: TaskField) -> [TaskOption] {
     switch f.optionsFrom ?? "" {
     case "stores":
-      model.stores.items.filter { !$0.isCore && !model.harnessHidden.contains($0.name) }.map { s in
+      model.stores.items.filter { !$0.isCore && !model.harnessHidden.contains($0.name) && $0.name != "claude" }.map { s in
         TaskOption(value: s.name, label: s.name, sub: [s.sensitive ? "sensitive" : nil, s.empty ? "empty" : nil, s.unlocked ? nil : "locked"].compactMap { $0 }.joined(separator: " · "))
       }
     case "sizes": model.sizes.map { TaskOption(value: $0.id, label: $0.id, sub: $0.label) }
@@ -110,6 +126,11 @@ struct TaskEditView: View {
       }
     }
   }
+  private func loadAccounts(_ t: TaskTemplate) async {
+    guard t.hasPrompt, inst == nil, let l = try? await RouterClient.shared.get("api/claude-accounts") else { return }
+    accounts = l["accounts"].array
+    if account.isEmpty { account = l["default"].string ?? "" }
+  }
   private func save(_ t: TaskTemplate) async {
     error = nil
     let n = name.trimmingCharacters(in: .whitespaces)
@@ -130,7 +151,9 @@ struct TaskEditView: View {
         await model.loadTasks()
         if !path.isEmpty { path.removeLast() }
       } else {
-        let r = try await RouterClient.shared.call("POST", "api/tasks/instances", ["template": t.name, "name": n, "params": params])
+        var body: [String: Any] = ["template": t.name, "name": n, "params": params]
+        if t.hasPrompt && !account.isEmpty { body["account"] = account }
+        let r = try await RouterClient.shared.call("POST", "api/tasks/instances", body)
         await model.loadTasks()
         model.say("Made “\(n)”: the iPhone approves it once.")
         if !path.isEmpty { path.removeLast() }

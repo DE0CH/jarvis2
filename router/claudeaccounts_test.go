@@ -194,3 +194,32 @@ func TestNewSessionClaudeAccount(t *testing.T) {
 		return n >= 5
 	})
 }
+
+// the account goes into the signed settings only with SIGN_CLAUDE_ACCOUNT=1 (older phone apps refuse the key)
+func TestClaudeAccountSignedWhenAsked(t *testing.T) {
+	newFakeAnthropic(t)
+	rg, vc := v2Rig(t)
+	r := rg.r
+	r.policy = Policy{Harnesses: map[string]HarnessPolicy{"claude": {ClaudeAccount: true}}}
+	r.accounts().add("main")
+	config := func() SessionConfig {
+		var c SessionConfig
+		opts, _ := vc.last("/succession")["options"].(map[string]any)
+		if opts == nil || json.Unmarshal([]byte(opts["config"].(string)), &c) != nil {
+			t.Fatalf("no config in %v", vc.last("/succession"))
+		}
+		return c
+	}
+	if _, err := r.CreateSession(NewSession{Label: "a", Prompt: "p", Harness: "claude"}); err != nil || config().ClaudeAccount != "" {
+		t.Fatal("signed without the switch", err)
+	}
+	t.Setenv("SIGN_CLAUDE_ACCOUNT", "1")
+	if _, err := r.CreateSession(NewSession{Label: "b", Prompt: "p", Harness: "claude"}); err != nil || config().ClaudeAccount != "claude-main" {
+		t.Fatal("not signed with the switch", err, config())
+	}
+	waitFor(t, "the approvals", func() bool {
+		n := 0
+		r.st.Do(func(d *persisted) { n = len(d.Approvals) })
+		return n >= 2
+	})
+}

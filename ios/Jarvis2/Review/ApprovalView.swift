@@ -247,6 +247,7 @@ struct SignedSettingsSection: View {
           if let repos = c["repos"] as? [String], !repos.isEmpty { LabeledContent("Repos", value: repos.joined(separator: "\n")).accessibilityIdentifier("signed-repos") }
           if let cs = Checks.content(c), !cs.isEmpty { LabeledContent("Content stores", value: cs.joined(separator: "\n")).accessibilityIdentifier("signed-content") }
           if !s("model").isEmpty { LabeledContent("Model", value: s("model")) }
+          if !s("claudeAccount").isEmpty { LabeledContent("Claude account", value: s("claudeAccount")).accessibilityIdentifier("signed-claude-account") }
           if (c["oneShot"] as? Bool) == true { LabeledContent("One-shot", value: "Yes").accessibilityIdentifier("signed-one-shot") }
           if (c["apiProxy"] as? Bool) == true { LabeledContent("API proxy log", value: "Yes").accessibilityIdentifier("signed-api-proxy") }
           if let t = c["task"] as? [String: Any] {

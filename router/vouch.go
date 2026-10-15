@@ -48,6 +48,9 @@ type SessionConfig struct {
 	Attachments []AttachmentRef `json:"attachments,omitempty"`
 	Restore     *RestoreRef     `json:"restore,omitempty"`
 	Task        *TaskConfig     `json:"task,omitempty"`
+	// the session's Claude account (claudeaccounts.go), shown on the phone; only with SIGN_CLAUDE_ACCOUNT=1 (an app
+	// build that knows the key: older ones refuse settings they can't show). The machine takes the router's word anyway.
+	ClaudeAccount string `json:"claudeAccount,omitempty"`
 }
 
 type AttachmentRef struct {
@@ -104,6 +107,9 @@ func splitRepos(s string) []string {
 // the attachments and the restore; the rest hold for the whole line)
 func (r *Router) sessionConfig(s *Session) (string, error) {
 	c := SessionConfig{V: 1, Label: s.Label, Prompt: s.Prompt, Model: s.Model, Repos: splitRepos(s.Repos), Content: s.Content}
+	if os.Getenv("SIGN_CLAUDE_ACCOUNT") == "1" {
+		c.ClaudeAccount = s.ClaudeAccount
+	}
 	if len(c.Repos) == 0 {
 		c.Repos = nil
 	}

@@ -418,6 +418,9 @@ per account its email, expiry, last refresh, the participants of its refresh pro
   was re-logged) replaces the one there; creds-sync then leaves the account record in `~/.claude/.account-switch.json`
   and restarts the claude host once it is idle, so its Remote Control comes up under the new account. The router never
   writes a login into a session (no login repair).
+- **The account in the signed settings:** set the router's env `SIGN_CLAUDE_ACCOUNT=1` (k8s/apps/router.yaml) only once
+  Deyao's iPhone runs an app build that knows `claudeAccount` (the TestFlight after 2026-10-15's first accounts build):
+  an older build refuses every New session whose settings carry it. New lines only; existing ones keep their config.
 - **Before accounts (the clean cut, 2026-10-15):** the first router with accounts turned `claude-login.json` into the
   account `claude-<its email's name>` (the default and Jarvis 1's; the old file is kept as `claude-login.json.migrated`)
   and gave it to every session whose cert names the core's old store `claude`. New sessions don't get that store; it

@@ -534,7 +534,8 @@ each (when under 30 min are left; DECISIONS 115-121); it never calls Jarvis 1. A
 token at once, so there is never a second refresher. A session's account is picked when it is made (`account` on
 `POST /api/sessions`, `/m/api/sessions`, a batch's `new-session` item, `POST /api/tasks/instances` for a prompt
 template, `POST /api/jarvis1/paused/{id}/import`; a record's restore takes the account it ran on while it exists) and
-kept for its life (`claudeAccount` in `GET /api/state`'s sessions and the `new-session` approval's options). A harness
+kept for its life (`claudeAccount` in `GET /api/state`'s sessions and the `new-session` approval's options; in the
+signed config too when the router runs with `SIGN_CLAUDE_ACCOUNT=1`). A harness
 whose policy says `claudeAccount` (claude, openclaw) and a prompt task get the default account when none is named; no
 account at all (a new box): it starts logged out. `account` for a harness without one: 400. The store `claude` (the one
 shared login before accounts) is refused in `stores` and in add-store (400).
