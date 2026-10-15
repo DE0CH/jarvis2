@@ -42,14 +42,7 @@ func moveStep(id, m string) {
 
 	moveAt := time.Now().Add(75 * time.Second).Truncate(time.Second)
 	step("move: router B starts as the candidate (MOVE_AT %s); the machine probes the session API, a lease and search every 200 ms", moveAt.UTC().Format(time.RFC3339))
-	probe := `end=$(( $(date +%s) + 170 ))
-run() { while [ $(date +%s) -lt $end ]; do s=$(date +%s%3N); c=$(curl -s -o /dev/null -w %{http_code} --max-time 90 "$@"); e=$(date +%s%3N); echo "$P $s $e $c" >> /tmp/move-probe.log; sleep 0.2; done; }
-P=api run http://127.0.0.1:7171/api/sessions/` + id + `/wakeups &
-P=lease run -X POST -H 'Content-Type: application/json' -d '{"purpose":"e2e-move","ttl":600}' http://127.0.0.1:7171/api/sessions/` + id + `/leases/e2e-move &
-P=search run 'http://127.0.0.1:7171/api/search?q=e2e-move' &
-wait`
-	expectOnMachine(m, "rm -f /tmp/move-probe.log; cat > /tmp/move-probe.sh <<'EOF'\n"+probe+"\nEOF\nchmod 755 /tmp/move-probe.sh; touch /tmp/move-probe.log; chown claude /tmp/move-probe.sh /tmp/move-probe.log; "+
-		"su - claude -c 'nohup /tmp/move-probe.sh >/dev/null 2>&1 &'; echo ok", "ok")
+	startProbe(m, id, 170)
 	cmd := exec.Command(start, moveAt.UTC().Format(time.RFC3339))
 	if err := cmd.Start(); err != nil {
 		log.Fatalf("router B: %v", err)
@@ -181,6 +174,19 @@ wait`
 	log.Printf("E2E PASSED (the router move only)")
 }
 
+// startProbe: on the machine, the session API, a lease and transcript search, every 200 ms for secs seconds
+// (/tmp/move-probe.log: path, start ms, end ms, HTTP code)
+func startProbe(m, id string, secs int) {
+	probe := `end=$(( $(date +%s) + ` + strconv.Itoa(secs) + ` ))
+run() { while [ $(date +%s) -lt $end ]; do s=$(date +%s%3N); c=$(curl -s -o /tmp/probe-$P.out -w %{http_code} --max-time 90 "$@"); e=$(date +%s%3N); echo "$P $s $e $c" >> /tmp/move-probe.log; [ "$c" = 200 ] || echo "$P $s body $(head -c 300 /tmp/probe-$P.out | tr '\n' ' ')" >> /tmp/move-probe.log; sleep 0.2; done; }
+P=api run http://127.0.0.1:7171/api/sessions/` + id + `/wakeups &
+P=lease run -X POST -H 'Content-Type: application/json' -d '{"purpose":"e2e-move","ttl":600}' http://127.0.0.1:7171/api/sessions/` + id + `/leases/e2e-move &
+P=search run 'http://127.0.0.1:7171/api/search?q=e2e-move' &
+wait`
+	expectOnMachine(m, "rm -f /tmp/move-probe.log; cat > /tmp/move-probe.sh <<'EOF'\n"+probe+"\nEOF\nchmod 755 /tmp/move-probe.sh; touch /tmp/move-probe.log; chown claude /tmp/move-probe.sh /tmp/move-probe.log; "+
+		"su - claude -c 'nohup /tmp/move-probe.sh >/dev/null 2>&1 &'; echo ok", "ok")
+}
+
 // probeSummary: per path, the calls, the non-200s, and the longest call or pause between answers around the move
 func probeSummary(log_ string, moveAt time.Time) string {
 	type call struct {
@@ -188,9 +194,14 @@ func probeSummary(log_ string, moveAt time.Time) string {
 		code string
 	}
 	paths := map[string][]call{}
+	var bodies strings.Builder
 	sc := bufio.NewScanner(strings.NewReader(log_))
 	for sc.Scan() {
 		f := strings.Fields(sc.Text())
+		if len(f) >= 3 && f[2] == "body" {
+			fmt.Fprintf(&bodies, "    %s\n", sc.Text())
+			continue
+		}
 		if len(f) != 4 {
 			continue
 		}
@@ -234,7 +245,7 @@ func probeSummary(log_ string, moveAt time.Time) string {
 		fmt.Fprintf(&b, "  probe %-6s %4d calls, %d not 200 (%s); longest call %d ms (at MOVE_AT%+d ms); longest time between answers %d ms\n",
 			n, len(cs), bad, verdict, longest, longestAt-moveAt.UnixMilli(), gap)
 	}
-	return b.String()
+	return b.String() + bodies.String()
 }
 
 func readFile(p string) string {

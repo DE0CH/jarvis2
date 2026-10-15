@@ -444,8 +444,13 @@ func (r *Router) deliverVouchedOpts(sid string, d Delivery, boot bool) error {
 			return nil
 		}
 		// the harness may still be booting: retry while nobody listens yet
+		// (quick at first: a resumed harness is usually up within seconds, and the input lands soon after it is)
 		if strings.Contains(out.Error, "target session not found") && time.Now().Before(deadline) {
-			time.Sleep(scheduleWaitStep * 2)
+			step := harnessRetryFast
+			if time.Until(deadline) < harnessUpMax-20*time.Second {
+				step = scheduleWaitStep
+			}
+			time.Sleep(step)
 			continue
 		}
 		return errors.New("the machine refused or failed: " + out.Error)

@@ -892,6 +892,7 @@ var (
 	scheduleWaitStep = 5 * time.Second
 	scheduleWaitMax  = 10 * time.Minute
 	harnessUpMax     = 5 * time.Minute
+	harnessRetryFast = 2 * time.Second // the first 20 s of a harness that isn't up yet
 )
 
 // deliverToSession: resume the session when it is paused, wait for it, then deliver (after: a shell step that

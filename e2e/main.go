@@ -271,7 +271,7 @@ func main() {
 	// its settings from the router as before the input guard (machine/legacy.go); the run ends after that check
 	held := os.Getenv("E2E_HELD_CORE") == "1"
 	newBody := map[string]any{"label": "e2e test", "stores": []string{"e2e"}, "size": "small", "harness": "claude"}
-	legacy := os.Getenv("E2E_ONLY") == "legacy"
+	legacy := os.Getenv("E2E_ONLY") == "legacy" || os.Getenv("E2E_ONLY") == "legacy-move"
 	if !held && os.Getenv("E2E_ONLY") != "drain" && os.Getenv("E2E_ONLY") != "move" && !continuity && !legacy {
 		contentSetupStep(secret) // nojarvis1.go
 		newBody["content"] = []string{"e2e-content"}
@@ -304,6 +304,10 @@ func main() {
 	expectNoUnlocks("after the Start's pull")
 	if continuity {
 		continuityStep(p, master, phoneAgreement, recovered, id, m1, secret)
+		return
+	}
+	if os.Getenv("E2E_ONLY") == "legacy-move" { // legacymove.go: the real box move, rehearsed
+		legacyMoveStep(p, master, phoneAgreement, recovered, id, m1, secret)
 		return
 	}
 	if legacy {

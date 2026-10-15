@@ -78,13 +78,20 @@ type wgServer struct {
 	srv     *http.Server
 	dev     *device.Device
 	dropSyn *atomic.Bool
+	oneShot *atomic.Bool
 	once    sync.Once
 }
+
+// Prepare (a handover is coming: the drain begins): every answer from now on closes its connection, while this peer
+// still serves. By the freeze the machines hold no pooled connection a request could race a FIN on (a POST on a
+// connection the server just closed fails, and the machine's proxy doesn't retry it).
+func (w *wgServer) Prepare() { w.oneShot.Store(true) }
 
 // Quiesce (a handover, movegate.go): no new connection opens here — a machine's SYN is dropped, so its dial waits in
 // TCP's retries for the next peer instead of reaching a router that no longer serves — and the idle connections are
 // closed (a FIN, so no machine sends its next call down a dead one); every answer from now on closes its connection.
 func (w *wgServer) Quiesce() {
+	w.oneShot.Store(true)
 	w.dropSyn.Store(true)
 	w.srv.SetKeepAlivesEnabled(false)
 }
@@ -203,11 +210,17 @@ func serveWG(path string, port int, h http.Handler) (*wgServer, error) {
 	if err != nil {
 		return nil, err
 	}
-	srv := &http.Server{Handler: h}
+	oneShot := &atomic.Bool{}
+	srv := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if oneShot.Load() {
+			w.Header().Set("Connection", "close")
+		}
+		h.ServeHTTP(w, r)
+	})}
 	go func() {
 		if err := srv.Serve(l); err != nil && err != http.ErrServerClosed {
 			log.Printf("wg: serve: %v", err)
 		}
 	}()
-	return &wgServer{srv: srv, dev: dev, dropSyn: drop}, nil
+	return &wgServer{srv: srv, dev: dev, dropSyn: drop, oneShot: oneShot}, nil
 }

@@ -257,8 +257,15 @@ func (s *moveSender) freeze(finalizeCore bool) (*freezeAnswer, error) {
 	if !s.frozen {
 		setMove(func(m *moveStatus) { m.Role, m.Phase, m.Error = "sender", "freezing", "" })
 		log.Printf("[move] freeze: draining")
+		prepared := time.Now()
+		if s.ld.prepare != nil {
+			s.ld.prepare() // wg.go: the machines' connections become one-shot while this router still serves
+		}
 		s.r.Drain(s.drain)
 		s.r.drainLogins(20 * time.Second)
+		if s.ld.prepare != nil {
+			time.Sleep(time.Until(prepared.Add(oneShotLead))) // every pooled machine connection used once more, and closed
+		}
 		s.r.stopDeliveries(90 * time.Second) // movegate.go: no wakeup is lost or made twice across the move
 		// the gap starts here: requests wait in the held proxy for the new router
 		s.heldAt = time.Now()
@@ -354,7 +361,7 @@ func (s *moveSender) abort() error {
 		if err != nil {
 			log.Printf("[move] abort: WireGuard peer: %v", err)
 		} else {
-			s.ld.stopWG, s.ld.quiesce = stop, quiesce
+			s.ld.stopWG, s.ld.quiesce, s.ld.prepare = stop, quiesce, nil
 		}
 	}
 	s.st.mu.Unlock()
@@ -369,6 +376,10 @@ func (s *moveSender) abort() error {
 	log.Printf("[move] aborted: serving again")
 	return nil
 }
+
+// oneShotLead: how long the machines' connections are one-shot before a handover freezes (the drain may already take
+// longer): each pooled connection carries one more request and closes cleanly, instead of racing a FIN at the freeze
+var oneShotLead = 3 * time.Second
 
 // moveLeaderProxy: a standby's move listener — every call to the leader's (its public address, the move port)
 func moveLeaderProxy(lock *leaderLock, self string) *leaderProxy {

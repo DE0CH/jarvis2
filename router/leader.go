@@ -187,6 +187,7 @@ type leadership struct {
 	mu       sync.Mutex
 	stopWG   func()
 	quiesce  func() // wg.go: no new machine connection opens here (a handover begins)
+	prepare  func() // wg.go: answers close their connections (the drain before a handover)
 	released bool
 }
 

@@ -181,7 +181,7 @@ func main() {
 	var startWG func() (stop, quiesce func(), err error)
 	if joiner != nil && joiner.peer != nil {
 		// move.go: the moved peer is up already, holding the machines' requests; from now on they are served
-		ld.stopWG, ld.quiesce = joiner.peer.Stop, joiner.peer.Quiesce
+		ld.stopWG, ld.quiesce, ld.prepare = joiner.peer.Stop, joiner.peer.Quiesce, joiner.peer.Prepare
 		startWG = func() (func(), func(), error) {
 			p, err := serveWG(wgPath, 8081, r.MachineHandler())
 			if err != nil {
@@ -200,7 +200,7 @@ func main() {
 			}
 			return p.Stop, p.Quiesce, nil
 		}
-		ld.stopWG, ld.quiesce = earlyPeer.Stop, earlyPeer.Quiesce
+		ld.stopWG, ld.quiesce, ld.prepare = earlyPeer.Stop, earlyPeer.Quiesce, earlyPeer.Prepare
 		earlyHold.serve(r.MachineHandler())
 		log.Printf("machines: WireGuard peer from %s, port 8081", wgPath)
 	} else {
@@ -234,11 +234,18 @@ func main() {
 	if sender != nil {
 		sender.abort() // a frozen move that never finished: serve again for the drain below
 	}
+	prepared := time.Now()
+	if ld.prepare != nil {
+		ld.prepare() // wg.go: the machines' connections become one-shot while this router still serves
+	}
 	r.Drain(time.Duration(drainMax) * time.Second)
 	r.BackupState("drain")
 	r.drainLogins(20 * time.Second)
 	if r.lines != nil {
 		r.lines.flush() // linestate.go: the newest line state into the bucket before the router goes
+	}
+	if ld.prepare != nil {
+		time.Sleep(time.Until(prepared.Add(oneShotLead))) // move.go: pooled machine connections closed cleanly first
 	}
 	// movegate.go: deliveries in flight finish here, long polls end at once (an unanswered GET goes to the next leader)
 	r.stopDeliveries(90 * time.Second)
