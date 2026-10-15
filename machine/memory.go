@@ -40,6 +40,9 @@ type memSample struct {
 	OOMKills  *int64    `json:"oomKills"`
 	PSIFull60 *float64  `json:"psiFull60"`
 	Top       []memProc `json:"top"`
+	// the root disk ($HOME's filesystem, where the session's work lives): the router warns before it is full
+	DiskTotalKb int64 `json:"diskTotalKb,omitempty"`
+	DiskAvailKb int64 `json:"diskAvailKb,omitempty"`
 }
 
 var procRoot = "/proc"
@@ -91,12 +94,25 @@ func readMemory() (memSample, error) {
 			}
 		}
 	}
+	s.DiskTotalKb, s.DiskAvailKb = readDisk(diskRoot())
 	procs := processes(func(int, int) bool { return true })
 	sort.Slice(procs, func(i, j int) bool { return procs[i].rssKb > procs[j].rssKb })
 	for i := 0; i < len(procs) && i < 3; i++ {
 		s.Top = append(s.Top, memProc{procs[i].rssKb, procs[i].comm})
 	}
 	return s, nil
+}
+
+// diskRoot: the filesystem the session's work lives on
+var diskRoot = func() string { h, _ := os.UserHomeDir(); return h }
+
+// readDisk: a filesystem's size and the space an unprivileged user may still write (KiB; 0, 0 when unknown)
+func readDisk(path string) (totalKb, availKb int64) {
+	var st syscall.Statfs_t
+	if path == "" || syscall.Statfs(path, &st) != nil {
+		return 0, 0
+	}
+	return int64(st.Blocks) * st.Bsize / 1024, int64(st.Bavail) * st.Bsize / 1024
 }
 
 type proc struct {

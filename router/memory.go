@@ -49,6 +49,9 @@ type MemSample struct {
 	OOMKills  *int64    `json:"oomKills"`
 	PSIFull60 *float64  `json:"psiFull60"`
 	Top       []MemProc `json:"top"`
+	// disk.go: the root disk (the filesystem of $HOME); 0 from a machine image from before disk reports
+	DiskTotalKb int64 `json:"diskTotalKb,omitempty"`
+	DiskAvailKb int64 `json:"diskAvailKb,omitempty"`
 }
 
 type MemAlert struct {
@@ -187,7 +190,7 @@ func (r *Router) registerMemory(app appRoute, m machineRoute) {
 			writeJSON(w, 400, map[string]string{"error": "bad memory sample"})
 			return
 		}
-		dm := ""
+		dm, ddm := "", ""
 		r.st.Do(func(d *persisted) {
 			s := d.Sessions[d.Machines[machine]]
 			if s == nil || s.MachineID != machine {
@@ -202,10 +205,15 @@ func (r *Router) registerMemory(app appRoute, m machineRoute) {
 			if s.Live.mem.observe(&in, time.Now().UTC()) {
 				dm = memMessage(sessionName(s, s.Live.Reg), s.Size, s.Live.mem.alert)
 			}
+			ddm = diskSample(s, machine, in, time.Now().UTC())
 		})
 		if dm != "" {
 			log.Printf("[memory] %s", dm)
 			r.DM(dm)
+		}
+		if ddm != "" {
+			log.Printf("[disk] %s", ddm)
+			r.DM(ddm)
 		}
 		writeJSON(w, 200, map[string]bool{"ok": true})
 	})

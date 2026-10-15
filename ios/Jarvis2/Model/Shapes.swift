@@ -58,6 +58,17 @@ struct Session: Identifiable, Equatable, Hashable {
     guard let a = j["memory"]["availMb"].int, let t = j["memory"]["totalMb"].int, t > 0 else { return nil }
     return (a, t)
   }
+  /// its machine is kept because the final snapshot failed or didn't arrive (router snapshots.go): nothing is lost
+  var held: Held? { j["held"].object == nil ? nil : Held(j: j["held"]) }
+  /// a running machine whose state may still be lost: Pause (again) takes its snapshot (failed: a held machine, or a
+  /// pause cut off by a router restart)
+  var pausable: Bool { state == "started" || state == "initialising" || (state == "failed" && j["machineId"].text != nil) }
+  /// a low-disk episode (router disk.go) and the latest disk sample of a running machine
+  var diskAlert: DiskAlert? { j["diskAlert"].object == nil ? nil : DiskAlert(j: j["diskAlert"]) }
+  var diskUsage: (availMb: Int, totalMb: Int)? {
+    guard let a = j["diskUsage"]["availMb"].int, let t = j["diskUsage"]["totalMb"].int, t > 0 else { return nil }
+    return (a, t)
+  }
   /// the router's last restart / upgrade job (kind, phase, error)
   var wakeKind: String? { j["wake"]["kind"].text }
   var wakePhase: String? { j["wake"]["phase"].text }
@@ -68,6 +79,22 @@ struct Session: Identifiable, Equatable, Hashable {
     if let k = j["wake"]["kind"].string, let p = j["wake"]["phase"].string, p != "done", p != "failed" { return Fmt.busyLabel[k] ?? "Working…" }
     return nil
   }
+}
+
+/// a machine kept after its final snapshot failed: when, for what (pause | destroy), why
+struct Held: Equatable, Hashable {
+  let j: JSON
+  var since: Date? { j["since"].string?.isoDate }
+  var action: String { j["for"].text ?? "pause" }
+  var reason: String { j["reason"].text ?? "the final snapshot didn't arrive" }
+}
+
+/// a low-disk episode: the disk now and the disk Upgrade disk moves to (0 = none bigger)
+struct DiskAlert: Equatable, Hashable {
+  let j: JSON
+  var since: Date? { j["since"].string?.isoDate }
+  var detail: String? { j["detail"].text }
+  var nextDiskGb: Int? { (j["nextDiskGb"].int ?? 0) > 0 ? j["nextDiskGb"].int : nil }
 }
 
 /// a memory-starvation episode (router memory watch): why, the memory now, and the size Upgrade moves it to

@@ -241,13 +241,27 @@ enum Checks {
   /// the keys a session's settings may have (machine/vouch.go SessionConfig) and a one-time input (OnceInputs);
   /// a challenge with anything else is refused: the phone must show all that it signs
   static let configKeys: Set<String> = ["v", "label", "prompt", "model", "repos", "content", "oneShot", "apiProxy", "attachments", "restore", "task"]
-  static let onceKeys: Set<String> = ["prompt", "rollback"]
+  static let onceKeys: Set<String> = ["prompt", "rollback", "fallback"]
+
+  /// a resume's fallback (router/fallback.go): the predecessor that left no snapshot, the line's snapshot it restores
+  /// instead and the live transcript copies; nil when it has a field this app can't show
+  struct Fallback { let lost: String; let machine: String?; let sha256: String?; let takenAt: String?; let transcripts: [(name: String, sha256: String, size: Int)] }
+  static func fallback(_ v: Any?) -> Fallback? {
+    guard let f = v as? [String: Any], Set(f.keys).isSubset(of: ["lost", "machine", "sha256", "takenAt", "transcripts"]), let lost = f["lost"] as? String else { return nil }
+    var ts: [(name: String, sha256: String, size: Int)] = []
+    for t in (f["transcripts"] as? [Any]) ?? [] {
+      guard let t = t as? [String: Any], Set(t.keys).isSubset(of: ["name", "sha256", "size"]), let n = t["name"] as? String, let s = t["sha256"] as? String else { return nil }
+      ts.append((n, s, (t["size"] as? Int) ?? 0))
+    }
+    return Fallback(lost: lost, machine: f["machine"] as? String, sha256: f["sha256"] as? String, takenAt: f["takenAt"] as? String, transcripts: ts)
+  }
 
   static func checkKnown(_ r: Reviewed) throws {
     if let c = r.config, !Set(c.keys).isSubset(of: configKeys) { throw TrustError.mismatch("settings this app can't show") }
     if let c = r.config, attachments(c) == nil { throw TrustError.mismatch("attachments this app can't show") }
     if let c = r.config, content(c) == nil { throw TrustError.mismatch("content stores this app can't show") }
     if let o = r.once, !Set(o.keys).isSubset(of: onceKeys) { throw TrustError.mismatch("one-time inputs this app can't show") }
+    if let o = r.once, let f = o["fallback"], fallback(f) == nil { throw TrustError.mismatch("a fallback this app can't show") }
     if r.challenge.request.options.config?.isEmpty == false && r.config == nil { throw TrustError.mismatch("settings that aren't a JSON object") }
     if r.challenge.request.options.once?.isEmpty == false && r.once == nil { throw TrustError.mismatch("one-time inputs that aren't a JSON object") }
   }

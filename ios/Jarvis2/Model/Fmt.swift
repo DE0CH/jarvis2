@@ -6,7 +6,8 @@ enum Fmt {
     "mad": "Madrid", "iad": "Virginia", "ord": "Chicago", "sjc": "San Jose", "lax": "Los Angeles", "sin": "Singapore", "nrt": "Tokyo",
     "hkg": "Hong Kong", "syd": "Sydney"]
   static let busyLabel: [String: String] = ["starting": "Starting…", "restarting": "Restarting…", "pausing": "Pausing…", "destroying": "Destroying…", "mode": "Switching mode…",
-                                              "upgrading": "Upgrading…", "upgrade": "Upgrading…"]
+                                              "upgrading": "Upgrading…", "upgrade": "Upgrading…",
+                                              "upgrading disk": "Upgrading disk…", "upgrade-disk": "Upgrading disk…"]
   /// "Upgrade to Large (8 GB)"; past the named sizes, which are named by their memory ("16gb"), "Upgrade to 16 GB"
   /// (router/sizes.go: every next size doubles the memory)
   static func upgradeTitle(_ a: MemAlert) -> String {

@@ -78,6 +78,13 @@ enum SignedAction {
     if let o = r.once {
       if let p = o["prompt"] as? String, !p.isEmpty { f.append(.init(id: "once-prompt", label: "Resume prompt", value: p)) }
       if let m = o["rollback"] as? String, !m.isEmpty { f.append(.init(id: "once-rollback", label: "Roll back from", value: m, style: .warning)) }
+      if let fb = Checks.fallback(o["fallback"]) {
+        f.append(.init(id: "once-fallback", label: "No snapshot from", value: fb.lost, style: .warning))
+        f.append(.init(id: "once-fallback-from", label: "Restores instead", value: fb.machine.map { "\($0) · \(fb.takenAt ?? "?") · sha256 \(String((fb.sha256 ?? "").prefix(12)))…" } ?? "no snapshot of the files", style: .code))
+        if !fb.transcripts.isEmpty {
+          f.append(.init(id: "once-fallback-transcripts", label: "Conversation copies", value: fb.transcripts.map { "\($0.name) · \($0.size) B · sha256 \($0.sha256.prefix(12))…" }.joined(separator: "\n"), style: .code))
+        }
+      }
     }
     return f
   }

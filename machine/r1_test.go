@@ -4,10 +4,6 @@ package main
 
 import (
 	"crypto/ecdh"
-	"crypto/sha256"
-	"fmt"
-	"io"
-	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
@@ -94,20 +90,17 @@ func TestTheMachineSignsOneFinalSnapshot(t *testing.T) {
 	home, run := t.TempDir(), t.TempDir()
 	t.Setenv("HOME", home)
 	key := newKey()
-	oldF, oldS, oldK, oldZ := finalSnapshot, finalSnapshotSig, snapshotKey, freezeSession
+	oldS, oldK, oldZ := finalSnapshotSig, snapshotKey, freezeSession
 	defer func() {
-		finalSnapshot, finalSnapshotSig, snapshotKey, freezeSession = oldF, oldS, oldK, oldZ
+		finalSnapshotSig, snapshotKey, freezeSession = oldS, oldK, oldZ
 		frozen.Store(false)
 	}()
-	finalSnapshot, finalSnapshotSig = filepath.Join(run, "f.tar.gz"), filepath.Join(run, "f.sig")
+	finalSnapshotSig = filepath.Join(run, "f.sig")
 	snapshotKey = func() (*ecdh.PrivateKey, error) { return key.k, nil }
 	froze := 0
 	freezeSession = func() { froze++ }
-	var got []string
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		b, _ := io.ReadAll(r.Body)
-		got = append(got, fmt.Sprintf("%x %s", sha256.Sum256(b), r.Header.Get("X-Snapshot-Sig")))
-	}))
+	fr := newSnapRouter()
+	srv := httptest.NewServer(fr)
 	defer srv.Close()
 	c := &client{base: srv.URL, me: "m1", sig: key.k, http: srv.Client()}
 	os.MkdirAll(filepath.Join(home, "workspace"), 0o755)
@@ -118,13 +111,22 @@ func TestTheMachineSignsOneFinalSnapshot(t *testing.T) {
 	if froze != 1 || !frozen.Load() {
 		t.Fatal("the session wasn't stopped before its snapshot")
 	}
-	// work after it (if anything still ran) never reaches a second signed snapshot
+	// work after it (if anything still ran) never reaches a second signed snapshot: the same one is committed again
 	os.WriteFile(filepath.Join(home, "workspace", "a"), []byte("two"), 0o644)
 	if err := uploadSnapshot(c); err != nil {
 		t.Fatal(err)
 	}
-	if len(got) != 2 || got[0] != got[1] || froze != 1 {
-		t.Fatalf("a second, different snapshot was signed: %v (froze %d)", got, froze)
+	if len(fr.commits) != 2 || fr.commits[0] != fr.commits[1] || froze != 1 || fr.streams != 1 {
+		t.Fatalf("a second, different snapshot was signed: %v (froze %d, streams %d)", fr.commits, froze, fr.streams)
+	}
+	// a router that lost the bytes gets them streamed again; changed files are never signed as a second snapshot
+	fr.forget()
+	if err := uploadSnapshot(c); err == nil || !strings.Contains(err.Error(), "changed after its final snapshot") {
+		t.Fatalf("a changed session was signed again: %v", err)
+	}
+	os.WriteFile(filepath.Join(home, "workspace", "a"), []byte("one"), 0o644)
+	if err := uploadSnapshot(c); err != nil || len(fr.commits) != 3 || fr.commits[2] != fr.commits[0] {
+		t.Fatalf("the same frozen files weren't committed again: %v %v", err, fr.commits)
 	}
 	// and nothing is delivered or run into a stopped session
 	if err := notFrozen(); err == nil {

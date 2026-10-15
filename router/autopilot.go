@@ -57,6 +57,8 @@ type Liveness struct {
 	dialogReported  bool
 	screen          *pushedScreen // the pane the machine pushes itself (machine/screen.go); in memory only
 	mem             *memState     // memory.go: the starvation watch of the running machine; in memory only
+	disk            *diskState    // disk.go: the running machine's disk watch; in memory only
+	diskMachine     string
 	// the stall watchdog's last nudge: when and how it ended ("" = delivered), for GET /setup/sessions
 	NudgeAt    time.Time `json:"nudgeAt,omitempty"`
 	NudgeError string    `json:"nudgeError,omitempty"`
@@ -157,7 +159,8 @@ func liveView(s *Session, v map[string]any) {
 	if !l.LastReport.IsZero() {
 		v["lastReport"] = l.LastReport
 	}
-	memView(s, v) // memory.go: memAlert, memory
+	memView(s, v)  // memory.go: memAlert, memory
+	diskView(s, v) // disk.go: diskAlert, diskUsage
 	if s.State != "started" || s.MachineID == "" || l.Reg == nil || time.Since(l.LastReport) > defaultPilot.StaleReport {
 		return
 	}

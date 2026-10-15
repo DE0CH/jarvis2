@@ -10,6 +10,35 @@ extension AppModel {
                     until: { ["paused", "failed"].contains($0.session(id)?.state ?? "") })
   }
 
+  /// a held machine (its final snapshot failed): killed without it, after Deyao confirms what that loses
+  func pauseWithoutSnapshot(_ id: String) async {
+    let t = session(id)?.title ?? id
+    guard await confirm("Pause “\(t)” without its snapshot?", "The work since the session's last snapshot is lost. The next resume restores that snapshot and the newest copies of the conversation.",
+                        action: "Pause without the snapshot", destructive: true) else { return }
+    await pendUntil("s:" + id, "Pausing…", 120, action: { try await RouterClient.shared.call("POST", "api/sessions/\(id)/pause?withoutSnapshot=1") },
+                    until: { ["paused", "failed"].contains($0.session(id)?.state ?? "") && $0.session(id)?.held == nil })
+  }
+
+  /// Upgrade disk out of a low-disk episode: pause (its snapshot), then the same conversation on a bigger disk
+  func upgradeDisk(_ id: String) async {
+    guard let gb = session(id)?.diskAlert?.nextDiskGb else { return }
+    await exclusive("s:" + id) {
+      pend("s:" + id, "Upgrading disk…")
+      defer { pend("s:" + id, nil) }
+      do {
+        try await RouterClient.shared.call("POST", "api/sessions/\(id)/upgrade-disk", [:])
+        await refreshUntil(60) { m in
+          guard let x = m.session(id) else { return true }
+          return x.serverBusy == nil && (x.state == "started" || (x.wakeKind == "upgrade-disk" && x.wakePhase == "failed"))
+        }
+        if let x = session(id), x.serverBusy == nil, x.wakeKind == "upgrade-disk", x.wakePhase == "failed" {
+          failure = "Upgrade to a \(gb) GB disk failed" + (x.wakeError.map { ": \($0)" } ?? "")
+        }
+        settle(120)
+      } catch { fail(error); await refresh() }
+    }
+  }
+
   /// Resume with an optional prompt (typed into the conversation once it is up; the iPhone approves it as a one-time
   /// input). A resume that needs the phone (another permission mode, a prompt) opens its approval by itself.
   func resume(_ id: String) async {
@@ -116,7 +145,14 @@ extension AppModel {
         try await RouterClient.shared.call("POST", "api/sessions/\(id)/destroy")
         await refreshUntil(15 * 60) { m in
           guard let x = m.session(id) else { return true }
-          return x.state != "destroying" && (x.error?.hasPrefix("archive:") ?? false)
+          return x.state != "destroying" && ((x.error?.hasPrefix("archive:") ?? false) || x.held != nil)
+        }
+        if let x = session(id), let h = x.held {
+          if await confirm("No final snapshot", h.reason + "\n\nDestroy without it? The work since the session's last snapshot is lost; that snapshot is archived.",
+                           action: "Destroy without the snapshot", destructive: true) {
+            try await RouterClient.shared.call("POST", "api/sessions/\(id)/destroy?withoutSnapshot=1")
+            await refreshUntil(10 * 60) { $0.session(id) == nil || $0.session(id)?.error?.hasPrefix("archive:") == true }
+          }
         }
         if let x = session(id), let e = x.error, e.hasPrefix("archive:") {
           if await confirm("Archiving to the Storage Box failed", e, action: "Destroy anyway", destructive: true) {

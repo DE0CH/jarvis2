@@ -23,6 +23,9 @@ type (
 func (r *Router) registerFeatures(app appRoute, m machineRoute, public publicRoute) {
 	r.registerAutopilot(app, m)
 	r.registerMemory(app, m)                // memory.go
+	r.registerDisk(app)                     // disk.go: disk watch, Upgrade disk
+	r.registerSnapshots(m)                  // snapshots.go: streamed final snapshots, held machines
+	r.registerFallback(m)                   // fallback.go: a resume from the line's newest state
 	r.registerHarnesses(app)                // harness.go: /api/models
 	r.registerRemote(app, m, public)        // remote.go: remote pages, /api/remotes, tunnel proofs
 	r.registerLeases(app, m, public)        // leases.go: shared-device leases (before sessionapi.go's /m/api/ catch-all)

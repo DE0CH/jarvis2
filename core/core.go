@@ -564,6 +564,8 @@ type StartRequest struct {
 	Image  string `json:"image"`
 	Region string `json:"region"`
 	Size   string `json:"size"` // small | medium | large | 16gb | 32gb … (sizeGuest, fly.go)
+	// Disk: the machine's root disk in GB (Fly's rootfs.size_gb: 16, 32, … 512); 0 = Fly's default (8 GB)
+	Disk int `json:"disk,omitempty"`
 }
 
 // Start: anyone may ask (normally the router): one Fly create, nothing more — a machine without a cert gets no
@@ -576,6 +578,9 @@ func (c *Core) Start(r StartRequest) (SignedDoc, error) {
 	kind, cpus, memoryMB := sizeGuest(r.Size)
 	if kind == "" {
 		return SignedDoc{}, fail(400, "size: small, medium, large or a doubling past it (16gb, 32gb, …)")
+	}
+	if r.Disk != 0 && !diskSize(r.Disk) {
+		return SignedDoc{}, fail(400, "disk: 16, 32, 64, 128, 256 or 512 (GB)")
 	}
 	guest := map[string]any{"cpu_kind": kind, "cpus": cpus, "memory_mb": memoryMB}
 	env := c.machineEnv() // the machine's trust anchor and the router's address, set by the core, never the caller
@@ -590,7 +595,11 @@ func (c *Core) Start(r StartRequest) (SignedDoc, error) {
 	defer c.mu.Unlock()
 	c.created[id] = r.Image
 	c.logf("machine %s created (%s)", id, r.Image)
-	return c.sign(map[string]any{"kind": "created", "id": id, "image": r.Image})
+	created := map[string]any{"kind": "created", "id": id, "image": r.Image}
+	if r.Disk != 0 {
+		created["disk"] = r.Disk // the router learns this core sets disk sizes
+	}
+	return c.sign(created)
 }
 
 // Init: one try at reading a created machine's keys — Fly must report it started, then the image's init command

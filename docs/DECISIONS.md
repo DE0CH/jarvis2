@@ -1329,3 +1329,47 @@ Deyao: several actions approved together with ONE Face ID; the caller groups the
      replicas): at up to 2 GiB with ffmpeg it can't sit beside the control plane on a 4 GiB box. *Not chosen*: a
      PriorityClass or a ResourceQuota for the other services — both need permissions the bootstrap doesn't give Flux
      (admin in the three namespaces only, nothing cluster-scoped; a change means a box rebuild).
+
+## A pause never loses a session's state, 2026-10-15
+
+169. **The final snapshot streams to the router; a machine whose snapshot fails is held, never killed** (Deyao,
+     2026-10-15, after session sb8e0273d6c308894 "k-matrix clone: interactive 5" lost its conversation, workspace and
+     artefacts). Root cause: the machine staged its snapshot as `/run/jarvis2/final-snapshot.tar.gz` on Fly's 8 GB root
+     disk (the session image takes about 3.4 GB of it), the session's work had filled the disk, so the write failed
+     ("no space left on device"); the router then waited out `SnapshotWait`, logged "going on from the last one" (a
+     machine signs only one snapshot, so there was none) and killed the machine; the core's kill recorded no snapshot,
+     so the successor's cert named none and it started empty. Now: the machine streams the snapshot as it makes it
+     (`POST /m/snapshot/stream`, the request signed over "stream"), the router hashes it onto its volume, the machine
+     signs the hash the router answers and commits it (`POST /m/snapshot/commit`); only the hash and the signature stay
+     on the machine, so answering again commits the same one (or streams the same frozen files again; the tar is
+     deterministic: no access or change times). A booted machine whose snapshot fails (`POST /m/snapshot/failed` with
+     the reason), doesn't arrive, or that has gone silent is held (`Session.Held`, state failed, a "needs you" DM);
+     only Deyao's `?withoutSnapshot=1` on pause or destroy kills it anyway, never the session actions, auto-pause, the
+     budget cap or a forced destroy. A never-booted machine whose cert names its predecessor's snapshot answers with
+     that one (`X-Snapshot-Same`, signed by itself) so the line keeps it; one that names none is killed as before.
+     The old single-body `POST /m/snapshot` stays for running machines of older images. *Not chosen*: stopping a held
+     machine to save money (a stopped Fly machine's root disk is reset on start and it loses its keys: lessons/58, so
+     the state would be gone anyway); a router-side timeout that kills after some hours (only Deyao decides to lose
+     work); HTTP trailers carrying the signature (proxies on the path may drop them).
+170. **A resume whose predecessor left no snapshot falls back to the line's newest state, approved on the phone.**
+     The router keeps every machine's snapshot until Destroy and, from now on, each live transcript copy's request
+     signature (`LiveSync.signed`). Such a resume is never unattended: it is a `resume-upgrade` approval on the newest
+     image (older images refuse an unknown one-time input) with `once.fallback` naming the newest line snapshot and the
+     40 newest live copies by hash, and a resume prompt saying what was restored. The successor checks the snapshot
+     (hash, core-signed cert of the same line, that machine's signature) and each copy (hash, the sending request's
+     signature by a machine of the line; a copy that fails is skipped and listed in `~/artifacts/jarvis2-fallback.txt`),
+     and a copy replaces a restored transcript only when longer. An empty start takes `startEmpty: true`. A line with no
+     state at all (no snapshot, no copies) resumes as before. *Not chosen*: the router choosing the fallback by itself
+     (it could then roll a line back to any earlier snapshot: the phone approves it, as a rollback); copies vouched by
+     the cert's hash alone (the router supplied those bytes; the line's signature proves the session wrote them).
+171. **Disk is reported like memory, and Upgrade disk gives a bigger root disk** (`router/disk.go`). The memory report
+     carries `$HOME`'s filesystem; under 1.5 GiB or 10 % free the router DMs once per episode and the app offers
+     Upgrade disk (pause, resume with `diskGb` 16, then doubling to 512). The core sets Fly's
+     `config.rootfs.size_gb` (Machines API `MachineRootfs.size_gb`, fly-go `MachineRootfs.SizeGB` since 2026-02-05,
+     flyctl `--rootfs-size`: "Uses an overlayfs to allow the root filesystem to exceed its default size"), and names
+     the disk in its `created` document so the router can tell a core from before it (the job then fails saying so).
+     Fly documents no range and no price for `size_gb`; its pricing page names only stopped machines' rootfs, USD
+     0.15/GB-month (docs.fly.io/about/pricing). The cap of 512 matches Fly's largest volume; a test machine settles
+     the real range and the bill. *Not chosen*: a Fly volume per machine (USD 0.15/GB-month provisioned, 500 GB max,
+     one per machine, pinned to one host, created and destroyed with each machine by the core: more core code and a
+     host pin for every resume, for the same result); trimming the image (the 8 GB Fly limit covers image plus work).

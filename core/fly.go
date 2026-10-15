@@ -100,6 +100,9 @@ func sizeText(size string) string {
 
 // ---- end of the machine sizes block ----
 
+// diskSize: a root disk size a machine may ask for (GB): 16 to 512, doubling
+func diskSize(gb int) bool { return gb >= 16 && gb <= 512 && gb&(gb-1) == 0 }
+
 // FlyApp: the one Fly app the core makes machines in
 const FlyApp = "jarvis2-sessions"
 
@@ -162,9 +165,13 @@ func (f *FlyAPI) Create(r StartRequest, guest map[string]any, env map[string]str
 	var m struct {
 		ID string `json:"id"`
 	}
-	body := map[string]any{"region": r.Region, "config": map[string]any{
-		"image": r.Image, "guest": guest, "env": env, "restart": map[string]any{"policy": "no"},
-	}}
+	config := map[string]any{"image": r.Image, "guest": guest, "env": env, "restart": map[string]any{"policy": "no"}}
+	if r.Disk > 0 {
+		// a root filesystem bigger than Fly's default, through an overlayfs (Fly Machines API MachineConfig.rootfs,
+		// fly-go MachineRootfs.SizeGB; flyctl --rootfs-size)
+		config["rootfs"] = map[string]any{"size_gb": r.Disk}
+	}
+	body := map[string]any{"region": r.Region, "config": config}
 	if err := f.call("POST", "/machines", body, &m); err != nil {
 		return "", err
 	}

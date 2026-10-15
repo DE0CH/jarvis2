@@ -301,6 +301,12 @@ func prepare() error {
 			if err := restore(c, pc.Machine.SigningKey, v); err != nil {
 				return fmt.Errorf("snapshot: %w", err)
 			}
+		} else if v.Once.Fallback != nil {
+			// the predecessor left no snapshot: the line's newest state, as the phone approved it (fallback.go)
+			predecessorKey = pc.Machine.SigningKey
+			if err := restoreFallback(c, coreKey, cert, v.Once.Fallback); err != nil {
+				return fmt.Errorf("fallback: %w", err)
+			}
 		} else if v.Config.Restore != nil {
 			// a line whose machines never left a snapshot (an import stopped mid-way): the import its signed config
 			// names again, Jarvis 1 imports only (restore.go reimportJarvis1)
@@ -313,6 +319,7 @@ func prepare() error {
 		}
 		if v.Once.Rollback != "" { // rollback.go: only a rollback the phone approved, on the verified snapshot
 			applyRollback(v.Once.Rollback)
+			os.Remove(restoredSnapshot) // its state is no longer exactly the predecessor's snapshot
 		}
 	}
 	// 2b. a new line restoring a destroyed session's archived snapshot (restore.go): only the one the cert names
@@ -496,16 +503,28 @@ func skipInSnapshot(rel string) bool {
 	return false
 }
 
-// makeSnapshot: the snapshot as a tar.gz written to path (streamed: a workspace can be several GB) → its sha256
+// makeSnapshot: the snapshot as a tar.gz written to path → its sha256 (tests and tools; a pause streams it)
 func makeSnapshot(path string) (string, int64, error) {
-	home, _ := os.UserHomeDir()
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
 	if err != nil {
 		return "", 0, err
 	}
 	defer f.Close()
+	sum, n, err := makeSnapshotTo(f)
+	if err == nil {
+		err = f.Sync()
+	}
+	return sum, n, err
+}
+
+// makeSnapshotTo: the snapshot as a tar.gz streamed into w → its sha256 and size. It needs no disk: a pause streams
+// it straight to the router (a session whose work filled the disk still leaves its snapshot; 2026-10-15). The bytes
+// depend only on the files (no access or change times, gzip without a name or time), so the same frozen session gives
+// the same snapshot again when an answer has to be streamed a second time.
+func makeSnapshotTo(w io.Writer) (string, int64, error) {
+	home, _ := os.UserHomeDir()
 	h := sha256.New()
-	cw := &countWriter{w: io.MultiWriter(f, h)}
+	cw := &countWriter{w: io.MultiWriter(w, h)}
 	gz := gzip.NewWriter(cw)
 	tw := tar.NewWriter(gz)
 	for _, rel := range snapshotPaths {
@@ -533,6 +552,7 @@ func makeSnapshot(path string) (string, int64, error) {
 				return nil
 			}
 			h.Name = name
+			h.AccessTime, h.ChangeTime = time.Time{}, time.Time{} // reading the files changes them
 			if fi.Mode().IsRegular() {
 				f, err := os.Open(p)
 				if err != nil {
@@ -559,9 +579,6 @@ func makeSnapshot(path string) (string, int64, error) {
 		return "", 0, err
 	}
 	if err := gz.Close(); err != nil {
-		return "", 0, err
-	}
-	if err := f.Sync(); err != nil {
 		return "", 0, err
 	}
 	return hex.EncodeToString(h.Sum(nil)), cw.n, nil
@@ -609,6 +626,7 @@ func restore(c *client, predSigningKey string, v Vouched) error {
 	if err != nil {
 		return err
 	}
+	os.WriteFile(restoredSnapshot, []byte(sum), 0o600) // noSnapshot: the state until this machine boots
 	log.Printf("restored the predecessor's snapshot (%d files)", n)
 	return nil
 }
@@ -725,6 +743,7 @@ func agent() error {
 					}
 				} else if err := uploadSnapshot(c); err != nil {
 					log.Printf("snapshot failed: %v", err)
+					snapshotFailed(c, err)
 				}
 			}
 		}
@@ -733,16 +752,27 @@ func agent() error {
 
 func booted() bool { _, err := os.Stat(bootedPath); return err == nil }
 
-// noSnapshot: the answer to a snapshot command while booting — nothing to snapshot, so the router kills at once
+// noSnapshot: the answer to a snapshot command while booting. A machine that restored its predecessor's snapshot
+// has, until it boots, exactly that state: it answers with that snapshot's hash and its own signature over it, so the
+// router keeps the predecessor's bytes as this machine's snapshot and the line loses nothing (X-Snapshot-Same). Before
+// that (no cert yet, a new line) there is nothing to snapshot, so the router kills at once.
 func noSnapshot(c *client) error {
-	_, _, status, err := c.raw("POST", "/m/snapshot", nil, "X-Snapshot-None", "booting")
+	hdr := []string{"X-Snapshot-None", "booting"}
+	if sum, err := readTrim(restoredSnapshot); err == nil && sum != "" {
+		if key, err := snapshotKey(); err == nil {
+			if sig, err := sign(key, []byte(sum)); err == nil {
+				hdr = append(hdr, "X-Snapshot-Same", sum, "X-Snapshot-Sig", sig)
+			}
+		}
+	}
+	_, _, status, err := c.raw("POST", "/m/snapshot", nil, hdr...)
 	if err != nil {
 		return err
 	}
 	if status != 200 {
 		return fmt.Errorf("HTTP %d", status)
 	}
-	log.Printf("snapshot asked while booting: answered nothing to snapshot")
+	log.Printf("snapshot asked while booting: answered %s", map[bool]string{true: "the restored snapshot", false: "nothing to snapshot"}[len(hdr) > 2])
 	return nil
 }
 
@@ -751,11 +781,19 @@ func noSnapshot(c *client) error {
 // exactly one in its life: before taking it, it stops every process of the session (SIGSTOP), so nothing changes
 // after it, and a later snapshot command gets that same one again. A router that keeps an earlier signed snapshot
 // therefore has none to keep, and can't roll a successor back to a state from before the session's last work.
+//
+// The snapshot never touches the machine's disk (2026-10-15: a session whose work filled its 8 GB root disk lost
+// everything when its snapshot couldn't be written there): it streams to the router (POST /m/snapshot/stream), which
+// hashes it on the way and answers that hash; the machine checks it against its own, signs it, and commits it (POST
+// /m/snapshot/commit). Only the hash and the signature are kept on the machine (a few bytes), so a later snapshot
+// command commits the same one again (or streams the same frozen files again when the router lost the bytes).
 var (
-	finalSnapshot    = dir + "/final-snapshot.tar.gz"
 	finalSnapshotSig = dir + "/final-snapshot.sig"
 	// snapshotKey: the machine's current signing key (re-read: a downgrade changes it under the agent)
 	snapshotKey = func() (*ecdh.PrivateKey, error) { p, err := loadPrivate(); return p.sig, err }
+	// restoredSnapshot: the sha256 of the predecessor's snapshot this machine restored (prepare): until it boots, its
+	// state is exactly that snapshot, which it answers a snapshot command with (noSnapshot)
+	restoredSnapshot = dir + "/restored-snapshot"
 )
 
 var frozen atomic.Bool // the session is stopped for its final snapshot: no execs, no deliveries
@@ -790,39 +828,141 @@ func finalSnapshotSum() (string, string, error) {
 	return sum, sig, nil
 }
 
+// errNotStreamed: the router holds no streamed snapshot with the hash a commit names
+var errNotStreamed = errors.New("the router holds no streamed snapshot with that hash")
+
 func uploadSnapshot(c *client) error {
 	sum, sig, err := finalSnapshotSum()
-	if err != nil { // the first: freeze, take, sign, keep
+	if err == nil { // signed before: commit it again; stream it again only when the router lost the bytes
+		if err := commitSnapshot(c, sum, sig); !errors.Is(err, errNotStreamed) {
+			return err
+		}
+	} else if !frozen.Load() { // the first: freeze, then take it
 		frozen.Store(true)
 		freezeSession()
 		writeChanges() // restore.go: the repos' state, for the router's uncommitted-work check
-		if sum, _, err = makeSnapshot(finalSnapshot); err != nil {
-			return err
-		}
+	}
+	got, n, routerSum, err := c.streamSnapshot("/m/snapshot/stream")
+	if err != nil {
+		return err
+	}
+	if routerSum != got {
+		return fmt.Errorf("the router received %s, the machine sent %s", routerSum, got)
+	}
+	switch {
+	case sum == "": // sign it: the one snapshot of this machine's life
 		key, err := snapshotKey()
 		if err != nil {
 			return err
 		}
-		if sig, err = sign(key, []byte(sum)); err != nil {
+		if sig, err = sign(key, []byte(got)); err != nil {
 			return err
 		}
-		if err := os.WriteFile(finalSnapshotSig+".sha256", []byte(sum), 0o600); err != nil {
+		if err := os.WriteFile(finalSnapshotSig+".sha256", []byte(got), 0o600); err != nil {
 			return err
 		}
 		if err := os.WriteFile(finalSnapshotSig, []byte(sig), 0o600); err != nil {
 			return err
 		}
+		sum = got
+	case got != sum:
+		return fmt.Errorf("the session's files changed after its final snapshot (%s, now %s): not signing another", sum, got)
 	}
-	status, n, err := c.upload("/m/snapshot", finalSnapshot, sum, "X-Snapshot-Sig", sig)
-	if err != nil {
+	if err := commitSnapshot(c, sum, sig); err != nil {
 		return err
-	}
-	if status != 200 {
-		return fmt.Errorf("HTTP %d", status)
 	}
 	log.Printf("snapshot uploaded (%d bytes)", n)
 	return nil
 }
+
+// commitSnapshot: the streamed snapshot with this hash is the machine's final one (its signature over the hash)
+func commitSnapshot(c *client, sum, sig string) error {
+	b, _ := json.Marshal(map[string]string{"sha256": sum, "sig": sig})
+	out, _, status, err := c.raw("POST", "/m/snapshot/commit", b)
+	if err != nil {
+		return err
+	}
+	switch status {
+	case 200:
+		return nil
+	case 404:
+		return errNotStreamed
+	}
+	return fmt.Errorf("commit: HTTP %d %s", status, strings.TrimSpace(string(out[:min(len(out), 200)])))
+}
+
+// snapshotFailed: a snapshot command this machine couldn't answer, with the reason: the router keeps the machine and
+// tells Deyao instead of waiting it out (router lastSnapshot)
+func snapshotFailed(c *client, cause error) {
+	if err := c.json("POST", "/m/snapshot/failed", map[string]string{"error": cause.Error()}, nil); err != nil {
+		log.Printf("reporting the failed snapshot: %v", err)
+	}
+}
+
+// streamSnapshot: the snapshot as a signed POST streamed while it is made (no Content-Length, nothing on disk). The
+// request's signature can't cover a hash nobody knows yet, so it names the body "stream"; the commit binds the bytes.
+// → the sha256 and size the machine sent, and the sha256 the router received.
+func (c *client) streamSnapshot(path string) (string, int64, string, error) {
+	pr, pw := io.Pipe()
+	type made struct {
+		sum string
+		n   int64
+		err error
+	}
+	done := make(chan made, 1)
+	go func() {
+		sum, n, err := makeSnapshotTo(pw)
+		pw.CloseWithError(err)
+		done <- made{sum, n, err}
+	}()
+	h, err := c.signed("POST", path, streamedBody)
+	if err != nil {
+		pr.CloseWithError(err)
+		<-done
+		return "", 0, "", err
+	}
+	req, _ := http.NewRequest("POST", c.base+path, pr)
+	for k, v := range h {
+		req.Header.Set(k, v)
+	}
+	hc := streamHTTP
+	if c.http != nil && c.http.Transport != nil {
+		hc = &http.Client{Transport: c.http.Transport}
+	}
+	resp, err := hc.Do(req)
+	if err != nil {
+		pr.CloseWithError(err)
+		m := <-done
+		if m.err != nil && !errors.Is(m.err, err) {
+			return "", 0, "", fmt.Errorf("%v (making it: %v)", err, m.err)
+		}
+		return "", 0, "", err
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<16))
+	pr.CloseWithError(errors.New("the router answered"))
+	m := <-done
+	if m.err != nil {
+		return "", 0, "", fmt.Errorf("making the snapshot: %w", m.err)
+	}
+	if resp.StatusCode != 200 {
+		return "", 0, "", fmt.Errorf("stream: HTTP %d %s", resp.StatusCode, strings.TrimSpace(string(body[:min(len(body), 200)])))
+	}
+	var out struct {
+		Sha256 string `json:"sha256"`
+		Size   int64  `json:"size"`
+	}
+	if err := json.Unmarshal(body, &out); err != nil {
+		return "", 0, "", fmt.Errorf("stream: %v", err)
+	}
+	if out.Size != m.n {
+		return "", 0, "", fmt.Errorf("the router received %d bytes, the machine sent %d", out.Size, m.n)
+	}
+	return m.sum, m.n, out.Sha256, nil
+}
+
+// streamedBody: what a streamed request's signature names in place of the body's hash (router requireMachineStreamed)
+const streamedBody = "stream"
 
 // ---- add a store ----------------------------------------------------------------------------------
 

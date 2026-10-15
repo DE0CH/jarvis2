@@ -170,8 +170,25 @@ type TaskConfig struct {
 
 // OnceInputs: Options.Once — this machine's one-time inputs (approved on the phone, never carried over)
 type OnceInputs struct {
-	Prompt   string `json:"prompt,omitempty"`   // a resume's prompt: typed into the resumed conversation
-	Rollback string `json:"rollback,omitempty"` // drop every transcript line from the first containing it
+	Prompt   string       `json:"prompt,omitempty"`   // a resume's prompt: typed into the resumed conversation
+	Rollback string       `json:"rollback,omitempty"` // drop every transcript line from the first containing it
+	Fallback *FallbackRef `json:"fallback,omitempty"` // fallback.go: the predecessor left no snapshot
+}
+
+// FallbackRef: what a successor whose predecessor left no snapshot restores instead (router/fallback.go)
+type FallbackRef struct {
+	Lost        string    `json:"lost"`              // the predecessor that left none
+	Machine     string    `json:"machine,omitempty"` // the line's machine whose signed snapshot it restores ("" = none)
+	Sha256      string    `json:"sha256,omitempty"`
+	TakenAt     string    `json:"takenAt,omitempty"`
+	Transcripts []LiveRef `json:"transcripts,omitempty"`
+}
+
+// LiveRef: one live transcript copy, as a machine of the line sent it
+type LiveRef struct {
+	Name   string `json:"name"`
+	Sha256 string `json:"sha256"`
+	Size   int64  `json:"size"`
 }
 
 // Vouched: what this machine may use, each piece with its voucher
@@ -186,7 +203,9 @@ var (
 	modelRE     = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._/:\[\]-]{0,99}$`)
 	sha256RE    = regexp.MustCompile(`^[0-9a-f]{64}$`)
 	machineIDRE = regexp.MustCompile(`^[a-z0-9]{1,40}$`)
-	contentRE   = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,40}[a-z0-9])?$`)
+	// a conversation transcript's file name (router/livesync.go liveNameRE)
+	transcriptNameRE = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,127}\.jsonl$`)
+	contentRE        = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,40}[a-z0-9])?$`)
 )
 
 // vouch: the cert's settings, strictly read. A field the machine doesn't know refuses the whole config (the phone
@@ -233,6 +252,16 @@ func vouch(cert Cert) (Vouched, error) {
 		}
 		if v.Once.Rollback != "" && len(v.Once.Rollback) < 4 {
 			return v, errors.New("the cert's rollback marker is too short")
+		}
+		if fb := v.Once.Fallback; fb != nil {
+			if !machineIDRE.MatchString(fb.Lost) || (fb.Machine != "" && (!machineIDRE.MatchString(fb.Machine) || !sha256RE.MatchString(fb.Sha256))) {
+				return v, errors.New("the cert's fallback")
+			}
+			for _, t := range fb.Transcripts {
+				if !transcriptNameRE.MatchString(t.Name) || !sha256RE.MatchString(t.Sha256) || t.Size < 0 {
+					return v, fmt.Errorf("the cert's fallback transcript %q", t.Name)
+				}
+			}
 		}
 	}
 	return v, nil

@@ -16,6 +16,7 @@ func TestLastSnapshotNeverWaitsOnABootingMachine(t *testing.T) {
 	r := rg.r
 	r.cfg.SnapshotWait = 30 * time.Second
 	running := func(booted string) {
+		os.Remove(r.st.snapshotPath("m1") + ".sig") // a running machine hasn't sent its final snapshot yet
 		r.st.Do(func(d *persisted) {
 			s := d.Sessions["s1"]
 			s.State, s.MachineID, s.Booted, s.Cert = "started", "m1", booted, rg.cert
@@ -57,15 +58,15 @@ func TestLastSnapshotNeverWaitsOnABootingMachine(t *testing.T) {
 	if waiting != "" {
 		t.Fatalf("still waiting: %q", waiting)
 	}
-	// booted but silent (its machine stopped or gone): not asked, the pause goes straight to the kill
+	// booted but silent (its machine stopped, starved or gone): it can't send its snapshot, so it is held, not killed
 	running("m1")
 	r.st.Do(func(d *persisted) { d.Sessions["s1"].Live.LastReport = time.Now().Add(-10 * time.Minute) })
 	t0 = time.Now()
 	if err := r.Pause("s1"); err != nil {
 		t.Fatal(err)
 	}
-	if err := r.waitState("s1", "paused", 5*time.Second); err != nil || time.Since(t0) > 5*time.Second {
-		t.Fatalf("a silent machine held the pause: %v", err)
+	if err := r.waitState("s1", "paused", 5*time.Second); err == nil || !strings.Contains(err.Error(), "hasn't reported since") || time.Since(t0) > 5*time.Second {
+		t.Fatalf("a silent machine wasn't held at once: %v", err)
 	}
 	if waitText(10*time.Minute) != "10 min" {
 		t.Fatal(waitText(10 * time.Minute))

@@ -89,7 +89,7 @@ func splitRouter(t *testing.T, c *splitCore) *Router {
 func TestStartRetriesInitUntilTheMachineIsUp(t *testing.T) {
 	c := &splitCore{key: newTestKey(), initWait: 3, bodies: map[string]map[string]any{}}
 	r := splitRouter(t, c)
-	d, err := r.startMachine("img", "")
+	d, err := r.startMachine("img", "", 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -106,7 +106,7 @@ func TestStartRetriesInitUntilTheMachineIsUp(t *testing.T) {
 func TestStartKillsAMachineThatNeverComesUp(t *testing.T) {
 	c := &splitCore{key: newTestKey(), initFail: true, killWt: 2, bodies: map[string]map[string]any{}}
 	r := splitRouter(t, c)
-	if _, err := r.startMachine("img", "small"); err == nil {
+	if _, err := r.startMachine("img", "small", 0); err == nil {
 		t.Fatal("started")
 	}
 	if c.count("/init") != 1 || c.count("/kill") != 3 { // a permanent refusal isn't retried; the kill is, until destroyed
@@ -115,7 +115,7 @@ func TestStartKillsAMachineThatNeverComesUp(t *testing.T) {
 	c.initFail, c.initWait = false, 1<<30
 	initMax = 20 * time.Millisecond
 	defer func() { initMax = 12 * time.Minute }()
-	if _, err := r.startMachine("img", "small"); err == nil {
+	if _, err := r.startMachine("img", "small", 0); err == nil {
 		t.Fatal("started")
 	}
 	if c.calls[len(c.calls)-1] != "/kill" {
@@ -126,7 +126,7 @@ func TestStartKillsAMachineThatNeverComesUp(t *testing.T) {
 func TestStartWithACoreFromBeforeR2(t *testing.T) {
 	c := &splitCore{key: newTestKey(), old: true, bodies: map[string]map[string]any{}}
 	r := splitRouter(t, c)
-	d, err := r.startMachine("img", "large")
+	d, err := r.startMachine("img", "large", 0)
 	if err != nil || c.count("/init") != 0 {
 		t.Fatalf("%v %v", err, c.calls)
 	}
@@ -145,7 +145,7 @@ func TestStartWaitsOutFlysMachineLimit(t *testing.T) {
 	r := splitRouter(t, c)
 	machineLimitStep = time.Millisecond
 	defer func() { machineLimitStep = time.Minute }()
-	if _, err := r.startMachine("img", ""); err != nil {
+	if _, err := r.startMachine("img", "", 0); err != nil {
 		t.Fatal(err)
 	}
 	if c.count("/start") != 3 {
@@ -154,7 +154,7 @@ func TestStartWaitsOutFlysMachineLimit(t *testing.T) {
 	c.limit = 1 << 30
 	machineLimitWait = 5 * time.Millisecond
 	defer func() { machineLimitWait = 3 * time.Hour }()
-	if _, err := r.startMachine("img", ""); err == nil || !flyMachineLimit(err) {
+	if _, err := r.startMachine("img", "", 0); err == nil || !flyMachineLimit(err) {
 		t.Fatalf("gave up without the limit's error: %v", err)
 	}
 }

@@ -29,7 +29,7 @@ type Router struct {
 	execs    map[string]chan execItem   // machine id → holder-signed shell commands (grants.go)
 	results  map[string]chan ExecResult // exec request id → its waiting caller
 	hk       holders
-	snapped  map[string]chan struct{}
+	snapped  map[string]chan snapResult
 	locks    sync.Map   // session id → *sync.Mutex: one lifecycle action at a time
 	drain    drainState // drain.go: the lifecycle goroutines running, refused once SIGTERM came
 	ops      opsState   // sessionops.go: busy marks, permission-mode/restart jobs, uploads, repos
@@ -48,7 +48,7 @@ type Router struct {
 }
 
 func NewRouter(cfg Config, st *State, core *CoreClient, policy Policy) *Router {
-	return &Router{cfg: cfg, st: st, core: core, policy: policy, setupSeen: map[string]time.Time{}, commands: map[string]chan string{}, execs: map[string]chan execItem{}, results: map[string]chan ExecResult{}, snapped: map[string]chan struct{}{}}
+	return &Router{cfg: cfg, st: st, core: core, policy: policy, setupSeen: map[string]time.Time{}, commands: map[string]chan string{}, execs: map[string]chan execItem{}, results: map[string]chan ExecResult{}, snapped: map[string]chan snapResult{}}
 }
 
 func randID() string {
@@ -174,11 +174,14 @@ var (
 // startMachine: the core's start (one Fly create), then its init until Fly reports the machine up and the image's
 // init command gave its keys → the core's signed "started" document. A machine that never comes up is killed.
 // A core from before R2 answers "started" from /start itself (it waited and retried inside).
-func (r *Router) startMachine(image, size string) (*Doc, error) {
+func (r *Router) startMachine(image, size string, disk int) (*Doc, error) {
 	if size == "" {
 		size = "medium"
 	}
 	in := map[string]any{"image": image, "region": r.cfg.Region, "size": size}
+	if disk > 0 {
+		in["disk"] = disk // disk.go: the root disk in GB (a core from before disk sizes ignores it)
+	}
 	d, err := r.core.Call("/start", in)
 	// Fly's org machine limit (lessons/58): nothing was created and the approval is still unused, so wait for a
 	// machine to go (sessions pause by themselves) instead of failing a start Deyao already approved
@@ -199,11 +202,13 @@ func (r *Router) startMachine(image, size string) (*Doc, error) {
 	var c struct {
 		Kind string `json:"kind"`
 		ID   string `json:"id"`
+		Disk int    `json:"disk"`
 	}
 	d.Decode(&c)
 	if c.Kind != "created" {
 		return d, nil
 	}
+	r.noteDiskAnswer(disk, c.Disk) // disk.go: whether the core gave the disk asked for
 	deadline := time.Now().Add(initMax)
 	for {
 		st, err := r.core.Call("/init", map[string]string{"machine": c.ID})
@@ -257,7 +262,7 @@ func (r *Router) startAndCertify(sid string, approval *Doc) {
 		}
 	})
 	r.setState(sid, "starting", "")
-	d, err := r.startMachine(a.Request.Image, s.Size)
+	d, err := r.startMachine(a.Request.Image, s.Size, s.Disk)
 	if err != nil {
 		r.setState(sid, "failed", "start: "+err.Error())
 		return
@@ -711,7 +716,11 @@ func (r *Router) RejectAs(id, outcome string) error {
 
 // ---- pause ---------------------------------------------------------------------------------------------
 
-func (r *Router) Pause(id string) error {
+func (r *Router) Pause(id string) error { return r.PauseWith(id, false) }
+
+// PauseWith: the machine's final snapshot, then its kill. A machine whose snapshot fails or doesn't arrive is held
+// (snapshots.go), unless withoutSnapshot: Deyao's explicit choice to lose the work since the line's last snapshot.
+func (r *Router) PauseWith(id string, withoutSnapshot bool) error {
 	unlock, err := r.lock(id, "pausing")
 	if err != nil {
 		return err
@@ -729,9 +738,7 @@ func (r *Router) Pause(id string) error {
 	r.setState(id, "pausing", "")
 	go func() {
 		defer unlock()
-		r.lastSnapshot(id, s.MachineID)
-		if _, err := r.killMachine(s.MachineID); err != nil { // vouch.go: with the snapshot's hash
-			r.setState(id, "failed", "kill: "+err.Error())
+		if !r.snapshotAndKill(id, s.MachineID, "pause", withoutSnapshot) {
 			return
 		}
 		now := time.Now().UTC()
@@ -783,6 +790,19 @@ func (r *Router) Resume(id string, upgrade bool) error {
 			log.Printf("session %s: resume on the newest image (its image %s predates the router's Claude login)", id, own)
 		}
 		once := r.resumeOnce(&s) // vouch.go: a resume prompt or a rollback: only the phone approves one
+		// fallback.go: a predecessor that left no snapshot never means an empty start by itself
+		var fb *FallbackRef
+		if s.StartEmpty {
+			r.st.Do(func(d *persisted) {
+				if x := d.Sessions[id]; x != nil {
+					x.StartEmpty = false
+				}
+			})
+			log.Printf("session %s: resume starts empty if its predecessor left no snapshot (Deyao's choice)", id)
+		} else if fb = r.lineFallback(&s); fb != nil {
+			once, upgrade = withFallback(once, fb), true // the newest image: older ones refuse a fallback
+			log.Printf("session %s: %s left no snapshot; the resume falls back to %q and %d transcript(s)", id, fb.Lost, fb.Machine, len(fb.Transcripts))
+		}
 		// the permission mode is signed: a resume in another mode than the line's cert (raising to bypass) is a
 		// change the iPhone approves, like a newer image
 		modeChange := certMode(s.Cert) != normMode(s.PermissionMode)
@@ -797,6 +817,9 @@ func (r *Router) Resume(id string, upgrade bool) error {
 			}
 			r.setState(id, "approval", "")
 			r.addApproval(&Approval{Kind: "resume-upgrade", Session: id, Label: s.Label, Challenge: ch, Options: opts})
+			if fb != nil {
+				r.DM(fallbackDMText(sessionName(&s, nil), fb))
+			}
 		}
 		phoneImage := pinned
 		if upgrade {
@@ -925,11 +948,18 @@ func (r *Router) DestroyWith(id string, force bool) error {
 	return r.destroy(id, destroyOpts{force: force})
 }
 
+// DestroyWithoutSnapshot: Deyao's destroy of a session whose machine is held (its final snapshot failed): the machine
+// is killed without it and the line's newest snapshot is archived
+func (r *Router) DestroyWithoutSnapshot(id string, force bool) error {
+	return r.destroy(id, destroyOpts{force: force, withoutSnapshot: true})
+}
+
 // destroyOpts: force = destroy even when the archive failed; report (oneshot.go) gets, once the line is
 // burnt and the session is a record, the repos' state as the final snapshot recorded it and what the archive did
 type destroyOpts struct {
-	force  bool
-	report func(s Session, changes map[string]any, archived *ArchiveInfo, aerr error)
+	force           bool
+	withoutSnapshot bool // Deyao's explicit choice: kill a held machine without its final snapshot
+	report          func(s Session, changes map[string]any, archived *ArchiveInfo, aerr error)
 }
 
 func (r *Router) destroy(id string, o destroyOpts) error {
@@ -951,7 +981,7 @@ func (r *Router) destroy(id string, o destroyOpts) error {
 	r.setState(id, "destroying", "")
 	go func() {
 		defer unlock()
-		if s.MachineID != "" && !r.snapshotAndKill(id, s.MachineID) {
+		if s.MachineID != "" && !r.snapshotAndKill(id, s.MachineID, "destroy", o.withoutSnapshot) {
 			return
 		}
 		var changes map[string]any
@@ -1016,8 +1046,9 @@ func (r *Router) finish(id string) {
 		}
 		for m, sid := range d.Machines {
 			if sid == id {
-				os.Remove(r.st.snapshotPath(m))
-				os.Remove(r.st.snapshotPath(m) + ".sig")
+				for _, ext := range []string{"", ".sig", ".sha256", ".pending", ".pending.sha256"} {
+					os.Remove(r.st.snapshotPath(m) + ext)
+				}
 				r.dropCarry(m) // the carried secrets go with the line (the core has burnt it too)
 			}
 		}
@@ -1132,14 +1163,15 @@ func (r *Router) send(machine, cmd string) {
 	}
 }
 
-// lastSnapshot: before a pause or destroy kills the machine, its last snapshot (or its "nothing to snapshot"
-// while booting), waiting up to SnapshotWait with the reason shown in the app. A machine that never got past boot
-// (no status report from it) isn't asked at all: it has nothing to snapshot, and an older image may never answer
-// (e.g. stuck pulling the secrets of a locked store).
-// silentAfter: a booted machine whose last report is older than this isn't asked for a snapshot
+// lastSnapshot: before a pause or destroy kills the machine, its final snapshot → "" when the kill loses nothing,
+// else why it would (the caller holds the machine instead: snapshots.go). A machine that never got past boot (no
+// status report from it) has no state of its own: it is asked briefly (one that restored its predecessor's snapshot
+// answers with that one) and then killed. A booted machine must send its snapshot: one that has gone silent, says it
+// failed, or doesn't answer within SnapshotWait is held, with the reason shown in the app.
+// silentAfter: a booted machine whose last report is older than this can't be asked for a snapshot
 var silentAfter = 3 * time.Minute
 
-func (r *Router) lastSnapshot(id, machine string) {
+func (r *Router) lastSnapshot(id, machine string) string {
 	booted := func() (b bool) {
 		r.st.Do(func(d *persisted) {
 			if x := d.Sessions[id]; x != nil {
@@ -1148,6 +1180,9 @@ func (r *Router) lastSnapshot(id, machine string) {
 		})
 		return
 	}
+	if r.hasFinalSnapshot(machine) {
+		return "" // taken before (a retry after a hold, or a machine asked twice)
+	}
 	// a machine that has its secrets is seconds from booted (repos, then its first report): wait for it, or a pause
 	// right after a start would leave its successor with no state at all (its cert names the snapshot this machine
 	// signs, and only that one: vouch.go)
@@ -1155,11 +1190,27 @@ func (r *Router) lastSnapshot(id, machine string) {
 		time.Sleep(time.Second)
 	}
 	if !booted() {
-		log.Printf("session %s: %s never got past boot; nothing to snapshot", id, machine)
-		return
+		// only a machine whose cert names its predecessor's snapshot may have restored one to answer with
+		var named string
+		r.st.Do(func(d *persisted) {
+			var c struct {
+				Snapshot string `json:"snapshot"`
+			}
+			if cert := d.Certs[machine]; cert != nil && cert.Decode(&c) == nil {
+				named = c.Snapshot
+			}
+		})
+		if named == "" {
+			log.Printf("session %s: %s never got past boot and restored nothing; nothing to snapshot", id, machine)
+			return ""
+		}
+		if res, ok := r.askSnapshot(id, machine, bootSnapshotWait); ok && res.err == "" {
+			log.Printf("session %s: %s never got past boot; it answered its snapshot", id, machine)
+		} else {
+			log.Printf("session %s: %s never got past boot; nothing of its own to snapshot", id, machine)
+		}
+		return ""
 	}
-	// a machine that has gone silent (stopped or gone: its agent reports at least every 60 s) can't answer: no wait,
-	// so a pause that a router restart re-runs still reaches the kill
 	var last time.Time
 	r.st.Do(func(d *persisted) {
 		if x := d.Sessions[id]; x != nil && x.Live != nil {
@@ -1167,18 +1218,16 @@ func (r *Router) lastSnapshot(id, machine string) {
 		}
 	})
 	if time.Since(last) > silentAfter {
-		log.Printf("session %s: %s silent since %s; not waiting for a snapshot", id, machine, last.Format(time.RFC3339))
-		return
+		return "its machine hasn't reported since " + last.UTC().Format("2006-01-02 15:04 UTC") + ", so it can't send its final snapshot"
 	}
-	done := r.awaitSnapshot(machine)
-	r.send(machine, "snapshot")
-	r.setWaiting(id, "waiting for the machine's last snapshot (up to "+waitText(r.cfg.SnapshotWait)+")")
-	defer r.setWaiting(id, "")
-	select {
-	case <-done:
-	case <-time.After(r.cfg.SnapshotWait):
-		log.Printf("session %s: no snapshot from %s within %s; going on from the last one", id, machine, r.cfg.SnapshotWait)
+	res, ok := r.askSnapshot(id, machine, r.cfg.SnapshotWait)
+	switch {
+	case !ok:
+		return "no final snapshot arrived within " + waitText(r.cfg.SnapshotWait)
+	case res.err != "":
+		return "its final snapshot failed (" + res.err + ")"
 	}
+	return ""
 }
 
 func (r *Router) setWaiting(id, what string) {
@@ -1195,23 +1244,6 @@ func waitText(d time.Duration) string {
 		return fmt.Sprintf("%d min", int(d.Round(time.Minute)/time.Minute))
 	}
 	return fmt.Sprintf("%d s", int(d/time.Second))
-}
-
-func (r *Router) awaitSnapshot(machine string) chan struct{} {
-	r.cmdMu.Lock()
-	defer r.cmdMu.Unlock()
-	c := make(chan struct{})
-	r.snapped[machine] = c
-	return c
-}
-
-func (r *Router) snapshotArrived(machine string) {
-	r.cmdMu.Lock()
-	defer r.cmdMu.Unlock()
-	if c := r.snapped[machine]; c != nil {
-		close(c)
-		delete(r.snapped, machine)
-	}
 }
 
 func normMode(m string) string {

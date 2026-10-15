@@ -259,6 +259,14 @@ struct SignedSettingsSection: View {
           VStack(alignment: .leading) { Text("Resume prompt").font(.footnote).foregroundStyle(.secondary); Text(p).textSelection(.enabled) }
             .accessibilityElement(children: .combine).accessibilityIdentifier("signed-once-prompt")
         }
+        if let fb = Checks.fallback(o["fallback"]) {
+          VStack(alignment: .leading, spacing: 4) {
+            Label("The last machine left no snapshot", systemImage: "externaldrive.badge.exclamationmark").foregroundStyle(.orange)
+            Text("Machine \(fb.lost) left none. Restores instead: " + (fb.machine.map { "the snapshot of \($0) taken \(fb.takenAt ?? "?") (sha256 \(String((fb.sha256 ?? "").prefix(12)))…)" } ?? "no snapshot of the files") +
+                 ", and the newest copies of \(fb.transcripts.count) conversation(s). Work after that snapshot is gone.").font(.footnote)
+          }
+          .accessibilityElement(children: .combine).accessibilityIdentifier("signed-once-fallback")
+        }
         if let m = o["rollback"] as? String, !m.isEmpty {
           LabeledContent {
             Text(m)

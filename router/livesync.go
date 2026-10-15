@@ -15,6 +15,8 @@ package main
 // router. docs/DECISIONS.md 38.
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"log"
 	"net/http"
@@ -31,6 +33,8 @@ type LiveSync struct {
 	Files  map[string]int64 `json:"files"`  // conversation file → bytes last received
 	Stored bool             `json:"stored"` // false: received but not written (no Storage Box, or RECORDS_OFF)
 	Error  string           `json:"error,omitempty"`
+	// Signed: each stored copy as its machine signed it (fallback.go: a successor of a line with no snapshot checks it)
+	Signed map[string]*LiveSigned `json:"signed,omitempty"`
 }
 
 const liveRoot = recordsRoot + "/.live"
@@ -105,6 +109,14 @@ func (r *Router) liveTranscript(w http.ResponseWriter, req *http.Request, machin
 		s.LiveSync.Files[name] = int64(len(body))
 		if werr != nil {
 			s.LiveSync.Error = werr.Error()
+		}
+		if stored { // what the successor of a line with no snapshot can check (fallback.go)
+			if s.LiveSync.Signed == nil {
+				s.LiveSync.Signed = map[string]*LiveSigned{}
+			}
+			sum := sha256.Sum256(body)
+			s.LiveSync.Signed[name] = &LiveSigned{Machine: machine, At: req.Header.Get("X-Time"), Sig: req.Header.Get("X-Sig"),
+				Sha256: hex.EncodeToString(sum[:]), Size: int64(len(body))}
 		}
 	})
 	if werr != nil {

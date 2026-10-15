@@ -2,6 +2,7 @@ package main
 
 import (
 	"errors"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -15,6 +16,7 @@ func TestDrainLetsInFlightFinishAndRefusesNew(t *testing.T) {
 	r := rg.r
 	r.cfg.NoAccess = true
 	r.cfg.SnapshotWait = 30 * time.Second
+	os.Remove(r.st.snapshotPath("m1") + ".sig") // running: no final snapshot yet
 	r.st.Do(func(d *persisted) {
 		s := d.Sessions["s1"]
 		s.State, s.MachineID, s.Booted, s.Cert = "started", "m1", "m1", rg.cert
@@ -138,7 +140,7 @@ func TestDrainEndsAMachineLimitWait(t *testing.T) {
 	c := &splitCore{key: newTestKey(), limit: 1 << 30, bodies: map[string]map[string]any{}}
 	r := splitRouter(t, c)
 	res := make(chan error, 1)
-	go func() { _, err := r.startMachine("img", ""); res <- err }()
+	go func() { _, err := r.startMachine("img", "", 0); res <- err }()
 	waitFor(t, "the limit wait", func() bool { return c.count("/start") >= 1 })
 	go r.Drain(time.Second)
 	select {
@@ -149,7 +151,7 @@ func TestDrainEndsAMachineLimitWait(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("the machine-limit wait went on through the drain")
 	}
-	if _, err := r.startMachine("img", ""); !errors.Is(err, errLimitDraining) {
+	if _, err := r.startMachine("img", "", 0); !errors.Is(err, errLimitDraining) {
 		t.Fatalf("a wait began during the drain: %v", err)
 	}
 }

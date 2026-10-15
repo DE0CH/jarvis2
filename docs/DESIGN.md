@@ -352,11 +352,31 @@ by the core, approved by the phone; the box alone can never make one, and no AI 
 - **New session:** the router adds the harness's stores (policy) → `succession(null, …)` ← iPhone approval →
   `start(image)` → `certify(approval, machine)` → succession cert. (The router may start the machine while
   Deyao is still deciding, and destroy it on a reject.)
-- **Pause:** the machine stops every process of the session (SIGSTOP), signs its snapshot (artefacts, workspace, transcript, the harnesses' state)
-  with its signing key and uploads it; it signs only this one in its life and answers any later snapshot command with
-  the same one, so the router holds no earlier signed state to roll a successor back to →
-  `kill(machine, snapshot hash + its signature)`: the successor's cert names that snapshot and no other. Its carried secrets (sealed by the core at its last pull) are already next to the snapshot. Skipped/failed
-  snapshot = nothing to resume; no secret moves.
+- **Pause:** the machine stops every process of the session (SIGSTOP) and streams its snapshot (artefacts, workspace,
+  transcript, the harnesses' state) to the router while it makes it: nothing is staged on the machine's disk, so a
+  session whose work filled its disk still leaves its snapshot (2026-10-15). The router answers the hash of what it
+  received; the machine checks it, signs it with its signing key and commits it. It signs only this one in its life and
+  answers any later snapshot command with the same one (committing it again, or streaming the same frozen files again),
+  so the router holds no earlier signed state to roll a successor back to →
+  `kill(machine, snapshot hash + its signature)`: the successor's cert names that snapshot and no other. Its carried
+  secrets (sealed by the core at its last pull) are already next to the snapshot.
+- **A pause never loses a session's state (Deyao, 2026-10-15; `router/snapshots.go`).** A booted machine whose
+  snapshot fails (the machine says why), doesn't arrive within the wait, or that has stopped reporting is **held**: not
+  killed, kept running (and billed: a stopped Fly machine loses its root disk), the session `failed` with the reason,
+  and Deyao told by a "needs you" DM and in the app. Pausing again retries; only Deyao's explicit "without the
+  snapshot" kills it anyway, and nothing automatic does (auto-pause, the budget cap, a destroy, a session's actions).
+  A machine that never got past boot holds nothing of its own; if it restored its predecessor's snapshot it answers
+  with that one, signed by itself, so its kill carries the line's state on.
+- **A resume never starts empty by itself when the line had state (`router/fallback.go`, `machine/fallback.go`).** When
+  the predecessor left no snapshot, the resume is the phone's approval of a fallback, a one-time input of the
+  successor's cert: the newest snapshot the line has (another of its machines' signed snapshots) and the newest live
+  copy of each conversation transcript, each named by its hash, plus a resume prompt that says so. The successor checks
+  each byte against the cert and the line's machine signatures (a snapshot: signed by its machine, whose cert the core
+  signed for the same line; a live copy: the request that sent it, signed by a machine of the line). An empty start
+  takes Deyao's explicit choice (`startEmpty`).
+- **Disk:** the machine reports its root disk with its memory; under 1.5 GiB or 10 % free the router DMs once and
+  offers Upgrade disk: a pause and a resume on a machine with a bigger root disk (Fly's `rootfs.size_gb`, which the core
+  sets at create: 16, 32, … 512 GB).
 - **Resume, nothing changed (also unattended, e.g. scheduled):** `succession(old, …)` ← approve_by_dead_machine
   → `start` → `certify` (with the line's carry) → succession cert + the carry rebound → the machine pulls its secrets from the carried blob,
   no store unlocked, no Face ID.

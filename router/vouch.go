@@ -69,8 +69,9 @@ type TaskConfig struct {
 
 // OnceInputs: Options.Once
 type OnceInputs struct {
-	Prompt   string `json:"prompt,omitempty"`
-	Rollback string `json:"rollback,omitempty"`
+	Prompt   string       `json:"prompt,omitempty"`
+	Rollback string       `json:"rollback,omitempty"`
+	Fallback *FallbackRef `json:"fallback,omitempty"` // fallback.go: the predecessor left no snapshot
 }
 
 // certOptions: the cert's Config and Once

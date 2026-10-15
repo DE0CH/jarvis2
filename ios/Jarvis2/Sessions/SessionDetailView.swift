@@ -74,7 +74,9 @@ private struct SessionDetailList: View {
         }
       }
 
+      if let h = m.held { HeldSection(m: m, h: h, busy: busy) }
       if let a = m.memAlert { MemAlertSection(m: m, a: a, busy: busy) }
+      if let a = m.diskAlert { DiskAlertSection(m: m, a: a, busy: busy) }
 
       if let h = m.needsGrant {
         Section {
@@ -107,7 +109,7 @@ private struct SessionDetailList: View {
 
       Section {
         if busy == nil {
-          if m.state == "started" || m.state == "initialising" {
+          if m.pausable && m.held == nil {
             Button("Pause", systemImage: "pause.circle") { Task { await model.pause(m.id) } }.accessibilityIdentifier("pause-\(m.id)")
           }
           if m.resumable {
@@ -139,6 +141,10 @@ private struct SessionDetailList: View {
           LabeledContent("Memory", value: "\(Fmt.bytes(mem.availMb * 1_048_576)) free of \(Fmt.bytes(mem.totalMb * 1_048_576))")
             .accessibilityIdentifier("memory-\(m.id)")
         }
+        if m.state == "started", let disk = m.diskUsage {
+          LabeledContent("Disk", value: "\(Fmt.bytes(disk.availMb * 1_048_576)) free of \(Fmt.bytes(disk.totalMb * 1_048_576))")
+            .accessibilityIdentifier("disk-\(m.id)")
+        }
         if let c = m.created { LabeledContent("Created", value: Fmt.ago(c)) }
         if m.state == "paused", let pa = m.pausedAt { LabeledContent("Paused", value: Fmt.ago(pa)) }
         LabeledContent("Session id") { Text(m.id).font(.footnote.monospaced()).textSelection(.enabled) }
@@ -161,6 +167,65 @@ private struct SessionDetailList: View {
     if !m.autoPause { return ("Auto-pause", "Off") }
     if let ms = m.pauseInMs { return ("Auto-pause", "In \(max(1, Int((ms / 60000).rounded()))) min") }
     return ("Auto-pause", "After 1 h idle")
+  }
+}
+
+/// a held machine (its final snapshot failed or didn't arrive): why, and what Deyao can do — retry, or go on without
+/// the snapshot (the line keeps its last one; a resume falls back to it)
+private struct HeldSection: View {
+  @Environment(AppModel.self) private var model
+  let m: Session
+  let h: Held
+  let busy: String?
+
+  var body: some View {
+    Section {
+      Label("Machine kept: no final snapshot", systemImage: "externaldrive.badge.exclamationmark")
+        .foregroundStyle(.red).font(.subheadline.weight(.semibold))
+        .accessibilityIdentifier("held-\(m.id)")
+      LabeledContent("Why", value: h.reason)
+      if let since = h.since { LabeledContent("Since", value: Fmt.ago(since)) }
+      if busy == nil {
+        Button("Pause again", systemImage: "arrow.clockwise.circle") { Task { await model.pause(m.id) } }
+          .accessibilityIdentifier("held-retry-\(m.id)")
+        Button("Pause without the snapshot", systemImage: "pause.circle", role: .destructive) { Task { await model.pauseWithoutSnapshot(m.id) } }
+          .accessibilityIdentifier("held-pause-anyway-\(m.id)")
+      }
+    } header: {
+      Label("Final snapshot", systemImage: "externaldrive")
+    } footer: {
+      Text("The machine keeps running (and costing) so nothing is lost. Without the snapshot, the work since the line's last snapshot is gone; the next resume restores that snapshot and the newest copies of the conversation.")
+    }
+  }
+}
+
+/// a low-disk episode: the disk now, and Upgrade disk (the same conversation on a machine with a bigger disk)
+private struct DiskAlertSection: View {
+  @Environment(AppModel.self) private var model
+  let m: Session
+  let a: DiskAlert
+  let busy: String?
+
+  var body: some View {
+    Section {
+      Label("Running out of disk", systemImage: "exclamationmark.triangle.fill")
+        .foregroundStyle(.red).font(.subheadline.weight(.semibold))
+        .accessibilityIdentifier("diskalert-\(m.id)")
+      if let d = a.detail { LabeledContent("Now", value: d) }
+      if let since = a.since { LabeledContent("Since", value: Fmt.ago(since)) }
+      if busy == nil, m.wakeKind == "upgrade-disk", m.wakePhase == "failed" {
+        ErrorRow(text: "Upgrade disk failed" + (m.wakeError.map { ": \($0)" } ?? ""), id: "upgrade-disk-error-\(m.id)")
+      }
+      if let gb = a.nextDiskGb, busy == nil {
+        Button("Upgrade to a \(gb) GB disk", systemImage: "arrow.up.circle") { Task { await model.upgradeDisk(m.id) } }
+          .tint(.red)
+          .accessibilityIdentifier("upgrade-disk-\(m.id)")
+      }
+    } header: {
+      Label("Disk", systemImage: "internaldrive")
+    } footer: {
+      if a.nextDiskGb != nil { Text("Upgrade disk pauses the session (its snapshot keeps everything) and brings the same conversation back on a machine with the bigger disk.") }
+    }
   }
 }
 

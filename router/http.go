@@ -392,7 +392,8 @@ func (r *Router) buildHandlers() {
 		writeJSON(w, 200, map[string]any{"id": id, "requestId": in.RequestID})
 	})
 	app("POST /api/sessions/{id}/pause", func(w http.ResponseWriter, req *http.Request) {
-		if err := r.Pause(req.PathValue("id")); err != nil {
+		// withoutSnapshot=1: a held machine (snapshots.go) is killed without its final snapshot (Deyao only)
+		if err := r.PauseWith(req.PathValue("id"), req.URL.Query().Get("withoutSnapshot") == "1"); err != nil {
 			writeErr(w, err)
 			return
 		}
@@ -422,7 +423,11 @@ func (r *Router) buildHandlers() {
 		writeJSON(w, 200, map[string]bool{"ok": true})
 	})
 	app("POST /api/sessions/{id}/destroy", func(w http.ResponseWriter, req *http.Request) {
-		if err := r.DestroyWith(req.PathValue("id"), req.URL.Query().Get("force") == "1"); err != nil {
+		destroy := r.DestroyWith
+		if req.URL.Query().Get("withoutSnapshot") == "1" {
+			destroy = r.DestroyWithoutSnapshot // a held machine, killed without its final snapshot (Deyao only)
+		}
+		if err := destroy(req.PathValue("id"), req.URL.Query().Get("force") == "1"); err != nil {
 			writeErr(w, err)
 			return
 		}
@@ -536,6 +541,18 @@ func (r *Router) buildHandlers() {
 	// hashed on the way, the machine's request signature checked against that hash, then put in place
 	mmux.Handle("POST /m/snapshot", r.requireMachineStream(func(w http.ResponseWriter, req *http.Request, machine, tmp string) {
 		p := r.st.snapshotPath(machine)
+		if same := req.Header.Get("X-Snapshot-Same"); same != "" {
+			os.Remove(tmp)
+			// a machine still booting whose state is exactly its predecessor's snapshot (snapshots.go)
+			if err := r.keepSameSnapshot(machine, same, req.Header.Get("X-Snapshot-Sig")); err != nil {
+				log.Printf("machine %s: its restored snapshot isn't kept: %v", machine, err)
+			} else {
+				log.Printf("machine %s: still booting; its predecessor's snapshot is its own", machine)
+			}
+			r.snapshotArrived(machine)
+			writeJSON(w, 200, map[string]bool{"ok": true})
+			return
+		}
 		if req.Header.Get("X-Snapshot-None") != "" {
 			os.Remove(tmp)
 			// a machine still booting has nothing to snapshot: the waiting pause or destroy goes on at once
@@ -731,7 +748,7 @@ func sessionView(s *Session, d *persisted) map[string]any {
 		"environment": strings.Join(s.Stores, ","), "stores": s.Stores, "content": orEmptyS(s.Content), "harness": s.Harness, "label": s.Label, "aiTitle": s.Title,
 		"model": s.Model, "permissionMode": s.PermissionMode, "guest": guest, "size": s.Size, "pausedAt": s.PausedAt,
 		"image": s.Image, "createRequestId": s.RequestID, "repos": s.Repos, "discordChannel": s.DiscordChannel,
-		"waiting": s.Waiting, "lockedStore": s.LockedStore,
+		"waiting": s.Waiting, "lockedStore": s.LockedStore, "held": s.Held, "diskGb": s.Disk,
 	}
 	liveView(s, v)
 	scheduleView(d, s.ID, v)

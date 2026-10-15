@@ -165,17 +165,26 @@ func (r *Router) latestSnapshot(sessionID string) (machine string, cert *Doc, at
 
 // ---- destroy: snapshot + kill, then archive ------------------------------------------------------------
 
-// snapshotAndKill: what Pause does to a running machine (flows.go); false (state failed) when the kill fails
-func (r *Router) snapshotAndKill(id, machine string) bool {
-	r.lastSnapshot(id, machine)
+// snapshotAndKill: what Pause and Destroy do to a running machine: its final snapshot, then the kill naming it.
+// false when the machine stays: held (its snapshot failed or didn't arrive; withoutSnapshot = Deyao's choice to kill it
+// anyway) or the kill failed (state failed either way)
+func (r *Router) snapshotAndKill(id, machine, what string, withoutSnapshot bool) bool {
+	if reason := r.lastSnapshot(id, machine); reason != "" {
+		if !withoutSnapshot {
+			r.hold(id, machine, what, reason)
+			return false
+		}
+		log.Printf("session %s: %s killed without its final snapshot (Deyao's choice): %s", id, machine, reason)
+	}
 	if _, err := r.killMachine(machine); err != nil { // vouch.go: with the snapshot's hash
 		r.setState(id, "failed", "kill: "+err.Error())
 		return false
 	}
+	r.dropSnapshotLeftovers(machine)
 	now := time.Now().UTC()
 	r.st.Do(func(d *persisted) {
 		if x := d.Sessions[id]; x != nil {
-			x.MachineID, x.PausedAt, x.Status = "", &now, ""
+			x.MachineID, x.PausedAt, x.Status, x.Held = "", &now, "", nil
 		}
 	})
 	return true

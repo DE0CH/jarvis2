@@ -1228,3 +1228,34 @@ func TestARecoverOfAppWrappedStores(t *testing.T) {
 		t.Fatalf("got %v", v)
 	}
 }
+
+// Upgrade disk (router/disk.go): the root disk travels in the start request; Fly gets it as rootfs.size_gb, and the
+// created document names it so the router knows this core set it
+func TestStartSetsTheRootDisk(t *testing.T) {
+	c, _, _ := setup(t)
+	if _, err := c.Start(StartRequest{Image: img, Size: "small", Disk: 24}); err == nil {
+		t.Fatal("started a disk size that isn't one")
+	}
+	cr := pl(t)(c.Start(StartRequest{Image: img, Size: "small", Disk: 32}))
+	if cr["disk"] != float64(32) {
+		t.Fatalf("created: %v", cr)
+	}
+	if cr := pl(t)(c.Start(StartRequest{Image: img, Size: "small"})); cr["disk"] != nil {
+		t.Fatalf("a default disk named one: %v", cr)
+	}
+	var got map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewDecoder(r.Body).Decode(&got)
+		w.Write([]byte(`{"id":"m1"}`))
+	}))
+	defer srv.Close()
+	f := &FlyAPI{base: srv.URL, http: srv.Client(), token: "t"}
+	if _, err := f.Create(StartRequest{Image: img, Disk: 64}, map[string]any{}, nil); err != nil {
+		t.Fatal(err)
+	}
+	conf, _ := got["config"].(map[string]any)
+	rootfs, _ := conf["rootfs"].(map[string]any)
+	if rootfs["size_gb"] != float64(64) {
+		t.Fatalf("Fly config: %v", conf)
+	}
+}

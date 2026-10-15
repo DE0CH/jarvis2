@@ -339,11 +339,18 @@ type ResumeOptions struct {
 	Size     string `json:"size"`
 	Model    string `json:"model"`
 	APIProxy *bool  `json:"apiProxy"`
+	// StartEmpty: when the line's last machine left no snapshot, start with no state instead of the fallback the phone
+	// would approve (fallback.go). Deyao's explicit choice; the actions of a session can't send it.
+	StartEmpty bool `json:"startEmpty"`
+	Disk       int  `json:"diskGb"` // disk.go: the next machine's root disk in GB
 }
 
 func (o ResumeOptions) check() error {
 	if o.Size != "" && sizeMemGB(o.Size) == 0 {
 		return fmt.Errorf("size is small, medium, large or a doubling past it (16gb, 32gb, …)")
+	}
+	if o.Disk != 0 && !diskSize(o.Disk) {
+		return fmt.Errorf("diskGb is 16, 32, 64, 128, 256 or 512")
 	}
 	return nil
 }
@@ -362,7 +369,7 @@ func (r *Router) applyResumeOptions(id string, o ResumeOptions) error {
 	if err := o.check(); err != nil {
 		return err
 	}
-	if o.Size == "" && o.Model == "" && o.APIProxy == nil {
+	if o.Size == "" && o.Model == "" && o.APIProxy == nil && !o.StartEmpty && o.Disk == 0 {
 		return nil
 	}
 	var err error
@@ -381,6 +388,12 @@ func (r *Router) applyResumeOptions(id string, o ResumeOptions) error {
 			}
 			if o.Model != "" {
 				s.Model = o.Model
+			}
+			if o.StartEmpty {
+				s.StartEmpty = true
+			}
+			if o.Disk != 0 {
+				s.Disk = o.Disk
 			}
 			if o.APIProxy != nil {
 				if s.Ops == nil {
