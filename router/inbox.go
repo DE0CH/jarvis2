@@ -65,12 +65,10 @@ type RequestParams struct {
 	Action    string `json:"action,omitempty"` // repo-key: add | remove
 	Repo      string `json:"repo,omitempty"`   // repo-key: owner/name
 	Sensitive bool   `json:"sensitive,omitempty"`
-	// grant, unlock: the session it is for. repo-key add from a session: the session that asked, which gets the repo's
-	// store in the same approval (repos.go repoFollowups; DECISIONS 171)
-	Session string `json:"session,omitempty"`
-	Holder  string `json:"holder,omitempty"`  // grant
-	Minutes int    `json:"minutes,omitempty"` // grant: 1–10
-	Days    int    `json:"days,omitempty"`    // a standing rule instead: 1–365 days
+	Session   string `json:"session,omitempty"` // grant, unlock
+	Holder    string `json:"holder,omitempty"`  // grant
+	Minutes   int    `json:"minutes,omitempty"` // grant: 1–10
+	Days      int    `json:"days,omitempty"`    // a standing rule instead: 1–365 days
 	// api-call (apicalls.go): the call to run as Deyao
 	Method      string `json:"method,omitempty"`
 	Path        string `json:"path,omitempty"` // with its query
@@ -108,14 +106,10 @@ func callerMay(c Caller, kind string, p RequestParams) error {
 		if p.Action != "add" {
 			return errors.New("a session may ask for a repo to be added, not removed")
 		}
-		if p.Session != "" && p.Session != c.Session {
-			return fmt.Errorf("a session may ask for a repo's store only for itself (%s)", c.Session)
-		}
 	case requestKindGrant, requestKindUnlock:
 		if p.Session != c.Session {
 			return fmt.Errorf("a session may ask only for itself (%s)", c.Session)
 		}
-	case requestKindCall: // any app API call, as its actions may (apicalls.go); checked by checkCall
 	default:
 		return fmt.Errorf("unknown request kind %s", kind)
 	}
@@ -183,17 +177,6 @@ func (r *Router) normalizeRequest(kind string, p RequestParams) (RequestParams, 
 		out := RequestParams{Action: p.Action, Repo: repo}
 		if p.Action == "add" {
 			out.Sensitive = p.Sensitive
-			if p.Session != "" {
-				var ok bool
-				r.st.Do(func(d *persisted) {
-					s := d.Sessions[p.Session]
-					ok = s != nil && s.State != "destroyed" && s.State != "destroying"
-				})
-				if !ok {
-					return p, fmt.Errorf("no session %q", p.Session)
-				}
-				out.Session = p.Session
-			}
 		}
 		return out, nil
 	case requestKindGrant, requestKindUnlock:
@@ -486,10 +469,6 @@ func requestItem(d *persisted, q *InboxRequest, now time.Time) InboxItem {
 	switch q.Kind {
 	case requestKindRepo:
 		opts["action"], opts["repo"], opts["sensitive"] = q.Params.Action, q.Params.Repo, q.Params.Sensitive
-		if q.Params.Session != "" { // the store goes into this session in the same approval (repos.go)
-			it.SessionName = inboxSessionName(d, q.Params.Session)
-			opts["into"], opts["intoLabel"], opts["store"] = q.Params.Session, it.SessionName, repoStore(q.Params.Repo)
-		}
 	case requestKindGrant:
 		it.SessionName = inboxSessionName(d, q.Params.Session)
 		opts["sessionId"], opts["label"], opts["holder"] = q.Params.Session, it.SessionName, q.Params.Holder
@@ -582,7 +561,6 @@ func (r *Router) DenyRequest(id string) error {
 type requestIn struct {
 	Repo        string `json:"repo"`
 	Sensitive   bool   `json:"sensitive"`
-	NoStore     bool   `json:"noStore"` // repo/add from a session: don't add the repo's store to the asking session
 	Session     string `json:"session"`
 	Holder      string `json:"holder"`
 	Minutes     int    `json:"minutes"`
@@ -611,18 +589,6 @@ var intents = map[string]func(in requestIn) (string, RequestParams){
 	},
 }
 
-// ownSession: what a session leaves out is its own — the session of a grant or an unlock, and, for a repo it asks to
-// be added, the session that gets the repo's store in the same approval (unless noStore)
-func ownSession(c Caller, kind string, p RequestParams, in requestIn) RequestParams {
-	switch {
-	case c.Kind == "session" && p.Session == "" && kind != requestKindRepo:
-		p.Session = c.Session
-	case (c.Kind == "session" || c.Kind == "actions") && kind == requestKindRepo && p.Action == "add" && !in.NoStore:
-		p.Session = c.Session
-	}
-	return p
-}
-
 // callArgs: the arguments as the router understood them (shown as the API call; the explanation is shown apart)
 func callArgs(kind string, p RequestParams) map[string]any {
 	switch kind {
@@ -630,9 +596,6 @@ func callArgs(kind string, p RequestParams) map[string]any {
 		a := map[string]any{"repo": p.Repo}
 		if p.Sensitive {
 			a["sensitive"] = true
-		}
-		if p.Session != "" {
-			a["into"] = p.Session
 		}
 		return a
 	case requestKindGrant:
@@ -681,7 +644,9 @@ func (r *Router) fileIntent(w http.ResponseWriter, method, path, intent string, 
 		return
 	}
 	kind, p := mk(in)
-	p = ownSession(c, kind, p, in)
+	if c.Kind == "session" && p.Session == "" && kind != requestKindRepo {
+		p.Session = c.Session // a session's own: the session may leave it out
+	}
 	np, err := r.normalizeRequest(kind, p)
 	if err != nil {
 		writeRequestErr(w, &badRequest{err.Error()})

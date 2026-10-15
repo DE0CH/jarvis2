@@ -449,7 +449,7 @@ func TestDeployKeyClashRaceTakesTheKeyBack(t *testing.T) {
 // data key wrapped to the store key the core signed (store_key)
 func appKey(t *testing.T, c *Core, p *phone, repo, store string) (string, []KeyEntry, ed25519.PrivateKey) {
 	t.Helper()
-	sk := pl(t)(c.StoreKey(p.agreementKey()))
+	sk := pl(t)(c.StoreKey(p.agreementKey(), ""))
 	if sk["phone"] != p.agreementKey() {
 		t.Fatal("the store key names another phone")
 	}
@@ -509,7 +509,7 @@ func TestDeployKeyFromTheAppsKeyPair(t *testing.T) {
 	if !strings.Contains(string(k), "OPENSSH PRIVATE KEY") || priv == nil {
 		t.Fatal("the store doesn't hold the app's private key")
 	}
-	if _, err := c.StoreKey("not a key"); err == nil {
+	if _, err := c.StoreKey("not a key", ""); err == nil {
 		t.Fatal("a store key for nothing")
 	}
 }

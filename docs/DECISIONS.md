@@ -1362,45 +1362,45 @@ Deyao: several actions approved together with ONE Face ID; the caller groups the
      every extra store costs a stale core answer the router throws away; a core release (the held core already answers
      onto the newest cert) needs Deyao's go and a Recover, and the batch must work before it.
 
-## Failed sessions, repo stores and API calls in a batch, 2026-10-15
 
-170. **A failed session comes back with one tap and can always be destroyed** (Deyao, 2026-10-15). Stuck that day:
-     "Jarvis Core rebuild" (start: core /start timed out), "Jarvis 2" (start cut off by a router restart), "Draft reply
-     to image" (kill: a Fly destroy timed out), and five sessions whose kill the core refused ("the snapshot isn't signed
-     by machine …'s current key": machines certified by the core from before the 2026-10-15 Recover, for which this
-     core has no key, so it refuses every snapshot claim). *Resume* takes any failed session: with no machine as 165
-     says; with one, it first finishes the pause (the final snapshot, the same one again if the machine took it, then
-     the kill) and resumes from it, on the same tap. A kill the core refuses (403) leaves it failed with the error.
-     *Kills* that fail on the way (502: Fly's API timing out; the core not answering) are tried again 4 times, 30 s
-     apart; refusals are final. *Destroy* never restores anything, so when the core refuses the snapshot claim it kills
-     without one: the core still destroys the machine, the router's own copy of the snapshot (checked against the
-     machine's key when it arrived) is archived to the Storage Box as usual, and the record (`snapshotNote`,
-     `archive.unverified`, `session.json` `snapshotUnverified`) says "from an earlier core, not verified by this core";
-     restoring such a record is refused until the core release that carries old lines. A destroy whose kill still
-     fails goes on when Fly (the router's read token) has no such machine; otherwise it is failed with "… (Destroy anyway
-     removes the session; the machine is then on the Machines tab)", and Destroy anyway (`?force=1`) destroys it: the
-     router stops taking the machine's calls (its `started` key goes) and the Machines tab treats a destroyed session's
-     machine as an orphan, whose Destroy tries the kill again. *The /start timeout was ours* (165 said the box): the
-     running core (sha-06ab2452f8ad, from before R2) waits inside /start (a create, up to 10 waits for "started", up to
-     10 init execs, each Fly call bounded by its own 90 s client: ≈ 34 min at worst) and /kill (≈ 32 min), and the router
-     gave up after 15 min, failing a start the core was still carrying out (and leaving any machine it then made unknown
-     to anyone). The router now waits 40 min for /start and /kill (`coreCallTimeout`); other calls keep 15 min. The held
-     core's start is one Fly call, so this matters only until it is live.
-171. **A repo a session asks for lands in that session in the same approval** (Deyao, 2026-10-15: one Face ID). A
-     session's `repo/add` (alone or in a batch, through its requests or its actions) names the asking session
-     (`params.session`; `noStore: true` opts out, for a repo meant for a proposed session); the Inbox shows it
-     (`open.options.into`, `intoLabel`, `store`) and the call's args carry `into`. When the key is finished
-     (`POST /api/repos/key/finish?inbox=ID`), the router files an add-store of `github-<repo>` for each running session
-     that asked and doesn't hold it, at once (the core makes a challenge only for a store it has), and answers the one
-     for the request the phone answered as `followups` beside the core's document. The phone showed it before Face ID
-     ("then adds the store to session …"), checks the challenge is exactly that store for that session, and signs it
-     under the same Face ID. Other asking sessions' add-stores wait in the Inbox on their own; a session that isn't
-     running gets none. The add-store's origin is the request's caller and call without its signed filing (the session
-     hears the repo's outcome; `jarvis2-request add-repo` starts the store's waiter). An app from before this signs the
-     add-store as a second item, as before.
-172. **An API call can be an item of a batch** (`{"intent": "call", "method", "path", "body" | "bodyText"}`), from a
-     session's requests or its actions only, checked exactly as a single call request (callRules) before anything is
-     filed. It is an `api-call` request in the batch; the phone's Allow all approves it with the others (no Face ID of
-     its own, 155) and then shows what the call brought about, each follow-up on its own page with its own Face ID
-     (166: it wasn't shown before the batch's Face ID). Its result is read by the session through either of its
-     credentials (`GET /m/api/actions/requests/call/:id`), and its outcome arrives as the batch's item.
+## Core continuity: the same kit makes the same core, 2026-10-15
+
+170. **The core's keys come from the master key; its line state comes back at a Recover; the cores hand over to each
+     other** (Deyao, 2026-10-15: a hard reset and then a resources change each forced a Recover, and each cut every
+     session off; "even the current design allows my iPhone to sign arbitrary certs"; supersedes 69's "a new core
+     destroys the earlier core's sessions" for a Recover with the same kit; DESIGN "Core continuity").
+     - *Chosen: derive the core's keys from the kit.* The app sends HKDF(master scalar, `jarvis2/core-seed`) in the
+       sealed claim bundle; the core derives its signing key, store share K, carry, nonce and line-state keys from it
+       (`core/continuity.go`), and the master-signed statement names the derived public keys (`identity`), so a
+       derivation mismatch fails at the claim, not later. No machine code changes: `JARVIS2_CORE_KEY` stays right for
+       every image, old ones included. Security cost: the kit now also yields the core's private keys. The kit already
+       opens every backup, so its loss was already total; the core key adds impersonating a core to machines, which
+       gives nothing the backups didn't. The seed exists outside the core only on the phone during a Reset/Recover.
+     - *Chosen: a sealed line state the router keeps* (newest cert per machine, created/initialised machines, killed,
+       used, spent approvals, the input log's head, the stores as wrapped entries), fetched by the router whenever
+       `X-Line-Seq` moves, before the answer goes on (`router/linestate.go`), copied to the bucket every ≤5 min and at
+       the drain. The app checks it against the derived key and refuses one older than the newest `lineSeq` it has seen
+       in the core's state. A key without its state would be unsafe (superseded certs, burnt lines and used
+       predecessors would all be live again); the state without a witness lets the router roll back what happened
+       since the app last looked: accepted, bounded, and never more than an earlier point of a line Deyao approved.
+     - *Chosen: the deploy-key stores travel in the line state* (wrapped to P + K, no plaintext), so the app keeps its
+       Secure Enclave keys across a Recover (Reset still renews them). A Recover on another phone still loses them
+       (Make key again). *Not chosen*: a master-sealed backup of each deploy key written by the app (more app and
+       router code; worth adding for the lost-phone case).
+     - *Chosen: handoff / standby / takeover in the core* (Deyao's blue/green): a serving core seals a FINAL state on
+       the router's call and stops; a standby Recover serves only from a final state at least as new as the one it was
+       Recovered with. At most one core with these keys serves in a planned move. A crash Recover (no final state
+       possible) serves at once: there the old core being gone is the guarantee. The app doesn't offer standby yet; the
+       blue/green flow adds it.
+     - *Chosen: archives from earlier cores restore through the master key's claim of that core* (`core-cert.json`
+       in every archive; the running core's signed state names the master).
+     - *Not chosen*: a master-signed chain of core keys that machines accept (every machine image would need the new
+       check, and every running session on an old image would still be cut off; the core would still lose its line
+       state). *Not chosen*: the phone re-signing live certs at Recover (machines on old images reject the new core
+       key anyway; the phone can't tell the newest cert of each line from the router's word; one Face ID per Recover
+       per line). *Not chosen*: a monotonic anchor at a provider (the core writing its state head to the bucket or Fly
+       metadata with its own credential, which would close the rollback above): a new credential and network path for
+       the core; the next step if the rollback bound isn't enough.
+     - The sessions running when this was released were made by a random-key core: no later core can sign for them,
+       so they end once more at this release's restart. `router/corechange.go` now marks only sessions whose cert the
+       running core's key didn't sign, and only once the core is set up.

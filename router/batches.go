@@ -241,7 +241,7 @@ type batchIn struct {
 // batchItemIn: one item: its intent and that intent's own body (as the single endpoint takes it); explanation is
 // optional here (the batch's summary is required)
 type batchItemIn struct {
-	Intent string `json:"intent"` // repo/add | repo/remove | grant | unlock | add-store | call | new-session | jarvis1-import
+	Intent string `json:"intent"` // repo/add | repo/remove | grant | unlock | add-store | new-session | jarvis1-import
 	requestIn
 	ID string `json:"id"` // jarvis1-import: the Jarvis 1 session
 }
@@ -289,7 +289,9 @@ func (r *Router) checkBatchItem(c Caller, raw json.RawMessage) (*batchItem, erro
 	it := &batchItem{intent: in.Intent, expl: expl}
 	if mk := intents[in.Intent]; mk != nil {
 		kind, p := mk(in.requestIn)
-		p = ownSession(c, kind, p, in.requestIn)
+		if c.Kind == "session" && p.Session == "" && kind != requestKindRepo {
+			p.Session = c.Session
+		}
 		np, err := r.normalizeRequest(kind, p)
 		if err != nil {
 			return nil, &badRequest{err.Error()}
@@ -305,23 +307,6 @@ func (r *Router) checkBatchItem(c Caller, raw json.RawMessage) (*batchItem, erro
 		return it, nil
 	}
 	switch in.Intent {
-	case "call":
-		// an app API call, run as Deyao once approved (apicalls.go): in a batch beside the session's other asks, so it
-		// never has to be filed on its own. Only a session (its requests or its actions) asks for one.
-		if (c.Kind != "session" && c.Kind != "actions") || c.Session == "" {
-			return nil, &forbidden{"an API call is asked for by a session (its machine key)"}
-		}
-		var ci callIn
-		if err := json.Unmarshal(raw, &ci); err != nil {
-			return nil, &badRequest{"bad JSON: " + err.Error()}
-		}
-		p, args, err := r.checkCall(ci)
-		if err != nil {
-			return nil, &badRequest{"call: " + err.Error()}
-		}
-		it.kind, it.p, it.args = requestKindCall, p, args
-		it.args["intent"] = in.Intent
-		return it, nil
 	case "add-store":
 		sid := in.Session
 		if c.Kind == "session" {

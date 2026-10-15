@@ -208,6 +208,7 @@ func (r *Router) buildHandlers() {
 	}))
 	device("POST /api/core/wipe", "/wipe")
 	r.registerBackups(app)
+	r.registerLineState(app)
 	app("GET /api/policy", func(w http.ResponseWriter, req *http.Request) { writeJSON(w, 200, r.policy) })
 
 	// ---- sign-in -----------------------------------------------------------------------------------

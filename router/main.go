@@ -107,7 +107,7 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	r := NewRouter(cfg, st, &CoreClient{base: cfg.CoreURL, http: &http.Client{}}, policy) // each core call has its own deadline (core.go coreCallTimeout)
+	r := NewRouter(cfg, st, &CoreClient{base: cfg.CoreURL, http: &http.Client{Timeout: 15 * time.Minute}}, policy)
 	r.startFeatures()
 	ld := &leadership{lock: lock, self: self, handler: public}
 	log.Printf("router on %s (core %s), leader at %s", addr, cfg.CoreURL, self)
@@ -139,6 +139,9 @@ func main() {
 	<-sig
 	r.Drain(time.Duration(drainMax) * time.Second)
 	r.loginHub().drain(20 * time.Second)
+	if r.lines != nil {
+		r.lines.flush() // linestate.go: the newest line state into the bucket before the router goes
+	}
 	ld.handOver(st)
 	time.Sleep(time.Duration(handoverLingerSeconds()) * time.Second)
 	os.Exit(0)

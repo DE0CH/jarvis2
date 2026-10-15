@@ -5,13 +5,12 @@ package main
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
-	"time"
 )
 
 type Doc struct {
@@ -24,6 +23,9 @@ func (d *Doc) Decode(out any) error { return json.Unmarshal([]byte(d.Payload), o
 type CoreClient struct {
 	base string
 	http *http.Client
+	// onLineSeq: every answer's X-Line-Seq (linestate.go keeps the core's line state when it moved), called before
+	// the answer goes back to the caller
+	onLineSeq func(int)
 }
 
 // CoreError: the core refused; Body is its signed error document (relayed as is)
@@ -35,38 +37,33 @@ type CoreError struct {
 
 func (e *CoreError) Error() string { return e.Msg }
 
-// coreCallMax: how long the router waits for one core call. The default covers every call that answers from memory or
-// makes one Fly request. The running core (sha-06ab2452f8ad, from before R2; held by core-pin) waits INSIDE /start
-// and /kill: its start is a Fly create, up to 10 waits for "started" and up to 10 init execs, each Fly request bounded
-// by its own 90 s client (≈ 34 min at worst), and its kill a destroy plus up to 20 confirming reads (≈ 32 min). A
-// router that gave up sooner (15 min, 2026-10-15: "start: core /start: … Client.Timeout exceeded") failed a start the
-// core was still carrying out, which then left a started machine nobody knew of. So those two wait past the core's
-// own worst case and always hear its answer (DECISIONS 170).
-var coreCallMax = map[string]time.Duration{"/start": 40 * time.Minute, "/kill": 40 * time.Minute}
-
-const coreCallDefault = 15 * time.Minute
-
-func coreCallTimeout(path string) time.Duration {
-	if d, ok := coreCallMax[path]; ok {
-		return d
+func (c *CoreClient) Raw(method, path string, body []byte) (int, []byte, error) {
+	status, b, seq, err := c.raw(method, path, body)
+	if err == nil && seq > 0 && c.onLineSeq != nil {
+		c.onLineSeq(seq)
 	}
-	return coreCallDefault
+	return status, b, err
 }
 
-func (c *CoreClient) Raw(method, path string, body []byte) (int, []byte, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), coreCallTimeout(path))
-	defer cancel()
-	req, _ := http.NewRequestWithContext(ctx, method, strings.TrimSuffix(c.base, "/")+path, bytes.NewReader(body))
+// rawNoHook: Raw without the line-state hook (the hook's own calls)
+func (c *CoreClient) rawNoHook(method, path string, body []byte) (int, []byte, error) {
+	status, b, _, err := c.raw(method, path, body)
+	return status, b, err
+}
+
+func (c *CoreClient) raw(method, path string, body []byte) (int, []byte, int, error) {
+	req, _ := http.NewRequest(method, strings.TrimSuffix(c.base, "/")+path, bytes.NewReader(body))
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return 0, nil, err
+		return 0, nil, 0, err
 	}
 	defer resp.Body.Close()
 	b, err := io.ReadAll(io.LimitReader(resp.Body, 64<<20))
-	return resp.StatusCode, b, err
+	seq, _ := strconv.Atoi(resp.Header.Get(lineSeqHeader))
+	return resp.StatusCode, b, seq, err
 }
 
 // Call: POST a JSON body, expect a signed document

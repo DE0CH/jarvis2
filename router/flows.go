@@ -20,9 +20,10 @@ import (
 )
 
 type Router struct {
-	cfg  Config
-	st   *State
-	core *CoreClient
+	cfg   Config
+	st    *State
+	core  *CoreClient
+	lines *lineKeeper // linestate.go
 
 	cmdMu    sync.Mutex
 	commands map[string]chan string     // machine id → pending commands (snapshot)
@@ -48,7 +49,12 @@ type Router struct {
 }
 
 func NewRouter(cfg Config, st *State, core *CoreClient, policy Policy) *Router {
-	return &Router{cfg: cfg, st: st, core: core, policy: policy, setupSeen: map[string]time.Time{}, commands: map[string]chan string{}, execs: map[string]chan execItem{}, results: map[string]chan ExecResult{}, snapped: map[string]chan struct{}{}}
+	r := &Router{cfg: cfg, st: st, core: core, policy: policy, setupSeen: map[string]time.Time{}, commands: map[string]chan string{}, execs: map[string]chan execItem{}, results: map[string]chan ExecResult{}, snapped: map[string]chan struct{}{}}
+	if core != nil { // linestate.go: the core's line state, kept as its answers name a new one
+		r.lines = newLineKeeper(r.lineStatePath(), core)
+		core.onLineSeq = r.lines.seen
+	}
+	return r
 }
 
 func randID() string {
@@ -228,32 +234,18 @@ func flyMachineLimit(err error) bool {
 }
 
 // killUntilDestroyed: the core's kill (one Fly destroy) again until Fly reports the machine destroyed (409 before).
-// A core from before R2 waited inside its kill. A kill that failed on the way (Fly's API timing out, 502, or the core
-// not answering) is tried again too, a few times over a few minutes: on 2026-10-15 one Fly destroy timeout left
-// "Draft reply to image" failed for good (DECISIONS 170). A refusal (403, 400) is final.
+// A core from before R2 waited inside its kill.
 func (r *Router) killUntilDestroyed(in map[string]any) (*Doc, error) {
 	deadline := time.Now().Add(killMax)
-	transient := 0
 	for {
 		d, err := r.core.Call("/kill", in)
 		var ce *CoreError
-		switch {
-		case err == nil:
-			return d, nil
-		case errors.As(err, &ce) && ce.Status == 409 && time.Now().Before(deadline):
-			time.Sleep(killStep)
-		case (!errors.As(err, &ce) || ce.Status >= 500) && transient < killTransientTries:
-			transient++
-			log.Printf("kill %v: %v; trying again (%d of %d)", in["machine"], err, transient, killTransientTries)
-			time.Sleep(killTransientStep)
-		default:
+		if err == nil || !errors.As(err, &ce) || ce.Status != 409 || time.Now().After(deadline) {
 			return d, err
 		}
+		time.Sleep(killStep)
 	}
 }
-
-// killTransientTries / killTransientStep: how often and how far apart a kill that failed on the way is tried again
-var killTransientTries, killTransientStep = 4, 30 * time.Second
 
 // startAndCertify: an approval → a machine on the approved image → its cert. The core's start is open (it
 // can't lead to a secret); certify binds the approval to that one machine.
@@ -836,16 +828,14 @@ func (r *Router) Resume(id string, upgrade bool) error {
 			s = *x
 		}
 	})
-	// paused, or failed. With no machine (a start or certify that failed, or a start cut off by a router restart) the
-	// line is where its last pause left it (the core marks a predecessor used only at certify). With one (a pause or
-	// destroy whose kill failed, or one cut off) the pause is finished first: the machine's final snapshot (the same
-	// one again if it took it already), the kill, then the resume, all on this one tap (DECISIONS 170).
-	if s.ID == "" || !(s.State == "paused" || s.State == "failed") {
+	// paused, or failed with no machine (a start or certify that failed, or a start cut off by a router restart): the
+	// line is where its last pause left it (the core marks a predecessor used only at certify), so Resume brings it back
+	if s.ID == "" || !(s.State == "paused" || s.State == "failed" && s.MachineID == "") {
 		unlock()
-		return fmt.Errorf("session %s isn't paused or failed", id)
+		return fmt.Errorf("session %s isn't paused (or failed with no machine)", id)
 	}
 	if s.Cert == nil {
-		if s.State != "failed" || s.MachineID != "" {
+		if s.State != "failed" {
 			unlock()
 			return fmt.Errorf("session %s has no line to resume", id)
 		}
@@ -855,19 +845,6 @@ func (r *Router) Resume(id string, upgrade bool) error {
 	go func() {
 		defer unlock()
 		defer r.settleFollowups(id) // apicalls.go: a call waiting on this resume learns nothing more comes of it
-		if s.MachineID != "" {
-			r.setWaiting(id, "finishing the pause first")
-			if !r.snapshotAndKill(id, s.MachineID) { // archive.go: failed again with the kill's error
-				r.setWaiting(id, "")
-				return
-			}
-			r.setWaiting(id, "")
-			r.st.Do(func(d *persisted) {
-				if x := d.Sessions[id]; x != nil {
-					s = *x
-				}
-			})
-		}
 		// the same image: the dead-machine rule compares the cert's own image string (what Fly reported, repo@digest);
 		// a phone approval names CI's pinned ref for that digest (ref:sha-…@digest), whose signature the phone checks
 		own := certImage(s.Cert, s.Image)
@@ -1045,7 +1022,7 @@ func (r *Router) destroy(id string, o destroyOpts) error {
 	r.setState(id, "destroying", "")
 	go func() {
 		defer unlock()
-		if s.MachineID != "" && !r.snapshotAndKillFor(id, s.MachineID, true, force) {
+		if s.MachineID != "" && !r.snapshotAndKill(id, s.MachineID) {
 			return
 		}
 		var changes map[string]any
@@ -1130,12 +1107,6 @@ func (r *Router) AddStore(machine, store string) error {
 
 // AddStoreFrom: the add-store approval, with its caller and the caller's explanation (inbox.go)
 func (r *Router) AddStoreFrom(machine, store string, o Origin, explanation, batch string) error {
-	_, err := r.addStoreApproval(machine, store, o, explanation, batch)
-	return err
-}
-
-// addStoreApproval: AddStoreFrom → the approval's id
-func (r *Router) addStoreApproval(machine, store string, o Origin, explanation, batch string) (string, error) {
 	var s Session
 	r.st.Do(func(d *persisted) {
 		if x := d.Sessions[d.Machines[machine]]; x != nil {
@@ -1143,20 +1114,19 @@ func (r *Router) addStoreApproval(machine, store string, o Origin, explanation, 
 		}
 	})
 	if s.ID == "" || s.MachineID != machine || s.Cert == nil {
-		return "", fmt.Errorf("this machine isn't a running session")
+		return fmt.Errorf("this machine isn't a running session")
 	}
 	stores, err := r.withHarnessStores(append(append([]string{}, s.Stores...), store), nil)
 	if err != nil {
-		return "", err
+		return err
 	}
 	ch, err := r.succession(s.Cert, machine, stores, s.Harness, certMode(s.Cert), "", lineConfig(&s), "")
 	if err != nil {
-		return "", err
+		return err
 	}
-	a := &Approval{Kind: "add-store", Session: s.ID, Machine: machine, Label: s.Label, Challenge: ch,
-		Options: map[string]string{"store": store}, Origin: &o, Explanation: explanation, Batch: batch}
-	r.addApproval(a)
-	return a.ID, nil
+	r.addApproval(&Approval{Kind: "add-store", Session: s.ID, Machine: machine, Label: s.Label, Challenge: ch,
+		Options: map[string]string{"store": store}, Origin: &o, Explanation: explanation, Batch: batch})
+	return nil
 }
 
 // ---- downgrade in place (asked by the machine) -------------------------------------------------------------

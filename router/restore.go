@@ -55,9 +55,6 @@ func (r *Router) RestoreRecord(recordID, requestID string) (string, error) {
 	if rec.Archive.Signer == "" {
 		return "", errHandIndex // records.go
 	}
-	if rec.Archive.Unverified != "" {
-		return "", fmt.Errorf("this archive's snapshot is %s: it is kept on the Storage Box, but restoring it waits for the core release that carries old lines", rec.Archive.Unverified)
-	}
 	box := r.box()
 	if box == nil {
 		return "", errNoStorageBox
@@ -88,16 +85,26 @@ func (r *Router) RestoreRecord(recordID, requestID string) (string, error) {
 			return fail(fmt.Errorf("the archive has no jarvis2/%s", f))
 		}
 	}
+	// the master key's claim of the core that signed the cert (archive.go writes it): an archive from an earlier core
+	// restores through it (core continuity); absent in archives from before the router kept claims
+	box.Download(rec.Archive.Dir+"/jarvis2/core-cert.json", filepath.Join(dir, "core-cert.json"))
 	cert, err := r.checkRestoreFiles(dir)
 	if err != nil {
 		return fail(err)
+	}
+	var coreCert *MasterCert
+	if b, err := os.ReadFile(filepath.Join(dir, "core-cert.json")); err == nil {
+		var mc MasterCert
+		if json.Unmarshal(b, &mc) == nil && mc.Statement != "" {
+			coreCert = &mc
+		}
 	}
 	label := rec.Label
 	if label == "" {
 		label = rec.Archive.Title
 	}
 	s := &Session{ID: sid, State: "approval", Created: time.Now().UTC(), Label: label, Model: rec.Model, PermissionMode: rec.PermissionMode,
-		Size: rec.Size, Harness: rec.Harness, Stores: stores, Repos: rec.Repos, RequestID: requestID, RestoreFrom: recordID, RestoreCert: cert}
+		Size: rec.Size, Harness: rec.Harness, Stores: stores, Repos: rec.Repos, RequestID: requestID, RestoreFrom: recordID, RestoreCert: cert, RestoreCoreCert: coreCert}
 	r.st.Do(func(d *persisted) { d.Sessions[sid] = s })
 	config, err := r.sessionConfig(s) // vouch.go: names the snapshot this line restores (machine + sha256)
 	if err != nil {
@@ -140,8 +147,9 @@ func (r *Router) checkRestoreFiles(dir string) (*Doc, error) {
 	if cert.Decode(&c) != nil || c.Kind != "succession-cert" || c.Machine == nil {
 		return nil, errors.New("the archive's cert.json isn't a succession cert")
 	}
-	if key, err := r.core.Key(); err == nil && key["signingKey"] != "" && !verifyP256(key["signingKey"], []byte(cert.Payload), cert.Sig) {
-		return nil, errors.New("the archive's cert isn't signed by this core (was the core recovered since?)")
+	if key, err := r.core.Key(); err == nil && key["signingKey"] != "" && !verifyP256(key["signingKey"], []byte(cert.Payload), cert.Sig) &&
+		!r.earlierCoreSigned(dir, &cert) {
+		return nil, errors.New("the archive's cert isn't signed by this core, nor by an earlier core the master key claimed")
 	}
 	sig, err := os.ReadFile(filepath.Join(dir, "snapshot.sig"))
 	if err != nil {
@@ -225,4 +233,52 @@ func (r *Router) markRestored(recordID, sid string) {
 			log.Printf("record %s: restored by %s, not noted in the index: %v", recordID, sid, err)
 		}
 	}
+}
+
+// earlierCoreSigned: the archive's core-cert.json is the master key's claim (the running core's master) of a core whose
+// key signed the cert — the router's early check of what machine/restore.go checks again (core continuity)
+func (r *Router) earlierCoreSigned(dir string, cert *Doc) bool {
+	b, err := os.ReadFile(filepath.Join(dir, "core-cert.json"))
+	if err != nil {
+		return false
+	}
+	var mc MasterCert
+	if json.Unmarshal(b, &mc) != nil {
+		return false
+	}
+	st := r.coreStateDoc()
+	var cs struct {
+		Master string `json:"master"`
+	}
+	if st == nil || st.Decode(&cs) != nil || cs.Master == "" || !verifyP256(cs.Master, []byte(mc.Statement), mc.MasterSig) {
+		return false
+	}
+	var claim struct {
+		Kind     string                       `json:"kind"`
+		Master   string                       `json:"master"`
+		Core     struct{ SigningKey string }  `json:"core"`
+		Identity *struct{ SigningKey string } `json:"identity"`
+	}
+	if json.Unmarshal([]byte(mc.Statement), &claim) != nil || claim.Kind != "claim" || claim.Master != cs.Master {
+		return false
+	}
+	if verifyP256(claim.Core.SigningKey, []byte(cert.Payload), cert.Sig) {
+		return true
+	}
+	return claim.Identity != nil && verifyP256(claim.Identity.SigningKey, []byte(cert.Payload), cert.Sig)
+}
+
+// coreStateDoc: the running core's signed state (its master key), as /identity answers it
+func (r *Router) coreStateDoc() *Doc {
+	status, b, err := r.core.Raw("GET", "/identity", nil)
+	if err != nil || status != 200 {
+		return nil
+	}
+	var id struct {
+		State *Doc `json:"state"`
+	}
+	if json.Unmarshal(b, &id) != nil {
+		return nil
+	}
+	return id.State
 }

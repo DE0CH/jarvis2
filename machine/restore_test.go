@@ -6,6 +6,7 @@ import (
 	"compress/gzip"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -127,5 +128,55 @@ func TestSnapshotCarriesHarnessState(t *testing.T) {
 		if !kept && err == nil {
 			t.Errorf("%s travelled in the snapshot", p)
 		}
+	}
+}
+
+// an archive from an earlier core restores through the master key's claim of that core (core continuity)
+func TestARestoreFromAnEarlierCoreGoesThroughTheMastersClaim(t *testing.T) {
+	now, earlier, master, other := newKey(), newKey(), newKey(), newKey()
+	old := Cert{Kind: "succession-cert", Machine: &Machine{ID: "old", SigningKey: newKey().pub()}, Line: "old"}
+	certDoc := earlier.doc(old)
+	state := now.doc(map[string]string{"kind": "core-state", "master": master.pub()})
+	claim := func(k tkey, v map[string]any) *struct {
+		Statement string `json:"statement"`
+		MasterSig string `json:"masterSig"`
+	} {
+		b, _ := json.Marshal(v)
+		s, _ := sign(k.k, b)
+		return &struct {
+			Statement string `json:"statement"`
+			MasterSig string `json:"masterSig"`
+		}{string(b), s}
+	}
+	rc := restoreCertDocs{Cert: certDoc, CoreState: state,
+		CoreCert: claim(master, map[string]any{"kind": "claim", "master": master.pub(), "core": map[string]string{"signingKey": earlier.pub()}})}
+	if k, err := restoreSigner(now.pub(), rc); err != nil || k != earlier.pub() {
+		t.Fatalf("%q %v", k, err)
+	}
+	// a seeded claim names the derived key as its identity
+	rc.CoreCert = claim(master, map[string]any{"kind": "claim", "master": master.pub(), "core": map[string]string{"signingKey": other.pub()},
+		"identity": map[string]string{"signingKey": earlier.pub()}})
+	if k, err := restoreSigner(now.pub(), rc); err != nil || k != earlier.pub() {
+		t.Fatalf("identity: %q %v", k, err)
+	}
+	// a claim another key signed, a state another core signed, a claim naming another core: refused
+	rc.CoreCert = claim(other, map[string]any{"kind": "claim", "master": master.pub(), "core": map[string]string{"signingKey": earlier.pub()}})
+	if _, err := restoreSigner(now.pub(), rc); err == nil {
+		t.Fatal("a claim the master didn't sign")
+	}
+	rc.CoreCert = claim(master, map[string]any{"kind": "claim", "master": master.pub(), "core": map[string]string{"signingKey": earlier.pub()}})
+	rc.CoreState = other.doc(map[string]string{"kind": "core-state", "master": master.pub()})
+	if _, err := restoreSigner(now.pub(), rc); err == nil {
+		t.Fatal("a state this machine's core didn't sign")
+	}
+	rc.CoreState = state
+	rc.CoreCert = claim(master, map[string]any{"kind": "claim", "master": master.pub(), "core": map[string]string{"signingKey": other.pub()}})
+	if _, err := restoreSigner(now.pub(), rc); err == nil {
+		t.Fatal("a claim of another core")
+	}
+	// the running core's own cert needs nothing else
+	rc.Cert = now.doc(old)
+	if k, err := restoreSigner(now.pub(), restoreCertDocs{Cert: rc.Cert}); err != nil || k != now.pub() {
+		t.Fatal(err)
 	}
 }

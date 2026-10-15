@@ -146,12 +146,10 @@ func (r *Router) machinesView(ms []flyMachineDetail, now time.Time) []machineVie
 // orphanRefusal: why the machine may not be destroyed from the Machines view, or "" when it may. Called with
 // the state held.
 func orphanRefusal(d *persisted, m flyMachineDetail, now time.Time) string {
-	sid, mapped := d.Machines[m.ID]
-	if mapped && d.Sessions[sid] != nil {
+	if sid, ok := d.Machines[m.ID]; ok {
 		return "it belongs to session " + sid + ": pause or destroy the session"
 	}
-	// a destroyed session's machine whose kill failed (Destroy anyway, flows.go): an orphan like any other
-	if !mapped && (d.Started[m.ID] != nil || d.Certs[m.ID] != nil) {
+	if d.Started[m.ID] != nil || d.Certs[m.ID] != nil {
 		return "the router started it for a session"
 	}
 	if t, err := time.Parse(time.RFC3339, m.CreatedAt); err != nil || now.Sub(t) < orphanMinAge {

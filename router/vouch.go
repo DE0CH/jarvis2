@@ -601,16 +601,21 @@ func (r *Router) registerVouch(app appRoute, m machineRoute) {
 	})
 	m("GET /m/restore-cert", func(w http.ResponseWriter, req *http.Request, machine string, _ []byte) {
 		var cert *Doc
+		var cc *MasterCert
 		r.st.Do(func(d *persisted) {
 			if s := d.Sessions[d.Machines[machine]]; s != nil && s.MachineID == machine {
-				cert = s.RestoreCert
+				cert, cc = s.RestoreCert, s.RestoreCoreCert
 			}
 		})
 		if cert == nil {
 			writeJSON(w, 404, map[string]string{"error": "no restore for this session"})
 			return
 		}
-		writeJSON(w, 200, map[string]any{"cert": cert})
+		out := map[string]any{"cert": cert}
+		if cc != nil { // machine/restore.go: an earlier core's cert, through the master key's claim of it
+			out["coreCert"], out["coreState"] = cc, r.coreStateDoc()
+		}
+		writeJSON(w, 200, out)
 	})
 	m("POST /m/delivery-result", func(w http.ResponseWriter, req *http.Request, machine string, body []byte) {
 		var res DeliveryResult

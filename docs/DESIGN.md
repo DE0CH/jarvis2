@@ -31,8 +31,9 @@ changes nobody can see — no single compromised component is enough.
 ## Parts
 
 - **Core (secrets controller):** the only holder of plaintext key stores. Runs in its own pod on the box with
-  minimal network surface. Generates its own key pairs (signing, agreement) when it starts; their private
-  halves never leave it. Holds the Fly API token in memory for its whole life (it must start machines
+  minimal network surface. Starts with fresh boot key pairs (signing, agreement), which only receive its claim; a
+  claim from the app brings the seed the master key derives, and from then on the core's keys are the ones that seed
+  derives, the same for every Recover with the same kit ("Core continuity"); their private halves never leave it. Holds the Fly API token in memory for its whole life (it must start machines
   unattended, e.g. a scheduled resume); the token comes from the special store `core`, never goes to a
   session and is never locked.
 - **Router/manager (outside the core):** chains core primitives into useful actions and exposes them as an
@@ -126,8 +127,9 @@ its **newest** cert. What
 it **trusts** about others (the phone's and the master's public keys, the box key's signature) needs no
 secrecy; what it uses to **prove itself** (its private keys, the Fly token) never leaves it.
 
-**Restart = a new, empty core,** set up again from the iPhone (Reset or Recover). Nothing is reloaded from the
-box's disk.
+**Restart = an empty core,** set up again from the iPhone (Reset or Recover). Nothing is reloaded from the
+box's disk. A Recover with the same kit brings back the same core (its keys from the master key's seed, its line state
+from the router): its sessions go on as if nothing happened ("Core continuity").
 
 ## Writing stores and their backups
 
@@ -233,7 +235,10 @@ page says only what Deyao acts on; errors are one plain sentence with the detail
   statement and a bundle of those keys (format `keys`: every store's name, every key, the `core` store's Fly token on
   its own, the names that aren't sensitive, each deploy-key store's repo), sealed to the core. The plaintext lives only on the phone, well inside a 10-minute cap; the core never sees it.
 
-Either way the app pins the core's keys and its own master public key, then forgets the master private key. From
+With a core that takes it (`continuity` in its identity) both paths also send the seed the master key derives, and
+Recover the line state the router kept ("Core continuity"); Recover keeps the phone's keys. Either way the app pins
+the core's keys (with a seed: the derived ones, checked after the claim) and its own master public key, then forgets
+the master private key. From
 then on it refuses a core set up with another master key, or for another phone. Stores are locked; Deyao unlocks
 them as usual.
 
@@ -247,6 +252,69 @@ It can withhold a backup or serve an older signed version (the bucket is version
 one: each is sealed to the master key and signed by its writer. The bucket's credential is the router's own (a
 Hetzner S3 credential narrowed by bucket policies to reads of the backup bucket and new versions under `keys/`), set
 once with the box.
+
+## Core continuity (Deyao, 2026-10-15)
+
+"A core restart + Recover must be invisible to sessions": on 2026-10-15 a hard reset of the box and then a core
+resources change each forced a Recover, and each Recover made a core with new random keys, so every running session's
+machine (which trusts the key Fly's config fixed at its creation) rejected the new core's signatures, its certs meant
+nothing to the new core, paused sessions couldn't resume, archives couldn't be restored and the deploy-key stores were
+gone. Deyao: "even the current design allows my iPhone to sign arbitrary certs": the master key, his kit, is the root
+of trust and may vouch for the core.
+
+**The same kit, the same core.** The app derives a seed from the kit's master private key (HKDF, info
+`jarvis2/core-seed`) and sends it in the claim bundle, sealed to the empty core's boot keys; the master key signs the
+bundle's hash and names the keys the seed derives in the statement (`identity`), so a core and an app that derive
+differently refuse each other. From the seed the core derives its signing key, its share K of every store key, the
+carry key, the nonce key and the line-state key (`core/continuity.go`). Every Recover with that kit therefore makes the
+same core: `JARVIS2_CORE_KEY` in every machine's Fly config stays right (sessions on any image, the machine code is
+unchanged), every cert, carry blob, input-log entry and store key P + K stays valid, the app's and the setup session's
+pins stay. The box key still vouches for the core's identity (it signs the derived keys at the claim); a new box (new
+host, new box key in `keys/box.pub`) changes nothing here, since the keys come from the kit, not from the box.
+
+**The line state.** Keeping the key is safe only if the core also keeps what makes its certs single-use: each
+machine's newest cert (an older one continues nothing, R1), the machines it created and initialised with their current
+signing keys, the killed and used sets (a line can't fork, a burnt line stays burnt), the spent approvals, the input
+log's head and length, and the stores as it holds them (each key wrapped to P + K, so no plaintext). After every call
+that changes it the core seals it under the line-state key and signs a head `{seq, sha256}`; every answer names the
+newest `seq` (`X-Line-Seq`) and the router fetches and keeps the newest before it passes the answer on
+(`router/linestate.go`: its volume at once, the backup bucket at most every 5 minutes and at its drain, so a router or
+box that comes back without its volume still has it). At a Recover the app reads it through the router, checks the head
+against the derived key, its hash, and that its `seq` is at least the highest the app itself has seen in the core's
+signed state, and puts it into the bundle; the core restores it. A Recover takes the deploy-key stores from it (they
+have no backup; only when wrapped for the same phone key, so the app keeps its Secure Enclave keys across a Recover);
+every other store comes from the backups, as before.
+
+**What the router can still do.** It can't read or forge a line state (sealed and signed by the core), so it can't
+add a line, a cert or a store. It can withhold it: the lines then end, exactly as before continuity (the sessions are
+marked `oldCore` for want of their line state, a paused one is destroyed and restorable from Previous). It can hand an
+older one: the app refuses one older than the newest number it has seen, so the most it can roll back is what happened
+since the app last read the core's state; rolled back, a line's newest cert, kill, burn or downgrade is forgotten, which
+can let a line continue from an earlier point it really had (an earlier downgrade undone, a burnt line resumed, a
+paused line resumed twice): always a machine on a CI-signed image with the stores Deyao approved for that line at some
+point, never a store to a line that never had it, and never a plaintext outside the core.
+
+**At most one core with these keys serves (blue/green, Deyao 2026-10-15).** Two live cores with one identity would let
+an untrusted router fork a line or answer one approval twice. So the cores hand over themselves: on the router's call
+the serving core seals a FINAL line state (`POST /handoff`) and from then on serves nothing; a core Recovered with
+`standby` in its master-signed statement serves nothing until `POST /takeover` gives it a final state sealed by the same
+keys whose `seq` is at least the one it was Recovered with, and takes the lines and every store from it (they are newer
+than any backup the Recover read). A Recover whose line state is already final serves at once. A Recover that is
+neither (after a crash, when the old core is gone and sealed nothing final) serves at once from the newest state the
+router kept: there the guarantee is that the old core is gone, which the app can't check; the app's standby option for
+a planned move comes with the blue/green flow.
+
+**Archives from any earlier core.** A restore checks the archived cert against the machine's core key, or, for an
+earlier core's cert, through the master key: the running core's signed state names its master, the master signed the
+claim naming the earlier core (the archive's `core-cert.json`; a seeded claim names its derived key as `identity`), and
+that core's key signed the cert (`machine/restore.go`, `router/restore.go`).
+
+**A kill the core can't check** (a machine an earlier core initialised) names no snapshot instead of refusing, so
+destroying an earlier core's session never fails on it.
+
+**Sessions running at the release of continuity** were made by a core with random keys, which no later core can sign
+for: they end once more, as before. Every session started after the first Recover on the new app keeps going through
+every later restart, Recover and box move.
 
 ## The box
 
@@ -344,8 +412,10 @@ by the core, approved by the phone; the box alone can never make one, and no AI 
   with an SSH host alias that uses only that key and pins GitHub's host keys, and git rewrites that repo's URLs to
   the alias, so clone, pull and push work with no setup, and no other repo is reachable with it.
 - **The router** keeps the repo list, adding or removing an entry only from the core's answer; it holds no token
-  that can push or manage keys. The repos' stores have no backup (the core can't write one): after a Recover each
-  repo is made again with one Face ID, which also deletes the old key on GitHub.
+  that can push or manage keys. The repos' stores have no backup (the core can't write one); they travel in the
+  core's line state, wrapped to P + K as the core holds them, so a Recover with the same kit on the same phone brings
+  them back ("Core continuity"). After a Recover on another phone (new phone keys, so P + K changed) each repo is made
+  again with one Face ID, which also deletes the old key on GitHub.
 
 ## Flows (router, outside the core)
 
@@ -408,14 +478,16 @@ unattended resumes (a wakeup, a cron, a task run with nobody there) he chose: **
 - **The carry key** is 32 random bytes the core makes when it starts, in memory only: sealed to the running core
   and nothing else — no backup, no setup step, no new trust path. Nothing else (the router, the Storage Box, a
   machine, another session, another core) can open or forge a blob.
-- **A new core destroys the earlier core's sessions** (Deyao, 2026-10-11: "They are just automatically destroyed.
-  Core restart is infrequent enough. No need to engineer around it."). A new core (restart, `core/` deploy, box
-  rebuild; empty, Reset or Recovered) can open none of the earlier blobs, and the earlier lines can't continue on it
-  (their certs are the earlier core's; its killed/used sets are gone). The router watches the core's identity
-  (`router/corechange.go`, every 30 s; the key must sign its own state document): when it changes, every session
-  with a line is marked `oldCore`, and each is destroyed the normal way once it is paused — archived as a record in
-  Previous, its snapshots and blob deleted, its machine and Discord channel cleaned up (a running one goes when it next
-  pauses). Restoring one from Previous is an ordinary new line approved on the phone.
+- **A Recovered core keeps the sessions; only another core destroys them** (Deyao, 2026-10-11: "They are just
+  automatically destroyed"; superseded 2026-10-15 by "Core continuity": a restart + Recover must be invisible to
+  sessions). The carry key is derived from the master key's seed, so a Recover with the same kit opens every earlier
+  blob, and the line state brings back the killed/used sets. Only a core with OTHER keys (a Reset, a claim from an app
+  without continuity, a core from before it) can open none of the earlier blobs or continue their lines. The router
+  watches the core's identity (`router/corechange.go`, every 30 s, once the core is set up: an empty core shows only its
+  boot keys); when it changes, every session whose cert the new key didn't sign is marked `oldCore` and destroyed the
+  normal way once it is paused — archived as a record in Previous, its snapshots and blob deleted, its machine and
+  Discord channel cleaned up (a running one goes when it next pauses). Restoring one from Previous is an ordinary new
+  line approved on the phone, and works from any earlier core the master key claimed (below).
 - **What still needs the phone:** a new line (Start, a restore, a task's first line), a store added, a changed image
   or permission mode on resume — as before. A paused session whose blob is gone (lost by the router, a session
   paused under a core that predates carried secrets) waits on its locked store as before ("Waiting for store X",
@@ -560,7 +632,8 @@ signature safe stays the same:
   session's cert (title and first prompt from a core that vouches, its line, machine and sensitivity); the router's
   label shows only as unverified. The app remembers each session id's line and refuses a cert naming another.
 - **Face ID for every signature**: the phone's two Secure Enclave keys are bound to the faces enrolled now
-  (`.biometryCurrentSet`) and made fresh at every Reset/Recover; a long-lived device key (Face ID or passcode) countersigns
+  (`.biometryCurrentSet`) and made fresh at every Reset (a Recover keeps them while they work, so the certs' phone key, the
+store key P + K and the deploy-key stores stay valid: "Core continuity"); a long-lived device key (Face ID or passcode) countersigns
   claims and wipes, so the setup session can tell this iPhone's claims from the router's.
 - **Nothing the router says decides what is signed**: the stores a harness brings are pinned in the app from git
   (`policy/stores.json`); Start refuses a store that wasn't picked and isn't the harness's, and a sensitive one it didn't
@@ -596,7 +669,10 @@ signature safe stays the same:
   sealed: to a machine's key (its pull), or under the core's carry key, bound to that machine (its carried secrets). The Fly token is the one
   secret the core keeps in memory for its whole life.
 - A deploy key is made or deleted only on a phone-approved request; the core uses the GitHub token for nothing else.
-- A session's line can't fork: each predecessor is used at most once (succession and burn both consume it).
+- A session's line can't fork: each predecessor is used at most once (succession and burn both consume it), also
+  across a restart + Recover (the line state), except for what an older line state the router hands back at a Recover
+  forgets ("Core continuity": bounded by the newest number the app has seen).
+- At most one core with one identity serves at a time in a planned move (handoff / standby / takeover).
 - A bug or compromise outside the core (router, Jarvis, the box) can block or fail actions, never move a store
   to a machine not approved for it.
 - A machine that holds secrets runs only the approved image's own entry point, and takes at its entry points only

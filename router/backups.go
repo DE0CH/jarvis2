@@ -176,7 +176,7 @@ func (b *backupBucket) all() ([]backupObject, error) {
 			return nil, err
 		}
 		for _, k := range keys {
-			if !strings.HasSuffix(k, ".json") {
+			if !strings.HasSuffix(k, ".json") || isLineStateObject(k) { // linestate.go: the router's own object, no backup
 				continue
 			}
 			body, err := b.get(k, nil)

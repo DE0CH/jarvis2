@@ -11,6 +11,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strconv"
 	"time"
 )
 
@@ -32,6 +33,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("BOX_KEY_FILE: %v", err)
 	}
+	c.box = box
 	k := c.Key()
 	if c.BoxSig, err = box.Sign([]byte(IdentityText(k["signingKey"], k["agreementKey"]))); err != nil {
 		log.Fatal(err)
@@ -49,6 +51,12 @@ func Handler(c *Core) http.Handler {
 	type body = map[string]json.RawMessage
 	h := func(pattern string, fn func(r *http.Request, b body) (any, error)) {
 		mux.HandleFunc(pattern, func(w http.ResponseWriter, r *http.Request) {
+			if m := c.Mode(); m != modeServing && !allowedIn(m, pattern) {
+				// continuity.go: a core that handed off, or stands by for a takeover, serves nothing else
+				writeErr(c, w, fail(409, "this core is %s: it serves nothing (%s)", m, map[string]string{
+					modeHandedOff: "it handed off to the core Recovered after it", modeStandby: "it waits for the serving core's final line state"}[m]))
+				return
+			}
 			raw, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 4<<20))
 			if err != nil {
 				writeErr(c, w, fail(400, "body: %v", err))
@@ -62,6 +70,10 @@ func Handler(c *Core) http.Handler {
 				}
 			}
 			out, err := fn(r, b)
+			c.syncLine() // continuity.go: a changed line state gets its next number before the answer leaves
+			if n := c.LineSeq(); n > 0 {
+				w.Header().Set(lineSeqHeader, strconv.Itoa(n))
+			}
 			if err != nil {
 				writeErr(c, w, err)
 				return
@@ -103,7 +115,16 @@ func Handler(c *Core) http.Handler {
 		}
 		return c.Claim(str(b, "statement"), str(b, "masterSig"), s)
 	})
-	h("POST /store-key", func(r *http.Request, b body) (any, error) { return c.StoreKey(str(b, "phone")) })
+	h("POST /store-key", func(r *http.Request, b body) (any, error) { return c.StoreKey(str(b, "phone"), str(b, "core")) })
+	h("GET /line-state", func(r *http.Request, b body) (any, error) { return c.LineState() })
+	h("POST /handoff", func(r *http.Request, b body) (any, error) { return c.Handoff() })
+	h("POST /takeover", func(r *http.Request, b body) (any, error) {
+		var d LineStateDoc
+		if err := json.Unmarshal(b["lineState"], &d); err != nil {
+			return nil, fail(400, "lineState: {head, sealed}")
+		}
+		return c.Takeover(&d)
+	})
 	h("POST /wipe", func(r *http.Request, b body) (any, error) { return c.Wipe(str(b, "statement"), str(b, "masterSig")) })
 	h("POST /fly-token", func(r *http.Request, b body) (any, error) {
 		s, err := sealed(b, "sealed")

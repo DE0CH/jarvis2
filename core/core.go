@@ -151,9 +151,10 @@ type Core struct {
 	signer    *Signer
 	agreement *ecdh.PrivateKey // the core's share K of every store's key
 	nonceKey  []byte
-	MasterKey string // the master public key it was claimed with ("" = empty, waiting for Reset or Recover)
-	BoxSig    string // the box key's signature over this core's identity
-	exit      func() // Wipe ends the process (main: os.Exit; tests: a stub)
+	MasterKey string  // the master public key it was claimed with ("" = empty, waiting for Reset or Recover)
+	BoxSig    string  // the box key's signature over this core's identity
+	box       *Signer // the box key (main), to vouch for the derived keys a claim brings (continuity.go)
+	exit      func()  // Wipe ends the process (main: os.Exit; tests: a stub)
 
 	phoneSigning, phoneAgreement string
 
@@ -192,6 +193,17 @@ type Core struct {
 	restores   map[string]*pendingRestore
 
 	carryKey []byte // carry.go: the AES key of the sessions' carried secrets; made at start, never leaves the core
+
+	// continuity.go: set when a claim brought the seed (the keys above are then the derived ones): the line-state key,
+	// the newest line state's seq, the hash of what it holds, and the sealed, signed document
+	lineKey  []byte
+	lineSeq  int
+	lineHash string
+	lineDoc  *LineStateDoc
+	// mode: serving (""), standby (Recovered to take over from a core that still serves) or handed-off; standbyFrom:
+	// the line state seq a standing-by core was Recovered with (a takeover brings one at least as new)
+	mode        string
+	standbyFrom int
 
 	fly    Fly
 	github GitHub // deploy keys only, with the token the phone unlocks for that one call
@@ -279,7 +291,10 @@ func IdentityText(signingKey, agreementKey string) string {
 func (c *Core) Identity() (map[string]any, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	st := map[string]any{"kind": "core-state", "master": c.MasterKey, "phone": nil}
+	// lineSeq: the newest line state's number (continuity.go), which the app remembers as the least a Recover may bring
+	// back; derived: the keys come from the master key's seed, so a Recover with the same kit brings this core back
+	st := map[string]any{"kind": "core-state", "master": c.MasterKey, "phone": nil, "lineSeq": c.lineSeq, "derived": c.lineKey != nil,
+		"serving": map[string]string{modeServing: "serving", modeStandby: "standby", modeHandedOff: "handed-off"}[c.mode]}
 	if c.phoneSigning != "" {
 		st["phone"] = map[string]string{"signingKey": c.phoneSigning, "agreementKey": c.phoneAgreement}
 	}
@@ -289,7 +304,8 @@ func (c *Core) Identity() (map[string]any, error) {
 	}
 	k := c.Key()
 	// bundle: the claim bundle format this core takes (keys.go: stores of keys), so the app wraps a Recover for it
-	return map[string]any{"signingKey": k["signingKey"], "agreementKey": k["agreementKey"], "boxSig": c.BoxSig, "state": d, "bundle": "keys"}, nil
+	// continuity: this core takes a claim bundle's coreSeed and lineState (continuity.go)
+	return map[string]any{"signingKey": k["signingKey"], "agreementKey": k["agreementKey"], "boxSig": c.BoxSig, "state": d, "bundle": "keys", "continuity": 1}, nil
 }
 
 // ---- claim: an empty core takes a master key (Reset or Recover, both from the app) ------------------------
@@ -311,6 +327,15 @@ type claimStatement struct {
 		AgreementKey string `json:"agreementKey"`
 	} `json:"phone"`
 	BundleSha256 string `json:"bundleSha256"`
+	// Identity: the keys the bundle's coreSeed derives (continuity.go), named by the app and signed by the master key;
+	// required with a seed, and the core refuses a claim whose seed derives other keys
+	Identity *struct {
+		SigningKey   string `json:"signingKey"`
+		AgreementKey string `json:"agreementKey"`
+	} `json:"identity,omitempty"`
+	// Standby: this core serves nothing after the claim until a takeover gives it the final line state of the core
+	// that still serves with the same keys (continuity.go, blue/green); with a seed only
+	Standby bool `json:"standby,omitempty"`
 }
 
 // FlyStore: the key store holding the core's own Fly token (FLY_API_TOKEN). It arrives in a Recover bundle as
@@ -330,6 +355,10 @@ type claimBundle struct {
 	NotSensitive []string          `json:"notSensitive"`
 	Owners       map[string]string `json:"owners"` // a deploy-key store → its repo
 	FlyToken     string            `json:"flyToken"`
+	// continuity.go: the seed the app derived from the master key (base64, 32 bytes): this core's keys from now on;
+	// and the line state an earlier core from the same seed left (the router kept it), taken back
+	CoreSeed  string        `json:"coreSeed,omitempty"`
+	LineState *LineStateDoc `json:"lineState,omitempty"`
 }
 
 // Claim: once per core, on an empty core. The statement names the master public key, this core and the
@@ -400,6 +429,29 @@ func (c *Core) Claim(statement, masterSig string, bundle Sealed) (SignedDoc, err
 			owners[st] = repo
 		}
 	}
+	var dk *coreKeys
+	var line *lineState
+	if b.CoreSeed != "" {
+		seed, err := b64.DecodeString(b.CoreSeed)
+		if err != nil || len(seed) != 32 {
+			return SignedDoc{}, fail(400, "coreSeed: 32 bytes, base64")
+		}
+		if dk, err = DeriveCoreKeys(seed); err != nil {
+			return SignedDoc{}, fail(400, "coreSeed: %v", err)
+		}
+		if st.Identity == nil || st.Identity.SigningKey != dk.signer.PublicKey() || st.Identity.AgreementKey != b64.EncodeToString(dk.agreement.PublicKey().Bytes()) {
+			return SignedDoc{}, fail(403, "the claim's identity isn't the keys its seed derives")
+		}
+		if b.LineState != nil {
+			ls, err := openLineState(b.LineState, dk)
+			if err != nil {
+				return SignedDoc{}, err
+			}
+			line = &ls
+		}
+	} else if st.Identity != nil || b.LineState != nil || st.Standby {
+		return SignedDoc{}, fail(400, "an identity or a line state comes with a coreSeed")
+	}
 	token := b.FlyToken
 	c.MasterKey = st.Master
 	c.repoOwner = owners
@@ -418,8 +470,34 @@ func (c *Core) Claim(statement, masterSig string, bundle Sealed) (SignedDoc, err
 	if token != "" {
 		c.fly.Configure(token)
 	}
-	c.logf("claimed: master key, phone keys, %d stores, Fly token %v", len(c.stores), token != "")
-	return c.sign(map[string]any{"kind": "claimed", "stores": len(c.stores)})
+	restored := []string{}
+	if dk != nil {
+		// from now on this core is the one the seed derives (the boot keys only received this claim)
+		c.signer, c.agreement, c.carryKey, c.nonceKey, c.lineKey = dk.signer, dk.agreement, dk.carry, dk.nonce, dk.state
+		k := c.Key()
+		if c.box != nil {
+			if sig, err := c.box.Sign([]byte(IdentityText(k["signingKey"], k["agreementKey"]))); err == nil {
+				c.BoxSig = sig
+			}
+		}
+		if line != nil {
+			restored = c.restoreLine(*line, line.Final) // a final state is newer than the backups: taken whole
+		}
+		if st.Standby && (line == nil || !line.Final) {
+			c.mode = modeStandby
+			if line != nil {
+				c.standbyFrom = line.Seq
+			}
+		}
+		c.lineHash, c.lineDoc = "", nil // syncLine seals the state as it is now, numbered on from the one taken back
+	}
+	c.logf("claimed: master key, phone keys, %d stores, Fly token %v, derived keys %v, line state %v (deploy-key stores back: %v)",
+		len(c.stores), token != "", dk != nil, line != nil, restored)
+	out := map[string]any{"kind": "claimed", "stores": len(c.stores), "derived": dk != nil, "standby": c.mode == modeStandby}
+	if line != nil {
+		out["lineSeq"], out["repoStores"] = line.Seq, restored
+	}
+	return c.sign(out)
 }
 
 // Wipe: the current master key (from Deyao's kit) ends this core: it answers, then exits, and Kubernetes
@@ -476,16 +554,28 @@ func (c *Core) SetFlyToken(sealed Sealed) (SignedDoc, error) {
 // StoreKey: the store key C = P + K for the phone agreement key P (open, public points only), signed: what the
 // app wraps a store's data key to (a Recover's blobs, a deploy key's store) without adding points itself (CryptoKit
 // has no point addition). The unwrap side is unchanged: the phone's share of P plus the core's of K.
-func (c *Core) StoreKey(phone string) (SignedDoc, error) {
+// core: another core point K to add instead of this core's own (a Recover wraps to the derived keys the claim is about
+// to give this core: continuity.go); the answer names it.
+func (c *Core) StoreKey(phone, core string) (SignedDoc, error) {
 	pb, err := b64.DecodeString(phone)
 	if err != nil || len(pb) != 65 {
 		return SignedDoc{}, fail(400, "phone: a P-256 public key (X9.63, base64)")
 	}
-	sum, err := AddPoints(pb, c.agreement.PublicKey().Bytes())
-	if err != nil {
-		return SignedDoc{}, fail(400, "phone: %v", err)
+	kb := c.agreement.PublicKey().Bytes()
+	if core != "" {
+		if kb, err = b64.DecodeString(core); err != nil || len(kb) != 65 {
+			return SignedDoc{}, fail(400, "core: a P-256 public key (X9.63, base64)")
+		}
 	}
-	return c.sign(map[string]any{"kind": "store-key", "phone": phone, "storeKey": b64.EncodeToString(sum)})
+	sum, err := AddPoints(pb, kb)
+	if err != nil {
+		return SignedDoc{}, fail(400, "phone or core: %v", err)
+	}
+	out := map[string]any{"kind": "store-key", "phone": phone, "storeKey": b64.EncodeToString(sum)}
+	if core != "" {
+		out["core"] = core
+	}
+	return c.sign(out)
 }
 
 // ---- stores ----------------------------------------------------------------------------------------
@@ -695,8 +785,14 @@ func (c *Core) KillWithSnapshot(id string, snapshot *SnapshotClaim) (SignedDoc, 
 	if done {
 		return c.sign(map[string]any{"kind": "killed", "id": id, "snapshot": sum})
 	}
+	if snapshot != nil && snapshot.Sha256 != "" && key == "" {
+		// a machine this core never initialised (an earlier core's): its snapshot can't be checked, so the kill names
+		// none — the kill itself still goes through (a destroy must not fail on it)
+		c.logf("kill %s: not a machine this core knows; its snapshot isn't taken", id)
+		snapshot = nil
+	}
 	if snapshot != nil && snapshot.Sha256 != "" {
-		if key == "" || !hex64RE.MatchString(snapshot.Sha256) || !VerifyWith(key, []byte(snapshot.Sha256), snapshot.Sig) {
+		if !hex64RE.MatchString(snapshot.Sha256) || !VerifyWith(key, []byte(snapshot.Sha256), snapshot.Sig) {
 			return SignedDoc{}, fail(403, "the snapshot isn't signed by machine %s's current key", id)
 		}
 		sum = snapshot.Sha256

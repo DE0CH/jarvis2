@@ -232,7 +232,7 @@ func WrapToPoint(combined, dataKey []byte) (WrappedKey, error) {
 // appWrap: a store's keys as the app wraps them, to the store key the core signed for this phone (store_key)
 func appWrap(t *testing.T, c *Core, p *phone, name string, vals map[string]string) []KeyEntry {
 	t.Helper()
-	sk := pl(t)(c.StoreKey(p.agreementKey()))
+	sk := pl(t)(c.StoreKey(p.agreementKey(), ""))
 	C, _ := b64.DecodeString(sk["storeKey"].(string))
 	out := []KeyEntry{}
 	for _, k := range sortedKeys(vals) {
@@ -1194,7 +1194,7 @@ func TestSuccessionTakesExactValuesOnly(t *testing.T) {
 func TestARecoverOfAppWrappedStores(t *testing.T) {
 	c, f, master := newCore(t)
 	p := newPhone()
-	sk := pl(t)(c.StoreKey(p.agreementKey())) // open on an empty core: the app asks before it claims
+	sk := pl(t)(c.StoreKey(p.agreementKey(), "")) // open on an empty core: the app asks before it claims
 	if sk["storeKey"] == "" {
 		t.Fatal("no store key")
 	}

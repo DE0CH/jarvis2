@@ -72,8 +72,12 @@ Reset or recover by itself, or Settings → Reset or recover…):
 
 - **Reset** — the app shows a new recovery kit (`jarvis2-kit:2:…`, Copy), he saves it in his password manager,
   taps "I've saved it", and the core is set up with no stores. Then "After a Reset" below.
-- **Recover** — he pastes his kit; the app reads the backups through the router and the core is set up with every
-  store. Nothing else to do.
+- **Recover** — he pastes his kit; the app reads the backups and the router's copy of the core's line state, and the
+  core is set up with every store. With the app and core from core continuity (DESIGN "Core continuity") it is the SAME
+  core as before (its keys come from the kit): running and paused sessions go on, deploy-key stores come back (same
+  phone), archives restore. Nothing else to do. Sessions made by a core from before continuity (random keys) end once.
+  `infra/setup.py identity` shows `derived` in its state; the router logs `line state N` as it keeps each one, and
+  `curl …/api/core/line-state` (Access login) shows the `X-Line-Seq` it holds.
 
 `infra/setup.py identity` says whether the core is empty or set up (and with which master public key).
 
@@ -157,7 +161,8 @@ Each repo is added in the app (Settings → Repos → Add repo, or "Make key" on
 the app makes an ed25519 key, the shell's secure page shows the core's signed request, and one Face ID lets the core
 use `github-deploy-keys` for that call to add the key to the repo as a read/write deploy key titled `jarvis2 <store>`
 and keep the app-wrapped private half in the store `github-<repo>` (the app keeps `github-jarvis2` sensitive). Nothing
-for Claude to do. Remove deletes both. A Recover brings no repo stores back (no backup): "Make key" again, which also
+for Claude to do. Remove deletes both. Repo stores have no backup: a Recover brings them back from the
+core's line state when it is done on the same phone (DESIGN "Core continuity"); otherwise "Make key" again, which also
 deletes the old key on GitHub. Sessions that include a repo's store clone, pull and push it over SSH
 (`machine/deploykeys.go`).
 
@@ -482,8 +487,11 @@ it reboots, so the core starts empty: Deyao Recovers in the app (as after a powe
    peer, no SSH, no open port, no IPv4 (above). Then both `infra/router-secrets.py …` runs (above; the backup read credential
    needs a new one, since its old value exists nowhere but the old box's Secret). It waits until
    `setup.py identity` answers.
-4. Deyao sets the core up in the app: Recover (above). Paused sessions are lost (their certs were signed by the
-   old core).
+4. Deyao sets the core up in the app: Recover (above). With continuity the sessions go on, provided the router's line
+   state reached the new box: it is on the router's volume (`line-state.json`) and in the backup bucket
+   (`keys/_jarvis2/line-state.json`, at most 5 minutes old, and fresh at the old router's drain); a new router reads
+   the bucket's copy when its volume has none. The carry blobs and snapshots are on the router's volume: move it, or a
+   resumed session waits for an Unlock of its stores. Without a line state the sessions are lost as before.
 
 ## Testing
 

@@ -289,7 +289,7 @@ When the core can't be reached at all (its pod restarting, e.g. after a wipe) ev
 Pass-through to the core's own endpoints, answers unchanged (signed): `GET identity`, `POST stores {nonce}`,
 `POST stores/create {name}`, `POST stores/mark-sensitive {name}`, `POST unlock/begin
 {store, for?}`, `POST unlock/finish {pending, shares}` (an unlock for one running session's cert also makes its machine
-pull again: `refresh-secrets`), `POST lock {id}`, `POST unlocked {nonce}`, `POST store-key {phone}`, and
+pull again: `refresh-secrets`), `POST lock {id}`, `POST unlocked {nonce}`, `POST store-key {phone, core?}`, `GET line-state` (the router's own copy, below), and
 — only from the app's device login (the `cf-access-token` header; 403 otherwise) — `POST claim {statement,
 masterSig, bundle}` and `POST wipe {statement, masterSig}`. Formats: `docs/DESIGN.md`, `core/core.go`, the app's
 `Shell/CoreSetup.swift`, and the reference client `e2e/main.go`. A claim the core accepts is kept by the router
@@ -313,6 +313,44 @@ Setting the core up (Reset and Recover, the app's Reset or recover page):
   which never becomes a store. Reset sends no blobs; Recover every store from the backups.
 - `wipe`: `statement` = `{"kind":"wipe","core": <the core's signing key>}`, signed by the master key the core was
   set up with → the core's signed `{"kind":"wiping","core"}`, then it exits; a new, empty core follows.
+
+Core continuity (`core/continuity.go`, `router/linestate.go`; DESIGN "Core continuity"):
+
+- `GET identity` also says `continuity: 1` (the core takes a seed and a line state in its claim bundle), and its
+  signed state carries `lineSeq` (the newest line state's number, 0 for none), `derived` (its keys come from the master
+  key's seed) and `serving` (`serving` | `standby` | `handed-off`).
+- `claim` with continuity: the bundle (format `keys`) adds `coreSeed` = base64 of HKDF-SHA256(the master private
+  scalar, no salt, info `"jarvis2/core-seed"`, 32 bytes) and optionally `lineState` = `{head, sealed}` as the router
+  serves it; the statement adds `identity: {signingKey, agreementKey}` = the public keys the seed derives (each key's
+  scalar = HKDF-SHA256(seed, no salt, info `"jarvis2/core/signing"` | `"…/agreement"`, 32 bytes), with `/1`, `/2`, … appended to
+  the info until it is a valid P-256 scalar; carry, nonce and line-state keys = HKDF with info `"jarvis2/core/carry"` |
+  `"…/nonce"` | `"…/line-state"`) and optionally `standby: true`. The core refuses (403) a claim whose identity isn't
+  what its seed derives, and (400) an identity, line state or standby without a seed. From the claim on, the core
+  signs and agrees with the derived keys (its identity and box signature change to them); its answer adds `derived`,
+  `standby`, and with a line state `lineSeq` and `repoStores` (the deploy-key stores it took back). Each key of the
+  bundle is wrapped to P + K for the DERIVED K: `POST store-key {phone, core}` (below).
+- `GET /line-state` (the core's; relayed to the app as `GET /api/core/line-state`) → `{head, sealed}`: `head` = the
+  core-signed `{"kind":"line-state-head", seq, final?, sha256 /* of base64-decoded sealed */, at}`, `sealed` = base64
+  of a 12-byte nonce ‖ AES-256-GCM (line-state key, associated data `"jarvis2/line-state"`) of the line state (newest
+  cert per machine, the machines created and initialised with their signing keys, killed, used, spent approvals, the
+  input log's head and length, every store as the core holds it wrapped to P + K, the deploy-key stores' repos, the
+  stores that aren't sensitive, the phone key they are wrapped for). 404 on a core without derived keys, 409 on one
+  standing by. Every answer of a core with derived keys carries `X-Line-Seq: n`; the router fetches `/line-state`
+  whenever `n` isn't the one it keeps, before it passes the answer on, and keeps it at `DATA_DIR/line-state.json` and,
+  at most every 5 minutes and at its drain, in the backup bucket as `keys/_jarvis2/line-state.json` (left out of
+  `GET /api/backups`). `GET /api/core/line-state` serves the kept one (`X-Line-Seq` names it), the bucket's when the
+  volume has none; 404 when there is none.
+- Blue/green (at most one core with these keys serves): `POST /handoff` (the core's; the router calls it, no body) →
+  the FINAL line state `{head, sealed}` (`head.final: true`); from then on that core answers 409 "this core is
+  handed-off" to everything but `GET identity`, `GET line-state` and `POST handoff` (the same final state again). A core
+  claimed with `standby: true` answers 409 "this core is standby" to everything but `GET identity`, `POST store-key`,
+  `POST wipe` and `POST /takeover {lineState: {head, sealed}}` → the core's signed `{"kind":"took-over", lineSeq,
+  stores}`: only a FINAL state sealed by the same keys whose seq is at least the one the standby was claimed with
+  (403 otherwise); it takes the lines and every store from it and serves. A claim whose `lineState` is already final
+  serves at once from it (the old core handed off before the Recover). A kill of a machine the core doesn't know (an
+  earlier core's) names no snapshot instead of refusing it.
+- `POST store-key {phone, core?}`: with `core` (an agreement public key, X9.63 base64) the answer is P + that point and
+  names it (`core`); what a Recover wraps to before the claim gives the core its derived K.
 
 ## Store versions and restore (`core/history.go`, `router/storerestore.go`)
 
@@ -513,7 +551,7 @@ off.
 | `POST /m/downgrade/finish` | Body `{challenge, signature}` → core `approve/by-old-key` → `{cert}`; from now on the router knows the machine by its new key. |
 | `GET /m/tunnel-proof` | `{proof, id}`: hex HMAC-SHA256(`JARVIS2_TUNNEL_KEY`, `"jarvis2-tunnel:" + <this machine's session id>`), which the cf-tunnel Worker checks when the `jarvis2-tunnel` token registers that id. The machine puts it in `TUNNEL_AGENT_SECRET` at boot (never in the Fly config). 404 without the key; 403 for a machine with no running session. |
 | `GET /m/config` | The values a machine takes from the router alone, each refused by the machine unless it matches its format (DESIGN "Inputs to a machine"): `{sessionId, discordChannel, liveSyncSeconds, taskRun, taskTrigger, tunnelProof}`. Everything else comes from the cert. |
-| `GET /m/restore-cert` | `{cert}`: the old line's cert a restoring new line checks (its machine must be the one the cert's config names). 404 without a restore. |
+| `GET /m/restore-cert` | `{cert, coreCert?, coreState?}`: the old line's cert a restoring new line checks (its machine must be the one the cert's config names). For a cert an earlier core signed: `coreCert` = the archive's `core-cert.json` (the master key's claim naming that core: `core` or, seeded, `identity`) and `coreState` = the running core's signed state naming its master key; the machine takes the cert when its own core key signed it, or that state's master signed that claim and the claimed key signed the cert. 404 without a restore. |
 | `POST /m/delivery-result` | `{id, ok, error?}`: the machine's answer to a delivery. Deliveries arrive in `GET /m/commands` as `{deliveries: [{id, kind: wakeup\|cron\|nudge\|continue\|upgraded, request?, run?, minutes?, jobs?, from?, to?, attest}]}` (`upgraded`: a text built into the image from the two sizes, each small, medium, large or a doubling past it): a wakeup/cron is the session's own signed request, `attest` the core's input-log entry for it. |
 | `GET /m/attachments` | `{files: [{name, size, isImage}], attest: {<name>: <core doc>}}`: the first-prompt attachments bound to this machine's session (404 none), each with the core's input-log entry for it (`/attest` machine, input `attachment`, origin `cert`, the sha256 of the file as it is on the volume; 502 when the core doesn't answer). The machine takes a file only when its bytes match the cert's sha256 + size AND its attestation. `GET /m/attachments/:name` the bytes; `DELETE /m/attachments` drops the router's copy once fetched. |
 | `POST /m/task-result` | A task line's machine (harness `task:<template>`, below) after its run: `{run, exitCode, timedOut, error, startedAt, finishedAt, log /* tail ≤ 256 KB */, output /* ≤ 64 KB */}`, store values already redacted by the machine. `run: ""` = a boot with no run (the line's first machine). The router records the run and pauses the line. 403 for a machine that isn't a running task line. |

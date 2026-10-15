@@ -14,6 +14,7 @@ package main
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -65,13 +66,15 @@ func restoreArchived(c *client, coreKey, me string, cert *Cert, v Vouched) error
 	if man, ok := readJ1Manifest(tmp, ref.Machine); ok {
 		return importJarvis1(c, man)
 	}
-	var rc struct {
-		Cert *SignedDoc `json:"cert"`
-	}
+	var rc restoreCertDocs
 	if err := c.json("GET", "/m/restore-cert", nil, &rc); err != nil || rc.Cert == nil {
 		return fmt.Errorf("the cert names a restore but the router serves no old cert (%v)", err)
 	}
-	old, err := checkRestoreCert(coreKey, me, cert, rc.Cert)
+	signer, err := restoreSigner(coreKey, rc)
+	if err != nil {
+		return err
+	}
+	old, err := checkRestoreCert(signer, me, cert, rc.Cert)
 	if err != nil {
 		return err
 	}
@@ -88,6 +91,58 @@ func restoreArchived(c *client, coreKey, me string, cert *Cert, v Vouched) error
 	restoredArchive = true
 	log.Printf("restored the archived snapshot of %s (line %s, %d files)", old.Machine.ID, old.Line, n)
 	return nil
+}
+
+// restoreCertDocs: what /m/restore-cert serves — the old line's cert, and for a cert an earlier core signed, that core's
+// claim (the master key's statement naming it: the archive's core-cert.json) and the running core's signed state
+// (naming its master key)
+type restoreCertDocs struct {
+	Cert     *SignedDoc `json:"cert"`
+	CoreCert *struct {
+		Statement string `json:"statement"`
+		MasterSig string `json:"masterSig"`
+	} `json:"coreCert"`
+	CoreState *SignedDoc `json:"coreState"`
+}
+
+// restoreSigner: the key the old cert must be signed by — this machine's core's, or an earlier core's that the master
+// key claimed: the running core states its master key (signed with the key this machine trusts), the master key
+// signed the claim naming the earlier core (its keys, or the keys a seeded claim derives), so a session archived under
+// any core Deyao set up with this kit restores (docs/DESIGN.md "Core continuity")
+func restoreSigner(coreKey string, rc restoreCertDocs) (string, error) {
+	if verify(coreKey, []byte(rc.Cert.Payload), rc.Cert.Sig) || rc.CoreCert == nil || rc.CoreState == nil {
+		return coreKey, nil
+	}
+	var st struct {
+		Kind   string `json:"kind"`
+		Master string `json:"master"`
+	}
+	if err := verifyDoc(coreKey, rc.CoreState, &st); err != nil || st.Kind != "core-state" || st.Master == "" {
+		return "", errors.New("the restore names an earlier core, but the core's state isn't signed by this machine's core")
+	}
+	if !verify(st.Master, []byte(rc.CoreCert.Statement), rc.CoreCert.MasterSig) {
+		return "", errors.New("the earlier core's claim isn't signed by the master key")
+	}
+	var claim struct {
+		Kind     string                       `json:"kind"`
+		Master   string                       `json:"master"`
+		Core     struct{ SigningKey string }  `json:"core"`
+		Identity *struct{ SigningKey string } `json:"identity"`
+	}
+	if json.Unmarshal([]byte(rc.CoreCert.Statement), &claim) != nil || claim.Kind != "claim" || claim.Master != st.Master {
+		return "", errors.New("the earlier core's claim isn't a claim by this master key")
+	}
+	for _, k := range []string{claim.Core.SigningKey, func() string {
+		if claim.Identity != nil {
+			return claim.Identity.SigningKey
+		}
+		return ""
+	}()} {
+		if k != "" && verify(k, []byte(rc.Cert.Payload), rc.Cert.Sig) {
+			return k, nil
+		}
+	}
+	return "", errors.New("the restore cert isn't signed by the core the master key's claim names")
 }
 
 // checkRestoreCert: the old line's cert, core-signed, for another machine; sensitive stays sensitive

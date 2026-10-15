@@ -103,8 +103,12 @@ func (r *Router) coreCert() []byte {
 			Core struct {
 				SigningKey string `json:"signingKey"`
 			} `json:"core"`
+			// a claim with the master key's seed names the keys the core takes from it (core/continuity.go)
+			Identity *struct {
+				SigningKey string `json:"signingKey"`
+			} `json:"identity"`
 		}
-		if json.Unmarshal([]byte(mc.Statement), &st) == nil && st.Core.SigningKey == key["signingKey"] {
+		if json.Unmarshal([]byte(mc.Statement), &st) == nil && (st.Core.SigningKey == key["signingKey"] || st.Identity != nil && st.Identity.SigningKey == key["signingKey"]) {
 			b, _ := json.Marshal(mc)
 			return b
 		}

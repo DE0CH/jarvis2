@@ -233,8 +233,10 @@ def claim_of(me):
     if not _verify(me["master"], st_text.encode(), cc.get("masterSig") or ""):
         raise SystemExit("the core's claim isn't signed by its master key")
     st = json.loads(st_text)
-    if st.get("master") != me["master"] or st.get("core", {}).get("signingKey") != me["signingKey"] or \
-            st.get("core", {}).get("agreementKey") != me["agreementKey"] or st.get("phone") != me["phone"]:
+    # a claim with the master key's seed names the keys the core takes from it as `identity` (core/continuity.go)
+    named = st.get("identity") or st.get("core") or {}
+    if st.get("master") != me["master"] or named.get("signingKey") != me["signingKey"] or \
+            named.get("agreementKey") != me["agreementKey"] or st.get("phone") != me["phone"]:
         raise SystemExit("the core's claim names another master, core or phone")
     device = st.get("device") or ""
     countersigned = bool(device) and any(

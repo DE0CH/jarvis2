@@ -62,15 +62,13 @@ const repoChangesSH = `cd ~/workspace 2>/dev/null || exit 0; for d in */; do d=$
 
 // ArchiveInfo: what a destroy put on the Storage Box
 type ArchiveInfo struct {
-	Dir         string    `json:"dir"`
-	Title       string    `json:"title"`       // the title it was archived under
-	Transcripts []string  `json:"transcripts"` // file names in Dir, oldest first
-	Artifacts   int       `json:"artifacts"`
-	Signer      string    `json:"signer"` // the machine whose snapshot it is
-	SnapshotAt  time.Time `json:"snapshotAt"`
-	// the snapshot wasn't named in the kill (Session.SnapshotNote): kept, but not restorable until the core vouches
-	Unverified string       `json:"unverified,omitempty"`
-	Last       *TailMessage `json:"last,omitempty"`
+	Dir         string       `json:"dir"`
+	Title       string       `json:"title"`       // the title it was archived under
+	Transcripts []string     `json:"transcripts"` // file names in Dir, oldest first
+	Artifacts   int          `json:"artifacts"`
+	Signer      string       `json:"signer"` // the machine whose snapshot it is
+	SnapshotAt  time.Time    `json:"snapshotAt"`
+	Last        *TailMessage `json:"last,omitempty"`
 }
 
 type RestoreMark struct {
@@ -167,48 +165,11 @@ func (r *Router) latestSnapshot(sessionID string) (machine string, cert *Doc, at
 
 // ---- destroy: snapshot + kill, then archive ------------------------------------------------------------
 
-// snapshotAndKill: what Pause does to a running machine (flows.go); false (state failed) when the kill fails. A destroy
-// (destroying true) ends the line, so nothing will restore the snapshot through the core: when the core refuses the
-// kill for the snapshot's signature, it kills without naming one (the archive takes the router's copy as it is). And
-// a destroy goes on when Fly no longer has the machine, or with force (Destroy anyway) whatever the kill said: the
-// router then stops serving the machine, which shows on the Machines tab with no session (its Destroy there tries
-// the kill again). DECISIONS 170.
+// snapshotAndKill: what Pause does to a running machine (flows.go); false (state failed) when the kill fails
 func (r *Router) snapshotAndKill(id, machine string) bool {
-	return r.snapshotAndKillFor(id, machine, false, false)
-}
-
-func (r *Router) snapshotAndKillFor(id, machine string, destroying, force bool) bool {
 	r.lastSnapshot(id, machine)
-	_, err := r.killMachine(machine) // vouch.go: with the snapshot's hash
-	if err != nil && destroying && refusedSnapshot(err) {
-		// a machine certified by an earlier core (before a Recover): this core has no key for it and refuses any claim.
-		// The router's copy (checked against the machine's key when it arrived) is archived as is, marked.
-		log.Printf("session %s: the core refused %s's snapshot (%v): killed without it (a destroy restores nothing)", id, machine, err)
-		r.st.Do(func(d *persisted) {
-			if x := d.Sessions[id]; x != nil {
-				x.SnapshotNote = snapshotFromEarlierCore
-			}
-		})
-		_, err = r.killUntilDestroyed(map[string]any{"machine": machine})
-	}
-	if err != nil && destroying {
-		gone, ferr := flyMachineGone(machine)
-		switch {
-		case ferr == nil && gone:
-			log.Printf("session %s: the kill of %s failed (%v) but Fly has no such machine: destroying on", id, machine, err)
-			err = nil
-		case force:
-			log.Printf("session %s: the kill of %s failed (%v): destroyed anyway; the machine is left to the Machines tab", id, machine, err)
-			r.st.Do(func(d *persisted) { delete(d.Started, machine) }) // the router no longer takes its calls
-			err = nil
-		}
-	}
-	if err != nil {
-		msg := "kill: " + err.Error()
-		if destroying {
-			msg += destroyAnywayHint
-		}
-		r.setState(id, "failed", msg)
+	if _, err := r.killMachine(machine); err != nil { // vouch.go: with the snapshot's hash
+		r.setState(id, "failed", "kill: "+err.Error())
 		return false
 	}
 	now := time.Now().UTC()
@@ -218,32 +179,6 @@ func (r *Router) snapshotAndKillFor(id, machine string, destroying, force bool) 
 		}
 	})
 	return true
-}
-
-// snapshotFromEarlierCore: the mark on an archive whose snapshot the core refused to name in the kill
-const snapshotFromEarlierCore = "from an earlier core, not verified by this core"
-
-// destroyAnywayHint: the end of a failed destroy's error, which the apps match to offer Destroy anyway
-const destroyAnywayHint = " (Destroy anyway removes the session; the machine is then on the Machines tab)"
-
-// refusedSnapshot: the core refusing a kill because the snapshot isn't signed by the machine's current key
-func refusedSnapshot(err error) bool {
-	var ce *CoreError
-	return errors.As(err, &ce) && ce.Status == 403 && strings.Contains(ce.Msg, "snapshot")
-}
-
-// flyMachineGone: Fly (the router's read token) lists no such live machine. An error when Fly can't be asked.
-var flyMachineGone = func(id string) (bool, error) {
-	ms, err := listFlyMachines()
-	if err != nil {
-		return false, err
-	}
-	for _, m := range ms {
-		if m.ID == id && m.State != "destroyed" {
-			return false, nil
-		}
-	}
-	return true, nil
 }
 
 // archive: the session's latest snapshot onto the Storage Box (layout at the top). nil when there is
@@ -332,8 +267,7 @@ func (r *Router) archiveSnapshot(box *StorageBox, s *Session) (*ArchiveInfo, err
 			return nil, err
 		}
 	}
-	info := &ArchiveInfo{Dir: dir, Title: title, Transcripts: up.transcripts, Artifacts: up.artifacts, Signer: machine, SnapshotAt: at.UTC(),
-		Unverified: s.SnapshotNote}
+	info := &ArchiveInfo{Dir: dir, Title: title, Transcripts: up.transcripts, Artifacts: up.artifacts, Signer: machine, SnapshotAt: at.UTC()}
 	if facts.Tail != nil {
 		info.Last = snippet(*facts.Tail)
 	}
@@ -344,9 +278,6 @@ func (r *Router) archiveSnapshot(box *StorageBox, s *Session) (*ArchiveInfo, err
 		"repos": s.Repos, "model": s.Model, "permissionMode": s.PermissionMode, "size": s.Size, "harness": s.Harness,
 		"image": s.Image, "line": certField(cert, "line"), "snapshotMachine": machine, "snapshotAt": info.SnapshotAt,
 		"unresolvedArtifactLinks": up.unresolved,
-	}
-	if s.SnapshotNote != "" {
-		meta["snapshotUnverified"] = s.SnapshotNote
 	}
 	mb, _ := json.MarshalIndent(meta, "", " ")
 	if err := box.PutBytes(dir+"/session.json", mb); err != nil {

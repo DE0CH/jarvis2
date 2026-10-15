@@ -1,5 +1,10 @@
 package main
 
+// Since core continuity (core/continuity.go, Deyao 2026-10-15) a Recover with the same kit on the new app brings back
+// the SAME core (keys derived from the master key, its line state handed back), so its sessions are untouched: only a
+// session whose cert the running core's key didn't sign is an earlier core's. That is a core set up without the seed
+// (an older app, or before continuity), or one after a Reset (a new master key). For those, what follows still holds.
+//
 // A new core (a restart, a core/ deploy, a box rebuild; empty, then Reset or Recovered) can't continue the lines of
 // the core before it: their certs are signed by the earlier core, its killed/used sets are gone, and the secrets
 // they carry (carry.go) were sealed under the earlier core's carry key. Deyao, 2026-10-11: "They are just
@@ -45,6 +50,14 @@ func (r *Router) coreIdentityKey() string {
 	if json.Unmarshal(b, &id) != nil || id.SigningKey == "" || !verifyP256(id.SigningKey, []byte(id.State.Payload), id.State.Sig) {
 		return ""
 	}
+	// an empty core (after a restart, before the Recover) shows only the keys it was started with; a core set up from
+	// the master key's seed takes other keys at the claim (core/continuity.go), so nothing is decided before it is set up
+	var st struct {
+		Master string `json:"master"`
+	}
+	if id.State.Decode(&st) != nil || st.Master == "" {
+		return ""
+	}
 	return id.SigningKey
 }
 
@@ -63,7 +76,9 @@ func (r *Router) coreChangeTick() {
 		default:
 			d.CoreKey = key
 			for _, s := range d.Sessions {
-				if s.Cert != nil && !s.OldCore {
+				// a cert the new core's key signed is still this core's: a Recover with the same kit is the same core
+				// (core/continuity.go), and its sessions go on
+				if s.Cert != nil && !s.OldCore && !verifyP256(key, []byte(s.Cert.Payload), s.Cert.Sig) {
 					s.OldCore = true
 					marked++
 				}
