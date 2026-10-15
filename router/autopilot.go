@@ -57,6 +57,7 @@ type Liveness struct {
 	dialogReported  bool
 	screen          *pushedScreen // the pane the machine pushes itself (machine/screen.go); in memory only
 	mem             *memState     // memory.go: the starvation watch of the running machine; in memory only
+	disk            *diskState    // disk.go: the disk watch of the running machine; in memory only
 	// the stall watchdog's last nudge: when and how it ended ("" = delivered), for GET /setup/sessions
 	NudgeAt    time.Time `json:"nudgeAt,omitempty"`
 	NudgeError string    `json:"nudgeError,omitempty"`

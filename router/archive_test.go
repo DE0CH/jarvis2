@@ -197,6 +197,19 @@ func (c *fakeCore) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		writeJSON(w, 200, map[string]any{"signingKey": c.key.pub(), "state": c.key.doc(map[string]string{"kind": "core-state", "master": "m"})})
 	case "/core-cert":
 		writeJSON(w, 200, map[string]string{"statement": "{}", "masterSig": "x"})
+	case "/kill": // the core's record names the snapshot the kill named (core.go KillWithSnapshot)
+		var in struct {
+			Machine  string `json:"machine"`
+			Snapshot *struct {
+				Sha256 string `json:"sha256"`
+			} `json:"snapshot"`
+		}
+		json.NewDecoder(req.Body).Decode(&in)
+		sum := ""
+		if in.Snapshot != nil {
+			sum = in.Snapshot.Sha256
+		}
+		writeJSON(w, 200, c.key.doc(map[string]any{"kind": "killed", "id": in.Machine, "snapshot": sum, "path": req.URL.Path}))
 	default:
 		writeJSON(w, 200, c.key.doc(map[string]string{"kind": "ok", "path": req.URL.Path}))
 	}

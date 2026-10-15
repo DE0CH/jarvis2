@@ -174,17 +174,27 @@ func (r *Router) succession(pred *Doc, machine string, stores []string, harness,
 // the router's waits on the core's single-shot machine calls (tests shorten them)
 var (
 	initStep, initMax = 5 * time.Second, 12 * time.Minute // a session image's first pull on a Fly host takes minutes
-	killStep, killMax = time.Second, 30 * time.Second
+	// killMax: a machine with a volume is stopped and its volume snapshotted before Fly destroys it (core/volumes.go):
+	// minutes for a large volume
+	killStep, killMax = time.Second, 45 * time.Minute
 )
 
 // startMachine: the core's start (one Fly create), then its init until Fly reports the machine up and the image's
 // init command gave its keys → the core's signed "started" document. A machine that never comes up is killed.
 // A core from before R2 answers "started" from /start itself (it waited and retried inside).
 func (r *Router) startMachine(image, size string) (*Doc, error) {
+	return r.startMachineDisk(image, size, 0)
+}
+
+// startMachineDisk: startMachine with the machine's volume size (disk.go; 0 = the core's default)
+func (r *Router) startMachineDisk(image, size string, diskGB int) (*Doc, error) {
 	if size == "" {
 		size = "medium"
 	}
 	in := map[string]any{"image": image, "region": r.cfg.Region, "size": size}
+	if diskGB > 0 {
+		in["diskGb"] = diskGB
+	}
 	d, err := r.core.Call("/start", in)
 	// Fly's org machine limit (lessons/58): nothing was created and the approval is still unused, so wait for a
 	// machine to go (sessions pause by themselves) instead of failing a start Deyao already approved
@@ -263,7 +273,7 @@ func (r *Router) startAndCertify(sid string, approval *Doc) {
 		}
 	})
 	r.setState(sid, "starting", "")
-	d, err := r.startMachine(a.Request.Image, s.Size)
+	d, err := r.startMachineDisk(a.Request.Image, s.Size, s.DiskGB)
 	if err != nil {
 		r.setState(sid, "failed", "start: "+err.Error())
 		return
@@ -800,9 +810,7 @@ func (r *Router) Pause(id string) error {
 	r.setState(id, "pausing", "")
 	go func() {
 		defer unlock()
-		r.lastSnapshot(id, s.MachineID)
-		if _, err := r.killMachine(s.MachineID); err != nil { // vouch.go: with the snapshot's hash
-			r.setState(id, "failed", "kill: "+err.Error())
+		if !r.finalSnapshotAndKill(id, s.MachineID, false) { // snapsafe.go: kept, failed and DMed
 			return
 		}
 		now := time.Now().UTC()
@@ -833,6 +841,10 @@ func (r *Router) Resume(id string, upgrade bool) error {
 	if s.ID == "" || !(s.State == "paused" || s.State == "failed" && s.MachineID == "") {
 		unlock()
 		return fmt.Errorf("session %s isn't paused (or failed with no machine)", id)
+	}
+	if err := r.resumeRefusal(id); err != nil { // snapsafe.go: its last machine left no snapshot
+		unlock()
+		return err
 	}
 	if s.Cert == nil {
 		if s.State != "failed" {
@@ -1022,7 +1034,7 @@ func (r *Router) destroy(id string, o destroyOpts) error {
 	r.setState(id, "destroying", "")
 	go func() {
 		defer unlock()
-		if s.MachineID != "" && !r.snapshotAndKill(id, s.MachineID) {
+		if s.MachineID != "" && !r.snapshotAndKill(id, s.MachineID, force) {
 			return
 		}
 		var changes map[string]any
@@ -1089,6 +1101,8 @@ func (r *Router) finish(id string) {
 			if sid == id {
 				os.Remove(r.st.snapshotPath(m))
 				os.Remove(r.st.snapshotPath(m) + ".sig")
+				os.Remove(pendingPath(r.st.snapshotPath(m))) // snapstream.go: a stream never committed
+				os.Remove(pendingPath(r.st.snapshotPath(m)) + ".sha256")
 				r.dropCarry(m) // the carried secrets go with the line (the core has burnt it too)
 			}
 		}
@@ -1211,7 +1225,7 @@ func (r *Router) send(machine, cmd string) {
 // silentAfter: a booted machine whose last report is older than this isn't asked for a snapshot
 var silentAfter = 3 * time.Minute
 
-func (r *Router) lastSnapshot(id, machine string) {
+func (r *Router) lastSnapshot(id, machine string) error {
 	booted := func() (b bool) {
 		r.st.Do(func(d *persisted) {
 			if x := d.Sessions[id]; x != nil {
@@ -1219,6 +1233,9 @@ func (r *Router) lastSnapshot(id, machine string) {
 			}
 		})
 		return
+	}
+	if haveSnapshot(r.st.snapshotPath(machine)) {
+		return nil // it already sent its final one (a machine signs only one: a later ask gets the same)
 	}
 	// a machine that has its secrets is seconds from booted (repos, then its first report): wait for it, or a pause
 	// right after a start would leave its successor with no state at all (its cert names the snapshot this machine
@@ -1228,10 +1245,10 @@ func (r *Router) lastSnapshot(id, machine string) {
 	}
 	if !booted() {
 		log.Printf("session %s: %s never got past boot; nothing to snapshot", id, machine)
-		return
+		return nil
 	}
 	// a machine that has gone silent (stopped or gone: its agent reports at least every 60 s) can't answer: no wait,
-	// so a pause that a router restart re-runs still reaches the kill
+	// so a pause that a router restart re-runs reaches its end at once (snapsafe.go: kept, or its volume backed up)
 	var last time.Time
 	r.st.Do(func(d *persisted) {
 		if x := d.Sessions[id]; x != nil && x.Live != nil {
@@ -1240,7 +1257,7 @@ func (r *Router) lastSnapshot(id, machine string) {
 	})
 	if time.Since(last) > silentAfter {
 		log.Printf("session %s: %s silent since %s; not waiting for a snapshot", id, machine, last.Format(time.RFC3339))
-		return
+		return fmt.Errorf("its machine has been silent since %s, so it can't send its snapshot", last.UTC().Format("2006-01-02 15:04 UTC"))
 	}
 	done := r.awaitSnapshot(machine)
 	r.send(machine, "snapshot")
@@ -1248,9 +1265,23 @@ func (r *Router) lastSnapshot(id, machine string) {
 	defer r.setWaiting(id, "")
 	select {
 	case <-done:
+		if err := r.snapshotError(machine); err != nil {
+			return err
+		}
+		return nil // its snapshot, or "nothing to snapshot" from a machine still booting
 	case <-time.After(r.cfg.SnapshotWait):
-		log.Printf("session %s: no snapshot from %s within %s; going on from the last one", id, machine, r.cfg.SnapshotWait)
+		log.Printf("session %s: no snapshot from %s within %s", id, machine, r.cfg.SnapshotWait)
+		if err := r.snapshotError(machine); err != nil {
+			return err
+		}
+		return fmt.Errorf("no snapshot from the machine within %s", waitText(r.cfg.SnapshotWait))
 	}
+}
+
+func haveSnapshot(p string) bool {
+	_, err1 := os.Stat(p)
+	_, err2 := os.Stat(p + ".sig")
+	return err1 == nil && err2 == nil
 }
 
 func (r *Router) setWaiting(id, what string) {

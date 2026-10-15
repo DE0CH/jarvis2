@@ -10,7 +10,7 @@ export const TABS: [Tab, string][] = [["sessions", "Sessions"], ["inbox", "Inbox
 // tasks + their schedules (api/tasks): loaded while the Tasks or Schedules tab (or a task page) is open
 export type TasksState = { loading: boolean; loaded: boolean; data: TasksOverview; err: string | null };
 // what holds a session right now (api/state `busy`), as a button label
-export const BUSY_LABEL: Record<string, string> = { starting: "Starting…", restarting: "Restarting…", pausing: "Pausing…", destroying: "Destroying…", mode: "Switching mode…", upgrading: "Upgrading…" };
+export const BUSY_LABEL: Record<string, string> = { starting: "Starting…", restarting: "Restarting…", pausing: "Pausing…", destroying: "Destroying…", mode: "Switching mode…", upgrading: "Upgrading…", "growing-disk": "Adding disk…" };
 // a list loaded on demand (records, the core's store list), not part of the 15 s poll
 export type Loaded<T> = { loading: boolean; loaded: boolean; items: T[]; err: string | null };
 export type Toast = { id: number; text: string; kind: "info" | "ok" | "error" };

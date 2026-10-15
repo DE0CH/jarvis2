@@ -43,6 +43,8 @@ type StartedMachine struct {
 	Image         string `json:"image"`         // what Fly reports the machine runs (ref@digest)
 	EncryptionKey string `json:"encryptionKey"` // the machine's own keys, read through Fly exec
 	SigningKey    string `json:"signingKey"`
+	// Volume: the machine's Fly volume (volumes.go), mounted at its path: where the machine keeps its state
+	Volume *VolumeInfo `json:"volume,omitempty"`
 }
 
 type Options struct {
@@ -204,6 +206,7 @@ type Core struct {
 	// the line state seq a standing-by core was Recovered with (a takeover brings one at least as new)
 	mode        string
 	standbyFrom int
+	vol         volState // volumes.go: each machine's Fly volume, its kill's backup snapshot
 
 	fly    Fly
 	github GitHub // deploy keys only, with the token the phone unlocks for that one call
@@ -237,7 +240,7 @@ func NewCore(fly Fly) (*Core, error) {
 		approvalsUsed: map[string]bool{}, latest: map[string]string{},
 		created: map[string]string{}, signing: map[string]string{}, killed: map[string]string{}, used: map[string]bool{},
 		stores: map[string]map[string]*KeyEntry{}, notSensitive: map[string]bool{}, pending: map[string]pendingUnlock{}, unlocked: map[string]*unlocked{}, pendingKeys: map[string]pendingDeployKey{}, repoOwner: map[string]string{},
-		fly: fly, github: newGitHub(), now: time.Now}, nil
+		vol: newVolState(), fly: fly, github: newGitHub(), now: time.Now}, nil
 }
 
 // logf: diagnostics to stdout only (the core keeps no log: every state change reaches the router as a signed answer)
@@ -653,7 +656,8 @@ func (c *Core) Stores(nonce string) (SignedDoc, error) {
 type StartRequest struct {
 	Image  string `json:"image"`
 	Region string `json:"region"`
-	Size   string `json:"size"` // small | medium | large | 16gb | 32gb … (sizeGuest, fly.go)
+	Size   string `json:"size"`   // small | medium | large | 16gb | 32gb … (sizeGuest, fly.go)
+	DiskGB int    `json:"diskGb"` // the machine's volume (volumes.go); 0 = defaultDiskGB
 }
 
 // Start: anyone may ask (normally the router): one Fly create, nothing more — a machine without a cert gets no
@@ -672,15 +676,23 @@ func (c *Core) Start(r StartRequest) (SignedDoc, error) {
 	if env == nil {
 		return SignedDoc{}, fail(503, "this core has no MACHINE_URL (its deployment's router address): it starts no machine")
 	}
-	id, err := c.fly.Create(r, guest, env)
+	id, vol, err := c.createMachine(r, guest, env) // volumes.go: with its own empty volume
 	if err != nil {
+		var e *Err
+		if errors.As(err, &e) {
+			return SignedDoc{}, err
+		}
 		return SignedDoc{}, fail(502, "fly create: %v", err)
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.created[id] = r.Image
 	c.logf("machine %s created (%s)", id, r.Image)
-	return c.sign(map[string]any{"kind": "created", "id": id, "image": r.Image})
+	out := map[string]any{"kind": "created", "id": id, "image": r.Image}
+	if vol != nil {
+		out["volume"] = vol
+	}
+	return c.sign(out)
 }
 
 // Init: one try at reading a created machine's keys — Fly must report it started, then the image's init command
@@ -712,6 +724,10 @@ func (c *Core) Init(id string) (SignedDoc, error) {
 	delete(c.created, id)
 	c.signing[id] = keys.SigningKey
 	m := &StartedMachine{ID: id, Requested: requested, Image: fm.Image, EncryptionKey: keys.EncryptionKey, SigningKey: keys.SigningKey}
+	if v := c.vol.live[id]; v != nil {
+		vc := *v
+		m.Volume = &vc
+	}
 	c.logf("machine %s started (%s)", id, fm.Image)
 	return c.sign(map[string]any{"kind": "started", "machine": m})
 }
@@ -774,6 +790,8 @@ func (c *Core) Certify(approval, started *SignedDoc, carry string) (SignedDoc, e
 // asks again) → killed. snapshot (optional): the sha256 of the snapshot the machine took and its signature over that
 // hash with the machine's current signing key; its successor restores that one only. Without it (no snapshot, or
 // none that checks) the successor starts with no predecessor state. The first kill fixes the snapshot.
+// A machine with a volume (volumes.go) is first stopped and its volume snapshotted (the backup, named in the record);
+// only once Fly reports that snapshot created is the machine destroyed and the volume deleted.
 func (c *Core) KillWithSnapshot(id string, snapshot *SnapshotClaim) (SignedDoc, error) {
 	if id == "" || id == "null" {
 		return SignedDoc{}, fail(400, "kill rejects null")
@@ -783,7 +801,9 @@ func (c *Core) KillWithSnapshot(id string, snapshot *SnapshotClaim) (SignedDoc, 
 	key := c.signing[id]
 	c.mu.Unlock()
 	if done {
-		return c.sign(map[string]any{"kind": "killed", "id": id, "snapshot": sum})
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		return c.sign(c.killedRecord(id))
 	}
 	if snapshot != nil && snapshot.Sha256 != "" && key == "" {
 		// a machine this core never initialised (an earlier core's): its snapshot can't be checked, so the kill names
@@ -796,6 +816,9 @@ func (c *Core) KillWithSnapshot(id string, snapshot *SnapshotClaim) (SignedDoc, 
 			return SignedDoc{}, fail(403, "the snapshot isn't signed by machine %s's current key", id)
 		}
 		sum = snapshot.Sha256
+	}
+	if err := c.backupVolume(id, sum != ""); err != nil {
+		return SignedDoc{}, err
 	}
 	fm, err := c.fly.Inspect(id)
 	if err != nil {
@@ -810,6 +833,7 @@ func (c *Core) KillWithSnapshot(id string, snapshot *SnapshotClaim) (SignedDoc, 
 			return SignedDoc{}, fail(409, "machine %s is %s, not destroyed yet (destroy: %v)", id, fm.State, derr)
 		}
 	}
+	c.dropVolume(id)
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if !c.isKilled(id) {
@@ -818,7 +842,17 @@ func (c *Core) KillWithSnapshot(id string, snapshot *SnapshotClaim) (SignedDoc, 
 	delete(c.created, id)
 	delete(c.signing, id)
 	c.logf("machine %s killed (snapshot %s)", id, orNull(c.killed[id]))
-	return c.sign(map[string]any{"kind": "killed", "id": id, "snapshot": c.killed[id]})
+	return c.sign(c.killedRecord(id))
+}
+
+// killedRecord: the kill's signed record — the snapshot its successor restores, and the volume's backup (volumes.go)
+// when it had one (callers hold c.mu)
+func (c *Core) killedRecord(id string) map[string]any {
+	out := map[string]any{"kind": "killed", "id": id, "snapshot": c.killed[id]}
+	if b := c.backupOf(id); b != nil {
+		out["backup"] = b
+	}
+	return out
 }
 
 // NullImage: a succession to the null image burns the predecessor — start() makes no machine, only marks the

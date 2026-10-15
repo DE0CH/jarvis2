@@ -138,6 +138,14 @@ struct SessionRow: View {
       if let a = m.memAlert {
         HStack(spacing: 6) { StatusPill(text: "Low memory", color: .red); Text(a.reason).font(.footnote).lineLimit(1) }
       }
+      if let a = m.diskAlert {
+        HStack(spacing: 6) { StatusPill(text: "Low disk", color: .red); Text(a.detail ?? a.reason).font(.footnote).lineLimit(1) }
+      }
+      if m.snapshotFailed != nil {
+        StatusPill(text: "Snapshot failed", color: .red)
+      } else if m.noSnapshot != nil {
+        StatusPill(text: "No snapshot", color: .red)
+      }
       if let lock = m.lockedStore {
         HStack(spacing: 6) { StatusPill(text: "Locked store", color: .orange); Text(lock).font(.footnote.monospaced()) }
       } else if let g = m.needsGrant {
@@ -201,7 +209,10 @@ struct SessionMenu: View {
     if m.state == "started", let a = m.memAlert, a.nextSize != nil {
       Button(Fmt.upgradeTitle(a), systemImage: "arrow.up.circle") { Task { await model.upgrade(m.id) } }
     }
-    if m.state == "paused" {
+    if m.state == "started", let a = m.diskAlert, a.canGrow, let gb = a.nextGB {
+      Button("More disk (\(gb) GB)", systemImage: "externaldrive.badge.plus") { Task { await model.moreDisk(m.id) } }
+    }
+    if m.state == "paused", m.noSnapshot == nil {
       Button("Resume with latest image", systemImage: "arrow.up.circle") { Task { await model.resumeLatest(m.id) } }
     }
     Button("Copy session id", systemImage: "doc.on.doc") { model.copy(m.id, "Session id") }

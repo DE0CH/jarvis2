@@ -499,6 +499,7 @@ var callRules = map[string]callRule{
 	"GET /api/sessions/{id}/terminal":           callStatus, // another session's screen
 	"POST /api/sessions/{id}/terminal":          callBody,
 	"POST /api/sessions/{id}/upgrade":           callBody,
+	"POST /api/sessions/{id}/disk":              callBody,
 	"DELETE /api/sessions/{id}/wakeup":          callBody,
 	"GET /api/sessions/{id}/wakeup":             callBody,
 	"POST /api/sessions/{id}/wakeup":            callBody,

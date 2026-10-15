@@ -49,7 +49,13 @@ type Session struct {
 	Waiting         string      `json:"waiting,omitempty"`      // what a pause or destroy is waiting on, in plain words (the app shows it)
 	LockedStore     string      `json:"lockedStore,omitempty"`  // the store the machine waits on at boot (its secrets pull got 423 "store X is locked")
 	OldCore         bool        `json:"oldCore,omitempty"`      // corechange.go: its line is an earlier core's; destroyed once paused
-	taskConfig      *TaskConfig // vouch.go: a task line's instance + parameters while its first challenge is made (not kept)
+	// snapsafe.go: what the machine's final snapshot left behind
+	SnapshotFailed string      `json:"snapshotFailed,omitempty"` // the final snapshot failed and the machine (no volume) is kept
+	NoSnapshot     string      `json:"noSnapshot,omitempty"`     // the line's last machine left no snapshot: Resume refuses
+	Backups        []Backup    `json:"backups,omitempty"`        // the core's volume backups of the line's machines, newest first
+	DiskGB         int         `json:"diskGb,omitempty"`         // disk.go: the volume size the next machine gets (0 = the core's default)
+	noSnapshotDMed bool        // a refused resume DMed once
+	taskConfig     *TaskConfig // vouch.go: a task line's instance + parameters while its first challenge is made (not kept)
 }
 
 type Approval struct {
@@ -87,10 +93,11 @@ type Record struct {
 
 // Started: what the core reported at start (the machine's keys authenticate its requests here)
 type Started struct {
-	ID            string `json:"id"`
-	Image         string `json:"image"`
-	EncryptionKey string `json:"encryptionKey"`
-	SigningKey    string `json:"signingKey"`
+	ID            string  `json:"id"`
+	Image         string  `json:"image"`
+	EncryptionKey string  `json:"encryptionKey"`
+	SigningKey    string  `json:"signingKey"`
+	Volume        *Volume `json:"volume,omitempty"` // snapsafe.go: the machine's Fly volume (a core with volumes)
 }
 
 type persisted struct {

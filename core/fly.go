@@ -159,16 +159,69 @@ func (f *FlyAPI) call(method, path string, body any, out any) error {
 }
 
 func (f *FlyAPI) Create(r StartRequest, guest map[string]any, env map[string]string) (string, error) {
+	return f.CreateWithVolume(r, guest, env, "", "")
+}
+
+// CreateWithVolume: Create with the volume mounted at path (volume "" = none)
+func (f *FlyAPI) CreateWithVolume(r StartRequest, guest map[string]any, env map[string]string, volume, path string) (string, error) {
 	var m struct {
 		ID string `json:"id"`
 	}
-	body := map[string]any{"region": r.Region, "config": map[string]any{
-		"image": r.Image, "guest": guest, "env": env, "restart": map[string]any{"policy": "no"},
-	}}
-	if err := f.call("POST", "/machines", body, &m); err != nil {
+	config := map[string]any{"image": r.Image, "guest": guest, "env": env, "restart": map[string]any{"policy": "no"}}
+	if volume != "" {
+		config["mounts"] = []map[string]any{{"volume": volume, "path": path}}
+	}
+	if err := f.call("POST", "/machines", map[string]any{"region": r.Region, "config": config}, &m); err != nil {
 		return "", err
 	}
 	return m.ID, nil
+}
+
+// ---- volumes (volumes.go; Fly Machines API /volumes) ----
+
+func (f *FlyAPI) CreateVolume(region string, sizeGB, retentionDays int) (string, error) {
+	var v struct {
+		ID string `json:"id"`
+	}
+	body := map[string]any{"name": volumeName, "region": region, "size_gb": sizeGB, "encrypted": true,
+		"snapshot_retention": retentionDays, "auto_backup_enabled": true, "require_unique_zone": false}
+	if err := f.call("POST", "/volumes", body, &v); err != nil {
+		return "", err
+	}
+	if v.ID == "" {
+		return "", fmt.Errorf("fly made no volume")
+	}
+	return v.ID, nil
+}
+
+func (f *FlyAPI) Stop(id string) error {
+	return f.call("POST", "/machines/"+id+"/stop", map[string]any{}, nil)
+}
+
+func (f *FlyAPI) SetRetention(volume string, days int) error {
+	return f.call("PUT", "/volumes/"+volume, map[string]any{"snapshot_retention": days}, nil)
+}
+
+func (f *FlyAPI) CreateSnapshot(volume string) error {
+	return f.call("POST", "/volumes/"+volume+"/snapshots", map[string]any{}, nil)
+}
+
+func (f *FlyAPI) Snapshots(volume string) ([]VolumeSnapshot, error) {
+	var out []VolumeSnapshot
+	err := f.call("GET", "/volumes/"+volume+"/snapshots", nil, &out)
+	return out, err
+}
+
+func (f *FlyAPI) ExtendVolume(volume string, sizeGB int) (bool, error) {
+	var out struct {
+		NeedsRestart bool `json:"needs_restart"`
+	}
+	err := f.call("PUT", "/volumes/"+volume+"/extend", map[string]any{"size_gb": sizeGB}, &out)
+	return out.NeedsRestart, err
+}
+
+func (f *FlyAPI) DeleteVolume(volume string) error {
+	return f.call("DELETE", "/volumes/"+volume, nil, nil)
 }
 
 func (f *FlyAPI) Inspect(id string) (FlyMachine, error) {

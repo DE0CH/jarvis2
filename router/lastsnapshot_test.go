@@ -15,6 +15,7 @@ func TestLastSnapshotNeverWaitsOnABootingMachine(t *testing.T) {
 	rg := newRig(t)
 	r := rg.r
 	r.cfg.SnapshotWait = 30 * time.Second
+	os.Remove(r.st.snapshotPath("m1") + ".sig") // m1 runs: it hasn't sent its final snapshot yet
 	running := func(booted string) {
 		r.st.Do(func(d *persisted) {
 			s := d.Sessions["s1"]
@@ -57,16 +58,22 @@ func TestLastSnapshotNeverWaitsOnABootingMachine(t *testing.T) {
 	if waiting != "" {
 		t.Fatalf("still waiting: %q", waiting)
 	}
-	// booted but silent (its machine stopped or gone): not asked, the pause goes straight to the kill
+	// booted but silent (its machine stopped or gone): not asked and not waited for; without a volume it can't be
+	// backed up, so it is kept (snapsafe.go), at once
 	running("m1")
 	r.st.Do(func(d *persisted) { d.Sessions["s1"].Live.LastReport = time.Now().Add(-10 * time.Minute) })
 	t0 = time.Now()
 	if err := r.Pause("s1"); err != nil {
 		t.Fatal(err)
 	}
-	if err := r.waitState("s1", "paused", 5*time.Second); err != nil || time.Since(t0) > 5*time.Second {
+	if err := r.waitState("s1", "failed", 5*time.Second); err != nil || time.Since(t0) > 5*time.Second {
 		t.Fatalf("a silent machine held the pause: %v", err)
 	}
+	r.st.Do(func(d *persisted) {
+		if s := d.Sessions["s1"]; s.MachineID != "m1" || !strings.Contains(s.SnapshotFailed, "silent since") {
+			t.Fatalf("not kept: %+v", s)
+		}
+	})
 	if waitText(10*time.Minute) != "10 min" {
 		t.Fatal(waitText(10 * time.Minute))
 	}

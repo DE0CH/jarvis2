@@ -3,12 +3,6 @@ package main
 // The audit's R1 findings on the machine side (2026-10-11): each test attempts the forbidden thing.
 
 import (
-	"crypto/ecdh"
-	"crypto/sha256"
-	"fmt"
-	"io"
-	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -91,25 +85,16 @@ func TestAWakeupIsDeliveredOnceAndACronOncePerRun(t *testing.T) {
 // Finding: the router could keep an early signed snapshot and kill with it later (a rollback). The machine signs one
 // snapshot in its life, after stopping the session, and answers every later snapshot command with that one.
 func TestTheMachineSignsOneFinalSnapshot(t *testing.T) {
-	home, run := t.TempDir(), t.TempDir()
+	home := t.TempDir()
 	t.Setenv("HOME", home)
 	key := newKey()
-	oldF, oldS, oldK, oldZ := finalSnapshot, finalSnapshotSig, snapshotKey, freezeSession
-	defer func() {
-		finalSnapshot, finalSnapshotSig, snapshotKey, freezeSession = oldF, oldS, oldK, oldZ
-		frozen.Store(false)
-	}()
-	finalSnapshot, finalSnapshotSig = filepath.Join(run, "f.tar.gz"), filepath.Join(run, "f.sig")
-	snapshotKey = func() (*ecdh.PrivateKey, error) { return key.k, nil }
+	restore := snapTestState(t, key)
+	defer restore()
 	froze := 0
 	freezeSession = func() { froze++ }
-	var got []string
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		b, _ := io.ReadAll(r.Body)
-		got = append(got, fmt.Sprintf("%x %s", sha256.Sum256(b), r.Header.Get("X-Snapshot-Sig")))
-	}))
-	defer srv.Close()
-	c := &client{base: srv.URL, me: "m1", sig: key.k, http: srv.Client()}
+	fr := newSnapRouter(t, key)
+	defer fr.srv.Close()
+	c := &client{base: fr.srv.URL, me: "m1", sig: key.k, http: fr.srv.Client()}
 	os.MkdirAll(filepath.Join(home, "workspace"), 0o755)
 	os.WriteFile(filepath.Join(home, "workspace", "a"), []byte("one"), 0o644)
 	if err := uploadSnapshot(c); err != nil {
@@ -123,8 +108,8 @@ func TestTheMachineSignsOneFinalSnapshot(t *testing.T) {
 	if err := uploadSnapshot(c); err != nil {
 		t.Fatal(err)
 	}
-	if len(got) != 2 || got[0] != got[1] || froze != 1 {
-		t.Fatalf("a second, different snapshot was signed: %v (froze %d)", got, froze)
+	if len(fr.commits) != 2 || fr.commits[0] != fr.commits[1] || froze != 1 {
+		t.Fatalf("a second, different snapshot was signed: %v (froze %d)", fr.commits, froze)
 	}
 	// and nothing is delivered or run into a stopped session
 	if err := notFrozen(); err == nil {

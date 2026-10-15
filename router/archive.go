@@ -165,11 +165,10 @@ func (r *Router) latestSnapshot(sessionID string) (machine string, cert *Doc, at
 
 // ---- destroy: snapshot + kill, then archive ------------------------------------------------------------
 
-// snapshotAndKill: what Pause does to a running machine (flows.go); false (state failed) when the kill fails
-func (r *Router) snapshotAndKill(id, machine string) bool {
-	r.lastSnapshot(id, machine)
-	if _, err := r.killMachine(machine); err != nil { // vouch.go: with the snapshot's hash
-		r.setState(id, "failed", "kill: "+err.Error())
+// snapshotAndKill: what Pause does to a running machine (flows.go); false (state failed, machine kept) when its
+// final snapshot or the kill fails (snapsafe.go; force: Destroy anyway goes on past a failed snapshot)
+func (r *Router) snapshotAndKill(id, machine string, force bool) bool {
+	if !r.finalSnapshotAndKill(id, machine, force) {
 		return false
 	}
 	now := time.Now().UTC()

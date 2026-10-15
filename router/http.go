@@ -535,6 +535,7 @@ func (r *Router) buildHandlers() {
 	})
 	// the snapshot streams to the volume (a session's workspace can be several GB; the router has 1 GiB of memory):
 	// hashed on the way, the machine's request signature checked against that hash, then put in place
+	r.registerSnapStream(mmux, m) // snapstream.go: the final snapshot streamed, committed, carried or failed
 	mmux.Handle("POST /m/snapshot", r.requireMachineStream(func(w http.ResponseWriter, req *http.Request, machine, tmp string) {
 		p := r.st.snapshotPath(machine)
 		if req.Header.Get("X-Snapshot-None") != "" {
@@ -735,6 +736,8 @@ func sessionView(s *Session, d *persisted) map[string]any {
 		"waiting": s.Waiting, "lockedStore": s.LockedStore,
 	}
 	liveView(s, v)
+	backupsView(s, v) // snapsafe.go
+	diskView(s, v)    // disk.go
 	scheduleView(d, s.ID, v)
 	opsView(s, v)
 	return v

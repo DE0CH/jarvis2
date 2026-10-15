@@ -1422,3 +1422,66 @@ Deyao: several actions approved together with ONE Face ID; the caller groups the
      - *The backup's rhythm lives in the database* (kv `last_backup`), so a handover doesn't start a new 8 GB staging
        copy; *seeding a missing database takes a file lock* beside it, so two replicas starting on an empty volume
        download the copy once.
+## A pause never loses a session's state, 2026-10-15
+
+After session sb8e0273d6c308894 ("k-matrix clone: interactive 5") lost its conversation: its disk was full, the final
+snapshot failed with "no space left on device", the machine was destroyed anyway and the resume started empty.
+
+172. **The final snapshot streams to the router; the machine needs no free disk for it** (`machine/snapstream.go`,
+     `router/snapstream.go`). The tar.gz is made straight into the request body (`POST /m/snapshot-stream`, signed over
+     the marker `stream` because the hash isn't known before the bytes, and checked before the router takes a byte); the
+     router answers the hash of what it stored, the machine compares it with its own, signs it and commits. The R1 rule
+     stands: one signature per machine, after the session is stopped; a later command commits the same one, and a commit
+     that never arrived is redone only if the frozen files hash the same. A failure is reported at once
+     (`/m/snapshot-failed`) and, with nothing signed, the session is let go on (SIGCONT) so space can be freed. A router
+     without streaming gets the old whole-file upload. *Not chosen*: HTTP trailers for the signature (proxies drop them);
+     compressing to a tmpfs (RAM is the next thing to run out).
+
+173. **A machine whose final snapshot fails and that has no volume is kept, never destroyed; Deyao gets a "needs you"
+     DM** (`router/snapsafe.go`). Failure = an error the machine reports, no snapshot within `SNAPSHOT_WAIT`, or a booted
+     machine silent for 3 min (it can't send one). The session goes `failed` with its machine and `snapshotFailed`; Pause
+     again retries, Destroy anyway (`force`) goes on without it. A kill that can't finish (the core's backup or destroy,
+     45 min) also keeps the machine and DMs. A machine paused while still booting signs its predecessor's snapshot (its
+     cert names it; the machine has no state of its own yet) and the router links that file, so a pause during boot no
+     longer leaves the line without a snapshot. *Not chosen*: retrying the snapshot in a loop (a full disk stays full).
+
+174. **Each machine keeps its state on its own Fly volume, and the core backs the volume up at every kill**
+     (Deyao, 2026-10-15; `core/volumes.go`, `machine/volume.go`). The core (the only Fly token holder) makes a new, empty
+     volume with each machine (`/data`, default 10 GB, encrypted, Fly's daily snapshots on); the machine bind-mounts the
+     snapshot's directories from it (paths unchanged, so Claude's project names don't move) and copies the single files
+     there every minute. At the kill, after the machine's own snapshot or after it failed or timed out, the core stops the
+     machine, takes an on-demand snapshot of the volume, and only once Fly reports it `created` destroys the machine and
+     deletes the volume. The kill's signed record names the backup (volume id, snapshot id, retention); the session lists
+     it (`backups`, app and web page). **No resume or restore reads a backup** (Deyao, 2026-10-15): a successor gets a
+     new empty volume and its state from the predecessor's signed snapshot only, so a volume never carries one line's data
+     to another machine; the backup is for recovery by hand. A line whose last kill named no signed snapshot doesn't
+     resume (`noSnapshot`: it would start empty): the session says why, Deyao gets a DM naming the backup, and Destroy
+     still archives the newest signed snapshot. Fly keeps a deleted volume's snapshots for their retention, reachable by
+     the volume id the record keeps. The live volumes and the backup records go in the core's line state
+     (DECISIONS 170), so a core that takes the line over still backs up and deletes those machines' volumes. **Retention: 3 days when the machine also signed its own snapshot** (the backup is a
+     second copy), **60 days (Fly's longest) when it didn't** (then the backup is the only copy of that state); the
+     retention is set on the volume just before the snapshot. *Price* (fly.io/docs/about/pricing, 2026-10: volumes USD
+     0.15/GB-month provisioned, snapshots USD 0.08/GB-month stored, the first 10 GB of snapshots free): a 10 GB volume
+     costs USD 1.50 per machine-month while it runs, nothing while paused (it is deleted); at about 3 running machines on
+     average that is about USD 4.50/month, which `router/budget.go` already counts (it bills provisioned volumes).
+     Backups: about 10 pauses a day × 3 days × ~3 GB of state ≈ 90 GB stored → about USD 6/month after the free 10 GB
+     (less if Fly's incremental storage shares blocks); each failed-snapshot backup adds ~3 GB × 2 months ≈ USD 0.50
+     once. Snapshot storage is not in the budget estimate (the read token lists no snapshots): a known gap. Needs the
+     held core release (the `core-pin: hold`), and the core's narrowed Fly token must allow volume calls: its caveat is
+     `Apps {jarvis2-sessions: rwcdC}` with no per-resource limit, which should cover volumes; check on the first start
+     after the release (a refusal shows as `start: fly create: volume: … 403`). *Not chosen*: restoring from the backup
+     automatically or from Fly's daily snapshots (Deyao: recovery from them is his decision, by hand); one volume per
+     session kept across pauses (it would bill while paused, and a router could then start any machine on it).
+
+175. **Disk is reported like memory, warned about before it fills, and grown with More disk** (`machine/disk.go`,
+     `router/disk.go`). Every 30 s the machine reports its root disk and its volume; the volume is the disk that counts
+     when there is one. Under 10 % or 1 GB free starts an episode: one DM, `diskAlert` on the session, ending at 20 % and
+     2 GB free. More disk (`POST /api/sessions/:id/disk`, a button on the session in the app and web page) has the core
+     extend the volume to twice its size (at most 500 GB); the session's `diskGb` keeps the size for every later machine,
+     and when Fly says the machine must restart to see it, a pause and resume follow (as Upgrade does). A machine without
+     a volume (until the held core is live) can't grow: the alert says so. *Not chosen*: Fly's automatic volume extension
+     (`auto_extend_size_*`): a runaway build would grow the bill without anyone seeing it; and a bigger root disk
+     (Fly `config.rootfs.size_gb`, the earlier unpushed attempt on branch snapshot-fix): the state must live on a volume
+     anyway for the core's outside backup (174), a volume grows in place (often with no restart) where a root disk needs
+     a new machine, and one disk to watch and grow is simpler than two. That branch's phone-approved resume fallback
+     (newest line snapshot + live transcript) is dropped too: Deyao wants no resume fallback (173, 174).

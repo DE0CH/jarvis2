@@ -2,6 +2,7 @@ package main
 
 import (
 	"errors"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -12,6 +13,7 @@ import (
 // pause is done
 func TestDrainLetsInFlightFinishAndRefusesNew(t *testing.T) {
 	rg := newRig(t)
+	os.Remove(rg.r.st.snapshotPath("m1") + ".sig") // m1 runs: it hasn't sent its final snapshot yet
 	r := rg.r
 	r.cfg.NoAccess = true
 	r.cfg.SnapshotWait = 30 * time.Second

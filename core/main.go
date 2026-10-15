@@ -176,6 +176,15 @@ func Handler(c *Core) http.Handler {
 	h("POST /certify", func(r *http.Request, b body) (any, error) {
 		return c.Certify(doc(b, "approval"), doc(b, "started"), str(b, "carry"))
 	})
+	h("POST /extend", func(r *http.Request, b body) (any, error) { // volumes.go: More disk
+		var in struct {
+			Machine string `json:"machine"`
+			SizeGB  int    `json:"sizeGb"`
+		}
+		raw, _ := json.Marshal(b)
+		json.Unmarshal(raw, &in)
+		return c.Extend(in.Machine, in.SizeGB)
+	})
 	h("POST /kill", func(r *http.Request, b body) (any, error) {
 		var snap *SnapshotClaim
 		if len(b["snapshot"]) != 0 && string(b["snapshot"]) != "null" {

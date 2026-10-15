@@ -88,7 +88,8 @@ changes nobody can see — no single compromised component is enough.
 
 The core trusts itself: it does what it signs. It doesn't care who calls or why — the router decides that.
 Its Fly token is narrowed (a Fly macaroon caveat) to app `jarvis2-sessions`: create, read, stop and destroy
-machines, and run exactly one command inside a machine, `/usr/local/bin/jarvis2-init` with no arguments.
+machines and their volumes (and the volumes' snapshots), and run exactly one command inside a machine,
+`/usr/local/bin/jarvis2-init` with no arguments.
 
 | Primitive | Does |
 |---|---|
@@ -106,10 +107,11 @@ machines, and run exactly one command inside a machine, `/usr/local/bin/jarvis2-
 | `approve_by_phone(challenge, sig, current?)` | The phone is the highest privilege: any challenge it signs is approved, once. An add-store is always answered onto `current`, the machine's newest cert (above), and refused without it. |
 | `approve_by_dead_machine(challenge)` | Automatic: the predecessor is killed (Fly-confirmed) and not used, and the stores, image and options are identical (the predecessor's `once` left out; this challenge has none) — or it is a burn. Never a new line, never a machine succeeding itself. |
 | `approve_by_old_key(challenge, sig)` | Automatic: a downgrade (same machine, a subset of its stores, a new key pair) signed with the signing key in the cert it continues. |
-| `start(image, region, size)` | Open (normally the router, which guards it; it can't lead to a secret): one Fly create → a created machine. The image is `ghcr.io/de0ch/jarvis2-session` pinned by digest; `size` is small, medium, large or a doubling past it, `16gb`, `32gb`, … (anything else is refused; `sizeGuest` makes the Fly guest); the machine's Fly config gets only what the core sets (its key, the router's address). |
+| `start(image, region, size, diskGb?)` | Open (normally the router, which guards it; it can't lead to a secret): a new, empty Fly volume (`diskGb`, default 10, at most 500; `core/volumes.go`) and one Fly create with it mounted at `/data` → a created machine, its volume named in the `created` and `started` documents and so in its cert. The image is `ghcr.io/de0ch/jarvis2-session` pinned by digest; `size` is small, medium, large or a doubling past it, `16gb`, `32gb`, … (anything else is refused; `sizeGuest` makes the Fly guest); the machine's Fly config gets only what the core sets (its key, the router's address, the mount). A volume is never made from a snapshot: no machine starts on another's data. |
 | `init(machine)` | One try, for a machine this core created: Fly must report it started, then one run of `jarvis2-init` (its output: the machine's keys) → the signed `started` document. 409 while it isn't up; the router retries and kills a machine that never comes up. |
 | `certify(approval, started, carry?)` | The approval and a started machine (init's signed document) running the approved image (the digest Fly reports is the approval's) → the succession cert, naming the snapshot the predecessor signed at its kill. One machine per approval, one line per machine, one successor per predecessor (killed and not used). The null image: no machine, a burn cert. For a machine succeeding itself the approval is the new cert at once. Given the line's carry blob, certify (and an add-store's or downgrade's answer) answers it rebound to the new cert beside it, keeping only that cert's stores. |
-| `kill(machine, snapshot?)` | One Fly destroy, then Fly must report the machine destroyed → killed (409 before: the router asks again). `snapshot` = the sha256 of the machine's last snapshot and its signature over it with its current key: kept as what its successor restores. |
+| `kill(machine, snapshot?)` | For a certified machine with a volume, first the **backup**: stop the machine, set the volume's snapshot retention (3 days when `snapshot` is given, 60 when not), take an on-demand volume snapshot and wait for Fly to report it `created` (409 at each step until then; 502 when Fly refuses or the snapshot fails, and nothing is destroyed). Then one Fly destroy, Fly must report the machine destroyed → killed (409 before: the router asks again), and the volume is deleted (its snapshots stay for their retention). `snapshot` = the sha256 of the machine's last snapshot and its signature over it with its current key: kept as what its successor restores. The signed record names `backup: {volume, snapshot, at, retentionDays, sizeBytes, signedSnapshot}`; no resume or restore reads it (recovery by hand). |
+| `extend(machine, sizeGb)` | More disk: the live machine's volume grows (never shrinks; at most 500 GB) → signed `extended {needsRestart}` (Fly's word whether the machine must restart to see it). |
 | `attest(machine, input, origin, sha256)` | The input log: sign and append to a hash chain (no parsing); the answer is the entry. Certs are appended by the core itself, each cert's entry answered beside it. The core keeps only the head and the length; the router keeps the entries. |
 | `unlock_begin(name, for)` / `unlock_finish(pending, phone shares)` | The split-key unlock of every key of the store (one share per key's `E`, all under one Face ID). `for` = the nonce of the one challenge or cert it is for (a Start, an add-store, a waiting session): only that cert reads it and its pull locks it again (below, "Carried secrets"); no `for` = a standing unlock, open until locked. |
 | `lock(unlock id)` / `list_unlocked(nonce)` | Release; the signed list of open unlocks (each with what it is for). |
@@ -120,7 +122,7 @@ machines, and run exactly one command inside a machine, `/usr/local/bin/jarvis2-
 A succession from null is approved only by the phone: every new line starts with Deyao's click.
 
 **State, in memory only:** its own key pairs, the carry key, the master and phone public keys (from the claim), the Fly token,
-the stores, each store's last 50 versions and the pending restores, the non-sensitive set, the machines it created and not yet initialised (with the image asked for), each
+the stores, each store's last 50 versions and the pending restores, the non-sensitive set, the machines it created and not yet initialised (with the image asked for), each live machine's volume and each killed machine's backup record, each
 initialised live machine's current signing key, the unlocked stores' plaintext (each unlock standing or for one cert), the pending unlocks and deploy-key requests, and append-only sets — **killed**
 (Fly-confirmed), **used** (predecessors continued or burnt), **spent** approvals, and per certified machine the nonce of
 its **newest** cert. What
@@ -425,8 +427,15 @@ by the core, approved by the phone; the box alone can never make one, and no AI 
 - **Pause:** the machine stops every process of the session (SIGSTOP), signs its snapshot (artefacts, workspace, transcript, the harnesses' state)
   with its signing key and uploads it; it signs only this one in its life and answers any later snapshot command with
   the same one, so the router holds no earlier signed state to roll a successor back to →
-  `kill(machine, snapshot hash + its signature)`: the successor's cert names that snapshot and no other. Its carried secrets (sealed by the core at its last pull) are already next to the snapshot. Skipped/failed
-  snapshot = nothing to resume; no secret moves.
+  `kill(machine, snapshot hash + its signature)`: the successor's cert names that snapshot and no other. Its carried secrets (sealed by the core at its last pull) are already next to the snapshot.
+  The snapshot streams into the router as it is made, so it needs no free disk on the machine; the machine signs the
+  router's hash of what arrived (`router/snapstream.go`). A machine paused while still booting signs its predecessor's
+  snapshot (the one its cert names: it has no state of its own yet) and stops booting, so the line keeps it.
+  **A pause never loses state (2026-10-15, `router/snapsafe.go`):** a machine whose snapshot fails (an error, the wait
+  running out, or a machine gone silent) and that has no volume is kept, never destroyed (session `failed`,
+  `snapshotFailed`, a "needs you" DM); with a volume the kill goes on and the core's backup holds its last state. A line
+  whose last kill named no snapshot doesn't resume (it would start empty): the session says why (`noSnapshot`) and
+  Deyao gets a DM naming the backup; recovery from a backup is by hand. No secret moves.
 - **Resume, nothing changed (also unattended, e.g. scheduled):** `succession(old, …)` ← approve_by_dead_machine
   → `start` → `certify` (with the line's carry) → succession cert + the carry rebound → the machine pulls its secrets from the carried blob,
   no store unlocked, no Face ID.
@@ -556,6 +565,13 @@ the router's is read-only), fetches its core-signed succession cert through the 
 core key and that it names its own keys; if the predecessor is a real machine it fetches the snapshot and checks
 it against the hash the cert names and the predecessor's signing key from the cert. Then it starts the harness from
 the cert's options and pulls its secrets. Any failed check → start nothing. Everything else it takes: below.
+
+**The volume (`machine/volume.go`).** A machine with a volume (mounted at `/data` by Fly, as the core asked) keeps the
+session's state on it: before restoring anything, boot bind-mounts each of the snapshot's directories (`~/workspace`,
+`~/artifacts`, `~/.claude/projects`, the harnesses' state) from `/data/home/<path>`, so every path stays the same, and
+the agent copies the snapshot's single files (`~/.claude.json`, the Jarvis records) there every minute and before the
+final snapshot. The volume is always new and empty at boot; the successor's state still comes only from the
+predecessor's signed snapshot. The agent reports the root disk and the volume every 30 s (`POST /m/disk`).
 
 ## Inputs to a machine (Deyao, 2026-10-11)
 

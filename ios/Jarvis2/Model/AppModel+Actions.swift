@@ -78,6 +78,27 @@ extension AppModel {
     }
   }
 
+  /// More disk out of a low-disk episode (router/disk.go): the core grows the machine's volume to twice its size; when
+  /// Fly says the machine must restart for it, the router pauses (its signed snapshot) and resumes it. One tap, as
+  /// Upgrade. The pending label holds until the job is done or failed.
+  func moreDisk(_ id: String) async {
+    await exclusive("s:" + id) {
+      pend("s:" + id, "Adding disk…")
+      defer { pend("s:" + id, nil) }
+      do {
+        try await RouterClient.shared.call("POST", "api/sessions/\(id)/disk", [:])
+        await refreshUntil(60) { m in
+          guard let x = m.session(id) else { return true }
+          return x.serverBusy == nil && x.wakeKind == "disk" && (x.wakePhase == "done" || x.wakePhase == "failed")
+        }
+        if let x = session(id), x.serverBusy == nil, x.wakeKind == "disk", x.wakePhase == "failed" {
+          failure = "More disk failed" + (x.wakeError.map { ": \($0)" } ?? "")
+        }
+        settle(120)
+      } catch { fail(error); await refresh() }
+    }
+  }
+
   /// what a destroy would lose (GET …/changes: uncommitted and unpushed work), in words
   /// what a destroy would lose, one line per fact: "Claude is working", "repo · 2 uncommitted · 1 unpushed"
   private func changesText(_ id: String) async -> String {

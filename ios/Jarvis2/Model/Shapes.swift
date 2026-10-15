@@ -8,8 +8,9 @@ struct Session: Identifiable, Equatable, Hashable {
   var id: String { j["id"].string ?? "" }
   var state: String { j["state"].string ?? "" }
   /// Resume brings it back: paused, or failed with no machine (a failed or cut-off start; router Resume)
-  /// a failed session with a machine finishes its pause first (router Resume, DECISIONS 170)
-  var resumable: Bool { state == "paused" || state == "failed" }
+  /// a failed session with a machine finishes its pause first (router Resume, DECISIONS 170); not one whose last
+  /// machine left no snapshot (the router refuses: it would start empty — router/snapsafe.go)
+  var resumable: Bool { (state == "paused" || state == "failed") && noSnapshot == nil }
   var status: String? { j["status"].text }
   var harness: String { j["harness"].text ?? "claude" }
   var model: String? { j["model"].text }
@@ -59,12 +60,28 @@ struct Session: Identifiable, Equatable, Hashable {
     guard let a = j["memory"]["availMb"].int, let t = j["memory"]["totalMb"].int, t > 0 else { return nil }
     return (a, t)
   }
+  /// a low-disk episode the router is watching (router/disk.go; absent once it is over)
+  var diskAlert: DiskAlert? { j["diskAlert"].object == nil ? nil : DiskAlert(j: j["diskAlert"]) }
+  /// the latest disk sample of a running machine: its volume when it has one, else its root filesystem
+  var disk: (availMb: Int, totalMb: Int, volume: Bool)? {
+    guard let a = j["disk"]["availMb"].int, let t = j["disk"]["totalMb"].int, t > 0 else { return nil }
+    return (a, t, j["disk"]["volume"].bool == true)
+  }
+  /// the volume size the line's next machine gets (0 = the core's default)
+  var diskGB: Int { j["diskGb"].int ?? 0 }
+  /// the core's Fly volume backups of the line's machines, newest first (for recovery by hand; nothing restores them)
+  var backups: [VolumeBackup] { j["backups"].array.map(VolumeBackup.init) }
+  /// the line's last machine left no signed snapshot: Resume is refused (it would start empty)
+  var noSnapshot: String? { j["noSnapshot"].text }
+  /// the final snapshot failed and the machine (no volume) is kept: Pause again or Destroy anyway
+  var snapshotFailed: String? { j["snapshotFailed"].text }
   /// the router's last restart / upgrade job (kind, phase, error)
   var wakeKind: String? { j["wake"]["kind"].text }
   var wakePhase: String? { j["wake"]["phase"].text }
   var wakeError: String? { j["wake"]["error"].text }
   /// what the router is doing to it right now (its lifecycle lock, or a mode / restart job), seen on every device
   var serverBusy: String? {
+    if j["busy"]["kind"].string == "growing-disk", j["wake"]["kind"].string == "disk", let p = j["wake"]["phase"].string, let l = Fmt.diskPhase[p] { return l }
     if let k = j["busy"]["kind"].string { return Fmt.busyLabel[k] ?? "Working…" }
     if let k = j["wake"]["kind"].string, let p = j["wake"]["phase"].string, p != "done", p != "failed" { return Fmt.busyLabel[k] ?? "Working…" }
     return nil
@@ -82,6 +99,33 @@ struct MemAlert: Equatable, Hashable {
   var nextGB: Int? { j["nextGb"].int }
   /// its Fly guest, "8×performance · 32 GB"
   var nextGuest: String? { j["nextGuest"].text }
+}
+
+/// a low-disk episode (router/disk.go): the disk now, and whether More disk can grow it
+struct DiskAlert: Equatable, Hashable {
+  let j: JSON
+  var since: Date? { j["since"].string?.isoDate }
+  var reason: String { j["reason"].text ?? "disk is short" }
+  var detail: String? { j["detail"].text }
+  var canGrow: Bool { j["canGrow"].bool == true }
+  /// the volume size More disk moves to
+  var nextGB: Int? { j["nextGb"].int }
+  /// why it can't grow (a machine without a volume)
+  var why: String? { j["why"].text }
+}
+
+/// a kill's Fly volume backup (router/snapsafe.go Backup)
+struct VolumeBackup: Identifiable, Equatable, Hashable {
+  let j: JSON
+  var id: String { snapshot }
+  var machine: String { j["machine"].text ?? "" }
+  var volume: String { j["volume"].text ?? "" }
+  var snapshot: String { j["snapshot"].text ?? "" }
+  var at: Date? { j["at"].string?.isoDate }
+  var expiresAt: Date? { j["expiresAt"].string?.isoDate }
+  var retentionDays: Int { j["retentionDays"].int ?? 0 }
+  var sizeBytes: Int? { j["sizeBytes"].int }
+  var signed: Bool { j["signedSnapshot"].bool == true }
 }
 
 struct Wakeup: Identifiable, Equatable, Hashable {

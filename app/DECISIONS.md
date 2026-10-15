@@ -333,6 +333,13 @@ fixes, 34–40 carried over from the old app and still true, 41–43 the web pag
     signature)"): Allow all approves it; what it brings about shows below as "What the API calls bring about", each
     opening the call's sheet already approved (its follow-ups under their own Face ID), then Done. The web page's batch
     card has "Review call" for its API calls.
+72. **Disk, More disk, kept machines and volume backups** (docs/DECISIONS.md 172–175; 2026-10-15). Web: the card's Machine
+    row adds "X of Y GB disk free" (the volume when the machine has one). A low-disk episode is a red callout like the
+    memory one, with "More disk (N GB)" (POST …/disk, busy label "Adding disk…", then the job's phases) or, on a machine
+    without a volume, why it can't grow. A kept machine (`snapshotFailed`) gets a red callout with Pause again and Destroy
+    anyway; a line that won't resume (`noSnapshot`) gets one naming the newest volume backup and its expiry. "Volume
+    backups" lists the newest three backups on the card (snapshot id, volume id, taken, kept until, whether the machine
+    also signed its own snapshot, size; Copy buttons where the clipboard works). No action restores from a backup.
 
 ## Unfinished / known gaps
 

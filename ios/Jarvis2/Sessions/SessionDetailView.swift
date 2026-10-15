@@ -75,6 +75,8 @@ private struct SessionDetailList: View {
       }
 
       if let a = m.memAlert { MemAlertSection(m: m, a: a, busy: busy) }
+      if let a = m.diskAlert { DiskAlertSection(m: m, a: a, busy: busy) }
+      if m.snapshotFailed != nil || m.noSnapshot != nil { SnapshotProblemSection(m: m, busy: busy) }
 
       if let h = m.needsGrant {
         Section {
@@ -139,10 +141,17 @@ private struct SessionDetailList: View {
           LabeledContent("Memory", value: "\(Fmt.bytes(mem.availMb * 1_048_576)) free of \(Fmt.bytes(mem.totalMb * 1_048_576))")
             .accessibilityIdentifier("memory-\(m.id)")
         }
+        if m.state == "started", let d = m.disk {
+          LabeledContent(d.volume ? "Disk (volume)" : "Disk", value: "\(Fmt.bytes(d.availMb * 1_048_576)) free of \(Fmt.bytes(d.totalMb * 1_048_576))")
+            .accessibilityIdentifier("disk-\(m.id)")
+        }
+        if m.diskGB > 0 { LabeledContent("Next machine's disk", value: "\(m.diskGB) GB") }
         if let c = m.created { LabeledContent("Created", value: Fmt.ago(c)) }
         if m.state == "paused", let pa = m.pausedAt { LabeledContent("Paused", value: Fmt.ago(pa)) }
         LabeledContent("Session id") { Text(m.id).font(.footnote.monospaced()).textSelection(.enabled) }
       }
+
+      if !m.backups.isEmpty { BackupsSection(m: m) }
 
       Section {
         Button("Destroy", systemImage: "trash", role: .destructive) { Task { await model.destroy(m.id) } }
@@ -191,6 +200,100 @@ private struct MemAlertSection: View {
       Label("Memory", systemImage: "memorychip")
     } footer: {
       if a.nextSize != nil { Text("Upgrade stops Claude and everything it runs, then brings the same conversation back on the bigger machine" + (a.nextGuest.map { " (\($0))" } ?? "") + ".") }
+    }
+  }
+}
+
+/// a low-disk episode: the disk now, and More disk (the volume twice as big, same conversation)
+private struct DiskAlertSection: View {
+  @Environment(AppModel.self) private var model
+  let m: Session
+  let a: DiskAlert
+  let busy: String?
+
+  var body: some View {
+    Section {
+      Label("Running out of disk", systemImage: "exclamationmark.triangle.fill")
+        .foregroundStyle(.red).font(.subheadline.weight(.semibold))
+        .accessibilityIdentifier("diskalert-\(m.id)")
+      LabeledContent("Why", value: a.reason)
+      if let d = a.detail { LabeledContent("Now", value: d) }
+      if let since = a.since { LabeledContent("Since", value: Fmt.ago(since)) }
+      if busy == nil, m.wakeKind == "disk", m.wakePhase == "failed" {
+        ErrorRow(text: "More disk failed" + (m.wakeError.map { ": \($0)" } ?? ""), id: "disk-error-\(m.id)")
+      }
+      if a.canGrow, let gb = a.nextGB, busy == nil, m.state == "started" {
+        Button("More disk (\(gb) GB)", systemImage: "externaldrive.badge.plus") { Task { await model.moreDisk(m.id) } }
+          .tint(.red)
+          .accessibilityIdentifier("moredisk-\(m.id)")
+      } else if let why = a.why {
+        LabeledContent("More disk", value: why)
+      }
+    } header: {
+      Label("Disk", systemImage: "internaldrive")
+    }
+  }
+}
+
+/// the final snapshot failed (machine kept), or the line's last machine left none (Resume refused)
+private struct SnapshotProblemSection: View {
+  @Environment(AppModel.self) private var model
+  let m: Session
+  let busy: String?
+
+  var body: some View {
+    Section {
+      if let f = m.snapshotFailed {
+        ErrorRow(text: f, id: "snapshot-failed-\(m.id)")
+        LabeledContent("Machine", value: "Kept")
+        if busy == nil, m.state == "failed" {
+          Button("Pause again", systemImage: "pause.circle") { Task { await model.pause(m.id) } }
+            .accessibilityIdentifier("pause-again-\(m.id)")
+        }
+      }
+      if let n = m.noSnapshot {
+        ErrorRow(text: n, id: "no-snapshot-\(m.id)")
+        LabeledContent("Resume", value: "Refused")
+        if let b = m.backups.first {
+          LabeledContent("Volume backup") { Text(b.snapshot).font(.footnote.monospaced()).textSelection(.enabled) }
+          if let e = b.expiresAt { LabeledContent("Kept until", value: e.formatted(date: .abbreviated, time: .omitted)) }
+        } else {
+          LabeledContent("Volume backup", value: "None")
+        }
+      }
+    } header: {
+      Label(m.snapshotFailed != nil ? "Final snapshot failed" : "No snapshot", systemImage: "externaldrive.badge.exclamationmark")
+        .foregroundStyle(.red)
+    }
+  }
+}
+
+/// the core's Fly volume backups of this line's machines, newest first: for recovery by hand, nothing restores them
+private struct BackupsSection: View {
+  @Environment(AppModel.self) private var model
+  let m: Session
+
+  var body: some View {
+    Section {
+      ForEach(m.backups) { b in
+        VStack(alignment: .leading, spacing: 4) {
+          LabeledContent("Snapshot") { Text(b.snapshot).font(.footnote.monospaced()).textSelection(.enabled) }
+          LabeledContent("Volume") { Text(b.volume).font(.footnote.monospaced()).textSelection(.enabled) }
+          if let at = b.at { LabeledContent("Taken", value: Fmt.ago(at)) }
+          if let e = b.expiresAt { LabeledContent("Kept until", value: e.formatted(date: .abbreviated, time: .omitted)) }
+          LabeledContent("Machine's own snapshot", value: b.signed ? "Yes" : "No")
+          if let n = b.sizeBytes, n > 0 { LabeledContent("Size", value: Fmt.bytes(n)) }
+        }
+        .contextMenu {
+          Button("Copy snapshot id", systemImage: "doc.on.doc") { model.copy(b.snapshot, "Snapshot id") }
+          Button("Copy volume id", systemImage: "doc.on.doc") { model.copy(b.volume, "Volume id") }
+        }
+        .accessibilityIdentifier("backup-\(b.snapshot)")
+      }
+    } header: {
+      Label("Volume backups", systemImage: "externaldrive.badge.timemachine")
+    } footer: {
+      Text("Fly volume snapshots the core took at each pause, for recovery by hand.")
     }
   }
 }

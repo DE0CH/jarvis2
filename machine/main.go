@@ -290,6 +290,9 @@ func prepare() error {
 	writeVouched(v)
 	firstMachine := cert.PredID == ""
 
+	// 1b. the volume (volume.go): the state's directories onto it, before anything is restored there
+	setupVolume()
+
 	// 2. the predecessor's snapshot: the one whose hash the cert names, signed by the predecessor
 	if !firstMachine && cert.PredID != me {
 		var pc Cert
@@ -337,7 +340,9 @@ func prepare() error {
 	placeImportedTranscripts()     // jarvis1import.go: an import's transcripts, under the working dir's project
 	rearmJarvis1(c, sessionID(me)) // jarvis1import.go: its wakeups and crons, as this line's own requests
 
-	// 5. booted: from now on a snapshot command gets a real snapshot; then Jarvis 1's entrypoint runs the harness
+	// 5. booted: from now on a snapshot command gets a real snapshot; then Jarvis 1's entrypoint runs the harness —
+	// unless a pause already took the predecessor's snapshot as this machine's (snapstream.go): it goes no further
+	holdIfCarried()
 	if err := os.WriteFile(bootedPath, []byte(time.Now().UTC().Format(time.RFC3339)), 0o644); err != nil {
 		return fmt.Errorf("booted marker: %w", err)
 	}
@@ -498,14 +503,27 @@ func skipInSnapshot(rel string) bool {
 
 // makeSnapshot: the snapshot as a tar.gz written to path (streamed: a workspace can be several GB) → its sha256
 func makeSnapshot(path string) (string, int64, error) {
-	home, _ := os.UserHomeDir()
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
 	if err != nil {
 		return "", 0, err
 	}
 	defer f.Close()
+	sum, n, err := writeSnapshot(f)
+	if err != nil {
+		return "", 0, err
+	}
+	if err := f.Sync(); err != nil {
+		return "", 0, err
+	}
+	return sum, n, nil
+}
+
+// writeSnapshot: the snapshot as a tar.gz into w (a file, or the request body that streams it to the router:
+// snapstream.go) → its sha256 and size
+func writeSnapshot(w io.Writer) (string, int64, error) {
+	home, _ := os.UserHomeDir()
 	h := sha256.New()
-	cw := &countWriter{w: io.MultiWriter(f, h)}
+	cw := &countWriter{w: io.MultiWriter(w, h)}
 	gz := gzip.NewWriter(cw)
 	tw := tar.NewWriter(gz)
 	for _, rel := range snapshotPaths {
@@ -559,9 +577,6 @@ func makeSnapshot(path string) (string, int64, error) {
 		return "", 0, err
 	}
 	if err := gz.Close(); err != nil {
-		return "", 0, err
-	}
-	if err := f.Sync(); err != nil {
 		return "", 0, err
 	}
 	return hex.EncodeToString(h.Sum(nil)), cw.n, nil
@@ -689,6 +704,7 @@ func agent() error {
 		}
 		go statusReporter(c)
 		go memoryReporter(c) // memory.go: RAM for the router's starvation watch
+		go diskReporter(c)   // disk.go: the root disk and the volume, for the router's low-disk warning
 		go screenReporter(c) // screen.go: the pane for the read-only terminal
 		go serveAPIProxy(c)  // apiproxy.go: $JARVIS_URL for Jarvis 1's session scripts
 		go liveSync(c)       // livesync.go: the transcripts to the Storage Box (through the router) for search
@@ -720,11 +736,12 @@ func agent() error {
 			}
 			if cmd == "snapshot" {
 				if !booted() {
-					if err := noSnapshot(c); err != nil {
+					if err := bootingSnapshot(c); err != nil { // snapstream.go: the predecessor's, carried over
 						log.Printf("answering the snapshot while booting: %v", err)
 					}
 				} else if err := uploadSnapshot(c); err != nil {
 					log.Printf("snapshot failed: %v", err)
+					reportSnapshotFailed(c, err) // snapstream.go: the pause stops waiting, and nothing is lost
 				}
 			}
 		}
@@ -790,7 +807,8 @@ func finalSnapshotSum() (string, string, error) {
 	return sum, sig, nil
 }
 
-func uploadSnapshot(c *client) error {
+// uploadSnapshotFile: the snapshot through a local file (a router from before snapshot streaming)
+func uploadSnapshotFile(c *client) error {
 	sum, sig, err := finalSnapshotSum()
 	if err != nil { // the first: freeze, take, sign, keep
 		frozen.Store(true)

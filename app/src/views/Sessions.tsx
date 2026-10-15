@@ -1,6 +1,6 @@
 import { useRef } from "react";
 import { Linking, View } from "react-native";
-import { api, ago, isTaskLine, challengeRequest, cronEvery, holderTitle, HOLDERS, HARNESS, REGION, sessionTitle, storesOf, when, type Approval, type Lease, type Session, type State } from "../lib/api";
+import { api, ago, isTaskLine, challengeRequest, cronEvery, holderTitle, HOLDERS, HARNESS, REGION, sessionTitle, storesOf, when, type Approval, type Backup, type Lease, type Session, type State } from "../lib/api";
 import { useStore, setTab, getStore, pend, refresh, refreshUntil, pendUntil, settle, ask, askText, toast, failed, exclusive, BUSY_LABEL } from "../lib/store";
 import { hasShell, requestSecure } from "../lib/shell";
 import { requestGrant } from "../lib/grants";
@@ -26,12 +26,15 @@ const clip = (t: string) => t.length > 90 ? t.slice(0, 90) + "…" : t;
 
 // the steps of an Upgrade job (wake.kind "upgrade"), as the busy label
 const UPGRADE_PHASE: Record<string, string> = { freeing: "Freeing memory…", snapshotting: "Snapshotting…", resuming: "Resuming…" };
+// the steps of a More disk job (wake.kind "disk", router/disk.go)
+const DISK_PHASE: Record<string, string> = { extending: "Growing the disk…", snapshotting: "Snapshotting…", resuming: "Resuming…" };
 // what the router is doing to this session right now (its lifecycle lock, or a mode / restart job), as a
 // button label — seen on every device, not only the one that started it
 export function serverBusy(m: Session): string | null {
   if (m.busy?.kind === "upgrading" && m.wake?.kind === "upgrade" && UPGRADE_PHASE[m.wake.phase]) return UPGRADE_PHASE[m.wake.phase];
+  if (m.busy?.kind === "growing-disk" && m.wake?.kind === "disk" && DISK_PHASE[m.wake.phase]) return DISK_PHASE[m.wake.phase];
   if (m.busy) return BUSY_LABEL[m.busy.kind] || "Working…";
-  if (m.wake && !["done", "failed"].includes(m.wake.phase)) return (m.wake.kind === "upgrade" && UPGRADE_PHASE[m.wake.phase]) || BUSY_LABEL[m.wake.kind] || "Working…";
+  if (m.wake && !["done", "failed"].includes(m.wake.phase)) return (m.wake.kind === "upgrade" && UPGRADE_PHASE[m.wake.phase]) || (m.wake.kind === "disk" && DISK_PHASE[m.wake.phase]) || BUSY_LABEL[m.wake.kind] || "Working…";
   return null;
 }
 // sessions the Claude app does not see: their primary action is the Remote page
@@ -78,6 +81,32 @@ export const upgradeSession = (id: string) => exclusive("s:" + id, async () => {
     const x = find(getStore().state, id);
     if (x?.wake?.kind === "upgrade" && x.wake.phase === "failed") toast("Upgrade failed: " + (x.wake.error || "no reason given"));
     else if (x?.wake?.kind === "upgrade" && x.wake.phase === "done") { toast(`Upgraded to ${sizeName(a)}.`, "ok"); settle(30000); }
+  } catch (e: any) { failed(e); await refresh(false); }
+  finally { pend("s:" + id, null); }
+});
+// More disk (router/disk.go): the core grows the machine's volume to twice its size; when Fly says the machine must
+// restart to see it, the router pauses and resumes it (POST …/disk → 202, then busy "growing-disk" + wake {kind:"disk"}
+// until done / failed). A machine without a volume can't grow (409, the alert says why).
+const diskDone = (x: Session | undefined) => !x || x.state === "failed" || (!x.busy && x.wake?.kind === "disk" && ["done", "failed"].includes(x.wake.phase));
+export const moreDisk = (id: string) => exclusive("s:" + id, async () => {
+  pend("s:" + id, "Adding disk…");
+  try {
+    const j = await api<{ toGb: number }>("POST", `api/sessions/${id}/disk`, {});
+    await refreshUntil((s) => diskDone(find(s, id)), 60 * 60 * 1000);
+    const x = find(getStore().state, id);
+    if (x?.wake?.kind === "disk" && x.wake.phase === "failed") toast("More disk failed: " + (x.wake.error || "no reason given"));
+    else if (x?.wake?.kind === "disk" && x.wake.phase === "done") { toast(`Disk grown to ${j.toGb} GB.`, "ok"); settle(30000); }
+  } catch (e: any) { failed(e); await refresh(false); }
+  finally { pend("s:" + id, null); }
+});
+// Destroy anyway: past a failed final snapshot (the machine was kept), dropping what changed since its last one
+const destroyAnyway = (id: string) => exclusive("s:" + id, async () => {
+  const m = find(getStore().state, id);
+  if (!(await ask({ title: "Destroy anyway?", rows: [{ label: "Session", value: m ? sessionTitle(m) : id }, { label: "Snapshot", value: m?.snapshotFailed || "Failed" }, { label: "If destroyed", value: "What changed since its last snapshot is lost" }], action: "Destroy anyway", danger: true }))) return;
+  pend("s:" + id, "Destroying…");
+  try {
+    await api("POST", `api/sessions/${id}/destroy?force=1`);
+    await refreshUntil((s) => !find(s, id) || find(s, id)?.state === "failed", 60 * 60 * 1000);
   } catch (e: any) { failed(e); await refresh(false); }
   finally { pend("s:" + id, null); }
 });
@@ -254,6 +283,74 @@ function MemAlert({ m, busy }: { m: Session; busy: string | null }) {
   );
 }
 const gb = (mb: number) => (mb / 1024).toFixed(1);
+// a low-disk episode: what is short, and More disk (or why it can't grow)
+function DiskAlert({ m, busy }: { m: Session; busy: string | null }) {
+  const a = m.diskAlert;
+  const failedGrow = m.wake?.kind === "disk" && m.wake.phase === "failed" ? m.wake.error || "no reason given" : "";
+  if (!a && !failedGrow) return null;
+  return (
+    <Callout color="red" variant="surface" mt={2} data={{ diskAlert: "1" }} id={"disk-alert-" + m.id}>
+      {!!a && <CalloutText color="red">{`Running out of disk: ${a.reason}. ${a.detail}.`}</CalloutText>}
+      {!!a && a.canGrow && <>
+        <CalloutText color="red">{`More disk grows its volume to ${a.nextGb} GB; if the machine must restart to see it, the session is paused and resumed with the same conversation.`}</CalloutText>
+        {!busy && m.state === "started" && <Flex mt={2}><PButton pkey={"s:" + m.id} color="red" id={"more-disk-" + m.id} onPress={() => moreDisk(m.id)} label={`More disk (${a.nextGb} GB)`} /></Flex>}
+      </>}
+      {!!a && !a.canGrow && <CalloutText color="red">{"More disk isn't possible: " + (a.why || "its machine has no volume") + ". Free space in it, or ask it to."}</CalloutText>}
+      {!!failedGrow && <CalloutText color="red">{"More disk failed: " + failedGrow}</CalloutText>}
+    </Callout>
+  );
+}
+const day = (iso: string) => new Date(iso).toISOString().slice(0, 10);
+const sizeText = (b?: number) => !b ? "" : b >= 1 << 30 ? `${(b / (1 << 30)).toFixed(1)} GB` : `${Math.max(1, Math.round(b / (1 << 20)))} MB`;
+// the final snapshot failed and the machine was kept; or the line's last machine left none and it won't resume
+function SnapshotTrouble({ m, busy }: { m: Session; busy: string | null }) {
+  const b = (m.backups || [])[0];
+  if (m.snapshotFailed) return (
+    <Callout color="red" variant="surface" mt={2} data={{ snapshotFailed: "1" }} id={"snapshot-failed-" + m.id}>
+      <CalloutText color="red">{`The final snapshot failed (${m.snapshotFailed}), so its machine was kept instead of destroyed: nothing is lost. Free what blocks it, then Pause again; Destroy anyway drops what changed since its last snapshot.`}</CalloutText>
+      {!busy && <Flex gap={2} mt={2} wrap>
+        <PButton pkey={"s:" + m.id} id={"pause-again-" + m.id} variant="soft" onPress={() => pause(m.id)} label="Pause again" />
+        <Button size={1} variant="soft" color="red" id={"destroy-anyway-" + m.id} onPress={() => destroyAnyway(m.id)}>Destroy anyway</Button>
+      </Flex>}
+    </Callout>
+  );
+  if (m.noSnapshot) return (
+    <Callout color="red" variant="surface" mt={2} data={{ noSnapshot: "1" }} id={"no-snapshot-" + m.id}>
+      <CalloutText color="red">{`It won't resume: its ${m.noSnapshot}, so it would start empty.`}</CalloutText>
+      <CalloutText color="red">{b ? `Its last state is in the Fly volume backup ${b.snapshot} (volume ${b.volume}), kept until ${day(b.expiresAt)}, for recovery by hand.` : "Its machine had no volume, so there is no volume backup. Destroy archives its newest signed snapshot."}</CalloutText>
+    </Callout>
+  );
+  return null;
+}
+const copyable = (label: string, v: string) => canCopy ? () => copyText(v).then(() => toast(label + " copied", "ok"), (e) => failed(e, "Could not copy: ")) : undefined;
+// the core's Fly volume backups of the line's machines (one per pause), newest first: for recovery by hand only
+function Backups({ m }: { m: Session }) {
+  const list = m.backups || [];
+  if (!list.length) return null;
+  const row = (x: Backup) => (
+    <Box key={x.snapshot} data={{ backup: x.snapshot }}>
+      <Rows>
+        <Row label="Snapshot" mono>{x.snapshot}</Row>
+        <Row label="Volume" mono>{x.volume}</Row>
+        <Row label="Taken">{`${ago(x.at)} · kept until ${day(x.expiresAt)}`}</Row>
+        <Row label="Signed snapshot">{x.signedSnapshot ? "Yes (the machine's own, too)" : "No: this is the only copy"}</Row>
+        {!!x.sizeBytes && <Row label="Size">{sizeText(x.sizeBytes)}</Row>}
+      </Rows>
+      {canCopy && <Flex gap={2} mt={1} wrap>
+        <Button size={1} variant="ghost" color="gray" id={"copy-snap-" + x.snapshot} onPress={copyable("Snapshot id", x.snapshot)}>Copy snapshot id</Button>
+        <Button size={1} variant="ghost" color="gray" id={"copy-vol-" + x.snapshot} onPress={copyable("Volume id", x.volume)}>Copy volume id</Button>
+      </Flex>}
+    </Box>
+  );
+  return (
+    <Box mt={2} id={"backups-" + m.id}>
+      <Lbl>{`Volume backups (${list.length})`}</Lbl>
+      <Muted>Fly volume snapshots taken at each pause, for recovery by hand; no resume uses them.</Muted>
+      {list.slice(0, 3).map(row)}
+      {list.length > 3 && <Muted>{`and ${list.length - 3} older (GET api/state lists them all)`}</Muted>}
+    </Box>
+  );
+}
 // a feature the machine refused without a grant (needs Deyao's approval): one tap to allow it for 10 minutes, or a standing rule
 function NeedsGrant({ m }: { m: Session }) {
   if (!m.needsGrant) return null;
@@ -336,17 +433,20 @@ export function Sessions() {
                   {!!m.content?.length && <Row label="Content"><BadgeList items={m.content} /></Row>}
                   <Row label="Harness">{HARNESS[m.harness || ""] || m.harness || "—"}</Row>
                   <Row label="Model">{modelName || "—"}</Row>
-                  <Row label="Machine">{[REGION[m.region || ""] || m.region, m.guest, m.state === "started" && m.memory && m.memory.totalMb > 0 ? `${gb(m.memory.availMb)} of ${gb(m.memory.totalMb)} GB free` : ""].filter(Boolean).join(" · ") || "—"}</Row>
+                  <Row label="Machine">{[REGION[m.region || ""] || m.region, m.guest, m.state === "started" && m.memory && m.memory.totalMb > 0 ? `${gb(m.memory.availMb)} of ${gb(m.memory.totalMb)} GB free` : "", m.state === "started" && m.disk && m.disk.totalMb > 0 ? `${gb(m.disk.availMb)} of ${gb(m.disk.totalMb)} GB disk free` : ""].filter(Boolean).join(" · ") || "—"}</Row>
                   <Row label="Created">{m.created ? ago(m.created) : "—"}</Row>
                   {paused && <Row label="Paused">{m.pausedAt ? ago(m.pausedAt) : "—"}</Row>}
                   {!paused && <Row label="Auto-pause" id={"autopause-" + m.id}>{autoPause || (m.oneShot ? "One-shot" : "—")}</Row>}
                 </Rows>
                 {!!m.resumePrompt && <Quote by={paused ? "Queued for the next resume" : "Queued prompt"} lines={3}>{clip(m.resumePrompt)}</Quote>}
                 <MemAlert m={m} busy={busy || null} />
+                <DiskAlert m={m} busy={busy || null} />
+                <SnapshotTrouble m={m} busy={busy || null} />
                 <NeedsGrant m={m} />
                 <LockedStore m={m} />
                 <Schedules m={m} />
                 {!!m.error && <P size={2} color="red" mt={1}>{m.error}</P>}
+                <Backups m={m} />
                 {!!m.discordChannel && <Flex mt={1}><Button size={1} variant="ghost" color="gray" id={"discord-" + m.id} onPress={() => openDiscord(m.discordChannel!)}>Discord channel ↗</Button></Flex>}
                 <Flex gap={2} pt={3} wrap style={{ marginTop: "auto" }} data={{ actions: "1" }}>
                   {busy ? <BusyButton variant="soft" color="gray" label={busy} />
