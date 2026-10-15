@@ -222,7 +222,7 @@ func (r *Router) DenyBatch(id string) error {
 		}
 	})
 	if !found {
-		return errors.New("no such batch (answered, denied or expired)")
+		return errAlreadyGone
 	}
 	for _, aid := range approvals {
 		r.Reject(aid)
@@ -274,6 +274,8 @@ type BatchResult struct {
 	Duplicate bool   `json:"duplicate,omitempty"`
 	Batch     string `json:"batch,omitempty"` // a duplicate already in another batch: that batch
 	Error     string `json:"error,omitempty"`
+	// Own: filed as a request of its own beside the batch (a restore is reviewed on its own page)
+	Own bool `json:"own,omitempty"`
 }
 
 // checkBatchItem: one item checked as its own endpoint would check it, before anything is filed
@@ -297,9 +299,6 @@ func (r *Router) checkBatchItem(c Caller, raw json.RawMessage) (*batchItem, erro
 		if err := callerMay(c, kind, np); err != nil {
 			return nil, &forbidden{err.Error()}
 		}
-		if kind == requestKindRestore {
-			return nil, &badRequest{"a restore is reviewed on its own page, not in a batch"}
-		}
 		it.kind, it.p, it.args = kind, np, callArgs(kind, np)
 		it.args["intent"] = in.Intent
 		return it, nil
@@ -307,10 +306,7 @@ func (r *Router) checkBatchItem(c Caller, raw json.RawMessage) (*batchItem, erro
 	switch in.Intent {
 	case "call":
 		// an app API call, run as Deyao once approved (apicalls.go): in a batch beside the session's other asks, so it
-		// never has to be filed on its own. Only a session (its requests or its actions) asks for one.
-		if (c.Kind != "session" && c.Kind != "actions") || c.Session == "" {
-			return nil, &forbidden{"an API call is asked for by a session (its machine key)"}
-		}
+		// never has to be filed on its own. Any caller may ask: it runs only once Deyao approves it.
 		var ci callIn
 		if err := json.Unmarshal(raw, &ci); err != nil {
 			return nil, &badRequest{"bad JSON: " + err.Error()}
@@ -324,22 +320,20 @@ func (r *Router) checkBatchItem(c Caller, raw json.RawMessage) (*batchItem, erro
 		return it, nil
 	case "add-store":
 		sid := in.Session
-		if c.Kind == "session" {
-			if sid != "" && sid != c.Session {
-				return nil, &forbidden{fmt.Sprintf("a session may ask only for itself (%s)", c.Session)}
-			}
-			sid = c.Session
+		if sid == "" && (c.Kind == "session" || c.Kind == "actions") {
+			sid = c.Session // for itself by default; for another session too (the phone shows which)
 		}
 		if strings.TrimSpace(in.Store) == "" {
 			return nil, &badRequest{"add-store: store is required"}
 		}
 		r.st.Do(func(d *persisted) {
-			if s := d.Sessions[sid]; s != nil && s.State == "started" {
+			// a running machine with a cert (started, or initialising while it waits on a locked store), as AddStore takes
+			if s := d.Sessions[sid]; s != nil && s.MachineID != "" && s.Cert != nil && (s.State == "started" || s.State == "initialising") {
 				it.machine = s.MachineID
 			}
 		})
 		if it.machine == "" {
-			return nil, &badRequest{fmt.Sprintf("add-store: session %q isn't running", sid)}
+			return nil, &badRequest{fmt.Sprintf("add-store: session %q has no running machine: a store is added to a paused session at its resume (jarvis2-request add-store once it runs)", sid)}
 		}
 		it.store, it.args = in.Store, map[string]any{"intent": in.Intent, "session": sid, "store": in.Store}
 		return it, nil
@@ -436,9 +430,9 @@ func (r *Router) FileBatch(c Caller, method, path string, body []byte, signed *S
 		reqs, props := callerLoad(d, c)
 		switch {
 		case reqs >= requestPerCaller:
-			limit = fmt.Sprintf("this caller has %d requests waiting already", reqs)
+			limit = fmt.Sprintf("this caller has %d requests waiting already: wait for Deyao to answer them, or deny some, then file again", reqs)
 		case proposes && (c.Kind == "session" || c.Kind == "actions") && props >= maxProposedSessions:
-			limit = fmt.Sprintf("%d proposed sessions already wait for Deyao", props)
+			limit = fmt.Sprintf("%d proposed sessions already wait for Deyao: wait for his answer, or deny one, then file again", props)
 		default:
 			d.Batches[b.ID] = b
 		}
@@ -465,6 +459,11 @@ func (r *Router) FileBatch(c Caller, method, path string, body []byte, signed *S
 		}
 	})
 	if len(entries) == 0 {
+		for _, x := range results {
+			if x.Own && x.Error == "" { // only requests of their own were filed: no batch, but nothing failed
+				return 200, map[string]any{"items": results}
+			}
+		}
 		return 400, map[string]any{"error": "nothing in the batch could be filed", "items": results}
 	}
 	return 200, map[string]any{"id": b.ID, "expires": b.Expires, "items": results}
@@ -476,6 +475,15 @@ func (r *Router) fileBatchItem(c Caller, method, path string, b *Batch, it *batc
 	res := BatchResult{Intent: it.intent}
 	o := Origin{Caller: c, Call: APICall{Method: method, Path: path, Args: it.args}, Signed: it.signed, Item: it.index, Batch: b.ID}
 	switch {
+	case it.kind == requestKindRestore: // its own review page, so its own request beside the batch
+		o.Batch, o.Item = "", 0
+		q, dup, err := r.FileRequest(it.kind, it.p, it.expl, o)
+		if err != nil {
+			res.Error = err.Error()
+			return res, nil
+		}
+		res.ID, res.Duplicate, res.Own = q.ID, dup, true
+		return res, nil
 	case it.kind != "":
 		q := &InboxRequest{ID: "q" + randID(), Kind: it.kind, Params: it.p, Origin: o, Explanation: it.expl, Created: b.Created,
 			Expires: b.Expires, Key: requestKey(it.kind, it.p), Batch: b.ID}
@@ -567,9 +575,5 @@ func (r *Router) serveBatch(w http.ResponseWriter, id string, only *Caller) {
 }
 
 func (r *Router) serveDenyBatch(w http.ResponseWriter, id string) {
-	if err := r.DenyBatch(id); err != nil {
-		writeJSON(w, 404, map[string]string{"error": err.Error()})
-		return
-	}
-	writeJSON(w, 200, map[string]bool{"ok": true})
+	writeDenied(w, r.DenyBatch(id))
 }

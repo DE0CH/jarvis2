@@ -103,11 +103,7 @@ func (r *Router) registerActions(m machineRoute) {
 	// deny: an Inbox request leaves; an approval is rejected as Deny in the app would (a new session disappears, a
 	// resume stays paused)
 	act("POST /m/api/actions/requests/{id}/deny", func(w http.ResponseWriter, req *http.Request, _ Caller, _ []byte) {
-		if err := r.DenyRequest(req.PathValue("id")); err != nil {
-			writeErr(w, err)
-			return
-		}
-		writeJSON(w, 200, map[string]bool{"ok": true})
+		writeDenied(w, r.DenyRequest(req.PathValue("id")))
 	})
 	act("POST /m/api/actions/sessions", func(w http.ResponseWriter, req *http.Request, c Caller, b []byte) {
 		r.proposeSession(w, c, "actions-"+c.Session, b, signedRequestOf(req, req.Header.Get("X-Machine"), b))

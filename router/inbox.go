@@ -93,33 +93,15 @@ type InboxRequest struct {
 	Batch       string        `json:"batch,omitempty"` // batches.go: filed in this batch
 }
 
-// what a caller may ask for. Every request still needs Face ID on the phone; this only keeps a session to its
-// own business: it may ask for a grant, an unlock or a store for itself, and for a repo to be added (harmless: a
-// new deploy key in its own store, which no session holds until Deyao picks it). Removing a repo, or anything about
-// another session, is refused. The web page, the app and the setup session may ask for any kind.
+// what a caller may ask for: every kind, for any session. Every request still needs Deyao on the phone, which renders
+// it from signed content and names the caller; a session's actions could already ask all of these (actions.go), so a
+// narrower rule for its /m/api requests protected nothing (refusal audit, DECISIONS 189).
 func callerMay(c Caller, kind string, p RequestParams) error {
-	if c.Kind != "session" {
+	switch kind {
+	case requestKindRestore, requestKindRepo, requestKindGrant, requestKindUnlock, requestKindCall:
 		return nil
 	}
-	switch kind {
-	case requestKindRestore:
-		return errors.New("a session may not ask for a store to be restored (the web page, the app or the setup session may)")
-	case requestKindRepo:
-		if p.Action != "add" {
-			return errors.New("a session may ask for a repo to be added, not removed")
-		}
-		if p.Session != "" && p.Session != c.Session {
-			return fmt.Errorf("a session may ask for a repo's store only for itself (%s)", c.Session)
-		}
-	case requestKindGrant, requestKindUnlock:
-		if p.Session != c.Session {
-			return fmt.Errorf("a session may ask only for itself (%s)", c.Session)
-		}
-	case requestKindCall: // any app API call, as its actions may (apicalls.go); checked by checkCall
-	default:
-		return fmt.Errorf("unknown request kind %s", kind)
-	}
-	return nil
+	return fmt.Errorf("unknown request kind %s", kind)
 }
 
 // cleanExplanation: the caller's words as plain text — control characters dropped (line breaks kept), at most
@@ -235,7 +217,10 @@ func (r *Router) normalizeRequest(kind string, p RequestParams) (RequestParams, 
 		}
 		return out, nil
 	case requestKindRestore:
-		if !storeNameOK(p.Store) || p.Store == flyStore {
+		if p.Store == flyStore {
+			return p, fmt.Errorf("store %s (the core's Fly token) is never restored: write it again with infra/setup.py backup-core", flyStore)
+		}
+		if !storeNameOK(p.Store) {
 			return p, fmt.Errorf("no store %q", p.Store)
 		}
 		if p.Seq < 1 {
@@ -283,7 +268,7 @@ func (r *Router) FileRequest(kind string, p RequestParams, explanation string, o
 			return
 		}
 		if mine, _ := callerLoad(d, o.Caller); mine >= requestPerCaller {
-			err = &badRequest{fmt.Sprintf("this caller has %d requests waiting already", requestPerCaller)}
+			err = &tooMany{fmt.Sprintf("this caller has %d requests waiting already: wait for Deyao to answer them, or deny some (DELETE /api/requests/ID, jarvis2-actions.py deny ID), then file again", requestPerCaller)}
 			return
 		}
 		d.Inbox[q.ID] = q
@@ -301,8 +286,8 @@ func pruneRequests(d *persisted, now time.Time) {
 	for id, q := range d.Inbox {
 		lapsed := !now.Before(q.Expires)
 		gone := false
-		if q.Kind == requestKindCall { // the actions end with the session's run (actions.go)
-			gone = gone || !callerRunning(d, q.Origin.Caller)
+		if q.Kind == requestKindCall { // it waits while its session is paused; only a destroyed session's goes
+			gone = gone || !callerExists(d, q.Origin.Caller)
 		}
 		if q.Params.Session != "" {
 			s := d.Sessions[q.Params.Session]
@@ -573,7 +558,26 @@ func (r *Router) DenyRequest(id string) error {
 	if found {
 		return nil
 	}
-	return r.Reject(id)
+	if r.Reject(id) != nil {
+		return errAlreadyGone
+	}
+	return nil
+}
+
+// errAlreadyGone: a deny of something no longer waiting (answered, denied or lapsed): what was asked for holds, so it
+// is answered 200 {ok, gone} (refusal audit, DECISIONS 189)
+var errAlreadyGone = errors.New("already gone (answered, denied or lapsed)")
+
+// writeDenied: a deny's answer
+func writeDenied(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, errAlreadyGone):
+		writeJSON(w, 200, map[string]any{"ok": true, "gone": true})
+	case err != nil:
+		writeErr(w, err)
+	default:
+		writeJSON(w, 200, map[string]bool{"ok": true})
+	}
 }
 
 // ---- the intent endpoints, for each kind of caller ---------------------------------------------------------
@@ -651,12 +655,20 @@ func callArgs(kind string, p RequestParams) map[string]any {
 
 type forbidden struct{ msg string }
 
+// tooMany: a caller over its limit of waiting asks (429)
+type tooMany struct{ msg string }
+
+func (t *tooMany) Error() string { return t.msg }
+
 func (f *forbidden) Error() string { return f.msg }
 
 func writeRequestErr(w http.ResponseWriter, err error) {
 	var b *badRequest
 	var f *forbidden
+	var tm *tooMany
 	switch {
+	case errors.As(err, &tm):
+		writeJSON(w, 429, map[string]string{"error": tm.msg})
 	case errors.As(err, &b):
 		writeJSON(w, 400, map[string]string{"error": b.msg})
 	case errors.As(err, &f):
@@ -710,11 +722,7 @@ func (r *Router) registerInbox(app appRoute, m machineRoute, public publicRoute)
 		writeJSON(w, 200, it)
 	})
 	app("DELETE /api/requests/{id}", func(w http.ResponseWriter, req *http.Request) {
-		if err := r.DenyRequest(req.PathValue("id")); err != nil {
-			writeErr(w, err)
-			return
-		}
-		writeJSON(w, 200, map[string]bool{"ok": true})
+		writeDenied(w, r.DenyRequest(req.PathValue("id")))
 	})
 	// done: the shell's page went through (the phone signed it); the request leaves the Inbox. An approval leaves
 	// by itself when it is answered.

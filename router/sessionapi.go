@@ -66,7 +66,7 @@ func (r *Router) registerSessionAPI(app appRoute, m machineRoute) {
 				return
 			}
 			if id := req.PathValue("id"); id != "" && id != sid {
-				writeJSON(w, 403, map[string]string{"error": fmt.Sprintf("this machine is session %s, not %s", sid, id)})
+				writeJSON(w, 403, map[string]string{"error": fmt.Sprintf("this machine is session %s, not %s: these routes act on the calling session only; to act on another session use its actions (scripts/jarvis2-actions.py, /m/api/actions/sessions/%s/…) or message it", sid, id, id)})
 				return
 			}
 			fn(w, req, sid, body)
@@ -336,7 +336,7 @@ func (r *Router) proposeSession(w http.ResponseWriter, c Caller, prefix string, 
 	waiting := 0
 	r.st.Do(func(d *persisted) { _, waiting = callerLoad(d, c) })
 	if waiting >= maxProposedSessions {
-		writeJSON(w, 429, map[string]string{"error": fmt.Sprintf("%d proposed sessions already wait for Deyao", waiting)})
+		writeJSON(w, 429, map[string]string{"error": fmt.Sprintf("%d proposed sessions already wait for Deyao: wait for his answer, or deny one (jarvis2-actions.py deny ID), then propose again", waiting)})
 		return
 	}
 	id, err := r.CreateSession(ns)

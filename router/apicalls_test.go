@@ -98,15 +98,22 @@ func TestAPICallRequest(t *testing.T) {
 		t.Fatalf("%d %v", code, out)
 	}
 
-	// a session that stops running: its pending calls leave the Inbox and an approval can't run them
+	// a session that pauses: its call waits and runs once approved (it runs as Deyao); a destroyed one's goes
 	_, out = m.do(t, mh, "POST", "/m/api/actions/requests/call", `{"method": "GET", "path": "/api/sizes", "explanation": "sizes again"}`)
 	id = out["id"].(string)
 	r.st.Do(func(d *persisted) { d.Sessions["sR"].State = "pausing" })
-	if _, still := r.InboxItem(id); still {
-		t.Fatal("a pausing session's call stayed in the Inbox")
+	if _, still := r.InboxItem(id); !still {
+		t.Fatal("a pausing session's call left the Inbox")
 	}
-	if code, _ := inboxDo(t, r, "POST", "/api/requests/"+id+"/approve", "", true); code != 404 {
-		t.Fatalf("a pausing session's call was approved: %d", code)
+	if code, out := inboxDo(t, r, "POST", "/api/requests/"+id+"/approve", "", true); code != 200 || out["state"] != "done" {
+		t.Fatalf("a pausing session's call didn't run: %d %v", code, out)
+	}
+	r.st.Do(func(d *persisted) { d.Sessions["sR"].State = "started" })
+	_, out = m.do(t, mh, "POST", "/m/api/actions/requests/call", `{"method": "GET", "path": "/api/sizes", "explanation": "sizes a third time"}`)
+	id = out["id"].(string)
+	r.st.Do(func(d *persisted) { d.Sessions["sR"].State = "destroyed" })
+	if _, still := r.InboxItem(id); still {
+		t.Fatal("a destroyed session's call stayed in the Inbox")
 	}
 }
 
@@ -145,10 +152,11 @@ func TestAnAPICallInABatch(t *testing.T) {
 	if n := len(r.Inbox()); n != 0 {
 		t.Fatalf("filed %d", n)
 	}
-	// the setup session and Deyao's own page don't ask for calls
-	if code, out := inboxDo(t, r, "POST", "/api/requests/batch", `{"summary":"s","items":[{"intent":"call","method":"GET","path":"/api/sizes"}]}`, true); code != 403 {
+	// the setup session and Deyao's own page may ask for calls too (each runs only once approved)
+	if code, out := inboxDo(t, r, "POST", "/api/requests/batch", `{"summary":"s","items":[{"intent":"call","method":"GET","path":"/api/sizes"}]}`, true); code != 200 {
 		t.Fatalf("%d %v", code, out)
 	}
+	r.st.Do(func(d *persisted) { d.Inbox, d.Batches = map[string]*InboxRequest{}, map[string]*Batch{} })
 
 	code, out := m.do(t, mh, "POST", "/m/api/requests/batch", `{"summary":"keep sO up and watch it","items":[
 		{"intent":"grant","holder":"status","minutes":5},

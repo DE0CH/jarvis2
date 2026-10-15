@@ -115,7 +115,7 @@ func TestPairListAdmitRevokeDevices(t *testing.T) {
 	}
 	w = httptest.NewRecorder()
 	h.ServeHTTP(w, httptest.NewRequest("DELETE", "/api/devices/"+id, nil))
-	if w.Code != 404 {
+	if w.Code != 200 {
 		t.Fatalf("revoke twice: %d", w.Code)
 	}
 	// Start of a session that doesn't exist

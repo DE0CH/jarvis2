@@ -200,17 +200,17 @@ kind of caller; the router records the caller from the credential (never from th
 | Intent | Body (`explanation` in every one) | Who |
 |---|---|---|
 | `POST …/repo/add` | `{repo /* owner/name or a GitHub URL */, sensitive?, noStore?}`; from a session (its requests or actions) the request names that session (`params.session`, `open.options.into`/`intoLabel`/`store`), which gets the repo's store in the same approval; `noStore: true` only makes the key | anyone |
-| `POST …/repo/remove` | `{repo}` | not a session |
-| `POST …/grant` | `{session, holder, minutes /* 1–10, default 10 */}` or `{session, holder, days /* 1–365: a standing rule */}` | a session only for itself (it may leave `session` out) |
-| `POST …/unlock` | `{session}`: the locked stores that session waits on | a session only for itself |
-| `POST …/restore` | `{store, seq}`: put version `seq` of a store back (below, "Store versions and restore"); opens the app's restore review | not a session; never in a batch |
+| `POST …/repo/remove` | `{repo}` | anyone |
+| `POST …/grant` | `{session, holder, minutes /* 1–10, default 10 */}` or `{session, holder, days /* 1–365: a standing rule */}` | anyone, for any session (a session may leave `session` out: itself) |
+| `POST …/unlock` | `{session}`: the locked stores that session waits on | anyone, for any session (a session may leave `session` out) |
+| `POST …/restore` | `{store, seq}`: put version `seq` of a store back (below, "Store versions and restore"); opens the app's restore review | anyone; in a batch it is filed as a request of its own beside it (`own: true`) |
 | `POST /m/api/requests/add-store` | `{store}` → the router's `add-store` approval (as `POST /m/add-store`) | a session, for itself |
 | `POST /m/api/sessions` | `POST /api/sessions`'s body without `attachments`, plus `explanation` (required) → `{id, requestId, approval: true}`: a session PROPOSES a new session (`jarvis2-request new-session`). The same line and `new-session` approval as the app's New session (a succession from null, so it starts only on Deyao's Face ID); the approval's caller is the proposing session and it carries the explanation. `requestId` is scoped to the proposing session; at most 3 proposals wait per session (429). | a session |
 
 `explanation`: the caller's reason, required from a session and the setup session (plain text; control and format
 characters dropped; ≤ 600 characters, ≤ 8 lines; 400 otherwise). Answer `{id, duplicate, expires}`: the same kind and
-arguments already pending answer that request (`duplicate: true`); 400 for bad arguments, 403 for what this caller may
-not ask; at most 20 pending per caller. A request goes after 10 minutes, when its session is destroyed, when it is done
+arguments already pending answer that request (`duplicate: true`); 400 for bad arguments; at most 20 pending per caller (429: wait, or deny some). Every caller may ask every kind, for
+any session (each waits for Deyao, and a session's actions could already ask them all). A request goes after 10 minutes, when its session is destroyed, when it is done
 (a repo request when the core's deploy-key answer for that repo comes back by any path; a grant request when a grant
 for that feature is stored), or on Deny.
 
@@ -229,7 +229,7 @@ item = { id, kind: "repo-key" | "grant" | "unlock" | "restore" | "new-session" |
 |---|---|
 | `GET /api/requests` | `{requests: [item]}`, newest first; also `inbox` in `GET /api/state` (the badge) |
 | `GET /api/requests/:id` | one item (404 when answered, denied or expired); the shell reads the call and the reason here |
-| `DELETE /api/requests/:id` | Deny: dropped (an approval is rejected, as `…/approvals/:id/reject`) |
+| `DELETE /api/requests/:id` | Deny: dropped (an approval is rejected, as `…/approvals/:id/reject`); one already gone answers 200 `{ok, gone: true}` |
 | `POST /api/requests/:id/done` | the shell's page went through: the request leaves the Inbox |
 | `POST /api/requests/:id/approve` | an `api-call` request (below, "Actions"): the router runs the call now as Deyao and keeps its outcome → `{ok, state: done \| failed, status, error, followups, awaiting}` (as below); 404 when gone. No Face ID: a step that needs the core's signature asks for its own afterwards, as a follow-up |
 | `GET /api/requests/calls/:id` | an approved call's follow-ups → `{id, state: running \| done \| failed, status, error, followups: [{id, open, item /* the Inbox item while open */}], awaiting: {session, until} \| null}`; 404 when unknown or over 10 min old. A follow-up is an approval whose origin is the call (`viaCall`): a resume call's `resume-upgrade`, a `POST /api/sessions` call's `new-session`, a restore's. `awaiting`: the call started work that may still file one (a resume asking the core); it clears when one is filed or the work ends without one, and lapses at `until` (1 min). The review sheet (app and web page) shows these and waits on exactly this |
@@ -245,9 +245,9 @@ lists the batch as one entry and the phone allows every item under ONE Face ID, 
 
 | Call | Does |
 |---|---|
-| `POST …/requests/batch` (`/api`, `/setup`, `/m/api`, `/m/api/actions`) | Body `{summary /* required, as explanation */, items: [{intent, …that intent's body…, explanation?}]}`; intents: `repo/add`, `repo/remove`, `grant`, `unlock` (as above), `add-store` (`{store}`; a session for itself, others name `session`), `new-session` (`POST /m/api/sessions`'s body), `jarvis1-import` (`{id, stores, size?, prompt?}`; setup session and Deyao only), `call` (`{method, path, body? | bodyText?, contentType?}`, as `POST /m/api/actions/requests/call`; a session only, through `/m/api` or `/m/api/actions`: an `api-call` request in the batch, approved with `POST /api/requests/:id/approve`, its result read at `GET /m/api/actions/requests/call/:id`; DECISIONS 183). 1–20 items. Every item is checked first, as its own endpoint checks it: one bad item (400/403, `item` = its index) or the same item twice and nothing is filed. → `{id: "b…", expires, items: [{intent, id?, session?, duplicate?, batch?, error?}]}`: an item that fails while being filed (the core refused its challenge) carries `error` and the rest stand. A request already waiting outside any batch joins this one (`duplicate`); one in another batch stays there (`batch`). Limits: a batch counts once toward the caller's 20 waiting requests and, when it proposes a session, once toward the 3 waiting proposals (429). |
+| `POST …/requests/batch` (`/api`, `/setup`, `/m/api`, `/m/api/actions`) | Body `{summary /* required, as explanation */, items: [{intent, …that intent's body…, explanation?}]}`; intents: `repo/add`, `repo/remove`, `grant`, `unlock` (as above), `add-store` (`{store, session?}`; a session for itself unless it names another; the session must have a running machine with a cert: started, or initialising on a locked store), `new-session` (`POST /m/api/sessions`'s body), `jarvis1-import` (`{id, stores, size?, prompt?}`; setup session and Deyao only), `call` (`{method, path, body? | bodyText?, contentType?}`, as `POST /m/api/actions/requests/call`; any caller: an `api-call` request in the batch, approved with `POST /api/requests/:id/approve`, its result read at `GET /m/api/actions/requests/call/:id`; DECISIONS 183). 1–20 items. Every item is checked first, as its own endpoint checks it: one bad item (400/403, `item` = its index) or the same item twice and nothing is filed. → `{id: "b…", expires, items: [{intent, id?, session?, duplicate?, batch?, error?}]}`: an item that fails while being filed (the core refused its challenge) carries `error` and the rest stand. A request already waiting outside any batch joins this one (`duplicate`); one in another batch stays there (`batch`). Limits: a batch counts once toward the caller's 20 waiting requests and, when it proposes a session, once toward the 3 waiting proposals (429). |
 | `GET /api/requests/batches/:id` (`/setup/…`; `/m/api/…` its own) | `{batch, items: [item]}`; 404 when gone |
-| `DELETE /api/requests/batches/:id`, `POST /m/api/actions/requests/batches/:id/deny` | Deny all: its requests leave, its approvals are rejected (an approval still being made is rejected as it arrives) |
+| `DELETE /api/requests/batches/:id`, `POST /m/api/actions/requests/batches/:id/deny` | Deny all: its requests leave, its approvals are rejected (an approval still being made is rejected as it arrives); one already gone answers 200 `{ok, gone: true}` |
 
 ```
 batch = { id, summary, caller, callerText, call: {method, path, args: {items}}, created, expires, items: [inbox ids, as filed],
@@ -294,7 +294,7 @@ Pass-through to the core's own endpoints, answers unchanged (signed): `GET ident
 `POST stores/create {name}`, `POST stores/mark-sensitive {name}`, `POST unlock/begin
 {store, for?}`, `POST unlock/finish {pending, shares}` (an unlock for one running session's cert also makes its machine
 pull again: `refresh-secrets`), `POST lock {id}`, `POST unlocked {nonce}`, `POST store-key {phone, core?}`, `GET line-state` (the router's own copy, below), and
-— only from the app's device login (the `cf-access-token` header; 403 otherwise) — `POST claim {statement,
+— from any of Deyao's logins (both are master-signed and checked by the core) — `POST claim {statement,
 masterSig, bundle}` and `POST wipe {statement, masterSig}`. Formats: `docs/DESIGN.md`, `core/core.go`, the app's
 `Shell/CoreSetup.swift`, and the reference client `e2e/main.go`. A claim the core accepts is kept by the router
 (`DATA_DIR/core-certs.json`, the newest 10): the master-signed statement naming the core verifies on its own, so the
@@ -467,12 +467,12 @@ its pending `api-call` requests leave the Inbox. Client: claude-env `scripts/jar
 | `POST /m/api/actions/sessions/:id/pause` | As the app's pause |
 | `POST /m/api/actions/sessions/:id/upgrade` | As the app's Upgrade (next size up, `router/memory.go`) → 202 |
 | `POST /m/api/actions/sessions/:id/destroy` | The app's Destroy, the same call: archived first, `?force=1` = its "destroy anyway" past a failed archive. |
-| `POST /m/api/actions/requests/:id/deny` | An Inbox request leaves; an approval is rejected as the app's Deny |
+| `POST /m/api/actions/requests/:id/deny` | An Inbox request leaves; an approval is rejected as the app's Deny; one already gone answers 200 `{ok, gone: true}` |
 | `POST /m/api/actions/sessions` | Propose a new session (body as `POST /m/api/sessions`, `explanation` required): a `new-session` approval in the Inbox; at most 3 wait per session |
 | `POST /m/api/actions/requests/{repo/add,repo/remove,grant,unlock}` | As `/setup/requests/*`: an Inbox request (any session, any repo) |
 | `POST /m/api/actions/requests/batch`, `POST /m/api/actions/requests/batches/:id/deny` | A batch (Requests "Batches"); Deny all |
 | `POST /m/api/actions/requests/call` | Ask for ANY app API call to be run as Deyao (`router/apicalls.go`). Body `{method, path /* with its query */, body? /* any JSON, sent as application/json */ \| bodyText? + contentType?, explanation /* required */}`, body at most 64 KB. The path must reach an app route that `callRules` allows (400 otherwise, e.g. the Inbox itself). → `{id, duplicate, expires}`: an `api-call` Inbox request with `params {method, path, body, contentType}` and `call.args.route` = the route's pattern |
-| `GET /m/api/actions/requests/call/:id` | That session's own call: `{state: "pending", expires}` while it waits, then `{state: done \| denied \| failed, status, contentType, body, withheld, error, approvedBy: app \| web, at}` for 10 min. `withheld`: the route's response carries a credential (`callStatus`), so only the status comes back. 404 for another session's |
+| `GET /m/api/actions/requests/call/:id` | (A call waits in the Inbox while its session is paused, and runs when approved: it runs as Deyao; its outcome reaches the session at its next run. Only a destroyed session's call leaves.) That session's own call: `{state: "pending", expires}` while it waits, then `{state: done \| denied \| failed, status, contentType, body, withheld, error, approvedBy: app \| web, at}` for 10 min. `withheld`: the route's response carries a credential (`callStatus`), so only the status comes back. 404 for another session's |
 
 Every app route is classified in `router/apicalls.go` `callRules` (`TestEveryAppRouteClassified` fails on one left
 out): `callBody` (status and body go back), `callStatus` (status only: the response carries a credential) or `callNo`

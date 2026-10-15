@@ -320,7 +320,7 @@ func (r *Router) execWith(session, holder, cmd string, timeout time.Duration, ph
 	select {
 	case q <- execItem{Request: string(req), Sig: sig, Grant: grant}:
 	default:
-		return ExecResult{}, errors.New("the machine has too many commands waiting")
+		return ExecResult{}, errors.New("the machine has too many commands waiting (16): wait for them to finish, then try again")
 	}
 	select {
 	case res := <-ch:

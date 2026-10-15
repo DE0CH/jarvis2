@@ -143,11 +143,14 @@ func TestWhoMayAskForARestore(t *testing.T) {
 		t.Fatal("a restore of the core store was filed")
 	}
 	m := newTestMachine(r, "mA")
-	if code, _ := m.do(t, r.MachineHandler(), "POST", "/m/api/requests/restore", `{"store":"default","seq":2,"explanation":"x"}`); code == 200 {
-		t.Fatal("a session filed a restore")
+	// a session may ask for one too (Deyao reviews it on its own page); in a batch it is filed beside the batch
+	if code, out := m.do(t, r.MachineHandler(), "POST", "/m/api/requests/restore", `{"store":"default","seq":2,"explanation":"x"}`); code != 200 || out["duplicate"] != true {
+		t.Fatalf("a session's restore: %d %v", code, out)
 	}
-	if code, _ := appDo(t, r, "POST", "/setup/requests/batch", `{"summary":"s","items":[{"intent":"restore","store":"default","seq":2}]}`); code == 200 {
-		t.Fatal("a restore went into a batch")
+	if code, out := appDo(t, r, "POST", "/setup/requests/batch", `{"summary":"s","items":[{"intent":"restore","store":"default","seq":2,"explanation":"put the keys back"}]}`); code != 200 || out["id"] != nil {
+		t.Fatalf("a restore in a batch: %d %v", code, out)
+	} else if it := out["items"].([]any)[0].(map[string]any); it["own"] != true || it["duplicate"] != true {
+		t.Fatalf("the restore item: %v", it)
 	}
 	var found bool
 	for _, it := range r.Inbox() {

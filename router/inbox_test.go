@@ -38,15 +38,17 @@ func TestInboxFromEachCaller(t *testing.T) {
 	if code, out := m.do(t, mh, "POST", "/m/api/requests/repo/add", `{"repo": "DE0CH/claude-env", "explanation": "again"}`); code != 200 || out["id"] != id || out["duplicate"] != true {
 		t.Fatalf("dedup: %d %v", code, out)
 	}
-	// refused for a session: removing a repo, another session's grant or unlock, no explanation
+	// a session may ask anything for any session (its actions could already; each still waits for Deyao)
 	for _, c := range []struct{ path, body string }{
 		{"/m/api/requests/repo/remove", `{"repo": "DE0CH/claude-env", "explanation": "x"}`},
 		{"/m/api/requests/grant", `{"session": "sB", "holder": "terminal", "explanation": "x"}`},
 		{"/m/api/requests/unlock", `{"session": "sB", "explanation": "x"}`},
 	} {
-		if code, out := m.do(t, mh, "POST", c.path, c.body); code != 403 {
-			t.Fatalf("%s should be refused: %d %v", c.path, code, out)
+		code, out := m.do(t, mh, "POST", c.path, c.body)
+		if code != 200 {
+			t.Fatalf("%s: %d %v", c.path, code, out)
 		}
+		r.DenyRequest(out["id"].(string))
 	}
 	if code, _ := m.do(t, mh, "POST", "/m/api/requests/grant", `{"holder": "terminal"}`); code != 400 {
 		t.Fatalf("no explanation: %d", code)

@@ -158,14 +158,10 @@ func (r *Router) buildHandlers() {
 
 	// ---- setting the core up: Reset and Recover (the app, with the master key) -----------------------------
 	app("GET /api/core/identity", func(w http.ResponseWriter, req *http.Request) { r.relayFor(w, req, "GET", "/identity", nil) })
-	// claim and wipe come only from the app's own device login (the cf-access-token header the shell sends),
-	// not from a browser tab
+	// claim and wipe: signed by the master key and checked by the core, so any of Deyao's logins may relay them (the
+	// app's device-header check protected nothing: refusal audit, DECISIONS 189)
 	device := func(pattern, corePath string) {
 		app(pattern, func(w http.ResponseWriter, req *http.Request) {
-			if !r.cfg.NoAccess && req.Header.Get("cf-access-token") == "" {
-				writeJSON(w, 403, map[string]string{"error": "only the iPhone app sets the core up"})
-				return
-			}
 			b, _ := io.ReadAll(io.LimitReader(req.Body, 16<<20))
 			r.relayFor(w, req, "POST", corePath, b) // nextcore.go: ?core=next sets the next core up
 		})
@@ -174,10 +170,6 @@ func (r *Router) buildHandlers() {
 	// core ignores it; the router keeps it for the setup session (claimdevice.go), which trusts a new master key
 	// only with it
 	app("POST /api/core/claim", func(w http.ResponseWriter, req *http.Request) {
-		if !r.cfg.NoAccess && req.Header.Get("cf-access-token") == "" {
-			writeJSON(w, 403, map[string]string{"error": "only the iPhone app sets the core up"})
-			return
-		}
 		b, _ := io.ReadAll(io.LimitReader(req.Body, 16<<20))
 		r.keepClaimDevice(b)
 		c := r.coreFor(req) // nextcore.go: ?core=next Recovers the next core

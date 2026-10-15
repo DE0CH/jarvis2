@@ -179,22 +179,24 @@ func sameSessionCaller(a, b Caller) bool {
 	return a == b || own(a) && own(b) && a.Session == b.Session
 }
 
-// callerRunning: an actions caller's session still runs (its key is live)
-func callerRunning(d *persisted, c Caller) bool {
+// callerExists: the requesting session is still there (any state but destroyed). An approved call runs as Deyao, so
+// it needs no running session; its result and outcome wait for the session's next run (refusal audit, DECISIONS 189).
+func callerExists(d *persisted, c Caller) bool {
+	if c.Kind != "session" && c.Kind != "actions" {
+		return true // the setup session, the app or the web page: no session to end with
+	}
 	s := d.Sessions[c.Session]
-	return s != nil && s.MachineID != "" && (s.State == "started" || s.State == "initialising")
+	return s != nil && s.State != "destroyed"
 }
 
 // ApproveCall: Deyao's approval of an API-call request: the call runs now, as him (his Access login from the
 // approving request), and its outcome is kept for the caller
 func (r *Router) ApproveCall(id string, approver *http.Request) (*CallResult, error) {
 	var q *InboxRequest
-	var running bool
 	r.st.Do(func(d *persisted) {
 		pruneRequests(d, time.Now().UTC())
 		if x := d.Inbox[id]; x != nil && x.Kind == requestKindCall {
 			q = x
-			running = callerRunning(d, x.Origin.Caller)
 			delete(d.Inbox, id)
 		}
 	})
@@ -215,11 +217,6 @@ func (r *Router) ApproveCall(id string, approver *http.Request) (*CallResult, er
 		})
 	}()
 	res := &CallResult{ID: q.ID, Caller: q.Origin.Caller, Method: q.Params.Method, Path: q.Params.Path, ApprovedBy: appCaller(approver).Kind, At: time.Now().UTC()}
-	if !running {
-		res.State, res.Error = "failed", "the requesting session no longer runs"
-		r.keepCallResult(res)
-		return res, nil
-	}
 	pattern, rule, err := r.callRoute(q.Params.Method, q.Params.Path)
 	if err != nil {
 		res.State, res.Error = "failed", err.Error()

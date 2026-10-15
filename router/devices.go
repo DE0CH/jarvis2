@@ -192,7 +192,7 @@ func (r *Router) RevokeDevice(id string) error {
 	var dev *Device
 	r.st.Do(func(d *persisted) { dev = devicesOf(d)[id] })
 	if dev == nil {
-		return &contentErr{404, "no such device: " + id}
+		return nil // already unpaired: what was asked for holds
 	}
 	if err := deleteDeviceToken(dev.ServiceTokenID); err != nil {
 		return err

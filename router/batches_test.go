@@ -103,8 +103,8 @@ func TestBatchFromASession(t *testing.T) {
 			}
 		}
 	})
-	if code, _ := inboxDo(t, r, "DELETE", "/api/requests/batches/"+bid, "", true); code != 404 {
-		t.Fatal("denied twice")
+	if code, out := inboxDo(t, r, "DELETE", "/api/requests/batches/"+bid, "", true); code != 200 || out["gone"] != true {
+		t.Fatalf("denied twice: %d %v", code, out)
 	}
 }
 
@@ -120,8 +120,6 @@ func TestBatchChecksEveryItemFirst(t *testing.T) {
 		body string
 		code int
 	}{
-		"another session's grant": {batchBody("s", ok, `{"intent": "grant", "session": "sB", "holder": "terminal"}`), 403},
-		"a repo removed":          {batchBody("s", ok, `{"intent": "repo/remove", "repo": "DE0CH/a"}`), 403},
 		"a Jarvis 1 import":       {batchBody("s", `{"intent": "jarvis1-import", "id": "x", "stores": ["default"]}`), 403},
 		"no summary":              {batchBody("  ", ok), 400},
 		"unknown intent":          {batchBody("s", `{"intent": "format-disk"}`), 400},
