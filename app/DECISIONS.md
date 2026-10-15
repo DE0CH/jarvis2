@@ -323,6 +323,16 @@ fixes, 34–40 carried over from the old app and still true, 41–43 the web pag
     comes back when signed or rejected; answered ones as "Answered, denied or lapsed"; while the router awaits one, a
     spinner with its deadline; then "Nothing more to approve." and Done. Web: the card's Review opens the `call` page
     with the same sections; follow-ups show their rows and "Approve in the iPhone app", with Deny.
+71. **Failed sessions, a session's repo, API calls in a batch** (docs/DECISIONS.md 170-172; Deyao, 2026-10-15). Both apps
+    show Resume for every failed session (one with a machine finishes its pause first, router-side), and a destroy that
+    ends "kill: …" asks "The machine wasn't destroyed" → Destroy anyway (`?force=1`), like a failed archive. A repo
+    request a session made shows "Then: Add store github-… to the session that asked" and the session under "What you
+    sign"; the iPhone takes ONE Face ID (`PhoneKeys.authorize`) for the key and the add-store the finish names
+    (`followups`), which it checks to be exactly that store for that session before signing (`expectAddStore`); the web
+    page shows an "Into session" row. A batch's API call is an item of its own ("API call, runs as you (no
+    signature)"): Allow all approves it; what it brings about shows below as "What the API calls bring about", each
+    opening the call's sheet already approved (its follow-ups under their own Face ID), then Done. The web page's batch
+    card has "Review call" for its API calls.
 
 ## Unfinished / known gaps
 

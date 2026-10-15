@@ -19,6 +19,14 @@ struct APICallReviewView: View {
   /// GET api/requests/calls/:id: {state, status, followups: [{id, open, item}], awaiting: {session, until}}
   @State private var follow: JSON?
 
+  init(callId: String) { self.callId = callId }
+  /// approved already (a batch's Allow all): the sheet opens on what the call brings about
+  init(callId: String, approved: (item: InboxItem, outcome: JSON)) {
+    self.callId = callId
+    _item = State(initialValue: approved.item)
+    _outcome = State(initialValue: approved.outcome)
+  }
+
   private var p: JSON { item?.params ?? .null }
   private var awaiting: Date? { follow?["awaiting"]["until"].string?.isoDate }
   private var followups: [JSON] { follow?["followups"].array ?? [] }
@@ -125,7 +133,7 @@ struct APICallReviewView: View {
       }
     }
     .interactiveDismissDisabled(busy != nil)
-    .task { await loadItem() }
+    .task { if outcome == nil { await loadItem() } }
     .task(id: outcome != nil) { await watchFollowups() }
   }
 

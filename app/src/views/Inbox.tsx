@@ -47,10 +47,11 @@ function BatchCard({ b }: { b: InboxBatch }) {
             <Row label="Call" mono lines={2}>{inboxCall(it)}</Row>
           </Rows>
           {!!it.explanation && <Quote by="Reason (unverified)" color="amber" lines={3}>{it.explanation}</Quote>}
+          {it.kind === "api-call" && <Flex pt={1}><Button id={"request-review-" + it.id} onPress={() => openPage("call", { item: it })}>Review call</Button></Flex>}
         </Box>
       ))}
       <Flex gap={2} pt={3} align="center">
-        <Muted style={{ flex: 1 }}>Approve in the iPhone app: one Face ID for all.</Muted>
+        <Muted style={{ flex: 1 }}>Approve in the iPhone app: one Face ID for all{items.some((x) => x.kind === "api-call") ? " (an API call can also be approved here)" : ""}.</Muted>
         <PButton pkey={"b:" + b.id} variant="soft" color="gray" onPress={deny} label="Deny all" id={"batch-deny-" + b.id} />
       </Flex>
     </Card>

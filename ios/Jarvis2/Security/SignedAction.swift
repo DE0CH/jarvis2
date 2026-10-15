@@ -7,6 +7,13 @@
 // from the real core's documents too.
 import Foundation
 
+/// a repo a session asked for: its store comes into that session in the same approval (router repos.go, DECISIONS 171)
+struct RepoInto: Equatable, Hashable {
+  let session: String
+  let label: String
+  let store: String
+}
+
 /// one signed fact: a labelled value, shown as a row
 struct SignedFact: Equatable, Identifiable {
   enum Style: Equatable {
@@ -46,6 +53,14 @@ enum SignedAction {
     f.append(.init(id: "token-store", label: "GitHub token from", value: b.tokenStore, style: .code))
     f.append(.init(id: "token-use", label: "Token use", value: "This request only"))
     return f
+  }
+
+  /// a repo a session asked for: the add-store this page signs under the same Face ID once the key is made (its
+  /// challenge doesn't exist before the store does; it is checked to be exactly this before it is signed)
+  static func repoInto(_ into: RepoInto, store: String) -> [SignedFact] {
+    [.init(id: "then", label: "Then", value: "Add store \(store) to the session that asked", style: .warning),
+     .init(id: "into-session", label: "Session", value: into.label == into.session ? into.session : "\(into.label) (\(into.session))"),
+     .init(id: "into-checked", label: "Checked before signing", value: "An add-store of exactly \(store), continuing this session's line")]
   }
 
   /// the signed settings and one-time inputs, one row per key (what the machine takes: docs/DESIGN.md "Inputs");
@@ -178,7 +193,7 @@ enum SignedAction {
   /// the keys of the page's own options that must equal the request's (so the request shown is the one this page
   /// acts on); "" = they match
   static func mismatch(page: [String: Any], request: [String: Any]) -> String {
-    for k in ["approvalId", "action", "repo", "sessionId", "holder", "grantKind", "minutes", "store", "seq"] {
+    for k in ["approvalId", "action", "repo", "sessionId", "holder", "grantKind", "minutes", "store", "seq", "into"] {
       let a = page[k].map { "\($0)" } ?? "", b = request[k].map { "\($0)" } ?? ""
       if k == "repo" ? a.lowercased() != b.lowercased() : a != b { return k }
     }

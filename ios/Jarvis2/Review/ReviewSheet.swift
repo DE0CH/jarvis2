@@ -13,7 +13,7 @@ struct ReviewSheet: View {
       case .approval(let id, let inbox): ApprovalView(approvalId: id, inbox: inbox, request: request)
       case .grant(let g, let inbox): GrantReviewView(ask: g, inbox: inbox, request: request)
       case .unlock(let s, let label, let inbox): UnlockReviewView(sessionId: s, label: label, inbox: inbox, request: request)
-      case .repoKey(let a, let r, let sens, let inbox): RepoKeyView(action: a, repo: r, sensitiveAsked: sens, inbox: inbox, request: request)
+      case .repoKey(let a, let r, let sens, let inbox, let into): RepoKeyView(action: a, repo: r, sensitiveAsked: sens, inbox: inbox, into: into, request: request)
       case .batch(let id): BatchReviewView(batchId: id)
       case .restore(let st, let q, let inbox): RestoreReviewView(store: st, seq: q, inbox: inbox, request: request)
       case .apiCall(let id): APICallReviewView(callId: id)

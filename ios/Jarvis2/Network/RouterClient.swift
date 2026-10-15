@@ -277,9 +277,17 @@ final class RouterClient: NSObject, ASWebAuthenticationPresentationContextProvid
     }
   }
   /// the phone's signature over the begin document and its share of the token store; the answer, checked
-  func deployKeyFinish(_ b: DeployKeyBegin, signature: Data, share: Data) async throws -> DeployKeyAnswer {
+  /// inbox: the Inbox request this answers; the router then names the add-store approval it filed for the session that
+  /// asked (followups, beside the core's document; DECISIONS 171)
+  func deployKeyFinish(_ b: DeployKeyBegin, signature: Data, share: Data, inbox: String? = nil) async throws -> (answer: DeployKeyAnswer, followups: [String]) {
     let body: [String: Any] = ["pending": b.pending, "signature": signature.base64EncodedString(), "share": try CoreCrypto.sealShare(share, to: b.t)]
-    return try Checks.deployKeyAnswer(try await json("POST", "api/repos/key/finish", body, as: SignedDoc.self), coreKey: try CoreTrust.key(), begin: b)
+    var path = "api/repos/key/finish"
+    if let inbox, let q = inbox.addingPercentEncoding(withAllowedCharacters: .alphanumerics) { path += "?inbox=" + q }
+    let (status, data) = try await raw("POST", path, body)
+    guard (200..<300).contains(status) else { throw Self.failure("POST", path, status, data) }
+    let a = try Checks.deployKeyAnswer(try JSONDecoder().decode(SignedDoc.self, from: data), coreKey: try CoreTrust.key(), begin: b)
+    let f = JSON.parse(data)["followups"].strings
+    return (a, f)
   }
 
   /// the core's store key C = P + K for this phone's agreement key, checked against `coreKey`; nil from a core that

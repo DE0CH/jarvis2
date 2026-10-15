@@ -102,7 +102,8 @@ extension AppModel {
   }
 
   /// Destroy: what would be lost first, then the router pauses (final snapshot), archives and burns the line; a
-  /// failed archive asks whether to destroy anyway
+  /// failed archive, or a kill that kept failing ("kill: … (Destroy anyway …)", router archive.go), asks whether to
+  /// destroy anyway
   func destroy(_ id: String) async {
     await exclusive("s:" + id) {
       pend("s:" + id, "Checking…")
@@ -116,10 +117,12 @@ extension AppModel {
         try await RouterClient.shared.call("POST", "api/sessions/\(id)/destroy")
         await refreshUntil(15 * 60) { m in
           guard let x = m.session(id) else { return true }
-          return x.state != "destroying" && (x.error?.hasPrefix("archive:") ?? false)
+          return x.state != "destroying" && (x.error.map { $0.hasPrefix("archive:") || $0.hasPrefix("kill:") } ?? false)
         }
-        if let x = session(id), let e = x.error, e.hasPrefix("archive:") {
-          if await confirm("Archiving to the Storage Box failed", e, action: "Destroy anyway", destructive: true) {
+        if let x = session(id), let e = x.error, e.hasPrefix("archive:") || e.hasPrefix("kill:") {
+          let kill = e.hasPrefix("kill:")
+          let msg = kill ? e + "\n\nDestroy anyway: the session goes (archived from its last snapshot); the machine stays on the Machines tab." : e
+          if await confirm(kill ? "The machine wasn't destroyed" : "Archiving to the Storage Box failed", msg, action: "Destroy anyway", destructive: true) {
             try await RouterClient.shared.call("POST", "api/sessions/\(id)/destroy?force=1")
             await refreshUntil(10 * 60) { $0.session(id) == nil }
           }

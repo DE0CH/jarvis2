@@ -38,6 +38,8 @@ export function inboxRows(it: InboxItem, approvals: Approval[] = [], policy: Pol
       add("store", "Store", repoStore(p.repo || ""));
       if (p.action !== "remove") add("access", "Access", "Read + push");
       if (p.sensitive) add("sensitive", "Sensitive", "Yes");
+      // a session's own ask: the store comes into it in the same approval (router repos.go, DECISIONS 171)
+      if (p.action !== "remove" && p.session) add("into", "Into session", session);
       return rows;
     case "grant":
       add("session", "Session", session);

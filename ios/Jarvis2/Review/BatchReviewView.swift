@@ -20,6 +20,8 @@ import SwiftUI
 final class BatchProgress {
   /// stores added to the session by this batch's add-stores (a later add-store's challenge may name them)
   var addedStores: Set<String> = []
+  /// the API calls this batch approved: their answers {ok, state, status, followups, awaiting}
+  var calls: [String: JSON] = [:]
 }
 
 /// one item, read and checked: what it signs and how to sign it under the batch's Face ID
@@ -38,15 +40,20 @@ enum BatchPrepare {
     case .approval(let id, _): return try await approval(id, model: model)
     case .grant(let g, _): return try await grant(g, model: model)
     case .unlock(let s, _, _): return try await unlock(s, model: model)
-    case .repoKey(let a, let r, let sens, _): return try await repoKey(a, r, sens)
-    case .newSession, .batch, .restore, .apiCall: throw TrustError.mismatch("an item this app can't open")
+    case .repoKey(let a, let r, let sens, let inbox, let into): return try await repoKey(a, r, sens, inbox: inbox, into: into, model: model)
+    case .apiCall(let id): return apiCall(it, id: id)
+    case .newSession, .batch, .restore: throw TrustError.mismatch("an item this app can't open")
     }
   }
 
   /// as ApprovalView.load / approve
-  static func approval(_ approvalId: String, model: AppModel) async throws -> BatchPrepared {
+  /// expectAddStore: the approval must be exactly this add-store (a repo's follow-up, shown before the Face ID)
+  static func approval(_ approvalId: String, model: AppModel, expectAddStore: RepoInto? = nil) async throws -> BatchPrepared {
     guard let x = try await RouterClient.shared.approval(approvalId) else { throw TrustError.stale("the approval (answered or rejected elsewhere)") }
     let rv = try Checks.review(challenge: x.challenge, coreKey: try CoreTrust.key())
+    if let e = expectAddStore, rv.kind != .addStore || rv.addedStore != e.store || x.session != e.session {
+      throw TrustError.mismatch("the follow-up isn't the add-store of \(e.store) to \(e.session)")
+    }
     let id = try Checks.continues(rv, coreKey: try CoreTrust.key())
     if let id, let sid = x.session {
       try LinePins.check(session: sid, line: id.line)
@@ -170,18 +177,51 @@ enum BatchPrepare {
     }
   }
 
-  /// as RepoKeyView.begin / go (the sensitivity asked for; Jarvis 2's own repo always sensitive)
-  static func repoKey(_ action: String, _ repo: String, _ sensitiveAsked: Bool) async throws -> BatchPrepared {
+  /// as RepoKeyView.begin / go (the sensitivity asked for; Jarvis 2's own repo always sensitive). A repo a session asked
+  /// for (into): the add-store the router files once the key is made is signed under the same Face ID
+  static func repoKey(_ action: String, _ repo: String, _ sensitiveAsked: Bool, inbox: String? = nil, into: RepoInto? = nil,
+                      model: AppModel) async throws -> BatchPrepared {
     let want = sensitiveAsked || repo.lowercased() == "de0ch/jarvis2"
     let r = try await RouterClient.shared.deployKeyBegin(action: action, repo: repo, sensitive: want)
     let payload = r.doc.payload, b = r.begin
     let e = b.e
-    return BatchPrepared(facts: SignedAction.deployKey(b)) { auth, _ in
+    let into = action == "add" && into?.store == b.store ? into : nil
+    return BatchPrepared(facts: SignedAction.deployKey(b) + (into.map { SignedAction.repoInto($0, store: b.store) } ?? [])) { auth, progress in
       let reason = (action == "add" ? "Add repo" : "Remove repo") + ": \(b.repo)"
       let x = try await offMain { try PhoneKeys.shared.signAndShare(payload, e: e, reason: reason, auth: auth) }
-      _ = try await RouterClient.shared.deployKeyFinish(b, signature: x.signature, share: x.share)
+      let f = try await RouterClient.shared.deployKeyFinish(b, signature: x.signature, share: x.share, inbox: into == nil ? nil : inbox)
+      if let into { try await repoFollowups(f.followups, into: into, model: model, auth: auth, progress: progress) }
     }
   }
+
+  /// the add-store a repo's finish brought about, checked to be exactly the one shown, signed under the same Face ID
+  static func repoFollowups(_ ids: [String], into: RepoInto, model: AppModel, auth: PhoneAuth, progress: BatchProgress) async throws {
+    for id in ids {
+      let p = try await approval(id, model: model, expectAddStore: into)
+      try await p.run(auth, progress)
+    }
+  }
+
+  /// an API call (router apicalls.go): no signature, Approve runs it as Deyao. What it brings about (a resume's
+  /// approval) wasn't shown before the batch's Face ID, so it opens on its own page afterwards (BatchReviewView)
+  static func apiCall(_ it: InboxItem, id: String) -> BatchPrepared {
+    let p = it.params
+    var facts: [SignedFact] = [.init(id: "kind", label: "Kind", value: "API call, runs as you (no signature)"),
+                               .init(id: "call", label: "Runs", value: "\(p["method"].string ?? "") \(p["path"].string ?? "")", style: .code)]
+    if let b = p["body"].text { facts.append(.init(id: "body", label: "Body", value: APICallReviewView.pretty(b), style: .code)) }
+    return BatchPrepared(facts: facts) { _, progress in
+      let out = try await RouterClient.shared.inboxApproveCall(id)
+      guard out["ok"].bool == true else { throw RouterError(message: out["error"].text ?? "The call didn't run.") }
+      progress.calls[id] = out
+    }
+  }
+}
+
+/// an API call this batch approved that brought about (or may still bring about) a core request
+struct BatchCallRun: Identifiable {
+  let item: InboxItem
+  let out: JSON
+  var id: String { item.id }
 }
 
 struct BatchReviewView: View {
@@ -198,6 +238,8 @@ struct BatchReviewView: View {
   @State private var loadError: String?
   @State private var busy: String?
   @State private var failure: String?
+  /// the API calls Allow all approved whose follow-ups wait: each opens its sheet in place (its own Face ID)
+  @State private var calls: [BatchCallRun] = []
 
   private var open: [InboxItem] { items.filter { !isDone($0) } }
   private func isDone(_ it: InboxItem) -> Bool { if case .success? = outcome[it.id] { return true }; return false }
@@ -240,6 +282,20 @@ struct BatchReviewView: View {
           Text("Written by the caller. Each item below shows what you sign.")
         }
         ForEach(Array(items.enumerated()), id: \.element.id) { n, it in itemSection(n + 1, it) }
+        if !calls.isEmpty {
+          Section {
+            ForEach(calls) { c in
+              NavigationLink {
+                APICallReviewView(callId: c.item.id, approved: (c.item, c.out))
+              } label: {
+                Text("\(c.item.params["method"].string ?? "") \(c.item.params["path"].string ?? "")").font(.footnote.monospaced())
+              }
+              .accessibilityIdentifier("batch-call-followups-\(c.item.id)")
+            }
+          } header: { Text("What the API calls bring about") } footer: {
+            Text("Each opens its own page: what you sign, under Face ID (it wasn't shown before this batch's Face ID).")
+          }
+        }
         Section {
           Button(busy == "Denying…" ? "Denying…" : "Deny all", role: .destructive) { Task { await denyAll() } }
             .disabled(busy != nil).accessibilityIdentifier("batch-deny")
@@ -257,7 +313,11 @@ struct BatchReviewView: View {
     .toolbar {
       ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() }.disabled(busy != nil).accessibilityIdentifier("secure-back") }
       ToolbarItem(placement: .confirmationAction) {
-        Button(busy ?? allowTitle) { Task { await allowAll() } }.disabled(!ready || busy != nil).accessibilityIdentifier("batch-allow")
+        if open.isEmpty && !calls.isEmpty {
+          Button("Done") { model.secureCompleted(true) }.accessibilityIdentifier("batch-done")
+        } else {
+          Button(busy ?? allowTitle) { Task { await allowAll() } }.disabled(!ready || busy != nil).accessibilityIdentifier("batch-allow")
+        }
       }
     }
     .interactiveDismissDisabled(busy != nil)
@@ -356,8 +416,13 @@ struct BatchReviewView: View {
         } catch { outcome[it.id] = .failure(error) }
       }
       busy = nil
-      if open.isEmpty { model.secureCompleted(true) }
-      else { failure = "Some items failed; the others went through." }
+      calls += runs.compactMap { run -> BatchCallRun? in
+        let it = run.0
+        guard let o = progress.calls[it.id], !o["followups"].array.isEmpty || o["awaiting"]["until"].string != nil else { return nil }
+        return BatchCallRun(item: it, out: o)
+      }
+      if open.isEmpty && calls.isEmpty { model.secureCompleted(true) }
+      else if !open.isEmpty { failure = "Some items failed; the others went through." }
     } catch { busy = nil; failure = errText(error) }
   }
 

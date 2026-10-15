@@ -20,7 +20,7 @@ enum SecureRequest: Identifiable, Equatable, Hashable {
   case approval(id: String, inbox: String? = nil)
   case grant(GrantAsk, inbox: String? = nil)
   case unlock(session: String, label: String, inbox: String? = nil)
-  case repoKey(action: String, repo: String, sensitive: Bool, inbox: String? = nil)
+  case repoKey(action: String, repo: String, sensitive: Bool, inbox: String? = nil, into: RepoInto? = nil)
   /// a batch from the Inbox (router/batches.go): its items on one page, allowed under one Face ID
   case batch(id: String)
   /// a store put back to an earlier version (core/history.go)
@@ -35,7 +35,7 @@ enum SecureRequest: Identifiable, Equatable, Hashable {
     case .approval(let a, _): "approval-\(a)"
     case .grant(let g, _): "grant-\(g.session)-\(g.holder)-\(g.kind)"
     case .unlock(let s, _, _): "unlock-\(s)"
-    case .repoKey(let a, let r, _, _): "repo-\(a)-\(r)"
+    case .repoKey(let a, let r, _, _, _): "repo-\(a)-\(r)"
     case .batch(let b): "batch-\(b)"
     case .restore(let st, let q, _): "restore-\(st)-\(q)"
     case .apiCall(let c): "api-call-\(c)"
@@ -44,7 +44,7 @@ enum SecureRequest: Identifiable, Equatable, Hashable {
   var inboxId: String? {
     switch self {
     case .newSession, .batch: nil
-    case .approval(_, let i), .grant(_, let i), .unlock(_, _, let i), .repoKey(_, _, _, let i), .restore(_, _, let i): i
+    case .approval(_, let i), .grant(_, let i), .unlock(_, _, let i), .repoKey(_, _, _, let i, _), .restore(_, _, let i): i
     case .apiCall(let c): c
     }
   }
@@ -58,7 +58,10 @@ enum SecureRequest: Identifiable, Equatable, Hashable {
       if g.kind == "grant" { o["minutes"] = g.minutes }
       return o
     case .unlock(let s, _, _): return ["sessionId": s]
-    case .repoKey(let a, let r, _, _): return ["action": a, "repo": r]
+    case .repoKey(let a, let r, _, _, let into):
+      var o: [String: Any] = ["action": a, "repo": r]
+      if let into { o["into"] = into.session }
+      return o
     case .restore(let st, let q, _): return ["store": st, "seq": q]
     }
   }
@@ -80,7 +83,9 @@ enum SecureRequest: Identifiable, Equatable, Hashable {
       return .unlock(session: s, label: o["label"].text ?? s, inbox: it.id)
     case "repo-key":
       guard let r = o["repo"].text else { return nil }
-      return .repoKey(action: o["action"].string == "remove" ? "remove" : "add", repo: r, sensitive: o["sensitive"].bool == true, inbox: it.id)
+      var into: RepoInto?
+      if let s = o["into"].text, let st = o["store"].text { into = RepoInto(session: s, label: o["intoLabel"].text ?? s, store: st) }
+      return .repoKey(action: o["action"].string == "remove" ? "remove" : "add", repo: r, sensitive: o["sensitive"].bool == true, inbox: it.id, into: into)
     case "restore":
       guard let st = o["store"].text, let q = o["seq"].int, q > 0 else { return nil }
       return .restore(store: st, seq: q, inbox: it.id)

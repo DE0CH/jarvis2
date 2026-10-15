@@ -122,7 +122,8 @@ const upgrade = (id: string) => exclusive("s:" + id, async () => {
 
 // Destroy: first what would be lost (GET …/changes: uncommitted / unpushed work), then the destroy itself —
 // the router pauses a running session (its final snapshot), archives it to the Storage Box and burns the line.
-// A failed archive leaves it paused with "archive: …"; then the question is whether to destroy anyway.
+// A failed archive leaves it paused with "archive: …", a kill that kept failing leaves it failed with "kill: … (Destroy
+// anyway …)" (router archive.go destroyAnywayHint); then the question is whether to destroy anyway.
 async function changesRows(id: string): Promise<AskRow[]> {
   try {
     const c = await api<any>("GET", `api/sessions/${id}/changes`);
@@ -149,10 +150,13 @@ export const destroySession = (id: string) => exclusive("s:" + id, async () => {
   pend("s:" + id, "Destroying…");
   try {
     await api("POST", `api/sessions/${id}/destroy`);
-    await refreshUntil((s) => { const x = find(s, id); return !x || (x.state !== "destroying" && !!x.error?.startsWith("archive:")); }, 15 * 60 * 1000);
+    const stuck = (e?: string | null) => !!e && (e.startsWith("archive:") || e.startsWith("kill:"));
+    await refreshUntil((s) => { const x = find(s, id); return !x || (x.state !== "destroying" && stuck(x.error)); }, 15 * 60 * 1000);
     const x = find(getStore().state, id);
-    if (x && x.error?.startsWith("archive:")) {
-      if (await ask({ title: "Archiving failed", rows: [{ label: "Error", value: x.error }, { label: "If destroyed", value: "Transcript and artifacts lost" }], action: "Destroy anyway", danger: true })) {
+    if (x && stuck(x.error)) {
+      const kill = x.error!.startsWith("kill:");
+      if (await ask({ title: kill ? "The machine wasn't destroyed" : "Archiving failed", rows: [{ label: "Error", value: x.error! },
+        kill ? { label: "If destroyed", value: "The session goes (archived from its last snapshot); the machine stays on the Machines tab" } : { label: "If destroyed", value: "Transcript and artifacts lost" }], action: "Destroy anyway", danger: true })) {
         await api("POST", `api/sessions/${id}/destroy?force=1`);
         await refreshUntil((s) => !find(s, id), 10 * 60 * 1000);
       }
@@ -308,7 +312,7 @@ export function Sessions() {
           {inGroup.map((m) => {
             const busy = pending.get("s:" + m.id) || serverBusy(m);
             const moving = !!MOVING[m.state] && m.state !== "initialising";
-            const paused = m.state === "paused", resumable = paused || (m.state === "failed" && !m.machineId);
+            const paused = m.state === "paused", resumable = paused || m.state === "failed"; // a failed one with a machine finishes its pause first (router Resume)
             const own = storesOf(m, policy);
             const modelName = models.find((x) => x.id === m.model)?.label || m.model;
             // auto-pause: off / counting down / the default (a running, non-one-shot session only)

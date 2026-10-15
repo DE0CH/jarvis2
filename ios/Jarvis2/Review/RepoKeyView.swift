@@ -2,7 +2,9 @@
 // half in the store github-<repo>) or remove. What the page shows comes from the core's signed begin document (asked
 // for when the page opens, and again when "Sensitive store" changes); one Face ID signs it and opens
 // github-deploy-keys for this one request. The core's refusals (e.g. a 409 when another repo already owns the store
-// name) are shown as the core words them.
+// name) are shown as the core words them. A repo a session asked for (into): the router files the add-store that puts
+// the repo's store into that session once the key exists, and this page signs it under the same Face ID, after checking
+// it is exactly that store for that session (BatchPrepare.repoFollowups; router DECISIONS 171).
 import SwiftUI
 
 struct RepoKeyView: View {
@@ -12,6 +14,7 @@ struct RepoKeyView: View {
   let repo: String
   let sensitiveAsked: Bool
   let inbox: String?
+  var into: RepoInto? = nil
   let request: SecureRequest
   @State private var b: DeployKeyBegin?
   @State private var doc: SignedDoc?
@@ -70,10 +73,13 @@ struct RepoKeyView: View {
     do {
       let r = try await RouterClient.shared.deployKeyBegin(action: action, repo: repo, sensitive: want)
       doc = r.doc; b = r.begin; sensitive = want
-      signed = SignedAction.deployKey(r.begin)
+      signed = SignedAction.deployKey(r.begin) + (follow(r.begin).map { SignedAction.repoInto($0, store: r.begin.store) } ?? [])
       forced = r.begin.sensitive && !want
     } catch { failure = errText(error) }
   }
+
+  /// the session the store goes into, when it is this begin's store
+  private func follow(_ b: DeployKeyBegin) -> RepoInto? { action == "add" && into?.store == b.store ? into : nil }
 
   private func go() async {
     guard let b, let doc else { return }
@@ -81,6 +87,25 @@ struct RepoKeyView: View {
     do {
       busy = action == "add" ? "Adding…" : "Removing…"
       let payload = doc.payload, e = b.e, reason = "\(title): \(b.repo)"
+      if let into = follow(b) {
+        // one Face ID for the key and the add-store that follows it
+        let auth = try await offMain { try PhoneKeys.shared.authorize(reason: reason) }
+        defer { auth.invalidate() }
+        let r = try await offMain { try PhoneKeys.shared.signAndShare(payload, e: e, reason: reason, auth: auth) }
+        let f = try await RouterClient.shared.deployKeyFinish(b, signature: r.signature, share: r.share, inbox: inbox)
+        do { try await BatchPrepare.repoFollowups(f.followups, into: into, model: model, auth: auth, progress: BatchProgress()) }
+        catch {
+          // the key is made; only the store's add-store failed: it stays in the Inbox
+          busy = nil
+          model.say("Deploy key added; adding the store to the session failed: " + errText(error))
+          model.secureCompleted(true)
+          return
+        }
+        busy = nil
+        model.say(f.followups.isEmpty ? "Deploy key added" : "Deploy key added and its store added to the session")
+        model.secureCompleted(true)
+        return
+      }
       let r = try await offMain { try PhoneKeys.shared.signAndShare(payload, e: e, reason: reason) }
       _ = try await RouterClient.shared.deployKeyFinish(b, signature: r.signature, share: r.share)
       busy = nil
