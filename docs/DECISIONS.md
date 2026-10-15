@@ -1466,7 +1466,7 @@ snapshot failed with "no space left on device", the machine was destroyed anyway
      average that is about USD 4.50/month, which `router/budget.go` already counts (it bills provisioned volumes).
      Backups: about 10 pauses a day × 3 days × ~3 GB of state ≈ 90 GB stored → about USD 6/month after the free 10 GB
      (less if Fly's incremental storage shares blocks); each failed-snapshot backup adds ~3 GB × 2 months ≈ USD 0.50
-     once. Snapshot storage is not in the budget estimate (the read token lists no snapshots): a known gap. Needs the
+     once. The budget cap counts both (177). Needs the
      held core release (the `core-pin: hold`), and the core's narrowed Fly token must allow volume calls: its caveat is
      `Apps {jarvis2-sessions: rwcdC}` with no per-resource limit, which should cover volumes; check on the first start
      after the release (a refusal shows as `start: fly create: volume: … 403`). *Not chosen*: restoring from the backup
@@ -1508,3 +1508,15 @@ snapshot failed with "no space left on device", the machine was destroyed anyway
      snapshots once each, the rest every 15 min when changed, 48 kept; a rebuilt box restores with `ROUTER_RESTORE=1`.
      *Not chosen*: rsync or a shared volume between boxes (no SSH, no shared storage); a Job that copies through the
      Storage Box at the cut (minutes of downtime).
+## The budget cap counts everything Fly bills for the sessions, 2026-10-15
+
+177. **Volume snapshots are in the Fly budget estimate, beside machines and provisioned volumes** (`router/budget.go`).
+     Prices from fly.io/docs/about/pricing, read 2026-10-15: started machines per its calculator (unchanged), volumes
+     USD 0.15 per provisioned GB-month (already counted), volume snapshots USD 0.08 per stored GB-month with the first
+     10 GB free. Every 30 min the router lists the snapshots of each volume Fly still has and of each deleted volume a
+     session or record names a backup of while its retention runs (Fly keeps those snapshots, and bills them, after the
+     volume is gone); each snapshot is counted once by id, failed ones not at all, and the stored GB past the free 10
+     add to the hourly burn the cap sums. The read-only token (`Apps {jarvis2-sessions: r}`) can list snapshots. A
+     failed list keeps the last one it got (logged). `GET /api/state` `budget` shows `snapshots` and `snapshotGb`.
+     *Not chosen*: Fly's billing API (the org's invoice needs a token that can see billing, more than read on one app);
+     counting snapshots at their volume's size (Fly bills the stored, incremental size, which its list reports).

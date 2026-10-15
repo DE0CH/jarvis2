@@ -9,8 +9,14 @@ package main
 // FLY_BUDGET_USD (default 30; 0 = off) → pause every running session (r.Pause: snapshot, then the core's
 // kill) and DM, and keep pausing anything started while the month stays over the cap.
 //
+// Volume snapshots count too (DECISIONS 176): the sessions' volumes are backed up at every kill (core/volumes.go) and
+// Fly bills their snapshots' stored size, including those of volumes already deleted (kept for their retention). Every
+// snapshotEvery the router lists the snapshots of each volume Fly still has and of each volume a session or record
+// names a backup of (still within its retention), sums their sizes once each, takes off Fly's free 10 GB and adds that
+// GB-month rate to the burn.
+//
 // The router has no Fly token that can change anything: FLY_READ_TOKEN is read-only on app jarvis2-sessions
-// (infra/fly-read-token.sh). It lists machines and volumes, nothing else.
+// (infra/fly-read-token.sh). It lists machines, volumes and the volumes' snapshots, nothing else.
 
 import (
 	"encoding/json"
@@ -33,15 +39,120 @@ const (
 	sessionsApp   = "jarvis2-sessions"
 )
 
-// rates (USD) from fly.io/docs/about/pricing (its "Started Fly Machines" calculator, read 2026-10-15): a vCPU-second
+// rates (USD) from fly.io/docs/about/pricing (its "Started Fly Machines" calculator, read 2026-10-15; volumes and
+// volume snapshots from its "Persistent storage" section, read 2026-10-15: USD 0.15 per provisioned GB-month, snapshots
+// USD 0.08 per stored GB-month with the first 10 GB free): a vCPU-second
 // shared 8.465e-7 / performance 1.2732e-5, each CPU with 0.25 GB (shared) or 2 GB (performance) of RAM included, every
 // further GB-second 2.316e-6, all times the region's markup (lhr, where sessions run: 1.134615385)
 var rates = struct {
 	sharedCPUPerHour, performanceCPUPerHour, ramPerGBHour, volumePerGBHour float64
 	sharedRAMIncluded, performanceRAMIncluded                              float64
+	snapshotPerGBHour, snapshotFreeGB                                      float64
 }{
 	8.465e-7 * 3600 * lhrMarkup, 1.2732e-5 * 3600 * lhrMarkup, 2.316e-6 * 3600 * lhrMarkup, 0.15 / hoursPerMonth,
 	0.25, 2,
+	0.08 / hoursPerMonth, 10,
+}
+
+// flySnapshot: one volume snapshot as Fly lists it (GET /volumes/:id/snapshots; size in bytes, stored)
+type flySnapshot struct {
+	ID     string `json:"id"`
+	Size   int64  `json:"size"`
+	Status string `json:"status"`
+}
+
+// snapshotReader: a flyReader that also lists a volume's snapshots (the real one; test fakes may not)
+type snapshotReader interface {
+	Snapshots(volume string) ([]flySnapshot, error)
+}
+
+const snapshotEvery = 30 * time.Minute
+
+// snapCache: each volume's snapshots, listed at most every snapshotEvery
+var snapCache = struct {
+	sync.Mutex
+	at    map[string]time.Time
+	snaps map[string][]flySnapshot
+}{at: map[string]time.Time{}, snaps: map[string][]flySnapshot{}}
+
+// hourlySnapshotCost: the stored snapshot GB past the free ones, per hour
+func hourlySnapshotCost(storedBytes int64) float64 {
+	gb := float64(storedBytes) / 1e9
+	return max(0, gb-rates.snapshotFreeGB) * rates.snapshotPerGBHour
+}
+
+// snapshotVolumes: every volume whose snapshots may still be billed — the ones Fly lists, and those a session's or a
+// record's backup names while its retention runs
+func (r *Router) snapshotVolumes(vs []flyVolume, now time.Time) []string {
+	seen := map[string]bool{}
+	out := []string{}
+	add := func(id string) {
+		if id != "" && !seen[id] {
+			seen[id] = true
+			out = append(out, id)
+		}
+	}
+	for _, v := range vs {
+		add(v.ID)
+	}
+	r.st.Do(func(d *persisted) {
+		for _, s := range d.Sessions {
+			for _, b := range s.Backups {
+				if b.ExpiresAt.After(now) {
+					add(b.Volume)
+				}
+			}
+		}
+		for _, rec := range d.Records {
+			for _, b := range rec.Backups {
+				if b.ExpiresAt.After(now) {
+					add(b.Volume)
+				}
+			}
+		}
+	})
+	sort.Strings(out)
+	return out
+}
+
+// snapshotStorage: the stored bytes of every billed snapshot (each counted once) → bytes, snapshots, the first error
+func snapshotStorage(fly flyReader, volumes []string, now time.Time) (int64, int, error) {
+	sr, ok := fly.(snapshotReader)
+	if !ok {
+		return 0, 0, nil
+	}
+	var firstErr error
+	ids := map[string]int64{}
+	for _, v := range volumes {
+		snapCache.Lock()
+		at, have := snapCache.at[v]
+		list := snapCache.snaps[v]
+		snapCache.Unlock()
+		if !have || now.Sub(at) >= snapshotEvery {
+			got, err := sr.Snapshots(v)
+			if err != nil {
+				if firstErr == nil {
+					firstErr = fmt.Errorf("snapshots of %s: %w", v, err)
+				}
+			} else {
+				list = got
+				snapCache.Lock()
+				snapCache.at[v], snapCache.snaps[v] = now, got
+				snapCache.Unlock()
+			}
+		}
+		for _, s := range list {
+			if s.Status == "failed" {
+				continue
+			}
+			ids[s.ID] = s.Size
+		}
+	}
+	var total int64
+	for _, n := range ids {
+		total += n
+	}
+	return total, len(ids), firstErr
 }
 
 const lhrMarkup = 1.134615385
@@ -92,9 +203,11 @@ func hourlyMachineCost(g *flyGuest) float64 {
 func hourlyVolumeCost(sizeGB int) float64 { return float64(sizeGB) * rates.volumePerGBHour }
 
 type burn struct {
-	RatePerHour float64
-	Running     int
-	Volumes     int
+	RatePerHour   float64
+	Running       int
+	Volumes       int
+	SnapshotBytes int64
+	Snapshots     int
 }
 
 func burnRate(ms []flyMachine, vs []flyVolume) burn {
@@ -218,6 +331,11 @@ func (f *flyAPI) Volumes() ([]flyVolume, error) {
 	return vs, f.get("/volumes", &vs)
 }
 
+func (f *flyAPI) Snapshots(volume string) ([]flySnapshot, error) {
+	var ss []flySnapshot
+	return ss, f.get("/volumes/"+volume+"/snapshots", &ss)
+}
+
 // ---- the tick ---------------------------------------------------------------------------------------
 
 type flyOther struct {
@@ -306,6 +424,12 @@ func (r *Router) budgetTick(fly flyReader, now time.Time, capUSD, warnUSD float6
 		return budgetActions{}, nil, nil
 	}
 	b := burnRate(ms, vs)
+	stored, nsnap, serr := snapshotStorage(fly, r.snapshotVolumes(vs, now), now)
+	b.SnapshotBytes, b.Snapshots = stored, nsnap
+	b.RatePerHour += hourlySnapshotCost(stored)
+	if serr != nil {
+		log.Printf("[budget] %v (counted from the last list)", serr)
+	}
 	var state BudgetState
 	var act budgetActions
 	r.st.Do(func(d *persisted) {
@@ -315,7 +439,8 @@ func (r *Router) budgetTick(fly flyReader, now time.Time, capUSD, warnUSD float6
 	budgetView.Lock()
 	budgetView.budget = map[string]any{"month": state.Month, "spentUsd": state.SpentUSD, "capUsd": capUSD, "warnUsd": warnUSD,
 		"warned": state.Warned, "capped": state.Capped, "cappedAt": state.CappedAt, "ratePerHour": b.RatePerHour,
-		"perMonth": b.RatePerHour * hoursPerMonth, "running": b.Running, "volumes": b.Volumes, "sampledAt": state.LastSampleAt}
+		"perMonth": b.RatePerHour * hoursPerMonth, "running": b.Running, "volumes": b.Volumes,
+		"snapshots": b.Snapshots, "snapshotGb": float64(b.SnapshotBytes) / 1e9, "sampledAt": state.LastSampleAt}
 	budgetView.Unlock()
 	var paused, unknown []string
 	if act.Enforce {

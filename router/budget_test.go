@@ -198,3 +198,63 @@ func TestStateHook(t *testing.T) {
 		t.Fatalf("%v", out)
 	}
 }
+
+// snapFly: a reader that also lists volume snapshots (the real Fly API's GET /volumes/:id/snapshots)
+type snapFly struct {
+	fakeFly
+	snaps map[string][]flySnapshot
+	asked []string
+}
+
+func (f *snapFly) Snapshots(v string) ([]flySnapshot, error) {
+	f.asked = append(f.asked, v)
+	return f.snaps[v], nil
+}
+
+// the cap counts what Fly bills for volume snapshots too: Fly's live volumes and the deleted volumes whose backups a
+// session or record still names, each snapshot once, past the free 10 GB, at USD 0.08 per GB-month
+func TestTheBudgetCountsVolumeSnapshots(t *testing.T) {
+	snapCache.Lock()
+	snapCache.at, snapCache.snaps = map[string]time.Time{}, map[string][]flySnapshot{}
+	snapCache.Unlock()
+	if c := hourlySnapshotCost(8e9); c != 0 {
+		t.Fatalf("under the free 10 GB: %v", c)
+	}
+	if c := hourlySnapshotCost(20e9) * hoursPerMonth; math.Abs(c-0.80) > 1e-9 {
+		t.Fatalf("20 GB stored: USD %v a month, want 0.80", c)
+	}
+	st, _ := LoadState(t.TempDir())
+	r := NewRouter(Config{}, st, nil, Policy{})
+	now := time.Date(2026, 10, 15, 12, 0, 0, 0, time.UTC)
+	st.Do(func(d *persisted) {
+		d.Sessions["s1"] = &Session{ID: "s1", State: "paused", Backups: []Backup{
+			{Volume: "vol_gone", Snapshot: "vs_a", ExpiresAt: now.Add(48 * time.Hour)},
+			{Volume: "vol_old", Snapshot: "vs_b", ExpiresAt: now.Add(-time.Hour)}, // past its retention: Fly dropped it
+		}}
+		d.Records = []*Record{{Session: Session{ID: "s0", Backups: []Backup{{Volume: "vol_rec", ExpiresAt: now.Add(time.Hour)}}}}}
+	})
+	fly := &snapFly{fakeFly: fakeFly{vs: []flyVolume{{ID: "vol_live", State: "created", SizeGB: 10}}},
+		snaps: map[string][]flySnapshot{
+			"vol_live": {{ID: "vs_d1", Size: 6e9, Status: "created"}},
+			"vol_gone": {{ID: "vs_a", Size: 10e9, Status: "created"}, {ID: "vs_x", Size: 9e9, Status: "failed"}},
+			"vol_rec":  {{ID: "vs_r", Size: 4e9, Status: "created"}, {ID: "vs_d1", Size: 6e9, Status: "created"}}, // listed twice: once
+		}}
+	if _, _, err := r.budgetTick(fly, now, 30, 25); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(fly.asked, ",") != "vol_gone,vol_live,vol_rec" {
+		t.Fatalf("asked %v", fly.asked)
+	}
+	budgetView.Lock()
+	v := budgetView.budget
+	budgetView.Unlock()
+	want := hourlyVolumeCost(10) + hourlySnapshotCost(20e9) // 6 + 10 + 4 GB stored
+	if v["snapshots"] != 3 || math.Abs(v["snapshotGb"].(float64)-20) > 1e-9 || math.Abs(v["ratePerHour"].(float64)-want) > 1e-12 {
+		t.Fatalf("view %v, want rate %v", v, want)
+	}
+	// listed at most every 30 min
+	r.budgetTick(fly, now.Add(2*time.Minute), 30, 25)
+	if len(fly.asked) != 3 {
+		t.Fatalf("listed again within 30 min: %v", fly.asked)
+	}
+}
