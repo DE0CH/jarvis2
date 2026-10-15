@@ -102,10 +102,20 @@ type delivered struct {
 
 var deliveredMu sync.Mutex
 
+// deliverOrderMu: held by deliver from the replay check to the record
+var deliverOrderMu sync.Mutex
+
 // notReplayed: records the delivery, or refuses a repeat of one already made (wakeup, cron); other kinds pass
-func notReplayed(d Delivery, now time.Time) error {
+// notReplayed: check AND record (tests, and any caller with nothing to do between)
+func notReplayed(d Delivery, now time.Time) error { return replayGuard(d, now, true) }
+
+// replayGuard: refuse a delivery already made; with record, also mark it made. deliver checks first, sends into the
+// harness, and records only after the harness took it: a resumed session's harness that is still booting answers
+// "target session not found", the router tries again, and that retry must not find the wakeup already burned
+// (2026-10-15, the legacy + move rehearsal).
+func replayGuard(d Delivery, now time.Time, record bool) error {
 	if d.Kind == "request-outcome" && d.Request != nil {
-		return outcomeNotReplayed(d, now)
+		return outcomeNotReplayed(d, now, record)
 	}
 	if (d.Kind != "wakeup" && d.Kind != "cron" && d.Kind != "watch" && d.Kind != "watch-fail") || d.Request == nil {
 		return nil
@@ -145,6 +155,9 @@ func notReplayed(d Delivery, now time.Time) error {
 		if now.Unix()-last.At < every/2 {
 			return errors.New("this cron ran less than half its period ago")
 		}
+	}
+	if !record {
+		return nil
 	}
 	seen[key] = delivered{Run: d.Run, At: now.Unix()}
 	if len(seen) > 2000 { // keep the newest
@@ -347,7 +360,10 @@ func deliver(c *client, d Delivery) error {
 	if err := notFrozen(); err != nil {
 		return err
 	}
-	if err := notReplayed(d, time.Now()); err != nil {
+	deliverOrderMu.Lock() // one delivery at a time between the check and the record
+	defer deliverOrderMu.Unlock()
+	now := time.Now()
+	if err := replayGuard(d, now, false); err != nil {
 		return err
 	}
 	if d.Kind == "watch" || d.Kind == "watch-fail" {
@@ -356,7 +372,10 @@ func deliver(c *client, d Delivery) error {
 			text += rerunCheck(w)
 		}
 	}
-	return sendToHarness(cert.Options.Harness, certMode(cert), "jarvis", text)
+	if err := sendToHarness(cert.Options.Harness, certMode(cert), "jarvis", text); err != nil {
+		return err
+	}
+	return replayGuard(d, now, true)
 }
 
 // sendToHarness: the text into the harness (the same as the router's old exec path, run here)

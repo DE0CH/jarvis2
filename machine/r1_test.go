@@ -116,3 +116,26 @@ func TestTheMachineSignsOneFinalSnapshot(t *testing.T) {
 		t.Fatal("a stopped session takes input")
 	}
 }
+
+// 2026-10-15 (the legacy + move rehearsal): a wakeup that resumes a paused session reaches a harness still booting
+// ("target session not found"); the router tries again, and the retry must still deliver. deliver checks before the
+// harness and records only after it took the text.
+func TestAWakeupTheHarnessRefusedIsNotBurned(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	k := newKey()
+	now := time.Unix(1791700000, 0)
+	w := Delivery{Kind: "wakeup", Request: signedRequest(k, "m1", "POST", "/m/api/sessions/s/wakeup", []byte(`{"prompt":"later"}`))}
+	if err := replayGuard(w, now, false); err != nil { // the check before the harness
+		t.Fatal(err)
+	}
+	// the harness refused: nothing recorded, so the retry passes the check and is recorded once it goes through
+	if err := replayGuard(w, now.Add(5*time.Second), false); err != nil {
+		t.Fatalf("a wakeup the harness refused counts as delivered: %v", err)
+	}
+	if err := replayGuard(w, now.Add(5*time.Second), true); err != nil {
+		t.Fatal(err)
+	}
+	if err := replayGuard(w, now.Add(time.Minute), false); err == nil {
+		t.Fatal("a delivered wakeup passes the check again")
+	}
+}

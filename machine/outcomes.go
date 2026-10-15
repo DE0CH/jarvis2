@@ -342,7 +342,7 @@ func proofHash(p *SignedDoc) string {
 }
 
 // outcomeNotReplayed: each item of a filing is told once (deliveredFile, which travels in the snapshot)
-func outcomeNotReplayed(d Delivery, now time.Time) error {
+func outcomeNotReplayed(d Delivery, now time.Time, record bool) error {
 	deliveredMu.Lock()
 	defer deliveredMu.Unlock()
 	home, _ := os.UserHomeDir()
@@ -355,6 +355,9 @@ func outcomeNotReplayed(d Delivery, now time.Time) error {
 		if _, ok := seen[fmt.Sprintf("outcome %s %d", d.Request.Sig, it.Item)]; ok {
 			return fmt.Errorf("the outcome of item %d of this filing was already delivered", it.Item)
 		}
+	}
+	if !record {
+		return nil
 	}
 	for _, it := range d.Outcomes {
 		seen[fmt.Sprintf("outcome %s %d", d.Request.Sig, it.Item)] = delivered{At: now.Unix()}
