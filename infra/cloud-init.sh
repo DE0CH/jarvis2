@@ -86,10 +86,10 @@ UNIT
 kube-proxy-arg:
   - nodeport-addresses=10.77.0.0/24
 kubelet-arg:
-  - system-reserved=cpu=200m,memory=512Mi
-  - kube-reserved=cpu=200m,memory=384Mi
-  - eviction-hard=memory.available<256Mi,nodefs.available<10%
-  - eviction-minimum-reclaim=memory.available=128Mi
+  - system-reserved=cpu=200m,memory=256Mi
+  - kube-reserved=cpu=200m,memory=256Mi
+  - eviction-hard=memory.available<200Mi,nodefs.available<10%
+  - eviction-minimum-reclaim=memory.available=100Mi
 K3S
 fi
 
@@ -101,7 +101,8 @@ export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
 for i in $(seq 1 60); do kubectl get nodes 2>/dev/null | grep -q ' Ready' && break; sleep 5; done
 
 curl -s https://fluxcd.io/install.sh | FLUX_VERSION="$FLUX_VERSION" bash || exit 1
-flux install --timeout 5m || exit 1
+# only the two controllers Jarvis 2 uses (no Helm, no notifications): less memory on a cx23 control box
+flux install --components source-controller,kustomize-controller --timeout 5m || exit 1
 # a Kustomization that names no service account applies as the powerless `default`, never as the controller
 kubectl -n flux-system patch deployment kustomize-controller --type=json \
   -p='[{"op":"add","path":"/spec/template/spec/containers/0/args/-","value":"--default-service-account=default"}]'

@@ -8,7 +8,7 @@
 # cloud-init.sh sends its outgoing IPv4 through Cloudflare WARP. The box has no SSH and no reachable k8s API: its firewall has no inbound rules, and everything after
 # this script comes from git (Flux). Prints no secret.
 # BOX_KIND=control|services makes one of the two boxes (docs/DESIGN.md "The boxes"; unset = the old single box until
-# it is retired): cx33, attached to the Hetzner Network `jarvis2` (10.77.0.0/24, made here if missing) at PRIVATE_IP
+# it is retired): control cx23, services cx33, attached to the Hetzner Network `jarvis2` (10.77.0.0/24, made here if missing) at PRIVATE_IP
 # (control 10.77.0.2, services 10.77.0.3 by default), its own age key (keys/<kind>-age.pub) and Flux path
 # (k8s/flux/<kind>.yaml). The services box gets no tunnel, no peer and no box key. The control box gets the box key
 # (keys/box-next.pub, renamed keys/box.pub when its core takes over) and, with WG_PEER=none, NO WireGuard peer: the
@@ -28,7 +28,7 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 D="$HOME/.jarvis2"; mkdir -p "$D"; chmod 700 "$D"
 BOX_KIND="${BOX_KIND:-}"
 case "$BOX_KIND" in
-  control)  NAME="${1:-jarvis2-control}"; TYPE="${SERVER_TYPE:-cx33}"; PRIVATE_IP="${PRIVATE_IP:-10.77.0.2}" ;;
+  control)  NAME="${1:-jarvis2-control}"; TYPE="${SERVER_TYPE:-cx23}"; PRIVATE_IP="${PRIVATE_IP:-10.77.0.2}" ;;
   services) NAME="${1:-jarvis2-services}"; TYPE="${SERVER_TYPE:-cx33}"; PRIVATE_IP="${PRIVATE_IP:-10.77.0.3}" ;;
   "")       NAME="${1:-jarvis2}"; TYPE="${SERVER_TYPE:-cx23}"; PRIVATE_IP="" ;;
   *) echo "BOX_KIND is control or services"; exit 1 ;;
