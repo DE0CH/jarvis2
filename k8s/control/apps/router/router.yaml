@@ -78,6 +78,10 @@ spec:
             # paired OpenClaw/Paseo apps (router/devices.go)
             - { name: ACCESS_DEVICES_AUD, value: 84f7faa757a2c8d49667a3e18bfd9af7d924732de682c501388a78d5e7e85a25 }
             # the Browserbase spend DM (router/bbbudget.go): overage above the plan fee, USD (Deyao, 2026-10-01)
+            # the external uptime probe's Access app jarvis2.deyaochen.com/healthz and its one service token
+            # (infra/cloudflare.py --health; router/healthz.go); neither is secret
+            - { name: ACCESS_HEALTH_AUD, value: 204115c631335178319ec7f729137773c9c4f95f192c681b82fae15ebb3dc886 }
+            - { name: HEALTH_CLIENT_ID, value: "f8d3af1465028cfa370fdf13bd9d4cea.access" }
             - { name: BROWSERBASE_BUDGET_USD, value: "10" }
             - { name: BROWSERBASE_BUDGET_WARN_USD, value: "8" }
           # the router's non-sensitive secrets (lobster's token, Storage Box keys, …): k8s/secrets/router.enc.yaml,

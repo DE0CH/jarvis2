@@ -102,6 +102,7 @@ func (r *Router) buildHandlers() {
 	r.registerRestore(app, mux)      // storerestore.go: a store's versions and putting one back (phone-signed)
 	r.registerActions(m)             // actions.go: each session's actions, on its machine key
 	r.registerNextCore(mux)          // nextcore.go: the flip to the next core
+	r.registerHealthz(mux.Handle)    // healthz.go: the external uptime probe
 	// the router's own health, for an operator with no way into the box: secret NAMES present, image, core up
 	mux.Handle("GET /setup/status", r.requireSetup(func(w http.ResponseWriter, req *http.Request) {
 		if err := r.checkSetupSig(req.Method, req.URL.Path, req.Header.Get("X-Setup-Time"), req.Header.Get("X-Setup-Sig"), nil); err != nil {
