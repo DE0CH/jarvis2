@@ -55,6 +55,9 @@ func (r *Router) RestoreRecord(recordID, requestID string) (string, error) {
 	if rec.Archive.Signer == "" {
 		return "", errHandIndex // records.go
 	}
+	if rec.Archive.Unverified != "" {
+		return "", fmt.Errorf("this archive's snapshot is %s: it is kept on the Storage Box, but restoring it waits for the core release that carries old lines", rec.Archive.Unverified)
+	}
 	box := r.box()
 	if box == nil {
 		return "", errNoStorageBox

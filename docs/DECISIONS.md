@@ -1520,3 +1520,48 @@ snapshot failed with "no space left on device", the machine was destroyed anyway
      failed list keeps the last one it got (logged). `GET /api/state` `budget` shows `snapshots` and `snapshotGb`.
      *Not chosen*: Fly's billing API (the org's invoice needs a token that can see billing, more than read on one app);
      counting snapshots at their volume's size (Fly bills the stored, incremental size, which its list reports).
+
+
+## Failed sessions, repo stores and API calls in a batch, 2026-10-15
+
+178. **A failed session comes back with one tap and can always be destroyed** (Deyao, 2026-10-15). Stuck that day:
+     "Jarvis Core rebuild" (start: core /start timed out), "Jarvis 2" (start cut off by a router restart), "Draft reply
+     to image" (kill: a Fly destroy timed out), and five sessions whose kill the core refused ("the snapshot isn't signed
+     by machine …'s current key": machines certified by the core from before the 2026-10-15 Recover, for which this
+     core has no key, so it refuses every snapshot claim). *Resume* takes any failed session: with no machine as 165
+     says; with one, it first finishes the pause (the final snapshot, the same one again if the machine took it, then
+     the kill) and resumes from it, on the same tap. A kill the core refuses (403) leaves it failed with the error.
+     *Kills* that fail on the way (502: Fly's API timing out; the core not answering) are tried again 4 times, 30 s
+     apart; refusals are final. *Destroy* never restores anything, so when the core refuses the snapshot claim it kills
+     without one: the core still destroys the machine, the router's own copy of the snapshot (checked against the
+     machine's key when it arrived) is archived to the Storage Box as usual, and the record (`snapshotNote`,
+     `archive.unverified`, `session.json` `snapshotUnverified`) says "from an earlier core, not verified by this core";
+     restoring such a record is refused until the core release that carries old lines. (Restored on top of 172-177 after 51b7bbd
+     dropped it: the kill path is snapsafe.go's, these fallbacks only on a destroy.) A destroy whose kill still
+     fails goes on when Fly (the router's read token) has no such machine; otherwise it is failed with "… (Destroy anyway
+     removes the session; the machine is then on the Machines tab)", and Destroy anyway (`?force=1`) destroys it: the
+     router stops taking the machine's calls (its `started` key goes) and the Machines tab treats a destroyed session's
+     machine as an orphan, whose Destroy tries the kill again. *The /start timeout was ours* (165 said the box): the
+     running core (sha-06ab2452f8ad, from before R2) waits inside /start (a create, up to 10 waits for "started", up to
+     10 init execs, each Fly call bounded by its own 90 s client: ≈ 34 min at worst) and /kill (≈ 32 min), and the router
+     gave up after 15 min, failing a start the core was still carrying out (and leaving any machine it then made unknown
+     to anyone). The router now waits 40 min for /start and /kill (`coreCallTimeout`); other calls keep 15 min. The held
+     core's start is one Fly call, so this matters only until it is live.
+179. **A repo a session asks for lands in that session in the same approval** (Deyao, 2026-10-15: one Face ID). A
+     session's `repo/add` (alone or in a batch, through its requests or its actions) names the asking session
+     (`params.session`; `noStore: true` opts out, for a repo meant for a proposed session); the Inbox shows it
+     (`open.options.into`, `intoLabel`, `store`) and the call's args carry `into`. When the key is finished
+     (`POST /api/repos/key/finish?inbox=ID`), the router files an add-store of `github-<repo>` for each running session
+     that asked and doesn't hold it, at once (the core makes a challenge only for a store it has), and answers the one
+     for the request the phone answered as `followups` beside the core's document. The phone showed it before Face ID
+     ("then adds the store to session …"), checks the challenge is exactly that store for that session, and signs it
+     under the same Face ID. Other asking sessions' add-stores wait in the Inbox on their own; a session that isn't
+     running gets none. The add-store's origin is the request's caller and call without its signed filing (the session
+     hears the repo's outcome; `jarvis2-request add-repo` starts the store's waiter). An app from before this signs the
+     add-store as a second item, as before.
+180. **An API call can be an item of a batch** (`{"intent": "call", "method", "path", "body" | "bodyText"}`), from a
+     session's requests or its actions only, checked exactly as a single call request (callRules) before anything is
+     filed. It is an `api-call` request in the batch; the phone's Allow all approves it with the others (no Face ID of
+     its own, 155) and then shows what the call brought about, each follow-up on its own page with its own Face ID
+     (166: it wasn't shown before the batch's Face ID). Its result is read by the session through either of its
+     credentials (`GET /m/api/actions/requests/call/:id`), and its outcome arrives as the batch's item.

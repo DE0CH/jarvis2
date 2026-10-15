@@ -12,10 +12,13 @@ import (
 )
 
 type Session struct {
-	ID             string     `json:"id"`        // stable: the first machine's id
-	MachineID      string     `json:"machineId"` // "" while paused
-	State          string     `json:"state"`
-	Error          string     `json:"error,omitempty"`
+	ID        string `json:"id"`        // stable: the first machine's id
+	MachineID string `json:"machineId"` // "" while paused
+	State     string `json:"state"`
+	Error     string `json:"error,omitempty"`
+	// archive.go: why its snapshot isn't one this core vouches for (a destroy killed the machine without naming it,
+	// the core refusing the claim: a machine from an earlier core). Archived as is; a restore of it is refused.
+	SnapshotNote   string     `json:"snapshotNote,omitempty"`
 	Created        time.Time  `json:"created"`
 	PausedAt       *time.Time `json:"pausedAt,omitempty"`
 	Label          string     `json:"label"`

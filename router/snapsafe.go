@@ -67,6 +67,11 @@ func (r *Router) machineVolume(machine string) *Volume {
 // finalSnapshotAndKill: a pause's or destroy's end of a running machine. false: the machine is still there (kept
 // after a failed snapshot, or a kill that didn't finish), the session failed with the reason, Deyao DMed.
 func (r *Router) finalSnapshotAndKill(id, machine string, force bool) bool {
+	return r.finalSnapshotAndKillFor(id, machine, false, force)
+}
+
+// finalSnapshotAndKillFor: destroying = a destroy's (archive.go snapshotAndKill: its kill falls back, DECISIONS 178)
+func (r *Router) finalSnapshotAndKillFor(id, machine string, destroying, force bool) bool {
 	serr := r.lastSnapshot(id, machine)
 	vol := r.machineVolume(machine)
 	if serr != nil && vol == nil && !force {
@@ -80,9 +85,19 @@ func (r *Router) finalSnapshotAndKill(id, machine string, force bool) bool {
 		r.setWaiting(id, "stopping the machine and taking its volume's backup snapshot (up to "+waitText(killMax)+")")
 	}
 	kd, err := r.killMachine(machine) // vouch.go: with the snapshot's hash
+	if err != nil && destroying {
+		kd, err = r.destroyKillFallback(id, machine, force, err)
+	}
 	r.setWaiting(id, "")
 	if err != nil {
 		r.killFailed(id, machine, vol != nil, err)
+		if destroying {
+			r.st.Do(func(d *persisted) {
+				if s := d.Sessions[id]; s != nil {
+					s.Error += destroyAnywayHint
+				}
+			})
+		}
 		return false
 	}
 	r.recordKill(id, machine, kd, serr)
@@ -239,4 +254,34 @@ func orEmptyBackups(b []Backup) []Backup {
 		return []Backup{}
 	}
 	return b
+}
+
+// destroyKillFallback: a destroy's kill that failed (DECISIONS 178). A refused snapshot claim (a machine from an
+// earlier core: this core has no key for it) is killed without the claim, the session marked so its archive says
+// so; a kill still failing is no obstacle when Fly no longer has the machine, or with force (the router stops taking
+// the machine's calls; it is an orphan on the Machines tab, whose Destroy tries the kill again)
+func (r *Router) destroyKillFallback(id, machine string, force bool, err error) (*Doc, error) {
+	var kd *Doc
+	if refusedSnapshot(err) {
+		log.Printf("session %s: the core refused %s's snapshot (%v): killed without it (a destroy restores nothing)", id, machine, err)
+		r.st.Do(func(d *persisted) {
+			if x := d.Sessions[id]; x != nil {
+				x.SnapshotNote = snapshotFromEarlierCore
+			}
+		})
+		if kd, err = r.killUntilDestroyed(map[string]any{"machine": machine}); err == nil {
+			return kd, nil
+		}
+	}
+	gone, ferr := flyMachineGone(machine)
+	switch {
+	case ferr == nil && gone:
+		log.Printf("session %s: the kill of %s failed (%v) but Fly has no such machine: destroying on", id, machine, err)
+		return nil, nil
+	case force:
+		log.Printf("session %s: the kill of %s failed (%v): destroyed anyway; the machine is left to the Machines tab", id, machine, err)
+		r.st.Do(func(d *persisted) { delete(d.Started, machine) })
+		return nil, nil
+	}
+	return nil, err
 }

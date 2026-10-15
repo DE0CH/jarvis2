@@ -278,7 +278,7 @@ final class RouterClient: NSObject, ASWebAuthenticationPresentationContextProvid
   }
   /// the phone's signature over the begin document and its share of the token store; the answer, checked
   /// inbox: the Inbox request this answers; the router then names the add-store approval it filed for the session that
-  /// asked (followups, beside the core's document; DECISIONS 171)
+  /// asked (followups, beside the core's document; DECISIONS 179)
   func deployKeyFinish(_ b: DeployKeyBegin, signature: Data, share: Data, inbox: String? = nil) async throws -> (answer: DeployKeyAnswer, followups: [String]) {
     let body: [String: Any] = ["pending": b.pending, "signature": signature.base64EncodedString(), "share": try CoreCrypto.sealShare(share, to: b.t)]
     var path = "api/repos/key/finish"

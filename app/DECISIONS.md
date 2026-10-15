@@ -323,7 +323,7 @@ fixes, 34–40 carried over from the old app and still true, 41–43 the web pag
     comes back when signed or rejected; answered ones as "Answered, denied or lapsed"; while the router awaits one, a
     spinner with its deadline; then "Nothing more to approve." and Done. Web: the card's Review opens the `call` page
     with the same sections; follow-ups show their rows and "Approve in the iPhone app", with Deny.
-71. **Failed sessions, a session's repo, API calls in a batch** (docs/DECISIONS.md 170-172; Deyao, 2026-10-15). Both apps
+71. **Failed sessions, a session's repo, API calls in a batch** (docs/DECISIONS.md 178-180; Deyao, 2026-10-15). Both apps
     show Resume for every failed session (one with a machine finishes its pause first, router-side), and a destroy that
     ends "kill: …" asks "The machine wasn't destroyed" → Destroy anyway (`?force=1`), like a failed archive. A repo
     request a session made shows "Then: Add store github-… to the session that asked" and the session under "What you

@@ -123,7 +123,7 @@ func main() {
 	if to := movedTo(cfg.DataDir); to != "" {
 		proxyOnly(to) // the leader that moved is gone, its lock with it: this pod stays a proxy too
 	}
-	coreClient := &CoreClient{base: cfg.CoreURL, http: &http.Client{Timeout: 15 * time.Minute}}
+	coreClient := &CoreClient{base: cfg.CoreURL, http: &http.Client{}} // each core call has its own deadline (core.go coreCallTimeout)
 	// move.go: the new box's router copies the old one's /data and proxies to it until it moves
 	joiner := moveJoinerFromEnv(cfg.DataDir)
 	if joiner != nil {
