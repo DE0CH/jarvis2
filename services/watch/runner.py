@@ -9,7 +9,11 @@ when it ends; while no check runs, every other process in the container is kille
 outlives it for long.
 
   POST /run {"script": "...", "name": "x", "timeout": 90}  ->  {"exit": n, "stdout": "...", "stderr": "...", "timedOut": b, "ms": n}
-  GET  /healthz
+  GET  /healthz   the process answers (liveness)
+  GET  /readyz    takes checks; 503 once SIGTERM arrived
+
+Two replicas, rolled one at a time (k8s/apps/watch.yaml). On SIGTERM a replica answers not-ready, keeps serving
+DRAIN_S while the Service drops it, waits for the checks it is running (at most MAX_TIMEOUT), then exits.
 """
 import json
 import os
@@ -27,9 +31,13 @@ STDOUT_CAP = 16 * 1024
 STDERR_CAP = 4 * 1024
 PARALLEL = int(os.environ.get("WATCH_PARALLEL", "4"))
 
+DRAIN_S = float(os.environ.get("DRAIN_S", "5"))
+
 _slots = threading.BoundedSemaphore(PARALLEL)
 _inflight = 0
 _lock = threading.Lock()
+_draining = threading.Event()
+_active = 0  # requests being handled (a check waiting for a slot counts too)
 
 
 def run_check(script, name, timeout):
@@ -83,6 +91,8 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(code)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(b)))
+        if _draining.is_set():
+            self.send_header("Connection", "close")  # the router's kept-alive connection moves to a replica that stays
         self.end_headers()
         self.wfile.write(b)
 
@@ -92,9 +102,21 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path == "/healthz":
             return self._send(200, {"ok": True})
+        if self.path == "/readyz":
+            return self._send(503 if _draining.is_set() else 200, {"ready": not _draining.is_set()})
         self._send(404, {"error": "not found"})
 
     def do_POST(self):
+        global _active
+        with _lock:
+            _active += 1
+        try:
+            self._post()
+        finally:
+            with _lock:
+                _active -= 1
+
+    def _post(self):
         global _inflight
         if self.path != "/run":
             return self._send(404, {"error": "not found"})
@@ -124,9 +146,31 @@ class Handler(BaseHTTPRequestHandler):
         self._send(200, res)
 
 
+def drain_and_stop(server):
+    """SIGTERM: not ready at once, serve DRAIN_S more, then wait for running checks and stop."""
+    time.sleep(DRAIN_S)
+    deadline = time.time() + MAX_TIMEOUT + 30
+    while time.time() < deadline:
+        with _lock:
+            if _active == 0:
+                break
+        time.sleep(0.2)
+    print(f"SIGTERM: drained ({_active} still running)", flush=True)
+    server.shutdown()
+
+
 def main():
     port = int(os.environ.get("PORT", "8095"))
-    ThreadingHTTPServer(("0.0.0.0", port), Handler).serve_forever()
+    server = ThreadingHTTPServer(("0.0.0.0", port), Handler)
+
+    def on_term(signum, frame):
+        if not _draining.is_set():
+            _draining.set()
+            print("SIGTERM: draining", flush=True)
+            threading.Thread(target=drain_and_stop, args=(server,), daemon=True).start()
+
+    signal.signal(signal.SIGTERM, on_term)
+    server.serve_forever()
 
 
 if __name__ == "__main__":

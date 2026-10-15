@@ -8,16 +8,19 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata: { name: watch, namespace: jarvis2-edge }
+# Zero-downtime: two replicas (it holds no state), rolled one at a time; on SIGTERM a replica leaves readiness and
+# finishes its running checks (at most 90 s) before it exits (runner.py drain_and_stop).
 spec:
-  replicas: 1
-  strategy: { type: Recreate }
+  replicas: 2
+  minReadySeconds: 3
+  strategy: { type: RollingUpdate, rollingUpdate: { maxUnavailable: 0, maxSurge: 1 } }
   selector: { matchLabels: { app: watch } }
   template:
     metadata: { labels: { app: watch } }
     spec:
       automountServiceAccountToken: false
       enableServiceLinks: false
-      terminationGracePeriodSeconds: 5
+      terminationGracePeriodSeconds: 130  # DRAIN_S + a 90 s check + margin
       containers:
         - name: watch
           image: ghcr.io/de0ch/jarvis2-watch:sha-255a625009c5@sha256:7f58c0bba381a88198a15af1b5c41d302aa68833d577248c1f57620769ec6238
@@ -26,11 +29,19 @@ spec:
             - { name: PORT, value: "8095" }
             - { name: TMPDIR, value: /tmp }
           volumeMounts: [{ name: tmp, mountPath: /tmp }]
-          readinessProbe: { httpGet: { path: /healthz, port: 8095 }, initialDelaySeconds: 1, periodSeconds: 10 }
+          livenessProbe: { httpGet: { path: /healthz, port: 8095 }, periodSeconds: 10, timeoutSeconds: 5, failureThreshold: 6 }
+          readinessProbe: { httpGet: { path: /readyz, port: 8095 }, initialDelaySeconds: 1, periodSeconds: 2, failureThreshold: 1 }
           resources: { requests: { cpu: 10m, memory: 32Mi }, limits: { cpu: 500m, memory: 256Mi, ephemeral-storage: 256Mi } }
           securityContext: { runAsNonRoot: true, runAsUser: 65532, runAsGroup: 65532, allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: { drop: [ALL] }, seccompProfile: { type: RuntimeDefault } }
       volumes:
         - { name: tmp, emptyDir: { sizeLimit: 128Mi } }
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata: { name: watch, namespace: jarvis2-edge }
+spec:
+  minAvailable: 1
+  selector: { matchLabels: { app: watch } }
 ---
 apiVersion: v1
 kind: Service

@@ -1,5 +1,6 @@
 import os
 import time
+import threading
 import unittest
 
 import runner
@@ -38,3 +39,26 @@ class RunnerTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class DrainTest(unittest.TestCase):
+    def test_readyz_and_drain(self):
+        import http.client
+        srv = runner.ThreadingHTTPServer(("127.0.0.1", 0), runner.Handler)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        port = srv.server_address[1]
+
+        def get(path):
+            c = http.client.HTTPConnection("127.0.0.1", port, timeout=5); c.request("GET", path); r = c.getresponse(); r.read(); return r.status, r.getheader("Connection")
+        self.assertEqual(get("/readyz")[0], 200)
+        runner._draining.set()
+        try:
+            st, conn = get("/readyz")
+            self.assertEqual(st, 503); self.assertEqual(conn, "close")
+            self.assertEqual(get("/healthz")[0], 200)  # still alive while draining
+            old = runner.DRAIN_S; runner.DRAIN_S = 0
+            t = threading.Thread(target=runner.drain_and_stop, args=(srv,)); t.start(); t.join(5)
+            runner.DRAIN_S = old
+            self.assertFalse(t.is_alive())
+        finally:
+            runner._draining.clear()
