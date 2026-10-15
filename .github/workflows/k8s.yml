@@ -32,7 +32,7 @@ jobs:
       - run: |
           kubectl kustomize k8s/apps > /tmp/apps.yaml
           deps="$(awk '/^kind: Deployment/{f=1} f&&/^  name:/{print $2;f=0}' /tmp/apps.yaml | sort | tr '\n' ' ')"
-          [ "$deps" = "bridge-icloud-index bridge-search bridge-watch cloudflared core netprobe router " ] || { echo "Deployments: $deps"; exit 1; }
+          [ "$deps" = "bridge-icloud-index bridge-search bridge-watch cloudflared core router " ] || { echo "Deployments: $deps"; exit 1; }
           grep -Eq 'jarvis2-router:sha-[0-9a-f]{12}@sha256:[0-9a-f]{64}' /tmp/apps.yaml || { echo "the router isn't pinned by digest"; exit 1; }
           grep -Eq 'jarvis2-session:sha-[0-9a-f]{12}@sha256:[0-9a-f]{64}' /tmp/apps.yaml || { echo "the session image isn't pinned by digest"; exit 1; }
           grep -A1 'name: SESSION_IMAGE_SIG' /tmp/apps.yaml | grep -Eq 'value: "?[A-Za-z0-9+/=]{20,}' || { echo "no CI signature for the session image"; exit 1; }
