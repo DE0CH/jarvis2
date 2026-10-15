@@ -15,6 +15,6 @@ spec:
         - name: probe
           image: docker.io/curlimages/curl:8.11.1@sha256:c1fe1679c34d9784c1b0d1e5f62ac0a79fca01fb6377cdd33e90473c6f9f9a69
           env: [{ name: TOKEN, valueFrom: { secretKeyRef: { name: netprobe, key: TOKEN } } }]
-          command: [sh, -c, 'while true; do r=$(curl -s -o /dev/null -m 8 -w "%{http_code} %{time_total}" http://10.77.0.2:30080/healthz); n=$(date +%s)000000000; curl -s -m 10 -u "1833850:$TOKEN" -H "Content-Type: application/json" -d "{\"streams\":[{\"stream\":{\"box\":\"old\",\"source\":\"netprobe\"},\"values\":[[\"$n\",\"MOVE_SELF $r\"]]}]}" https://logs-prod-012.grafana.net/loki/api/v1/push; sleep 30; done']
+          command: [sh, -c, 'while true; do r=$(curl -s -o /dev/null -m 8 -w "%{http_code} %{time_total}" http://10.77.0.2:30082/move/files); n=$(date +%s)000000000; curl -s -m 10 -u "1833850:$TOKEN" -H "Content-Type: application/json" -d "{\"streams\":[{\"stream\":{\"box\":\"old\",\"source\":\"netprobe\"},\"values\":[[\"$n\",\"MOVE_SELF_8082 $r\"]]}]}" https://logs-prod-012.grafana.net/loki/api/v1/push; sleep 30; done']
           resources: { requests: { cpu: 10m, memory: 16Mi }, limits: { cpu: 100m, memory: 32Mi } }
           securityContext: { runAsNonRoot: true, runAsUser: 65532, runAsGroup: 65532, allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: { drop: [ALL] }, seccompProfile: { type: RuntimeDefault } }
