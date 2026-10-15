@@ -121,6 +121,26 @@ network, the WireGuard peer moving between them, 2026-10-15; two runs, the secon
 The session is never restarted, paused or destroyed: the same Fly machine, boot and supervisor before and after (the
 e2e checks it).
 
+### The real move rehearsed (`E2E_CORE_REF=06ab2452f8ad E2E_ONLY=legacy-move infra/e2e.sh`)
+
+Router A on production's core (random keys) with a running session R and a paused one P (a wakeup armed, due ~6 min
+later); router B with its own core (this tree's, empty, no standby); the move; Deyao's seeded Recover on B; the legacy
+takeover. Measured on Fly, 2026-10-15 (the passing run; earlier runs found and fixed the issues below):
+
+| | What R (running) saw | What P (paused) saw |
+|---|---|---|
+| The move (gap 889 ms) | nothing failed: ≈400 calls per path (session API, lease, search), the longest 3.4 s at the freeze; same machine, boot and supervisor | nothing (paused) |
+| After the move, before the Recover | both routers' addresses answer only B's empty core; R keeps running | still paused, untouched |
+| The Recover on B | keeps running | taken over (CarryLost) 33–37 s after the Recover (the corechange tick) |
+| Its wakeup comes due | — | the scheduler resumes it; it waits on one unlock (the machine's boot: 12 s – 1 m 50 s after due), starts with its snapshot and secrets, and the wakeup is delivered once (26 s – 2 m 5 s after due) |
+| Its pause | paused in 12–13 s, taken over at its kill; resumed with one unlock, snapshot and secrets back (17 s – 6 min, Fly's boot) | — |
+
+Found on the way and fixed: a wakeup into a harness still booting was burned by the machine (it recorded the delivery
+before the harness took it; machine `38ac038` — sessions on an older image keep it until they move to a newer one);
+a POST racing the FIN of a pooled connection at the freeze (connections are one-shot from the drain on, 3 s before
+the freeze); the old machine listener refusing a request after the freeze (it serves until its peer goes); a search
+in flight cancelled at the freeze (only the long polls end).
+
 ### Flipping to the next core
 
 With `NEXT_CORE_URL` set and the next core Recovered alongside (a standby): `POST /setup/core/flip` (setup-signed),
