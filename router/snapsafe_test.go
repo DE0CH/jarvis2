@@ -268,7 +268,7 @@ func TestTheStreamedSnapshotIsCommittedOnlyWithTheMachinesSignature(t *testing.T
 	if b, _ := os.ReadFile(p); string(b) != body || !haveSnapshot(p) {
 		t.Fatal("the snapshot isn't in place")
 	}
-	if kd, err := rg.r.killMachine("m2"); err != nil || !strings.Contains(kd.Payload, want) {
+	if kd, err := rg.r.killMachine("m2", false); err != nil || !strings.Contains(kd.Payload, want) {
 		t.Fatalf("the kill doesn't name it: %v %v", kd, err)
 	}
 }

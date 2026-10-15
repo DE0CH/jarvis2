@@ -7,6 +7,7 @@ package main
 import (
 	"crypto/rand"
 	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -84,6 +85,33 @@ func TestASessionWritesAKeyIntoAStoreItDoesntHold(t *testing.T) {
 	}
 }
 
+// A session's write may make a new store (sensitive: it reaches no session without the phone); the router writes the
+// Claude account stores only, named as the router on every unlock.
+func TestNewStoresAndTheRoutersWrites(t *testing.T) {
+	c, f, p := setup(t)
+	cert, id := newLine(t, c, p, "default")
+	pl(t)(machineWrite(t, c, f, p, cert, id, "notes-new", "K", "v", ""))
+	if c.notSensitive["notes-new"] || storeOf(t, c, p, "notes-new")["K"] != "v" {
+		t.Fatal("a session's new store isn't sensitive, or lost its key")
+	}
+	pl(t)(c.CreateStore("claude-work"))
+	x := sealKey(t, c, p, "claude-work", "CLAUDE_CREDENTIALS", "pair")
+	r := pl(t)(c.WriteKey(WriteKeyInput{Store: "claude-work", Key: "CLAUDE_CREDENTIALS", Wrapped: x.Wrapped, Data: x.Data, Writer: "router"}))
+	if w, _ := r["writer"].(map[string]any); w["by"] != "router" || r["sensitive"] != false {
+		t.Fatalf("receipt %v", r)
+	}
+	d := pl2(t)(c.UnlockBegin("claude-work", ""))
+	if !strings.Contains(d.Payload, `"by":"router"`) {
+		t.Fatalf("the unlock doesn't name the router: %s", d.Payload)
+	}
+	for _, store := range []string{"default", "gmail", DeployKeyTokenStore, "claude"} {
+		x := sealKey(t, c, p, store, "K", "v")
+		if _, err := c.WriteKey(WriteKeyInput{Store: store, Key: "K", Wrapped: x.Wrapped, Data: x.Data, Writer: "router"}); err == nil {
+			t.Fatalf("the router wrote %s", store)
+		}
+	}
+}
+
 func TestAMachineWriteIsRefusedUnlessItIsALiveMachinesOwn(t *testing.T) {
 	c, f, p := setup(t)
 	cert, id := newLine(t, c, p, "default")
@@ -99,7 +127,7 @@ func TestAMachineWriteIsRefusedUnlessItIsALiveMachinesOwn(t *testing.T) {
 		Sig: (&phone{sig: ecdsaFromECDH(f.machines[id].sig)}).sign(WriterText("default", "K", x.Wrapped.E, x.Data, "")), Cert: &cert}); err == nil {
 		t.Fatal("a signature over another value wrote")
 	}
-	for name, store := range map[string]string{"the deploy-key token store": DeployKeyTokenStore, "a store that doesn't exist": "nope"} {
+	for name, store := range map[string]string{"the deploy-key token store": DeployKeyTokenStore, "a repo store that doesn't exist": "github-nope"} {
 		if _, err := machineWrite(t, c, f, p, cert, id, store, "K", "v", ""); err == nil {
 			t.Fatalf("%s: written", name)
 		}

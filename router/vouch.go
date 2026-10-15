@@ -212,13 +212,15 @@ func (r *Router) onceTaken(sid string) {
 // ---- kill with the snapshot -----------------------------------------------------------------------------------
 
 // killMachine: kill, naming the machine's last snapshot (its sha256 and the machine's signature over it) so the
-// successor's cert names exactly that one. A core that doesn't vouch ignores the snapshot field.
-func (r *Router) killMachine(machine string) (*Doc, error) {
+// successor's cert names exactly that one. requireSnapshot (a pause): the core keeps the machine (409) rather than
+// kill it without vouching for that snapshot; without it (a destroy, a takeover of a long-dead machine) a snapshot
+// the core can't check doesn't stop the kill, it just isn't named (core.go Kill, DECISIONS 190).
+func (r *Router) killMachine(machine string, requireSnapshot bool) (*Doc, error) {
 	in := map[string]any{"machine": machine}
 	p := r.st.snapshotPath(machine)
 	if sig, err := os.ReadFile(p + ".sig"); err == nil {
 		if sum, _, err := fileSha256(p); err == nil {
-			in["snapshot"] = map[string]string{"sha256": sum, "sig": strings.TrimSpace(string(sig))}
+			in["snapshot"] = map[string]any{"sha256": sum, "sig": strings.TrimSpace(string(sig)), "required": requireSnapshot}
 		}
 	}
 	if key, err := r.core.Key(); err == nil {

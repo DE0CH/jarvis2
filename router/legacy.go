@@ -117,7 +117,7 @@ func (r *Router) adoptPaused(id string) {
 	if recent {
 		return
 	}
-	if _, err := r.killMachine(machine); err != nil {
+	if _, err := r.killMachine(machine, false); err != nil {
 		log.Printf("session %s (an earlier core's, paused): taking its line over: %v", id, err)
 		return
 	}

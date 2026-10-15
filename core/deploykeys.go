@@ -148,7 +148,7 @@ func (c *Core) DeployKeyBegin(in DeployKeyRequest) (SignedDoc, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.phoneSigning == "" {
-		return SignedDoc{}, fail(409, "this core isn't set up yet")
+		return SignedDoc{}, fail(409, "this core isn't set up yet: Reset or Recover it in the app first")
 	}
 	if action != "add" && action != "remove" {
 		return SignedDoc{}, fail(400, "action: add or remove")

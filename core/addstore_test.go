@@ -165,8 +165,9 @@ func TestAnAddStoreAlwaysTakesTheNewestCert(t *testing.T) {
 	}
 }
 
-// A store the newest cert already holds isn't added again: refused, the caller treats it as done.
-func TestAnAddStoreOfAHeldStoreIsRefused(t *testing.T) {
+// A store the newest cert already holds isn't refused: the answer keeps the same stores (no duplicate) and is the
+// machine's newest cert, which reads the add-store's fresh unlock.
+func TestAnAddStoreOfAHeldStoreKeepsTheSameStores(t *testing.T) {
 	c, _, p := setup(t)
 	cert0, id := newLine(t, c, p, "default")
 	a := addStoreChallenge(t, c, cert0, id, "gmail")
@@ -174,7 +175,11 @@ func TestAnAddStoreOfAHeldStoreIsRefused(t *testing.T) {
 	cert1 := pl2(t)(c.ApproveByPhone(&o, p.sign(o.Payload), "", &cert0))
 	g := addStoreChallenge(t, c, cert1, id, "gmail")
 	cert2 := pl2(t)(c.ApproveByPhone(&g, p.sign(g.Payload), "", &cert1))
-	if _, err := c.ApproveByPhone(&a, p.sign(a.Payload), "", &cert2); err == nil {
-		t.Fatal("gmail was added to a cert that holds it")
+	cert3 := pl2(t)(c.ApproveByPhone(&a, p.sign(a.Payload), "", &cert2))
+	if got := certOf(t, cert3).Stores; !equalStrings(got, []string{"default", "gmail", "openrouter"}) {
+		t.Fatalf("got %v", got)
+	}
+	if c.latest[id] != certOf(t, cert3).Nonce {
+		t.Fatal("the answer isn't the machine's newest cert")
 	}
 }

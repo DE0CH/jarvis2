@@ -376,7 +376,7 @@ func (c *Core) Claim(statement, masterSig string, bundle Sealed) (SignedDoc, err
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.MasterKey != "" {
-		return SignedDoc{}, fail(409, "this core is already set up")
+		return SignedDoc{}, fail(409, "this core is already set up: end it with its own kit (the app's wipe), or empty it from git (RUNBOOK \"Emptying the core without its kit\"), then claim the new one")
 	}
 	var st claimStatement
 	if json.Unmarshal([]byte(statement), &st) != nil || st.Kind != "claim" {
@@ -512,8 +512,8 @@ func (c *Core) Claim(statement, masterSig string, bundle Sealed) (SignedDoc, err
 func (c *Core) Wipe(statement, masterSig string) (SignedDoc, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.MasterKey == "" {
-		return SignedDoc{}, fail(409, "this core is empty")
+	if c.MasterKey == "" { // already empty: what a wipe makes; nothing to end
+		return c.sign(map[string]any{"kind": "wiping", "core": c.signer.PublicKey(), "alreadyEmpty": true})
 	}
 	if !VerifyWith(c.MasterKey, []byte(statement), masterSig) {
 		return SignedDoc{}, fail(403, "the wipe isn't signed by this core's master key")
@@ -540,7 +540,7 @@ func (c *Core) SetFlyToken(sealed Sealed) (SignedDoc, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.MasterKey == "" {
-		return SignedDoc{}, fail(409, "this core isn't set up yet")
+		return SignedDoc{}, fail(409, "this core isn't set up yet: Reset or Recover it in the app first")
 	}
 	plain, err := OpenSealed(c.agreement, sealed, infoFlyToken)
 	if err != nil {
@@ -604,7 +604,7 @@ func (c *Core) CreateStore(name string) (SignedDoc, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.MasterKey == "" {
-		return SignedDoc{}, fail(409, "this core isn't set up yet")
+		return SignedDoc{}, fail(409, "this core isn't set up yet: Reset or Recover it in the app first")
 	}
 	if !storeName(name) || name == FlyStore || name == DeployKeyTokenStore {
 		return SignedDoc{}, fail(400, "bad store name (%s is always sensitive)", DeployKeyTokenStore)
@@ -623,8 +623,8 @@ func (c *Core) CreateStore(name string) (SignedDoc, error) {
 func (c *Core) MarkSensitive(name string) (SignedDoc, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if !c.notSensitive[name] {
-		return SignedDoc{}, fail(409, "store %s is already sensitive", name)
+	if !c.notSensitive[name] { // already sensitive (or never made): what was asked for holds
+		return c.sign(map[string]any{"kind": "marked-sensitive", "name": name, "already": true})
 	}
 	delete(c.notSensitive, name)
 	c.logf("store %s marked sensitive", name)
@@ -791,8 +791,11 @@ func (c *Core) Certify(approval, started *SignedDoc, carry string) (SignedDoc, e
 
 // KillWithSnapshot: one Fly destroy, then Fly must report the machine destroyed (409 until it does: the router
 // asks again) → killed. snapshot (optional): the sha256 of the snapshot the machine took and its signature over that
-// hash with the machine's current signing key; its successor restores that one only. Without it (no snapshot, or
-// none that checks) the successor starts with no predecessor state. The first kill fixes the snapshot.
+// hash with the machine's current signing key; its successor restores that one only. A claim that doesn't check (or
+// none) doesn't stop the kill: the record names no snapshot (and says why in snapshotRefused), so the successor
+// starts with no predecessor state — a kill needs no snapshot, only a successor's restore does. Only a caller that
+// asks for it (snapshot.required: a pause, which would rather keep the machine than lose its state) gets the kill
+// refused instead (409, the machine untouched). The first kill fixes the snapshot.
 // A machine with a volume (volumes.go) is first stopped and its volume snapshotted (the backup, named in the record);
 // only once Fly reports that snapshot created is the machine destroyed and the volume deleted.
 func (c *Core) KillWithSnapshot(id string, snapshot *SnapshotClaim) (SignedDoc, error) {
@@ -800,31 +803,31 @@ func (c *Core) KillWithSnapshot(id string, snapshot *SnapshotClaim) (SignedDoc, 
 }
 
 // Kill: KillWithSnapshot, and for a machine an earlier core certified (legacy: its cert and the master key's claim of
-// that core) the adoption of its line (legacy.go)
+// that core) the adoption of its line (legacy.go). A takeover that doesn't check is left out the same way as a
+// snapshot that doesn't: the machine is killed, its line not taken over (unless snapshot.required).
 func (c *Core) Kill(id string, snapshot *SnapshotClaim, legacy *LegacyCert) (SignedDoc, error) {
 	if id == "" || id == "null" {
-		return SignedDoc{}, fail(400, "kill rejects null")
+		return SignedDoc{}, fail(400, "kill takes a machine id (got %q)", id)
 	}
+	required := snapshot != nil && snapshot.Required
 	c.mu.Lock()
 	done, sum := c.isKilled(id), c.killed[id]
 	key := c.signing[id]
 	adopted := c.adopted[id]
 	var adopt *Cert
+	refused := "" // why the snapshot (or the takeover) isn't vouched for; the kill goes on without it
 	if !done && key == "" && legacy != nil {
 		cert, err := c.legacyCert(legacy)
-		if err != nil {
-			c.mu.Unlock()
-			return SignedDoc{}, err
+		switch {
+		case err != nil:
+			refused = "the earlier core's cert doesn't check (" + err.Error() + ")"
+		case cert.Machine.ID != id || c.latest[id] != "":
+			refused = fmt.Sprintf("the earlier core's cert isn't for %s, or this core knows %s already", id, id)
+		case snapshot == nil || snapshot.Sha256 == "":
+			refused = "an earlier core's line is taken over only with the snapshot its current key signed, and none came"
+		default:
+			adopt, key = &cert, cert.Machine.SigningKey
 		}
-		if cert.Machine.ID != id || c.latest[id] != "" {
-			c.mu.Unlock()
-			return SignedDoc{}, fail(409, "the earlier core's cert isn't for %s, or this core knows %s already", id, id)
-		}
-		if snapshot == nil || snapshot.Sha256 == "" {
-			c.mu.Unlock()
-			return SignedDoc{}, fail(409, "an earlier core's machine is taken over only with the snapshot its current key signed")
-		}
-		adopt, key = &cert, cert.Machine.SigningKey
 	}
 	c.mu.Unlock()
 	if done {
@@ -836,17 +839,22 @@ func (c *Core) Kill(id string, snapshot *SnapshotClaim, legacy *LegacyCert) (Sig
 		}
 		return c.sign(out)
 	}
-	if snapshot != nil && snapshot.Sha256 != "" && key == "" {
-		// a machine this core never initialised (an earlier core's, with no legacy cert): its snapshot can't be
-		// checked, so the kill names none — the kill itself still goes through (a destroy must not fail on it)
-		c.logf("kill %s: not a machine this core knows; its snapshot isn't taken", id)
-		snapshot = nil
-	}
-	if snapshot != nil && snapshot.Sha256 != "" {
-		if !hex64RE.MatchString(snapshot.Sha256) || !VerifyWith(key, []byte(snapshot.Sha256), snapshot.Sig) {
-			return SignedDoc{}, fail(403, "the snapshot isn't signed by machine %s's current key", id)
+	if refused == "" && snapshot != nil && snapshot.Sha256 != "" {
+		switch {
+		case key == "":
+			refused = fmt.Sprintf("machine %s isn't one this core knows (an earlier core's, with no cert of it), so its snapshot can't be checked", id)
+		case !hex64RE.MatchString(snapshot.Sha256) || !VerifyWith(key, []byte(snapshot.Sha256), snapshot.Sig):
+			refused = fmt.Sprintf("the snapshot isn't signed by machine %s's current key", id)
+		default:
+			sum = snapshot.Sha256
 		}
-		sum = snapshot.Sha256
+	}
+	if refused != "" {
+		if required {
+			return SignedDoc{}, fail(409, "machine %s is kept, not killed: %s, so a resume couldn't restore it. Destroy the session instead (a destroy needs no verified snapshot), or pause again once the machine sends a snapshot signed with its current key", id, refused)
+		}
+		adopt = nil
+		c.logf("kill %s: %s; killed without naming a snapshot", id, refused)
 	}
 	if err := c.backupVolume(id, sum != ""); err != nil {
 		return SignedDoc{}, err
@@ -892,6 +900,9 @@ func (c *Core) Kill(id string, snapshot *SnapshotClaim, legacy *LegacyCert) (Sig
 	out := c.killedRecord(id)
 	if adoptedNow != nil {
 		out["adopted"] = adoptedNow
+	}
+	if refused != "" {
+		out["snapshotRefused"] = refused
 	}
 	return c.sign(out)
 }
@@ -965,10 +976,10 @@ func (c *Core) Succession(in SuccessionInput) (SignedDoc, error) {
 	req.Stores = []string{}
 	for _, n := range in.Stores {
 		if keys, ok := c.stores[n]; !ok {
-			return SignedDoc{}, fail(400, "unknown store %s", n)
+			return SignedDoc{}, fail(400, "unknown store %s: make it first (a key written into it makes it)", n)
 		} else if len(keys) == 0 {
 			// an empty store gets its sensitivity settled by its writer first (setup.py marks it before writing)
-			return SignedDoc{}, fail(400, "store %s is empty", n)
+			return SignedDoc{}, fail(400, "store %s is empty, so there is nothing to unlock: write a key into it first (jarvis2 put-key), or leave it out", n)
 		}
 		if n == DeployKeyTokenStore {
 			// its token is opened only by deploy_key_finish, for one phone-approved call (DESIGN "Deploy keys")
@@ -1122,7 +1133,8 @@ func (c *Core) answer(ch challenge, by, carry string, current *SignedDoc) (Signe
 // what the newest cert says: a store a downgrade dropped stays dropped, a key pair a downgrade replaced stays replaced.
 // Two add-stores filed before either is answered thus both end in the session, whatever order and timing the phone
 // answers in (2026-10-13: identity and yyc; the second answer rebuilt the cert from the cert both were filed against,
-// and identity's answer was lost). A store the newest cert already holds is refused (409): nothing to add.
+// and identity's answer was lost). A store the newest cert already holds is no refusal: the answer is a cert with the
+// same stores, which reads the add-store's unlock, so the session gets the store as it is now.
 func (c *Core) addOnto(r Request, current *SignedDoc) (Request, error) {
 	var stale, cur Cert
 	if r.Predecessor == nil || c.verifyOwn(r.Predecessor, &stale) != nil || stale.Machine == nil {
@@ -1144,10 +1156,7 @@ func (c *Core) addOnto(r Request, current *SignedDoc) (Request, error) {
 		return r, fail(409, "the machine's options changed since the challenge")
 	}
 	set := map[string]bool{r.AddedStore: true}
-	for _, n := range cur.Stores {
-		if n == r.AddedStore {
-			return r, fail(409, "%s already holds store %s", cur.Machine.ID, n)
-		}
+	for _, n := range cur.Stores { // a store it already holds: the same set, and the new cert reads the fresh unlock
 		set[n] = true
 	}
 	stores := make([]string, 0, len(set))
@@ -1248,7 +1257,7 @@ func (c *Core) UnlockBegin(name, forNonce string) (SignedDoc, error) {
 	}
 	keys := c.stores[name]
 	if len(keys) == 0 || name == FlyStore {
-		return SignedDoc{}, fail(404, "no store %s with contents", name)
+		return SignedDoc{}, fail(404, "no store %s with contents: write a key into it first (jarvis2 put-key)", name)
 	}
 	if forNonce != "" && !isNonce(forNonce) {
 		return SignedDoc{}, fail(400, "for: not a challenge or cert nonce")
@@ -1339,7 +1348,8 @@ func (c *Core) Lock(id string) (SignedDoc, error) {
 			return c.sign(map[string]any{"kind": "locked", "id": id, "store": name})
 		}
 	}
-	return SignedDoc{}, fail(404, "no such unlock id")
+	// not open (locked already, lapsed, or never): what was asked for holds
+	return c.sign(map[string]any{"kind": "locked", "id": id, "already": true})
 }
 
 func (c *Core) ListUnlocked(nonce string) (SignedDoc, error) {
@@ -1379,7 +1389,7 @@ func (c *Core) PullSecrets(certDoc *SignedDoc, carry string) (SignedDoc, error) 
 		return SignedDoc{}, fail(400, "not a succession cert this core signed")
 	}
 	if c.latest[cert.Machine.ID] != cert.Nonce {
-		return SignedDoc{}, fail(409, "a superseded cert of %s: only its newest cert pulls", cert.Machine.ID)
+		return SignedDoc{}, fail(409, "a superseded cert of %s: only its newest cert pulls (ask the router for the machine's newest cert and pull with that)", cert.Machine.ID)
 	}
 	carried, carriedVersions := c.openCarryFor(carry, &cert) // nil when absent, not this line's, or not this core's
 	perStore := map[string]map[string]string{}
@@ -1396,7 +1406,7 @@ func (c *Core) PullSecrets(certDoc *SignedDoc, carry string) (SignedDoc, error) 
 			}
 		}
 		if !ok {
-			return SignedDoc{}, fail(423, "store %s is locked", n)
+			return SignedDoc{}, fail(423, "store %s is locked: the session waits for Deyao's unlock of it (Unlock… in the app, or an Inbox unlock request)", n)
 		}
 		if version != storeVersion(c.stores[n]) {
 			stale = append(stale, n) // a key was written since: only a new unlock (the phone) brings it

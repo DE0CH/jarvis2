@@ -29,22 +29,27 @@ func TestASeededCoreTakesOverTheLinesOfAnEarlierCoreTheMasterClaimed(t *testing.
 	c := newSeededCore(t, f, master, p, nil)
 	snapR := hex.EncodeToString([]byte("running-snapshot-0123456789abcde"))
 	snap := &SnapshotClaim{Sha256: snapR, Sig: machineSign(f.machines[idR].sig, snapR)}
-	// refused: no claim, a claim another master signed, no snapshot, a snapshot another key signed
-	if _, err := c.Kill(idR, snap, &LegacyCert{Cert: &certR}); err == nil {
+	// a pause (required) is refused, the machine kept: no claim, a claim another master signed, no snapshot, a
+	// snapshot another key signed
+	req := &SnapshotClaim{Sha256: snapR, Sig: snap.Sig, Required: true}
+	if _, err := c.Kill(idR, req, &LegacyCert{Cert: &certR}); err == nil {
 		t.Fatal("taken over without the master's claim")
 	}
 	other := newPhone()
-	if _, err := c.Kill(idR, snap, &LegacyCert{Cert: &certR, CoreCert: &struct {
+	if _, err := c.Kill(idR, req, &LegacyCert{Cert: &certR, CoreCert: &struct {
 		Statement string `json:"statement"`
 		MasterSig string `json:"masterSig"`
 	}{st, other.sign(st)}}); err == nil {
 		t.Fatal("taken over with a claim another key signed")
 	}
-	if _, err := c.Kill(idR, nil, &LegacyCert{Cert: &certR, CoreCert: claim}); err == nil {
+	if _, err := c.Kill(idR, &SnapshotClaim{Required: true}, &LegacyCert{Cert: &certR, CoreCert: claim}); err == nil {
 		t.Fatal("taken over without a snapshot")
 	}
-	if _, err := c.Kill(idR, &SnapshotClaim{Sha256: snapR, Sig: other.sign(snapR)}, &LegacyCert{Cert: &certR, CoreCert: claim}); err == nil {
+	if _, err := c.Kill(idR, &SnapshotClaim{Sha256: snapR, Sig: other.sign(snapR), Required: true}, &LegacyCert{Cert: &certR, CoreCert: claim}); err == nil {
 		t.Fatal("taken over with a snapshot the machine didn't sign")
+	}
+	if f.machines[idR].destroyed {
+		t.Fatal("a refused pause destroyed the machine")
 	}
 	// the running session pauses: its kill takes the line over
 	d := pl(t)(c.Kill(idR, snap, &LegacyCert{Cert: &certR, CoreCert: claim}))

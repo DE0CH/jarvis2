@@ -1686,3 +1686,21 @@ snapshot failed with "no space left on device", the machine was destroyed anyway
      450–550 probe calls per path (session API, lease, search) with none failed, an exec through `/m/commands` 0.8 s
      after the move, a wakeup due in the gap delivered once, 3.7 s after it was due. *Not chosen*: retries in the machine (running sessions keep their image until a restart).
 
+## Every refusal protects something, or it goes, 2026-10-15
+
+190. **A refusal stays only when it protects against a real threat or failure; the rest are gone, and the action does
+     its safe part** (Deyao, 2026-10-15: "what does refusing to destroy even protect?"). The audit lists every refusal of
+     the core, the router, the machine and the session tools with what it protects and its class (kept, removed,
+     redesigned). What changed in the core (ships with the core at the move):
+     *A kill never fails over the snapshot.* A snapshot claim the core can't check (another key's, a machine it doesn't
+     know, an earlier core's line whose takeover doesn't check) no longer refuses the kill: the machine is killed, the
+     record names no snapshot and says why (`snapshotRefused`), and its successor restores nothing. A destroy needs no
+     vouched snapshot; only a resume does. A pause still would rather keep the machine than lose its state, so the
+     router's pause asks for that (`snapshot.required`): then the kill is refused (409) with the machine untouched and
+     the message says to Destroy instead or pause again. *Answered, not refused, when the outcome already holds*: a
+     mark-sensitive of a sensitive store, a lock of an unlock that isn't open, a wipe of an empty core (nothing ends),
+     an add-store of a store the cert already holds (the new cert keeps the same stores and reads the add-store's
+     unlock, so the session gets the store as it is now). *A session's write may make a store* (sensitive, so it
+     reaches no session without the phone); `github-*` names stay reserved for repo deploy keys (squatting one would
+     block that repo's key). *The router writes the Claude account stores* (writer `router`, `claude-<name>` only,
+     below). Messages of the kept refusals say what to do next.

@@ -12,6 +12,8 @@ package main
 //     it against keys/setup.pub);
 //   - machine: a running session machine, whose signature over WriterText the core checks itself with the signing key
 //     in that machine's newest cert (sent beside it): only a live machine this core certified writes as a machine;
+//   - router: the router, for the Claude account stores only (claude-<name>: their pair rotates with nobody there);
+//     unsigned, so named for what it is;
 //   - core: the core's own wrapping (a Recover's bundle, a deploy key).
 // Every write is answered with a signed receipt (kind "key-written") naming the writer and the sha256 of the key's
 // backup, which the writer sealed to the master key; the router keeps the receipt with the backup, so a Recover can
@@ -25,6 +27,14 @@ import (
 	"strings"
 	"time"
 )
+
+// routerStoreRE: the stores the router writes (the Claude accounts, router/claudeaccounts.go)
+var routerStoreRE = regexp.MustCompile(`^claude-[a-z0-9]+(-[a-z0-9]+)*$`)
+
+// reservedStore: names a machine's write never makes (a repo's deploy-key store is made by its deploy-key call)
+func reservedStore(name string) bool {
+	return name == DeployKeyTokenStore || strings.HasPrefix(name, "github-")
+}
 
 // KeyEntry: one key of a store
 type KeyEntry struct {
@@ -96,16 +106,17 @@ type WriteKeyInput struct {
 	Cert         *SignedDoc `json:"cert"`
 }
 
-// WriteKey: one key written (or deleted). The setup writer's first key of a name the core doesn't have makes that store
-// (sensitive, as every store create_store didn't make); a machine writes only into existing stores, never the
-// deploy-key token store or a repo's deploy-key store (their keys come only from a phone-approved deploy-key call).
+// WriteKey: one key written (or deleted). A writer's first key of a name the core doesn't have makes that store
+// (sensitive, as every store create_store didn't make; a new store reaches no session without the phone); a machine
+// never writes the deploy-key token store or a repo's deploy-key store (their keys come only from a phone-approved
+// deploy-key call), nor makes a github-* store; the router writes only claude-* stores.
 // The core's own store is never written. Unlocked plaintext of the store stays as it was until locked (the store's
 // version tells it is behind).
 func (c *Core) WriteKey(in WriteKeyInput) (SignedDoc, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.MasterKey == "" {
-		return SignedDoc{}, fail(409, "this core isn't set up yet")
+		return SignedDoc{}, fail(409, "this core isn't set up yet: Reset or Recover it in the app first")
 	}
 	keys, exists := c.stores[in.Store]
 	if !storeName(in.Store) || in.Store == FlyStore {
@@ -153,15 +164,23 @@ func (c *Core) WriteKey(in WriteKeyInput) (SignedDoc, error) {
 		if in.Store == DeployKeyTokenStore || c.repoOwner[in.Store] != "" {
 			return SignedDoc{}, fail(403, "store %s's keys come only from a phone-approved deploy-key call", in.Store)
 		}
-		if !exists {
-			return SignedDoc{}, fail(404, "no store %s: a session writes keys into existing stores only", in.Store)
+		if !exists && reservedStore(in.Store) {
+			return SignedDoc{}, fail(403, "store %s doesn't exist and a session doesn't make it: github-* stores come only from a repo's deploy key (Settings → Repos)", in.Store)
 		}
 		w = EntryWriter{By: "machine", Machine: m, Line: cert.Line}
+	case "router":
+		// the router's own writes: only the Claude account stores, whose pair it refreshes with nobody there (DECISIONS
+		// 185, 188). Unsigned: the core can't tell the router from anything else on the box, so the writer is named
+		// as what it is, "router", and the phone shows it on every unlock; the router holds the pair in the clear anyway.
+		if !routerStoreRE.MatchString(in.Store) {
+			return SignedDoc{}, fail(403, "the router writes only the Claude account stores (claude-<name>), not %s", in.Store)
+		}
+		w = EntryWriter{By: "router"}
 	default:
-		return SignedDoc{}, fail(400, "writer: setup or machine")
+		return SignedDoc{}, fail(400, "writer: setup, machine or router")
 	}
 	now := c.now().UTC().Format(time.RFC3339)
-	if !exists { // the setup writer's first key makes the store, sensitive (create_store is the only way to a non-sensitive one)
+	if !exists { // a writer's first key makes the store, sensitive (create_store is the only way to a non-sensitive one)
 		keys = map[string]*KeyEntry{}
 		c.stores[in.Store] = keys
 	}

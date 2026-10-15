@@ -84,7 +84,7 @@ func (r *Router) finalSnapshotAndKillFor(id, machine string, destroying, force b
 	if vol != nil {
 		r.setWaiting(id, "stopping the machine and taking its volume's backup snapshot (up to "+waitText(killMax)+")")
 	}
-	kd, err := r.killMachine(machine) // vouch.go: with the snapshot's hash
+	kd, err := r.killMachine(machine, !destroying) // vouch.go: with the snapshot's hash; a pause only with it vouched for
 	if err != nil && destroying {
 		kd, err = r.destroyKillFallback(id, machine, force, err)
 	}

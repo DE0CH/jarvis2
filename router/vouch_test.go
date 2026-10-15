@@ -191,14 +191,19 @@ func TestAResumePromptOrRollbackNeedsThePhone(t *testing.T) {
 
 func TestAKillNamesTheMachinesSnapshot(t *testing.T) {
 	rg, vc := v2Rig(t)
-	if _, err := rg.r.killMachine("m1"); err != nil {
+	if _, err := rg.r.killMachine("m1", false); err != nil {
 		t.Fatal(err)
 	}
 	snap, _ := vc.last("/kill")["snapshot"].(map[string]any)
 	body, _ := os.ReadFile(rg.r.st.snapshotPath("m1"))
 	sig, _ := os.ReadFile(rg.r.st.snapshotPath("m1") + ".sig")
 	sum := sha256.Sum256(body)
-	if snap == nil || snap["sha256"] != hex.EncodeToString(sum[:]) || snap["sig"] != string(sig) {
+	if snap == nil || snap["sha256"] != hex.EncodeToString(sum[:]) || snap["sig"] != string(sig) || snap["required"] != false {
+		t.Fatalf("kill %v", vc.last("/kill"))
+	}
+	// a pause asks the core to keep the machine rather than kill it without that snapshot
+	rg.r.killMachine("m1", true)
+	if snap, _ := vc.last("/kill")["snapshot"].(map[string]any); snap["required"] != true {
 		t.Fatalf("kill %v", vc.last("/kill"))
 	}
 }

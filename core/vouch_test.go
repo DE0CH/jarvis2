@@ -119,9 +119,9 @@ func TestAResumeRestoresOnlyTheSnapshotItsPredecessorSigned(t *testing.T) {
 	cert, old := newLine(t, c, p, "default")
 	oc := certOf(t, cert)
 	sum := sha256Hex("the snapshot tarball")
-	// a snapshot the machine didn't sign: the kill is refused, the machine lives
+	// a snapshot the machine didn't sign, on a pause (required): the kill is refused, the machine lives
 	other := newPhone()
-	if _, err := c.KillWithSnapshot(old, &SnapshotClaim{Sha256: sum, Sig: other.sign(sum)}); err == nil {
+	if _, err := c.KillWithSnapshot(old, &SnapshotClaim{Sha256: sum, Sig: other.sign(sum), Required: true}); err == nil {
 		t.Fatal("killed with a snapshot another key signed")
 	}
 	if f.machines[old].destroyed {
@@ -150,6 +150,28 @@ func TestAResumeRestoresOnlyTheSnapshotItsPredecessorSigned(t *testing.T) {
 	}
 }
 
+// A destroy needs no verified snapshot: a claim that doesn't check (another key's, or a machine this core never
+// initialised) doesn't stop the kill; the record names no snapshot and says why, and the successor restores nothing.
+func TestAKillGoesOnWithoutASnapshotItCantVouchFor(t *testing.T) {
+	c, f, p := setup(t)
+	cert, id := newLine(t, c, p, "default")
+	sum := sha256Hex("the snapshot tarball")
+	d := pl(t)(c.KillWithSnapshot(id, &SnapshotClaim{Sha256: sum, Sig: newPhone().sign(sum)}))
+	if !f.machines[id].destroyed || d["snapshot"] != "" || d["snapshotRefused"] == nil {
+		t.Fatalf("destroyed %v, record %v", f.machines[id].destroyed, d)
+	}
+	oc := certOf(t, cert)
+	ch, _ := routerSuccession(c, SuccessionInput{Predecessor: &cert, Image: oc.Machine.Image, Stores: []string{"default"}})
+	a := pl2(t)(c.ApproveByDeadMachine(&ch))
+	if next, _ := start(t, c, a); certOf(t, next).Snapshot != "" {
+		t.Fatal("the successor restores a snapshot nobody vouched for")
+	}
+	// a machine this core never initialised: killed, no snapshot named
+	if _, err := c.KillWithSnapshot("m-unknown", &SnapshotClaim{Sha256: sum, Sig: newPhone().sign(sum)}); err != nil && !strings.Contains(err.Error(), "fly") {
+		t.Fatalf("an unknown machine's kill: %v", err)
+	}
+}
+
 func TestAfterADowngradeOnlyTheNewKeySignsTheSnapshot(t *testing.T) {
 	c, f, p := setup(t)
 	cert, id := newLine(t, c, p, "default", "gmail")
@@ -162,7 +184,7 @@ func TestAfterADowngradeOnlyTheNewKeySignsTheSnapshot(t *testing.T) {
 	}
 	pl(t)(c.ApproveByOldKey(&ch, machineSign(f.machines[id].sig, ch.Payload), ""))
 	sum := sha256Hex("tarball")
-	if _, err := c.KillWithSnapshot(id, &SnapshotClaim{Sha256: sum, Sig: machineSign(f.machines[id].sig, sum)}); err == nil {
+	if _, err := c.KillWithSnapshot(id, &SnapshotClaim{Sha256: sum, Sig: machineSign(f.machines[id].sig, sum), Required: true}); err == nil {
 		t.Fatal("the shredded old key still signs the snapshot")
 	}
 	pl(t)(c.KillWithSnapshot(id, &SnapshotClaim{Sha256: sum, Sig: machineSign(sig, sum)}))

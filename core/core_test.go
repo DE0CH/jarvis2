@@ -517,8 +517,9 @@ func TestWipeOnlyByTheCurrentMasterKey(t *testing.T) {
 		return string(b)
 	}
 	w := stmt(c.Key()["signingKey"])
-	if _, err := c.Wipe(w, master.sign(w)); err == nil {
-		t.Fatal("wiped an empty core")
+	// an empty core: already what a wipe makes, answered, nothing ends
+	if d := pl(t)(c.Wipe(w, master.sign(w))); d["alreadyEmpty"] != true || len(exited) != 0 {
+		t.Fatalf("an empty core's wipe: %v", d)
 	}
 	p := newPhone()
 	s, sig, b := claimFor(c, master, p, resetBundle)
@@ -915,8 +916,8 @@ func TestSensitivityOnlyGrows(t *testing.T) {
 	}
 	// the one-way upgrade
 	pl(t)(c.MarkSensitive("notes"))
-	if _, err := c.MarkSensitive("notes"); err == nil {
-		t.Fatal("upgraded twice")
+	if d := pl(t)(c.MarkSensitive("notes")); d["already"] != true || c.notSensitive["notes"] {
+		t.Fatalf("a second mark: %v", d)
 	}
 	if _, err := c.CreateStore("notes"); err == nil {
 		t.Fatal("downgraded by re-creating")

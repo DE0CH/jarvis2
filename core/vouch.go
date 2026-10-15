@@ -84,6 +84,8 @@ var hex64RE = regexp.MustCompile(`^[0-9a-f]{64}$`)
 type SnapshotClaim struct {
 	Sha256 string `json:"sha256"`
 	Sig    string `json:"sig"`
+	// Required: the caller (a pause) would rather keep the machine than kill it without this snapshot vouched for
+	Required bool `json:"required"`
 }
 
 // signCert: a cert, its entry in the input log beside it (a cert is an input too: it decides what a machine gets),

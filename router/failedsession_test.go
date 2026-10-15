@@ -64,8 +64,8 @@ func TestResumeOfAFailedSessionWithAMachineFinishesThePauseFirst(t *testing.T) {
 	if kills != 2 || slices.Index(calls, "/succession") < slices.Index(calls, "/kill") {
 		t.Fatalf("the kill (tried again) before the resume's challenge: %v", calls)
 	}
-	if snap, _ := vc.last("/kill")["snapshot"].(map[string]any); snap == nil {
-		t.Fatalf("the finished pause's kill names the snapshot: %v", vc.last("/kill"))
+	if snap, _ := vc.last("/kill")["snapshot"].(map[string]any); snap == nil || snap["required"] != true {
+		t.Fatalf("the finished pause's kill names the snapshot and keeps the machine without it: %v", vc.last("/kill"))
 	}
 	if in := vc.last("/succession"); in["predecessor"] == nil {
 		t.Fatalf("the resume continues the line: %v", in)

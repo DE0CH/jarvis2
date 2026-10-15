@@ -125,7 +125,7 @@ func (c *Core) Versions(store, nonce string) (SignedDoc, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.MasterKey == "" {
-		return SignedDoc{}, fail(409, "this core isn't set up yet")
+		return SignedDoc{}, fail(409, "this core isn't set up yet: Reset or Recover it in the app first")
 	}
 	if _, ok := c.stores[store]; !ok {
 		return SignedDoc{}, fail(404, "no store %s", store)
@@ -172,7 +172,7 @@ func (c *Core) RestoreBegin(store string, seq int) (SignedDoc, error) {
 	defer c.mu.Unlock()
 	c.expireRestores()
 	if c.MasterKey == "" || c.phoneSigning == "" {
-		return SignedDoc{}, fail(409, "this core isn't set up yet")
+		return SignedDoc{}, fail(409, "this core isn't set up yet: Reset or Recover it in the app first")
 	}
 	cur, ok := c.stores[store]
 	if !ok || store == FlyStore {
