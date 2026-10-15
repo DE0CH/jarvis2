@@ -19,6 +19,14 @@ jobs:
           base="${{ github.event.before }}"
           git cat-file -e "$base^{commit}" 2>/dev/null || base=HEAD~1
           PATH="$PATH:$(go env GOPATH)/bin" infra/flux-dryrun.sh "$base"
+          # the services box (docs/DESIGN.md "The boxes"): its own bootstrap, one Flux Kustomization per app
+          BOOTSTRAP=k8s/bootstrap-services TREES="$(ls -d k8s/services/apps/*/ | sed 's#/$##' | tr '\n' ' ')" \
+            PATH="$PATH:$(go env GOPATH)/bin" infra/flux-dryrun.sh "$base"
+          # the control box, once its tree exists
+          if [ -d k8s/control/apps ]; then
+            BOOTSTRAP=k8s/bootstrap-control TREES="$(ls -d k8s/control/apps/*/ | sed 's#/$##' | tr '\n' ' ')" \
+              PATH="$PATH:$(go env GOPATH)/bin" infra/flux-dryrun.sh "$base"
+          fi
       - run: |
           kubectl kustomize k8s/apps > /tmp/apps.yaml
           deps="$(awk '/^kind: Deployment/{f=1} f&&/^  name:/{print $2;f=0}' /tmp/apps.yaml | sort | tr '\n' ' ')"
@@ -26,3 +34,9 @@ jobs:
           grep -Eq 'jarvis2-router:sha-[0-9a-f]{12}@sha256:[0-9a-f]{64}' /tmp/apps.yaml || { echo "the router isn't pinned by digest"; exit 1; }
           grep -Eq 'jarvis2-session:sha-[0-9a-f]{12}@sha256:[0-9a-f]{64}' /tmp/apps.yaml || { echo "the session image isn't pinned by digest"; exit 1; }
           grep -A1 'name: SESSION_IMAGE_SIG' /tmp/apps.yaml | grep -Eq 'value: "?[A-Za-z0-9+/=]{20,}' || { echo "no CI signature for the session image"; exit 1; }
+          # the services box: every service there, each pinned by digest (Flux prunes what a commit drops)
+          for n in search watch icloud-index; do
+            kubectl kustomize "k8s/services/apps/$n" > /tmp/svc.yaml
+            grep -q "^kind: Deployment" /tmp/svc.yaml || { echo "k8s/services/apps/$n has no Deployment"; exit 1; }
+            grep -Eq "jarvis2-$n:sha-[0-9a-f]{12}@sha256:[0-9a-f]{64}" /tmp/svc.yaml || { echo "$n isn't pinned by digest"; exit 1; }
+          done

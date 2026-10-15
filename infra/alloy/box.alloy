@@ -1,0 +1,179 @@
+// The boxes' log and metrics agent (docs/DESIGN.md "Logs and metrics"). Grafana Alloy runs on each box's HOST as a
+// systemd unit (infra/cloud-init.sh), outside k3s, so it keeps working, and ships what happened, when the cluster on
+// that box doesn't. The host's /etc/alloy/config.alloy is a stub that imports this module from the public repo
+// (import.git, every 5 min), so a change here reaches both boxes as a visible commit, like everything else.
+//
+// Ships to Grafana Cloud (Free, EU stack): every pod's log (/var/log/pods), the journal (k3s, the kernel's OOM kills,
+// warp-svc, cloud-init; journald is persistent, so after a hard reset the previous boot's last minutes go out from the
+// saved cursor), node metrics (with PSI: memory pressure shows minutes before a thrash) and per-container cgroup
+// metrics. Credentials: env GRAFANA_* from the k8s Secret jarvis2-obs/alloy (k8s/<box>/secrets/alloy.enc.yaml), which
+// the host unit jarvis2-alloy-creds copies to /etc/alloy/grafana.env.
+//
+// Secret shapes are replaced before anything leaves the box (a second layer: the core logs nothing and the router
+// logs no value; Grafana Labs is a provider we trust to its contract, DESIGN "Trust boundary").
+
+declare "main" {
+  argument "box" { comment = "control or services" }
+
+  // ---- logs ----
+  loki.write "grafana" {
+    endpoint {
+      url = sys.env("GRAFANA_LOGS_URL")
+      basic_auth {
+        username = sys.env("GRAFANA_LOGS_USER")
+        password = sys.env("GRAFANA_WRITE_TOKEN")
+      }
+    }
+    external_labels = { box = argument.box.value }
+  }
+
+  loki.process "redact" {
+    forward_to = [loki.write.grafana.receiver]
+    stage.replace {
+      expression = "(?i)(bearer\\s+)[A-Za-z0-9._~+/=-]{8,}"
+      replace    = "<redacted>"
+    }
+    stage.replace {
+      expression = "(sk-ant-[A-Za-z0-9_-]{8,}|sk-or-v1-[A-Za-z0-9]{16,}|gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|AGE-SECRET-KEY-[A-Z0-9]{20,}|jarvis2-kit:[A-Za-z0-9:+/=_-]{8,}|glc_[A-Za-z0-9+/=]{20,}|-----BEGIN [A-Z ]*PRIVATE KEY-----)"
+      replace    = "<redacted>"
+    }
+  }
+
+  local.file_match "pods" {
+    path_targets = [{ "__path__" = "/var/log/pods/*/*/*.log" }]
+    sync_period  = "10s"
+  }
+
+  loki.source.file "pods" {
+    targets    = local.file_match.pods.targets
+    forward_to = [loki.process.pods.receiver]
+    tail_from_end = false
+  }
+
+  loki.process "pods" {
+    forward_to = [loki.process.redact.receiver]
+    stage.cri { }
+    // /var/log/pods/<namespace>_<pod>_<uid>/<container>/<n>.log
+    stage.regex {
+      source     = "filename"
+      expression = "^/var/log/pods/(?P<namespace>[^_]+)_(?P<pod>[^_]+)_[^/]+/(?P<container>[^/]+)/"
+    }
+    stage.labels {
+      values = { namespace = "", container = "" }
+    }
+    stage.structured_metadata {
+      values = { pod = "" }
+    }
+    stage.label_drop {
+      values = ["filename"]
+    }
+    stage.static_labels {
+      values = { source = "pod" }
+    }
+  }
+
+  loki.relabel "journal" {
+    forward_to = []
+    rule {
+      source_labels = ["__journal__systemd_unit"]
+      target_label  = "unit"
+    }
+    rule {
+      source_labels = ["__journal_priority_keyword"]
+      target_label  = "level"
+    }
+    rule {
+      source_labels = ["__journal__transport"]
+      target_label  = "transport"
+    }
+  }
+
+  loki.source.journal "host" {
+    forward_to    = [loki.process.redact.receiver]
+    relabel_rules = loki.relabel.journal.rules
+    max_age       = "48h"
+    labels        = { source = "journal" }
+  }
+
+  // ---- metrics ----
+  prometheus.remote_write "grafana" {
+    endpoint {
+      url = sys.env("GRAFANA_METRICS_URL")
+      basic_auth {
+        username = sys.env("GRAFANA_METRICS_USER")
+        password = sys.env("GRAFANA_WRITE_TOKEN")
+      }
+    }
+    external_labels = { box = argument.box.value }
+  }
+
+  prometheus.exporter.unix "node" {
+    set_collectors = ["cpu", "diskstats", "filesystem", "loadavg", "meminfo", "netdev", "pressure", "vmstat", "uname", "time", "stat"]
+    filesystem {
+      mount_points_exclude = "^/(dev|proc|run|sys|var/lib/kubelet/pods/.+|run/k3s/.+|var/lib/rancher/k3s/agent/containerd/.+)($|/)"
+    }
+  }
+
+  prometheus.scrape "node" {
+    targets         = prometheus.exporter.unix.node.targets
+    forward_to      = [prometheus.relabel.keep_node.receiver]
+    scrape_interval = "30s"
+  }
+
+  // the node metrics we chart and alert on (about 300 series, inside the free tier's 10k with room)
+  prometheus.relabel "keep_node" {
+    forward_to = [prometheus.remote_write.grafana.receiver]
+    rule {
+      source_labels = ["__name__"]
+      regex         = "node_(pressure_.*|memory_(MemTotal|MemAvailable|Cached|Buffers|SwapTotal|SwapFree|Active_file|Inactive_file)_bytes|vmstat_(oom_kill|pgmajfault|pswpin|pswpout)|cpu_seconds_total|load(1|5|15)|filesystem_(avail|size)_bytes|disk_(read|written)_bytes_total|disk_io_time_seconds_total|network_(receive|transmit)_bytes_total|boot_time_seconds|time_seconds|uname_info)|up"
+      action        = "keep"
+    }
+  }
+
+  prometheus.exporter.cadvisor "containers" {
+    containerd_host                = "/run/k3s/containerd/containerd.sock"
+    containerd_namespace           = "k8s.io"
+    docker_only                    = false
+    store_container_labels         = false
+    allowlisted_container_labels   = ["io.kubernetes.container.name", "io.kubernetes.pod.name", "io.kubernetes.pod.namespace"]
+    enabled_metrics                = ["cpu", "memory", "oom_event", "pressure"]
+    storage_duration               = "2m"
+  }
+
+  prometheus.scrape "containers" {
+    targets         = prometheus.exporter.cadvisor.containers.targets
+    forward_to      = [prometheus.relabel.keep_containers.receiver]
+    scrape_interval = "30s"
+  }
+
+  prometheus.relabel "keep_containers" {
+    forward_to = [prometheus.remote_write.grafana.receiver]
+    // only k8s containers (the pod sandboxes and raw cgroups add series and nothing we look at)
+    rule {
+      source_labels = ["container_label_io_kubernetes_container_name"]
+      regex         = ""
+      action        = "drop"
+    }
+    rule {
+      source_labels = ["container_label_io_kubernetes_container_name"]
+      target_label  = "container"
+    }
+    rule {
+      source_labels = ["container_label_io_kubernetes_pod_name"]
+      target_label  = "pod"
+    }
+    rule {
+      source_labels = ["container_label_io_kubernetes_pod_namespace"]
+      target_label  = "namespace"
+    }
+    rule {
+      regex  = "container_label_.*|id|image|name"
+      action = "labeldrop"
+    }
+    rule {
+      source_labels = ["__name__"]
+      regex         = "container_(memory_(working_set|rss|cache)_bytes|memory_failcnt|oom_events_total|cpu_usage_seconds_total|cpu_cfs_throttled_seconds_total|spec_memory_limit_bytes|pressure_.*)"
+      action        = "keep"
+    }
+  }
+}

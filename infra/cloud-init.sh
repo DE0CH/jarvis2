@@ -4,13 +4,18 @@
 # git can't fix is replaced, not repaired. Secrets (the tunnel token, the router's WireGuard peer, the box key, the age key) arrive
 # in user-data and become k8s Secrets here; the user-data is shredded at the end.
 # create.sh also puts infra/warp-host.sh (warp_host_setup) ahead of this file.
-# Injected: TUNNEL_TOKEN WG_CONF (the wg-quick file of `fly wireguard create`) BOX_KEY (the box key, PEM)
-#           AGE_KEY (Flux decrypts k8s/secrets with it)
+# Injected: BOX_KIND  control | services (docs/DESIGN.md "The boxes"); empty = the old single box (k8s/apps), until
+#           it is retired
+#           TUNNEL_TOKEN WG_CONF (the wg-quick file of `fly wireguard create`) BOX_KEY (the box key, PEM) — not on
+#           the services box; on the control box WG_CONF may be empty (a router move brings the peer's config along)
+#           AGE_KEY (Flux decrypts the box's SOPS secrets with it)
+#           PRIVATE_ALLOW  control box: the private addresses allowed in (the old box during a move), space-separated
 #           SYNC_YAML, EXTRA_MANIFEST  empty in production; a rehearsal box (infra/rehearse-recover.sh) sets them:
 #           its own Flux sync (the same ./k8s/apps with documented patches) in place of k8s/flux/sync.yaml, and
 #           the Secrets that sync can't get from git
 set -uo pipefail
 export DEBIAN_FRONTEND=noninteractive
+BOX_KIND="${BOX_KIND:-}" PRIVATE_ALLOW="${PRIVATE_ALLOW:-}"
 exec > >(tee -a /var/log/jarvis2-bootstrap.log) 2>&1
 echo "=== jarvis2 bootstrap $(date -u +%FT%TZ) ==="
 apt-get update -y && apt-get install -y --no-install-recommends ca-certificates curl git gnupg
@@ -35,6 +40,59 @@ WantedBy=multi-user.target
 UNIT
 systemctl daemon-reload && systemctl enable --now jarvis2-no-metadata.service
 
+if [ -n "$BOX_KIND" ]; then
+  # --- the two-box layout (docs/DESIGN.md "The boxes") ---
+  # journald keeps its files across reboots: after a hard reset Alloy ships the previous boot's last minutes
+  mkdir -p /var/log/journal /etc/systemd/journald.conf.d
+  printf '[Journal]\nStorage=persistent\nSystemMaxUse=2G\n' > /etc/systemd/journald.conf.d/jarvis2.conf
+  systemctl restart systemd-journald
+  # never an unplanned reboot for updates (a control-box reboot empties the core); security updates still install
+  printf 'Unattended-Upgrade::Automatic-Reboot "false";\n' > /etc/apt/apt.conf.d/52jarvis2-no-reboot
+  # the Hetzner Network (10.77.0.0/24): the router calls the services box's NodePorts on it, and nothing else may
+  # come in. Packets arriving on the private interface: answers to our own connections pass, new ones only from
+  # PRIVATE_ALLOW (services box: the routers; control box: the old box during a move) — in mangle PREROUTING,
+  # before k3s's NodePort DNAT, at every boot.
+  cat > /usr/local/sbin/jarvis2-private-guard <<'GUARD'
+#!/bin/sh
+for i in $(seq 1 30); do IF="$(ip -o -4 addr show | awk '/ 10\.77\./{print $2; exit}')"; [ -n "$IF" ] && break; sleep 2; done
+[ -n "$IF" ] || { echo "no private interface"; exit 0; }
+iptables -t mangle -N JARVIS2-PRIVATE 2>/dev/null || iptables -t mangle -F JARVIS2-PRIVATE
+iptables -t mangle -A JARVIS2-PRIVATE -m conntrack --ctstate ESTABLISHED,RELATED -j RETURN
+for a in $(cat /etc/jarvis2/private-allow 2>/dev/null); do iptables -t mangle -A JARVIS2-PRIVATE -s "$a" -j RETURN; done
+iptables -t mangle -A JARVIS2-PRIVATE -j DROP
+iptables -t mangle -C PREROUTING -i "$IF" -j JARVIS2-PRIVATE 2>/dev/null || iptables -t mangle -I PREROUTING -i "$IF" -j JARVIS2-PRIVATE
+echo "private guard on $IF: new connections only from $(cat /etc/jarvis2/private-allow 2>/dev/null)"
+GUARD
+  chmod 755 /usr/local/sbin/jarvis2-private-guard
+  mkdir -p /etc/jarvis2
+  if [ "$BOX_KIND" = services ]; then echo "10.77.0.2 10.77.0.9" > /etc/jarvis2/private-allow; else echo "$PRIVATE_ALLOW" > /etc/jarvis2/private-allow; fi
+  cat > /etc/systemd/system/jarvis2-private-guard.service <<'UNIT'
+[Unit]
+Description=Jarvis 2: on the private Network, only answers and the allowed peers come in
+After=network-online.target
+Wants=network-online.target
+Before=k3s.service
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/jarvis2-private-guard
+[Install]
+WantedBy=multi-user.target
+UNIT
+  systemctl daemon-reload && systemctl enable --now jarvis2-private-guard.service
+  # NodePorts only on the private address; memory kept back for the system so the kubelet evicts before the kernel
+  # thrashes (DECISIONS 168's lesson)
+  cat >> /etc/rancher/k3s/config.yaml <<'K3S'
+kube-proxy-arg:
+  - nodeport-addresses=10.77.0.0/24
+kubelet-arg:
+  - system-reserved=cpu=200m,memory=512Mi
+  - kube-reserved=cpu=200m,memory=384Mi
+  - eviction-hard=memory.available<256Mi,nodefs.available<10%
+  - eviction-minimum-reclaim=memory.available=128Mi
+K3S
+fi
+
 # pinned versions: no lookup of a "latest" (update.k3s.io served a self-signed certificate on 2026-10-10 and every
 # unpinned bootstrap failed: "Finding release for channel stable … Download failed"); bump them here
 K3S_VERSION=v1.36.5+k3s1 FLUX_VERSION=2.9.6
@@ -50,14 +108,22 @@ kubectl -n flux-system patch deployment kustomize-controller --type=json \
 kubectl -n flux-system rollout status deployment/kustomize-controller --timeout=120s
 
 git clone --depth 1 https://github.com/DE0CH/jarvis2.git /root/jarvis2 || exit 1
-kubectl apply -k /root/jarvis2/k8s/bootstrap || exit 1
-kubectl -n jarvis2-edge create secret generic tunnel-token --from-literal=token="$TUNNEL_TOKEN"
-printf '%s\n' "$WG_CONF" > /root/wg.conf
-kubectl -n jarvis2-router create secret generic router-wg --from-file=wg.conf=/root/wg.conf
-shred -u /root/wg.conf
-printf '%s\n' "$BOX_KEY" > /root/box-key.pem
-kubectl -n jarvis2-core create secret generic core-box-key --from-file=box-key.pem=/root/box-key.pem
-shred -u /root/box-key.pem
+case "$BOX_KIND" in
+  "") kubectl apply -k /root/jarvis2/k8s/bootstrap || exit 1 ;;
+  control) kubectl apply -k /root/jarvis2/k8s/bootstrap-control || exit 1 ;;
+  services) kubectl apply -k /root/jarvis2/k8s/bootstrap-services || exit 1 ;;
+esac
+if [ "$BOX_KIND" != services ]; then
+  kubectl -n jarvis2-edge create secret generic tunnel-token --from-literal=token="$TUNNEL_TOKEN"
+  if [ -n "${WG_CONF:-}" ]; then
+    printf '%s\n' "$WG_CONF" > /root/wg.conf
+    kubectl -n jarvis2-router create secret generic router-wg --from-file=wg.conf=/root/wg.conf
+    shred -u /root/wg.conf
+  fi
+  printf '%s\n' "$BOX_KEY" > /root/box-key.pem
+  kubectl -n jarvis2-core create secret generic core-box-key --from-file=box-key.pem=/root/box-key.pem
+  shred -u /root/box-key.pem
+fi
 printf '%s\n' "$AGE_KEY" > /root/age.agekey
 kubectl -n flux-system create secret generic sops-age --from-file=age.agekey=/root/age.agekey
 shred -u /root/age.agekey
@@ -68,7 +134,71 @@ fi
 if [ -n "${SYNC_YAML:-}" ]; then
   printf '%s\n' "$SYNC_YAML" | kubectl apply -f - || exit 1
 else
-  kubectl apply -f /root/jarvis2/k8s/flux/sync.yaml || exit 1
+  kubectl apply -f "/root/jarvis2/k8s/flux/${BOX_KIND:-sync}.yaml" || exit 1
+fi
+if [ -n "$BOX_KIND" ]; then
+  # Grafana Alloy on the host (infra/alloy/box.alloy): pinned, from Grafana's apt repo (IPv6), its module from git,
+  # its credentials from the k8s Secret jarvis2-obs/alloy (Flux decrypts it; a timer copies it to the host)
+  ALLOY_VERSION=1.20.1
+  mkdir -p /etc/apt/keyrings
+  curl -fsSL https://apt.grafana.com/gpg.key | gpg --yes --dearmor -o /etc/apt/keyrings/grafana.gpg
+  echo "deb [signed-by=/etc/apt/keyrings/grafana.gpg] https://apt.grafana.com stable main" > /etc/apt/sources.list.d/grafana.list
+  apt-get update -y && apt-get install -y "alloy=$ALLOY_VERSION" && apt-mark hold alloy
+  cat > /etc/alloy/config.alloy <<ALLOY
+// stub (infra/cloud-init.sh): the module is infra/alloy/box.alloy on main, pulled every 5 min
+import.git "jarvis2" {
+  repository     = "https://github.com/DE0CH/jarvis2"
+  revision       = "main"
+  path           = "infra/alloy/box.alloy"
+  pull_frequency = "5m"
+}
+jarvis2.main "box" {
+  box = "$BOX_KIND"
+}
+ALLOY
+  mkdir -p /etc/systemd/system/alloy.service.d
+  cat > /etc/systemd/system/alloy.service.d/jarvis2.conf <<'UNIT'
+[Unit]
+ConditionPathExists=/etc/alloy/grafana.env
+[Service]
+# root: it reads /var/log/pods, the journal and containerd's socket
+User=root
+EnvironmentFile=/etc/alloy/grafana.env
+MemoryMax=300M
+OOMScoreAdjust=-900
+Restart=always
+RestartSec=10
+UNIT
+  cat > /usr/local/sbin/jarvis2-alloy-creds <<'CREDS'
+#!/bin/sh
+# copies the Secret jarvis2-obs/alloy (GRAFANA_*) to /etc/alloy/grafana.env; restarts Alloy when it changed
+export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
+new="$(kubectl -n jarvis2-obs get secret alloy -o json 2>/dev/null | python3 -c 'import base64,json,sys; d=json.load(sys.stdin)["data"]; print("\n".join(k+"="+base64.b64decode(v).decode() for k,v in sorted(d.items())))')" || exit 0
+[ -n "$new" ] || exit 0
+umask 077
+if [ "$new" != "$(cat /etc/alloy/grafana.env 2>/dev/null)" ]; then
+  printf '%s\n' "$new" > /etc/alloy/grafana.env
+  systemctl daemon-reload; systemctl enable alloy >/dev/null 2>&1; systemctl restart alloy
+fi
+CREDS
+  chmod 700 /usr/local/sbin/jarvis2-alloy-creds
+  cat > /etc/systemd/system/jarvis2-alloy-creds.service <<'UNIT'
+[Unit]
+Description=Jarvis 2: Alloy's Grafana credentials from the cluster
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/jarvis2-alloy-creds
+UNIT
+  cat > /etc/systemd/system/jarvis2-alloy-creds.timer <<'UNIT'
+[Unit]
+Description=Jarvis 2: refresh Alloy's Grafana credentials
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=5min
+[Install]
+WantedBy=timers.target
+UNIT
+  systemctl daemon-reload && systemctl enable --now jarvis2-alloy-creds.timer
 fi
 rm -rf /root/jarvis2
 echo "bootstrap COMPLETE $(date -u +%FT%TZ)" > /var/log/jarvis2-bootstrap.done

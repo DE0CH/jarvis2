@@ -9,7 +9,8 @@
 # This starts a throwaway kube-apiserver + etcd (envtest binaries), applies the bootstrap, gives `admin` its aggregated
 # rules (a bare apiserver has no controller-manager to aggregate them), applies BASE_REF's k8s/apps for real as
 # flux-applier (the box as it is), then server-side dry-runs this tree's k8s/apps as flux-applier. Exit 1 on any
-# refusal. BASE_REF defaults to HEAD~1.
+# refusal. BASE_REF defaults to HEAD~1. BOOTSTRAP (default k8s/bootstrap) and TREES (default k8s/apps; space-separated)
+# pick a box: the services box is BOOTSTRAP=k8s/bootstrap-services TREES="k8s/services/apps/search …".
 set -euo pipefail
 cd "$(dirname "$0")/.."
 BASE="${1:-HEAD~1}"
@@ -37,17 +38,26 @@ K="kubectl --kubeconfig $W/kubeconfig"
 # up, and its default RBAC roles bootstrapped (they appear a moment after the API answers)
 for _ in $(seq 1 90); do $K get clusterrole system:aggregate-to-view >/dev/null 2>&1 && break; sleep 1; done
 $K create ns flux-system >/dev/null
-$K apply -k k8s/bootstrap >/dev/null
+BOOTSTRAP="${BOOTSTRAP:-k8s/bootstrap}"; TREES="${TREES:-k8s/apps}"
+$K apply -k "$BOOTSTRAP" >/dev/null
 $K get clusterrole system:aggregate-to-admin system:aggregate-to-edit system:aggregate-to-view -o json \
   | jq '{apiVersion:"rbac.authorization.k8s.io/v1",kind:"ClusterRole",metadata:{name:"admin"},rules:[.items[].rules[]]}' > "$W/admin.json"
 $K delete clusterrole admin >/dev/null; $K apply -f "$W/admin.json" >/dev/null
 AS=(--server-side --field-manager=kustomize-controller --as=system:serviceaccount:flux-system:flux-applier)
-mkdir -p "$W/base"; git archive "$BASE" k8s/apps | tar -x -C "$W/base"
-kubectl kustomize "$W/base/k8s/apps" > "$W/base.yaml"
-$K apply "${AS[@]}" -f "$W/base.yaml" > "$W/base.out" 2>&1 || { echo "note: $BASE itself doesn't apply cleanly:"; grep -v serverside-applied "$W/base.out" | head -5; }
-kubectl kustomize k8s/apps > "$W/new.yaml"
-if out="$($K apply "${AS[@]}" --dry-run=server -f "$W/new.yaml" 2>&1)"; then
-  echo "flux-dryrun: Flux (as flux-applier) accepts k8s/apps on top of $BASE"
-else
-  echo "flux-dryrun: Flux would REFUSE this tree (and apply nothing):"; echo "$out" | grep -v serverside-applied; exit 1
-fi
+mkdir -p "$W/base"
+for T in $TREES; do
+  if git archive "$BASE" "$T" 2>/dev/null | tar -x -C "$W/base" 2>/dev/null && kubectl kustomize "$W/base/$T" > "$W/base.yaml" 2>/dev/null; then
+    $K apply "${AS[@]}" -f "$W/base.yaml" > "$W/base.out" 2>&1 || { echo "note: $BASE's $T doesn't apply cleanly:"; grep -v serverside-applied "$W/base.out" | head -5; }
+  fi
+done
+fail=0
+for T in $TREES; do
+  kubectl kustomize "$T" > "$W/new.yaml"
+  [ -s "$W/new.yaml" ] || { echo "flux-dryrun: $T is empty"; continue; }
+  if out="$($K apply "${AS[@]}" --dry-run=server -f "$W/new.yaml" 2>&1)"; then
+    echo "flux-dryrun: Flux (as flux-applier) accepts $T on top of $BASE"
+  else
+    echo "flux-dryrun: Flux would REFUSE $T (and apply none of it):"; echo "$out" | grep -v serverside-applied; fail=1
+  fi
+done
+exit $fail
