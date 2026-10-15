@@ -19,7 +19,7 @@ BOX_KIND="${BOX_KIND:-}" PRIVATE_ALLOW="${PRIVATE_ALLOW:-}"
 exec > >(tee -a /var/log/jarvis2-bootstrap.log) 2>&1
 echo "=== jarvis2 bootstrap $(date -u +%FT%TZ) ==="
 apt-get update -y && apt-get install -y --no-install-recommends ca-certificates curl git gnupg
-systemctl disable --now ssh.socket ssh.service 2>/dev/null || true
+[ -n "${DEBUG_SSH:-}" ] || systemctl disable --now ssh.socket ssh.service 2>/dev/null || true   # a throwaway debug box keeps it (create.sh DEBUG_SSH_PUB)
 
 # The box is IPv6-only (create.sh: no primary IPv4; Deyao, 2026-10-13): IPv4 out through Cloudflare WARP, k3s on an IPv4
 # of a dummy interface (infra/warp-host.sh, which create.sh puts ahead of this file). Before anything fetches from GitHub.

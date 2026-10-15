@@ -21,6 +21,10 @@
 #   CF_ENV                the cloudflare.env file (default ~/.jarvis2/cloudflare.env)
 #   KEYS_OUT              where box.pub / box-age.pub go (default keys/ of this checkout)
 #   FIREWALL, LABELS      the Hetzner firewall's name (default jarvis2) and the server's labels (JSON, default role=jarvis2)
+#   DEBUG_SSH_PUB         a THROWAWAY box only (a rehearsal; refused for production's names): this public key gets root SSH,
+#                         the box keeps sshd and its firewall lets port 22 in, to look at a box that doesn't come up
+#                         (cloud-init's log: /var/log/jarvis2-bootstrap.log). Never for jarvis2 / jarvis2-control /
+#                         jarvis2-services.
 #   SYNC_YAML_FILE, EXTRA_MANIFEST_FILE  a Flux sync in place of k8s/flux/sync.yaml, and Secrets applied before it
 #                         (infra/cloud-init.sh)
 set -euo pipefail
@@ -51,6 +55,11 @@ if [ "$BOX_KIND" != services ]; then
 fi
 TUNNEL_TOKEN="${TUNNEL_TOKEN:-}"
 
+DEBUG_SSH_PUB="${DEBUG_SSH_PUB:-}"
+if [ -n "$DEBUG_SSH_PUB" ]; then
+  case "$NAME" in jarvis2|jarvis2-control|jarvis2-services) echo "DEBUG_SSH_PUB is for throwaway boxes only"; exit 1 ;; esac
+fi
+export DEBUG_SSH="${DEBUG_SSH_PUB:+1}"
 UD="$(mktemp)"; KEY="$(mktemp -d)"; trap 'rm -rf "$UD" "$KEY"' EXIT; chmod 600 "$UD"
 # a fresh WireGuard peer for the box (router/wg.go); machines reach it as $PEER._peer.internal (production:
 # jarvis2-box, MACHINE_URL in k8s/apps/router.yaml). Its config goes only into the box (user-data).
@@ -78,13 +87,14 @@ PY
 age-keygen -o "$KEY/age.key" 2>/dev/null
 age-keygen -y "$KEY/age.key" > "$AGEPUB"
 { echo '#!/bin/bash'
-  printf 'BOX_KIND=%q\nPRIVATE_ALLOW=%q\n' "$BOX_KIND" "$PRIVATE_ALLOW"
+  printf 'BOX_KIND=%q\nPRIVATE_ALLOW=%q\nDEBUG_SSH=%q\n' "$BOX_KIND" "$PRIVATE_ALLOW" "${DEBUG_SSH:-}"
   printf 'TUNNEL_TOKEN=%q\nWG_CONF=%q\nBOX_KEY=%q\nAGE_KEY=%q\n' "$TUNNEL_TOKEN" "$(cat "$KEY/wg.conf")" "$([ "$BOX_KIND" = services ] || cat "$KEY/box-key.pem")" "$(cat "$KEY/age.key")"
   printf 'SYNC_YAML=%q\nEXTRA_MANIFEST=%q\n' "$(cat "${SYNC_YAML_FILE:-/dev/null}")" "$(cat "${EXTRA_MANIFEST_FILE:-/dev/null}")"
   cat "$HERE/warp-host.sh" "$HERE/cloud-init.sh"; } > "$UD"
 # Hetzner mails a root password when a server has no SSH key: give it a throwaway key whose private half
 # is deleted with this script (sshd is off and port 22 closed anyway)
 ssh-keygen -q -t ed25519 -N "" -C jarvis2-throwaway -f "$KEY/k"
+[ -z "$DEBUG_SSH_PUB" ] || cp "$DEBUG_SSH_PUB" "$KEY/k.pub"
 python3 - "$NAME" "$TYPE" "$LOC" "$UD" "$KEY/k.pub" <<'PY'
 import json,os,sys,time,urllib.request,urllib.error
 name,stype,loc,ud,pub=sys.argv[1:6]
@@ -99,10 +109,11 @@ key=call("POST","/ssh_keys",{"name":kname,"public_key":open(pub).read().strip()}
 try:   # the throwaway key goes whatever happens (a refused create used to leave it behind)
     fwname=os.environ["FIREWALL"]
     fws=[f for f in call("GET","/firewalls")["firewalls"] if f["name"]==fwname]
+    rules=[{"direction":"in","protocol":"tcp","port":"22","source_ips":["::/0"]}] if os.environ.get("DEBUG_SSH") else []
     if fws:
-        fw=fws[0]["id"]; call("POST",f"/firewalls/{fw}/actions/set_rules",{"rules":[]})
+        fw=fws[0]["id"]; call("POST",f"/firewalls/{fw}/actions/set_rules",{"rules":rules})
     else:
-        fw=call("POST","/firewalls",{"name":fwname,"rules":[]})["firewall"]["id"]   # no inbound at all
+        fw=call("POST","/firewalls",{"name":fwname,"rules":rules})["firewall"]["id"]   # no inbound at all (but a debug box's SSH)
     pip=os.environ.get("PRIVATE_IP","")
     body={"name":name,"server_type":stype,"image":"ubuntu-24.04","location":loc,"ssh_keys":[key],
       "firewalls":[{"firewall":fw}],"public_net":{"enable_ipv4":False,"enable_ipv6":True},"labels":json.loads(os.environ["LABELS"]),"user_data":open(ud).read()}
