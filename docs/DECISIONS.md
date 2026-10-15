@@ -1624,9 +1624,13 @@ snapshot failed with "no space left on device", the machine was destroyed anyway
 
 186. **The control plane gets a box of its own; shared services and experiments get another** (Deyao, 2026-10-15,
      layout A of the redesign, after the thrash: "an unimportant job must never bring down the control plane").
-     Two cx33 (EUR 10.188/month gross each, Hetzner API), separate k3s and Flux, joined by a Hetzner Network (free).
-     DESIGN "The boxes". Claude's choices inside it: *cx33 for the control box*, not cx23: two routers at 1536 Mi plus a
-     rollout's surge pod don't fit a cx23's ~3.7 GiB (they don't on the old box either). *One Flux Kustomization per app*:
+     A cx23 control box and a cx33 services box (EUR 6.588 + 10.188/month gross, Hetzner API), separate k3s and Flux, joined by a Hetzner Network (free).
+     DESIGN "The boxes". Claude's choices inside it: *The control box is a cx23* (EUR 6.588/month): cx33 and cx43 were sold out
+     in every EU location that day (Hetzner API: available=false), and Deyao chose the cx23 over waiting or a cpx32
+     (EUR 42.588). It holds because the router measured small (`/setup/status` → `process`: 48 MB RSS at start, 171 MB
+     peak after 40 min, 2026-10-15): ONE router whose rollout surge pod is the standby (no standing standby), 512 Mi
+     requested / 1 Gi limit; two cores at 192 Mi; two cloudflared at 128 Mi; only Flux's source and kustomize
+     controllers; kubelet reserving 512 Mi with eviction at 200 Mi free; the memory-pressure alert shows if it is tight. *One Flux Kustomization per app*:
      a refused manifest holds back only its app. *The services box's NodePorts on the private address only, plus a
      mangle-table guard at boot*: Hetzner Firewalls don't cover private interfaces. *Search's Role in the bootstrap*:
      Flux's dry-run refuses a RoleBinding to a Role made in the same apply (it did on the services tree too). *Two

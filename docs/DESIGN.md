@@ -345,16 +345,17 @@ core's URL, `serving` value and identity (`core`).
 "An unimportant job must never be able to bring down the control plane, because that takes away the tool he uses to
 fix things." On 2026-10-15 the one 4 GB box ran the control plane next to transcript search and the iCloud index; they
 starved it of memory, a Flux backlog landed at once, and the app, the web page and every session lost the router until
-a hard reset. So Jarvis 2 runs on TWO Hetzner boxes (cx33, fsn1, IPv6-only with WARP for IPv4, DECISIONS 156), each its
+a hard reset. So Jarvis 2 runs on TWO Hetzner boxes (fsn1, IPv6-only with WARP for IPv4, DECISIONS 156), each its
 own single-node k3s with its own Flux, joined only by a Hetzner Network (`jarvis2`, 10.77.0.0/24):
 
-- **The control box** (`jarvis2-control`, 10.77.0.2; `k8s/control`, `k8s/bootstrap-control`, `k8s/flux/control.yaml`):
-  the cores (blue and green, "Core continuity"), the router (a leader and a standby, always) and cloudflared. Nothing
+- **The control box** (`jarvis2-control`, cx23, 10.77.0.2; `k8s/control`, `k8s/bootstrap-control`,
+  `k8s/flux/control.yaml`): the cores (blue and green, "Core continuity"), the router (one, whose rollout surge pod is the
+  standby; measured 48–171 MB, 512 Mi requested) and cloudflared. Nothing
   else: its bootstrap gives each namespace a ResourceQuota that Flux's `admin` role can read but not change, the control
   plane a PriorityClass, and the kubelet reserved memory with eviction thresholds, so even a push can't put a heavy job
   there. On the private interface only answers and the old box (during the move) come in (`jarvis2-private-guard`,
   mangle PREROUTING, before any NodePort).
-- **The services box** (`jarvis2-services`, 10.77.0.3; `k8s/services`, `k8s/bootstrap-services`,
+- **The services box** (`jarvis2-services`, cx33, 10.77.0.3; `k8s/services`, `k8s/bootstrap-services`,
   `k8s/flux/services.yaml`): transcript search, the watch runner, the iCloud index (each two replicas, rolled with no
   gap) and `jarvis2-poc` for experiments (quota 1.5 GiB, one core). The router reaches them on NodePorts that listen on
   the private address only (`nodeport-addresses`), and their NetworkPolicies admit only the routers' addresses. No
