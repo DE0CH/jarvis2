@@ -17,7 +17,7 @@
 # The defaults are production's. infra/rehearse-recover.sh makes a throwaway box with this same script and these
 # overrides (each named, so nothing of production is touched):
 #   HCLOUD_PROJECT_TOKEN  the Hetzner project's token (default HETZNER_JARVIS2_MOCK_API)
-#   WG_PEER               the box's WireGuard peer name (default jarvis2-box)
+#   WG_PEER               the box's WireGuard peer name (default jarvis2-box; for BOX_KIND=control: none)
 #   CF_ENV                the cloudflare.env file (default ~/.jarvis2/cloudflare.env)
 #   KEYS_OUT              where box.pub / box-age.pub go (default keys/ of this checkout)
 #   FIREWALL, LABELS      the Hetzner firewall's name (default jarvis2) and the server's labels (JSON, default role=jarvis2)
@@ -37,7 +37,11 @@ LOC="${LOCATION:-fsn1}"; PRIVATE_ALLOW="${PRIVATE_ALLOW:-10.77.0.9}"
 export BOX_KIND PRIVATE_IP NETWORK="${NETWORK:-jarvis2}"
 export HCLOUD_PROJECT_TOKEN="${HCLOUD_PROJECT_TOKEN:-${HETZNER_JARVIS2_MOCK_API:-}}"
 : "${HCLOUD_PROJECT_TOKEN:?}" "${JARVIS2_FLY_TOKEN:?}"
-PEER="${WG_PEER:-jarvis2-box}"; CFENV="${CF_ENV:-$D/cloudflare.env}"; KOUT="${KEYS_OUT:-$HERE/../keys}"
+# the control box defaults to NO peer: the move brings the live one's config along (router/move.go), and making a
+# peer of the same name first REMOVES the one the live router holds, cutting every session off. A control box rebuilt
+# with no live router to move from: WG_PEER=jarvis2-box.
+DEFPEER=jarvis2-box; [ "$BOX_KIND" = control ] && DEFPEER=none
+PEER="${WG_PEER:-$DEFPEER}"; CFENV="${CF_ENV:-$D/cloudflare.env}"; KOUT="${KEYS_OUT:-$HERE/../keys}"
 DEFAULT_LABELS='{"role":"jarvis2"}'
 [ -n "$BOX_KIND" ] && DEFAULT_LABELS="{\"role\":\"jarvis2-$BOX_KIND\"}"
 export FIREWALL="${FIREWALL:-jarvis2}" LABELS="${LABELS:-$DEFAULT_LABELS}"
