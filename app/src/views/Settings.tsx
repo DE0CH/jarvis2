@@ -4,7 +4,7 @@
 import { Linking } from "react-native";
 import { useEffect, useRef, useState } from "react";
 import { api, fromNow, loadClaudeAccounts, usd, type ClaudeAccount, type ClaudeAccounts, type Usage, type UsageLimit } from "../lib/api";
-import { useStore, ask, failed, pend } from "../lib/store";
+import { useStore, ask, failed, pend, toast } from "../lib/store";
 import { PButton } from "../ui/bits";
 import { hasShell, requestSecure } from "../lib/shell";
 import { Badge, Box, Button, Card, Flex, Heading, Muted, P, Pill, Progress, Row, Rows, TextField } from "../ui/kit";
@@ -30,7 +30,11 @@ function SignIn({ store, onDone, onCancel }: { store: string; onDone: () => void
   const [code, setCode] = useState(""), key = "claude-code-" + store;
   async function finish() {
     pend(key, "Signing in…");
-    try { await api("POST", `api/claude-accounts/${store}/code`, { code: code.trim() }); setCode(""); onDone(); } catch (e) { failed(e); }
+    try {
+      const out: any = await api("POST", `api/claude-accounts/${store}/code`, { code: code.trim() });
+      if (out?.note) toast(out.note, "info", 12000); // another Claude account: added as a new account
+      setCode(""); onDone();
+    } catch (e) { failed(e); }
     pend(key, null);
   }
   return (

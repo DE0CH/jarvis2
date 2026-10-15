@@ -559,7 +559,7 @@ one (400 saying so).
 | `POST /api/claude-accounts/{store}/code {code}` | The pasted `code#state` → `{ok, store, email, expiresAt, note?}`. A sign-in of another Claude account than the store's is kept in that account's own store (made as `claude-<its email's name>` when there is none): `store` names it and `note` says so; the store asked for is unchanged. Stuck "Please run /login" sessions of the account get "continue" afterwards. |
 | `POST /api/claude-accounts/{store}/refresh` | Refresh now → `{ok, refreshed, expiresAt}` (409 needLogin). |
 | `POST /api/claude-accounts/{store}/default` | New session pre-picks it → `{ok, default}`. |
-| `DELETE /api/claude-accounts/{store}` | Forget the account (its file goes, its core store loses its keys) → `{ok, moved: [session ids], movedTo, default}`: its sessions move to the default account (the next account, when it was the default). |
+| `DELETE /api/claude-accounts/{store}` | Forget the account (its file goes, its core store loses its keys) → `{ok, default}` (the next account becomes the default when it was the default). 409 while any session uses it (a session keeps its account for its life), naming them. |
 | `GET /api/claude-accounts/{store}/usage` | Its usage quota, as `/api/usage` was, plus `store` (`?refresh=1`). |
 
 `GET /api/claude-login`, `POST /api/claude-login/{refresh,start,code}` and `GET /api/usage` act on the default account

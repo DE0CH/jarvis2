@@ -116,7 +116,12 @@ private struct SignInRows: View {
   @State private var code = ""
   @State private var busy = false
   @State private var error: String?
+  @State private var note: String?
   var body: some View {
+    if let note {
+      Text(note).accessibilityIdentifier("claude-code-note-" + store)
+      Button("OK") { self.note = nil; done() }
+    }
     TextField("code#state", text: $code).textInputAutocapitalization(.never).autocorrectionDisabled().accessibilityIdentifier("claude-code-" + store)
     Button(busy ? "Signing in…" : "Sign in") { Task { await finish() } }
       .disabled(busy || !code.contains("#")).accessibilityIdentifier("claude-code-submit-" + store)
@@ -125,8 +130,10 @@ private struct SignInRows: View {
   private func finish() async {
     busy = true; defer { busy = false }
     do {
-      try await RouterClient.shared.call("POST", "api/claude-accounts/\(store)/code", ["code": code.trimmingCharacters(in: .whitespacesAndNewlines)])
-      code = ""; error = nil; done()
+      let out = try await RouterClient.shared.call("POST", "api/claude-accounts/\(store)/code", ["code": code.trimmingCharacters(in: .whitespacesAndNewlines)])
+      code = ""; error = nil
+      if let n = out["note"].string { note = n } // another Claude account: added as a new account (shown until dismissed)
+      else { done() }
     } catch { self.error = errText(error) }
   }
 }

@@ -462,7 +462,8 @@ per account its email, expiry, last refresh, the participants of its refresh pro
 - **Manage:** Settings → Claude accounts (web page or app). Add: a name, then the sign-in page opens; sign in, copy the
   code it shows (`code#state`), paste, Sign in. Re-login: the same for an existing account; a sign-in of another
   Claude account is kept as that account's own (its store, or a new `claude-<its name>`), the store asked for unchanged.
-  Make default. Remove: always; its sessions move to the default account (the next one when it was the default). A new box starts with no account: sessions start
+  Make default. Remove: refused while any session (running, paused, waiting, failed) uses it, since a session keeps its
+  account for its life; removing the default makes the next account the default. A new box starts with no account: sessions start
   logged out until one is added.
 - **A dead login** (the refresh was refused) DMs Deyao once, naming the account; nothing else happens by itself: only
   that account's sessions stop on "Please run /login" once their token runs out, and get "continue" after its Re-login.

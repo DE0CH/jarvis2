@@ -42,7 +42,7 @@ func TestClaudeAccountsManage(t *testing.T) {
 		t.Fatal("the same name twice", code, out)
 	}
 	// a second slot signed in to the same Claude account: the fresh grant lands in that account's own store
-	if code, out := signIn(t, r, "/api/claude-accounts", `{"name":"work"}`); code != 200 || out["store"] != "claude-main" || !strings.Contains(out["note"].(string), "kept as claude-main") {
+	if code, out := signIn(t, r, "/api/claude-accounts", `{"name":"work"}`); code != 200 || out["store"] != "claude-main" || !strings.Contains(out["note"].(string), "added as a new account, claude-main") {
 		t.Fatal("the same Claude account in two slots", code, out)
 	}
 	f.accounts["new"] = "acct-2"
@@ -71,18 +71,22 @@ func TestClaudeAccountsManage(t *testing.T) {
 	if code, out := appDo(t, r, "GET", "/api/claude-accounts/claude-work/usage", ""); code != 200 || out["store"] != "claude-work" || len(out["limits"].([]any)) != 1 {
 		t.Fatal(code, out)
 	}
-	// Remove of the default account that a session uses: it goes, the next account is the default and takes the session
+	// Remove: refused while a session uses it (a session keeps its account for its life), never moving the session
 	addSession(r, "s1", "paused", "", false)
 	r.st.Do(func(d *persisted) { d.Sessions["s1"].ClaudeAccount = "claude-main" })
-	code, out = appDo(t, r, "DELETE", "/api/claude-accounts/claude-main", "")
-	if code != 200 || out["movedTo"] != "claude-work" || out["default"] != "claude-work" || jsonString(out["moved"]) != `["s1"]` || r.accounts().hub("claude-main") != nil {
-		t.Fatal("remove", code, out)
+	if code, out := appDo(t, r, "DELETE", "/api/claude-accounts/claude-main", ""); code != 409 || !strings.Contains(out["error"].(string), "s1") {
+		t.Fatal("removed an account a session uses", code, out)
 	}
 	r.st.Do(func(d *persisted) {
-		if d.Sessions["s1"].ClaudeAccount != "claude-work" {
-			t.Fatal("the session wasn't moved to the default account")
+		if d.Sessions["s1"].ClaudeAccount != "claude-main" {
+			t.Fatal("the session was moved to another account")
 		}
+		delete(d.Sessions, "s1")
 	})
+	// the default can go: the next account becomes the default
+	if code, out := appDo(t, r, "DELETE", "/api/claude-accounts/claude-main", ""); code != 200 || out["default"] != "claude-work" || r.accounts().hub("claude-main") != nil {
+		t.Fatal("remove the default", code, out)
+	}
 	if _, err := os.Stat(filepath.Join(r.cfg.DataDir, "claude-accounts", "claude-main.json")); !os.IsNotExist(err) {
 		t.Fatal("a removed account's pair stayed on the volume")
 	}

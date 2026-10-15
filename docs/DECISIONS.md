@@ -1719,12 +1719,28 @@ snapshot failed with "no space left on device", the machine was destroyed anyway
      refreshes from the long poll (an unlock every 8 hours would be the refusal again). *The router keeps its working
      copy*: the core gives a store back only with the phone, and the router must refresh with nobody there. *The cert
      names the account's store only with the router's env `CLAUDE_STORE_IN_CERT=1`*, set once the app that accepts the
-     router writer is on Deyao's phone (an older app refuses that unlock, so every Start would fail). Also: Remove of an
-     account always goes (its sessions move to the default account, the next one when it was the default; its core
-     store loses its keys); a sign-in of another Claude account than the store's is kept as that account's own (its
-     store, or a new `claude-<its name>`) instead of thrown away after the exchange; Add of an existing name is its
+     router writer is on Deyao's phone (an older app refuses that unlock, so every Start would fail). Also: Remove of the
+     default account makes the next one the default (Remove stays refused while a session uses the account: Deyao's
+     decision that a session's account never changes); a removed account's core store loses its keys; a sign-in of another Claude account than the store's is kept as that account's own (its
+     store, or a new `claude-<its name>`, and the dashboard says it was added as a new account) instead of thrown away
+     after the exchange; Add of an existing name is its
      sign-in; an account named for a harness that takes none is ignored; an add-store of `claude` gives a session with
      no account the default one.
+     *Router, the machine and the tools* (each answer in API.md): what was already so is answered, not refused (Pause of
+     a paused session, Resume of a running one, a deny or unpair or record delete of something already gone, a content
+     store that exists); failed sessions take what paused ones take (permission mode, resume options, restart/env, More
+     disk, an Upgrade's next size); a lapsed New session of Deyao's own stays as failed (Start again) instead of
+     vanishing; an archive from an earlier core is restorable (the machine checks it, not a blanket refusal); a session
+     may ask for anything for another session too (every item still needs Deyao: the "only for itself" rule was already
+     bypassed by actions); an approved API call runs although its session paused (it runs as Deyao); a restore in a
+     batch is filed beside it; a locked store no longer stops a machine starting (it starts with no secrets and pulls
+     them at the unlock: the core seals a cert's stores all or none); `--drop` of a store not held drops the rest; a
+     delivery with some items already delivered delivers the others; one bad attachment no longer drops the good ones;
+     pull-secrets and content-sync work in a grant shell (the local proxy's address and token are fixed) and print the
+     proxy's error; setup.py's delete, mark-sensitive and `--replace` stop demanding what they don't use, and a store
+     the core calls not sensitive after a write is marked so and still backed up. *Kept, with Deyao's call*: every ask
+     carries a reason (`--why`) and every new key an explanation; approvals lapse after 10 minutes, Deyao's own too; a
+     session's actions stop once it starts pausing; the Fly budget cap pauses everything with no override.
 
 ## A destroy deletes no live copy it hasn't archived, 2026-10-15
 

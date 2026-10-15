@@ -13,9 +13,11 @@ package main
 //     `claudeAccount`: claude, openclaw) and prompt tasks get the default account when none is named. Trusted as the
 //     router's word, like the pair itself (Deyao, 2026-10-15: no machine-side account check).
 //   - The default account (claude-accounts/accounts.json) is what New session pre-picks; Deyao sets it.
-//   - Remove always goes: its sessions move to the default account (the next account becomes the default when it was
-//     the default), and its core store loses its keys. A sign-in of another Claude account than the store's is kept as
-//     that account's own (its store, or a new claude-<its name>), never thrown away (DECISIONS 190). A broken login gets no automatic action: the dashboard shows each account's state and
+//   - Remove is refused while any session (running, paused, waiting for approval, failed) uses the account (Deyao: a
+//     session's account is fixed for its life). The default can be removed: the next account becomes the default. A
+//     removed account's core store loses its keys. A sign-in of another Claude account than the store's is kept as that
+//     account's own (its store, or a new claude-<its name>, and the answer's note says so), never thrown away
+//     (DECISIONS 190). A broken login gets no automatic action: the dashboard shows each account's state and
 //     Deyao re-logs it in.
 //   - The clean cut from the one shared login (`claude` in the core): at the first start of this code the router's
 //     claude-login.json becomes the account claude-<the email's name> (the default and Jarvis 1's), and every session
@@ -29,7 +31,7 @@ package main
 //	POST   /api/claude-accounts/{store}/code       {code: "code#state"} → {ok, email, expiresAt}
 //	POST   /api/claude-accounts/{store}/refresh    refresh now
 //	POST   /api/claude-accounts/{store}/default    make it the default
-//	DELETE /api/claude-accounts/{store}            remove: {moved: sessions now on movedTo, default}
+//	DELETE /api/claude-accounts/{store}            remove: {ok, default} (409 while a session uses it)
 //	GET    /api/claude-accounts/{store}/usage      its usage quota (?refresh=1)
 //
 // The routes of the one shared login (/api/claude-login, …/refresh, …/start, …/code, /api/usage) act on the default
@@ -379,39 +381,32 @@ type accountConflict struct{ msg string }
 
 func (e *accountConflict) Error() string { return e.msg }
 
-// remove: the account goes; its sessions move to the default account (the next one when it was the default; none when
-// it was the last: they stop at "Please run /login"), and its core store loses its keys. Answers the sessions moved.
-func (a *claudeAccounts) remove(store string) ([]string, string, error) {
-	moved, to, err := a.removeHub(store)
-	if err != nil {
-		return nil, "", err
+// remove: refused while any session uses the account (Deyao's decision: a session's account is fixed for its life,
+// never switched); otherwise it goes, the next account becomes the default when it was the default, and its core
+// store loses its keys. Answers the new default.
+func (a *claudeAccounts) remove(store string) (string, error) {
+	if users := a.r.accountUsers(store); len(users) > 0 {
+		return "", &accountConflict{fmt.Sprintf("%s is used by %d session(s) (%s), and a session keeps its account for its life: destroy those sessions first (Previous keeps their archives), then Remove", store, len(users), strings.Join(users, ", "))}
 	}
-	if len(moved) > 0 {
-		a.r.st.Do(func(d *persisted) {
-			for _, id := range moved {
-				if s := d.Sessions[id]; s != nil && s.ClaudeAccount == store {
-					s.ClaudeAccount = to
-				}
-			}
-		})
-		log.Printf("[accounts] %s removed: sessions %s now on %q", store, strings.Join(moved, ", "), to)
+	to, err := a.removeHub(store)
+	if err != nil {
+		return "", err
 	}
 	go a.r.forgetAccountStore(store) // claudestores.go
-	return moved, to, nil
+	return to, nil
 }
 
-func (a *claudeAccounts) removeHub(store string) ([]string, string, error) {
-	users := a.r.accountUsers(store)
+func (a *claudeAccounts) removeHub(store string) (string, error) {
 	h := a.hub(store)
 	if h == nil {
-		return nil, "", fmt.Errorf("no Claude account %s", store)
+		return "", fmt.Errorf("no Claude account %s", store)
 	}
 	h.refreshMu.Lock() // not while its refresh or a sign-in is out (taken before a.mu: finishLogin's check takes a.mu)
 	defer h.refreshMu.Unlock()
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if err := os.Remove(h.path); err != nil && !os.IsNotExist(err) {
-		return nil, "", err
+		return "", err
 	}
 	delete(a.hubs, store)
 	if a.doc.Default == store || a.hubs[a.doc.Default] == nil {
@@ -430,7 +425,7 @@ func (a *claudeAccounts) removeHub(store string) ([]string, string, error) {
 	}
 	a.saveDoc()
 	log.Printf("[accounts] %s removed", store)
-	return users, a.doc.Default, nil
+	return a.doc.Default, nil
 }
 
 // list: every account's status (no secrets), with its name, whether it is the default and the sessions using it
@@ -519,7 +514,7 @@ func (r *Router) registerClaudeAccounts(app appRoute, public publicRoute) {
 		go r.resumeStuckLogins()
 		out := map[string]any{"ok": true, "store": store, "email": email, "expiresAt": cur.ExpiresAt}
 		if store != h.store {
-			out["note"] = fmt.Sprintf("that sign-in is %s, not %s's account: it is kept as %s (%s is unchanged)", email, h.store, store, h.store)
+			out["note"] = fmt.Sprintf("That sign-in is %s, another Claude account than %s's, so it was added as a new account, %s. %s is unchanged.", email, h.store, store, h.store)
 		}
 		writeJSON(w, 200, out)
 	}
@@ -557,15 +552,12 @@ func (r *Router) registerClaudeAccounts(app appRoute, public publicRoute) {
 		writeJSON(w, 200, map[string]any{"ok": true, "default": h.store})
 	}))
 	app("DELETE /api/claude-accounts/{store}", withHub(func(w http.ResponseWriter, req *http.Request, h *loginHub) {
-		moved, to, err := a.remove(h.store)
+		to, err := a.remove(h.store)
 		if err != nil {
 			writeJSON(w, loginErrStatus(err), map[string]string{"error": err.Error()})
 			return
 		}
-		if moved == nil {
-			moved = []string{}
-		}
-		writeJSON(w, 200, map[string]any{"ok": true, "moved": moved, "movedTo": nullIfEmpty(to), "default": nullIfEmpty(a.defaultStore())})
+		writeJSON(w, 200, map[string]any{"ok": true, "default": nullIfEmpty(to)})
 	}))
 
 	app("GET /api/claude-login", withDefault(func(w http.ResponseWriter, req *http.Request, h *loginHub) { writeJSON(w, 200, h.status()) }))
