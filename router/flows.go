@@ -33,7 +33,6 @@ type Router struct {
 	snapped  map[string]chan struct{}
 	locks    sync.Map   // session id → *sync.Mutex: one lifecycle action at a time
 	drain    drainState // drain.go: the lifecycle goroutines running, refused once SIGTERM came
-	gate     moveGate   // movegate.go: deliveries and requests in flight at a handover
 	ops      opsState   // sessionops.go: busy marks, permission-mode/restart jobs, uploads, repos
 
 	policy Policy

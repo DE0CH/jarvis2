@@ -58,13 +58,13 @@ func writeErr(w http.ResponseWriter, err error) {
 // MachineHandler: /m only, for the listener that only Fly's private network reaches
 func (r *Router) MachineHandler() http.Handler {
 	r.handlers()
-	return r.gated(r.machineMux) // movegate.go
+	return r.machineMux
 }
 
 // Handler: the public listener behind cloudflared — the app, the web page and setup
 func (r *Router) Handler() http.Handler {
 	r.handlers()
-	return r.gated(r.publicMux) // movegate.go
+	return r.publicMux
 }
 
 func (r *Router) handlers() {
@@ -617,10 +617,6 @@ func (r *Router) buildHandlers() {
 		case <-time.After(50 * time.Second):
 			writeJSON(w, 200, map[string]any{"commands": []string{}, "execs": []execItem{}})
 		case <-req.Context().Done():
-			if r.frozenNow() { // movegate.go: a handover — "nothing", so the machine polls again at once (the next leader)
-				w.Header().Set("Connection", "close")
-				writeJSON(w, 200, map[string]any{"commands": []string{}, "execs": []execItem{}})
-			}
 		}
 	})
 	m("POST /m/exec-result", func(w http.ResponseWriter, req *http.Request, machine string, body []byte) {
@@ -749,7 +745,7 @@ func sessionView(s *Session, d *persisted) map[string]any {
 		"environment": strings.Join(s.Stores, ","), "stores": s.Stores, "content": orEmptyS(s.Content), "harness": s.Harness, "label": s.Label, "aiTitle": s.Title,
 		"model": s.Model, "permissionMode": s.PermissionMode, "guest": guest, "size": s.Size, "pausedAt": s.PausedAt,
 		"image": s.Image, "createRequestId": s.RequestID, "repos": s.Repos, "discordChannel": s.DiscordChannel,
-		"waiting": s.Waiting, "lockedStore": s.LockedStore,
+		"waiting": s.Waiting, "lockedStore": s.LockedStore, "carryLost": s.CarryLost, "oldCore": s.OldCore,
 	}
 	liveView(s, v)
 	backupsView(s, v) // snapsafe.go

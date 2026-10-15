@@ -349,7 +349,14 @@ Core continuity (`core/continuity.go`, `router/linestate.go`; DESIGN "Core conti
   stores}`: only a FINAL state sealed by the same keys whose seq is at least the one the standby was claimed with
   (403 otherwise); it takes the lines and every store from it and serves. A claim whose `lineState` is already final
   serves at once from it (the old core handed off before the Recover). A kill of a machine the core doesn't know (an
-  earlier core's) names no snapshot instead of refusing it.
+  earlier core's) names no snapshot instead of refusing it, unless it comes with `legacy`.
+- Taking over an earlier core's line (`core/legacy.go`): `POST /kill {machine, snapshot, legacy: {cert, coreCert:
+  {statement, masterSig}}}` for a machine this core doesn't know: the claim signed by this core's master key, naming
+  (as `core` or `identity`) the key that signed `cert`, a succession cert for that machine; `snapshot` signed by the
+  cert's machine key (409 without one). The answer is the usual `killed` record plus `adopted` = the same cert signed by
+  this core (also on a repeated kill). The router sends `legacy` for every machine whose cert the running key didn't
+  sign and a kept claim names, replaces the session's cert with `adopted`, and marks the session `carryLost` (in
+  `/api/state`) until its first pull goes through. Fly answering 404 for a machine counts as destroyed.
 - `POST store-key {phone, core?}`: with `core` (an agreement public key, X9.63 base64) the answer is P + that point and
   names it (`core`); what a Recover wraps to before the claim gives the core its derived K.
 

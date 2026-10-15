@@ -34,7 +34,7 @@ spec:
   strategy: { type: RollingUpdate, rollingUpdate: { maxUnavailable: 0, maxSurge: 1 } }
   selector: { matchLabels: { app: search } }
   template:
-    metadata: { labels: { app: search }, annotations: { jarvis2/secrets-rev-search: "1872fd0edab8" } }
+    metadata: { labels: { app: search }, annotations: { jarvis2/secrets-rev-search: "986c1349c49c" } }
     spec:
       serviceAccountName: search
       automountServiceAccountToken: true  # only to read its own pod's restarts (Role search-self: k8s/bootstrap-services)

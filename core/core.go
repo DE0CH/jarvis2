@@ -176,6 +176,9 @@ type Core struct {
 	// its successor's cert names it. With used: approve_by_dead_machine's two sets.
 	killed map[string]string
 	used   map[string]bool
+	// adopted: a machine an earlier core certified whose line this core took over at its kill (legacy.go) → that
+	// cert, signed by this core
+	adopted map[string]*SignedDoc
 
 	auditHead string // audit.go: the input log's head and length (the router keeps the entries)
 	auditSeq  int
@@ -238,7 +241,7 @@ func NewCore(fly Fly) (*Core, error) {
 	}
 	return &Core{signer: s, agreement: a, nonceKey: nk, carryKey: ck,
 		approvalsUsed: map[string]bool{}, latest: map[string]string{},
-		created: map[string]string{}, signing: map[string]string{}, killed: map[string]string{}, used: map[string]bool{},
+		created: map[string]string{}, signing: map[string]string{}, killed: map[string]string{}, used: map[string]bool{}, adopted: map[string]*SignedDoc{},
 		stores: map[string]map[string]*KeyEntry{}, notSensitive: map[string]bool{}, pending: map[string]pendingUnlock{}, unlocked: map[string]*unlocked{}, pendingKeys: map[string]pendingDeployKey{}, repoOwner: map[string]string{},
 		vol: newVolState(), fly: fly, github: newGitHub(), now: time.Now}, nil
 }
@@ -793,21 +796,49 @@ func (c *Core) Certify(approval, started *SignedDoc, carry string) (SignedDoc, e
 // A machine with a volume (volumes.go) is first stopped and its volume snapshotted (the backup, named in the record);
 // only once Fly reports that snapshot created is the machine destroyed and the volume deleted.
 func (c *Core) KillWithSnapshot(id string, snapshot *SnapshotClaim) (SignedDoc, error) {
+	return c.Kill(id, snapshot, nil)
+}
+
+// Kill: KillWithSnapshot, and for a machine an earlier core certified (legacy: its cert and the master key's claim of
+// that core) the adoption of its line (legacy.go)
+func (c *Core) Kill(id string, snapshot *SnapshotClaim, legacy *LegacyCert) (SignedDoc, error) {
 	if id == "" || id == "null" {
 		return SignedDoc{}, fail(400, "kill rejects null")
 	}
 	c.mu.Lock()
 	done, sum := c.isKilled(id), c.killed[id]
 	key := c.signing[id]
+	adopted := c.adopted[id]
+	var adopt *Cert
+	if !done && key == "" && legacy != nil {
+		cert, err := c.legacyCert(legacy)
+		if err != nil {
+			c.mu.Unlock()
+			return SignedDoc{}, err
+		}
+		if cert.Machine.ID != id || c.latest[id] != "" {
+			c.mu.Unlock()
+			return SignedDoc{}, fail(409, "the earlier core's cert isn't for %s, or this core knows %s already", id, id)
+		}
+		if snapshot == nil || snapshot.Sha256 == "" {
+			c.mu.Unlock()
+			return SignedDoc{}, fail(409, "an earlier core's machine is taken over only with the snapshot its current key signed")
+		}
+		adopt, key = &cert, cert.Machine.SigningKey
+	}
 	c.mu.Unlock()
 	if done {
 		c.mu.Lock()
 		defer c.mu.Unlock()
-		return c.sign(c.killedRecord(id))
+		out := c.killedRecord(id)
+		if adopted != nil {
+			out["adopted"] = adopted
+		}
+		return c.sign(out)
 	}
 	if snapshot != nil && snapshot.Sha256 != "" && key == "" {
-		// a machine this core never initialised (an earlier core's): its snapshot can't be checked, so the kill names
-		// none — the kill itself still goes through (a destroy must not fail on it)
+		// a machine this core never initialised (an earlier core's, with no legacy cert): its snapshot can't be
+		// checked, so the kill names none — the kill itself still goes through (a destroy must not fail on it)
 		c.logf("kill %s: not a machine this core knows; its snapshot isn't taken", id)
 		snapshot = nil
 	}
@@ -836,13 +867,33 @@ func (c *Core) KillWithSnapshot(id string, snapshot *SnapshotClaim) (SignedDoc, 
 	c.dropVolume(id)
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	var adoptedNow *SignedDoc
+	if adopt != nil {
+		if c.isKilled(id) || c.latest[id] != "" {
+			return SignedDoc{}, fail(409, "machine %s was taken over meanwhile", id)
+		}
+		// the line goes on here: this core signs the earlier core's cert as its own (the same payload), so the
+		// successor's machine, whatever its image, checks its predecessor's cert with this core's key
+		sig, err := c.signer.Sign([]byte(legacy.Cert.Payload))
+		if err != nil {
+			return SignedDoc{}, err
+		}
+		d := &SignedDoc{Payload: legacy.Cert.Payload, Sig: sig}
+		c.latest[id], c.adopted[id] = adopt.Nonce, d
+		adoptedNow = d
+		c.logf("machine %s taken over from an earlier core (line %s, snapshot %s)", id, adopt.Line, orNull(sum))
+	}
 	if !c.isKilled(id) {
 		c.killed[id] = sum
 	}
 	delete(c.created, id)
 	delete(c.signing, id)
 	c.logf("machine %s killed (snapshot %s)", id, orNull(c.killed[id]))
-	return c.sign(c.killedRecord(id))
+	out := c.killedRecord(id)
+	if adoptedNow != nil {
+		out["adopted"] = adoptedNow
+	}
+	return c.sign(out)
 }
 
 // killedRecord: the kill's signed record — the snapshot its successor restores, and the volume's backup (volumes.go)

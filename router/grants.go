@@ -330,8 +330,6 @@ func (r *Router) execWith(session, holder, cmd string, timeout time.Duration, ph
 		return res, nil
 	case <-time.After(timeout + 60*time.Second):
 		return ExecResult{}, errors.New("no answer from the machine")
-	case <-r.handingOver(): // movegate.go: the machine's answer goes to the next leader
-		return ExecResult{}, errors.New("the router is moving: run it again")
 	}
 }
 

@@ -101,13 +101,6 @@ func main() {
 	if to := movedTo(cfg.DataDir); to != "" {
 		proxyOnly(to)
 	}
-	// move.go: the move listener (old box, MOVE_KEY) from the start, on every pod: a standby passes the calls on to the
-	// leader's, so one Service with both ports may select every router pod
-	moveListener := &swapHandler{}
-	if os.Getenv("MOVE_KEY") != "" && os.Getenv("MOVE_FROM") == "" {
-		moveListener.set(moveLeaderProxy(lock, self))
-		go func() { log.Fatal(http.ListenAndServe(env("MOVE_ADDR", ":8082"), moveListener)) }()
-	}
 	standby := !lock.tryLock()
 	if standby {
 		// listening (and so ready: a TCP probe) at once, every request proxied to the leader
@@ -188,7 +181,7 @@ func main() {
 		sender = &moveSender{r: r, st: st, ld: ld, lock: lock, self: self, public: public, dir: cfg.DataDir, key: key,
 			wgPath: wgPath, startWG: startWG, drain: time.Duration(drainMax) * time.Second, handoff: httpHandoff{}}
 		setMove(func(m *moveStatus) { m.Role, m.Phase = "sender", "serving" })
-		moveListener.set(sender.Handler())
+		go func() { log.Fatal(http.ListenAndServe(env("MOVE_ADDR", ":8082"), sender.Handler())) }()
 	}
 	// SIGTERM (a rollout): drain (drain.go): new lifecycle actions get 503 "router updating, try again shortly", the
 	// running ones finish, while both listeners keep serving reads, the machines' reports and the login's long
@@ -210,10 +203,6 @@ func main() {
 	if r.lines != nil {
 		r.lines.flush() // linestate.go: the newest line state into the bucket before the router goes
 	}
-	// movegate.go: deliveries in flight finish here, long polls end at once (an unanswered GET goes to the next leader)
-	r.stopDeliveries(90 * time.Second)
-	public.set(newLeaderProxy(lock, self, nil))
-	r.freezeRequests(newLeaderProxy(lock, self, nil), 10*time.Second)
 	ld.handOver(st)
 	time.Sleep(time.Duration(handoverLingerSeconds()) * time.Second)
 	os.Exit(0)

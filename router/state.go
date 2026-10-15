@@ -52,6 +52,9 @@ type Session struct {
 	Waiting         string      `json:"waiting,omitempty"`      // what a pause or destroy is waiting on, in plain words (the app shows it)
 	LockedStore     string      `json:"lockedStore,omitempty"`  // the store the machine waits on at boot (its secrets pull got 423 "store X is locked")
 	OldCore         bool        `json:"oldCore,omitempty"`      // corechange.go: its line is an earlier core's; destroyed once paused
+	// legacy.go: its line was taken over from an earlier core, whose carried secrets don't open here: the first pull
+	// that waits on a store files the unlock request itself
+	CarryLost bool `json:"carryLost,omitempty"`
 	// snapsafe.go: what the machine's final snapshot left behind
 	SnapshotFailed string      `json:"snapshotFailed,omitempty"` // the final snapshot failed and the machine (no volume) is kept
 	NoSnapshot     string      `json:"noSnapshot,omitempty"`     // the line's last machine left no snapshot: Resume refuses

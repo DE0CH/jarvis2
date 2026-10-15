@@ -139,7 +139,7 @@ fi
 if [ -n "$BOX_KIND" ]; then
   # Grafana Alloy on the host (infra/alloy/box.alloy): pinned, from Grafana's apt repo (IPv6), its module from git,
   # its credentials from the k8s Secret jarvis2-obs/alloy (Flux decrypts it; a timer copies it to the host)
-  ALLOY_VERSION=1.20.1-1  # the apt version (Grafana appends -1)
+  ALLOY_VERSION=1.20.1
   mkdir -p /etc/apt/keyrings
   curl -fsSL https://apt.grafana.com/gpg.key | gpg --yes --dearmor -o /etc/apt/keyrings/grafana.gpg
   echo "deb [signed-by=/etc/apt/keyrings/grafana.gpg] https://apt.grafana.com stable main" > /etc/apt/sources.list.d/grafana.list

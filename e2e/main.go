@@ -148,11 +148,13 @@ func main() {
 	step("Recover: the master key sets the core up, naming the core and the phone; every store comes in, wrapped by the app")
 	phoneAgreement := b64.EncodeToString(ak.PublicKey().Bytes())
 	var skd Doc
-	must2(call(router, "POST", "/api/core/store-key", map[string]string{"phone": phoneAgreement}, &skd))
 	var skey struct{ Kind, Phone, StoreKey string }
-	verify(skd, &skey)
-	if skey.Kind != "store-key" || skey.Phone != phoneAgreement {
-		log.Fatalf("not this phone's store key: %+v", skey)
+	if id0.Bundle != "" { // a core from before the store key (production's until core continuity: E2E_ONLY=legacy) takes plaintext
+		must2(call(router, "POST", "/api/core/store-key", map[string]string{"phone": phoneAgreement}, &skd))
+		verify(skd, &skey)
+		if skey.Kind != "store-key" || skey.Phone != phoneAgreement {
+			log.Fatalf("not this phone's store key: %+v", skey)
+		}
 	}
 	secret := hex.EncodeToString(randBytes(8))
 	recovered := map[string]map[string]string{
@@ -176,13 +178,19 @@ func main() {
 			}
 		}
 		bundle, _ = json.Marshal(map[string]any{"format": "keys", "stores": names, "keys": keys,
-			"flyToken": os.Getenv("E2E_FLY_TOKEN"), "notSensitive": []string{"e2e", "claude"}})
+			"flyToken": coreFlyToken(), "notSensitive": []string{"e2e", "claude"}})
+	} else if id0.Bundle == "" { // a core from before the store key: the stores in plaintext, sealed to it
+		ss := []map[string]any{{"name": "core", "values": map[string]string{"FLY_API_TOKEN": coreFlyToken()}}}
+		for _, n := range []string{"claude", "e2e", "e2e-extra", "e2e-more"} {
+			ss = append(ss, map[string]any{"name": n, "values": recovered[n]})
+		}
+		bundle, _ = json.Marshal(map[string]any{"stores": ss, "notSensitive": []string{"e2e", "claude"}})
 	} else { // a core from before keys.go (the held production core's run, E2E_HELD_CORE)
 		blobs := []map[string]any{}
 		for _, n := range []string{"e2e", "e2e-extra", "e2e-more", "claude"} {
 			blobs = append(blobs, wrapStore(skey.StoreKey, n, recovered[n]))
 		}
-		bundle, _ = json.Marshal(map[string]any{"format": "blobs", "stores": "blobs", "flyToken": os.Getenv("E2E_FLY_TOKEN"),
+		bundle, _ = json.Marshal(map[string]any{"format": "blobs", "stores": "blobs", "flyToken": coreFlyToken(),
 			"blobs": blobs, "notSensitive": []string{"e2e", "claude"}})
 	}
 	if !continuity {
@@ -261,7 +269,8 @@ func main() {
 	// its settings from the router as before the input guard (machine/legacy.go); the run ends after that check
 	held := os.Getenv("E2E_HELD_CORE") == "1"
 	newBody := map[string]any{"label": "e2e test", "stores": []string{"e2e"}, "size": "small", "harness": "claude"}
-	if !held && os.Getenv("E2E_ONLY") != "drain" && !continuity {
+	legacy := os.Getenv("E2E_ONLY") == "legacy"
+	if !held && os.Getenv("E2E_ONLY") != "drain" && !continuity && !legacy {
 		contentSetupStep(secret) // nojarvis1.go
 		newBody["content"] = []string{"e2e-content"}
 	}
@@ -293,6 +302,10 @@ func main() {
 	expectNoUnlocks("after the Start's pull")
 	if continuity {
 		continuityStep(p, master, phoneAgreement, recovered, id, m1, secret)
+		return
+	}
+	if legacy {
+		legacyStep(p, master, phoneAgreement, recovered, id, m1, secret)
 		return
 	}
 	expectOnMachine(m1, "echo marker-"+secret+" > /home/claude/artifacts/e2e-marker && chown claude /home/claude/artifacts/e2e-marker && echo ok", "ok")

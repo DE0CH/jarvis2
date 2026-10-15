@@ -314,9 +314,21 @@ that core's key signed the cert (`machine/restore.go`, `router/restore.go`).
 **A kill the core can't check** (a machine an earlier core initialised) names no snapshot instead of refusing, so
 destroying an earlier core's session never fails on it.
 
-**Sessions running at the release of continuity** were made by a core with random keys, which no later core can sign
-for: they end once more, as before. Every session started after the first Recover on the new app keeps going through
-every later restart, Recover and box move.
+**Sessions of an earlier core (random keys) are taken over, not ended** (Deyao, 2026-10-15: the release must not end
+the sessions he is working in). The master key claimed that core (the router keeps every claim it passes on, and the
+running core's own claim: `core-certs.json`), so its certs count: at a machine's kill the router sends its cert and that
+claim (`legacy`), and the core, after checking the claim is its master's, that it names the core that signed the cert,
+and that the machine's current key (the cert's) signed the final snapshot, records the kill and signs the same cert
+as its own (`adopted`), which becomes the session's cert (`core/legacy.go`, `router/legacy.go`). A paused session is
+taken over at once (its machine is long gone: Fly answers 404, which counts as destroyed), a running one at its own
+next pause; nothing is forced. Each resumes like any other: the dead-machine responder, its snapshot, its image (the
+successor's machine checks the re-signed predecessor cert with the new key, so an old image works). What it loses:
+until it pauses, a running session can't pull new secrets or add stores (its machine trusts only the earlier key), and
+the earlier core's carry blob doesn't open here, so the first resume waits once for an unlock of its stores, which the
+router files in the Inbox itself; from then on its secrets are carried as usual. What this trusts the router for: which
+earlier cert of a line is the newest (an older one can only have fewer stores: a downgrade's new key signs the
+snapshot) and that a line the earlier core already continued isn't taken over from an older machine (that core's used
+set is gone): once per machine, only for cores the master key claimed, only with a signed snapshot.
 
 **The flip (`router/nextcore.go`).** The router has one serving core (`CORE_URL`) and, with `NEXT_CORE_URL`, a next one.
 The app's Reset-or-Recover calls (`/api/core/identity`, `/api/core/claim`, `/api/core/wipe`) reach the next core with

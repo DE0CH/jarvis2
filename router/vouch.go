@@ -215,7 +215,16 @@ func (r *Router) killMachine(machine string) (*Doc, error) {
 			in["snapshot"] = map[string]string{"sha256": sum, "sig": strings.TrimSpace(string(sig))}
 		}
 	}
-	return r.killUntilDestroyed(in)
+	if key, err := r.core.Key(); err == nil {
+		if l := r.legacyFor(machine, key["signingKey"]); l != nil {
+			in["legacy"] = l // legacy.go: an earlier core's machine, its line taken over at this kill
+		}
+	}
+	kd, err := r.killUntilDestroyed(in)
+	if err == nil {
+		r.adopted(machine, kd)
+	}
+	return kd, err
 }
 
 // ---- the values the machine takes from the router alone (each a strict format) --------------------------------
@@ -357,11 +366,6 @@ func (r *Router) deliverVouchedRunning(sid string, d Delivery) error {
 }
 
 func (r *Router) deliverVouchedOpts(sid string, d Delivery, boot bool) error {
-	done, err := r.beginDelivery() // movegate.go: none begins once a handover started; the next leader makes it
-	if err != nil {
-		return err
-	}
-	defer done()
 	state, _ := r.sessionState(sid)
 	if !boot && state != "started" {
 		if state == "" {

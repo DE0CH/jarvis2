@@ -1565,3 +1565,23 @@ snapshot failed with "no space left on device", the machine was destroyed anyway
      its own, 155) and then shows what the call brought about, each follow-up on its own page with its own Face ID
      (166: it wasn't shown before the batch's Face ID). Its result is read by the session through either of its
      credentials (`GET /m/api/actions/requests/call/:id`), and its outcome arrives as the batch's item.
+
+## The release of core continuity keeps today's sessions, 2026-10-15
+
+181. **An earlier core's sessions are taken over at their kill, not destroyed** (Deyao, 2026-10-15: "he's doing real
+     work in his running sessions": no session destroyed by the release, each moves over at its own next pause; DESIGN
+     "Core continuity"). `POST /kill` takes `legacy: {cert, coreCert}`: a cert of a core the running core's master key
+     claimed (the claim the router kept; it now also keeps the running core's own claim when it has none:
+     `keepRunningClaim`), with the snapshot the cert's machine key signed; the core records the kill and answers the
+     same cert signed by itself (`adopted`). The router sends it for any machine whose cert the running key didn't sign,
+     takes a paused session over at once and a running one at its pause, and never destroys a session whose earlier core
+     a kept claim names. The first resume of each waits for one unlock (the earlier core's carry key is gone; nothing but
+     the phone opens the stores), which the router files as an Inbox request when the pull first waits (`CarryLost`).
+     Proven with `infra/e2e.sh` E2E_ONLY=legacy against production's core of the day (06ab245): a running and a paused
+     session on it, the restart to this core, the paused one taken over at once, the running one at its pause, both
+     resumed with their snapshots and secrets after one unlock each, and a second pause/resume carrying the secrets as
+     usual. *Not chosen*: re-sealing the earlier carry blobs (the earlier core has no such call and can't get one
+     without a restart); a standing unlock of every store at the release (opens every store to every session).
+     *Trusted to the router*: which earlier cert of a line is the newest (an older one has fewer stores; a downgrade's
+     key signs the snapshot) and that an earlier line isn't taken over twice from two of its machines: once per
+     machine, for claimed cores only.

@@ -649,8 +649,8 @@ var errSkip = errors.New("busy")
 
 func (r *Router) scheduleLoop() {
 	for {
-		r.scheduleTick(time.Now()) // at once at start: what came due during a handover fires right after it
 		time.Sleep(scheduleTick)
+		r.scheduleTick(time.Now())
 	}
 }
 

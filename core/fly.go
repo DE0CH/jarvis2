@@ -235,6 +235,11 @@ func (f *FlyAPI) Inspect(id string) (FlyMachine, error) {
 		} `json:"image_ref"`
 	}
 	if err := f.call("GET", "/machines/"+id, nil, &m); err != nil {
+		if strings.Contains(err.Error(), "HTTP 404") {
+			// Fly forgets a machine some time after it is destroyed: one it doesn't know is gone (a kill, or a line
+			// taken over from an earlier core long after its pause: legacy.go)
+			return FlyMachine{State: "destroyed"}, nil
+		}
 		return FlyMachine{}, err
 	}
 	image := m.Config.Image

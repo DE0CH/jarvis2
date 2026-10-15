@@ -66,6 +66,7 @@ func (r *Router) coreChangeTick() {
 	if key == "" {
 		return
 	}
+	r.keepRunningClaim(key) // legacy.go: so its sessions can be taken over by whatever core comes next
 	var marked int
 	var gone []string
 	r.st.Do(func(d *persisted) {
@@ -90,8 +91,25 @@ func (r *Router) coreChangeTick() {
 			}
 		}
 	})
-	if marked > 0 {
-		log.Printf("a new core (%.16s…): %d session(s) belong to the earlier core and are destroyed once paused", key, marked)
+	// legacy.go: a session whose earlier core a kept master-signed claim names isn't destroyed: the running core takes
+	// its line over (a paused one now, a running one at its pause); only the rest go as before (a Reset's)
+	keep := gone[:0]
+	for _, id := range gone {
+		var cert *Doc
+		r.st.Do(func(d *persisted) {
+			if s := d.Sessions[id]; s != nil {
+				cert = s.Cert
+			}
+		})
+		if r.claimOfSigner(cert) != nil {
+			go r.adoptPaused(id)
+			continue
+		}
+		keep = append(keep, id)
+	}
+	gone = keep
+	if marked > 0 { // (legacy ones are taken over, not destroyed: below)
+		log.Printf("a new core (%.16s…): %d session(s) belong to an earlier core: taken over at their pause when a kept claim names that core, else destroyed once paused", key, marked)
 	}
 	for _, id := range gone {
 		oldCoreMu.Lock()

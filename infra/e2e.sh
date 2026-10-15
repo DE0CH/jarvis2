@@ -6,6 +6,7 @@
 # Leaves nothing behind but the core's and router's logs (in $E2E_LOGS, default /tmp/jarvis2-e2e-logs): the
 # peer is removed, the processes stopped. Never touches the production core.
 #   JARVIS2_FLY_TOKEN   the jarvis2-370 org token
+#   E2E_CORE_FLY_TOKEN  optional: the token the test core gets instead (infra/fly-token.sh: narrowed as production's)
 #   E2E_CORE_REF + E2E_HELD_CORE=1: run against the core of that ref (the held one) and check only that a session gets
 #     its settings from the router as before
 #   E2E_ONLY=jarvis1-import: after the core's setup, only the Jarvis 1 import step (a fake paused session on 127.0.0.1:${PP}070)
@@ -13,6 +14,8 @@
 #   E2E_ONLY=restore: after the core's setup, only the restore of a store to an earlier version (no machines)
 #   E2E_ONLY=continuity: the core set up from the master key's seed, a running and a paused session, then the core
 #     restarted and Recovered with the same kit and the router's line state: the sessions go on (e2e/continuity.go)
+#   E2E_ONLY=legacy + E2E_CORE_REF=<production's core commit>: sessions on that core (random keys), then the restart to
+#     this tree's core, Recovered with the seed: a running and a paused session are taken over and resume (e2e/legacy.go)
 # Always with Jarvis 1 unreachable (e2e/nojarvis1.go): the router runs in its own mount namespace (sudo unshare) whose
 #   /etc/hosts sends jarvis.deyaochen.com to a listener that fails the test on any connection; each machine gets it
 #   blackholed too; search, the watch runner and the Storage Box are local stand-ins
@@ -31,10 +34,18 @@ import json, sys
 want = "http://" + sys.argv[1] + "._peer.internal:8081"
 for m in json.load(sys.stdin):
     if m.get("state") != "destroyed" and ((m.get("config") or {}).get("env") or {}).get("JARVIS2_URL") == want:
-        print(m["id"])' "$PEER" \
-    | while read -r m; do
+        print(m["id"], " ".join(x.get("volume", "") for x in ((m.get("config") or {}).get("mounts") or [])))' "$PEER" \
+    | while read -r m vols; do
         curl -fsS -o /dev/null -X DELETE -H "Authorization: Bearer $JARVIS2_FLY_TOKEN" \
           "https://api.machines.dev/v1/apps/jarvis2-sessions/machines/$m?force=true" && echo "e2e: destroyed leftover machine $m ($PEER)"
+        # its state volume (core/volumes.go): a force destroy leaves it behind, unattached
+        for v in $vols; do
+          for _ in 1 2 3 4 5 6; do
+            curl -fsS -o /dev/null -X DELETE -H "Authorization: Bearer $JARVIS2_FLY_TOKEN" \
+              "https://api.machines.dev/v1/apps/jarvis2-sessions/volumes/$v" && { echo "e2e: deleted its volume $v"; break; }
+            sleep 5
+          done
+        done
       done || true
 }
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -62,6 +73,8 @@ else
   (cd "$ROOT/core" && go build -o "$W/core" .)
 fi
 (cd "$ROOT/router" && go build -o "$W/router" .)
+# E2E_ONLY=legacy: the core the run starts on is E2E_CORE_REF's (production's, random keys); the restart brings this tree's
+[ "${E2E_ONLY:-}" = legacy ] && (cd "$ROOT/core" && go build -o "$W/core-next" .)
 python3 - "$W" <<'PY'
 import base64, sys
 from cryptography.hazmat.primitives.asymmetric import ec
@@ -86,7 +99,8 @@ echo $! > "$W/core.pid"
 cat > "$W/core-restart" <<SH
 #!/bin/sh
 kill \$(cat "$W/core.pid") 2>/dev/null; sleep 1
-BOX_KEY_FILE="$W/box-key.pem" ADDR=127.0.0.1:${PP}090 MACHINE_URL="http://$PEER._peer.internal:8081" nohup "$W/core" >> "$W/core.log" 2>&1 &
+BIN="$W/core"; [ -x "$W/core-next" ] && BIN="$W/core-next"
+BOX_KEY_FILE="$W/box-key.pem" ADDR=127.0.0.1:${PP}090 MACHINE_URL="http://$PEER._peer.internal:8081" nohup "\$BIN" >> "$W/core.log" 2>&1 &
 echo \$! > "$W/core.pid"
 for i in \$(seq 1 30); do curl -sf http://127.0.0.1:${PP}090/identity > /dev/null && exit 0; sleep 0.5; done
 exit 1
@@ -151,6 +165,6 @@ done
 grep -q 'jarvis.deyaochen.com' /etc/hosts && { echo "the blackhole leaked into this session's own /etc/hosts"; exit 1; }
 sleep 3
 (cd "$ROOT/e2e" && E2E_CORE_RESTART="$W/core-restart" E2E_ROUTER_PID="$ROUTER_PID" E2E_ROUTER_LOG="$W/router.log" E2E_DATA_DIR="$W/data" E2E_ROUTER=http://127.0.0.1:${PP}080 E2E_CORE=http://127.0.0.1:${PP}090 E2E_MASTER_KEY_FILE="$ROOT/e2e/testdata/master-test.pem" E2E_BOX_PUB="$(cat "$W/box.pub")" \
-  E2E_JARVIS1_ADDR=127.0.0.1:${PP}070 E2E_FLY_TOKEN="$JARVIS2_FLY_TOKEN" \
+  E2E_JARVIS1_ADDR=127.0.0.1:${PP}070 E2E_FLY_TOKEN="$JARVIS2_FLY_TOKEN" E2E_CORE_FLY_TOKEN="${E2E_CORE_FLY_TOKEN:-$JARVIS2_FLY_TOKEN}" \
   E2E_PEER="$PEER" E2E_J1_HITS="$W/j1-hits.log" E2E_SEARCH_ADDR=127.0.0.1:${PP}071 E2E_WATCH_ADDR=127.0.0.1:${PP}072 \
   E2E_DAV_ADDR=127.0.0.1:${PP}073 E2E_DAV_CERT="$W/dav.crt" E2E_DAV_KEY="$W/dav.key" E2E_S3_DIR="$W/s3/jarvis2-backup-de0ch" go run .) || { echo "--- router log"; tail -40 "$W/router.log"; exit 1; }

@@ -80,7 +80,7 @@ func seededClaim(master *ecdsa.PrivateKey, p *phone, phoneAgreement string, reco
 			keys = append(keys, wrapKey(skey.StoreKey, n, k, v))
 		}
 	}
-	b := map[string]any{"format": "keys", "stores": names, "keys": keys, "flyToken": os.Getenv("E2E_FLY_TOKEN"),
+	b := map[string]any{"format": "keys", "stores": names, "keys": keys, "flyToken": coreFlyToken(),
 		"notSensitive": []string{"e2e", "claude"}, "coreSeed": b64.EncodeToString(seed)}
 	if line != nil {
 		b["lineState"] = line
@@ -99,6 +99,7 @@ func seededClaim(master *ecdsa.PrivateKey, p *phone, phoneAgreement string, reco
 	must2(call(router, "POST", "/api/core/claim", map[string]any{"statement": string(stmt), "masterSig": b64.EncodeToString(msig),
 		"bundle": sealTo(id0.AgreementKey, bundle, "jarvis2/claim")}, &rec))
 	coreKey = dsk // from the claim's answer on, the core signs with the derived key
+	keysCore = true
 	var claimed struct {
 		Kind    string
 		Derived bool
@@ -189,4 +190,13 @@ func continuityStep(p *phone, master *ecdsa.PrivateKey, phoneAgreement string, r
 		time.Sleep(3 * time.Second)
 	}
 	log.Printf("E2E PASSED (core continuity: restart + Recover kept the sessions)")
+}
+
+// coreFlyToken: the Fly token the test core gets in its Recover bundle (E2E_CORE_FLY_TOKEN: narrowed as production's;
+// the test's own Fly calls keep E2E_FLY_TOKEN)
+func coreFlyToken() string {
+	if t := os.Getenv("E2E_CORE_FLY_TOKEN"); t != "" {
+		return t
+	}
+	return os.Getenv("E2E_FLY_TOKEN")
 }

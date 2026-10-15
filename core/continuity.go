@@ -136,6 +136,8 @@ type lineState struct {
 	Approvals []string          `json:"approvals"`
 	AuditHead string            `json:"auditHead"`
 	AuditSeq  int               `json:"auditSeq"`
+	// lines taken over from an earlier core (legacy.go): the machine → its cert as this core signed it
+	Adopted map[string]*SignedDoc `json:"adopted,omitempty"`
 	// the stores as the core holds them (each key wrapped to P + K for this phone key), the deploy-key stores' repos and
 	// the stores that aren't sensitive. A Recover takes back from it only the deploy-key stores (they have no backup;
 	// the rest come from the backups); a takeover takes them all (they are newer than any backup the Recover read).
@@ -177,7 +179,7 @@ func setList(m map[string]bool) []string {
 // lineSnapshot: the current line state with seq 0 (callers hold c.mu)
 func (c *Core) lineSnapshot() lineState {
 	st := lineState{Latest: c.latest, Created: c.created, Signing: c.signing, Killed: c.killed, Used: setList(c.used),
-		Approvals: setList(c.approvalsUsed), AuditHead: c.auditHead, AuditSeq: c.auditSeq, Phone: c.phoneAgreement,
+		Approvals: setList(c.approvalsUsed), AuditHead: c.auditHead, AuditSeq: c.auditSeq, Adopted: c.adopted, Phone: c.phoneAgreement,
 		Stores: c.stores, RepoOwner: c.repoOwner, NotSensitive: setList(c.notSensitive),
 		Volumes: c.vol.live, Backups: c.vol.backups, VolOrphans: setList(c.vol.orphans)}
 	return st
@@ -300,6 +302,10 @@ func (c *Core) restoreLine(st lineState, all bool) []string {
 	}
 	for _, v := range st.VolOrphans {
 		c.vol.orphans[v] = true
+	}
+	c.adopted = st.Adopted
+	if c.adopted == nil {
+		c.adopted = map[string]*SignedDoc{}
 	}
 	c.lineSeq = st.Seq
 	back := []string{}

@@ -193,7 +193,14 @@ func Handler(c *Core) http.Handler {
 				return nil, fail(400, "snapshot: {sha256, sig}")
 			}
 		}
-		return c.KillWithSnapshot(str(b, "machine"), snap)
+		var legacy *LegacyCert
+		if len(b["legacy"]) != 0 && string(b["legacy"]) != "null" {
+			legacy = &LegacyCert{}
+			if json.Unmarshal(b["legacy"], legacy) != nil {
+				return nil, fail(400, "legacy: {cert, coreCert: {statement, masterSig}}")
+			}
+		}
+		return c.Kill(str(b, "machine"), snap, legacy)
 	})
 	// ---- the input log (audit.go) ----
 	h("POST /attest", func(r *http.Request, b body) (any, error) {
