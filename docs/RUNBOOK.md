@@ -346,6 +346,20 @@ The box's services have their own parts (Secrets in jarvis2-edge):
 
 After a box rebuild, re-run all of them (the age key is new).
 
+**The two boxes:** `--box control` writes the control box's parts (to `keys/control-age.pub`, `k8s/control/secrets/`, the
+annotations in `k8s/control/apps/router/router.yaml`): the default part, `backup`, `github`, `flyorgs`, `flypersonal`,
+`browserbase`, `devices`, `move` and `alloy`; `--box services` the services box's (`search`, `icloud-index`,
+`icloud-session`, `alloy`). The control box's router got fresh values (2026-10-15): its own Fly read token, a new
+repo-list PAT (`jarvis2-repo-list-control`), read-only tokens for jarvis2-370 and personal (the empty org kamyee has none:
+no store holds a token for it), a new tunnel-proof key (the Worker's `JARVIS2_TUNNEL_KEY_NEXT`, so running sessions keep
+their old proofs), and a second backup read credential (`backup-read-key.py policies --both` names it beside the old
+box's; a plain `policies` run drops the old one once the old box is gone). **Not yet: `CF_DEVICE_TOKENS_API`** (pairing
+NEW OpenClaw/Paseo apps; paired ones keep working): a Cloudflare API token can only be minted in the dashboard
+(`CLOUDFLARE_API` gets 9109 on both `/user/tokens` and `/accounts/<id>/tokens`), and the dashboard's login didn't pass its
+Turnstile from a session on 2026-10-15; mint it with the `cloudflare-dash` skill
+(`cf_token.js jarvis2-device-tokens-control OUT a1c0fec57cf94af79479a6d827fa518c 91f7ce32fa614d73b7e1fc8f0e78582b`) and
+`router-secrets.py --box control --part devices CF_DEVICE_TOKENS_API=file:OUT`.
+
 ### The backup bucket's read credential
 
 The router's only way into the bucket; Deyao never sees it. It is the Hetzner S3 credential `jarvis2-backup-read`
