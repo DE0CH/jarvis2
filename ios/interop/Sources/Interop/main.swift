@@ -552,8 +552,8 @@ check(aTs == 200 && rT != nil && !throwsErr { try Checks.answerFor(rT!, answer: 
 let ch2 = challenge(["predecessor": docJSON(cert1), "machine": m1.id, "stores": ["claude-login", "default", "gmail"], "options": ["harness": "claude", "permissionMode": "bypass"]])
 let r2 = try! Checks.review(challenge: ch2, coreKey: coreKey)
 check(r2.kind == .addStore && r2.addedStore == "gmail" && list().first { $0.name == "gmail" }?.sensitive == true, "add-store challenge: one more store, marked sensitive in the core's store list")
-// a second add-store for the same machine, read on a batch page before the first went in (2026-10-15)
-let chN = challenge(["predecessor": docJSON(cert1), "machine": m1.id, "stores": ["claude-login", "default", "notes"], "options": ["harness": "claude", "permissionMode": "bypass"]])
+// a second add-store for the same machine (a store with a key: an empty one is refused), read on a batch page before the first went in (2026-10-15)
+let chN = challenge(["predecessor": docJSON(cert1), "machine": m1.id, "stores": ["claude-login", "default", "moved"], "options": ["harness": "claude", "permissionMode": "bypass"]])
 let (a2s, a2) = approve(ch2, current: cert1)
 check(a2s == 200 && !throwsErr { try Checks.answerFor(r2, answer: a2!, coreKey: coreKey) }, "adding a store answers with the machine's new succession cert")
 // …then made again from the machine's new cert (router rebaseAddStores): the batch page signs it only as the same ask
@@ -566,12 +566,12 @@ if let a2, let rN = try? Checks.review(challenge: chN, coreKey: coreKey), let id
     guard let f else { return false }
     return !throwsErr { try Checks.sameAddStore(read: rN, of: idN, fresh: f.0, of: f.1, addedHere: here) }
   }
-  let fN = fresh(["claude-login", "default", "gmail", "notes"])
-  check(fN?.0.kind == .addStore && fN?.0.addedStore == "notes" && fN?.1?.stores.contains("gmail") == true, "an add-store made again continues the machine's new cert")
+  let fN = fresh(["claude-login", "default", "gmail", "moved"])
+  check(fN?.0.kind == .addStore && fN?.0.addedStore == "moved" && fN?.1?.stores.contains("gmail") == true, "an add-store made again continues the machine's new cert")
   check(same(fN, ["gmail"]), "…and is the same ask as the one reviewed when the batch itself added the other store")
   check(!same(fN, []), "…refused when it names a store neither the page nor the batch added")
   check(same((rN, idN), []), "the challenge reviewed is the same ask as itself")
-  check(!same(fresh(["claude-login", "default", "gmail", "notes"], mode: "auto"), ["gmail"]), "…refused with another permission mode")
+  check(!same(fresh(["claude-login", "default", "gmail", "moved"], mode: "auto"), ["gmail"]), "…refused with another permission mode")
   let rG = try? Checks.review(challenge: ch2, coreKey: coreKey)
   check(rG != nil && throwsErr { try Checks.sameAddStore(read: rN, of: idN, fresh: rG!, of: try? Checks.continues(rG!, coreKey: coreKey), addedHere: ["gmail"]) }, "…refused when it adds another store")
 } else { check(false, "a second add-store challenge read before the first went in") }
