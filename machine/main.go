@@ -105,7 +105,7 @@ func main() {
 	log.SetFlags(0)
 	log.SetPrefix("[jarvis2] ")
 	if len(os.Args) < 2 {
-		log.Fatal("usage: jarvis2-machine boot | init | stores [--json] | put-key <store> <key> [--explain <text>] < value | delete-key <store> <key> | add-store <name> | await-store <name> | downgrade <store>… | --none | allow [<holder> <duration> | --remove <holder>]")
+		log.Fatal("usage: jarvis2-machine boot | init | stores [--json] | put-key <store> <key> [--explain <text>] < value | delete-key <store> <key> | add-store <name> | await-store <name> | downgrade --keep <store>… | --drop <store>… | --none | allow [<holder> <duration> | --remove <holder>]")
 	}
 	var err error
 	switch os.Args[1] {
@@ -130,9 +130,9 @@ func main() {
 	case "delete-key":
 		err = putKeyCmd(os.Args[2:], true)
 	case "downgrade":
-		var keep []string
-		if keep, err = downgradeArgs(os.Args[2:]); err == nil {
-			err = downgrade(keep)
+		var sp downgradeSpec
+		if sp, err = downgradeArgs(os.Args[2:]); err == nil {
+			err = downgrade(sp)
 		}
 	case "agent":
 		err = agent()
@@ -957,21 +957,74 @@ func refreshSecrets(prepare func() error, pull func() (map[string]string, error)
 	return n, err
 }
 
-// downgradeArgs: the stores to keep. No names is refused rather than read as "keep none": a session that
-// meant to drop one store once dropped all of them that way; dropping everything takes --none.
-func downgradeArgs(args []string) ([]string, error) {
-	if len(args) == 1 && args[0] == "--none" {
-		return []string{}, nil
-	}
+// downgradeSpec: what `downgrade` was asked, before it is checked against the stores this session holds. The
+// mode is always spelled out (Deyao, 2026-10-15): sessions twice passed the stores they meant to keep to a command
+// that dropped what it was given (and the other way round), so bare names are refused and every name must be held.
+type downgradeSpec struct {
+	mode  string // keep | drop | none
+	names []string
+}
+
+const downgradeUsage = "downgrade --keep STORE… (keep only these) | --drop STORE… (drop these, keep the rest) | --none (drop all)"
+
+func downgradeArgs(args []string) (downgradeSpec, error) {
 	if len(args) == 0 {
-		return nil, errors.New("name every store to KEEP (e.g. downgrade default github-claude-env); --none drops them all")
+		return downgradeSpec{}, errors.New("say what to do: " + downgradeUsage)
 	}
-	for _, a := range args {
+	var sp downgradeSpec
+	switch args[0] {
+	case "--keep":
+		sp.mode = "keep"
+	case "--drop":
+		sp.mode = "drop"
+	case "--none":
+		if len(args) != 1 {
+			return downgradeSpec{}, errors.New("--none takes no store names: " + downgradeUsage)
+		}
+		return downgradeSpec{mode: "none"}, nil
+	default:
+		return downgradeSpec{}, fmt.Errorf("%s: name the mode first: %s", args[0], downgradeUsage)
+	}
+	seen := map[string]bool{}
+	for _, a := range args[1:] {
 		if strings.HasPrefix(a, "-") {
-			return nil, fmt.Errorf("unknown option %s (store names only, or --none alone)", a)
+			return downgradeSpec{}, fmt.Errorf("%s: one mode only, then store names: %s", a, downgradeUsage)
+		}
+		if !seen[a] {
+			seen[a] = true
+			sp.names = append(sp.names, a)
 		}
 	}
-	return args, nil
+	if len(sp.names) == 0 {
+		return downgradeSpec{}, fmt.Errorf("--%s needs store names: %s", sp.mode, downgradeUsage)
+	}
+	return sp, nil
+}
+
+// keepFor: the stores to keep, from what this session holds now. Every name must be held (a typo or a store
+// already gone is refused, not ignored), and --drop that would leave nothing is refused: that is --none.
+func (sp downgradeSpec) keepFor(held []string) ([]string, error) {
+	if sp.mode == "none" {
+		return []string{}, nil
+	}
+	for _, n := range sp.names {
+		if !hasStore(held, n) {
+			return nil, fmt.Errorf("%s isn't held by this session (held: %s); nothing changed", n, strings.Join(held, " "))
+		}
+	}
+	if sp.mode == "keep" {
+		return append([]string{}, sp.names...), nil
+	}
+	keep := []string{}
+	for _, h := range held {
+		if !hasStore(sp.names, h) {
+			keep = append(keep, h)
+		}
+	}
+	if len(keep) == 0 {
+		return nil, errors.New("--drop names every store this session holds; to drop them all, say --none")
+	}
+	return keep, nil
 }
 
 // downgrade: keep only the named stores, in place. A new key pair; the core's challenge signed with the old
@@ -980,11 +1033,11 @@ func downgradeArgs(args []string) ([]string, error) {
 // waiter neither pulls with the keys being replaced nor writes over the downgraded file; an add-store answered
 // between the challenge and its answer makes the challenge stale (the core takes only the newest cert), and the
 // downgrade starts again from the new cert, with a new key pair (nothing was kept from the stale try).
-func downgrade(keep []string) error {
+func downgrade(sp downgradeSpec) error {
 	return withSecretsLock(func() error {
 		var err error
 		for try := 0; try < 3; try++ {
-			if err = downgradeOnce(keep); err == nil || !strings.Contains(err.Error(), "newest") {
+			if err = downgradeOnce(sp); err == nil || !strings.Contains(err.Error(), "newest") {
 				return err
 			}
 			log.Printf("downgrade: the cert changed meanwhile (%v); again from the newest", err)
@@ -993,12 +1046,20 @@ func downgrade(keep []string) error {
 	})
 }
 
-func downgradeOnce(keep []string) error {
+func downgradeOnce(sp downgradeSpec) error {
 	coreKey, err := readTrim(coreKeyPath)
 	if err != nil {
 		return err
 	}
 	c, err := newClient()
+	if err != nil {
+		return err
+	}
+	held := certStores(c, coreKey, c.me)
+	if held == nil {
+		return errors.New("couldn't read this session's cert, so the stores it holds aren't known; nothing changed")
+	}
+	keep, err := sp.keepFor(held)
 	if err != nil {
 		return err
 	}

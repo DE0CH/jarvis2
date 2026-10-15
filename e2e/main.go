@@ -425,7 +425,7 @@ func main() {
 	}
 
 	step("downgrade in place: back to [e2e], new keys, the extra secret shredded")
-	expectOnMachine(m1, "su - claude -c 'jarvis2 downgrade e2e' >/dev/null 2>&1 && grep -c E2E_SECRET /home/claude/.secrets && grep -c E2E_EXTRA /home/claude/.secrets || true", "1\n0")
+	expectOnMachine(m1, "su - claude -c 'jarvis2 downgrade --keep e2e' >/dev/null 2>&1 && grep -c E2E_SECRET /home/claude/.secrets && grep -c E2E_EXTRA /home/claude/.secrets || true", "1\n0")
 
 	if keysCore {
 		step("a key written into e2e before the pause, its refresh not allowed: the resumed session's carried copy is behind, " +

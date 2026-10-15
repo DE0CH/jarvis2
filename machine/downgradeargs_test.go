@@ -1,18 +1,41 @@
 package main
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
-func TestDowngradeNeedsStoreNames(t *testing.T) {
-	if _, err := downgradeArgs(nil); err == nil {
-		t.Fatal("no names must be refused, not read as keep none")
+func TestDowngradeNeedsAMode(t *testing.T) {
+	for _, bad := range [][]string{nil, {"default"}, {"default", "tunnel"}, {"--all"}, {"--keep"}, {"--drop"},
+		{"--none", "default"}, {"--keep", "a", "--drop", "b"}} {
+		if _, err := downgradeArgs(bad); err == nil {
+			t.Fatalf("%q must be refused", bad)
+		}
 	}
-	if _, err := downgradeArgs([]string{"--all"}); err == nil {
-		t.Fatal("an unknown option must be refused")
+	held := []string{"default", "github-claude-env", "infra", "tunnel"}
+	keep := func(args ...string) ([]string, error) {
+		sp, err := downgradeArgs(args)
+		if err != nil {
+			t.Fatalf("%q: %v", args, err)
+		}
+		return sp.keepFor(held)
 	}
-	if k, err := downgradeArgs([]string{"--none"}); err != nil || len(k) != 0 || k == nil {
+	if k, err := keep("--keep", "default", "tunnel"); err != nil || strings.Join(k, " ") != "default tunnel" {
+		t.Fatalf("--keep: %v %v", k, err)
+	}
+	if k, err := keep("--drop", "infra"); err != nil || strings.Join(k, " ") != "default github-claude-env tunnel" {
+		t.Fatalf("--drop: %v %v", k, err)
+	}
+	if k, err := keep("--none"); err != nil || k == nil || len(k) != 0 {
 		t.Fatalf("--none: %v %v", k, err)
 	}
-	if k, err := downgradeArgs([]string{"default", "tunnel"}); err != nil || len(k) != 2 {
-		t.Fatalf("names: %v %v", k, err)
+	if _, err := keep("--drop", "identity"); err == nil {
+		t.Fatal("dropping a store not held must be refused")
+	}
+	if _, err := keep("--keep", "default", "gmail"); err == nil {
+		t.Fatal("keeping a store not held must be refused")
+	}
+	if _, err := keep("--drop", "default", "github-claude-env", "infra", "tunnel"); err == nil {
+		t.Fatal("--drop of every held store must be refused (that is --none)")
 	}
 }

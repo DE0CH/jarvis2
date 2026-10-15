@@ -1313,3 +1313,13 @@ Deyao: several actions approved together with ONE Face ID; the caller groups the
      approval page inside the sheet (What you sign (exact), Face ID) and comes back to it. The web page can't sign: it
      shows each follow-up and waits for the iPhone app's Face ID (or denies it). *Not chosen*: the sheet watching the
      Inbox for any approval of the call's session (an unrelated approval would be shown as the call's), and a fixed wait.
+
+## Downgrade names its mode, 2026-10-15
+
+167. **`jarvis2 downgrade` takes `--keep STORE…`, `--drop STORE…` or `--none`; bare store names are refused**
+     (Deyao, 2026-10-15). Twice a session meant one of keep/drop and ran the other (the command read its names as
+     the keep-set, the claude-env skill's `downgrade.sh` as the drop-set), and the session lost every store it wanted.
+     Now the mode is always spelled out, every name must be a store the session's newest cert holds (a typo or a
+     store already gone changes nothing), and `--drop` that would leave nothing is refused (that is `--none`). The
+     keep-set is worked out from the cert inside each try, so a retry after an add-store uses the new list.
+     Session images from before this keep the old reading (names = keep); the claude-env skill's `downgrade.sh` is gone.
