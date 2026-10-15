@@ -35,10 +35,16 @@ struct NewSessionView: View {
   @State private var content: Set<String> = []
   /// the router's store rows (each key's writer): the keys sessions wrote into the stores Start unlocks are shown
   @State private var storeRows: [StoreRowDTO] = []
+  /// the Claude accounts (GET api/claude-accounts, router/claudeaccounts.go): the default pre-picked; the session keeps it
+  @State private var accounts: [JSON]?
+  @State private var account = ""
 
   static let defaultRepo = "DE0CH/claude-env"
   private var hidden: Set<String> { model.harnessHidden }
-  private var offered: [StoreView] { stores.filter { !$0.isCore && !hidden.contains($0.name) } }
+  /// not the core's own, not a harness's, and not `claude`, the one shared login's old store (accounts replaced it)
+  private var offered: [StoreView] { stores.filter { !$0.isCore && !hidden.contains($0.name) && $0.name != "claude" } }
+  /// the harnesses that run on a Claude account (policy/stores.json `claudeAccount`)
+  private var takesAccount: Bool { harness == "claude" || harness == "openclaw" }
   /// every sensitive store the session would get: picked here, or brought by the harness
   private var pickedSensitive: [String] { stores.filter { $0.sensitive && allStores.contains($0.name) }.map(\.name) }
   private var models: [Choice] { model.models.filter { ($0.harness ?? "claude") == harness } }
@@ -55,6 +61,7 @@ struct NewSessionView: View {
       harnessStoresSection
       SessionWritesSection(writes: SessionWrites.from(storeRows, stores: toUnlock))
       harnessSection
+      accountSection
       reposSection
       contentSection
       modeSection
@@ -144,6 +151,28 @@ struct NewSessionView: View {
         CheckRow(on: harness == h.id, id: "secure-harness-\(h.id)", action: { harness = h.id }) {
           VStack(alignment: .leading) { Text(h.title); Text(h.sub).font(.footnote).foregroundStyle(Color.secondary) }
         }
+      }
+    }
+  }
+
+  @ViewBuilder private var accountSection: some View {
+    if takesAccount {
+      Section {
+        if let accounts {
+          if accounts.isEmpty { Text("No Claude account yet (Settings): the session starts logged out.").foregroundStyle(.secondary) }
+          ForEach(accounts, id: \.self) { a in
+            let store = a["store"].string ?? ""
+            CheckRow(on: account == store, id: "ns-account-\(store)", action: { account = store }) {
+              VStack(alignment: .leading) {
+                Text(store + (a["default"].bool == true ? " (default)" : ""))
+                Text([a["email"].text ?? "not signed in", a["needLogin"].bool == true ? "Re-login needed" : ""].filter { !$0.isEmpty }.joined(separator: " · "))
+                  .font(.footnote).foregroundStyle(Color.secondary)
+              }
+            }
+          }
+        } else { ProgressView() }
+      } header: { Text("Claude account") } footer: {
+        Text("The session keeps this account; it shows up in that account's Claude app.")
       }
     }
   }
@@ -255,6 +284,10 @@ struct NewSessionView: View {
     } catch { if !loaded { loadError = errText(error) } }
     if model.models.isEmpty { await model.loadLists() }
     contentStores = (try? await RouterClient.shared.contentStores()) ?? []
+    if let l = try? await RouterClient.shared.get("api/claude-accounts") {
+      accounts = l["accounts"].array
+      if account.isEmpty { account = l["default"].string ?? "" }
+    } else { accounts = [] }
     storeRows = (try? await RouterClient.shared.storeRows()) ?? []
     pickModel()
     defaultRepo()
@@ -273,6 +306,7 @@ struct NewSessionView: View {
                                  "prompt": trimmedPrompt, "model": modelId, "size": size, "oneShot": oneShot,
                                  "autoPause": !oneShot && autoPause, "repos": chosen.map(\.url).joined(separator: ","), "apiProxy": apiProxy]
       if !content.isEmpty { body["content"] = content.sorted() }
+      if takesAccount && !account.isEmpty { body["account"] = account }
       if !attached.isEmpty { body["attachments"] = ["uploadId": rid, "files": attached.map { ["name": $0.name] }] }
       busy = "Requesting…"
       try await RouterClient.shared.call("POST", "api/sessions", body)

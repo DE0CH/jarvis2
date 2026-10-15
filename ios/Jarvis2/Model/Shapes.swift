@@ -13,6 +13,8 @@ struct Session: Identifiable, Equatable, Hashable {
   var resumable: Bool { (state == "paused" || state == "failed") && noSnapshot == nil }
   var status: String? { j["status"].text }
   var harness: String { j["harness"].text ?? "claude" }
+  /// the Claude account it runs on (router/claudeaccounts.go), fixed when it was made
+  var claudeAccount: String? { j["claudeAccount"].text }
   var model: String? { j["model"].text }
   var region: String? { j["region"].text }
   var guest: String? { j["guest"].text }

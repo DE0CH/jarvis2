@@ -132,6 +132,7 @@ private struct SessionDetailList: View {
         let own = m.stores(policy: model.policy)
         LabeledContent("Stores", value: own.isEmpty ? "none" : own.joined(separator: ", "))
         LabeledContent("Harness", value: Fmt.harness(m.harness))
+        if let acct = m.claudeAccount { LabeledContent("Claude account", value: acct).accessibilityIdentifier("session-claude-account") }
         if let mo = m.model { LabeledContent("Model", value: model.models.first { $0.id == mo }?.label ?? mo) }
         LabeledContent("Permission mode", value: m.permissionMode == "bypass" ? "bypass (no prompts)" : "auto")
         if let r = m.region { LabeledContent("Region", value: Fmt.region[r] ?? r) }
