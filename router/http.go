@@ -147,7 +147,7 @@ func (r *Router) buildHandlers() {
 				"attention": flyAttentionCount([]flyOrgView{o})})
 		}
 		writeJSON(w, 200, map[string]any{"secrets": present, "sessionImage": r.cfg.SessionImage, "coreUp": coreErr == nil, "version": os.Getenv("VERSION"), "githubRepos": gh, "flyOrgs": flyOrgs,
-			"move": moveStatusNow(), "backup": backupStatus(), "core": r.nextCoreStatus()})
+			"move": moveStatusNow(), "backup": backupStatus(), "core": r.nextCoreStatus(), "process": processStatus()})
 	}))
 	setup("GET /setup/identity", "GET", "/identity")
 	setup("POST /setup/stores", "POST", "/stores")
