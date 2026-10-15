@@ -854,17 +854,16 @@ iCloud index and leases (decided while Deyao was away; the safe, reversible defa
 Deyao: several actions approved together with ONE Face ID; the caller groups them through the API and gives a summary
 (its unverified words, shown above every item's signed details); nothing excluded; Deny works on the whole batch.
 
-140. **One Face ID, every item signed as alone; no core change** (supersedes 124). The app takes Face ID once
-     (`PhoneKeys.authorize`: both Enclave keys used once on a fresh `LAContext`, a signature over a fixed text no
-     verifier accepts and a share with a throwaway key, both discarded) and passes that context
+140. **One Face ID, every item signed as alone; no core change** (supersedes 124). The app evaluates Face ID once
+     (`PhoneKeys.authorize`: `LAContext.evaluatePolicy(.deviceOwnerAuthenticationWithBiometrics)`) and passes that context
      to every Secure Enclave use of the batch (`SecureEnclave.P256…PrivateKey(dataRepresentation:authenticationContext:)`),
      so the Enclave asks no second time; the keys stay `.biometryCurrentSet`. Each item is then signed and sent exactly as
      from its own page (approvals' core challenges, grant texts, deploy-key begin documents, unlocks' shares), so the core
      verifies each one unchanged. The simulator does its Face ID stand-in once per batch. The replica proves the one-Face-ID
-     path on the simulator (software keys) only. On Deyao's iPhone a context that had only run
-     `evaluatePolicy(.deviceOwnerAuthenticationWithBiometrics)` signed the batch's first item and the rest failed
-     (2026-10-15); a context the keys themselves authenticated is what one page's `signAndShares` (New session's Start:
-     a signature and several shares under one Face ID) has always reused. Change: a core primitive approving N challenges from one signature (a Recover).
+     path on the simulator (software keys) only; on Deyao's iPhone the evaluated context opened the keys for every item
+     (169: batch b986f9a3177e8d687, two deploy keys signed 1.3 s apart under one Face ID). 0e1f12f's guess that it
+     opened them for the first item only was wrong and is reverted (169). Change: a core primitive approving N
+     challenges from one signature (a Recover).
 141. **Items are read and checked before Face ID; each is signed and sent in order after it.** A batch page reads every
      item as its own page would (the same Checks: the core key, line pins, the session's cert, CI's image signature, the
      grant's draft checked field for field before signing) and offers Allow all only when every item is readable and
@@ -1329,3 +1328,37 @@ Deyao: several actions approved together with ONE Face ID; the caller groups the
      replicas): at up to 2 GiB with ffmpeg it can't sit beside the control plane on a 4 GiB box. *Not chosen*: a
      PriorityClass or a ResourceQuota for the other services — both need permissions the bootstrap doesn't give Flux
      (admin in the three namespaces only, nothing cluster-scoped; a change means a box rebuild).
+
+## Batch Allow all: every add-store after the first failed, 2026-10-15
+
+169. **A waiting add-store is made again from the session's new cert, and the batch page signs it as it is then**
+     (Deyao, 2026-10-15: "batch approval is buggy, sometimes only the first request succeeds signing"). *The cause*,
+     from the router's own outcomes: the failed items were add-stores for one session. Batch b820f7dcea03177ee
+     (5 add-stores for s9bda92994266c781, 02:11 UTC) went in over several rounds (item 5 alone at 02:11:50; at 02:12:15
+     two stores in and three still waiting; all five a few seconds later), and Deyao reported the bug at 02:15;
+     ba07c5f9390738c4b (2 add-stores for
+     s71b971c6bf7328de) went in 7 s apart (item 2 04:09:14, item 1 04:09:21: a Retry), while b986f9a3177e8d687 (2 deploy
+     keys, each a signature and a share) went in 1.3 s apart on one Allow all with the same app, so the Face ID context
+     was never it. Every add-store is a challenge the router makes from the session's cert when it is filed
+     (`stores = cert's + X`), and the page reads every item before the Face ID. The live core (k8s/apps/core.yaml:
+     sha-06ab2452f8ad, the held core waits for Deyao's go) answers a challenge exactly as made, so the second answer
+     named the cert both were made from and lacked the first store; `respondAddStore` refuses to store such an answer,
+     files the approval again from the newest cert and returns "another store was added to this session while this
+     approval waited: approve it again" — the failed item. One store per round, so "only the first" every time a batch
+     has two add-stores for one session; batches of other kinds (grants, deploy keys) were unaffected, hence
+     "sometimes". Reproduced by router/addstore_test.go `TestABatchOfAddStoresForOneSessionAllGoInAtOnce` (fails with
+     exactly that error without the fix). *The fix*: (1) the router: whenever a running machine gets a new cert (an
+     add-store answered, a downgrade finished) every other add-store waiting for it is made again from that cert
+     (`rebaseAddStores`), keeping the earlier challenges (`earlier`) so a phone that signed one while its page was open
+     is still answered (tried after a 403 on the current one); (2) the app's batch page reads an add-store's challenge
+     again right before signing it and signs a new one only when it is the same ask (`Checks.sameAddStore`: the same
+     store, machine, session line and title, mode, harness and settings, the store's sensitivity, and no store but
+     those the reviewed challenge named or this batch just added), once more if the router made it again during the
+     signing; an unlock reads the session's cert again for the nonce it is for (an add-store before it gives the
+     session a new cert). "What you sign (exact)" shows "Stores when asked" of the challenge reviewed; the one signed
+     may also name the stores this batch added before it (the R1 core's addOnto answers so anyway, 154). Works with
+     either core. (3) `PhoneKeys.authorize` is `evaluatePolicy` again (0e1f12f reverted: no throwaway signature with the
+     phone key). *Not chosen*: an app-only fix that re-signs after the router's "approve it again" — it works, but
+     every extra store costs a stale core answer the router throws away; a core release (the held core already answers
+     onto the newest cert) needs Deyao's go and a Recover, and the batch must work before it.
+

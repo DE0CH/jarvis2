@@ -23,6 +23,7 @@ type addStoreCore struct {
 	latest   map[string]string // machine → newest cert nonce
 	answered map[string]bool
 	n        int
+	sigs     bool // the phone's signature must cover the challenge: "sig:" + its nonce (phoneSig)
 }
 
 type fakeCert struct {
@@ -41,6 +42,7 @@ func (c *addStoreCore) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		Stores      []string `json:"stores"`
 		Challenge   *Doc     `json:"challenge"`
 		Current     *Doc     `json:"current"`
+		Signature   string   `json:"signature"`
 	}
 	json.Unmarshal(b, &in)
 	c.mu.Lock()
@@ -84,6 +86,11 @@ func (c *addStoreCore) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		var pc fakeCert
 		ch.Request.Predecessor.Decode(&pc)
 		m := ch.Request.Machine["id"]
+		if c.sigs && in.Signature != "sig:"+ch.Nonce {
+			w.WriteHeader(403)
+			doc(map[string]string{"error": "the iPhone's signature doesn't cover this challenge"})
+			return
+		}
 		if c.answered[ch.Nonce] {
 			refuse("this challenge was already answered")
 			return
@@ -109,6 +116,11 @@ func (c *addStoreCore) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 }
 
 func addStoreRouter(t *testing.T, held bool) *Router {
+	r, _ := addStoreRouterCore(t, held)
+	return r
+}
+
+func addStoreRouterCore(t *testing.T, held bool) (*Router, *addStoreCore) {
 	r := newTestRouter(t)
 	cc := &addStoreCore{held: held, latest: map[string]string{"m1": "c0"}, answered: map[string]bool{}}
 	s := httptest.NewServer(cc)
@@ -119,7 +131,18 @@ func addStoreRouter(t *testing.T, held bool) *Router {
 		d.Sessions["s1"] = &Session{ID: "s1", State: "started", MachineID: "m1", Harness: "claude", Cert: &Doc{Payload: string(p)}, Stores: []string{"default"}}
 		d.Machines["m1"] = "s1"
 	})
-	return r
+	return r, cc
+}
+
+// phoneSig: the phone's signature over the approval's challenge as the phone reads it now (the stand-in core's form)
+func phoneSig(t *testing.T, r *Router, id string) string {
+	t.Helper()
+	var ch struct{ Nonce string }
+	r.st.Do(func(d *persisted) { d.Approvals[id].Challenge.Decode(&ch) })
+	if ch.Nonce == "" {
+		t.Fatalf("approval %s has no challenge", id)
+	}
+	return "sig:" + ch.Nonce
 }
 
 // fileTwo: identity and yyc asked for, both pending before either is answered → their approval ids
@@ -192,21 +215,85 @@ func TestTwoPendingAddStoresBothApprovedEndInTheSession(t *testing.T) {
 	}
 }
 
-// The held core answers the stale one from the cert it was made from: the router doesn't store that answer, files
-// the approval again from the newest cert, and the next answer ends with both.
+// The held core answers a stale challenge from the cert it was made from: the router doesn't store that answer, files
+// the approval again from the newest cert, and the next answer ends with both. (A phone that signed identity's first
+// challenge before yyc went in: rebaseAddStores had already made identity's again, so the router tries the current
+// challenge, then the one the phone signed.)
 func TestAStaleAnswerFromTheHeldCoreDropsNoStore(t *testing.T) {
-	r := addStoreRouter(t, true)
+	r, cc := addStoreRouterCore(t, true)
+	cc.sigs = true
 	ids := fileTwo(t, r)
-	if _, _, err := r.Respond(ids["yyc"], "sig"); err != nil {
+	stale := phoneSig(t, r, ids["identity"])
+	if _, _, err := r.Respond(ids["yyc"], phoneSig(t, r, ids["yyc"])); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := r.Respond(ids["identity"], "sig"); err == nil {
+	if _, _, err := r.Respond(ids["identity"], stale); err == nil {
 		t.Fatal("a stale answer was taken")
 	}
 	if got := sessionStores(r); !equalSets(got, []string{"default", "yyc"}) {
 		t.Fatalf("the stale answer dropped a store: %v", got)
 	}
-	if _, _, err := r.Respond(ids["identity"], "sig"); err != nil {
+	if _, _, err := r.Respond(ids["identity"], phoneSig(t, r, ids["identity"])); err != nil {
+		t.Fatal(err)
+	}
+	if got := sessionStores(r); !equalSets(got, []string{"default", "identity", "yyc"}) {
+		t.Fatalf("the session ends with %v", got)
+	}
+}
+
+// A batch of add-stores for one session, allowed together (Deyao, 2026-10-15: "sometimes only the first request
+// succeeds signing"): the phone signs each item's challenge as it reads it right before signing, one after another.
+// With the live core (answers exactly as made) every item after the first used to fail: its challenge was made from
+// the cert the first one replaced. Now each answer makes the others' challenges again from the new cert, so every
+// item goes in on the first Allow all, with either core and in any order.
+func TestABatchOfAddStoresForOneSessionAllGoInAtOnce(t *testing.T) {
+	stores := []string{"identity", "claude", "tunnel", "github-claude-env", "yyc"}
+	for _, held := range []bool{true, false} {
+		for _, reverse := range []bool{false, true} {
+			r, cc := addStoreRouterCore(t, held)
+			cc.sigs = true
+			ids := map[string]string{}
+			for _, s := range stores {
+				if err := r.AddStoreFrom("m1", s, Origin{Caller: Caller{Kind: "session", Session: "s1"}}, "", ""); err != nil {
+					t.Fatal(err)
+				}
+			}
+			r.st.Do(func(d *persisted) {
+				for id, a := range d.Approvals {
+					ids[a.Options["store"]] = id
+				}
+			})
+			order := append([]string{}, stores...)
+			if reverse {
+				sort.Sort(sort.Reverse(sort.StringSlice(order)))
+			}
+			for _, s := range order {
+				if _, _, err := r.Respond(ids[s], phoneSig(t, r, ids[s])); err != nil {
+					t.Fatalf("held=%v reverse=%v: %s: %v", held, reverse, s, err)
+				}
+			}
+			want := append([]string{"default"}, stores...)
+			if got := sessionStores(r); !equalSets(got, want) {
+				t.Fatalf("held=%v reverse=%v: the session ends with %v", held, reverse, got)
+			}
+		}
+	}
+}
+
+// The single Add store page read identity's challenge, then yyc went in (and identity's challenge was made again):
+// the phone's signature over the challenge it read is still answered, by the core that answers onto the newest cert.
+func TestAnAnswerToTheChallengeBeforeTheRebaseIsStillTaken(t *testing.T) {
+	r, cc := addStoreRouterCore(t, false)
+	cc.sigs = true
+	ids := fileTwo(t, r)
+	read := phoneSig(t, r, ids["identity"])
+	if _, _, err := r.Respond(ids["yyc"], phoneSig(t, r, ids["yyc"])); err != nil {
+		t.Fatal(err)
+	}
+	if phoneSig(t, r, ids["identity"]) == read {
+		t.Fatal("identity's challenge wasn't made again from the new cert")
+	}
+	if _, _, err := r.Respond(ids["identity"], read); err != nil {
 		t.Fatal(err)
 	}
 	if got := sessionStores(r); !equalSets(got, []string{"default", "identity", "yyc"}) {

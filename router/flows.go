@@ -590,9 +590,13 @@ func (r *Router) respondAddStore(a *Approval, signature string) (*Doc, string, e
 	defer unlock()
 	var cur *Doc
 	var have []string
+	chs := []*Doc{a.Challenge}
 	r.st.Do(func(d *persisted) {
 		if s := d.Sessions[a.Session]; s != nil && s.MachineID == a.Machine && s.State == "started" {
 			cur, have = s.Cert, append([]string{}, s.Stores...)
+		}
+		if x := d.Approvals[a.ID]; x != nil { // as it is now that this answer holds the machine's lock
+			chs = append([]*Doc{x.Challenge}, x.Earlier...)
 		}
 	})
 	if cur == nil {
@@ -608,8 +612,17 @@ func (r *Router) respondAddStore(a *Approval, signature string) (*Doc, string, e
 		return nil, "", err
 	}
 	defer done()
-	in := map[string]any{"challenge": a.Challenge, "signature": signature, "current": cur, "carry": r.readCarry(a.Machine)}
-	ans, extra, err := r.core.CallAnswer("/approve/by-phone", in)
+	// the phone signed the challenge it read: the current one, or one rebaseAddStores replaced while its page was open
+	var ans *Doc
+	var extra *Answer
+	for i, ch := range chs {
+		in := map[string]any{"challenge": ch, "signature": signature, "current": cur, "carry": r.readCarry(a.Machine)}
+		ans, extra, err = r.core.CallAnswer("/approve/by-phone", in)
+		var ce *CoreError
+		if err == nil || !errors.As(err, &ce) || ce.Status != 403 || i == len(chs)-1 {
+			break
+		}
+	}
 	if err != nil {
 		var ce *CoreError
 		if errors.As(err, &ce) && ce.Status == 409 && containsString(have, store) {
@@ -657,7 +670,59 @@ func (r *Router) respondAddStore(a *Approval, signature string) (*Doc, string, e
 		}
 	})
 	r.carryAfter(a.Machine, a.Machine, ans, extra) // its carried stores go on; the added one comes from its unlock
+	r.rebaseAddStores(a.Machine, ans)
 	return ans, a.Session, nil
+}
+
+// rebaseAddStores: the machine has a new cert (an add-store answered, a downgrade finished), so every other add-store
+// still waiting for it is made again from that cert: its challenge is then "the newest cert's stores plus X", the one
+// the live core (sha-06ab2452f8ad answers a challenge exactly as made) answers without losing the store just added.
+// Before this, a batch of two add-stores for one session (Allow all signs every item it read before the Face ID)
+// had its second answered from the cert both were filed against: respondAddStore refused to store it and the phone
+// showed the item failed (Deyao, 2026-10-15: "sometimes only the first request succeeds signing"). The phone reads an
+// add-store's challenge again right before signing it (BatchReviewView) and checks it is the same ask. Called under
+// the machine's selfSuccessionLock; a challenge the core won't make stays as it was (respondAddStore still refuses a
+// stale answer, and files it again then).
+func (r *Router) rebaseAddStores(machine string, cert *Doc) {
+	var c struct {
+		Stores []string `json:"stores"`
+	}
+	if cert == nil || cert.Decode(&c) != nil {
+		return
+	}
+	type waiting struct{ id, store string }
+	var todo []waiting
+	harness, config := "", ""
+	r.st.Do(func(d *persisted) {
+		for id, x := range d.Approvals {
+			if x.Kind == "add-store" && x.Machine == machine {
+				todo = append(todo, waiting{id, x.Options["store"]})
+			}
+		}
+		if s := d.Sessions[d.Machines[machine]]; s != nil {
+			harness, config = s.Harness, lineConfig(s)
+		}
+	})
+	sort.Slice(todo, func(i, j int) bool { return todo[i].id < todo[j].id })
+	for _, w := range todo {
+		if w.store == "" || containsString(c.Stores, w.store) {
+			continue // already in (or nothing named): respondAddStore answers it as done
+		}
+		ch, err := r.succession(cert, machine, sortedSet(append(append([]string{}, c.Stores...), w.store)), harness, certMode(cert), "", config, "")
+		if err != nil {
+			log.Printf("add-store %s for %s: making it again from the new cert failed: %v", w.store, machine, err)
+			continue
+		}
+		r.st.Do(func(d *persisted) {
+			if x := d.Approvals[w.id]; x != nil {
+				x.Earlier = append([]*Doc{x.Challenge}, x.Earlier...)
+				if len(x.Earlier) > batchMaxItems {
+					x.Earlier = x.Earlier[:batchMaxItems]
+				}
+				x.Challenge = ch
+			}
+		})
+	}
 }
 
 func containsString(list []string, x string) bool {
@@ -1109,6 +1174,7 @@ func (r *Router) DowngradeFinish(machine string, challenge *Doc, signature strin
 		}
 	})
 	r.carryAfter(machine, machine, cert, ans) // the dropped stores leave the carried secrets at once
+	r.rebaseAddStores(machine, cert)          // a waiting add-store no longer brings back what the downgrade dropped
 	return cert, nil
 }
 

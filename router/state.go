@@ -51,15 +51,18 @@ type Session struct {
 }
 
 type Approval struct {
-	ID        string            `json:"id"`
-	Kind      string            `json:"kind"` // new-session | resume-upgrade | add-store
-	Created   time.Time         `json:"created"`
-	Session   string            `json:"session"`
-	Machine   string            `json:"machine"`
-	Label     string            `json:"label"`
-	Challenge *Doc              `json:"challenge"`
-	BurnCert  *Doc              `json:"burnCert,omitempty"`
-	Options   map[string]string `json:"options,omitempty"`
+	ID        string    `json:"id"`
+	Kind      string    `json:"kind"` // new-session | resume-upgrade | add-store
+	Created   time.Time `json:"created"`
+	Session   string    `json:"session"`
+	Machine   string    `json:"machine"`
+	Label     string    `json:"label"`
+	Challenge *Doc      `json:"challenge"`
+	// an add-store's challenges made before its current one (flows.go rebaseAddStores, newest first): a phone that
+	// signed one of them while its page was open is still answered
+	Earlier  []*Doc            `json:"earlier,omitempty"`
+	BurnCert *Doc              `json:"burnCert,omitempty"`
+	Options  map[string]string `json:"options,omitempty"`
 	// inbox.go: who asked for it (from the caller's credential) and the call it made, and the caller's own words
 	Origin      *Origin `json:"origin,omitempty"`
 	Explanation string  `json:"explanation,omitempty"`

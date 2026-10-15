@@ -6,14 +6,28 @@
 // own text, each deploy key's own begin document): the core and the grant store verify each one unchanged. An item
 // that fails is shown failed; the ones before it already went through (they left the Inbox), so Retry reads the
 // failed ones again and asks for one more Face ID. Deny all drops the batch; an item can be denied on its own.
+//
+// Items of one batch can depend on each other through the session's cert: an add-store is a challenge made from the
+// session's cert, and when another item puts a store in first, the router makes the waiting add-store again from the
+// new cert (router flows.go rebaseAddStores). So an add-store reads its challenge again right before it is signed,
+// and signs the new one only when it is the same ask (Checks.sameAddStore); an unlock reads the session's cert again
+// for the nonce it is for. Before this (2026-10-15), every add-store after the first of a session failed with "another
+// store was added to this session while this approval waited" on the live core.
 import SwiftUI
+
+/// what the items signed so far in this Allow all did, for the ones after them
+@MainActor
+final class BatchProgress {
+  /// stores added to the session by this batch's add-stores (a later add-store's challenge may name them)
+  var addedStores: Set<String> = []
+}
 
 /// one item, read and checked: what it signs and how to sign it under the batch's Face ID
 struct BatchPrepared {
   let facts: [SignedFact]
   /// why it can't be signed (a short fixed label), as its own page would refuse it
   var refusal: String?
-  let run: @MainActor (PhoneAuth) async throws -> Void
+  let run: @MainActor (PhoneAuth, BatchProgress) async throws -> Void
 }
 
 @MainActor
@@ -53,19 +67,47 @@ enum BatchPrepare {
     let toUnlock = want.filter { n in doc.stores.contains { $0.name == n && !$0.unlocked && !$0.empty } }
     let writes = await SessionWrites.load(toUnlock)
     facts += SignedAction.alsoUnlocks(toUnlock, scoped: true) + SessionWrites.fact(writes)
-    let payload = x.challenge.payload, nonce = rv.challenge.nonce
-    return BatchPrepared(facts: facts) { auth in
-      let reason = "Approve"
-      let sig: Data
-      if toUnlock.isEmpty {
-        sig = try await offMain { try PhoneKeys.shared.sign(payload, reason: reason, auth: auth) }
-      } else {
-        guard let s = try await StoreUnlock.signAndUnlock(payload: payload, stores: toUnlock, reason: reason, for: nonce, shown: writes, auth: auth) else { throw TrustError.stale("signature") }
-        sig = s
+    let payload = x.challenge.payload
+    return BatchPrepared(facts: facts) { auth, progress in
+      /// one signature over this challenge and its answer
+      func answer(_ r: Checks.Reviewed, _ text: String) async throws {
+        let reason = "Approve"
+        let sig: Data
+        if toUnlock.isEmpty {
+          sig = try await offMain { try PhoneKeys.shared.sign(text, reason: reason, auth: auth) }
+        } else {
+          guard let s = try await StoreUnlock.signAndUnlock(payload: text, stores: toUnlock, reason: reason, for: r.challenge.nonce, shown: writes, auth: auth) else { throw TrustError.stale("signature") }
+          sig = s
+        }
+        let ans = try await RouterClient.shared.respond(approvalId, signature: sig)
+        try Checks.answerFor(r, answer: ans.answer, coreKey: try CoreTrust.key())
       }
-      let ans = try await RouterClient.shared.respond(approvalId, signature: sig)
-      try Checks.answerFor(rv, answer: ans.answer, coreKey: try CoreTrust.key())
+      guard rv.kind == .addStore else { return try await answer(rv, payload) }
+      // an add-store: the challenge as it is now (another item may have put a store in first), if it is the same ask
+      var (r, text) = try await currentAddStore(approvalId, read: rv, of: id, readPayload: payload, addedHere: progress.addedStores)
+      do { try await answer(r, text) }
+      catch {
+        // made again while this one was being signed (an older router files it again only on a stale answer): once more
+        guard let again = try? await currentAddStore(approvalId, read: rv, of: id, readPayload: payload, addedHere: progress.addedStores),
+              again.1 != text else { throw error }
+        (r, text) = again
+        try await answer(r, text)
+      }
+      if let a = rv.addedStore { progress.addedStores.insert(a) }
     }
+  }
+
+  /// an add-store's challenge as the router has it now: the one reviewed, or one made again from the session's newer
+  /// cert that asks exactly the same (Checks.sameAddStore)
+  static func currentAddStore(_ approvalId: String, read rv: Checks.Reviewed, of id: LineIdentity?, readPayload: String,
+                              addedHere: Set<String>) async throws -> (Checks.Reviewed, String) {
+    guard let x = try await RouterClient.shared.approval(approvalId) else { throw TrustError.stale("the approval (answered or rejected elsewhere)") }
+    if x.challenge.payload == readPayload { return (rv, readPayload) }
+    let r = try Checks.review(challenge: x.challenge, coreKey: try CoreTrust.key())
+    let fid = try Checks.continues(r, coreKey: try CoreTrust.key())
+    if let fid, let sid = x.session { try LinePins.check(session: sid, line: fid.line) }
+    try Checks.sameAddStore(read: rv, of: id, fresh: r, of: fid, addedHere: addedHere)
+    return (r, x.challenge.payload)
   }
 
   /// as GrantReviewView.load / allow
@@ -85,7 +127,7 @@ enum BatchPrepare {
     else if isRule && c.sensitive == true { refusal = "Sensitive session: no standing rule" }
     else if holderKeys[holder] == nil { refusal = "No key listed for this feature" }
     let facts = SignedAction.grant(feature: Holder.title(holder), allows: Holder.sub(holder), minutes: isRule ? nil : minutes, until: until, line: c.line, of: id)
-    return BatchPrepared(facts: facts, refusal: refusal) { auth in
+    return BatchPrepared(facts: facts, refusal: refusal) { auth, _ in
       guard let hk = holderKeys[holder] else { throw TrustError.stale("the feature's key") }
       let phone = try PhoneKeys.shared.publicKeys().signingKey
       var body: [String: Any] = ["holder": holder, "kind": ask.kind]
@@ -114,8 +156,17 @@ enum BatchPrepare {
     let certStores = (c.stores ?? []).filter { $0 != StoreView.coreStore }
     let locked = certStores.filter { n in doc.stores.contains { $0.name == n && !$0.unlocked && !$0.empty } }
     let writes = await SessionWrites.load(locked)
-    return BatchPrepared(facts: SignedAction.unlock(stores: locked, session: id, scoped: scoped) + SessionWrites.fact(writes), refusal: locked.isEmpty ? "Nothing locked" : nil) { auth in
-      try await StoreUnlock.signAndUnlock(payload: nil, stores: locked, reason: "Unlock \(locked.joined(separator: ", "))", for: nonce, shown: writes, auth: auth)
+    return BatchPrepared(facts: SignedAction.unlock(stores: locked, session: id, scoped: scoped) + SessionWrites.fact(writes), refusal: locked.isEmpty ? "Nothing locked" : nil) { auth, _ in
+      // for the session's cert as it is now: an add-store earlier in the batch gives it a new cert (and nonce)
+      var forNonce = nonce, stores = locked
+      if scoped {
+        let now = try await RouterClient.shared.sessionCert(sessionId)
+        guard now.line == c.line else { throw TrustError.stale("the session's cert") }
+        forNonce = now.nonce
+        stores = locked.filter { (now.stores ?? []).contains($0) }
+      }
+      guard !stores.isEmpty else { return }
+      _ = try await StoreUnlock.signAndUnlock(payload: nil, stores: stores, reason: "Unlock \(stores.joined(separator: ", "))", for: forNonce, shown: writes, auth: auth)
     }
   }
 
@@ -125,7 +176,7 @@ enum BatchPrepare {
     let r = try await RouterClient.shared.deployKeyBegin(action: action, repo: repo, sensitive: want)
     let payload = r.doc.payload, b = r.begin
     let e = b.e
-    return BatchPrepared(facts: SignedAction.deployKey(b)) { auth in
+    return BatchPrepared(facts: SignedAction.deployKey(b)) { auth, _ in
       let reason = (action == "add" ? "Add repo" : "Remove repo") + ": \(b.repo)"
       let x = try await offMain { try PhoneKeys.shared.signAndShare(payload, e: e, reason: reason, auth: auth) }
       _ = try await RouterClient.shared.deployKeyFinish(b, signature: x.signature, share: x.share)
@@ -295,10 +346,11 @@ struct BatchReviewView: View {
       let n = runs.count
       let auth = try await offMain { try PhoneKeys.shared.authorize(reason: "Allow \(n) requests") }
       defer { auth.invalidate() }
+      let progress = BatchProgress()
       for (i, (it, p)) in runs.enumerated() {
         busy = "Signing \(i + 1) of \(n)…"
         do {
-          try await p.run(auth)
+          try await p.run(auth, progress)
           outcome[it.id] = .success(())
           if !it.isApproval { await RouterClient.shared.inboxDone(it.id) }
         } catch { outcome[it.id] = .failure(error) }

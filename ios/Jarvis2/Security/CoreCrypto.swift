@@ -528,6 +528,29 @@ extension Checks {
     return LineIdentity(cert: c)
   }
 
+  /// An add-store's challenge made again while its batch was being signed (router flows.go rebaseAddStores: another
+  /// item of the batch put a store in the session first, so the router asks the core again from the session's new
+  /// cert): `fresh` must be the very ask Deyao reviewed (`read`) — the same store added, to the same running machine of
+  /// the same session, with the same settings — continuing a newer cert of that session, and every other store it
+  /// names one the reviewed challenge already named or one this batch has just added (`addedHere`). The core makes it
+  /// only as "that cert's stores plus one".
+  static func sameAddStore(read: Reviewed, of readId: LineIdentity?, fresh: Reviewed, of freshId: LineIdentity?, addedHere: Set<String>) throws {
+    guard read.kind == .addStore, fresh.kind == .addStore, let added = read.addedStore, !added.isEmpty else { throw TrustError.mismatch("not an added store") }
+    guard fresh.addedStore == added else { throw TrustError.mismatch("another store than the one reviewed") }
+    guard let m = read.challenge.request.machine?.id, fresh.challenge.request.machine?.id == m else { throw TrustError.mismatch("another machine than the one reviewed") }
+    guard let a = readId, let b = freshId, a.line == b.line, a.machine == b.machine, a.label == b.label, a.prompt == b.prompt else {
+      throw TrustError.mismatch("another session than the one reviewed")
+    }
+    let ro = read.challenge.request.options, fo = fresh.challenge.request.options
+    guard fresh.harness == read.harness, fresh.permissionMode == read.permissionMode, (fo.config ?? "") == (ro.config ?? ""), (fo.once ?? "") == (ro.once ?? "") else {
+      throw TrustError.mismatch("other settings than the ones reviewed")
+    }
+    guard fresh.sensitive.contains(added) == read.sensitive.contains(added) else { throw TrustError.mismatch("the store's sensitivity changed") }
+    guard fresh.stores.contains(added), Set(fresh.stores).subtracting([added]).isSubset(of: Set(read.stores).union(addedHere)) else {
+      throw TrustError.mismatch("stores this page didn't show")
+    }
+  }
+
   /// The page was opened for a session the app knows by its New-session title (unsigned, the router's record); the
   /// signed identity must not name another one. Both untitled: nothing to compare (the page shows the line instead).
   static func sameSession(_ id: LineIdentity, expectedLabel: String?) throws {
