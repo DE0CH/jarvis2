@@ -55,16 +55,20 @@ func (r *Router) RestoreRecord(recordID, requestID string) (string, error) {
 	if rec.Archive.Signer == "" {
 		return "", errHandIndex // records.go
 	}
-	if rec.Archive.Unverified != "" {
-		return "", fmt.Errorf("this archive's snapshot is %s: it is kept on the Storage Box, but restoring it waits for the core release that carries old lines", rec.Archive.Unverified)
-	}
+	// an archive marked unverified (its snapshot wasn't named in its kill: an earlier core's machine) is checked like
+	// any other below (checkRestoreFiles: its cert by this core or an earlier core the master key claimed, the snapshot
+	// by the cert's machine), and again by the restoring machine
 	box := r.box()
 	if box == nil {
 		return "", errNoStorageBox
 	}
 	h, ok := r.policy.Harnesses[rec.Harness]
-	if !ok {
-		return "", fmt.Errorf("no harness %s in the policy", rec.Harness)
+	if !ok { // a harness the policy no longer has: restored on claude, as CreateSession falls back
+		log.Printf("restore %s: no harness %s in the policy; restoring on claude", recordID, rec.Harness)
+		rec.Harness = "claude"
+		if h, ok = r.policy.Harnesses[rec.Harness]; !ok {
+			return "", errors.New("no harness claude in the policy")
+		}
 	}
 	var kept []string // the record's stores, less the shared login's old store (its account comes as the account)
 	for _, n := range rec.Stores {

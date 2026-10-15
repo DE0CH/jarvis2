@@ -125,8 +125,9 @@ func (r *Router) pickArchiveDir(box *StorageBox, s *Session, title string) (stri
 		if !taken {
 			break
 		}
-		if i > 50 {
-			return "", fmt.Errorf("no free archive dir next to %s", base)
+		if i > 50 { // 50 of the same name: the session id makes it unique
+			dir = base + " " + s.ID
+			break
 		}
 		dir = base + " " + strconv.Itoa(i)
 	}
@@ -647,21 +648,21 @@ func (r *Router) PausedTail(id string) (*Tail, int, error) {
 	if s.ID == "" {
 		return nil, 404, errors.New("no such session")
 	}
-	if s.MachineID != "" {
-		return nil, 409, fmt.Errorf("the session is %s, not paused — its pause snapshot (if any) is out of date", s.State)
-	}
+	stale := s.MachineID != "" // running: its last pause snapshot's tail, marked stale (the live view is Remote Control)
 	m, _, _ := r.latestSnapshot(id)
 	if m == "" {
-		return nil, 404, errors.New("this session has no pause snapshot")
+		return nil, 404, errors.New("this session has no pause snapshot yet")
 	}
 	facts, err := readSnapshotFacts(r.st.snapshotPath(m))
 	if err != nil {
 		return nil, 500, err
 	}
-	if facts.Tail == nil {
-		return &Tail{Messages: []TailMessage{}}, 200, nil
+	t := Tail{Messages: []TailMessage{}}
+	if facts.Tail != nil {
+		t = *facts.Tail
 	}
-	return facts.Tail, 200, nil
+	t.Stale = stale
+	return &t, 200, nil
 }
 
 func (r *Router) record(id string) *Record {
@@ -712,7 +713,7 @@ func (r *Router) RecordTail(id string) (*Tail, int, error) {
 func (r *Router) DeleteRecord(id string, purge bool) (map[string]any, error) {
 	rec := r.record(id)
 	if rec == nil {
-		return nil, errors.New("no such previous session")
+		return map[string]any{"ok": true, "already": true}, nil // gone already: what was asked for
 	}
 	box := r.box()
 	out := map[string]any{"ok": true}

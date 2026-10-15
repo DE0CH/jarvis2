@@ -31,6 +31,8 @@ type Tail struct {
 	Title     string        `json:"title"`
 	SessionID string        `json:"sessionId"`
 	Messages  []TailMessage `json:"messages"`
+	// Stale: the session runs, so this is its last pause snapshot's tail, older than what it is doing now
+	Stale bool `json:"stale,omitempty"`
 }
 
 // injected: one pattern per tag (Go's regexp has no backreferences to pair the open and close tags)

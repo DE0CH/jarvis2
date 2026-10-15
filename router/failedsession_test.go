@@ -157,7 +157,8 @@ func TestADestroyGoesPastARefusedSnapshot(t *testing.T) {
 	if !strings.Contains(string(rg.dav.get(dir+"/session.json")), `"snapshotUnverified": "`+snapshotFromEarlierCore) {
 		t.Fatalf("session.json: %s", rg.dav.get(dir+"/session.json"))
 	}
-	if _, err := rg.r.RestoreRecord("s1", ""); err == nil || !strings.Contains(err.Error(), "earlier core") {
+	// restorable like any archive: checked by checkRestoreFiles and the restoring machine, not refused for its mark
+	if _, err := rg.r.RestoreRecord("s1", ""); err != nil && strings.Contains(err.Error(), "waits for the core release") {
 		t.Fatalf("restore: %v", err)
 	}
 }

@@ -450,8 +450,8 @@ func TestPausedTailAndChanges(t *testing.T) {
 		t.Fatalf("changes %v", ch)
 	}
 	rg.r.st.Do(func(d *persisted) { d.Sessions["s1"].MachineID, d.Sessions["s1"].State = "m1", "started" })
-	if _, st, _ := rg.r.PausedTail("s1"); st != 409 {
-		t.Fatalf("a running session's tail: %d", st)
+	if tl, st, _ := rg.r.PausedTail("s1"); st != 200 || !tl.Stale { // its last pause's tail, marked stale
+		t.Fatalf("a running session's tail: %d %+v", st, tl)
 	}
 	if ch := rg.r.Changes("s1"); ch["checked"] != false {
 		t.Fatalf("a running session without a grant: %v", ch) // Exec has no machine to answer
