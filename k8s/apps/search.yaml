@@ -18,20 +18,31 @@ spec:
 apiVersion: apps/v1
 kind: Deployment
 metadata: { name: search, namespace: jarvis2-edge }
+# Zero-downtime (CLAUDE.md "Deploy"): two serving replicas on the one SQLite file (a local-path RWO volume: every pod
+# on the node mounts it), a rolling update that starts the new copy before an old one goes (maxUnavailable 0), and
+# readiness on /readyz. Exactly one replica writes (crawl, embeddings, backup): the writer lease in the database
+# (services/search/lib/lease.js) passes on SIGTERM, or lapses 45 s after a kill. On SIGTERM a replica drops out of
+# readiness, keeps serving 5 s while the Service drops it, stops its index run, hands the lease back, finishes what it
+# serves and exits (lib/server.js shutdown). Memory: the vectors are int8 in memory, loaded page by page (234 MB peak
+# RSS at 50k chunks through a reload, where the old Float32 load reached 761 MB against the 768Mi limit and blocked
+# the event loop for tens of seconds); live numbers in GET /api/search/status (replica.memory) and the pod's logs.
+# 768Mi leaves room for the writer's transcript parsing and for the index to triple.
 spec:
-  replicas: 1
-  strategy: { type: Recreate }  # one writer on the volume
+  replicas: 2
+  minReadySeconds: 5
+  strategy: { type: RollingUpdate, rollingUpdate: { maxUnavailable: 0, maxSurge: 1 } }
   selector: { matchLabels: { app: search } }
   template:
     metadata: { labels: { app: search }, annotations: { jarvis2/secrets-rev-search: "4a4871f3ad44" } }
     spec:
-      automountServiceAccountToken: false
+      serviceAccountName: search
+      automountServiceAccountToken: true  # only to read its own pod's restarts (Role search-self below)
       enableServiceLinks: false
-      terminationGracePeriodSeconds: 10
+      terminationGracePeriodSeconds: 45
       securityContext: { fsGroup: 65532 }
       containers:
         - name: search
-          image: ghcr.io/de0ch/jarvis2-search:sha-255a625009c5@sha256:20df070b33a45bddf96a4c2418d934e6fc657574666dfea7a71628bb1840e0d8
+          image: ghcr.io/de0ch/jarvis2-search:sha-000000000000
           ports: [{ containerPort: 8090 }]
           env:
             - { name: PORT, value: "8090" }
@@ -39,13 +50,42 @@ spec:
             - { name: TMPDIR, value: /data/tmp }  # transcripts reach 100+ MB each
             - { name: INDEX_INTERVAL_S, value: "600" }
             - { name: BACKUP_INTERVAL_H, value: "24" }
+            - { name: DRAIN_MS, value: "6000" }  # > readiness period × failureThreshold
+            - { name: POD_NAME, valueFrom: { fieldRef: { fieldPath: metadata.name } } }
+            - { name: MEMORY_LIMIT, valueFrom: { resourceFieldRef: { resource: limits.memory } } }
           envFrom: [{ secretRef: { name: search-secrets } }]
           volumeMounts: [{ name: data, mountPath: /data }]
-          readinessProbe: { httpGet: { path: /healthz, port: 8090 }, initialDelaySeconds: 2, periodSeconds: 5 }
-          resources: { requests: { cpu: 50m, memory: 192Mi }, limits: { memory: 768Mi } }
+          # a new volume is seeded from the Storage Box first (minutes): the startup probe allows 15 min
+          startupProbe: { httpGet: { path: /healthz, port: 8090 }, periodSeconds: 5, failureThreshold: 180 }
+          livenessProbe: { httpGet: { path: /healthz, port: 8090 }, periodSeconds: 10, timeoutSeconds: 5, failureThreshold: 6 }
+          readinessProbe: { httpGet: { path: /readyz, port: 8090 }, periodSeconds: 2, timeoutSeconds: 3, failureThreshold: 2 }
+          resources: { requests: { cpu: 50m, memory: 320Mi }, limits: { memory: 768Mi } }
           securityContext: { runAsNonRoot: true, runAsUser: 65532, runAsGroup: 65532, allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: { drop: [ALL] }, seccompProfile: { type: RuntimeDefault } }
       volumes:
         - { name: data, persistentVolumeClaim: { claimName: search-data } }
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata: { name: search, namespace: jarvis2-edge }
+spec:
+  minAvailable: 1
+  selector: { matchLabels: { app: search } }
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata: { name: search, namespace: jarvis2-edge }
+automountServiceAccountToken: false
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata: { name: search-self, namespace: jarvis2-edge }
+rules: [{ apiGroups: [""], resources: [pods], verbs: [get] }]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata: { name: search-self, namespace: jarvis2-edge }
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: Role, name: search-self }
+subjects: [{ kind: ServiceAccount, name: search, namespace: jarvis2-edge }]
 ---
 apiVersion: v1
 kind: Service
@@ -69,3 +109,7 @@ spec:
     # the Storage Box (WebDAV) and OpenRouter
     - to: [{ ipBlock: { cidr: 0.0.0.0/0, except: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16] } }]
       ports: [{ port: 443, protocol: TCP }]
+    # the Kubernetes API (its own pod's status, lib/kube.js): the ClusterIP, and the node's apiserver port after DNAT
+    - to: [{ ipBlock: { cidr: 10.43.0.1/32 } }]
+      ports: [{ port: 443, protocol: TCP }]
+    - ports: [{ port: 6443, protocol: TCP }]

@@ -374,6 +374,10 @@ and pinned by digest like the router. Only the router reaches them (`router/sear
 and "iCloud index" for the calls. Check them from any Jarvis 2 session:
 `curl -s "$JARVIS_URL/api/search/status"` and `curl -s "$JARVIS_URL/api/icloud/status"`.
 
+- **Search has no downtime on a rollout or a crash**: two replicas share the SQLite file, the rolling update starts
+  the new one before an old one goes (`maxUnavailable: 0`), and the writer lease (`services/search/lib/lease.js`)
+  passes on SIGTERM or lapses 45 s after a kill. `GET /api/search/status` names the writer, this replica's start,
+  memory and Kubernetes restarts (`replica`), and how the previous copy ended (`previousReplica`).
 - **The iCloud index is identity-level**: sessions reach it only while they hold the `identity` store (router 403
   otherwise; Deyao's app always). Its Storage Box copy is age-encrypted; the private key is `BACKUP_AGE_KEY` in the
   `icloud-index` part and `ICLOUD_BACKUP_AGE_KEY` in the sensitive store `icloud-backup` (re-run the part from that

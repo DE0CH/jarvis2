@@ -739,7 +739,7 @@ Nothing is forwarded to Jarvis 1.
 
 ## Transcript search (`services/search`)
 
-Its own pod (`k8s/apps/search.yaml`, namespace jarvis2-edge), reached only through the router (above). It crawls
+Two replicas (`k8s/apps/search.yaml`, namespace jarvis2-edge; any one answers, rolled one at a time with no gap), reached only through the router (above). One of them, the writer (a lease in the database), crawls; the other reloads when the index changes. It crawls
 `claude-records/` on the Storage Box every 10 minutes (and when the router archives a session): archived sessions of
 both Jarvises (`<dir>/transcript-<id>.jsonl`), Jarvis 1's pause snapshots (`.paused/<id>/`), running sessions of both
 (`.live/<id>/`) and the text records in archive dirs (`.md .txt .html .log`, the task records). Other dot-dirs
@@ -750,8 +750,8 @@ both Jarvises (`<dir>/transcript-<id>.jsonl`), Jarvis 1's pause snapshots (`.pau
 |---|---|
 | `GET /api/search?q=` | `&limit=` (1-50, 10), `&kind=msg,tool,doc`, `&after=`/`&before=` (YYYY-MM-DD), `&state=live,paused,archive` (the session's state now), `&archived=1` (only text read from an archive dir), `&session=` (id / dir / title fragment), `&mode=hybrid|keyword|semantic`, `&rerank=0`, `&group=1` (by session), `&full=1` (whole chunk text). `"quoted phrases"` must match. → `{query, mode, reranked, total, tookMs, timing, notes, terms, hits: [{id, score, via, kind, date, ts, title, sid, dir, state, machineId, file, lines, snippet, text?}]}` (or `sessions: [{title, sid, dir, state, machineId, date, score, count, hits}]` with `group=1`). |
 | `GET /api/search/context?id=&before=3&after=3` | The chunks around a hit, in file order → `{session, file, chunks: [{id, kind, ts, lineFrom, lineTo, text, hit?}]}`; 404 for an unknown id. |
-| `GET /api/search/status` | Counts (`chunks, sessions, files, vectors, kinds, sessions_by_state, span`), models and the indexer's state (`indexer: {state, lastRun, lastError, billing}`). |
-| `POST /api/search/reindex` | Crawl now → 202 `{started}`. |
+| `GET /api/search/status` | Counts (`chunks, sessions, files, vectors, kinds, sessions_by_state, span`), models and the indexer's state (`indexer: {state, lastRun, lastError, billing}`). Also, for the replica that answered: `replica: {pod, started, role: writer\|reader, draining, memory: {rssMB, peakRssMB, heapUsedMB, arrayBuffersMB, limitMB, ofLimit}, restartsInPod, restartedAfter, kubernetes: {restarts, containerStarted, lastTermination: {reason, exitCode, startedAt, finishedAt}}}`; `writer: {holder, since, until}`; `previousReplica` (the last copy that went away: `ended.how` = a clean SIGTERM, or killed with its `lastMemory`); `indexVersion`. |
+| `POST /api/search/reindex` | Crawl now (the writer at once; a reader passes it to the writer's next 10 s tick) → 202 `{started, by}`. |
 
 The index is one SQLite file on the pod's volume; a missing one is seeded from `claude-records/.jarvis2-services/search.db.gz`
 on the Storage Box, which the pod rewrites daily.

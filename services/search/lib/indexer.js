@@ -54,7 +54,7 @@ const SOURCE_ORDER = { archive: 0, paused: 1, live: 2 };
 class Indexer {
   constructor(db, source, log = console.log) {
     this.db = db; this.source = source; this.log = log;
-    this.running = null; this.again = false;
+    this.running = null; this.again = false; this.stopping = false;
     this.status = { state: "idle", lastRun: null, lastError: null, billing: false };
     const d = db;
     this.q = {
@@ -77,9 +77,10 @@ class Indexer {
 
   // one run at a time; a request that arrives mid-run queues exactly one more
   run(opts = {}) {
+    if (this.stopping) return Promise.resolve();
     if (this.running) { this.again = true; return this.running; }
     this.running = this._run(opts).catch((e) => { this.status.lastError = e.message; this.status.billing = !!e.billing; this.log(`index run failed: ${e.stack || e.message}`); })
-      .finally(() => { this.running = null; this.status.state = "idle"; if (this.again) { this.again = false; this.run(); } });
+      .finally(() => { this.running = null; this.status.state = "idle"; if (this.again && !this.stopping) { this.again = false; this.run(); } });
     return this.running;
   }
 
@@ -112,10 +113,12 @@ class Indexer {
     // that started a new file), the original keeps it
     const order = [...dirty].filter((g) => groups.has(g)).sort((a, b) => String(groups.get(a)[0].c.dir || "~").localeCompare(String(groups.get(b)[0].c.dir || "~")));
     for (const g of order) {
+      if (this.stopping) { this.log(`index run stopped after ${done}/${order.length} groups (stopping)`); break; }
       try { await this._group(g, groups.get(g), dirMeta); }
       catch (e) { this.log(`group ${g}: ${e.message}`); this.status.lastError = `${g}: ${e.message}`; }
       this.status.progress = `${++done}/${order.length}`;
     }
+    if (this.stopping) { if (done && this.onChange) this.onChange(); return; }
     this.status.state = "embedding";
     const embedded = await this._embed();
     this.db.exec("DELETE FROM emb WHERE hash NOT IN (SELECT hash FROM chunks)");
@@ -126,6 +129,10 @@ class Indexer {
     this.log(`index run: ${JSON.stringify(this.status.lastRun)}`);
     if ((order.length || gone.length || embedded) && this.onChange) this.onChange();
   }
+
+  // stop at the next group / embedding batch (each is its own transaction, so the index stays consistent and the next
+  // writer carries on incrementally); resolves when the current run has ended
+  async stop() { this.stopping = true; this.again = false; if (this.running) await this.running; }
 
   _drop(grp) { this.q.delFts.run(grp); this.q.delChunks.run(grp); this.q.delUuids.run(grp); this.q.delFiles.run(grp); this.q.delSession.run(grp); }
 
@@ -182,7 +189,7 @@ class Indexer {
     if (cur.length) batches.push(cur);
     let n = 0, failed = null;
     await pool(batches, 4, async (b) => {
-      if (failed) return;
+      if (failed || this.stopping) return;
       try {
         const vecs = await embedDocs(b.map((t) => `Session: ${t.title}\n${t.text}`));
         this.db.transaction(() => b.forEach((t, i) => this.q.insEmb.run(t.hash, EMBED_MODEL, vecToBlob(vecs[i]))))();

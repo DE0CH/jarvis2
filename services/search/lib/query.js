@@ -3,12 +3,18 @@
 //   keyword leg   precise on names, commands, error strings, ids — and on 中文 substrings
 //   semantic leg  paraphrases and cross-language ("train ticket" finds 火车票)
 //   rerank        reads query + passage together; fixes the ordering either leg gets wrong
-// Vectors live in one Float32Array (rows × dims, unit length) — ~15k chunks × 1024 dims is 60 MB
-// and a full scan is ~15 ms, so there is no ANN index to maintain.
+// Vectors live in memory as ONE Int8Array (rows × dims) with a per-row scale: 1 byte per dimension, so ~50k chunks ×
+// 1024 dims is 51 MB instead of 205 MB as Float32. The Float32 load (every row's blob in one array, then a copy each)
+// reached 761 MB RSS on its first reload at 50k chunks — the limit was 768Mi — and blocked the event loop for tens of
+// seconds, failing readiness (2026-10-15). Now the load pages through the rows, yielding between pages (234 MB peak in
+// the same test). The int8 scan only picks candidates: the best LEG × OVERSAMPLE are rescored with their exact float
+// vectors read from SQLite, so the semantic leg's ranking and scores are exact. A full scan costs about what the
+// Float32 one did, so there is still no ANN index to maintain.
 const { cjkSpace } = require("./db");
 const { embedQuery, rerank, blobToVec, EMBED_MODEL, EMBED_DIMS } = require("./embed");
 
 const LEG = 120;         // candidates per leg
+const OVERSAMPLE = 4;    // int8 candidates per exact slot
 const RERANK_HEAD = 40;  // fused candidates handed to the reranker
 const RRF_K = 60;
 const TOOL_PRIOR = 0.97;
@@ -48,21 +54,54 @@ function parseQuery(q) {
 class Searcher {
   constructor(db, log = console.log) {
     this.qcache = new Map(); // query text -> vector (the same query is re-run on every filter change)
-    this.db = db; this.log = log; this.ids = []; this.rowOf = new Map(); this.matrix = new Float32Array(0);
+    this.db = db; this.log = log; this.ids = []; this.rowOf = new Map(); this.q8 = new Int8Array(0); this.scale = new Float32Array(0);
     this.q = {
       byIds: (n) => db.prepare(`SELECT c.id, c.sid, c.dir, c.title, c.source, c.kind, c.date, c.ts, c.file, c.line_from lineFrom, c.line_to lineTo, c.text FROM chunks c WHERE c.id IN (${Array(n).fill("?").join(",")})`),
       session: db.prepare("SELECT sid, title, dir, source, machine_id machineId, date, first_ts firstTs, last_ts lastTs, model FROM sessions WHERE sid = ?"),
       chunk: db.prepare("SELECT id, sid, file, dir, title, kind, ts, line_from lineFrom, line_to lineTo, text FROM chunks WHERE id = ?"),
+      vecsByIds: (n) => db.prepare(`SELECT c.id, e.vec FROM chunks c JOIN emb e ON e.hash = c.hash AND e.model = ? WHERE c.id IN (${Array(n).fill("?").join(",")})`),
     };
-    this.load();
+    this.loading = null; this.reloadAgain = false; // load() is async: the caller awaits the first one
   }
 
+  // reads the vectors page by page (PAGE rows, yielding to the event loop between pages, so a reload never stalls
+  // the requests this replica is serving) into a fresh int8 matrix, then swaps it in; one load at a time (a request
+  // for another during a load runs once more after it)
   load() {
-    const rows = this.db.prepare("SELECT c.id, e.vec FROM chunks c JOIN emb e ON e.hash = c.hash AND e.model = ? ORDER BY c.id").all(EMBED_MODEL);
-    const m = new Float32Array(rows.length * EMBED_DIMS), ids = new Array(rows.length), rowOf = new Map();
-    rows.forEach((r, i) => { const v = blobToVec(r.vec); if (v.length === EMBED_DIMS) m.set(v, i * EMBED_DIMS); ids[i] = r.id; rowOf.set(r.id, i); });
-    this.matrix = m; this.ids = ids; this.rowOf = rowOf;
-    this.log(`vectors loaded: ${rows.length}`);
+    if (this.loading) { this.reloadAgain = true; return this.loading; }
+    this.loading = this._load().finally(() => { this.loading = null; if (this.reloadAgain) { this.reloadAgain = false; this.load(); } });
+    return this.loading;
+  }
+
+  async _load() {
+    const t0 = Date.now(), d = EMBED_DIMS, PAGE = 2000;
+    const n = this.db.prepare("SELECT count(*) n FROM chunks c JOIN emb e ON e.hash = c.hash AND e.model = ?").get(EMBED_MODEL).n;
+    const q8 = new Int8Array(n * d), scale = new Float32Array(n), ids = new Array(n), rowOf = new Map();
+    const page = this.db.prepare("SELECT c.id, e.vec FROM chunks c JOIN emb e ON e.hash = c.hash AND e.model = ? WHERE c.id > ? ORDER BY c.id LIMIT ?");
+    let i = 0, last = -1;
+    while (i < n) {
+      const rows = page.all(EMBED_MODEL, last, Math.min(PAGE, n - i));
+      if (!rows.length) break;
+      for (const r of rows) {
+        const v = blobToVec(r.vec);
+        if (v.length === d) scale[i] = quantize(v, q8, i * d);
+        ids[i] = r.id; rowOf.set(r.id, i); i++; last = r.id;
+      }
+      await new Promise((res) => setImmediate(res));
+    }
+    // rows deleted during the load leave the tail short; rows added wait for the next load
+    this.q8 = i === n ? q8 : q8.subarray(0, i * d); this.scale = i === n ? scale : scale.subarray(0, i); this.ids = i === n ? ids : ids.slice(0, i); this.rowOf = rowOf;
+    this.log(`vectors loaded: ${i} in ${Date.now() - t0} ms (${Math.round(this.q8.byteLength / 1048576)} MB int8)`);
+  }
+
+  // id -> exact Float32Array, read from SQLite (into `into`, skipping what it already has)
+  exactVecs(ids, into = new Map()) {
+    const need = [...new Set(ids)].filter((id) => !into.has(id));
+    for (let k = 0; k < need.length; k += 500) {
+      const part = need.slice(k, k + 500);
+      for (const r of this.q.vecsByIds(part.length).all(EMBED_MODEL, ...part)) into.set(r.id, blobToVec(r.vec));
+    }
+    return into;
   }
 
   // SQL filter shared by both legs -> { where, params }
@@ -96,14 +135,18 @@ class Searcher {
     return all.concat(any.filter((id) => !seen.has(id))).slice(0, LEG);
   }
 
-  semanticLeg(qvec, f, hasFilter) {
-    const n = this.ids.length, d = EMBED_DIMS, m = this.matrix, scores = new Float32Array(n);
-    for (let i = 0, o = 0; i < n; i++, o += d) { let s = 0; for (let j = 0; j < d; j++) s += m[o + j] * qvec[j]; scores[i] = s; }
+  // -> [{id, score}] best first, exact cosine scores; `vecs` collects the exact vectors read (dedupe reuses them)
+  semanticLeg(qvec, f, hasFilter, vecs = new Map()) {
+    const n = this.ids.length, d = EMBED_DIMS, m = this.q8, scale = this.scale, approx = new Float32Array(n);
+    for (let i = 0, o = 0; i < n; i++, o += d) { let s = 0; for (let j = 0; j < d; j++) s += m[o + j] * qvec[j]; approx[i] = s * scale[i]; }
     let allowed = null;
     if (hasFilter) allowed = new Set(this.db.prepare(`SELECT c.id FROM chunks c WHERE 1=1${f.where}`).all(...f.params).map((r) => r.id));
-    const idx = Array.from({ length: n }, (_, i) => i).filter((i) => !allowed || allowed.has(this.ids[i]));
-    idx.sort((a, b) => scores[b] - scores[a]);
-    return idx.slice(0, LEG).map((i) => ({ id: this.ids[i], score: scores[i] }));
+    const idx = [];
+    for (let i = 0; i < n; i++) if (!allowed || allowed.has(this.ids[i])) idx.push(i);
+    idx.sort((a, b) => approx[b] - approx[a]);
+    const cand = idx.slice(0, LEG * OVERSAMPLE).map((i) => this.ids[i]);
+    this.exactVecs(cand, vecs);
+    return cand.filter((id) => vecs.has(id)).map((id) => ({ id, score: dot(vecs.get(id), qvec) })).sort((a, b) => b.score - a.score).slice(0, LEG);
   }
 
   async search(opts) {
@@ -113,9 +156,9 @@ class Searcher {
     const timing = {}, notes = [];
     const kw = mode === "semantic" ? [] : this.keywordLeg(pq, f);
     timing.keyword = Date.now() - t0;
-    let sem = [];
+    let sem = []; const vecs = new Map();
     if (mode !== "keyword" && this.ids.length) {
-      try { const t = Date.now(); let qv = this.qcache.get(q); if (!qv) { qv = await embedQuery(q); this.qcache.set(q, qv); if (this.qcache.size > 200) this.qcache.delete(this.qcache.keys().next().value); } timing.embed = Date.now() - t; sem = this.semanticLeg(qv, f, hasFilter); }
+      try { const t = Date.now(); let qv = this.qcache.get(q); if (!qv) { qv = await embedQuery(q); this.qcache.set(q, qv); if (this.qcache.size > 200) this.qcache.delete(this.qcache.keys().next().value); } timing.embed = Date.now() - t; sem = this.semanticLeg(qv, f, hasFilter, vecs); }
       catch (e) { notes.push(`semantic leg unavailable: ${e.message}`); }
     }
     // reciprocal-rank fusion; with "must" phrases the keyword leg is a hard filter
@@ -141,7 +184,7 @@ class Searcher {
         head = top.concat(head.filter((h) => !got.has(h.id))); reranked = true;
       } catch (e) { notes.push(`rerank unavailable: ${e.message}`); }
     }
-    head = this.dedupe(head);
+    head = this.dedupe(head, vecs);
     const semScore = new Map(sem.map((s) => [s.id, s.score]));
     const sessions = new Map();
     const sess = (sid) => { if (!sid) return null; if (!sessions.has(sid)) sessions.set(sid, this.q.session.get(sid) || null); return sessions.get(sid); };
@@ -163,15 +206,14 @@ class Searcher {
     return out;
   }
 
-  // keep the best-ranked of any group of near-identical passages
-  dedupe(head) {
-    const d = EMBED_DIMS, m = this.matrix, kept = [], rowsKept = [];
+  // keep the best-ranked of any group of near-identical passages (exact vectors)
+  dedupe(head, vecs = new Map()) {
+    this.exactVecs(head.map((h) => h.id), vecs);
+    const kept = [], keptVecs = [];
     for (const h of head) {
-      const r = this.rowOf.get(h.id);
-      if (r == null) { kept.push(h); continue; }
-      let dup = false;
-      for (const k of rowsKept) { let s = 0; for (let j = 0; j < d; j++) s += m[r * d + j] * m[k * d + j]; if (s > NEAR_DUP) { dup = true; break; } }
-      if (!dup) { kept.push(h); rowsKept.push(r); }
+      const v = vecs.get(h.id);
+      if (!v || v.length !== EMBED_DIMS) { kept.push(h); continue; }
+      if (!keptVecs.some((k) => dot(k, v) > NEAR_DUP)) { kept.push(h); keptVecs.push(v); }
     }
     return kept;
   }
@@ -189,6 +231,18 @@ class Searcher {
   }
 }
 
+function dot(a, b) { let s = 0; for (let j = 0; j < a.length; j++) s += a[j] * b[j]; return s; }
+
+// v (unit Float32) -> q8[o..o+d) as round(v / max|v| * 127); returns the row's scale (max|v| / 127)
+function quantize(v, q8, o) {
+  let mx = 0;
+  for (let j = 0; j < v.length; j++) { const a = Math.abs(v[j]); if (a > mx) mx = a; }
+  if (!mx) return 0;
+  const k = 127 / mx;
+  for (let j = 0; j < v.length; j++) q8[o + j] = Math.round(v[j] * k);
+  return mx / 127;
+}
+
 // ~320 chars around the densest cluster of query terms (the chunk's start when nothing matches
 // literally — a purely semantic hit)
 function snippet(text, terms, width = 320) {
@@ -202,4 +256,4 @@ function snippet(text, terms, width = 320) {
   return (start ? "…" : "") + text.slice(start, end) + (end < text.length ? "…" : "");
 }
 
-module.exports = { Searcher, parseQuery, snippet };
+module.exports = { Searcher, parseQuery, snippet, quantize, dot };

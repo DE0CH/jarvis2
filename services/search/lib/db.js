@@ -19,6 +19,9 @@ function open(file) {
   const db = new Database(file);
   db.pragma("journal_mode = WAL");
   db.pragma("synchronous = NORMAL");
+  // several replicas open this file (lease.js): a write waits briefly for another's lease transaction instead of
+  // failing; short, because better-sqlite3 waits on the event loop
+  db.pragma("busy_timeout = 300");
   db.exec(`
     CREATE TABLE IF NOT EXISTS files(path TEXT PRIMARY KEY, etag TEXT, size INTEGER, grp TEXT, indexed_at TEXT, chunks INTEGER DEFAULT 0, note TEXT);
     CREATE INDEX IF NOT EXISTS files_grp ON files(grp);

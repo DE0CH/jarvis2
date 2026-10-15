@@ -28,9 +28,12 @@ async function seed(dbFile, env = process.env, log = console.log) {
   const r = await fetch(d.url(`${DIR}/${name}.gz`), { headers: { Authorization: d.auth } });
   if (r.status === 404) return "none";
   if (!r.ok) throw new Error(`seed: GET ${name}.gz -> ${r.status}`);
-  const tmp = dbFile + ".seed";
-  await pipeline(Readable.fromWeb(r.body), zlib.createGunzip(), fs.createWriteStream(tmp));
-  fs.renameSync(tmp, dbFile);
+  // replicas may seed the same new volume at once: each downloads to its own file and the first to link it wins
+  const tmp = `${dbFile}.seed-${process.pid}-${require("os").hostname()}`;
+  try {
+    await pipeline(Readable.fromWeb(r.body), zlib.createGunzip(), fs.createWriteStream(tmp));
+    try { fs.linkSync(tmp, dbFile); } catch (e) { if (e.code === "EEXIST") return "exists"; throw e; }
+  } finally { fs.rmSync(tmp, { force: true }); }
   log(`seeded ${dbFile} from the Storage Box (${fs.statSync(dbFile).size} bytes)`);
   return "seeded";
 }
@@ -55,11 +58,12 @@ async function backup(db, name, env = process.env, log = console.log) {
   } finally { fs.rmSync(raw, { force: true }); fs.rmSync(gz, { force: true }); }
 }
 
-function backupLoop(db, name, env = process.env, log = console.log) {
+// active(): only the writer backs up (lease.js); a replica that lost the lease skips its turn
+function backupLoop(db, name, env = process.env, log = console.log, active = () => true) {
   const h = +(env.BACKUP_INTERVAL_H || 24);
   if (!(h > 0)) return;
   let busy = false;
-  const run = () => { if (busy) return; busy = true; backup(db, name, env, log).catch((e) => log(`backup failed: ${e.message}`)).finally(() => { busy = false; }); };
+  const run = () => { if (busy || !active()) return; busy = true; backup(db, name, env, log).catch((e) => log(`backup failed: ${e.message}`)).finally(() => { busy = false; }); };
   setTimeout(run, 10 * 60 * 1000).unref(); // the first one after the first crawl has settled
   setInterval(run, h * 3600 * 1000).unref();
 }
