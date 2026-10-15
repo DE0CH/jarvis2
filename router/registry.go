@@ -5,7 +5,7 @@ package main
 // registry command (machine/status.go) every ~10 s and POSTs the raw text to /m/status when it changes and at
 // least once a minute; the router parses it here. Nothing in it is a secret: claude's registry files, ai-title
 // lines, background-job counts, the one-shot marker, the ids of transcripts ending on "Please run /login", the
-// credentials file's expiry time and the transcripts' refusal entries.
+// credentials file's expiry time, the transcripts' refusal entries and the subagent/background-job counts.
 
 import (
 	"encoding/json"
@@ -42,6 +42,37 @@ type Registry struct {
 	SessionsInside  int       `json:"sessionsInside"`
 	OneShotDone     bool      `json:"oneShotDone"`
 	Refusals        []Refusal `json:"refusals"`
+	Workers         *Workers  `json:"workers"` // nil: the machine doesn't count them (an image from before)
+}
+
+// Workers: what the host conversation's harness has running besides itself (machine/workers.go, from Claude
+// Code's hooks): subagents (foreground and background) and every other background job by Claude Code's own type
+// label (shell, monitor, workflow, teammate, …)
+type Workers struct {
+	Subagents int            `json:"subagents"`
+	Jobs      map[string]int `json:"jobs"`
+	At        int64          `json:"at"` // ms, its last change
+}
+
+var workerType = regexp.MustCompile(`^[a-z][a-z _-]{0,30}$`)
+
+// parseWorkers: the __WORKERS__ section's line for conversation sid
+func parseWorkers(section, sid string) *Workers {
+	for _, e := range jsonLines(section) {
+		if sid == "" || str(e, "workersOf") != sid {
+			continue
+		}
+		w := &Workers{Subagents: int(min(max(num(e, "subagents"), 0), 1000)), Jobs: map[string]int{}, At: num(e, "at")}
+		if jobs, ok := e["jobs"].(map[string]any); ok {
+			for k, v := range jobs {
+				if n, ok := v.(float64); ok && n > 0 && workerType.MatchString(k) && len(w.Jobs) < 20 {
+					w.Jobs[k] = int(min(n, 1000))
+				}
+			}
+		}
+		return w
+	}
+	return nil
 }
 
 // normalize: claude's "shell" (the turn ended while background shells run) is idle + bgTasks ≥ 1
@@ -163,7 +194,8 @@ func parseRegistry(raw string) *Registry {
 	titlePart, rest2 := cut(rest, "__BG__")
 	bgPart, rest3 := cut(rest2, "__ONESHOT__")
 	oneShotPart, rest4 := cut(rest3, "__AUTH__")
-	authPart, refusalPart := cut(rest4, "__REFUSAL__")
+	authPart, rest5 := cut(rest4, "__REFUSAL__")
+	refusalPart, workersPart := cut(rest5, "__WORKERS__")
 	failed, credsExp := parseLogin(authPart)
 	refusals := parseRefusals(refusalPart)
 	oneShotDone := regexp.MustCompile(`(?m)^done\b`).MatchString(strings.TrimSpace(oneShotPart))
@@ -208,6 +240,6 @@ func parseRegistry(raw string) *Registry {
 		Status: status, BgTasks: n, StatusUpdatedAt: num(host, "statusUpdatedAt"),
 		BridgeSessionID: str(host, "bridgeSessionId"), SessionID: sid,
 		AuthFailed: failed[sid], CredsExpiresAt: credsExp, SessionsInside: len(entries),
-		OneShotDone: oneShotDone, Refusals: refusals,
+		OneShotDone: oneShotDone, Refusals: refusals, Workers: parseWorkers(workersPart, sid),
 	}
 }

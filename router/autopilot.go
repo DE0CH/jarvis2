@@ -166,6 +166,9 @@ func liveView(s *Session, v map[string]any) {
 	v["bgTasks"], v["statusUpdatedAt"], v["bridgeSessionId"], v["sessionId"] = g.BgTasks, g.StatusUpdatedAt, g.BridgeSessionID, g.SessionID
 	v["authFailed"], v["credsExpiresAt"], v["sessionsInside"] = g.AuthFailed, g.CredsExpiresAt, g.SessionsInside
 	v["oneShotDone"], v["refusals"] = g.OneShotDone, orEmptyR(g.Refusals)
+	if g.Workers != nil {
+		v["workers"] = g.Workers // registry.go: subagents and background jobs running now
+	}
 	if !l.AutoPauseOff && !l.IdleSince.IsZero() && idleEligible(g) {
 		v["pauseInMs"] = max(int64(0), time.Until(l.IdleSince.Add(defaultPilot.IdlePause)).Milliseconds())
 	}

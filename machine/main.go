@@ -136,6 +136,9 @@ func main() {
 		}
 	case "agent":
 		err = agent()
+	case "workers-hook":
+		workersHook() // workers.go: a Claude Code hook; never fails
+		return
 	case "creds-sync":
 		credsSync() // claudelogin.go: started by boot for a session with the `claude` store; never returns
 	case "allow":
@@ -366,6 +369,13 @@ func prepare() error {
 	}
 	if firstMachine && len(v.Config.Attachments) > 0 {
 		env = append(env, fetchAttachments(c, coreKey, v.Config.Attachments)...) // attachments.go: hash-checked against the cert
+	}
+	if h := cert.Options.Harness; h == "" || h == "claude" {
+		if home, err := os.UserHomeDir(); err == nil {
+			if err := installWorkerHooks(home); err != nil { // workers.go: the subagent/background-job count
+				log.Printf("workers hooks: %v", err)
+			}
+		}
 	}
 	waitAPIProxy(15 * time.Second) // the entrypoint's first calls ($JARVIS_URL: content-sync pull) need it up
 	log.Printf("starting the harness")

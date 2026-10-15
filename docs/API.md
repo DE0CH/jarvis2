@@ -40,6 +40,9 @@ same thing:
   status /* busy | idle | waiting | … */, aiTitle, liveName, nameSource, bgTasks, statusUpdatedAt, bridgeSessionId,
   sessionId /* claude's conversation id */, authFailed, credsExpiresAt, sessionsInside, oneShotDone,
   refusals: [{kind: "fallback" | "refusal", at, uuid, from, to, model, category}],
+  workers /* {subagents, jobs: {<Claude Code's task type: shell | monitor | workflow | teammate | …>: n}, at (ms)}:
+  what the host conversation's harness runs besides itself now, from Claude Code's hooks (machine/workers.go);
+  absent on an image from before */,
   pauseInMs /* while the auto-pause countdown runs */,
   serverTitle /* the Claude app's own title of its Remote Control entry (the machine reads it; kept while paused) */,
   userTitle /* a name pinned in the CLI */, title /* what the card, channel and archive use: serverTitle → userTitle →

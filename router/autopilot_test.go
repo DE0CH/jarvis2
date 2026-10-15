@@ -51,6 +51,28 @@ func TestParseRegistry(t *testing.T) {
 	}
 }
 
+func TestParseRegistryWorkers(t *testing.T) {
+	if g := parseRegistry(sampleRaw); g.Workers != nil {
+		t.Fatalf("an image without the count: %+v", g.Workers)
+	}
+	raw := sampleRaw + "__WORKERS__\n" +
+		`{"workersOf":"bbbbbbbb-2222","at":5,"subagents":7,"jobs":{}}` + "\n" +
+		`{"workersOf":"aaaaaaaa-1111","at":9,"subagents":2,"jobs":{"shell":3,"monitor":1,"Bad Type!":4,"zero":0},"listed":{"b1":"shell"}}` + "\n"
+	g := parseRegistry(raw)
+	if g.Workers == nil || g.Workers.Subagents != 2 || g.Workers.At != 9 || len(g.Workers.Jobs) != 2 || g.Workers.Jobs["shell"] != 3 || g.Workers.Jobs["monitor"] != 1 {
+		t.Fatalf("workers %+v", g.Workers)
+	}
+	if len(g.Refusals) != 2 {
+		t.Fatalf("the workers section broke the refusals: %+v", g.Refusals)
+	}
+	s := &Session{State: "started", MachineID: "m", Live: &Liveness{Reg: g, LastReport: time.Now()}}
+	v := map[string]any{}
+	liveView(s, v)
+	if w, _ := v["workers"].(*Workers); w == nil || w.Subagents != 2 {
+		t.Fatalf("state view %v", v["workers"])
+	}
+}
+
 func TestParseRegistryEmptyAndOneShot(t *testing.T) {
 	if parseRegistry("__TITLES__\n__BG__\n__ONESHOT__\n__AUTH__\n__CREDS__\n__REFUSAL__\n") != nil {
 		t.Fatal("no claude inside should be nil")

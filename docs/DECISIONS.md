@@ -1646,3 +1646,25 @@ snapshot failed with "no space left on device", the machine was destroyed anyway
      (Grafana tokens, the alert webhook, the probe token, the router's backup key), written only by the setup path.
      *Alerts to Discord #jarvis2-alerts* through a webhook; rules as code (`infra/grafana.py`). *The external probe on
      `/healthz`* with its own path-scoped Access app and one service token, never past Access.
+
+## Subagents and background jobs on the session card, 2026-10-15
+
+188. **A running session shows how many subagents and background jobs its harness runs now** (Deyao, 2026-10-15: "the
+     number of subagents/workers of a session on the dashboard"). Claude's choices: *Claude Code's documented hooks are
+     the source* (code.claude.com/docs/en/hooks): Claude Code documents no live list of its tasks from outside (not in
+     `claude agents`, the statusline, the registry file or a CLI command; its task output under `/tmp/claude-<uid>/` and
+     subagent transcripts stay after they end), but `Stop` and `SubagentStop` carry `background_tasks`, the harness's own
+     in-flight list with a type per task (shell, subagent, monitor, workflow, teammate, …). Each such list replaces the
+     count; between two of them `SubagentStart` adds the agent and a `PostToolUse` with a `backgroundTaskId` (a background
+     Bash, a Monitor) adds the job, so a new one shows within one status report (10 s). A job that ends in the middle of a
+     long turn stays counted until the next subagent end or turn end (no hook marks it). *Foreground subagents count too*:
+     the list never names them (seen with a logging hook on 2.1.300), so they come from SubagentStart/SubagentStop, and a
+     turn's Stop clears any left. *A stopping subagent's own list entry is dropped* (the list still has it as running).
+     The harness's internal agents (empty `agent_type`: prompt suggestions, `/btw`) are not counted. *Installed by the
+     machine at boot* (`jarvis2-machine workers-hook` in `~/.claude/settings.json`, next to whatever else is there), only
+     for the claude harness; the counts live in `~/.claude/jarvis2-workers/<conversation>.json` (ids and types, never a
+     command or a description; not in the snapshot; emptied on each boot and on SessionStart startup/resume) and travel
+     in the status report (section `__WORKERS__`), not a new endpoint. The router keeps the host conversation's in its
+     live state (`workers` in /api/state). *Subagents apart, other jobs by Claude Code's own type label.* *`bgTasks` stays
+     as it was* (the process count the autopilot's idle and nudge rules use): changing what auto-pause sees is another
+     decision. The hook never fails a turn: any error exits 0 with no output. New sessions only (the session image).
