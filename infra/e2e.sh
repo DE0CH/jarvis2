@@ -11,6 +11,8 @@
 #   E2E_ONLY=jarvis1-import: after the core's setup, only the Jarvis 1 import step (a fake paused session on 127.0.0.1:${PP}070)
 #   E2E_ONLY=drain: after the first session is up, only the drain: SIGTERM to the router with a pause in flight
 #   E2E_ONLY=restore: after the core's setup, only the restore of a store to an earlier version (no machines)
+#   E2E_ONLY=continuity: the core set up from the master key's seed, a running and a paused session, then the core
+#     restarted and Recovered with the same kit and the router's line state: the sessions go on (e2e/continuity.go)
 # Always with Jarvis 1 unreachable (e2e/nojarvis1.go): the router runs in its own mount namespace (sudo unshare) whose
 #   /etc/hosts sends jarvis.deyaochen.com to a listener that fails the test on any connection; each machine gets it
 #   blackholed too; search, the watch runner and the Storage Box are local stand-ins
@@ -41,6 +43,7 @@ PIDS=(); SUDO_PIDS=()
 cleanup() {
   mkdir -p "${E2E_LOGS:-/tmp/jarvis2-e2e-logs}" && cp "$W"/*.log "${E2E_LOGS:-/tmp/jarvis2-e2e-logs}/" 2>/dev/null || true
   for p in "${PIDS[@]}"; do kill "$p" 2>/dev/null || true; done
+  [ -s "$W/core.pid" ] && kill "$(cat "$W/core.pid")" 2>/dev/null || true
   for p in "${SUDO_PIDS[@]}"; do sudo -n pkill -P "$p" 2>/dev/null || true; sudo -n kill "$p" 2>/dev/null || true; done
   sweep
   FLY_API_TOKEN="$JARVIS2_FLY_TOKEN" flyctl wireguard remove jarvis2-370 "$PEER" >/dev/null 2>&1 || true
@@ -78,6 +81,17 @@ FLY_API_TOKEN="$JARVIS2_FLY_TOKEN" flyctl wireguard remove jarvis2-370 "$PEER" >
 mkdir -p "$W/data" "$W/web"
 # the core sets the router's address in every machine it makes (core/vouch.go), from its own deployment
 BOX_KEY_FILE="$W/box-key.pem" ADDR=127.0.0.1:${PP}090 MACHINE_URL="http://$PEER._peer.internal:8081" "$W/core" > "$W/core.log" 2>&1 & PIDS+=($!)
+echo $! > "$W/core.pid"
+# E2E_ONLY=continuity restarts the core mid-run (e2e/continuity.go): the running one ends, an empty one takes its port
+cat > "$W/core-restart" <<SH
+#!/bin/sh
+kill \$(cat "$W/core.pid") 2>/dev/null; sleep 1
+BOX_KEY_FILE="$W/box-key.pem" ADDR=127.0.0.1:${PP}090 MACHINE_URL="http://$PEER._peer.internal:8081" nohup "$W/core" >> "$W/core.log" 2>&1 &
+echo \$! > "$W/core.pid"
+for i in \$(seq 1 30); do curl -sf http://127.0.0.1:${PP}090/identity > /dev/null && exit 0; sleep 0.5; done
+exit 1
+SH
+chmod 700 "$W/core-restart"
 # the core starts only the session image pinned by its linux/amd64 digest
 E2E_SESSION_IMAGE="$("$ROOT/infra/image-digest.sh" "${E2E_SESSION_IMAGE:-ghcr.io/de0ch/jarvis2-session:latest}")"
 # stand-ins for the box's other services (e2e/nojarvis1.go serves them): search, the watch runner, and the Storage Box
@@ -136,7 +150,7 @@ for h in $J1_HOSTS; do
 done
 grep -q 'jarvis.deyaochen.com' /etc/hosts && { echo "the blackhole leaked into this session's own /etc/hosts"; exit 1; }
 sleep 3
-(cd "$ROOT/e2e" && E2E_ROUTER_PID="$ROUTER_PID" E2E_ROUTER_LOG="$W/router.log" E2E_DATA_DIR="$W/data" E2E_ROUTER=http://127.0.0.1:${PP}080 E2E_CORE=http://127.0.0.1:${PP}090 E2E_MASTER_KEY_FILE="$ROOT/e2e/testdata/master-test.pem" E2E_BOX_PUB="$(cat "$W/box.pub")" \
+(cd "$ROOT/e2e" && E2E_CORE_RESTART="$W/core-restart" E2E_ROUTER_PID="$ROUTER_PID" E2E_ROUTER_LOG="$W/router.log" E2E_DATA_DIR="$W/data" E2E_ROUTER=http://127.0.0.1:${PP}080 E2E_CORE=http://127.0.0.1:${PP}090 E2E_MASTER_KEY_FILE="$ROOT/e2e/testdata/master-test.pem" E2E_BOX_PUB="$(cat "$W/box.pub")" \
   E2E_JARVIS1_ADDR=127.0.0.1:${PP}070 E2E_FLY_TOKEN="$JARVIS2_FLY_TOKEN" \
   E2E_PEER="$PEER" E2E_J1_HITS="$W/j1-hits.log" E2E_SEARCH_ADDR=127.0.0.1:${PP}071 E2E_WATCH_ADDR=127.0.0.1:${PP}072 \
   E2E_DAV_ADDR=127.0.0.1:${PP}073 E2E_DAV_CERT="$W/dav.crt" E2E_DAV_KEY="$W/dav.key" E2E_S3_DIR="$W/s3/jarvis2-backup-de0ch" go run .) || { echo "--- router log"; tail -40 "$W/router.log"; exit 1; }

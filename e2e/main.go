@@ -163,8 +163,11 @@ func main() {
 		"claude": {},
 	}
 	keysCore = id0.Bundle == "keys"
+	continuity := os.Getenv("E2E_ONLY") == "continuity"
 	var bundle []byte
-	if keysCore { // every store's name and every key, each wrapped on its own (core claimBundle)
+	if continuity { // continuity.go: the claim with the master key's seed
+		seededClaim(master, p, phoneAgreement, recovered, nil)
+	} else if keysCore { // every store's name and every key, each wrapped on its own (core claimBundle)
 		names, keys := []string{}, []map[string]any{}
 		for _, n := range []string{"claude", "e2e", "e2e-extra", "e2e-more"} {
 			names = append(names, n)
@@ -182,21 +185,23 @@ func main() {
 		bundle, _ = json.Marshal(map[string]any{"format": "blobs", "stores": "blobs", "flyToken": os.Getenv("E2E_FLY_TOKEN"),
 			"blobs": blobs, "notSensitive": []string{"e2e", "claude"}})
 	}
-	sum := sha256.Sum256(bundle)
-	mpub, _ := master.PublicKey.ECDH()
-	stmt, _ := json.Marshal(map[string]any{"kind": "claim", "master": b64.EncodeToString(mpub.Bytes()),
-		"core":         map[string]string{"signingKey": id0.SigningKey, "agreementKey": id0.AgreementKey},
-		"phone":        map[string]string{"signingKey": p.signingKey(), "agreementKey": phoneAgreement},
-		"bundleSha256": hex.EncodeToString(sum[:])})
-	h := sha256.Sum256(stmt)
-	msig, _ := ecdsa.SignASN1(rand.Reader, master, h[:])
-	var rec Doc
-	must2(call(router, "POST", "/api/core/claim", map[string]any{"statement": string(stmt), "masterSig": b64.EncodeToString(msig),
-		"bundle": sealTo(id0.AgreementKey, bundle, "jarvis2/claim")}, &rec))
-	verify(rec, nil)
-	if s, _ := call(router, "POST", "/api/core/claim", map[string]any{"statement": string(stmt), "masterSig": b64.EncodeToString(msig),
-		"bundle": sealTo(id0.AgreementKey, bundle, "jarvis2/claim")}, nil); s == 200 {
-		log.Fatal("a set-up core was claimed again")
+	if !continuity {
+		sum := sha256.Sum256(bundle)
+		mpub, _ := master.PublicKey.ECDH()
+		stmt, _ := json.Marshal(map[string]any{"kind": "claim", "master": b64.EncodeToString(mpub.Bytes()),
+			"core":         map[string]string{"signingKey": id0.SigningKey, "agreementKey": id0.AgreementKey},
+			"phone":        map[string]string{"signingKey": p.signingKey(), "agreementKey": phoneAgreement},
+			"bundleSha256": hex.EncodeToString(sum[:])})
+		h := sha256.Sum256(stmt)
+		msig, _ := ecdsa.SignASN1(rand.Reader, master, h[:])
+		var rec Doc
+		must2(call(router, "POST", "/api/core/claim", map[string]any{"statement": string(stmt), "masterSig": b64.EncodeToString(msig),
+			"bundle": sealTo(id0.AgreementKey, bundle, "jarvis2/claim")}, &rec))
+		verify(rec, nil)
+		if s, _ := call(router, "POST", "/api/core/claim", map[string]any{"statement": string(stmt), "masterSig": b64.EncodeToString(msig),
+			"bundle": sealTo(id0.AgreementKey, bundle, "jarvis2/claim")}, nil); s == 200 {
+			log.Fatal("a set-up core was claimed again")
+		}
 	}
 
 	step("stores: e2e not sensitive, e2e-extra sensitive; a created store is not; the upgrade is one-way")
@@ -256,7 +261,7 @@ func main() {
 	// its settings from the router as before the input guard (machine/legacy.go); the run ends after that check
 	held := os.Getenv("E2E_HELD_CORE") == "1"
 	newBody := map[string]any{"label": "e2e test", "stores": []string{"e2e"}, "size": "small", "harness": "claude"}
-	if !held && os.Getenv("E2E_ONLY") != "drain" {
+	if !held && os.Getenv("E2E_ONLY") != "drain" && !continuity {
 		contentSetupStep(secret) // nojarvis1.go
 		newBody["content"] = []string{"e2e-content"}
 	}
@@ -286,6 +291,10 @@ func main() {
 		return
 	}
 	expectNoUnlocks("after the Start's pull")
+	if continuity {
+		continuityStep(p, master, phoneAgreement, recovered, id, m1, secret)
+		return
+	}
 	expectOnMachine(m1, "echo marker-"+secret+" > /home/claude/artifacts/e2e-marker && chown claude /home/claude/artifacts/e2e-marker && echo ok", "ok")
 	// the OpenCode/Paseo and OpenClaw harnesses' state travels in the snapshot too (their pairings), their pid files don't
 	expectOnMachine(m1, "cd /home/claude && mkdir -p .paseo .openclaw/devices .local/share/opencode/storage && echo paseo > .paseo/e2e-state && "+
