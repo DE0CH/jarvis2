@@ -1,0 +1,82 @@
+# ONE-OFF (2026-10-15): capture the evidence of the 02:40 UTC search outage before it expires (k8s events live ~1h;
+# a container's previous log and lastState go when its pod is replaced). Read-only: events, pod statuses and the
+# previous/current logs of restarted containers in the three namespaces, as one tarball PUT to a presigned S3 URL
+# (write-only, that one key, expires 04:50 UTC). Removed again once the bundle is read.
+apiVersion: v1
+kind: ServiceAccount
+metadata: { name: forensics, namespace: jarvis2-edge }
+automountServiceAccountToken: false
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata: { name: forensics-read, namespace: jarvis2-edge }
+rules: [{ apiGroups: [""], resources: [pods, pods/log, events], verbs: [get, list] }]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata: { name: forensics-read, namespace: jarvis2-router }
+rules: [{ apiGroups: [""], resources: [pods, pods/log, events], verbs: [get, list] }]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata: { name: forensics-read, namespace: jarvis2-core }
+rules: [{ apiGroups: [""], resources: [pods, events], verbs: [get, list] }]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata: { name: forensics-read, namespace: jarvis2-edge }
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: Role, name: forensics-read }
+subjects: [{ kind: ServiceAccount, name: forensics, namespace: jarvis2-edge }]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata: { name: forensics-read, namespace: jarvis2-router }
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: Role, name: forensics-read }
+subjects: [{ kind: ServiceAccount, name: forensics, namespace: jarvis2-edge }]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata: { name: forensics-read, namespace: jarvis2-core }
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: Role, name: forensics-read }
+subjects: [{ kind: ServiceAccount, name: forensics, namespace: jarvis2-edge }]
+---
+apiVersion: batch/v1
+kind: Job
+metadata: { name: forensics-20261015, namespace: jarvis2-edge }
+spec:
+  backoffLimit: 2
+  template:
+    spec:
+      serviceAccountName: forensics
+      automountServiceAccountToken: true
+      restartPolicy: Never
+      enableServiceLinks: false
+      containers:
+        - name: dump
+          image: docker.io/alpine/k8s:1.31.13@sha256:8bbc91da39ec2d230bbee9b17aa379ca5f33084f69659f7185adcdf971e6f596
+          env:
+            - { name: HOME, value: /tmp }
+            - { name: PUT_URL, value: "https://fsn1.your-objectstorage.com/de0ch-claude-6fdff6/forensics/2026-10-15-search-outage-673a98be610a1570.tar.gz?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=19PFHRXEKVHHPJIG46HH%2F20261015%2Ffsn1%2Fs3%2Faws4_request&X-Amz-Date=20261015T024530Z&X-Amz-Expires=7200&X-Amz-SignedHeaders=host&X-Amz-Signature=2facf07f0a51a8ba15fa2886bc47b47618cae19aac914a9b0f86bc74ea03ac58" }
+          command: [/bin/bash, -c]
+          args:
+            - |
+              set -u; D=/tmp/out; mkdir -p $D; cd $D
+              date -u +%FT%TZ > taken-at.txt
+              for ns in jarvis2-edge jarvis2-router jarvis2-core; do
+                kubectl get events -n $ns -o json > events-$ns.json 2>>errors.txt
+                kubectl get events -n $ns --sort-by=.lastTimestamp > events-$ns.txt 2>>errors.txt
+                kubectl get pods -n $ns -o json 2>>errors.txt | jq '[.items[] | {name: .metadata.name, created: .metadata.creationTimestamp, node: .spec.nodeName, limits: [.spec.containers[] | {name, resources}], status}]' > pods-$ns.json
+                [ $ns = jarvis2-core ] && continue
+                for p in $(jq -r '.[].name' pods-$ns.json); do
+                  for c in $(jq -r --arg p $p '.[] | select(.name==$p) | .status.containerStatuses[]? | select(.restartCount>0) | .name' pods-$ns.json); do
+                    kubectl logs -n $ns $p -c $c --previous --timestamps > prev-$ns-$p-$c.log 2>>errors.txt
+                  done
+                done
+              done
+              for p in $(jq -r '.[].name' pods-jarvis2-edge.json | grep '^search-'); do kubectl logs -n jarvis2-edge $p --timestamps --since-time=2026-10-15T01:30:00Z > cur-$p.log 2>>errors.txt; done
+              for p in $(jq -r '.[].name' pods-jarvis2-router.json | grep '^router-'); do kubectl logs -n jarvis2-router $p --timestamps --since-time=2026-10-15T02:20:00Z 2>>errors.txt | grep -i 'search' | head -2000 > cur-$p-search-lines.log; done
+              cd /tmp && tar czf b.tgz out && curl -sS -f -X PUT -T b.tgz "$PUT_URL" && echo uploaded
+          resources: { requests: { cpu: 10m, memory: 32Mi }, limits: { memory: 256Mi } }
+          securityContext: { runAsNonRoot: true, runAsUser: 65532, runAsGroup: 65532, allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: { drop: [ALL] }, seccompProfile: { type: RuntimeDefault } }
+          volumeMounts: [{ name: tmp, mountPath: /tmp }]
+      volumes: [{ name: tmp, emptyDir: {} }]
