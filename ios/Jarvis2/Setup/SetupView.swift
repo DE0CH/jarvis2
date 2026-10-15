@@ -40,6 +40,8 @@ struct SetupView: View {
   @State private var unpinned = false
   /// the core takes a seed (core/continuity.go): its keys come from the kit, so a Recover keeps the sessions
   @State private var takesSeed = false
+  /// the Recover asked for is alongside the serving core (standby until it hands over)
+  @State private var alongside = false
 
   var body: some View {
     NavigationStack {
@@ -90,6 +92,9 @@ struct SetupView: View {
             icon: { Image(systemName: "arrow.counterclockwise") }
         }
         .accessibilityIdentifier("setup-choose-recover")
+        // blue/green (core/continuity.go): this core is Recovered while the one before it still serves, and takes over
+        // when that one hands over; only a core that takes a seed, and only an empty one (the router shows it)
+        if takesSeed && status == .empty { alongsideButton }
       } footer: {
         if status != .empty {
           if state?.derived == true { Text("Both need the current recovery kit. Recover keeps the sessions; Reset ends them.") }
@@ -129,8 +134,24 @@ struct SetupView: View {
         }
       }
     case .done:
-      Section { Label(doneText, systemImage: "checkmark.seal.fill").foregroundStyle(.green).accessibilityElement(children: .combine).accessibilityIdentifier("setup-done") }
+      Section {
+        Label(doneText, systemImage: "checkmark.seal.fill").foregroundStyle(.green).accessibilityElement(children: .combine).accessibilityIdentifier("setup-done")
+      } footer: {
+        if state?.serving == "standby" { Text("Waiting for the running core to hand over.") }
+      }
     }
+  }
+
+  private var alongsideButton: some View {
+    Button { failure = nil; alongside = true; step = .recover } label: {
+      Label {
+        VStack(alignment: .leading) {
+          Text("Recover alongside").foregroundStyle(Color.primary)
+          Text("The running core keeps serving until it hands over").font(.footnote).foregroundStyle(Color.secondary)
+        }
+      } icon: { Image(systemName: "arrow.left.arrow.right") }
+    }
+    .accessibilityIdentifier("setup-choose-recover-alongside")
   }
 
   @ToolbarContentBuilder private var toolbar: some ToolbarContent {
@@ -182,7 +203,7 @@ struct SetupView: View {
     failure = nil
     if reset {
       if status == .empty { newKey = MasterKey.generate(); copied = false; step = .newKit } else { step = .resetAuth }
-    } else { step = .recover }
+    } else { alongside = false; step = .recover }
   }
   /// forget a pasted kit (it never outlives the page, and goes after 10 minutes)
   private func forget() { kitText = ""; wipeTimer?.cancel(); wipeTimer = nil }
@@ -288,7 +309,9 @@ struct SetupView: View {
       if keys {
         guard let sk = try await RouterClient.shared.storeKey(coreKey: c.signingKey, core: derived?.agreementKey) else { throw TrustError.stale("store key") }
         let bundle = try CoreSetup.keysBundle(stores, storeKey: sk, coreSeed: seed, lineState: line)
-        _ = try await RouterClient.shared.claim(try await withDevice(try CoreSetup.claim(core: c, phone: phone, master: m, bundle: bundle, device: device, identity: derived)), core: c, answeredBy: derived?.signingKey)
+        let standby = alongside && derived != nil
+        _ = try await RouterClient.shared.claim(try await withDevice(try CoreSetup.claim(core: c, phone: phone, master: m, bundle: bundle, device: device, identity: derived, standby: standby)),
+                                                core: c, answeredBy: derived?.signingKey)
         claimed = true
       } else if let sk = try await RouterClient.shared.storeKey(coreKey: c.signingKey) {
         do {
@@ -299,7 +322,7 @@ struct SetupView: View {
       if !claimed {
         _ = try await RouterClient.shared.claim(try await withDevice(try CoreSetup.claim(core: c, phone: phone, master: m, bundle: try CoreSetup.bundle(stores), device: device)), core: c)
       }
-      finish(try await settled(c, derived: derived, master: m), master: m.publicKey, text: "Recovered")
+      finish(try await settled(c, derived: derived, master: m), master: m.publicKey, text: alongside && derived != nil ? "Recovered alongside" : "Recovered")
     } catch {
       busy = nil
       if step == .confirmRestart { step = .recover }

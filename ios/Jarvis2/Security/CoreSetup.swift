@@ -43,7 +43,10 @@ enum CoreSetup {
   }
   /// lineSeq: the newest record of the sessions the core keeps (this iPhone remembers the highest it saw: LineWitness);
   /// derived: the core's keys come from the master key, so a Recover with the same kit brings this core back
-  struct State: Decodable { let kind: String; let master: String; let phone: PublicKeys?; var lineSeq: Int? = nil; var derived: Bool? = nil }
+  /// serving: "serving" | "standby" (Recovered alongside a core that still serves, waiting for its handoff) | "handed-off"
+  struct State: Decodable {
+    let kind: String; let master: String; let phone: PublicKeys?; var lineSeq: Int? = nil; var derived: Bool? = nil; var serving: String? = nil
+  }
   /// the core as this iPhone sees it
   enum Status: Equatable {
     case empty                // waiting for Reset or Recover
@@ -227,17 +230,23 @@ enum CoreSetup {
   /// `device`: this install's long-lived device key (PhoneKeys.devicePublic), inside the master-signed text so the setup
   /// session takes it only from there (a router can't attach its own); the core ignores the field
   /// `identity`: the keys the bundle's seed derives (CoreContinuity), which the core takes on from the claim (nil = no seed)
-  static func statement(master: String, core: PublicKeys, phone: PublicKeys, bundle: Data, device: String? = nil, identity: PublicKeys? = nil) throws -> String {
+  /// `standby`: Recovered alongside the core that still serves; it serves nothing until that core hands over (only with a
+  /// seed; encoded only when true)
+  static func statement(master: String, core: PublicKeys, phone: PublicKeys, bundle: Data, device: String? = nil, identity: PublicKeys? = nil,
+                        standby: Bool = false) throws -> String {
     struct St: Encodable {
       let kind = "claim"; let master: String; let core: PublicKeys; let phone: PublicKeys; let bundleSha256: String; let device: String?; let identity: PublicKeys?
+      let standby: Bool?
     }
     let e = JSONEncoder(); e.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
-    return String(decoding: try e.encode(St(master: master, core: core, phone: phone, bundleSha256: CoreCrypto.sha256hex(bundle), device: device, identity: identity)), as: UTF8.self)
+    return String(decoding: try e.encode(St(master: master, core: core, phone: phone, bundleSha256: CoreCrypto.sha256hex(bundle), device: device, identity: identity,
+                                            standby: standby ? true : nil)), as: UTF8.self)
   }
 
   /// the body of POST /api/core/claim
-  static func claim(core: PublicKeys, phone: PublicKeys, master: MasterKey, bundle: Data, device: String? = nil, identity: PublicKeys? = nil) throws -> [String: Any] {
-    let st = try statement(master: master.publicKey, core: core, phone: phone, bundle: bundle, device: device, identity: identity)
+  static func claim(core: PublicKeys, phone: PublicKeys, master: MasterKey, bundle: Data, device: String? = nil, identity: PublicKeys? = nil,
+                    standby: Bool = false) throws -> [String: Any] {
+    let st = try statement(master: master.publicKey, core: core, phone: phone, bundle: bundle, device: device, identity: identity, standby: standby)
     return ["statement": st, "masterSig": try master.sign(st), "bundle": try CoreCrypto.seal(bundle, to: core.agreementKey, info: CoreCrypto.claimInfo)]
   }
 

@@ -320,7 +320,7 @@ check((try? CoreSetup.readBackups(servedNow, master: kitMaster, setupKey: setupK
       "…and opens with the kit, laid over the store's whole-store backup")
 // the record of the sessions (core/continuity.go): the router keeps the newest (fetched when the write above came back with a higher X-Line-Seq); the app checks it before a Recover
 let (lss, lsd) = call("/api/core/line-state", base: need("INTEROP_ROUTER"))
-let lsDoc = lss == 200 ? try? JSONDecoder().decode(CoreSetup.LineStateDoc.self, from: lsd) : nil
+let lsDoc: CoreSetup.LineStateDoc? = lss == 200 ? (try? JSONDecoder().decode(CoreSetup.LineStateDoc.self, from: lsd)) : nil
 check(lsDoc.map { d in (try? CoreSetup.checkLineState(d, coreKey: coreKey, atLeast: 1)) != nil } == true, "the router serves the core's record of the sessions, signed by the derived key (HTTP \(lss))")
 check(lsDoc.map { d in throwsErr { _ = try CoreSetup.checkLineState(d, coreKey: coreKey, atLeast: 1_000_000) } } == true, "…and the app refuses one older than it saw")
 check(lsDoc.map { d in throwsErr { _ = try CoreSetup.checkLineState(CoreSetup.LineStateDoc(head: d.head, sealed: Data("x".utf8).base64EncodedString()), coreKey: coreKey, atLeast: 0) } } == true, "…or one that isn't what its head names")
