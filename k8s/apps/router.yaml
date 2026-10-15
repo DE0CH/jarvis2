@@ -29,15 +29,15 @@ spec:
       securityContext: { fsGroup: 65532 }
       containers:
         - name: router
-          image: ghcr.io/de0ch/jarvis2-router:sha-49fd10822374@sha256:7d98bcf2231dce3495cedde87d6557d2bc4e658783880054c59d1d551d88770b
+          image: ghcr.io/de0ch/jarvis2-router:sha-6253dbc5bad8@sha256:5562de5b2ddd3a92978c4b013dd818274635d81f601e57f98bc88b157905171f
           ports: [{ containerPort: 8080 }]
           env:
             # this pod's address, written next to the leader lock: a standby proxies to it (router/leader.go). Must be
             # live before the move to a rolling update, or a standby would proxy to 127.0.0.1, i.e. to itself
             - { name: POD_IP, valueFrom: { fieldRef: { fieldPath: status.podIP } } }
-            - { name: SESSION_IMAGE, value: "ghcr.io/de0ch/jarvis2-session:sha-49fd10822374@sha256:46ee036caab4b223777d99c8b64847d785d338e2942ab4b51a9978304d1de3a6" }
+            - { name: SESSION_IMAGE, value: "ghcr.io/de0ch/jarvis2-session:sha-6253dbc5bad8@sha256:579e09d0fae3e2f3fc41600590f9dba1a65d6f81a644fa046a50bc7334b6abd8" }
             # the CI key's signature over "jarvis2-session-image <SESSION_IMAGE>" (images.yml, keys/ci.pub): the phone checks it
-            - { name: SESSION_IMAGE_SIG, value: "MEUCIBshXvf/83BvoOZfudKHltykcyHxgVqGlmNAh5qVTywIAiEA+cgXLTIg0+VDr6+I479mTuPC9EOEA43NKW+nXMKJ9Ac=" }
+            - { name: SESSION_IMAGE_SIG, value: "MEUCIQDGxT7ywRmXXpqaIXI3EPRgnnZW0In1bVFUdHNPlB0v9QIgOtXZBo2CZOCTtxl7UbY5bm1xGREeeKrDIfiMTifC2Dk=" }
             # every earlier CI-pinned session image with its signature (k8s/apps/session-image-sigs.txt, images.yml)
             - { name: SESSION_IMAGE_SIGS_FILE, value: /sigs/session-image-sigs.txt }
             - { name: FLY_REGION, value: lhr }
