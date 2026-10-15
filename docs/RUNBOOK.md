@@ -53,6 +53,36 @@ when the drain begins ("…start it again"). After a crash (OOM, node reboot), s
 (a resume: `paused`) with "cut off by a router crash" and are started, paused or destroyed again from the app; a
 cut-off start may leave an uncertified machine that the Machines tab flags with no session (Destroy it there).
 
+### Moving the router (and the core) to another box
+
+The move is git only (`router/move.go`, DESIGN "The box"); the boxes reach each other over their private network.
+
+1. The old box's router gets `MOVE_KEY` (its own secret part) and a NodePort for 8080 and 8082 on the private address;
+   a rollout (gapless) brings them. `/setup/status` → `move.role` = `sender`.
+2. The new box's router starts with `MOVE_FROM` (`http://<old private IP>:<8082 NodePort>`), `MOVE_PUBLIC`
+   (`…:<8080 NodePort>`), `MOVE_SELF` (its own public URL as the old box reaches it), the same `MOVE_KEY` and no
+   `MOVE_AT`: it proxies to the old box and copies `/data` every minute (`move.role` = `candidate`, `lastPrecopy`).
+3. To carry the core: the old router gets `NEXT_CORE_URL` = the new box's core, and Deyao Recovers it alongside
+   (`?core=next`; `core.next.serving` = `standby`).
+4. Set `MOVE_AT` (RFC3339, a minute ahead) on the new box's router and push. At that time it freezes the old box, takes
+   the delta and the peer, and serves; `move.gapMs` is the gap. The old box's routers are proxies from then on
+   (`/data/router.moved`); scale its cloudflared to 0 and retire it.
+5. A failed move logs `[move] … FAILED` and aborts: the old box serves again. A new `MOVE_AT` tries again.
+
+### Flipping to the next core
+
+With `NEXT_CORE_URL` set and the next core Recovered alongside (a standby): `POST /setup/core/flip` (setup-signed),
+or `FLIP_AUTO=1` in the router's env. `/setup/status` → `core.current` / `core.next` show each core's `serving`.
+A refused takeover leaves no core serving and DMs Deyao; run the flip again (it reuses the kept final state).
+
+### The router's state backup
+
+`/setup/status` → `backup` (`at`, `path`, `size`, `snapshots`, `error`). Needs `ROUTER_BACKUP_AGE_PUB` and the Storage
+Box keys in the router's env. On a rebuilt box: give the router `ROUTER_RESTORE=1` and `ROUTER_BACKUP_AGE_KEY` (from
+the `infra` store, its own secret part) for its first start — it restores the newest state and every snapshot before
+it loads, and refuses to start if it can't — then remove both. Offline: `router restore-backup DIR` with the Storage
+Box env and `ROUTER_BACKUP_AGE_KEY`.
+
 ## The keys (`keys/`)
 
 - `box.pub` — written by `infra/create.sh` with each new box; commit it. The app and `setup.py` check a core's

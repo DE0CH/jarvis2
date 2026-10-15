@@ -318,6 +318,16 @@ destroying an earlier core's session never fails on it.
 for: they end once more, as before. Every session started after the first Recover on the new app keeps going through
 every later restart, Recover and box move.
 
+**The flip (`router/nextcore.go`).** The router has one serving core (`CORE_URL`) and, with `NEXT_CORE_URL`, a next one.
+The app's Reset-or-Recover calls (`/api/core/identity`, `/api/core/claim`, `/api/core/wipe`) reach the next core with
+`?core=next` (or `X-Jarvis2-Core: next`), so Deyao Recovers it as a standby while the serving core goes on. The flip —
+`POST /setup/core/flip` (setup-signed), or by itself with `FLIP_AUTO=1` once the next core is a standby — drains,
+calls `POST /handoff` on the serving core and `POST /takeover` with that final state on the next, then points every
+later core call at it and records it in the state (`activeCore`), so a restarted router talks to the same core; the
+drain ends. A takeover refused after the handoff leaves no core serving: the router DMs Deyao, keeps the final state
+and a retry of the flip reuses it (a handed-off core stays handed off; there is no undo). `/setup/status` shows each
+core's URL, `serving` value and identity (`core`).
+
 ## The box
 
 It takes changes only from git: no SSH, no reachable k8s API, no inbound port; everything arrives through
@@ -341,6 +351,32 @@ master). `infra/setup.py` writes, backs up and sends nothing until the core's ma
 Secure Enclave key, kept across Reset and Recover — inside the master-signed statement and the router kept that
 device's signature over the statement (`deviceKey`/`deviceSig` on POST /api/core/claim). A claim under the pinned master
 pins the device key it names; a claim countersigned by the pinned device key moves the master pin (a Reset).
+
+**The router moves between boxes with no gap (Deyao, 2026-10-15; `router/move.go`).** Leader and standby (leader.go)
+share one node's volume; a move to another box is the same handover over the boxes' private network. The old box's
+leader (the SENDER, with `MOVE_KEY`) answers the move calls on its own port (`MOVE_ADDR`, 8082; bearer `MOVE_KEY`):
+the file list of `/data`, one file, freeze, done, abort. The new box's router (the JOINER: `MOVE_FROM`, `MOVE_PUBLIC`,
+`MOVE_SELF`, `MOVE_AT`, `MOVE_KEY`) is a CANDIDATE until it has moved: it loads no state, proxies every request to the
+old box and copies `/data` every minute (changed files only). At `MOVE_AT` it takes a last copy and freezes the sender
+(which drains as for a rollout, lets the Claude login's refresh finish, stops the WireGuard peer, saves and freezes its
+state and answers the file list and the peer's `wg.conf`), takes the delta (every file under 1 MB and everything touched
+since the last copy, whatever its size and mtime say), writes the peer into `/data/wg.conf` (it wins over `WG_CONFIG`:
+the peer moves with the leadership, so `jarvis2-box._peer.internal` keeps its address and the machines notice only a
+handshake), starts as the leader and tells the sender done. From then on the old box's routers are only proxies to the
+new one (`/data/router.moved`, kept across restarts: they never load the old state again). Requests that arrive
+meanwhile wait in both boxes' proxies; the gap (sender frozen → new router serving) is logged and shown in
+`/setup/status` (`move`). A failed freeze or delta aborts: the sender thaws (state, peer, drain) and the candidate goes
+on proxying. **The core moves along:** when the new box's core is a standby (Recovered alongside, `?core=next` on the
+old router: `NEXT_CORE_URL`), the freeze also hands the old core off (`POST /handoff`) and the joiner's core takes over
+(`POST /takeover`) before the new router serves.
+
+**The router's state is backed up to the Storage Box (`router/backup.go`).** Every 15 minutes (and at a drain or a
+move's freeze) a tar.gz of `/data` without the snapshots, `tmp/`, uploads over 200 MB and the lock, encrypted with age
+to `ROUTER_BACKUP_AGE_PUB` (the private half, `ROUTER_BACKUP_AGE_KEY`, lives in the `infra` store, not on the box), as
+`claude-records/.jarvis2-router/state-<UTC>.tar.gz.age`; the newest 48 are kept, and nothing is sent when nothing
+changed. Each session snapshot goes once, encrypted the same way, to `.jarvis2-router/snapshots/`, and goes from there
+once gone from `/data`. A rebuilt box's router restores the newest state and every snapshot before it starts
+(`ROUTER_RESTORE=1` with the key), so a lost control box keeps its paused sessions.
 
 ## The path between iPhone and core
 
@@ -462,6 +498,9 @@ by the core, approved by the phone; the box alone can never make one, and no AI 
   polls, then exits; the pod's grace period (30 min) covers the longest one. A crash still cuts actions off: at start
   the router turns each session it left mid-action into a `failed` (or, for a resume whose line is intact, `paused`)
   session with the reason, and Deyao runs the action again. Nothing is saved to be redone.
+  The next pod waits as a standby that proxies to the draining one and takes the state over through the flock on the
+  shared volume (`router/leader.go`); between boxes the same handover runs over the private network (`router/move.go`,
+  "The box").
 
 ## Carried secrets (Deyao, 2026-10-11)
 

@@ -499,6 +499,21 @@ against `SETUP_KEY` (`k8s/apps/router.yaml`), within ±2 min, each signature onc
 image, whether the core answers, and `githubRepos` — `{total, private}` repos the picker's `GITHUB_READ_TOKEN`
 sees (or `{error}`; same 5-minute cache as `/api/github/repos`). `private: 0` = the token has no permission picked.
 `flyOrgs` — the Machines view's orgs as counts only: `[{org, via, error, apps: [name…], machines, attention}]`.
+`move` — the box move (`router/move.go`): `{role: sender|candidate|joined, phase, lastPrecopy, files, bytes, gapMs,
+to, error}`. `backup` — the last state backup: `{at, path, size, snapshots, error}`. `core` — `{current: {url, serving,
+identity}, next: {url, serving, identity, finalPending}}` (`serving`: empty | standby | serving | handed-off).
+
+`POST /setup/core/flip` (setup-signed, empty body) — the next core serves from now on: drain → `POST /handoff` to the
+serving core → `POST /takeover {lineState}` to the next → every later core call goes there. 409 with the reason when
+the next core isn't a standby or refused the takeover (then no core serves until a retry; DECISIONS 176).
+
+Every `/api/core/*` call takes `X-Jarvis2-Core: next` (or `?core=next`) to reach the next core (`NEXT_CORE_URL`)
+instead of the serving one: "Recover alongside" sends it on identity, store-key and claim. `GET /api/state`'s `core`
+has `next: {up, serving, signingKey}` when there is a next core.
+
+The move's own listener (the old box, `MOVE_ADDR` :8082, `Authorization: Bearer <MOVE_KEY>`): `GET /move/files`,
+`GET /move/file?path=…`, `POST /move/freeze {finalizeCore}` → `{files, wg, coreFinal}`, `POST /move/done {url}`,
+`POST /move/abort`.
 
 ## The Claude login (`router/claudelogin.go`)
 

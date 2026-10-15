@@ -1485,3 +1485,26 @@ snapshot failed with "no space left on device", the machine was destroyed anyway
      anyway for the core's outside backup (174), a volume grows in place (often with no restart) where a root disk needs
      a new machine, and one disk to watch and grow is simpler than two. That branch's phone-approved resume fallback
      (newest line snapshot + live transcript) is dropped too: Deyao wants no resume fallback (173, 174).
+
+## The router moves between boxes, its state is backed up, the core flips, 2026-10-15
+
+176. **The router moves to another box by the same handover as a rollout, over the private network; the core moves
+     with it as a flip** (Deyao, 2026-10-15: layout A, a box of its own for the control plane, the move with "as little
+     downtime as possible"; `router/move.go`). The new box's router is a candidate that proxies to the old one and
+     copies `/data` every minute; at `MOVE_AT` the old one drains, freezes and hands over its files and its WireGuard
+     peer, and from then on is only a proxy (`/data/router.moved`, for good). Claude's choices: *pull, not push* (the
+     new box copies; the old box needs only a listener with a shared bearer key, `MOVE_KEY`, on a port the private
+     network reaches); *size + mtime for the pre-copies, and the final delta refetches every file under 1 MB and
+     everything touched since the last copy* (a same-size rewrite within one mtime tick, state.json's case, would
+     otherwise be missed); *the peer moves in `/data/wg.conf`, which wins over `WG_CONFIG`* (the machines'
+     `jarvis2-box._peer.internal` must keep its address, and a new peer of the same name would cut them off until it
+     is made); *a trigger in git (`MOVE_AT`)*, not an API call (the box changes only through git); *a failed freeze or
+     delta aborts and thaws the old box* (state, peer and drain back); *a refused takeover is not undone* (core
+     continuity: a handed-off core stays handed off; the final state is kept for the retry and Deyao is DMed).
+     *The flip* (`router/nextcore.go`): every `/api/core/*` relay takes `X-Jarvis2-Core: next` / `?core=next`, the
+     state names the serving core (`activeCore`) so a restart keeps it, and `FLIP_AUTO=1` flips once the next core is
+     a standby. *The state backup* (`router/backup.go`, Deyao: "router state backed up to the Storage Box"): age to a
+     key whose private half is in `infra`, not on the box (the Storage Box is shared with Jarvis 1's sessions); the
+     snapshots once each, the rest every 15 min when changed, 48 kept; a rebuilt box restores with `ROUTER_RESTORE=1`.
+     *Not chosen*: rsync or a shared volume between boxes (no SSH, no shared storage); a Job that copies through the
+     Storage Box at the cut (minutes of downtime).
