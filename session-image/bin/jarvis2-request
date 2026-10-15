@@ -43,7 +43,7 @@ this session as the caller, from the machine's key) and the reason given here, a
                                     id) is decided, then print its outcome (default timeout 660 s; exit 0 approved,
                                     1 anything else, 2 still waiting)
 
-A session may ask only for itself (grant, unlock, add-store), for a repo to be added, and propose new sessions; --why is required (plain
+A session asks for itself by default (grant, unlock, add-store; another session by naming it), for repos, and proposes new sessions; --why is required (plain
 text, at most 600 characters, 8 lines). Nothing happens until Deyao allows it; a request goes after 10 minutes.
 Once it is decided, the outcome arrives in this session by itself as a message from Jarvis ("[Inbox outcome] …", per
 item for a batch; a paused session gets it when it runs again), so there is no need to poll; `wait` is for a script
