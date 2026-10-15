@@ -57,6 +57,8 @@ type Origin struct {
 	Signed *SignedRequest `json:"signed,omitempty"`
 	Item   int            `json:"item,omitempty"`
 	Batch  string         `json:"batch,omitempty"`
+	// apicalls.go: the API-call request whose approved call made this (its review sheet follows the approval)
+	ViaCall string `json:"viaCall,omitempty"`
 }
 
 type RequestParams struct {
@@ -385,6 +387,7 @@ func (r *Router) noteOrigin(sid string, o Origin) {
 			if a.Session == sid && a.Origin == nil {
 				oc := o
 				a.Origin = &oc
+				linkFollowup(d, a) // apicalls.go
 			}
 		}
 	})
@@ -420,6 +423,7 @@ type InboxItem struct {
 	Options     map[string]string `json:"options,omitempty"` // an approval's unsigned form fields
 	Open        map[string]any    `json:"open"`              // the shell page to open: {kind, options}
 	Batch       string            `json:"batch,omitempty"`   // batches.go: reviewed together with the batch's other items
+	ViaCall     string            `json:"viaCall,omitempty"` // apicalls.go: the API-call request whose approved call brought it about
 }
 
 func (r *Router) Inbox() []InboxItem {
@@ -478,7 +482,7 @@ func requestItem(d *persisted, q *InboxRequest, now time.Time) InboxItem {
 		opts["sessionId"], opts["label"] = q.Params.Session, it.SessionName
 	case requestKindRestore:
 		opts["store"], opts["seq"] = q.Params.Store, q.Params.Seq
-	case requestKindCall: // approved in the Inbox itself (POST /api/requests/{id}/approve), no shell page
+	case requestKindCall: // its own review sheet (app APICallReviewView, web pages/APICall.tsx): Approve = POST /api/requests/{id}/approve
 		it.Session, it.SessionName = q.Origin.Caller.Session, inboxSessionName(d, q.Origin.Caller.Session)
 	}
 	it.Open = map[string]any{"kind": q.Kind, "options": opts}
@@ -492,7 +496,7 @@ func approvalItem(d *persisted, a *Approval) InboxItem {
 	}
 	it := InboxItem{ID: a.ID, Kind: a.Kind, Approval: true, Session: a.Session, SessionName: inboxSessionName(d, a.Session),
 		Caller: o.Caller, CallerText: callerText(d, o.Caller), Call: o.Call, Explanation: a.Explanation, Created: a.Created, Options: a.Options,
-		Batch: a.Batch}
+		Batch: a.Batch, ViaCall: o.ViaCall}
 	if b := d.Batches[a.Batch]; b != nil {
 		exp := approvalDeadline(d, a)
 		it.Expires = &exp
@@ -695,7 +699,20 @@ func (r *Router) registerInbox(app appRoute, m machineRoute, public publicRoute)
 			writeErr(w, err)
 			return
 		}
-		writeJSON(w, 200, map[string]any{"ok": res.State == "done", "state": res.State, "status": res.Status, "error": res.Error})
+		out := map[string]any{"ok": res.State == "done", "state": res.State, "status": res.Status, "error": res.Error}
+		if f, ok := r.CallFollowupsOf(res.ID); ok { // the sheet stays up for these (apicalls.go)
+			out["followups"], out["awaiting"] = f.Followups, f.Awaiting
+		}
+		writeJSON(w, 200, out)
+	})
+	// followups: the core requests an approved API call brought about, and whether one may still come (apicalls.go)
+	app("GET /api/requests/calls/{id}", func(w http.ResponseWriter, req *http.Request) {
+		f, ok := r.CallFollowupsOf(req.PathValue("id"))
+		if !ok {
+			writeJSON(w, 404, map[string]string{"error": "no approved call " + req.PathValue("id") + " (or its result is over " + inboxTTL.String() + " old)"})
+			return
+		}
+		writeJSON(w, 200, f)
 	})
 	// batches (batches.go): several items filed together, reviewed on one page under one Face ID
 	app("POST /api/requests/batch", func(w http.ResponseWriter, req *http.Request) {

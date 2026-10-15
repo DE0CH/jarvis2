@@ -68,6 +68,8 @@ type Approval struct {
 	ImageSig string `json:"imageSig,omitempty"`
 	// batches.go: the batch it was filed in (reviewed with the batch's others under one Face ID)
 	Batch string `json:"batch,omitempty"`
+	// flows.go startAgain: a failed new line's start asked again; Deny leaves the session failed instead of removing it
+	Again bool `json:"again,omitempty"`
 }
 
 type Record struct {

@@ -1008,7 +1008,7 @@ Deyao: several actions approved together with ONE Face ID; the caller groups the
      also refuse a session that is pausing, destroying or paused (`actionsSession`), and its pending call requests
      leave the Inbox, so no action outlives the session's run.
      *Any call*: `POST /m/api/actions/requests/call` files an `api-call` request naming one app route's method, path and
-     body. Deyao approves it on its Inbox card (app or web page); the router runs it through its own public mux with
+     body. Deyao approves it on its own review sheet (app or web page, 166); the router runs it through its own public mux with
      the approving request's Access headers, so the route checks Deyao exactly as when he calls it, and keeps the
      result 10 min for that session alone. No Face ID for the approval: Face ID signs only what the core verifies, and
      a call that needs it (a switch to bypass needs the terminal grant) asks for that separately.
@@ -1274,3 +1274,42 @@ Deyao: several actions approved together with ONE Face ID; the caller groups the
      session on such an image moved past large gets no `upgraded` message (the router logs the refusal).
      *Not chosen*: a fixed list of rungs; a guest set by the router on a running machine (the core alone holds the Fly
      token and makes machines).
+
+## Resume and API calls, 2026-10-15
+
+165. **A resume the core won't answer by itself becomes the resume-upgrade approval in the Inbox** (Deyao, 2026-10-15:
+     "Resume just works with my single tap"). *Root cause*: the core's `approve_by_dead_machine` compares the predecessor
+     cert's image string with the challenge's, byte for byte, and a cert names what Fly reported its machine runs
+     (`registry/repository@sha256:…`). Since 692658e the router named CI's pinned ref for that digest
+     (`…:sha-…@sha256:…`) in every resume, so every same-image resume of a pinned line was refused with "store set,
+     image or options differ from the predecessor's" (2026-10-15: "Jarvis Core rebuild" stayed paused). *What*: an
+     unattended resume names the cert's own image string (`certImage`); a resume the phone approves (a prompt, a
+     rollback, a mode change, a newer image) names CI's pinned ref, whose signature the phone checks. When the core still
+     refuses the unattended resume with that 403, the router files the `resume-upgrade` approval on the same image
+     itself, so the app's Resume, the web page's, the session actions' and the setup resume all end in one Face ID,
+     never a retry or a `{upgrade: true}` call. Any other refusal (a predecessor that isn't a killed, unused machine)
+     stays an error on the paused session. The unattended challenge takes its stores, harness, options and image from the
+     cert itself, the very things the core compares.
+     *From failed too*: a `failed` session with no machine is resumed like a paused one (the core marks a predecessor used
+     only at certify, so a start or certify that failed leaves the line where its pause left it); a new line that never
+     got a cert gets its `new-session` approval again (`startAgain`, `Approval.Again`: Deny leaves it failed instead of
+     removing it). Both apps show Resume for such a session. A failed session that may still have a machine (a pause cut
+     off) is not resumed. The 2026-10-15 `/start` failure ("context deadline exceeded (Client.Timeout exceeded while
+     awaiting headers)") was the router's 15-minute client timeout: the core's Start is one Fly create bounded by its own
+     90 s client and holds no lock across it, so the core process itself didn't answer for 15 minutes: the box, not the
+     code (the same day's box incident has its forensics Job in k8s/apps).
+     *Not chosen*: matching by digest in the core (a core change behind the
+     `core-pin: hold`, and the router-side fix suffices); retrying on the newest image (that changes the image, which
+     Deyao didn't ask for). The match is on the core's refusal text; the core's text changes only with a core release.
+166. **An API call has its own review sheet, which stays up for the core requests the call brings about** (Deyao,
+     2026-10-15). The `api-call` Inbox item opens a sheet (iPhone app `APICallReviewView`, web page `pages/APICall.tsx`)
+     with the call (method, path, body), who asked and the reason; Approve runs it (no Face ID, 155). The router links an
+     approval to the call that made it: the call runs with its request id in the context (`viaCallKey`), the handler's
+     origin carries it (`Origin.ViaCall`), and filing the approval adds it to the call's kept result (`Followups`). A
+     handler whose work may file one later (a resume asking the core) says so before the work starts
+     (`expectFollowup` → `Awaiting {session, until}`, 1 min); filing the approval or the work ending without one
+     (`settleFollowups`) clears it, and a failed call waits for nothing. The sheet reads
+     `GET /api/requests/calls/:id` and waits on exactly that, never on a guess: each open follow-up opens its own
+     approval page inside the sheet (What you sign (exact), Face ID) and comes back to it. The web page can't sign: it
+     shows each follow-up and waits for the iPhone app's Face ID (or denies it). *Not chosen*: the sheet watching the
+     Inbox for any approval of the call's session (an unrelated approval would be shown as the call's), and a fixed wait.

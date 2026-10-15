@@ -48,7 +48,7 @@ type CallResult struct {
 	Caller      Caller    `json:"caller"`
 	Method      string    `json:"method"`
 	Path        string    `json:"path"`
-	State       string    `json:"state"` // done | denied | failed
+	State       string    `json:"state"` // running | done | denied | failed
 	Status      int       `json:"status,omitempty"`
 	ContentType string    `json:"contentType,omitempty"`
 	Body        string    `json:"body,omitempty"`
@@ -56,7 +56,22 @@ type CallResult struct {
 	Error       string    `json:"error,omitempty"`
 	ApprovedBy  string    `json:"approvedBy,omitempty"` // app | web
 	At          time.Time `json:"at"`
+	// the core requests the call brought about (approvals whose Origin.ViaCall is this call), and, while one may
+	// still come, what the router waits on: the review sheet follows exactly these, never a guess
+	Followups []string   `json:"followups,omitempty"`
+	Awaiting  *CallAwait `json:"awaiting,omitempty"`
 }
+
+// CallAwait: an approved call started work that may still file a core request (a resume asking the core): the
+// sheet waits for it until Until, or until the router says nothing more comes (Awaiting cleared)
+type CallAwait struct {
+	Session string    `json:"session,omitempty"`
+	Until   time.Time `json:"until"`
+}
+
+// followupWait: how long an approved call's sheet waits for a request the call's work may still file. The work is
+// router-side (a challenge, one core call): seconds; a minute covers a slow core.
+const followupWait = time.Minute
 
 // callIn: what POST /m/api/actions/requests/call takes. body is any JSON value (sent as application/json);
 // bodyText a raw body with its contentType instead.
@@ -198,8 +213,11 @@ func (r *Router) ApproveCall(id string, approver *http.Request) (*CallResult, er
 		r.keepCallResult(res)
 		return res, nil
 	}
-	req := httptest.NewRequest(q.Params.Method, q.Params.Path, strings.NewReader(q.Params.Body)).
-		WithContext(context.WithValue(approver.Context(), onBehalfKey{}, q.Origin.Caller))
+	running0 := *res
+	running0.State = "running"
+	r.keepCallResult(&running0) // the approvals the call files link to it while it runs (linkFollowup)
+	ctx := context.WithValue(context.WithValue(approver.Context(), onBehalfKey{}, q.Origin.Caller), viaCallKey{}, q.ID)
+	req := httptest.NewRequest(q.Params.Method, q.Params.Path, strings.NewReader(q.Params.Body)).WithContext(ctx)
 	for _, h := range []string{"Cf-Access-Jwt-Assertion", "cf-access-token", "Cf-Access-Authenticated-User-Email"} {
 		if v := approver.Header.Get(h); v != "" {
 			req.Header.Set(h, v)
@@ -229,11 +247,114 @@ func (r *Router) ApproveCall(id string, approver *http.Request) (*CallResult, er
 // onBehalfKey: the context value naming whose approved call the router is running (appCaller)
 type onBehalfKey struct{}
 
+// viaCallKey: the context value naming the API-call request whose approved call the router is running: the
+// approvals the call's handler files (or notes an origin for) are linked to it (Origin.ViaCall)
+type viaCallKey struct{}
+
+// viaCall: the API-call request a request runs for ("" for Deyao's own calls)
+func viaCall(req *http.Request) string {
+	id, _ := req.Context().Value(viaCallKey{}).(string)
+	return id
+}
+
+// expectFollowup: the handler of an approved call started work that may file a core request for session sid
+// later (a resume): the call's sheet waits for it. Called BEFORE the work starts, so the work's own end
+// (settleFollowups) or its request (linkFollowup) always comes after and clears it.
+func (r *Router) expectFollowup(req *http.Request, sid string) {
+	id := viaCall(req)
+	if id == "" {
+		return
+	}
+	r.st.Do(func(d *persisted) {
+		if x := d.CallResults[id]; x != nil && len(x.Followups) == 0 {
+			x.Awaiting = &CallAwait{Session: sid, Until: time.Now().UTC().Add(followupWait)}
+		}
+	})
+}
+
+// settleFollowups: the work on session sid ended; a call waiting on it gets nothing more (inside or outside st.Do)
+func (r *Router) settleFollowups(sid string) {
+	r.st.Do(func(d *persisted) {
+		for _, x := range d.CallResults {
+			if x.Awaiting != nil && x.Awaiting.Session == sid {
+				x.Awaiting = nil
+			}
+		}
+	})
+}
+
+// linkFollowup: an approval whose origin is an approved call joins that call's follow-ups (inside st.Do)
+func linkFollowup(d *persisted, a *Approval) {
+	if a.Origin == nil || a.Origin.ViaCall == "" {
+		return
+	}
+	x := d.CallResults[a.Origin.ViaCall]
+	if x == nil {
+		return
+	}
+	if !containsString(x.Followups, a.ID) {
+		x.Followups = append(x.Followups, a.ID)
+	}
+	x.Awaiting = nil
+}
+
+// CallFollowups: what the review sheet of an API call shows after Approve: the call's outcome, each core request it
+// brought about (the Inbox item while it waits; gone = answered, denied or lapsed) and what may still come
+type CallFollowups struct {
+	ID        string         `json:"id"`
+	State     string         `json:"state"`
+	Status    int            `json:"status,omitempty"`
+	Error     string         `json:"error,omitempty"`
+	Followups []CallFollowup `json:"followups"`
+	Awaiting  *CallAwait     `json:"awaiting,omitempty"`
+}
+
+type CallFollowup struct {
+	ID   string     `json:"id"`
+	Open bool       `json:"open"`           // still in the Inbox
+	Item *InboxItem `json:"item,omitempty"` // while open: the item, opened like any other (its signed page)
+}
+
+func (r *Router) CallFollowupsOf(id string) (CallFollowups, bool) {
+	var x CallResult
+	ok := false
+	r.st.Do(func(d *persisted) {
+		now := time.Now().UTC()
+		pruneCallResults(d, now)
+		if c := d.CallResults[id]; c != nil {
+			if c.Awaiting != nil && !now.Before(c.Awaiting.Until) {
+				c.Awaiting = nil
+			}
+			x, ok = *c, true
+		}
+	})
+	if !ok {
+		return CallFollowups{}, false
+	}
+	out := CallFollowups{ID: x.ID, State: x.State, Status: x.Status, Error: x.Error, Followups: []CallFollowup{}, Awaiting: x.Awaiting}
+	for _, fid := range x.Followups {
+		f := CallFollowup{ID: fid}
+		if it, open := r.InboxItem(fid); open {
+			f.Open, f.Item = true, &it
+		}
+		out.Followups = append(out.Followups, f)
+	}
+	return out, true
+}
+
 var errNoRequest = errors.New("this request is gone (answered, denied or expired)")
 
+// keepCallResult: the call's outcome; the follow-ups linked while it ran stay, and a call that failed brings
+// nothing more about
 func (r *Router) keepCallResult(res *CallResult) {
 	r.st.Do(func(d *persisted) {
 		pruneCallResults(d, time.Now().UTC())
+		if old := d.CallResults[res.ID]; old != nil && old != res {
+			res.Followups, res.Awaiting = old.Followups, old.Awaiting
+		}
+		if res.State == "failed" || res.Status >= 400 {
+			res.Awaiting = nil
+		}
 		d.CallResults[res.ID] = res
 	})
 }
@@ -345,6 +466,7 @@ var callRules = map[string]callRule{
 	"POST /api/requests/unlock":                 callNo, // the Inbox
 	"DELETE /api/requests/{id}":                 callNo, // the Inbox
 	"GET /api/requests/{id}":                    callNo, // the Inbox
+	"GET /api/requests/calls/{id}":              callNo, // the Inbox
 	"POST /api/requests/{id}/approve":           callNo, // the Inbox
 	"POST /api/requests/{id}/done":              callNo, // the Inbox
 	"GET /api/search":                           callBody,

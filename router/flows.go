@@ -330,6 +330,7 @@ func (r *Router) addApproval(a *Approval) {
 			denied = true
 		}
 		d.Approvals[a.ID] = a
+		linkFollowup(d, a) // apicalls.go: an approved call's sheet follows it
 	})
 	if denied {
 		r.Reject(a.ID)
@@ -697,6 +698,8 @@ func (r *Router) RejectAs(id, outcome string) error {
 		s := d.Sessions[a.Session]
 		switch {
 		case s == nil:
+		case a.Kind == "new-session" && a.Again:
+			s.State, s.Error = "failed", "the start again was "+outcome // a failed line asked to start again stays
 		case a.Kind == "new-session":
 			delete(d.Sessions, a.Session) // no machine was made
 		case a.Kind == "resume-upgrade":
@@ -754,56 +757,162 @@ func (r *Router) Resume(id string, upgrade bool) error {
 			s = *x
 		}
 	})
-	if s.ID == "" || s.State != "paused" || s.Cert == nil {
+	// paused, or failed with no machine (a start or certify that failed, or a start cut off by a router restart): the
+	// line is where its last pause left it (the core marks a predecessor used only at certify), so Resume brings it back
+	if s.ID == "" || !(s.State == "paused" || s.State == "failed" && s.MachineID == "") {
 		unlock()
-		return fmt.Errorf("session %s isn't paused", id)
+		return fmt.Errorf("session %s isn't paused (or failed with no machine)", id)
+	}
+	if s.Cert == nil {
+		if s.State != "failed" {
+			unlock()
+			return fmt.Errorf("session %s has no line to resume", id)
+		}
+		return r.startAgain(s, unlock) // a new line whose first start failed
 	}
 	r.setState(id, "resuming", "")
 	go func() {
 		defer unlock()
-		image := pinnedImage(s.Image, r.cfg.SessionImage, r.cfg.ImageOrder) // the same image, as CI pinned and signed it
-		if !upgrade && slices.Contains(s.Stores, "claude") && legacyLoginImage(s.Image, r.cfg.ImageOrder) {
+		defer r.settleFollowups(id) // apicalls.go: a call waiting on this resume learns nothing more comes of it
+		// the same image: the dead-machine rule compares the cert's own image string (what Fly reported, repo@digest);
+		// a phone approval names CI's pinned ref for that digest (ref:sha-…@digest), whose signature the phone checks
+		own := certImage(s.Cert, s.Image)
+		pinned := pinnedImage(own, r.cfg.SessionImage, r.cfg.ImageOrder)
+		if !upgrade && slices.Contains(s.Stores, "claude") && legacyLoginImage(own, r.cfg.ImageOrder) {
 			upgrade = true // its machine would fetch the Claude login from Jarvis 1: the newest image instead
-			log.Printf("session %s: resume on the newest image (its image %s predates the router's Claude login)", id, s.Image)
-		}
-		if upgrade {
-			image = r.cfg.SessionImage
+			log.Printf("session %s: resume on the newest image (its image %s predates the router's Claude login)", id, own)
 		}
 		once := r.resumeOnce(&s) // vouch.go: a resume prompt or a rollback: only the phone approves one
-		ch, err := r.succession(s.Cert, "", s.Stores, s.Harness, s.PermissionMode, image, lineConfig(&s), once)
-		if err != nil {
-			r.setState(id, "paused", "resume: "+err.Error())
-			return
-		}
-		if once != "" {
-			r.onceTaken(id) // the cert will carry them; nothing else delivers them
-			r.setState(id, "approval", "")
-			r.addApproval(&Approval{Kind: "resume-upgrade", Session: id, Label: s.Label, Challenge: ch,
-				Options: map[string]string{"permissionMode": normMode(s.PermissionMode), "once": once}})
-			return
-		}
 		// the permission mode is signed: a resume in another mode than the line's cert (raising to bypass) is a
 		// change the iPhone approves, like a newer image
-		if certMode(s.Cert) != normMode(s.PermissionMode) {
+		modeChange := certMode(s.Cert) != normMode(s.PermissionMode)
+		phone := func(image string, opts map[string]string) {
+			ch, err := r.succession(s.Cert, "", s.Stores, s.Harness, s.PermissionMode, image, lineConfig(&s), once)
+			if err != nil {
+				r.setState(id, "paused", "resume: "+err.Error())
+				return
+			}
+			if once != "" {
+				r.onceTaken(id) // the cert will carry them; nothing else delivers them
+			}
 			r.setState(id, "approval", "")
-			r.addApproval(&Approval{Kind: "resume-upgrade", Session: id, Label: s.Label, Challenge: ch,
-				Options: map[string]string{"permissionMode": normMode(s.PermissionMode)}})
+			r.addApproval(&Approval{Kind: "resume-upgrade", Session: id, Label: s.Label, Challenge: ch, Options: opts})
+		}
+		phoneImage := pinned
+		if upgrade {
+			phoneImage = r.cfg.SessionImage
+		}
+		switch {
+		case once != "":
+			phone(phoneImage, map[string]string{"permissionMode": normMode(s.PermissionMode), "once": once})
+			return
+		case modeChange:
+			phone(phoneImage, map[string]string{"permissionMode": normMode(s.PermissionMode)})
+			return
+		case upgrade:
+			// a change: the iPhone approves first; nothing happens to the old machine until then
+			phone(phoneImage, nil)
 			return
 		}
-		if upgrade {
-			// a change: the iPhone approves first; nothing happens to the old machine until then
-			r.setState(id, "approval", "")
-			r.addApproval(&Approval{Kind: "resume-upgrade", Session: id, Label: s.Label, Challenge: ch})
+		// the core compares the cert's stores, options and image with the challenge's: all of them from the cert
+		stores, harness := certStoresHarness(s.Cert, s.Stores, s.Harness)
+		ch, err := r.succession(s.Cert, "", stores, harness, s.PermissionMode, own, lineConfig(&s), "")
+		if err != nil {
+			r.setState(id, "paused", "resume: "+err.Error())
 			return
 		}
 		a, err := r.core.Call("/approve/by-dead-machine", map[string]any{"challenge": ch})
+		if refusedSameLine(err) {
+			// the core won't answer this resume by itself: it becomes the resume-upgrade approval in the Inbox, on
+			// the same image, so one tap (and Face ID) resumes it — never a retry or a call asking for it
+			log.Printf("session %s: the core refused the unattended resume (%v): asking the phone", id, err)
+			phone(pinned, nil)
+			return
+		}
 		if err != nil {
 			r.setState(id, "paused", "resume: "+err.Error())
 			return
 		}
+		r.settleFollowups(id) // no approval follows: the machine starts now
 		r.startAndCertify(id, a)
 	}()
 	return nil
+}
+
+// startAgain: a new line whose first start failed (the start or certify failed, or a router restart cut it off) gets
+// its new-session approval again, built from the session as it is (vouch.go sessionConfig): one Face ID starts it.
+// Its Deny leaves the session failed (Approval.Again) rather than removing it.
+func (r *Router) startAgain(s Session, unlock func()) error {
+	r.setState(s.ID, "resuming", "")
+	go func() {
+		defer unlock()
+		defer r.settleFollowups(s.ID)
+		config, err := r.sessionConfig(&s)
+		var ch *Doc
+		if err == nil {
+			ch, err = r.succession(nil, "", s.Stores, s.Harness, s.PermissionMode, r.cfg.SessionImage, config, "")
+		}
+		if err != nil {
+			r.setState(s.ID, "failed", "start again: "+err.Error())
+			return
+		}
+		opts := map[string]string{"model": s.Model, "size": s.Size, "permissionMode": s.PermissionMode, "repos": s.Repos}
+		if len(s.Content) > 0 {
+			opts["content"] = strings.Join(s.Content, ",")
+		}
+		liveOptions(&s, opts)
+		opsOptions(&s, opts)
+		r.setState(s.ID, "approval", "")
+		r.addApproval(&Approval{Kind: "new-session", Session: s.ID, Label: s.Label, Challenge: ch, Options: opts, Again: true})
+	}()
+	return nil
+}
+
+// refusedSameLine: the core's approve_by_dead_machine refusing a resume because it doesn't see the same line (store
+// set, image or options differ, or a one-time input); the phone can still approve it (core/core.go)
+func refusedSameLine(err error) bool {
+	var ce *CoreError
+	return errors.As(err, &ce) && ce.Status == 403 && strings.Contains(ce.Msg, "differ from the predecessor")
+}
+
+// certStoresHarness: the stores and harness the line's cert names (the fallbacks when it names none)
+func certStoresHarness(c *Doc, stores []string, harness string) ([]string, string) {
+	if c == nil {
+		return stores, harness
+	}
+	var x struct {
+		Stores  []string `json:"stores"`
+		Options struct {
+			Harness string `json:"harness"`
+		} `json:"options"`
+	}
+	if json.Unmarshal([]byte(c.Payload), &x) != nil {
+		return stores, harness
+	}
+	if x.Stores != nil {
+		stores = x.Stores
+	}
+	if x.Options.Harness != "" {
+		harness = x.Options.Harness
+	}
+	return stores, harness
+}
+
+// certImage: the image the line's cert says its machine ran (what Fly reported, repo@digest); fallback when the
+// cert names none
+func certImage(c *Doc, fallback string) string {
+	if c == nil {
+		return fallback
+	}
+	var x struct {
+		Machine *struct {
+			Image string `json:"image"`
+		} `json:"machine"`
+	}
+	if json.Unmarshal([]byte(c.Payload), &x) != nil || x.Machine == nil || x.Machine.Image == "" {
+		return fallback
+	}
+	return x.Machine.Image
 }
 
 // ---- destroy ---------------------------------------------------------------------------------------------

@@ -382,12 +382,13 @@ func (r *Router) buildHandlers() {
 		if in.Prompt != "" {
 			args["prompt"] = fmt.Sprintf("(%d characters)", len([]rune(in.Prompt)))
 		}
-		in.Origin = &Origin{Caller: appCaller(req), Call: APICall{Method: "POST", Path: "/api/sessions", Args: args}}
+		in.Origin = &Origin{Caller: appCaller(req), Call: APICall{Method: "POST", Path: "/api/sessions", Args: args}, ViaCall: viaCall(req)}
 		id, err := r.CreateSession(in)
 		if err != nil {
 			scheduleErr(w, err)
 			return
 		}
+		r.expectFollowup(req, id) // apicalls.go: its new-session approval (unless already linked)
 		writeJSON(w, 200, map[string]any{"id": id, "requestId": in.RequestID})
 	})
 	app("POST /api/sessions/{id}/pause", func(w http.ResponseWriter, req *http.Request) {
@@ -412,7 +413,8 @@ func (r *Router) buildHandlers() {
 			writeErr(w, err)
 			return
 		}
-		r.noteOrigin(req.PathValue("id"), Origin{Caller: appCaller(req), Call: APICall{Method: "POST", Path: req.URL.Path, Args: map[string]any{"upgrade": in.Upgrade}}})
+		r.noteOrigin(req.PathValue("id"), Origin{Caller: appCaller(req), Call: APICall{Method: "POST", Path: req.URL.Path, Args: map[string]any{"upgrade": in.Upgrade}}, ViaCall: viaCall(req)})
+		r.expectFollowup(req, req.PathValue("id")) // apicalls.go: an approved call's sheet waits for the resume's approval, if any
 		if err := r.resumeWithPrompt(req.PathValue("id"), in.Upgrade, prompt); err != nil {
 			writeErr(w, err)
 			return

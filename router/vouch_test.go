@@ -25,6 +25,7 @@ type v2Core struct {
 	fakeCore
 	mu     sync.Mutex
 	bodies map[string][]map[string]any
+	refuse string // approve_by_dead_machine answers 403 with this (the core's refusal)
 }
 
 func (c *v2Core) last(path string) map[string]any {
@@ -52,6 +53,15 @@ func (c *v2Core) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		writeJSON(w, 200, map[string]any{"entries": []any{}, "head": c.key.doc(map[string]any{"kind": "input-log-head", "seq": 0})})
 	case "/succession":
 		writeJSON(w, 200, c.key.doc(map[string]any{"kind": "challenge", "nonce": strings.Repeat("a", 64), "request": b}))
+	case "/approve/by-dead-machine":
+		c.mu.Lock()
+		refuse := c.refuse
+		c.mu.Unlock()
+		if refuse == "" {
+			c.fakeCore.ServeHTTP(w, req)
+			return
+		}
+		writeJSON(w, 403, c.key.doc(map[string]any{"error": refuse}))
 	case "/attest":
 		writeJSON(w, 200, c.key.doc(map[string]any{"kind": "input", "machine": b["machine"], "input": b["input"], "sha256": b["sha256"]}))
 	default:
