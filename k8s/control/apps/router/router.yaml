@@ -50,7 +50,9 @@ spec:
             - { name: WATCH_URL, value: "http://10.77.0.3:30095" }
             # the move from the old box (router/move.go, docs/RUNBOOK.md "Moving to the two boxes"): this router
             # proxies to the old one and copies its /data until MOVE_AT (empty = not yet), then takes over
-            - { name: MOVE_FROM, value: "http://10.77.0.9:30082" }
+            # the old box's move port through its tunnel (its NodePorts listen only on its node IP): /move/* behind
+            # Access, the service token jarvis2-move in the router-move part (MOVE_ACCESS_ID/SECRET)
+            - { name: MOVE_FROM, value: "https://jarvis2.deyaochen.com" }
             - { name: MOVE_PUBLIC, value: "http://10.77.0.9:30080" }
             - { name: MOVE_SELF, value: "http://10.77.0.2:30080" }
             - { name: MOVE_AT, value: "" }
