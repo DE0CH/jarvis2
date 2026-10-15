@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"strings"
 	"testing"
 )
@@ -29,8 +30,12 @@ func TestDowngradeNeedsAMode(t *testing.T) {
 	if k, err := keep("--none"); err != nil || k == nil || len(k) != 0 {
 		t.Fatalf("--none: %v %v", k, err)
 	}
-	if _, err := keep("--drop", "identity"); err == nil {
-		t.Fatal("dropping a store not held must be refused")
+	// a store not held is already gone: the held ones named go, and naming only unheld ones changes nothing
+	if k, err := keep("--drop", "identity", "infra"); err != nil || strings.Join(k, " ") != "default github-claude-env tunnel" {
+		t.Fatalf("--drop with one unheld: %v %v", k, err)
+	}
+	if _, err := keep("--drop", "identity"); !errors.Is(err, errNothingToDrop) {
+		t.Fatalf("--drop of only unheld stores: %v", err)
 	}
 	if _, err := keep("--keep", "default", "gmail"); err == nil {
 		t.Fatal("keeping a store not held must be refused")

@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -114,25 +115,34 @@ func TestFetchAttachments(t *testing.T) {
 	for n, b := range files {
 		refs = append(refs, AttachmentRef{Name: n, Sha256: hexSum(b), Size: int64(len(b))})
 	}
-	refused := func(why string, r []AttachmentRef) {
+	// one file that doesn't check is refused alone: the other is kept, the refused one named for the first message,
+	// and the router's copy kept (for a look by hand)
+	refused := func(why string, r []AttachmentRef, bad string) {
 		t.Helper()
-		if env := fetchAttachments(c, core.pub(), r); env != nil {
-			t.Fatalf("%s: taken: %v", why, env)
+		env := strings.Join(fetchAttachments(c, core.pub(), r), "\n")
+		if !strings.Contains(env, "SESSION_ATTACHMENTS_REFUSED=") || !strings.Contains(env, bad) {
+			t.Fatalf("%s: the refused file isn't named: %v", why, env)
 		}
-		if _, err := os.Stat(filepath.Join(home, attachStaging)); err == nil {
+		if _, err := os.Stat(filepath.Join(home, attachStaging, bad)); err == nil {
 			t.Fatalf("%s: a refused attachment was left on disk", why)
 		}
 		if deleted {
 			t.Fatalf("%s: the router's copy was dropped for a refused set", why)
 		}
+		for _, f := range r {
+			if f.Name != bad && !strings.Contains(env, fmt.Sprintf(`{"name":%q`, f.Name)) {
+				t.Fatalf("%s: the verified %s was dropped too: %v", why, f.Name, env)
+			}
+		}
+		os.RemoveAll(filepath.Join(home, attachStaging))
 	}
 	// the router swapped a file: its bytes aren't the ones the cert names
 	bad := append([]AttachmentRef{}, refs...)
 	bad[0].Sha256 = hexSum("other bytes")
-	refused("a swapped file", bad)
+	refused("a swapped file", bad, bad[0].Name)
 	bad = append([]AttachmentRef{}, refs...)
 	bad[1].Size++
-	refused("another size", bad)
+	refused("another size", bad, bad[1].Name)
 	// no attestation, an attestation for another machine, kind, input, or not by the core: not in the input log
 	mu.Lock()
 	saved := attest["notes%.txt"]
@@ -140,7 +150,7 @@ func TestFetchAttachments(t *testing.T) {
 		attestFor(core, "m1", "attachment", []byte("PNG")), attestFor(newKey(), "m1", "attachment", []byte("text"))} {
 		attest["notes%.txt"] = a
 		mu.Unlock()
-		refused("an attachment without the core's attestation", refs)
+		refused("an attachment without the core's attestation", refs, "notes%.txt")
 		mu.Lock()
 	}
 	attest["notes%.txt"] = saved

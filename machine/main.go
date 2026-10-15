@@ -327,8 +327,14 @@ func prepare() error {
 	}
 	trustLineKeys(cert) // deliver.go: this line's signing keys, for what it asked to be delivered later
 
-	// 3. the secrets, sealed to this machine's encryption key
+	// 3. the secrets, sealed to this machine's encryption key. A store still locked after the wait doesn't stop the
+	// start: the session runs with none of its secrets (the lower-privilege state; the core seals all or nothing) and
+	// gets them when Deyao's unlock goes through (the router's refresh-secrets rewrites ~/.secrets)
 	secrets, err := pullSecrets(c, coreKey, me)
+	if errors.Is(err, errStoresLocked) {
+		log.Printf("%v: starting without secrets; ~/.secrets fills in once the store is unlocked (Unlock… in the app, or `jarvis2-request unlock`)", err)
+		secrets, err = map[string]string{}, nil
+	}
 	if err != nil {
 		return err
 	}
@@ -419,22 +425,31 @@ func readTrim(p string) (string, error) {
 	return s, nil
 }
 
+// pullTries × pullWait: how long a pull waits on a locked store before the machine starts without its secrets
+var pullTries, pullWait = 300, 2 * time.Second
+
+// errStoresLocked: a store of the cert is still locked after the wait (the core's 423)
+var errStoresLocked = errors.New("a store this session's cert names is still locked")
+
 // pullSecrets: the core seals the answer to this machine's encryption key, so it needs no other proof
 func pullSecrets(c *client, coreKey, me string) (map[string]string, error) {
 	var doc SignedDoc
 	var lastErr error
 	// a store may still be locked: the app shows which (the router notes the core's 423) and Deyao unlocks it on the
 	// phone; the pull is retried every 2 s for 10 minutes, so the machine carries on within seconds of the unlock
-	for i := 0; i < 300; i++ {
+	for i := 0; i < pullTries; i++ {
 		if lastErr = c.json("POST", "/m/pull-secrets", map[string]string{}, &doc); lastErr == nil {
 			break
 		}
 		if i%30 == 0 {
 			log.Printf("pull secrets: %v (retrying)", lastErr)
 		}
-		time.Sleep(2 * time.Second)
+		time.Sleep(pullWait)
 	}
 	if lastErr != nil {
+		if strings.Contains(lastErr.Error(), "HTTP 423") {
+			return nil, fmt.Errorf("pull secrets: %w (%v)", errStoresLocked, lastErr)
+		}
 		return nil, fmt.Errorf("pull secrets: %w", lastErr)
 	}
 	var out struct {
@@ -1029,15 +1044,29 @@ func downgradeArgs(args []string) (downgradeSpec, error) {
 	return sp, nil
 }
 
-// keepFor: the stores to keep, from what this session holds now. Every name must be held (a typo or a store
-// already gone is refused, not ignored), and --drop that would leave nothing is refused: that is --none.
+// errNothingToDrop: --drop named only stores this session doesn't hold: what was asked already holds
+var errNothingToDrop = errors.New("nothing to drop")
+
+// keepFor: the stores to keep, from what this session holds now. --keep must name held stores (a typo would drop the
+// real ones); --drop of a store not held is no refusal (it is already gone: noted on stderr), but a --drop that would
+// leave nothing is refused: that is --none.
 func (sp downgradeSpec) keepFor(held []string) ([]string, error) {
 	if sp.mode == "none" {
 		return []string{}, nil
 	}
+	gone := []string{}
 	for _, n := range sp.names {
 		if !hasStore(held, n) {
-			return nil, fmt.Errorf("%s isn't held by this session (held: %s); nothing changed", n, strings.Join(held, " "))
+			if sp.mode == "keep" {
+				return nil, fmt.Errorf("%s isn't held by this session (held: %s); nothing changed. --keep names only held stores", n, strings.Join(held, " "))
+			}
+			gone = append(gone, n)
+		}
+	}
+	if len(gone) > 0 {
+		fmt.Fprintf(os.Stderr, "not held by this session already: %s\n", strings.Join(gone, " "))
+		if len(gone) == len(sp.names) {
+			return nil, errNothingToDrop
 		}
 	}
 	if sp.mode == "keep" {
@@ -1088,6 +1117,10 @@ func downgradeOnce(sp downgradeSpec) error {
 		return errors.New("couldn't read this session's cert, so the stores it holds aren't known; nothing changed")
 	}
 	keep, err := sp.keepFor(held)
+	if errors.Is(err, errNothingToDrop) {
+		fmt.Fprintf(os.Stderr, "nothing changed: this session holds %s\n", strings.Join(held, " "))
+		return nil
+	}
 	if err != nil {
 		return err
 	}

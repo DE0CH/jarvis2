@@ -360,6 +360,14 @@ func deliver(c *client, d Delivery) error {
 	if err := notFrozen(); err != nil {
 		return err
 	}
+	if d.Kind == "request-outcome" && d.Request != nil {
+		if f := outcomeFresh(d); len(f.Outcomes) != len(d.Outcomes) {
+			if text, _, err = deliveryText(f, readLineKeys()); err != nil { // the same checks, on the items still untold
+				return err
+			}
+			d = f
+		}
+	}
 	deliverOrderMu.Lock() // one delivery at a time between the check and the record
 	defer deliverOrderMu.Unlock()
 	now := time.Now()

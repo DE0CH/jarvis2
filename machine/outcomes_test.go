@@ -120,4 +120,13 @@ func TestRequestOutcomes(t *testing.T) {
 	if err := notReplayed(bd, time.Now()); err == nil {
 		t.Fatal("delivered twice")
 	}
+	// a later delivery with an item told already and a new one: the new one is still delivered
+	more := bd
+	more.Outcomes = append(append([]OutcomeItem{}, bd.Outcomes...), OutcomeItem{Item: 2, Outcome: "denied", Ref: "q4"})
+	if f := outcomeFresh(more); len(f.Outcomes) != 1 || f.Outcomes[0].Item != 2 {
+		t.Fatalf("fresh %+v", f.Outcomes)
+	}
+	if err := notReplayed(outcomeFresh(more), time.Now()); err != nil {
+		t.Fatal(err)
+	}
 }

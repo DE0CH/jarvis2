@@ -23,6 +23,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -341,27 +342,65 @@ func proofHash(p *SignedDoc) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// outcomeNotReplayed: each item of a filing is told once (deliveredFile, which travels in the snapshot)
+// outcomeNotReplayed: each item of a filing is told once (deliveredFile, which travels in the snapshot); a delivery
+// whose items were all told already is refused (the router replaying it). With record, the untold items are marked told.
 func outcomeNotReplayed(d Delivery, now time.Time, record bool) error {
 	deliveredMu.Lock()
 	defer deliveredMu.Unlock()
-	home, _ := os.UserHomeDir()
-	p := filepath.Join(home, deliveredFile)
-	seen := map[string]delivered{}
-	if b, err := os.ReadFile(p); err == nil {
-		json.Unmarshal(b, &seen)
-	}
-	for _, it := range d.Outcomes {
-		if _, ok := seen[fmt.Sprintf("outcome %s %d", d.Request.Sig, it.Item)]; ok {
-			return fmt.Errorf("the outcome of item %d of this filing was already delivered", it.Item)
-		}
+	seen := readDelivered()
+	fresh := outcomeUntold(d, seen)
+	if len(fresh) == 0 {
+		return fmt.Errorf("the outcomes of this filing's items %v were all delivered already", outcomeItems(d.Outcomes))
 	}
 	if !record {
 		return nil
 	}
-	for _, it := range d.Outcomes {
+	for _, it := range fresh {
 		seen[fmt.Sprintf("outcome %s %d", d.Request.Sig, it.Item)] = delivered{At: now.Unix()}
 	}
 	b, _ := json.Marshal(seen)
-	return os.WriteFile(p, b, 0o600)
+	home, _ := os.UserHomeDir()
+	return os.WriteFile(filepath.Join(home, deliveredFile), b, 0o600)
+}
+
+func readDelivered() map[string]delivered {
+	home, _ := os.UserHomeDir()
+	seen := map[string]delivered{}
+	if b, err := os.ReadFile(filepath.Join(home, deliveredFile)); err == nil {
+		json.Unmarshal(b, &seen)
+	}
+	return seen
+}
+
+// outcomeUntold: the delivery's items not told yet (an item told before is skipped, the rest still delivered)
+func outcomeUntold(d Delivery, seen map[string]delivered) []OutcomeItem {
+	out := []OutcomeItem{}
+	for _, it := range d.Outcomes {
+		if _, ok := seen[fmt.Sprintf("outcome %s %d", d.Request.Sig, it.Item)]; !ok {
+			out = append(out, it)
+		}
+	}
+	return out
+}
+
+func outcomeItems(l []OutcomeItem) []int {
+	out := []int{}
+	for _, it := range l {
+		out = append(out, it.Item+1)
+	}
+	return out
+}
+
+// outcomeFresh: d with only the items not told yet, for the text the harness gets (the attestation covers the
+// whole delivery and is checked before); d itself when every item is new
+func outcomeFresh(d Delivery) Delivery {
+	deliveredMu.Lock()
+	fresh := outcomeUntold(d, readDelivered())
+	deliveredMu.Unlock()
+	if len(fresh) == 0 || len(fresh) == len(d.Outcomes) {
+		return d
+	}
+	log.Printf("request-outcome: items %v were told already; delivering %v", outcomeItems(d.Outcomes), outcomeItems(fresh))
+	d.Outcomes = fresh
+	return d
 }

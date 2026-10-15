@@ -142,18 +142,18 @@ func authorise(e Exec, now time.Time) (ExecRequest, error) {
 		return r, fmt.Errorf("request is for line %s, this is %s", r.Session, me)
 	}
 	if r.PhoneOnly && e.Grant == nil {
-		return r, errors.New("this request needs a phone grant")
+		return r, fmt.Errorf("this request needs a phone grant: file `jarvis2-request grant %s --minutes N --why …` and Deyao approves it with Face ID", r.Holder)
 	}
 	if e.Grant == nil {
 		if cert.Sensitive {
-			return r, errors.New("this session holds a sensitive store: only a phone grant opens a shell")
+			return r, fmt.Errorf("this session holds a sensitive store, so only a phone grant opens a shell: `jarvis2-request grant %s --minutes N --why …`", r.Holder)
 		}
 		for _, a := range readAllow() {
 			if u, err := time.Parse(time.RFC3339, a.Until); err == nil && a.Holder == r.Holder && now.Before(u) {
 				return r, nil
 			}
 		}
-		return r, errors.New("no grant, and the holder isn't on this session's allow list")
+		return r, fmt.Errorf("no grant, and %s isn't on this session's allow list: `jarvis2-machine allow %s DURATION` (non-sensitive sessions), or `jarvis2-request grant %s --why …`", r.Holder, r.Holder, r.Holder)
 	}
 	var g Grant
 	if cert.Phone == "" || verifyDoc(cert.Phone, e.Grant, &g) != nil {
@@ -167,18 +167,18 @@ func authorise(e Exec, now time.Time) (ExecRequest, error) {
 		iss, err1 := time.Parse(time.RFC3339, g.Issued)
 		exp, err2 := time.Parse(time.RFC3339, g.Expires)
 		if err1 != nil || err2 != nil || exp.Sub(iss) > maxGrant || !now.Before(exp) || now.Before(iss.Add(-2*time.Minute)) {
-			return r, errors.New("the grant is expired, or longer than 10 minutes")
+			return r, fmt.Errorf("the grant is expired, or longer than 10 minutes: ask for a new one (`jarvis2-request grant %s --minutes N --why …`)", r.Holder)
 		}
 	case "rule":
 		if r.PhoneOnly {
-			return r, errors.New("this request needs a phone grant, not a standing rule")
+			return r, fmt.Errorf("this request needs a phone grant, not a standing rule: `jarvis2-request grant %s --minutes N --why …`", r.Holder)
 		}
 		if cert.Sensitive {
-			return r, errors.New("this session holds a sensitive store: standing rules don't apply")
+			return r, fmt.Errorf("this session holds a sensitive store, so standing rules don't apply: `jarvis2-request grant %s --minutes N --why …` (at most 10 minutes)", r.Holder)
 		}
 		u, err := time.Parse(time.RFC3339, g.Until)
 		if err != nil || !now.Before(u) {
-			return r, errors.New("the standing rule has expired")
+			return r, fmt.Errorf("the standing rule has expired: ask again (`jarvis2-request grant %s --days N --why …`)", r.Holder)
 		}
 	default:
 		return r, errors.New("unknown grant kind")

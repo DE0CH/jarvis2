@@ -33,6 +33,9 @@ for it in items:
 parts = []
 if prompt.strip(): parts.append(prompt)
 if files: parts.append("Attached files (in ~/uploads): " + " ".join(files))
+try: refused = json.loads(os.environ.get("SESSION_ATTACHMENTS_REFUSED") or "[]")
+except Exception: refused = []
+if refused: parts.append("Attachments refused by this machine (not the files Deyao approved, so they aren't in ~/uploads): " + "; ".join(str(r) for r in refused))
 if images: parts.append("Attached images:")
 open(textf, "w").write("\n\n".join(parts))
 open(imgf, "w").write(" ".join(images))
