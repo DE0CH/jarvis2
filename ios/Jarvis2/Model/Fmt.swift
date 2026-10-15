@@ -56,6 +56,18 @@ enum Fmt {
   static func plural(_ n: Int, _ word: String) -> String { "\(n) \(word)\(n == 1 ? "" : "s")" }
   static func clip(_ t: String, _ n: Int = 90) -> String { t.count > n ? String(t.prefix(n)) + "…" : t }
 
+  /// "2 subagents · 1 background shell" (the web's workersText says the same), "None" when nothing runs
+  static func workers(subagents: Int, jobs: [String: Int]) -> String {
+    let words: [String: (String, String)] = ["shell": ("background shell", "background shells"), "monitor": ("monitor", "monitors"),
+                                             "workflow": ("workflow", "workflows"), "teammate": ("teammate", "teammates")]
+    var parts = subagents > 0 ? ["\(subagents) \(subagents == 1 ? "subagent" : "subagents")"] : []
+    for (t, n) in jobs.sorted(by: { $0.key < $1.key }) where n > 0 {
+      let w = words[t] ?? ("\(t) job", "\(t) jobs")
+      parts.append("\(n) \(n == 1 ? w.0 : w.1)")
+    }
+    return parts.isEmpty ? "None" : parts.joined(separator: " · ")
+  }
+
   static func harness(_ h: String) -> String {
     if h.hasPrefix("task:") { return "Task “\(h.dropFirst(5))”" }
     return Harness.all.first { $0.id == h }?.title ?? h

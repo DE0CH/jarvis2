@@ -57,6 +57,14 @@ struct Session: Identifiable, Equatable, Hashable {
   }
   /// a memory-starvation episode the router is watching (absent once it is over)
   var memAlert: MemAlert? { j["memAlert"].object == nil ? nil : MemAlert(j: j["memAlert"]) }
+  /// what a running session's harness has running besides itself (router/registry.go Workers, from Claude Code's
+  /// hooks): subagents, and every other background job by Claude Code's type label; nil on an image from before
+  var workers: (subagents: Int, jobs: [String: Int])? {
+    guard j["workers"].object != nil else { return nil }
+    var jobs: [String: Int] = [:]
+    for (k, v) in j["workers"]["jobs"].object ?? [:] { if let n = v.int, n > 0 { jobs[k] = n } }
+    return (j["workers"]["subagents"].int ?? 0, jobs)
+  }
   /// the latest memory sample of a running machine
   var memory: (availMb: Int, totalMb: Int)? {
     guard let a = j["memory"]["availMb"].int, let t = j["memory"]["totalMb"].int, t > 0 else { return nil }

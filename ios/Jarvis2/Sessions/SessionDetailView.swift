@@ -138,6 +138,10 @@ private struct SessionDetailList: View {
         if let r = m.region { LabeledContent("Region", value: Fmt.region[r] ?? r) }
         let machine = [m.size, m.guest].compactMap { $0 }.joined(separator: " · ")
         if !machine.isEmpty { LabeledContent("Machine", value: machine) }
+        if m.state == "started", let w = m.workers {
+          LabeledContent("Workers", value: Fmt.workers(subagents: w.subagents, jobs: w.jobs))
+            .accessibilityIdentifier("workers-\(m.id)")
+        }
         if m.state == "started", let mem = m.memory {
           LabeledContent("Memory", value: "\(Fmt.bytes(mem.availMb * 1_048_576)) free of \(Fmt.bytes(mem.totalMb * 1_048_576))")
             .accessibilityIdentifier("memory-\(m.id)")

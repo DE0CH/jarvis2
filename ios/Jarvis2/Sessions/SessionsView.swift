@@ -135,6 +135,11 @@ struct SessionRow: View {
         if let busy { StatusPill(text: busy.lowercased(), color: .orange, spinning: true) } else { StatusPill(text: p.text, color: p.color, spinning: p.spin) }
       }
       Text(line1).font(.subheadline).foregroundStyle(.secondary).lineLimit(2)
+      if m.state == "started", let w = m.workers, w.subagents > 0 || !w.jobs.isEmpty {
+        Label(Fmt.workers(subagents: w.subagents, jobs: w.jobs), systemImage: "person.2")
+          .font(.footnote).foregroundStyle(.secondary).lineLimit(1)
+          .accessibilityIdentifier("workers-row-\(m.id)")
+      }
       if let a = m.memAlert {
         HStack(spacing: 6) { StatusPill(text: "Low memory", color: .red); Text(a.reason).font(.footnote).lineLimit(1) }
       }

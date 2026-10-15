@@ -345,7 +345,9 @@ fixes, 34–40 carried over from the old app and still true, 41–43 the web pag
     "Workers" row: "2 subagents · 1 background shell" (subagents first, then every other job by Claude Code's type
     label in words: background shell, monitor, workflow, teammate, else "<type> job"), "None" when nothing runs, "—"
     while the machine doesn't count them (an image from before). A row, not a pill: the status pill keeps saying
-    working / idle; `bgTasks` in the idle pill is unchanged.
+    working / idle; `bgTasks` in the idle pill is unchanged. iPhone: the session page's Details has the same "Workers"
+    row (absent on an image from before), and the Sessions list shows it as a footnote line under the card's first
+    line only while something runs (a list row has no room for "None").
 
 ## Unfinished / known gaps
 
