@@ -458,7 +458,7 @@ func (j *moveJoiner) call(method, path string, body any, out any) error {
 		rd = bytes.NewReader(b)
 	}
 	req, _ := http.NewRequest(method, j.from+path, rd)
-	req.Header.Set("Authorization", "Bearer "+j.key)
+	j.auth(req)
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
@@ -530,7 +530,7 @@ func (j *moveJoiner) fetch(f moveFile) (int64, error) {
 		return 0, err
 	}
 	req, _ := http.NewRequest("GET", j.from+"/move/file?path="+urlQueryEscape(f.Path), nil)
-	req.Header.Set("Authorization", "Bearer "+j.key)
+	j.auth(req)
 	resp, err := j.http.Do(req)
 	if err != nil {
 		return 0, err
@@ -703,4 +703,15 @@ func urlQueryEscape(s string) string {
 		}
 	}
 	return b.String()
+}
+
+// auth: the move key, and, when the sender is reached through Cloudflare (MOVE_FROM https://…; the old box's NodePorts
+// listen only on its node IP, so the move port is behind its tunnel at /move/*: infra/cloudflare.py --move), the
+// Access service token jarvis2-move (MOVE_ACCESS_ID / MOVE_ACCESS_SECRET)
+func (j *moveJoiner) auth(req *http.Request) {
+	req.Header.Set("Authorization", "Bearer "+j.key)
+	if id := os.Getenv("MOVE_ACCESS_ID"); id != "" {
+		req.Header.Set("CF-Access-Client-Id", id)
+		req.Header.Set("CF-Access-Client-Secret", os.Getenv("MOVE_ACCESS_SECRET"))
+	}
 }
