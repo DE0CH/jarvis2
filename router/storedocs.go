@@ -37,6 +37,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -62,12 +63,12 @@ type KeyRow struct {
 
 // StoreRow: one store as listed
 type StoreRow struct {
-	Name      string   `json:"name"`
-	Sensitive bool     `json:"sensitive"`
-	Empty     bool     `json:"empty"`
-	Unlocked  bool     `json:"unlocked"`
-	About     string   `json:"about"`
-	Version   string   `json:"version,omitempty"`
+	Name      string `json:"name"`
+	Sensitive bool   `json:"sensitive"`
+	Empty     bool   `json:"empty"`
+	Unlocked  bool   `json:"unlocked"`
+	About     string `json:"about"`
+	Version   string `json:"version,omitempty"`
 	// Keys: the key names (null: not known — a core from before keys.go with no recorded names), the shape every
 	// session image reads; KeyInfo: the same keys with what each is for and who wrote it
 	Keys     []string `json:"keys"`
@@ -483,7 +484,13 @@ func (r *Router) refreshAfterPull(machine string, pulled *Doc) {
 	var x struct {
 		Stale []string `json:"stale"`
 	}
-	if pulled == nil || pulled.Decode(&x) != nil || len(x.Stale) == 0 {
+	if pulled == nil || pulled.Decode(&x) != nil {
+		return
+	}
+	// the Claude account stores are written by this router at every refresh: their machines take the pair from the
+	// long poll, so a copy behind them needs no unlock (claudestores.go)
+	x.Stale = slices.DeleteFunc(x.Stale, func(n string) bool { return accountStoreRE.MatchString(n) })
+	if len(x.Stale) == 0 {
 		return
 	}
 	var sid string

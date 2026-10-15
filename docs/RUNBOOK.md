@@ -448,8 +448,9 @@ infra/backup-read-key.py login` when they aren't in the env):
 
 ## The Claude accounts
 
-The router holds one Claude key store per Claude account, `claude-<name>` (`router/claudeaccounts.go`,
-`router/claudelogin.go`, API.md "Claude accounts", DECISIONS 115-121 and 185): each account's OAuth pair on its volume
+Each Claude account is the core store `claude-<name>` (`router/claudeaccounts.go`, `router/claudestores.go`,
+`router/claudelogin.go`, API.md "Claude accounts", DECISIONS 115-121, 185 and 190): the router writes each account's pair
+and record into it at every change (the core's writer `router`), keeps its working copy on its volume
 (`claude-accounts/<store>.json`), and it is the ONLY refresher of each (Jarvis 2 never calls Jarvis 1; Jarvis 1, while it
 still runs, follows one account through `/peer/claude-login`). `infra/setup.py claude-accounts` shows them (no secrets):
 per account its email, expiry, last refresh, the participants of its refresh protocol (`m:<machine>` per session,
@@ -459,9 +460,9 @@ per account its email, expiry, last refresh, the participants of its refresh pro
   new-session --account NAME`; a prompt task's account is picked when the task is made. A session keeps its account for
   its life (resumes included) and shows up in that account's Claude app (lessons/59). A running session can't switch.
 - **Manage:** Settings → Claude accounts (web page or app). Add: a name, then the sign-in page opens; sign in, copy the
-  code it shows (`code#state`), paste, Sign in. Re-login: the same for an existing account, and it must be that same
-  Claude account (another one is refused: add it as a new account). Make default. Remove: refused while any session
-  (running, paused, waiting, failed) uses it, and for the default. A new box starts with no account: sessions start
+  code it shows (`code#state`), paste, Sign in. Re-login: the same for an existing account; a sign-in of another
+  Claude account is kept as that account's own (its store, or a new `claude-<its name>`), the store asked for unchanged.
+  Make default. Remove: always; its sessions move to the default account (the next one when it was the default). A new box starts with no account: sessions start
   logged out until one is added.
 - **A dead login** (the refresh was refused) DMs Deyao once, naming the account; nothing else happens by itself: only
   that account's sessions stop on "Please run /login" once their token runs out, and get "continue" after its Re-login.
@@ -471,6 +472,9 @@ per account its email, expiry, last refresh, the participants of its refresh pro
   was re-logged) replaces the one there; creds-sync then leaves the account record in `~/.claude/.account-switch.json`
   and restarts the claude host once it is idle, so its Remote Control comes up under the new account. The router never
   writes a login into a session (no login repair).
+- **The account in the cert:** set the router's env `CLAUDE_STORE_IN_CERT=1` only once Deyao's iPhone runs an app build
+  that accepts the router as a key's writer (the TestFlight after DECISIONS 190): new sessions' certs then name their
+  account's store and the phone unlocks it at Start; an older build refuses that unlock.
 - **The account in the signed settings:** set the router's env `SIGN_CLAUDE_ACCOUNT=1` (k8s/apps/router.yaml) only once
   Deyao's iPhone runs an app build that knows `claudeAccount` (the TestFlight after 2026-10-15's first accounts build):
   an older build refuses every New session whose settings carry it. New lines only; existing ones keep their config.

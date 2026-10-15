@@ -1708,6 +1708,23 @@ snapshot failed with "no space left on device", the machine was destroyed anyway
      reaches no session without the phone); `github-*` names stay reserved for repo deploy keys (squatting one would
      block that repo's key). *The router writes the Claude account stores* (writer `router`, `claude-<name>` only,
      below). Messages of the kept refusals say what to do next.
+     *The Claude accounts are core stores* (the coordinator's case, Deyao: "I thought write was free"). DECISIONS 185 kept
+     the pairs in the router because the core took keys only from the setup session or a session. That refusal was a
+     real protection with the wrong outcome: it keeps every key truthfully attributed, but the router gains nothing by
+     being refused (it holds the pair in the clear and hands it to machines anyway). So the core takes writer `router`
+     for `claude-<name>` stores only, unsigned and named "router" on every unlock (the phone accepts it for those stores
+     only), and the router writes each account's `CLAUDE_CREDENTIALS` and `CLAUDE_ACCOUNT` into its store at every change
+     (`router/claudestores.go`, from the login loop; a new core gets them within a minute). Claude's choices: *no bucket
+     backup and no Inbox refresh for these writes*: an earlier pair is worthless once rotated, and running machines take
+     refreshes from the long poll (an unlock every 8 hours would be the refusal again). *The router keeps its working
+     copy*: the core gives a store back only with the phone, and the router must refresh with nobody there. *The cert
+     names the account's store only with the router's env `CLAUDE_STORE_IN_CERT=1`*, set once the app that accepts the
+     router writer is on Deyao's phone (an older app refuses that unlock, so every Start would fail). Also: Remove of an
+     account always goes (its sessions move to the default account, the next one when it was the default; its core
+     store loses its keys); a sign-in of another Claude account than the store's is kept as that account's own (its
+     store, or a new `claude-<its name>`) instead of thrown away after the exchange; Add of an existing name is its
+     sign-in; an account named for a harness that takes none is ignored; an add-store of `claude` gives a session with
+     no account the default one.
 
 ## A destroy deletes no live copy it hasn't archived, 2026-10-15
 

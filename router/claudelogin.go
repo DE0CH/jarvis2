@@ -117,6 +117,9 @@ type loginHub struct {
 	// check: a Re-login's account (uuid) may land in this hub (claudeaccounts.go: the hub's own account, and no other
 	// hub's); nil = any
 	check func(uuid string) error
+	// elsewhere: the hub a sign-in that check turned away belongs in instead (the account's own hub, or a new one), so
+	// a fresh grant is never thrown away; nil = refuse
+	elsewhere func(uuid, email string) (*loginHub, error)
 }
 
 func newLoginHub(path, store string) *loginHub {
@@ -579,27 +582,37 @@ func (h *loginHub) startLogin() (string, error) {
 
 // finishLogin: the pasted "code#state" → the CLI's exchange (authorization_code, the manual redirect, PKCE) → the
 // profile (subscription, rate tier, the account record) → stored, whatever the account (Deyao's own action)
-func (h *loginHub) finishLogin(pasted string) (string, error) {
+func (h *loginHub) finishLogin(pasted string) (email, store string, err error) {
+	target, email, err := h.finishLoginTo(pasted)
+	if err != nil {
+		return "", "", err
+	}
+	return email, target.store, nil
+}
+
+// finishLoginTo: the exchange, then the pair stored in this hub, or (another Claude account than this hub's) in the
+// hub of that account, made if there is none: the store asked for keeps its own account (DECISIONS 190)
+func (h *loginHub) finishLoginTo(pasted string) (*loginHub, string, error) {
 	pasted = strings.TrimSpace(pasted)
 	code, state, _ := strings.Cut(pasted, "#")
 	h.mu.Lock()
 	p := h.f.Pending
 	h.mu.Unlock()
 	if p == nil || time.Since(p.At) > loginPendingTTL {
-		return "", errors.New("no sign-in in progress (or it is older than 15 minutes): press Re-login again")
+		return nil, "", errors.New("no sign-in in progress (or it is older than 15 minutes): press Re-login again")
 	}
 	if code == "" || state == "" {
-		return "", errors.New("paste the whole code shown after sign-in (it has a # in it)")
+		return nil, "", errors.New("paste the whole code shown after sign-in (it has a # in it)")
 	}
 	if state != p.State {
-		return "", errors.New("that code belongs to another sign-in: press Re-login again")
+		return nil, "", errors.New("that code belongs to another sign-in: press Re-login again")
 	}
 	h.refreshMu.Lock() // not while a refresh is out
 	defer h.refreshMu.Unlock()
 	j, _, err := tokenCall(map[string]any{"grant_type": "authorization_code", "code": code, "redirect_uri": oauthRedirectURL,
 		"client_id": oauthClientID, "code_verifier": p.Verifier, "state": state})
 	if err != nil {
-		return "", err
+		return nil, "", err
 	}
 	at, _ := j["access_token"].(string)
 	o := map[string]any{"accessToken": at, "refreshToken": j["refresh_token"], "expiresAt": time.Now().UnixMilli() + max(jnum(j["expires_in"]), 60)*1000}
@@ -645,19 +658,34 @@ func (h *loginHub) finishLogin(pasted string) (string, error) {
 		b, _ := json.Marshal(acct)
 		account = string(b)
 	}
+	target := h
 	if h.check != nil {
 		if err := h.check(accountUUID(account)); err != nil {
-			return "", err
+			if h.elsewhere == nil {
+				return nil, "", err
+			}
+			t, terr := h.elsewhere(accountUUID(account), accountEmail(account))
+			if terr != nil {
+				return nil, "", fmt.Errorf("%v (keeping it as its own account failed too: %v)", err, terr)
+			}
+			log.Printf("[login] %s: the sign-in is %s, kept in %s instead", h.store, accountEmail(account), t.store)
+			target = t
 		}
 	}
 	h.mu.Lock()
 	h.f.Pending = nil
 	h.mu.Unlock()
-	if _, err := h.offerLocked(string(creds), account, "relogin"); err != nil {
-		return "", err
+	if target != h {
+		target.refreshMu.Lock()
+		defer target.refreshMu.Unlock()
 	}
-	return accountEmail(account), nil
+	if _, err := target.offerLocked(string(creds), account, "relogin"); err != nil {
+		return nil, "", err
+	}
+	return target, accountEmail(account), nil
 }
+
+
 
 // offerLocked: offer for a Re-login, with refreshMu already held (force, any account)
 func (h *loginHub) offerLocked(credentials, account, source string) (bool, error) {
@@ -839,6 +867,7 @@ func (r *Router) loginLoop() {
 				log.Printf("[login] %s: %v", h.store, err)
 			}
 		}
+		r.syncAccountStores() // claudestores.go: each account's pair into its core store
 		time.Sleep(time.Minute)
 	}
 }

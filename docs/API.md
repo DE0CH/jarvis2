@@ -534,9 +534,12 @@ The move's own listener (the old box, `MOVE_ADDR` :8082, `Authorization: Bearer 
 
 ## Claude accounts and their logins (`router/claudeaccounts.go`, `router/claudelogin.go`)
 
-One Claude key store per Claude account, `claude-<name>` (DECISIONS 185): its OAuth pair and account record on the
-router's volume (`claude-accounts/<store>.json`, 0600; the default and Jarvis 1's account in
-`claude-accounts/accounts.json`). These stores are the router's, not the core's. The router is the ONLY refresher of
+One Claude key store per Claude account, `claude-<name>` (DECISIONS 185, 190): a core store the router writes at every
+change of the account's pair (`CLAUDE_CREDENTIALS`) or record (`CLAUDE_ACCOUNT`), as the core's writer `router` (no
+approval, no bucket backup, no Inbox refresh; a core without them gets them within a minute), and the router's working
+copy on its volume (`claude-accounts/<store>.json`, 0600; the default and Jarvis 1's account in
+`claude-accounts/accounts.json`). With the router's env `CLAUDE_STORE_IN_CERT=1` a new session's cert names its
+account's store, so the session gets its pair through that store at Start (the phone unlocks it with the rest). The router is the ONLY refresher of
 each (when under 30 min are left; DECISIONS 115-121); it never calls Jarvis 1. A refresh revokes the previous access
 token at once, so there is never a second refresher. A session's account is picked when it is made (`account` on
 `POST /api/sessions`, `/m/api/sessions`, a batch's `new-session` item, `POST /api/tasks/instances` for a prompt
@@ -544,18 +547,19 @@ template, `POST /api/jarvis1/paused/{id}/import`; a record's restore takes the a
 kept for its life (`claudeAccount` in `GET /api/state`'s sessions and the `new-session` approval's options; in the
 signed config too when the router runs with `SIGN_CLAUDE_ACCOUNT=1`). A harness
 whose policy says `claudeAccount` (claude, openclaw) and a prompt task get the default account when none is named; no
-account at all (a new box): it starts logged out. `account` for a harness without one: 400. The store `claude` (the one
-shared login before accounts) is refused in `stores` and in add-store (400).
+account at all (a new box): it starts logged out. `account` for a harness without one is ignored. The store `claude` (the
+one shared login before accounts) is refused in `stores`; an add-store of it gives a session with no account the default
+one (400 saying so).
 
 | Call | Does |
 |---|---|
 | `GET /api/claude-accounts` | `{default, accounts: [{store, name, default, sessions: [ids], hasLogin, expiresAt, expired, email, accountUuid, source, updatedAt, refreshedAt, participants, loginInProgress, preparing, error?, rejected?, needLogin?}]}` (no secrets). `GET /setup/claude-accounts` the same for the setup session. |
-| `POST /api/claude-accounts {name}` | A new account `claude-<name>` (lowercase letters, digits, single dashes; `name` may carry the prefix) → `{store, url}`: the sign-in page; then `…/code`. The first account becomes the default. 400 a bad or taken name. |
+| `POST /api/claude-accounts {name}` | A new account `claude-<name>` (lowercase letters, digits, single dashes; `name` may carry the prefix) → `{store, url}`: the sign-in page; then `…/code`. The first account becomes the default. An existing name starts that account's sign-in. 400 a bad name. |
 | `POST /api/claude-accounts/{store}/login` | Re-login: `{store, url}` (the PKCE verifier is kept on the volume for 15 min). |
-| `POST /api/claude-accounts/{store}/code {code}` | The pasted `code#state` → `{ok, store, email, expiresAt}`. 400 when the sign-in is another Claude account than the store's (once it has one), or an account another store already holds. Stuck "Please run /login" sessions of the account get "continue" afterwards. |
+| `POST /api/claude-accounts/{store}/code {code}` | The pasted `code#state` → `{ok, store, email, expiresAt, note?}`. A sign-in of another Claude account than the store's is kept in that account's own store (made as `claude-<its email's name>` when there is none): `store` names it and `note` says so; the store asked for is unchanged. Stuck "Please run /login" sessions of the account get "continue" afterwards. |
 | `POST /api/claude-accounts/{store}/refresh` | Refresh now → `{ok, refreshed, expiresAt}` (409 needLogin). |
 | `POST /api/claude-accounts/{store}/default` | New session pre-picks it → `{ok, default}`. |
-| `DELETE /api/claude-accounts/{store}` | Forget the account (its file goes) → `{ok}`. 409 while any session uses it, or for the default. |
+| `DELETE /api/claude-accounts/{store}` | Forget the account (its file goes, its core store loses its keys) → `{ok, moved: [session ids], movedTo, default}`: its sessions move to the default account (the next account, when it was the default). |
 | `GET /api/claude-accounts/{store}/usage` | Its usage quota, as `/api/usage` was, plus `store` (`?refresh=1`). |
 
 `GET /api/claude-login`, `POST /api/claude-login/{refresh,start,code}` and `GET /api/usage` act on the default account

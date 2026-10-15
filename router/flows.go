@@ -507,6 +507,7 @@ func (r *Router) CreateSession(in NewSession) (string, error) {
 	if err != nil {
 		return "", bad("%v", err)
 	}
+	stores = withAccountStore(stores, account) // claudestores.go: the account's core store, once certs name it
 	content, err := r.checkContentStores(in.Content) // content.go: each an existing store
 	if err != nil {
 		return "", err
@@ -1216,7 +1217,18 @@ func (r *Router) addStoreApproval(machine, store string, o Origin, explanation, 
 		return "", fmt.Errorf("this machine isn't a running session")
 	}
 	if store == legacyClaudeStore {
-		return "", bad("the store claude is gone: a session's Claude account is fixed when it is made")
+		// what is asked for is a Claude login: a session with no account gets the default one (the router's word, as
+		// at its making; its machine takes it at its next poll of /m/claude-login); one with an account keeps it
+		def := r.accounts().defaultStore()
+		if s.ClaudeAccount == "" && def != "" {
+			r.st.Do(func(d *persisted) {
+				if x := d.Sessions[s.ID]; x != nil && x.ClaudeAccount == "" {
+					x.ClaudeAccount = def
+				}
+			})
+			return "", bad("the store claude is gone: this session now has the Claude account %s; its machine logs in with it by itself (restart the harness if it doesn't)", def)
+		}
+		return "", bad("the store claude is gone: this session already has the Claude account %s (Settings → Claude accounts re-logs it in)", s.ClaudeAccount)
 	}
 	stores, err := r.withHarnessStores(append(append([]string{}, s.Stores...), store), nil)
 	if err != nil {

@@ -37,21 +37,28 @@ func TestClaudeAccountsManage(t *testing.T) {
 	if code != 200 || out["store"] != "claude-main" || out["email"] != "acct-1@example.com" {
 		t.Fatal(code, out)
 	}
-	if code, _ := appDo(t, r, "POST", "/api/claude-accounts", `{"name":"claude-main"}`); code != 400 {
-		t.Fatal("the same name twice")
+	// Add of a name that exists is its sign-in
+	if code, out := appDo(t, r, "POST", "/api/claude-accounts", `{"name":"claude-main"}`); code != 200 || out["store"] != "claude-main" {
+		t.Fatal("the same name twice", code, out)
 	}
-	// a second account: the same Claude account again is refused, another one is taken
-	if code, out := signIn(t, r, "/api/claude-accounts", `{"name":"work"}`); code != 400 || !strings.Contains(out["error"].(string), "already claude-main") {
+	// a second slot signed in to the same Claude account: the fresh grant lands in that account's own store
+	if code, out := signIn(t, r, "/api/claude-accounts", `{"name":"work"}`); code != 200 || out["store"] != "claude-main" || !strings.Contains(out["note"].(string), "kept as claude-main") {
 		t.Fatal("the same Claude account in two slots", code, out)
 	}
 	f.accounts["new"] = "acct-2"
 	if code, out := signIn(t, r, "/api/claude-accounts/claude-work/login", ""); code != 200 || out["email"] != "acct-2@example.com" {
 		t.Fatal(code, out)
 	}
-	// a Re-login into an account must be that account
+	// a Re-login into an account as another Claude account: kept as that account's own, claude-work unchanged
 	f.accounts["new"] = "acct-3"
-	if code, out := signIn(t, r, "/api/claude-accounts/claude-work/login", ""); code != 400 || !strings.Contains(out["error"].(string), "another Claude account") {
-		t.Fatal("a Re-login switched an account's Claude account", code, out)
+	if code, out := signIn(t, r, "/api/claude-accounts/claude-work/login", ""); code != 200 || out["store"] != "claude-acct-3" {
+		t.Fatal("a Re-login as another account", code, out)
+	}
+	if h := r.accounts().hub("claude-work"); accountUUID(h.current().Account) != "acct-2" {
+		t.Fatal("a Re-login switched an account's Claude account")
+	}
+	if code, _ := appDo(t, r, "DELETE", "/api/claude-accounts/claude-acct-3", ""); code != 200 {
+		t.Fatal("remove")
 	}
 	_, out = appDo(t, r, "GET", "/api/claude-accounts", "")
 	rows := out["accounts"].([]any)
@@ -64,22 +71,18 @@ func TestClaudeAccountsManage(t *testing.T) {
 	if code, out := appDo(t, r, "GET", "/api/claude-accounts/claude-work/usage", ""); code != 200 || out["store"] != "claude-work" || len(out["limits"].([]any)) != 1 {
 		t.Fatal(code, out)
 	}
-	// Remove: refused for the default and while a session uses it
-	if code, _ := appDo(t, r, "DELETE", "/api/claude-accounts/claude-main", ""); code != 409 {
-		t.Fatal("removed the default account")
-	}
+	// Remove of the default account that a session uses: it goes, the next account is the default and takes the session
 	addSession(r, "s1", "paused", "", false)
-	r.st.Do(func(d *persisted) { d.Sessions["s1"].ClaudeAccount = "claude-work" })
-	if code, out := appDo(t, r, "DELETE", "/api/claude-accounts/claude-work", ""); code != 409 || !strings.Contains(out["error"].(string), "s1") {
-		t.Fatal("removed an account a session uses", code, out)
+	r.st.Do(func(d *persisted) { d.Sessions["s1"].ClaudeAccount = "claude-main" })
+	code, out = appDo(t, r, "DELETE", "/api/claude-accounts/claude-main", "")
+	if code != 200 || out["movedTo"] != "claude-work" || out["default"] != "claude-work" || jsonString(out["moved"]) != `["s1"]` || r.accounts().hub("claude-main") != nil {
+		t.Fatal("remove", code, out)
 	}
-	r.st.Do(func(d *persisted) { delete(d.Sessions, "s1") })
-	if code, _ := appDo(t, r, "POST", "/api/claude-accounts/claude-work/default", ""); code != 200 || r.accounts().defaultStore() != "claude-work" {
-		t.Fatal("make default")
-	}
-	if code, _ := appDo(t, r, "DELETE", "/api/claude-accounts/claude-main", ""); code != 200 || r.accounts().hub("claude-main") != nil {
-		t.Fatal("remove")
-	}
+	r.st.Do(func(d *persisted) {
+		if d.Sessions["s1"].ClaudeAccount != "claude-work" {
+			t.Fatal("the session wasn't moved to the default account")
+		}
+	})
 	if _, err := os.Stat(filepath.Join(r.cfg.DataDir, "claude-accounts", "claude-main.json")); !os.IsNotExist(err) {
 		t.Fatal("a removed account's pair stayed on the volume")
 	}
@@ -154,6 +157,20 @@ func TestNewSessionClaudeAccount(t *testing.T) {
 		r.st.Do(func(d *persisted) { s = d.Sessions[id].ClaudeAccount })
 		return
 	}
+	t.Cleanup(func() { // each new session's approval is filed in the background: let it land before the dir goes
+		waitFor(t, "the approvals filed", func() (ok bool) {
+			r.st.Do(func(d *persisted) {
+				n := 0
+				for _, s := range d.Sessions {
+					if s.State == "approval" {
+						n++
+					}
+				}
+				ok = len(d.Approvals) >= n
+			})
+			return
+		})
+	})
 	// no account at all (a new box): it starts logged out
 	if id, err := r.CreateSession(NewSession{Label: "x", Harness: "claude"}); err != nil || acct(id) != "" {
 		t.Fatal("a Claude session with no account at all", err)
@@ -182,8 +199,9 @@ func TestNewSessionClaudeAccount(t *testing.T) {
 	if err != nil || acct(id) != "" {
 		t.Fatal(err, acct(id))
 	}
-	if _, err := r.CreateSession(NewSession{Label: "o", Harness: "opencode", Account: "work"}); err == nil {
-		t.Fatal("an account for a harness that takes none")
+	// an account named for a harness that takes none changes nothing
+	if id, err := r.CreateSession(NewSession{Label: "o", Harness: "opencode", Account: "work"}); err != nil || acct(id) != "" {
+		t.Fatal("an account for a harness that takes none", err, acct(id))
 	}
 	// the app's, the web page's and jarvis2-request's body names it as "account"
 	var ns NewSession
