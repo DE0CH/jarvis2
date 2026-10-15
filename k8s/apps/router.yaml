@@ -13,28 +13,36 @@ apiVersion: apps/v1
 kind: Deployment
 metadata: { name: router, namespace: jarvis2-router }
 spec:
+  # Zero-downtime on the old 4 GB box until the move (router/leader.go): one router, and a rollout's surge pod IS the
+  # standby: it starts next to the leader, proxies to it, and takes over after the leader's drain (the same volume and
+  # flock, one node). Its services run on the services box now, so the surge fits (measured: 62 MB RSS, 171 MB peak).
   replicas: 1
-  strategy: { type: Recreate }
+  minReadySeconds: 5
+  strategy: { type: RollingUpdate, rollingUpdate: { maxUnavailable: 0, maxSurge: 1 } }
   selector: { matchLabels: { app: router } }
   template:
     # secrets-rev(-backup|-github|-flyorgs|-flypersonal|-browserbase|-devices): bumped by infra/router-secrets.py so a changed Secret restarts the pod (envFrom is read at start)
-    metadata: { labels: { app: router }, annotations: { jarvis2/secrets-rev: "043246abae2f", jarvis2/secrets-rev-backup: "cc2fe4a5bfde", jarvis2/secrets-rev-github: "5d4b8b75a9b6", jarvis2/secrets-rev-flyorgs: "1a0800b2e3d3", jarvis2/secrets-rev-flypersonal: "30529653e40d", jarvis2/secrets-rev-browserbase: "06b3d7b5626f", jarvis2/secrets-rev-devices: "a572b6d9c54e" } }
+    metadata: { labels: { app: router }, annotations: { jarvis2/secrets-rev: "043246abae2f", jarvis2/secrets-rev-backup: "cc2fe4a5bfde", jarvis2/secrets-rev-github: "5d4b8b75a9b6", jarvis2/secrets-rev-flyorgs: "1a0800b2e3d3", jarvis2/secrets-rev-flypersonal: "30529653e40d", jarvis2/secrets-rev-browserbase: "06b3d7b5626f", jarvis2/secrets-rev-devices: "a572b6d9c54e", jarvis2/secrets-rev-move: "50d920e73d7b" } }
     spec:
       automountServiceAccountToken: false
       enableServiceLinks: false
       # SIGTERM drains (router/drain.go): running lifecycle actions finish before the pod exits. The longest is a
       # restart/upgrade job: a pause (SNAPSHOT_WAIT_SECONDS 600 + the kill) then a resume (a machine's init, up to
-      # 12 min); DRAIN_SECONDS (1740) stays under this. Recreate: the new pod starts once this one has drained.
+      # 12 min); DRAIN_SECONDS (1740) stays under this.
       terminationGracePeriodSeconds: 1800
       securityContext: { fsGroup: 65532 }
       containers:
         - name: router
           image: ghcr.io/de0ch/jarvis2-router:sha-d24bc9a2166d@sha256:90938f4546d0fb1bc09acabc3c36214c61c595d2a1f5c693a0674e35c501f643
-          ports: [{ containerPort: 8080 }]
+          ports: [{ containerPort: 8080 }, { containerPort: 8082 }]  # 8082: the move (MOVE_KEY, router/move.go)
+          readinessProbe: { tcpSocket: { port: 8080 }, periodSeconds: 2, failureThreshold: 2 }
           env:
             # this pod's address, written next to the leader lock: a standby proxies to it (router/leader.go). Must be
             # live before the move to a rolling update, or a standby would proxy to 127.0.0.1, i.e. to itself
             - { name: POD_IP, valueFrom: { fieldRef: { fieldPath: status.podIP } } }
+            # its /data, age-encrypted, to the Storage Box every 15 min and at the move's freeze (router/backup.go);
+            # the private half is ROUTER_BACKUP_AGE_KEY in jarvis2-ops
+            - { name: ROUTER_BACKUP_AGE_PUB, value: "age1zkvnmh6wu5hyvxppvxf9c83l6q5af7xqqlxtmahkz0l5hhwqq90s8edvu0" }
             - { name: SESSION_IMAGE, value: "ghcr.io/de0ch/jarvis2-session:sha-d24bc9a2166d@sha256:1bea7823357fde17357eb0fcc61a20276f105a831b17c8580e5eab7605735b7a" }
             # the CI key's signature over "jarvis2-session-image <SESSION_IMAGE>" (images.yml, keys/ci.pub): the phone checks it
             - { name: SESSION_IMAGE_SIG, value: "MEUCIG3j+I1FzjBh56VHZDS3fVB1nlk9DaL45rNA9X4jNElLAiEA9c8GDkwNeqDlIyzoyEZKv6Hm2yo2967pBqH/gs8Uws0=" }
@@ -68,9 +76,9 @@ spec:
           # k8s/secrets/router-backup.enc.yaml, and the repo picker's GITHUB_READ_TOKEN: k8s/secrets/router-github.enc.yaml
           # — all SOPS-encrypted to the box's age key (infra/router-secrets.py). router-secrets-github stays LAST: with a
           # key in several envFrom sources the last one wins, and the default part still holds an old GITHUB_READ_TOKEN
-          envFrom: [{ secretRef: { name: router-secrets, optional: true } }, { secretRef: { name: router-secrets-backup, optional: true } }, { secretRef: { name: router-secrets-github, optional: true } }, { secretRef: { name: router-secrets-flyorgs, optional: true } }, { secretRef: { name: router-secrets-flypersonal, optional: true } }, { secretRef: { name: router-secrets-browserbase, optional: true } }, { secretRef: { name: router-secrets-devices, optional: true } }]
+          envFrom: [{ secretRef: { name: router-secrets, optional: true } }, { secretRef: { name: router-secrets-backup, optional: true } }, { secretRef: { name: router-secrets-github, optional: true } }, { secretRef: { name: router-secrets-flyorgs, optional: true } }, { secretRef: { name: router-secrets-flypersonal, optional: true } }, { secretRef: { name: router-secrets-browserbase, optional: true } }, { secretRef: { name: router-secrets-devices, optional: true } }, { secretRef: { name: router-move, optional: true } }]
           volumeMounts: [{ name: data, mountPath: /data }, { name: wg, mountPath: /wg, readOnly: true }, { name: sigs, mountPath: /sigs, readOnly: true }]
-          resources: { requests: { cpu: 500m, memory: 1536Mi }, limits: { memory: 1536Mi } }  # the control plane holds 2 GiB of the 4 GiB box as its own (DECISIONS 168)
+          resources: { requests: { cpu: 300m, memory: 512Mi }, limits: { memory: 1Gi } }  # measured 62 MB RSS, 171 MB peak (2026-10-15, /setup/status process)
           securityContext: { runAsNonRoot: true, runAsUser: 65532, runAsGroup: 65532, allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: { drop: [ALL] }, seccompProfile: { type: RuntimeDefault } }
       volumes:
         - { name: data, persistentVolumeClaim: { claimName: router-data } }
@@ -84,6 +92,17 @@ spec:
   selector: { app: router }
   ports: [{ port: 8080, targetPort: 8080 }]
 ---
+# the move only: the control box's router reaches this one over the Hetzner Network (public 8080 → 30080, move
+# 8082 → 30082); Local keeps its address for the NetworkPolicy
+apiVersion: v1
+kind: Service
+metadata: { name: router-private, namespace: jarvis2-router }
+spec:
+  type: NodePort
+  externalTrafficPolicy: Local
+  selector: { app: router }
+  ports: [{ name: public, port: 8080, targetPort: 8080, nodePort: 30080 }, { name: move, port: 8082, targetPort: 8082, nodePort: 30082 }]
+---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata: { name: router, namespace: jarvis2-router }
@@ -93,11 +112,23 @@ spec:
   ingress:
     - from: [{ namespaceSelector: { matchLabels: { jarvis2/ns: edge } } }]
       ports: [{ port: 8080 }]
+    # the standby's proxy to the leader (pod to pod)
+    - from: [{ podSelector: { matchLabels: { app: router } } }]
+      ports: [{ port: 8080 }, { port: 8082 }]
+    # the control box's router during the move
+    - from: [{ ipBlock: { cidr: 10.77.0.2/32 } }]
+      ports: [{ port: 8080 }, { port: 8082 }]
   egress:
     - to: [{ namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: kube-system } }, podSelector: { matchLabels: { k8s-app: kube-dns } } }]
       ports: [{ port: 53, protocol: UDP }, { port: 53, protocol: TCP }]
     - to: [{ namespaceSelector: { matchLabels: { jarvis2/ns: core } } }]
       ports: [{ port: 8090 }]
+    # the standby's proxy to the leader
+    - to: [{ podSelector: { matchLabels: { app: router } } }]
+      ports: [{ port: 8080 }, { port: 8082 }]
+    # after the move this router only proxies to the control box's (its public NodePort)
+    - to: [{ ipBlock: { cidr: 10.77.0.2/32 } }]
+      ports: [{ port: 30080 }, { port: 30082 }]
     # transcript search and the iCloud index (k8s/apps/search.yaml, icloud-index.yaml; router/searchsvc.go)
     - to: [{ namespaceSelector: { matchLabels: { jarvis2/ns: edge } }, podSelector: { matchLabels: { app: search } } }]
       ports: [{ port: 8090 }]
