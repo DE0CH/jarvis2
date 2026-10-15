@@ -81,6 +81,12 @@ kind: Role
 metadata: { name: search-self, namespace: jarvis2-edge }
 rules: [{ apiGroups: [""], resources: [pods], verbs: [get] }]
 ---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata: { name: search-self, namespace: jarvis2-edge }
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: Role, name: search-self }
+subjects: [{ kind: ServiceAccount, name: search, namespace: jarvis2-edge }]
+---
 apiVersion: v1
 kind: Service
 metadata: { name: search, namespace: jarvis2-edge }
@@ -107,4 +113,3 @@ spec:
     - to: [{ ipBlock: { cidr: 10.43.0.1/32 } }]
       ports: [{ port: 443, protocol: TCP }]
     - ports: [{ port: 6443, protocol: TCP }]
-
