@@ -43,7 +43,7 @@ spec:
       securityContext: { fsGroup: 65532 }
       containers:
         - name: search
-          image: ghcr.io/de0ch/jarvis2-search:sha-0197be05ada4@sha256:6e8ffcf7a3d355a22f9b48524b07f018cd0b1819e780f155fa619b8702e07995
+          image: ghcr.io/de0ch/jarvis2-search:sha-d260798b7126@sha256:2350e7778bf312e2491c903c06075546c41c33553de573502ed558a08038a47f
           ports: [{ containerPort: 8090 }]
           env:
             - { name: PORT, value: "8090" }
