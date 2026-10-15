@@ -173,7 +173,7 @@ func (r *Router) registerRestore(app appRoute, mux *http.ServeMux) {
 		path := "/" + p
 		app("POST /api/core"+path, func(w http.ResponseWriter, req *http.Request) {
 			b, _ := io.ReadAll(io.LimitReader(req.Body, 1<<20))
-			r.relay(w, "POST", path, b)
+			r.relayFor(w, req, "POST", path, b)
 		})
 	}
 	app("POST /api/stores/restore/finish", func(w http.ResponseWriter, req *http.Request) {

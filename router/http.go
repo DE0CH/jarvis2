@@ -473,14 +473,19 @@ func (r *Router) buildHandlers() {
 		path := "/" + p
 		app("POST /api/core"+path, func(w http.ResponseWriter, req *http.Request) {
 			b, _ := io.ReadAll(io.LimitReader(req.Body, 1<<20))
-			r.relay(w, "POST", path, b)
+			r.relayFor(w, req, "POST", path, b) // nextcore.go: X-Jarvis2-Core: next (store-key for Recover alongside)
 		})
 	}
 
 	// an unlock for one running session's cert: its machine pulls again (storedocs.go unlockArrived)
 	app("POST /api/core/unlock/finish", func(w http.ResponseWriter, req *http.Request) {
 		b, _ := io.ReadAll(io.LimitReader(req.Body, 1<<20))
-		status, out, err := r.core.Raw("POST", "/unlock/finish", b)
+		c := r.coreFor(req)
+		if c == nil {
+			writeJSON(w, 404, map[string]string{"error": "there is no next core"})
+			return
+		}
+		status, out, err := c.Raw("POST", "/unlock/finish", b)
 		if err != nil {
 			log.Printf("core POST /unlock/finish: %v", err)
 			writeJSON(w, 503, map[string]any{"error": "the core isn't running", "coreDown": true})

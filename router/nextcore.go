@@ -283,6 +283,26 @@ func (r *Router) nextCoreStatus() map[string]any {
 	return out
 }
 
+// GET /api/state's core.next: the app learns there is a next core (and what it is) and offers Recover alongside for
+// it, every call for it with X-Jarvis2-Core: next
+func init() {
+	stateHooks = append(stateHooks, func(r *Router, out map[string]any) {
+		n := r.nextOf()
+		if n.next == nil {
+			return
+		}
+		core, _ := out["core"].(map[string]any)
+		if core == nil {
+			return
+		}
+		nx := map[string]any{"up": false}
+		if serving, key, err := coreServing(n.next); err == nil {
+			nx["up"], nx["serving"], nx["signingKey"] = true, orEmptyCore(serving), key
+		}
+		core["next"] = nx
+	})
+}
+
 // registerNextCore: the flip route
 func (r *Router) registerNextCore(mux *http.ServeMux) {
 	mux.Handle("POST /setup/core/flip", r.requireSetup(func(w http.ResponseWriter, req *http.Request) {
