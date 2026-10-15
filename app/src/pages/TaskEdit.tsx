@@ -4,7 +4,7 @@
 // Parameters are not secret (they travel unsigned in the machine's config): secrets belong in a store.
 import { useEffect, useState } from "react";
 import { View } from "react-native";
-import { api, CORE_STORE, DEPLOY_KEY_TOKEN_STORE, harnessStoreSet, type TaskField, type TaskOption } from "../lib/api";
+import { api, loadClaudeAccounts, CORE_STORE, DEPLOY_KEY_TOKEN_STORE, LEGACY_CLAUDE_STORE, harnessStoreSet, type ClaudeAccounts, type TaskField, type TaskOption } from "../lib/api";
 import { useStore, loadTasks, loadStores, toast } from "../lib/store";
 import { openApprovalFor } from "../lib/tasks";
 import { BadgeList, Button, CheckboxCards, Lbl, Muted, P, RadioCards, Row, Rows, Spinner, Switch, TextArea, TextField } from "../ui/kit";
@@ -43,13 +43,16 @@ export function TaskEdit({ spec }: { spec: TaskEditSpec }) {
   const t = data.templates.find((x) => x.name === (inst ? inst.template : spec.template));
   const [name, setName] = useState(inst ? inst.name : t ? t.title : "");
   const [vals, setVals] = useState<Record<string, any>>(() => Object.fromEntries((t?.fields || []).map((f) => [f.name, initial(f, inst?.params[f.name])])));
+  // a prompt template runs claude -p on a Claude account: the default pre-picked, fixed for the task
+  const [accounts, setAccounts] = useState<ClaudeAccounts | null>(null), [account, setAccount] = useState("");
+  useEffect(() => { loadClaudeAccounts().then((a) => { setAccounts(a); setAccount((c) => c || a.default); }, () => {}); }, []);
   const [busy, run, guard] = useBusy();
   const [err, setErr] = useState("");
   if (!t) return <Page title="Task">{spec.id && !inst ? <P size={2} color="red" mt={3}>This task no longer exists.</P>
     : <><P size={2} color="red" mt={3}>Template not in tasks/.</P><Rows mt={2}><Row label="Template" mono>{inst?.template || spec.template || ""}</Row></Rows></>}</Page>;
   // options: the template's own, or the core's stores / the sizes / the models
   const optionsOf = (f: TaskField): TaskOption[] =>
-    f.optionsFrom === "stores" ? stores.items.filter((s) => s.name !== CORE_STORE && s.name !== DEPLOY_KEY_TOKEN_STORE && !hidden.has(s.name)).map((s) => ({ value: s.name, label: s.name, sub: [s.sensitive ? "sensitive" : "", s.empty ? "empty" : "", s.unlocked ? "" : "locked"].filter(Boolean).join(" · ") || undefined }))
+    f.optionsFrom === "stores" ? stores.items.filter((s) => s.name !== CORE_STORE && s.name !== DEPLOY_KEY_TOKEN_STORE && s.name !== LEGACY_CLAUDE_STORE && !hidden.has(s.name)).map((s) => ({ value: s.name, label: s.name, sub: [s.sensitive ? "sensitive" : "", s.empty ? "empty" : "", s.unlocked ? "" : "locked"].filter(Boolean).join(" · ") || undefined }))
     : f.optionsFrom === "content" ? contentList.map((c) => ({ value: c.name, label: c.name, sub: `${c.files} file${c.files === 1 ? "" : "s"}` }))
     : f.optionsFrom === "sizes" ? sizes.map((s) => ({ value: s.id, label: s.id, sub: s.label }))
     : f.optionsFrom === "models" ? models.map((m) => ({ value: m.id, label: m.label || m.id }))
@@ -62,7 +65,7 @@ export function TaskEdit({ spec }: { spec: TaskEditSpec }) {
       try {
         const params: Record<string, any> = {};
         for (const f of t.fields) params[f.name] = vals[f.name];
-        const r = await api<{ id: string; session: string | null }>(inst ? "PUT" : "POST", inst ? "api/tasks/instances/" + inst.id : "api/tasks/instances", inst ? { name: name.trim(), params } : { template: t.name, name: name.trim(), params });
+        const r = await api<{ id: string; session: string | null }>(inst ? "PUT" : "POST", inst ? "api/tasks/instances/" + inst.id : "api/tasks/instances", inst ? { name: name.trim(), params } : { template: t.name, name: name.trim(), params, ...(t.prompt && account ? { account } : {}) });
         await loadTasks();
         closePage();
         if (!inst) { toast("Task made. Approve it in the iPhone app.", "ok"); openPage("task", { id: r.id }); openApprovalFor(r.session, "new-session"); }
@@ -84,6 +87,9 @@ export function TaskEdit({ spec }: { spec: TaskEditSpec }) {
           {!!f.help && <Muted mt={1}>{f.help}</Muted>}
         </View>
       ))}
+      {!!t.prompt && !inst && !!accounts?.accounts.length && <><Lbl>Claude account</Lbl>
+        <RadioCards id="te-account" value={account} onChange={setAccount} options={accounts.accounts.map((a) => ({ value: a.store, title: a.store + (a.default ? " (default)" : ""), sub: a.email || "not signed in" }))} />
+        <Muted mt={1}>Fixed once approved.</Muted></>}
       <Rows mt={4}><Row label="Template stores"><BadgeList items={t.stores || []} /></Row></Rows>
       <Muted mt={2}>Values are not secret; secrets come from stores.</Muted>
       {!!err && <P size={2} color="red" mt={3} id="te-err">{err}</P>}

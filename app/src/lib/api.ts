@@ -123,6 +123,8 @@ export type Session = {
   // a lifecycle action holding the session (others are refused 409) and a permission-mode / restart job
   // what a pause or destroy is waiting on, in plain words (e.g. "waiting for the machine's last snapshot (up to 10 min)")
   waiting?: string;
+  // the Claude account it runs on (router/claudeaccounts.go), fixed when it was made
+  claudeAccount?: string | null;
   // the store the machine is waiting on at boot (the core answered 423 "store X is locked" to its secrets pull)
   lockedStore?: string;
   busy?: { kind: string; since?: string } | null; wake?: { kind: string; phase: string; error?: string } | null; apiProxy?: "on" | "off";
@@ -153,6 +155,18 @@ export type Usage = {
   limits: UsageLimit[];
   extraUsage: { enabled: boolean; monthlyLimit: number; usedCredits: number; utilization: number; currency: string; decimalPlaces: number; disabledReason?: string | null; spendLimitReached: boolean } | null;
 };
+// a Claude account (GET api/claude-accounts; router/claudeaccounts.go): the router's Claude key store claude-<name>,
+// its login's state (no secrets), whether New session pre-picks it, and the sessions using it
+export type ClaudeAccount = {
+  store: string; name: string; default: boolean; sessions: string[];
+  hasLogin: boolean; expiresAt: number | null; expired: boolean; email: string; accountUuid?: string; source: string;
+  updatedAt: string | null; refreshedAt: string | null; needLogin?: boolean; rejected?: boolean; error?: string; loginInProgress: boolean;
+  participants?: { id: string; seen: string }[];
+};
+export type ClaudeAccounts = { default: string; accounts: ClaudeAccount[] };
+export const loadClaudeAccounts = () => api<ClaudeAccounts>("GET", "api/claude-accounts");
+// the core's store of the one shared login before accounts: sessions from before still hold it; never picked again
+export const LEGACY_CLAUDE_STORE = "claude";
 export function fromNow(iso: string | Date) { const d = new Date(iso).getTime() - Date.now(); return d < 0 ? ago(iso) : "in " + ago(new Date(Date.now() - d)).replace(" ago", "").replace("just now", "a moment"); }
 export type TailMessage = { role: "user" | "assistant"; text: string; at?: string };
 export type ArchiveInfo = { dir: string; title: string; transcripts: string[]; artifacts: number; signer?: string; snapshotAt?: string; last?: TailMessage | null };
@@ -219,10 +233,16 @@ export type CoreStore = {
 // which stores each harness brings (GET api/policy): the router adds them to a session, so the app
 // doesn't offer them in pickers or list them in summaries
 export type Policy = Record<string, string[]>;
+// the harnesses that run on a Claude account (policy/stores.json `claudeAccount`), filled by loadPolicy
+export const accountHarnesses = new Set<string>(["claude", "openclaw"]);
 export async function loadPolicy(): Promise<Policy> {
-  const j = await api<{ harnesses?: Record<string, { stores?: string[] }> }>("GET", "api/policy");
+  const j = await api<{ harnesses?: Record<string, { stores?: string[]; claudeAccount?: boolean }> }>("GET", "api/policy");
   const out: Policy = {};
-  for (const [h, v] of Object.entries(j.harnesses || {})) out[h] = v.stores || [];
+  accountHarnesses.clear();
+  for (const [h, v] of Object.entries(j.harnesses || {})) {
+    out[h] = v.stores || [];
+    if (v.claudeAccount) accountHarnesses.add(h);
+  }
   return out;
 }
 export const harnessStoreSet = (p: Policy) => new Set(Object.values(p).flat());

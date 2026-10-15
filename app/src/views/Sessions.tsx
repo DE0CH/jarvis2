@@ -432,6 +432,7 @@ export function Sessions() {
                   <Row label="Stores"><BadgeList items={own} /></Row>
                   {!!m.content?.length && <Row label="Content"><BadgeList items={m.content} /></Row>}
                   <Row label="Harness">{HARNESS[m.harness || ""] || m.harness || "—"}</Row>
+                  {!!m.claudeAccount && <Row label="Claude account" id="session-claude-account">{m.claudeAccount}</Row>}
                   <Row label="Model">{modelName || "—"}</Row>
                   <Row label="Machine">{[REGION[m.region || ""] || m.region, m.guest, m.state === "started" && m.memory && m.memory.totalMb > 0 ? `${gb(m.memory.availMb)} of ${gb(m.memory.totalMb)} GB free` : "", m.state === "started" && m.disk && m.disk.totalMb > 0 ? `${gb(m.disk.availMb)} of ${gb(m.disk.totalMb)} GB disk free` : ""].filter(Boolean).join(" · ") || "—"}</Row>
                   <Row label="Created">{m.created ? ago(m.created) : "—"}</Row>

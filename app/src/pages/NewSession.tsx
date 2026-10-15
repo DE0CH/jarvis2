@@ -6,7 +6,7 @@
 // signed config names each one's sha256 + size, and the machine takes only those bytes.
 import { useEffect, useRef, useState } from "react";
 import { Image, Platform, Pressable, View } from "react-native";
-import { api, newId, uploadFile, CORE_STORE, DEPLOY_KEY_TOKEN_STORE, harnessStoreSet } from "../lib/api";
+import { api, newId, uploadFile, accountHarnesses, loadClaudeAccounts, CORE_STORE, DEPLOY_KEY_TOKEN_STORE, LEGACY_CLAUDE_STORE, harnessStoreSet, type ClaudeAccounts } from "../lib/api";
 import { useStore, loadStores, refresh, settle, toast, failed } from "../lib/store";
 import { BadgeList, Button, CheckboxCards, Flex, Lbl, Muted, P, Pill, RadioCards, Row, Rows, Segmented, Spinner, Text, TextArea, TextField } from "../ui/kit";
 import { BtnLabel } from "../ui/bits";
@@ -68,7 +68,7 @@ export function NewSession() {
   // every store is offered, sensitive ones marked (never pre-picked); not the core's own store (it never goes to a
   // session), the deploy-key token's store (only a deploy-key call opens it), nor a harness's (they come with it)
   const hidden = harnessStoreSet(useStore((s) => s.policy));
-  const plain = stores.items.filter((s) => s.name !== CORE_STORE && s.name !== DEPLOY_KEY_TOKEN_STORE && !hidden.has(s.name));
+  const plain = stores.items.filter((s) => s.name !== CORE_STORE && s.name !== DEPLOY_KEY_TOKEN_STORE && s.name !== LEGACY_CLAUDE_STORE && !hidden.has(s.name));
   const isSensitive = (n: string) => stores.items.some((s) => s.name === n && s.sensitive);
   const [picked, setPicked] = useState<string[]>([]);
   const touched = useRef(false);
@@ -77,6 +77,10 @@ export function NewSession() {
   // the models of the chosen harness (the router swaps a model of another harness for that harness's default)
   const models = MODELS.filter((m) => (m.harness || "claude") === harness);
   useEffect(() => { setModel((m) => (models.some((x) => x.id === m) ? m : models[0]?.id || "")); }, [harness, models.map((m) => m.id).join(",")]);
+  // the Claude account (router/claudeaccounts.go): the default pre-picked; fixed for the session's life
+  const [accounts, setAccounts] = useState<ClaudeAccounts | null>(null), [account, setAccount] = useState("");
+  useEffect(() => { loadClaudeAccounts().then((a) => { setAccounts(a); setAccount((cur) => cur || a.default); }, () => setAccounts({ default: "", accounts: [] })); }, []);
+  const takesAccount = accountHarnesses.has(harness);
   const [label, setLabel] = useState(""), [prompt, setPrompt] = useState("");
   // one-shot: the session runs its prompt, then is archived and destroyed by itself (never auto-paused)
   const [mode, setMode] = useState("session"), [autoPause, setAutoPause] = useState<string[]>(["on"]);
@@ -142,7 +146,8 @@ export function NewSession() {
     const chosen = repoList.filter((r) => repos.includes(r.name));
     const withRepos = [...new Set([...picked, ...repoStores(chosen)])];
     const body = { requestId: requestId.current, label: label.trim(), prompt: prompt.trim(), model, permissionMode: perm, size, harness, stores: withRepos, oneShot, autoPause: !oneShot && autoPause.includes("on"),
-      repos: chosen.map((r) => r.url).join(","), apiProxy: apiProxy.includes("on"), ...(content.length ? { content } : {}) };
+      repos: chosen.map((r) => r.url).join(","), apiProxy: apiProxy.includes("on"), ...(content.length ? { content } : {}),
+      ...(takesAccount && account ? { account } : {}) };
     try {
       const attachments = await upload();
       setBusy("Starting…");
@@ -176,6 +181,12 @@ export function NewSession() {
           { value: "openclaw", title: "claw-code · OpenClaw", sub: "Claude subscription · OpenClaw app + Control UI" },
         ]} />
       </>
+      {takesAccount && <><Lbl>Claude account</Lbl>
+        {accounts === null ? <Flex gap={2} align="center"><Spinner /><Muted>Loading Claude accounts…</Muted></Flex>
+          : accounts.accounts.length ? <RadioCards id="ns-account" value={account} onChange={setAccount} options={accounts.accounts.map((a) => ({ value: a.store, title: a.store + (a.default ? " (default)" : ""),
+              sub: [a.email || "not signed in", a.needLogin ? "Re-login needed" : ""].filter(Boolean).join(" · ") }))} />
+          : <Muted>No Claude account yet (Settings → Claude accounts): the session starts logged out.</Muted>}
+        <Muted mt={1}>The session keeps this account; it shows up in that account's Claude app.</Muted></>}
       <Lbl>Repos</Lbl>
       {repoList.length ? <CheckboxCards id="ns-repo" value={repos} onChange={setRepos} options={repoList.map((r) => ({ value: r.name, title: r.repo, sub: r.store }))} />
         : <Muted>No repos (Settings → Repos).</Muted>}

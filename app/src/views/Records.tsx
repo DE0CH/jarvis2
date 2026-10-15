@@ -83,6 +83,7 @@ export function Records() {
                 {!!m.created && <Row label="Created">{new Date(m.created).toLocaleDateString()}</Row>}
                 <Row label="Stores"><BadgeList items={storesOf(m, policy)} /></Row>
                 {!!(HARNESS[m.harness || ""] || m.harness) && <Row label="Harness">{HARNESS[m.harness || ""] || m.harness}</Row>}
+                {!!m.claudeAccount && <Row label="Claude account">{m.claudeAccount}</Row>}
                 {!!m.model && <Row label="Model">{models.find((x) => x.id === m.model)?.label || m.model}</Row>}
                 {!!m.size && <Row label="Size">{m.size}</Row>}
                 {a ? <>
