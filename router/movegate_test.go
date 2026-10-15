@@ -21,19 +21,25 @@ func TestHandoverEndsLongPollsAtOnce(t *testing.T) {
 
 	block := make(chan struct{})
 	pub := http.NewServeMux()
-	pub.HandleFunc("GET /poll", func(w http.ResponseWriter, req *http.Request) {
+	pub.HandleFunc("GET /peer/claude-login", func(w http.ResponseWriter, req *http.Request) {
 		select {
 		case <-req.Context().Done():
 		case <-block:
 			io.WriteString(w, "old")
 		}
 	})
-	pub.HandleFunc("GET /login", func(w http.ResponseWriter, req *http.Request) {
+	pub.HandleFunc("GET /api/claude-login", func(w http.ResponseWriter, req *http.Request) {
 		<-req.Context().Done()
 		io.WriteString(w, "what it has") // the Claude login's poll answers what it has
 	})
 	pub.HandleFunc("POST /act", func(w http.ResponseWriter, req *http.Request) {
-		<-req.Context().Done()
+		time.Sleep(400 * time.Millisecond) // a call in flight that isn't a long poll runs to its end
+		select {
+		case <-req.Context().Done():
+			io.WriteString(w, "cancelled")
+		default:
+			io.WriteString(w, "done")
+		}
 	})
 	ph := r.gated(pub)
 	next := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) { io.WriteString(w, "next leader") }))
@@ -63,7 +69,7 @@ func TestHandoverEndsLongPollsAtOnce(t *testing.T) {
 			return res{w.Code, w.Body.String(), w.Header(), time.Since(start)}
 		}
 	}
-	poll, act, login := run(pubReq("GET", "/poll")), run(pubReq("POST", "/act")), run(pubReq("GET", "/login"))
+	poll, act, login := run(pubReq("GET", "/peer/claude-login")), run(pubReq("POST", "/act")), run(pubReq("GET", "/api/claude-login"))
 	time.Sleep(200 * time.Millisecond)
 
 	start := time.Now()
@@ -83,8 +89,8 @@ func TestHandoverEndsLongPollsAtOnce(t *testing.T) {
 		t.Fatalf("an answer during the freeze must close its connection: %q %v", l.body, l.hdr)
 	}
 	a := <-act
-	if a.code != 503 || a.hdr.Get("Connection") != "close" || !strings.Contains(a.body, "router moving") {
-		t.Fatalf("an unanswered POST: %d %v %s", a.code, a.hdr, a.body)
+	if a.code != 200 || a.body != "done" || a.hdr.Get("Connection") != "close" {
+		t.Fatalf("a POST in flight runs to its end (and closes its connection): %d %v %s", a.code, a.hdr, a.body)
 	}
 	// the machines' listener still serves what reaches it after the freeze (until its peer goes); its long poll answers
 	if code, out := m.do(t, mh, "GET", "/m/commands", ""); code != 200 || !strings.Contains(toJSON(out), `"commands":[]`) {
@@ -98,7 +104,7 @@ func TestHandoverEndsLongPollsAtOnce(t *testing.T) {
 	}
 	// an aborted move serves again
 	r.thawRequests()
-	poll = run(pubReq("GET", "/poll"))
+	poll = run(pubReq("GET", "/peer/claude-login"))
 	time.Sleep(100 * time.Millisecond)
 	close(block)
 	if p := <-poll; p.body != "old" {

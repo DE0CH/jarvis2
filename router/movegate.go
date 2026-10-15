@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 )
@@ -194,13 +195,21 @@ func (r *Router) gatedAs(h http.Handler, fallbackOK bool) http.Handler {
 		// that, so what is served here is in what the next leader loads); only its long polls end at once (their
 		// context is cancelled). A refusal here would be a failed call: the machine's proxy doesn't retry.
 		if !frozen || !fallbackOK {
-			ctx, cancel := context.WithCancel(req.Context())
-			stop := context.AfterFunc(fctx, cancel)
-			h.ServeHTTP(tw, req.WithContext(ctx))
-			stop()
-			cancel()
-			if tw.wrote || fctx.Err() == nil {
-				return
+			if !longPoll(req.URL.Path) {
+				// anything else runs to its end with its own context (a search or a core call in flight is answered)
+				h.ServeHTTP(tw, req)
+				if tw.wrote || fctx.Err() == nil || !fallbackOK {
+					return
+				}
+			} else {
+				ctx, cancel := context.WithCancel(req.Context())
+				stop := context.AfterFunc(fctx, cancel)
+				h.ServeHTTP(tw, req.WithContext(ctx))
+				stop()
+				cancel()
+				if tw.wrote || fctx.Err() == nil {
+					return
+				}
 			}
 		}
 		// ended by the handover with no answer
@@ -216,6 +225,12 @@ func (r *Router) gatedAs(h http.Handler, fallbackOK bool) http.Handler {
 		w.Header().Set("Retry-After", "1")
 		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": "router moving, try again shortly", "retry": true})
 	})
+}
+
+// longPoll: the routes that wait for something (their context ends at a handover; every other request runs to its
+// end): the machine's command poll and the Claude login's polls (machine, peer, app)
+func longPoll(path string) bool {
+	return path == "/m/commands" || strings.HasSuffix(path, "/claude-login")
 }
 
 // gateWriter: knows whether the handler answered; every answer after the freeze closes its connection
