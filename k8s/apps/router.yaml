@@ -32,6 +32,9 @@ spec:
           image: ghcr.io/de0ch/jarvis2-router:sha-12e69302c3b3@sha256:83ce14bdb50592cbab2ef4d2139549e7510160a3313ae1bb753a69bb1350773d
           ports: [{ containerPort: 8080 }]
           env:
+            # this pod's address, written next to the leader lock: a standby proxies to it (router/leader.go). Must be
+            # live before the move to a rolling update, or a standby would proxy to 127.0.0.1, i.e. to itself
+            - { name: POD_IP, valueFrom: { fieldRef: { fieldPath: status.podIP } } }
             - { name: SESSION_IMAGE, value: "ghcr.io/de0ch/jarvis2-session:sha-12e69302c3b3@sha256:3e86ae44b1016b0ce7ccc83e37f1edea8127df6afcfc30b5db400562b563a490" }
             # the CI key's signature over "jarvis2-session-image <SESSION_IMAGE>" (images.yml, keys/ci.pub): the phone checks it
             - { name: SESSION_IMAGE_SIG, value: "MEYCIQCHIDorAtlHJquU9tr7MApsDe78KFs93PLlZ5t8raVxNwIhAJ5iMe2N9jRD1uRgtzIZXO8Qc7F3DhXKAWmeis+8KeKd" }
