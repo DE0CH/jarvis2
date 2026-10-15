@@ -1,0 +1,25 @@
+# Grafana Cloud Logs (stack jumboshortbread1389): every machine log line of the org's apps, labelled box="fly"
+[transforms.jarvis2_redact]
+  type = "remap"
+  inputs = ["log_json"]
+  source = '''
+  .level = .log.level
+  m = string(.message) ?? ""
+  m = replace(m, r'(?i)(bearer\s+)[A-Za-z0-9._~+/=-]{8,}', "<redacted>")
+  m = replace(m, r'(sk-ant-[A-Za-z0-9_-]{8,}|sk-or-v1-[A-Za-z0-9]{16,}|gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|AGE-SECRET-KEY-[A-Z0-9]{20,}|jarvis2-kit:[A-Za-z0-9:+/=_-]{8,}|glc_[A-Za-z0-9+/=]{20,}|-----BEGIN [A-Z ]*PRIVATE KEY-----)', "<redacted>")
+  .message = m
+  '''
+
+[sinks.loki]
+  type = "loki"
+  inputs = ["jarvis2_redact"]
+  endpoint = "${LOKI_URL}"
+  compression = "gzip"
+  auth.strategy = "basic"
+  auth.user = "${LOKI_USERNAME}"
+  auth.password = "${LOKI_PASSWORD}"
+  encoding.codec = "json"
+  labels.box = "fly"
+  labels.fly_app = "{{fly.app.name}}"
+  labels.fly_region = "{{fly.region}}"
+  labels.level = "{{level}}"

@@ -524,7 +524,15 @@ IPv6) that writes `warp-host.sh` and its boot unit onto the disk, then a boot in
 the core answers through the tunnel. About 10 minutes of downtime. The box keeps its keys, Secrets and Flux state, but
 it reboots, so the core starts empty: Deyao Recovers in the app (as after a power failure). DECISIONS 160.
 
-## Rebuilding the box
+## Rebuilding a box
+
+**The services box** (`jarvis2-services`): delete the server, `BOX_KIND=services infra/create.sh` (a new age key,
+`keys/services-age.pub`; attached to the Network at 10.77.0.3 before its first boot), write its four parts again
+(`infra/router-secrets.py --box services --part search|icloud-index|icloud-session|alloy …`, values from `jarvis1`,
+`default`, `icloud-backup`, `identity` and `jarvis2-ops`), commit and push. Search and the iCloud index seed from their
+Storage Box copies. Nothing else waits on it; the router reports search unreachable meanwhile.
+
+**The control box** (and, until the move, the old single box):
 
 1. Delete the server in the jarvis2 Hetzner project (API or console).
 2. `infra/cloudflare.py ~/.jarvis2/cloudflare.env` (with `ROTATE=1` if that file is gone: a new setup service
@@ -650,4 +658,48 @@ under one shared name deleted each other's service token, PAT and bucket (2026-1
 - What the core did: it keeps no log of its own (R2: as small and stateless as it can be); every change it makes is a
   signed answer the router keeps (certs, the input log in the router's `input-log.jsonl`).
 - A session machine's log: `FLY_API_TOKEN=$JARVIS2_FLY_TOKEN flyctl logs -a jarvis2-sessions --machine <id> --no-tail`
-- The box itself: no way in by design; GitHub (Flux status is visible only through what the services answer).
+- The boxes themselves: no way in by design; their logs and metrics are in Grafana Cloud (next section): Flux's
+  reconciles (`container="manager"`), the kubelet and the kernel (`source="journal"`), every pod.
+
+## Logs, metrics and alerts (DESIGN "Logs and metrics")
+
+Grafana Cloud stack `jumboshortbread1389` (https://jumboshortbread1389.grafana.net, EU Germany, Free: 50 GB logs, 10k
+metric series, 14 days). The account logs in **with GitHub as DE0CH** (no Grafana password). Credentials: the store
+`jarvis2-ops`.
+
+- **Query from a session** with `GRAFANA_READ_TOKEN`:
+  `curl -u "1833850:$GRAFANA_READ_TOKEN" -G https://logs-prod-012.grafana.net/loki/api/v1/query_range --data-urlencode
+  'query={box="control",container="router"}'` (labels `box` control | services | fly, `source` pod | journal,
+  `namespace`, `container`, `unit`, `fly_app`), and Prometheus at
+  `https://prometheus-prod-65-prod-eu-west-2.grafana.net/api/prom/api/v1/query` with user 3676371 (e.g.
+  `rate(node_pressure_memory_stalled_seconds_total{box="control"}[5m])`, `container_memory_working_set_bytes`).
+- **The boxes:** Alloy on each host (cloud-init; `systemctl status alloy` would show it, but there is no way in: a box
+  that sends nothing raises "gone quiet"). Its module is `infra/alloy/box.alloy` on main, pulled every 5 min; its
+  credentials are the box's `alloy` secret part: `GRAFANA_LOGS_URL=https://logs-prod-012.grafana.net/loki/api/v1/push
+  GRAFANA_LOGS_USER=1833850 GRAFANA_METRICS_URL=https://prometheus-prod-65-prod-eu-west-2.grafana.net/api/prom/push
+  GRAFANA_METRICS_USER=3676371 infra/router-secrets.py --box <box> --part alloy GRAFANA_LOGS_URL GRAFANA_LOGS_USER
+  GRAFANA_METRICS_URL GRAFANA_METRICS_USER GRAFANA_WRITE_TOKEN`.
+- **Session machines:** the Fly app `jarvis2-log-shipper` (`services/log-shipper`; deploy: `FLY_API_TOKEN=$JARVIS2_FLY_TOKEN
+  flyctl deploy -c services/log-shipper/fly.toml --ha=false --remote-only`). Its secrets: `ORG=jarvis2-370`,
+  `ACCESS_TOKEN` (`flyctl tokens create readonly jarvis2-370 --from-existing` with the org token), `LOKI_URL=https://logs-prod-012.grafana.net`,
+  `LOKI_USERNAME=1833850`, `LOKI_PASSWORD` = `GRAFANA_WRITE_TOKEN`. One shared-cpu-1x 256 MB machine (USD 2.19/month, in
+  the Fly budget).
+- **Alerts:** `GRAFANA_ADMIN_TOKEN=… GRAFANA_DISCORD_WEBHOOK=… infra/grafana.py apply --boxes control,services` (name only
+  the boxes that exist; `show` lists the rules), to Discord #jarvis2-alerts (channel 1560217907072344104 in DE0CH's
+  server). The probe: `GRAFANA_SM_TOKEN=… HEALTH_PROBE_ID=… HEALTH_PROBE_SECRET=… infra/grafana.py probe`.
+- **Re-minting** (each credential, when lost or leaked; then write it into `jarvis2-ops` with `infra/setup.py write`,
+  and into the boxes' parts where named):
+  - `GRAFANA_WRITE_TOKEN`, `GRAFANA_READ_TOKEN`: grafana.com → the org's Access Policies (log in with GitHub):
+    `jarvis2-boxes-write` (logs:write, metrics:write) and `jarvis2-read` (logs:read, metrics:read, alerts:read) → Add
+    token; or the same through `https://grafana.com/api/v1/tokens?region=prod-eu-west-2&orgId=1949146` from a logged-in
+    browser page (header `X-Request-Id`). A new write token goes into both boxes' `alloy` parts and the shipper's
+    `LOKI_PASSWORD`.
+  - `GRAFANA_ADMIN_TOKEN`: the stack → Administration → Service accounts → `jarvis2-admin` → Add token.
+  - `GRAFANA_SM_TOKEN`: `POST https://synthetic-monitoring-api-eu-west-2.grafana.net/api/v1/register/install` with an
+    access-policy token (stacks:read, metrics:write, logs:write, traces:write) and `{"stackId":1876074,
+    "metricsInstanceId":3676371,"logsInstanceId":1833850}`.
+  - `GRAFANA_DISCORD_WEBHOOK`: a new webhook on #jarvis2-alerts (lobster: `POST /channels/<id>/webhooks`), then
+    `infra/grafana.py apply`.
+  - `HEALTH_PROBE_ID/SECRET`: `ROTATE=1 infra/cloudflare.py --health OUT`, then `infra/grafana.py probe`.
+  - `ROUTER_BACKUP_AGE_KEY`: can't be re-minted for the backups already made; a new pair means a new
+    `ROUTER_BACKUP_AGE_PUB` in `k8s/control/apps/router/router.yaml` (backups from then on).

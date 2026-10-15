@@ -340,12 +340,61 @@ drain ends. A takeover refused after the handoff leaves no core serving: the rou
 and a retry of the flip reuses it (a handed-off core stays handed off; there is no undo). `/setup/status` shows each
 core's URL, `serving` value and identity (`core`).
 
-## The box
+## The boxes (Deyao, 2026-10-15)
 
-It takes changes only from git: no SSH, no reachable k8s API, no inbound port; everything arrives through
-Flux from the public repo. A box git can't fix is replaced, then set up again as above (Recover). Session machines reach
-the router over Fly's private network (the box is a WireGuard peer of the org), not through Cloudflare, so no
-credential on a machine opens anything on the edge.
+"An unimportant job must never be able to bring down the control plane, because that takes away the tool he uses to
+fix things." On 2026-10-15 the one 4 GB box ran the control plane next to transcript search and the iCloud index; they
+starved it of memory, a Flux backlog landed at once, and the app, the web page and every session lost the router until
+a hard reset. So Jarvis 2 runs on TWO Hetzner boxes (cx33, fsn1, IPv6-only with WARP for IPv4, DECISIONS 156), each its
+own single-node k3s with its own Flux, joined only by a Hetzner Network (`jarvis2`, 10.77.0.0/24):
+
+- **The control box** (`jarvis2-control`, 10.77.0.2; `k8s/control`, `k8s/bootstrap-control`, `k8s/flux/control.yaml`):
+  the cores (blue and green, "Core continuity"), the router (a leader and a standby, always) and cloudflared. Nothing
+  else: its bootstrap gives each namespace a ResourceQuota that Flux's `admin` role can read but not change, the control
+  plane a PriorityClass, and the kubelet reserved memory with eviction thresholds, so even a push can't put a heavy job
+  there. On the private interface only answers and the old box (during the move) come in (`jarvis2-private-guard`,
+  mangle PREROUTING, before any NodePort).
+- **The services box** (`jarvis2-services`, 10.77.0.3; `k8s/services`, `k8s/bootstrap-services`,
+  `k8s/flux/services.yaml`): transcript search, the watch runner, the iCloud index (each two replicas, rolled with no
+  gap) and `jarvis2-poc` for experiments (quota 1.5 GiB, one core). The router reaches them on NodePorts that listen on
+  the private address only (`nodeport-addresses`), and their NetworkPolicies admit only the routers' addresses. No
+  service calls the router, so a services box that is broken into or thrashing has no way into the control box.
+- **Each box's Flux** applies only its own tree, one Kustomization per app, so a manifest Flux refuses holds back only
+  that app (2026-10-15: one refused RoleBinding held every rollout for 40 min), and a services commit never touches the
+  control box. CI dry-runs every tree as flux-applier (`infra/flux-dryrun.sh`, k8s.yml).
+- **Each box's host runs Grafana Alloy** (outside k3s, so it keeps shipping when the cluster doesn't; "Logs and
+  metrics" below).
+- **A control-box reboot** empties its cores (in memory by design): the router comes back from its volume and Deyao
+  Recovers, as before; with core continuity his sessions are not cut off. A services-box reboot needs nothing.
+
+Both boxes take changes only from git: no SSH, no reachable k8s API, no inbound port; everything arrives through Flux from
+the public repo. A box git can't fix is replaced (`BOX_KIND=control|services infra/create.sh`). Session machines reach
+the router over Fly's private network (the control box's router is a WireGuard peer of the org), not through
+Cloudflare, so no credential on a machine opens anything on the edge.
+
+**Now (2026-10-15):** the services box runs and is checked through its logs; the old single box (`k8s/apps`) still runs
+the control plane and its own search and watch until the move (RUNBOOK "Moving to the two boxes"), after which it is
+deleted and `k8s/apps`, `k8s/bootstrap`, `k8s/secrets` and `k8s/flux/sync.yaml` go with it.
+
+### Logs and metrics
+
+Grafana Cloud (Free, stack `jumboshortbread1389`, EU Germany). Grafana Labs joins the trusted providers (Trust
+boundary): logs leave the boxes, so secret shapes are replaced first (Bearer tokens, `sk-ant-`, GitHub tokens, age and
+PEM private keys, the kit's prefix), as a second layer under "the core logs nothing, the router logs no value".
+
+- **Each box's host:** Alloy (`infra/alloy/box.alloy`, imported from git by a stub cloud-init writes; credentials from
+  the k8s Secret `jarvis2-obs/alloy`, which a host timer copies out) ships every pod's log, the journal (persistent:
+  after a hard reset the last minutes of the previous boot still go out) and metrics: PSI memory/IO pressure, OOM kills,
+  disk, network, per-container memory and CPU. Labels: `box` (control | services), `source` (pod | journal),
+  `namespace`, `container`, `unit`.
+- **The session machines:** the Fly app `jarvis2-log-shipper` in org jarvis2-370 (`services/log-shipper`: Fly's log
+  shipper with only the Loki sink, the same redaction, and no listening port: Vector's API would let any machine on the
+  org's network tap every session's log), label `box="fly"`.
+- **Alerts** (rules as code: `infra/grafana.py`) go to Discord #jarvis2-alerts: memory pressure, OOM kills, disk,
+  Flux failing, control-plane restarts, a new core (Deyao Recovers), a box gone quiet, and the external probe: Grafana
+  Synthetic Monitoring calls `https://jarvis2.deyaochen.com/healthz` every minute from London and Frankfurt with its own
+  Access service token (path-scoped Access app; `router/healthz.go` answers 200 only while the router and its core
+  serve).
 
 - **The metadata address** (169.254.169.254, which keeps serving the user-data with the box key): NetworkPolicies keep
   the core, the router and cloudflared from it, and a box built from 2026-10-11 on drops every pod's packets to it in

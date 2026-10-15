@@ -1618,3 +1618,31 @@ snapshot failed with "no space left on device", the machine was destroyed anyway
      router refuses it in `stores` and add-store, and the pickers hide it; the store stays in the core for the older
      lines (a store can't be deleted). Machines ask the router whether their session has an account (404 `noAccount`
      otherwise) instead of looking for the store in their cert. A new box with no account starts sessions logged out.
+## Two boxes, logs in Grafana Cloud, 2026-10-15
+
+187. **The control plane gets a box of its own; shared services and experiments get another** (Deyao, 2026-10-15,
+     layout A of the redesign, after the thrash: "an unimportant job must never bring down the control plane").
+     Two cx33 (EUR 10.188/month gross each, Hetzner API), separate k3s and Flux, joined by a Hetzner Network (free).
+     DESIGN "The boxes". Claude's choices inside it: *cx33 for the control box*, not cx23: two routers at 1536 Mi plus a
+     rollout's surge pod don't fit a cx23's ~3.7 GiB (they don't on the old box either). *One Flux Kustomization per app*:
+     a refused manifest holds back only its app. *The services box's NodePorts on the private address only, plus a
+     mangle-table guard at boot*: Hetzner Firewalls don't cover private interfaces. *Search's Role in the bootstrap*:
+     Flux's dry-run refuses a RoleBinding to a Role made in the same apply (it did on the services tree too). *Two
+     primary-IP and four core slots freed by deleting the old YYC server yyc-stream* (Deyao's OK): the account is at 10
+     primary IPs (IPv6 primaries count) and 20 shared cores. *Not chosen*: one cluster with two nodes (shared apiserver and
+     Flux: the 2026-10-15 backlog would still land on the control node), one bigger box (shared kernel, disk and reboots).
+187. **Logs and metrics go to Grafana Cloud Free (EU Germany), from Alloy on each host, and session machines' logs from
+     Fly's log shipper** (Deyao, 2026-10-15). Claude's choices: *Alloy on the host, not a pod*: it must keep shipping when
+     the cluster on that box doesn't, and Pod Security "restricted" forbids the hostPaths it reads (rightly: the disk
+     holds the user-data with the box key). Its config comes from git (`import.git`), its token from a SOPS Secret a host
+     timer copies, so nothing about it changes outside a commit. *Persistent journald*, so a hard reset's last minutes
+     still reach Grafana. *Secret shapes replaced before shipping* on the boxes and the Fly shipper. *The Fly shipper
+     without Vector's API or metrics port*: it sits in the sessions' org network, and the API's `tap` would stream every
+     session's log to any machine there. *The Grafana account is a GitHub login (DE0CH)*: email signup's Turnstile never
+     cleared from a session (Browserbase out of credit, IPRoyal's residential balance empty), and DE0CH's GitHub carries
+     chendeyao000@gmail.com. *The log read token lives in the new store `jarvis2-ops`, not `infra`* (the decision said
+     `infra`): `infra` held keys this session didn't, so the old core's whole-store write would have dropped them, and the
+     tokens had to be stored before the core release; `jarvis2-ops` holds all of Jarvis 2's operations credentials
+     (Grafana tokens, the alert webhook, the probe token, the router's backup key), written only by the setup path.
+     *Alerts to Discord #jarvis2-alerts* through a webhook; rules as code (`infra/grafana.py`). *The external probe on
+     `/healthz`* with its own path-scoped Access app and one service token, never past Access.
