@@ -1,0 +1,157 @@
+# The router: the app's API, the web page and setup (through the tunnel, from jarvis2-edge) and the
+# machines' API (/m, only on its own WireGuard peer in Fly's private network, router/wg.go). Reaches the
+# cores, the services box (search, watch, the iCloud index) over the Hetzner Network, the internet (Access certs) and
+# Fly's WireGuard gateway. On the CONTROL box (docs/DESIGN.md "The boxes"). Its records live on a volume (backed up,
+# age-encrypted, to the Storage Box every 15 min: router/backup.go). The WireGuard peer's config moves with leadership:
+# /data/wg.conf (brought by the move, router/move.go) wins over the optional router-wg Secret (a rebuilt box's new peer).
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata: { name: router-data, namespace: jarvis2-router }
+spec:
+  accessModes: [ReadWriteOnce]
+  resources: { requests: { storage: 30Gi } }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: router, namespace: jarvis2-router }
+spec:
+  # Zero-downtime (CLAUDE.md "Deploy", router/leader.go): two pods always, a leader and a standby that proxies to it;
+  # a rollout starts the new pod as a standby (maxSurge 1) and the leader hands over after its drain. Both share the
+  # one RWO volume (single node) and its flock.
+  replicas: 2
+  minReadySeconds: 5
+  strategy: { type: RollingUpdate, rollingUpdate: { maxUnavailable: 0, maxSurge: 1 } }
+  selector: { matchLabels: { app: router } }
+  template:
+    # secrets-rev(-backup|-github|-flyorgs|-flypersonal|-browserbase|-devices): bumped by infra/router-secrets.py so a changed Secret restarts the pod (envFrom is read at start)
+    metadata: { labels: { app: router }, annotations: { jarvis2/secrets-rev: "000000000000", jarvis2/secrets-rev-backup: "000000000000", jarvis2/secrets-rev-github: "000000000000", jarvis2/secrets-rev-flyorgs: "000000000000", jarvis2/secrets-rev-flypersonal: "000000000000", jarvis2/secrets-rev-browserbase: "000000000000", jarvis2/secrets-rev-devices: "000000000000", jarvis2/secrets-rev-move: "000000000000" } }
+    spec:
+      priorityClassName: jarvis2-control
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      # SIGTERM drains (router/drain.go): running lifecycle actions finish before the pod exits. The longest is a
+      # restart/upgrade job: a pause (SNAPSHOT_WAIT_SECONDS 600 + the kill) then a resume (a machine's init, up to
+      # 12 min); DRAIN_SECONDS (1740) stays under this.
+      terminationGracePeriodSeconds: 1800
+      securityContext: { fsGroup: 65532 }
+      containers:
+        - name: router
+          image: ghcr.io/de0ch/jarvis2-router:sha-8b4e57393c12@sha256:f0568116a1dd425bbaecc7dc505c707cf81aa20c7a9bc52022f7750afa3211db
+          env:
+            - { name: POD_IP, valueFrom: { fieldRef: { fieldPath: status.podIP } } }  # the standby proxies to the leader's
+            # the cores (k8s/control/apps/core): CORE_URL serves until a flip, NEXT_CORE_URL is the other one
+            - { name: CORE_URL, value: "http://core-blue.jarvis2-core.svc.cluster.local:8090" }
+            - { name: NEXT_CORE_URL, value: "http://core-green.jarvis2-core.svc.cluster.local:8090" }
+            - { name: FLIP_AUTO, value: "1" }  # flip as soon as the next core is Recovered alongside (a standby)
+            # the services box over the Hetzner Network (k8s/services)
+            - { name: SEARCH_URL, value: "http://10.77.0.3:30090" }
+            - { name: ICLOUD_INDEX_URL, value: "http://10.77.0.3:30091" }
+            - { name: WATCH_URL, value: "http://10.77.0.3:30095" }
+            # the move from the old box (router/move.go, docs/RUNBOOK.md "Moving to the two boxes"): this router
+            # proxies to the old one and copies its /data until MOVE_AT (empty = not yet), then takes over
+            - { name: MOVE_FROM, value: "http://10.77.0.9:30082" }
+            - { name: MOVE_PUBLIC, value: "http://10.77.0.9:30080" }
+            - { name: MOVE_SELF, value: "http://10.77.0.2:30080" }
+            - { name: MOVE_AT, value: "" }
+            # its /data, age-encrypted to this key, to the Storage Box (router/backup.go); the private half is
+            # ROUTER_BACKUP_AGE_KEY in the infra store
+            - { name: ROUTER_BACKUP_AGE_PUB, value: "age1zkvnmh6wu5hyvxppvxf9c83l6q5af7xqqlxtmahkz0l5hhwqq90s8edvu0" }
+            - { name: SESSION_IMAGE, value: "ghcr.io/de0ch/jarvis2-session:sha-8b4e57393c12@sha256:4536c0b79024d7705c72a1e8c2bb6f50c14f95c7165daa703f3fd6d51328c03a" }
+            # the CI key's signature over "jarvis2-session-image <SESSION_IMAGE>" (images.yml, keys/ci.pub): the phone checks it
+            - { name: SESSION_IMAGE_SIG, value: "MEYCIQCcJL5w2CxW90HNJA1f5D2DRlGXqz1ikAM+OELXk8Zt+gIhALPRXcTXN44C5D1q8Y6di/G/HMZOvTZgZ3kZ3PnF6CLN" }
+            # every earlier CI-pinned session image with its signature (k8s/apps/session-image-sigs.txt, images.yml)
+            - { name: SESSION_IMAGE_SIGS_FILE, value: /sigs/session-image-sigs.txt }
+            - { name: FLY_REGION, value: lhr }
+            # the box's WireGuard peer in Fly org jarvis2-370 (fly wireguard create jarvis2-370 lhr jarvis2-box)
+            - { name: MACHINE_URL, value: "http://jarvis2-box._peer.internal:8081" }
+            - { name: WG_CONFIG, value: /wg/wg.conf }
+            - { name: ACCESS_APP_AUD, value: f19ca5e19727b6b7b7a48800c6681fec1f450b53020752715e1a2012d06da9fe }
+            # the setup session's PUBLIC key: the router checks it on every /setup call (its private half is
+            # JARVIS2_SETUP_KEY in Jarvis 1's default store)
+            - { name: SETUP_KEY, value: "BEhYIkmGeCkg7D8vdKhRe8b00asMI8a9EyXNW41eBbIphkf6lZmy/c9FsRlqoXLD5JyRZgVOxLzM7OBv47Uy2Ms=" }
+            - { name: ACCESS_SETUP_AUD, value: fdd80d914f37f8f73409c3e44c11282cffefa5e20663d2d9de50bb087159ee89 }
+            # Jarvis 1 reading the Claude login (router/claudelogin.go /peer/*): the Access app jarvis2.deyaochen.com/peer
+            # and the one service token it admits, jarvis1-claude-login (infra/cloudflare.py --peer); neither is secret
+            - { name: ACCESS_PEER_AUD, value: 0ede1ae31fb19bf1cbd58a9b86bf4237d67b62bacecd7ce704c16e760fba4fb6 }
+            - { name: JARVIS1_LOGIN_CLIENT_ID, value: "4825630869d1df65df6e8205338f80d9.access" }
+            # Access app "Jarvis 2 devices" (/api/remotes, /api/sessions/*/start; infra/cloudflare.py --devices): Deyao's
+            # paired OpenClaw/Paseo apps (router/devices.go)
+            - { name: ACCESS_DEVICES_AUD, value: 84f7faa757a2c8d49667a3e18bfd9af7d924732de682c501388a78d5e7e85a25 }
+            # the Browserbase spend DM (router/bbbudget.go): overage above the plan fee, USD (Deyao, 2026-10-01)
+            - { name: BROWSERBASE_BUDGET_USD, value: "10" }
+            - { name: BROWSERBASE_BUDGET_WARN_USD, value: "8" }
+          # the router's non-sensitive secrets (lobster's token, Storage Box keys, …): k8s/secrets/router.enc.yaml,
+          # and the backup bucket's read credential (it serves the locked backups to the app's Recover):
+          # k8s/secrets/router-backup.enc.yaml, and the repo picker's GITHUB_READ_TOKEN: k8s/secrets/router-github.enc.yaml
+          # — all SOPS-encrypted to the box's age key (infra/router-secrets.py). router-secrets-github stays LAST: with a
+          # key in several envFrom sources the last one wins, and the default part still holds an old GITHUB_READ_TOKEN
+          envFrom: [{ secretRef: { name: router-secrets, optional: true } }, { secretRef: { name: router-secrets-backup, optional: true } }, { secretRef: { name: router-secrets-github, optional: true } }, { secretRef: { name: router-secrets-flyorgs, optional: true } }, { secretRef: { name: router-secrets-flypersonal, optional: true } }, { secretRef: { name: router-secrets-browserbase, optional: true } }, { secretRef: { name: router-secrets-devices, optional: true } }, { secretRef: { name: router-move, optional: true } }]
+          ports: [{ containerPort: 8080 }, { containerPort: 8082 }]
+          readinessProbe: { tcpSocket: { port: 8080 }, periodSeconds: 2, failureThreshold: 2 }
+          volumeMounts: [{ name: data, mountPath: /data }, { name: wg, mountPath: /wg, readOnly: true }, { name: sigs, mountPath: /sigs, readOnly: true }]
+          resources: { requests: { cpu: 500m, memory: 1536Mi }, limits: { memory: 1536Mi } }  # the control plane holds 2 GiB of the 4 GiB box as its own (DECISIONS 168)
+          securityContext: { runAsNonRoot: true, runAsUser: 65532, runAsGroup: 65532, allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: { drop: [ALL] }, seccompProfile: { type: RuntimeDefault } }
+      volumes:
+        - { name: data, persistentVolumeClaim: { claimName: router-data } }
+        - { name: wg, secret: { secretName: router-wg, defaultMode: 0440, optional: true } }
+        - { name: sigs, configMap: { name: session-image-sigs } }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: router, namespace: jarvis2-router }
+spec:
+  selector: { app: router }
+  ports: [{ port: 8080, targetPort: 8080 }]
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata: { name: router, namespace: jarvis2-router }
+spec:
+  minAvailable: 1
+  selector: { matchLabels: { app: router } }
+---
+# the move only: the old box's router reaches this one over the Hetzner Network (public 8080 → 30080, move 8082 → 30082);
+# NodePorts listen on the private address only, and the box's private guard lets in only the old box (10.77.0.9)
+apiVersion: v1
+kind: Service
+metadata: { name: router-private, namespace: jarvis2-router }
+spec:
+  type: NodePort
+  externalTrafficPolicy: Local
+  selector: { app: router }
+  ports: [{ name: public, port: 8080, targetPort: 8080, nodePort: 30080 }, { name: move, port: 8082, targetPort: 8082, nodePort: 30082 }]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: { name: router, namespace: jarvis2-router }
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from: [{ namespaceSelector: { matchLabels: { jarvis2/ns: edge } } }]
+      ports: [{ port: 8080 }]
+    # the standby's proxy to the leader (pod to pod)
+    - from: [{ podSelector: { matchLabels: { app: router } } }]
+      ports: [{ port: 8080 }, { port: 8082 }]
+    # the old box's router during the move
+    - from: [{ ipBlock: { cidr: 10.77.0.9/32 } }]
+      ports: [{ port: 8080 }, { port: 8082 }]
+  egress:
+    - to: [{ namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: kube-system } }, podSelector: { matchLabels: { k8s-app: kube-dns } } }]
+      ports: [{ port: 53, protocol: UDP }, { port: 53, protocol: TCP }]
+    - to: [{ namespaceSelector: { matchLabels: { jarvis2/ns: core } } }]
+      ports: [{ port: 8090 }]
+    # transcript search, the iCloud index and the watch runner on the services box (router/searchsvc.go, watches.go)
+    - to: [{ ipBlock: { cidr: 10.77.0.3/32 } }]
+      ports: [{ port: 30090 }, { port: 30091 }, { port: 30095 }]
+    # the old box's router during the move (its public and move NodePorts)
+    - to: [{ ipBlock: { cidr: 10.77.0.9/32 } }]
+      ports: [{ port: 30080 }, { port: 30082 }]
+    # the standby's proxy to the leader
+    - to: [{ podSelector: { matchLabels: { app: router } } }]
+      ports: [{ port: 8080 }, { port: 8082 }]
+    - to: [{ ipBlock: { cidr: 0.0.0.0/0, except: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16] } }]
+      ports: [{ port: 443 }]
+    # Fly's WireGuard gateway (lhr1.gateway.6pn.dev)
+    - to: [{ ipBlock: { cidr: 0.0.0.0/0, except: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16] } }]
+      ports: [{ port: 51820, protocol: UDP }]
