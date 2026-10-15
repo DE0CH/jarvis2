@@ -61,7 +61,7 @@ spec:
       enableServiceLinks: false
       containers:
         - name: core
-          image: ghcr.io/de0ch/jarvis2-core:sha-12e69302c3b3@sha256:2920faf6b3ce7ce554099d7a67c3b11c8fd1cbd041e37ec3e59b37a55717f549
+          image: ghcr.io/de0ch/jarvis2-core:sha-c51390086a7e@sha256:7f408923b87763cef9c125d53cae064d548804e5a5428f7f73f51be998890ace
           ports: [{ containerPort: 8090 }]
           env:
             # no master key here: a new core starts empty and takes one from Deyao's app (Reset or Recover)
