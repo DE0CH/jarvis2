@@ -356,3 +356,36 @@ func TestIsSynTo(t *testing.T) {
 		t.Fatal("an IPv4 SYN to 8081")
 	}
 }
+
+// A freeze behind a proxy that times out (Cloudflare's 524 while the sender drains) is asked again, not aborted.
+func TestFreezeRetriedThroughAProxyTimeout(t *testing.T) {
+	g := newMoveRig(t)
+	var n atomic.Int32
+	front := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/move/freeze" && n.Add(1) == 1 {
+			w.WriteHeader(524)
+			return
+		}
+		u := g.srvMove.URL + r.URL.RequestURI()
+		req, _ := http.NewRequest(r.Method, u, r.Body)
+		req.Header = r.Header
+		res, err := http.DefaultClient.Do(req)
+		if err != nil {
+			w.WriteHeader(502)
+			return
+		}
+		w.WriteHeader(res.StatusCode)
+		io.Copy(w, res.Body)
+	}))
+	defer front.Close()
+	g.joiner.from = front.URL
+	g.joiner.at = time.Now()
+	if !g.joiner.candidate(g.lockB, g.srvB.URL, g.pubB, make(chan os.Signal)) {
+		t.Fatal("the move gave up on a proxy timeout")
+	}
+	if n.Load() < 2 {
+		t.Fatal("the freeze wasn't asked again")
+	}
+	g.pubB.set(g.serveB)
+	g.joiner.finish()
+}

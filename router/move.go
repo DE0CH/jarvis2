@@ -661,7 +661,15 @@ func (j *moveJoiner) move(self string, public *swapHandler) bool {
 	}
 	setMove(func(m *moveStatus) { m.Phase = "freezing" })
 	log.Printf("[move] freezing the sender (it drains first)")
-	if err := j.call("POST", "/move/freeze", map[string]bool{"finalizeCore": wantCore}, &fz); err != nil {
+	// the freeze drains first, which can outlast a proxy's timeout (Cloudflare answers 524 after 100 s): it is idempotent,
+	// so a timeout or a proxy error is asked again (the sender is still draining, or answers the frozen state at once)
+	err := j.call("POST", "/move/freeze", map[string]bool{"finalizeCore": wantCore}, &fz)
+	for deadline := time.Now().Add(35 * time.Minute); err != nil && retriableFreeze(err) && time.Now().Before(deadline); {
+		log.Printf("[move] freeze still going (%v): asking again", err)
+		time.Sleep(2 * time.Second)
+		err = j.call("POST", "/move/freeze", map[string]bool{"finalizeCore": wantCore}, &fz)
+	}
+	if err != nil {
 		log.Printf("[move] FREEZE FAILED, aborting, still proxying: %v", err)
 		j.call("POST", "/move/abort", nil, nil)
 		setMove(func(m *moveStatus) { m.Phase, m.Error = "failed", "freeze: "+err.Error() })
@@ -723,6 +731,17 @@ func (j *moveJoiner) move(self string, public *swapHandler) bool {
 		time.Since(frozenAt).Round(time.Millisecond), frozenAt.Sub(start).Round(time.Millisecond))
 	moveStarted = frozenAt
 	return true
+}
+
+// retriableFreeze: a timeout or a proxy's error (502/503/504/520-524), not the sender's own refusal (401, 409)
+func retriableFreeze(err error) bool {
+	m := err.Error()
+	for _, c := range []string{"HTTP 502", "HTTP 503", "HTTP 504", "HTTP 520", "HTTP 521", "HTTP 522", "HTTP 523", "HTTP 524", "Timeout", "timeout", "EOF", "connection reset"} {
+		if strings.Contains(m, c) {
+			return true
+		}
+	}
+	return false
 }
 
 // moveStarted: when the sender froze (the gap starts there); finish ends it
