@@ -249,6 +249,12 @@ func (r *Router) Upgrade(id string) (map[string]any, error) {
 		if from == "" {
 			from = "medium"
 		}
+		if !coreTakesSize(to) {
+			r.refreshCoreSizes()
+			if !coreTakesSize(to) {
+				return nil, fmt.Errorf("session is on %s, the largest size the running core starts: %s needs the new core", sizeText(from), sizeText(to)) // → 409
+			}
+		}
 		if err := r.applyResumeOptions(id, ResumeOptions{Size: to}); err != nil {
 			return nil, err
 		}
