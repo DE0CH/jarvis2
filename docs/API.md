@@ -702,13 +702,13 @@ schedule = { id, instance, time "HH:MM", tz, enabled, since /* ms */, createdAt,
 |---|---|
 | `GET /api/tasks` | `{sessionImage, templates /* parsed, broken ones with `error`; `source` = the run/prompt file */, instances, schedules}` |
 | `POST /api/tasks/instances` | `{template, name, params, size?, requestId?}` → the instance (state `approval`); the phone's approval is in `/api/approvals`. 400 for bad values (`hide` is refused). |
-| `PUT /api/tasks/instances/:id` | `{name?, params?, size?}` → the instance. Values that change the line's stores → 400 (make a new task). |
+| `PUT /api/tasks/instances/:id` | `{name?, params?, size?}` → the instance. Values that change the line's stores or content stores file a new line for the phone (as …/approve does); the instance, its schedules and runs stay, the old line goes. 409 while a run is in progress. |
 | `DELETE /api/tasks/instances/:id` | Drops it with its schedules and runs; its line is destroyed (archived like any session) or its pending approval rejected. |
 | `POST /api/tasks/instances/:id/approve` | A new line (phone approval) for an instance whose line is gone or failed; 409 otherwise. |
-| `POST /api/tasks/instances/:id/run` | `{upgrade?}` → `{name, run}` (phase `queued`; it starts once the line is paused). `upgrade: true` resumes on the newest session image, which the phone approves first (`resume-upgrade`) — how a changed template reaches an existing task. 409: waiting for the first approval, line gone, or 3 runs queued. |
+| `POST /api/tasks/instances/:id/run` | `{upgrade?}` → `{name, run}` (phase `queued`; it starts once the line is paused). `upgrade: true` resumes on the newest session image, which the phone approves first (`resume-upgrade`) — how a changed template reaches an existing task. A line waiting for the phone keeps the run queued until approved; a line gone or being destroyed gets its new line filed for the phone, and the run waits for it. 409 only with 3 runs queued. |
 | `GET /api/tasks/instances/:id/runs` | `{runs}` newest first (20 finished kept). |
 | `GET /api/tasks/runs/:id` | `{run, log, output}`. |
-| `POST /api/tasks/runs/:id/stop` | Queued: dropped. Starting/running: `stopped`, the line is paused (a machine already up may have started the script). 409 when finished. |
+| `POST /api/tasks/runs/:id/stop` | Queued: dropped. Starting/running: `stopped`, the line is paused (a machine already up may have started the script). Finished: nothing to do, 200. |
 | `POST /api/tasks/schedules` | `{instance, time, tz? /* default Europe/London */, enabled?}` → schedule. Daily at `time` in `tz`; a change never fires a slot already past; a slot missed by more than 2 h (router down) is skipped. |
 | `PUT /api/tasks/schedules/:id` | `{time?, tz?, enabled?}` |
 | `DELETE /api/tasks/schedules/:id` | `{ok}` |

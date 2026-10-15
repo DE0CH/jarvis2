@@ -266,9 +266,11 @@ func TestTaskLifecycle(t *testing.T) {
 		t.Fatalf("%s", f.got())
 	}
 	inst := r.instance(id)
-	// no run while the phone hasn't approved
-	if code, _ := appDo(t, r, "POST", "/api/tasks/instances/"+id+"/run", `{}`); code != 409 {
-		t.Fatalf("a run before the approval: %d", code)
+	// a run asked for while the phone hasn't approved waits, queued, for the approved line (dropped here again)
+	if code, out := appDo(t, r, "POST", "/api/tasks/instances/"+id+"/run", `{}`); code != 200 || r.instance(id).Runs[0].Phase != "queued" {
+		t.Fatalf("a run before the approval: %d %v", code, out)
+	} else if err := r.StopRun(out["name"].(string)); err != nil {
+		t.Fatal(err)
 	}
 	// the phone approves: the first machine boots with no run, reports ready, and is paused
 	f.approve(inst.Session)
@@ -325,7 +327,7 @@ func TestTaskLifecycle(t *testing.T) {
 		t.Fatalf("%v", iv)
 	}
 	code, out = appDo(t, r, "GET", "/api/tasks/instances/"+id+"/runs", "")
-	if code != 200 || len(out["runs"].([]any)) != 1 {
+	if code != 200 || len(out["runs"].([]any)) != 2 { // the run, and the one stopped before the approval
 		t.Fatalf("%d %v", code, out)
 	}
 }
@@ -460,17 +462,55 @@ func TestStopAndQueueLimit(t *testing.T) {
 	if x := r.instance(id).run(a.ID); x.Phase != "stopped" {
 		t.Fatalf("%+v", x)
 	}
-	if code, _ := appDo(t, r, "POST", "/api/tasks/runs/"+a.ID+"/stop", ""); code != 409 {
-		t.Fatal("stopped twice")
+	if code, _ := appDo(t, r, "POST", "/api/tasks/runs/"+a.ID+"/stop", ""); code != 200 { // already over: done
+		t.Fatal("a second stop refused")
+	}
+}
+
+// A change of picked stores files the new line for the phone itself; the instance (name, schedules, runs) stays and
+// the old line goes.
+func TestEditOfStoresFilesANewLine(t *testing.T) {
+	r, f := newTaskRig(t, false)
+	id, sid := makeReadyTask(t, r, f)
+	r.saveSchedule("", map[string]any{"instance": id, "time": "07:00"})
+	code, out := appDo(t, r, "PUT", "/api/tasks/instances/"+id, `{"params":{"msg":"new","key":"aes"}}`)
+	i := r.instance(id)
+	if code != 200 || i.Session == sid || strings.Join(i.Stores, ",") != "aes,base" || out["state"] != "approval" {
+		t.Fatalf("%d %v %+v", code, out, i)
+	}
+	doomed := false
+	r.st.Do(func(d *persisted) { doomed = containsString(tasksOf(d).Doomed, sid) })
+	if !doomed {
+		t.Fatal("the old line wasn't let go")
+	}
+	n := 0
+	r.st.Do(func(d *persisted) {
+		for _, x := range tasksOf(d).Schedules {
+			if x.Instance == id {
+				n++
+			}
+		}
+	})
+	if n != 1 {
+		t.Fatalf("schedules %d", n)
+	}
+}
+
+// A run asked for on a line that is gone files a new line for the phone and waits for it, queued.
+func TestARunOnAGoneLineFilesANewOne(t *testing.T) {
+	r, f := newTaskRig(t, false)
+	id, sid := makeReadyTask(t, r, f)
+	r.st.Do(func(d *persisted) { delete(d.Sessions, sid) })
+	run, err := r.StartRun(id, "manual", "", nil, false)
+	i := r.instance(id)
+	if err != nil || run.Phase != "queued" || i.Session == sid || i.Session == "" || r.sessionOf(i.Session).State != "approval" {
+		t.Fatalf("%v %+v %+v", err, run, i)
 	}
 }
 
 func TestEditKeepsStores(t *testing.T) {
 	r, f := newTaskRig(t, false)
 	id, sid := makeReadyTask(t, r, f)
-	if code, out := appDo(t, r, "PUT", "/api/tasks/instances/"+id, `{"params":{"msg":"new","key":"aes"}}`); code != 400 || !strings.Contains(out["error"].(string), "stores") {
-		t.Fatalf("%d %v", code, out)
-	}
 	code, out := appDo(t, r, "PUT", "/api/tasks/instances/"+id, `{"name":"Renamed","params":{"msg":"new"},"size":"large"}`)
 	if code != 200 || out["name"] != "Renamed" || out["params"].(map[string]any)["msg"] != "new" {
 		t.Fatalf("%d %v", code, out)
@@ -531,9 +571,6 @@ func TestGoneLineAndReapprove(t *testing.T) {
 	i := r.instance(id)
 	if i.Session != "" || i.run(run.ID).Phase != "failed" {
 		t.Fatalf("%+v", i)
-	}
-	if code, _ := appDo(t, r, "POST", "/api/tasks/instances/"+id+"/run", `{}`); code != 409 {
-		t.Fatal("a run on a gone line")
 	}
 	code, out := appDo(t, r, "POST", "/api/tasks/instances/"+id+"/approve", "")
 	if code != 200 || out["state"] != "approval" || out["session"] == sid {

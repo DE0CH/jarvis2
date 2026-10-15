@@ -939,7 +939,9 @@ func (r *Router) UpdateTask(id string, in instanceIn) (map[string]any, error) {
 		return nil, bad("size must be small, medium or large")
 	}
 	stores, content := lineStores(t, params), lineContent(t, params)
-	var v map[string]any
+	// new stores or content stores: they are approved with the line, so the change files a new line for the phone
+	// (as Reapprove does) and keeps the instance, its runs and schedules; the old line goes once the new one exists
+	var relined *TaskInstance
 	err = nil
 	r.st.Do(func(d *persisted) {
 		i := tasksOf(d).Instances[id]
@@ -947,15 +949,47 @@ func (r *Router) UpdateTask(id string, in instanceIn) (map[string]any, error) {
 			err = notFound("no such task instance: %s", id)
 			return
 		}
-		if !reflect.DeepEqual(content, i.Content) {
-			err = bad("this changes the task's content stores (%s → %s): they are approved with the task, so make a new task for them",
-				strings.Join(i.Content, ","), strings.Join(content, ","))
+		if reflect.DeepEqual(content, i.Content) && reflect.DeepEqual(stores, i.Stores) {
 			return
 		}
-		if !reflect.DeepEqual(stores, i.Stores) {
-			err = bad("this changes the task's stores (%s → %s): the stores are approved with the task, so make a new task for them",
-				strings.Join(i.Stores, ","), strings.Join(stores, ","))
+		if i.Active != "" {
+			err = conflict("a run is in progress: change the task's stores once it has finished")
 			return
+		}
+		c := *i
+		c.Stores, c.Content, c.Params = stores, content, params
+		if n := strings.TrimSpace(in.Name); n != "" {
+			c.Name = n
+		}
+		if in.Size != "" {
+			c.Size = in.Size
+		}
+		relined = &c
+	})
+	if err != nil {
+		return nil, err
+	}
+	old := ""
+	if relined != nil {
+		old = relined.Session
+		if err := r.newTaskLine(relined, ""); err != nil {
+			return nil, err
+		}
+	}
+	var v map[string]any
+	r.st.Do(func(d *persisted) {
+		ts := tasksOf(d)
+		i := ts.Instances[id]
+		if i == nil {
+			err = notFound("no such task instance: %s", id)
+			return
+		}
+		if relined != nil {
+			i.Stores, i.Content = relined.Stores, relined.Content
+			i.Session, i.SessionError, i.ReadyAt, i.PauseWanted, i.StartedIdle = relined.Session, "", nil, false, nil
+			if old != "" && d.Sessions[old] != nil {
+				ts.Doomed = append(ts.Doomed, old)
+			}
 		}
 		if n := strings.TrimSpace(in.Name); n != "" {
 			i.Name = n
@@ -1020,7 +1054,10 @@ func (r *Router) DeleteTask(id string) error {
 }
 
 // Reapprove: a new line for an instance whose line is gone or failed (the old one, if any, is destroyed)
-func (r *Router) Reapprove(id string) (map[string]any, error) {
+func (r *Router) Reapprove(id string) (map[string]any, error) { return r.reapprove(id, false) }
+
+// reapprove: Reapprove; destroying: a line being destroyed is replaced too (a run asked for meanwhile)
+func (r *Router) reapprove(id string, destroying bool) (map[string]any, error) {
 	var inst TaskInstance
 	var old string
 	var err error
@@ -1034,7 +1071,7 @@ func (r *Router) Reapprove(id string) (map[string]any, error) {
 		switch {
 		case i.Active != "":
 			err = conflict("a run is in progress")
-		case s != nil && s.State != "failed":
+		case s != nil && s.State != "failed" && !(destroying && s.State == "destroying"):
 			err = conflict("the task's session is %s; only a gone or failed one is replaced", s.State)
 		default:
 			inst = *i
@@ -1056,36 +1093,48 @@ func (r *Router) Reapprove(id string) (map[string]any, error) {
 			i.Session, i.SessionError, i.ReadyAt, i.PauseWanted, i.StartedIdle = inst.Session, "", nil, false, nil
 			v = instanceView(i, d)
 		}
-		if old != "" {
+		if old != "" && !destroying {
 			ts.Doomed = append(ts.Doomed, old)
 		}
 	})
 	return v, nil
 }
 
-// StartRun: queue a run; the tick starts it when the line is paused (now, for an idle line)
+// StartRun: queue a run; the tick starts it when the line is paused (now, for an idle line). A line that waits for
+// the phone keeps the run queued until it is approved; a line that is gone or being destroyed gets its new line filed
+// for the phone (Reapprove) and the run waits for it.
 func (r *Router) StartRun(id, trigger, schedule string, slot *time.Time, upgrade bool) (*TaskRun, error) {
 	run := &TaskRun{ID: "r" + randID(), Instance: id, Trigger: trigger, Schedule: schedule, Slot: slot, Upgrade: upgrade,
 		Phase: "queued", CreatedAt: time.Now().UTC()}
 	var err error
+	reline, destroying := false, false
 	r.st.Do(func(d *persisted) {
 		i := tasksOf(d).Instances[id]
 		if i == nil {
 			err = notFound("no such task instance: %s", id)
 			return
 		}
-		s := d.Sessions[i.Session]
-		switch {
-		case s == nil:
-			err = conflict("the task's session is gone: POST /api/tasks/instances/%s/approve makes a new one (phone approval)", id)
-		case s.State == "approval" && s.Cert == nil:
-			err = conflict("the task waits for its approval on the phone")
-		case s.State == "destroying":
-			err = conflict("the task's session is being destroyed")
-		case len(i.queued()) >= taskMaxQueued:
-			err = conflict("%d runs are already queued", taskMaxQueued)
+		if len(i.queued()) >= taskMaxQueued {
+			err = conflict("%d runs are already queued: wait for them, or stop one", taskMaxQueued)
+			return
 		}
-		if err != nil {
+		s := d.Sessions[i.Session]
+		reline = s == nil || s.State == "destroying"
+		destroying = s != nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	if reline {
+		if _, err := r.reapprove(id, destroying); err != nil {
+			return nil, fmt.Errorf("the task's line is gone and a new one couldn't be filed: %w", err)
+		}
+		log.Printf("[tasks] %s: its line was gone: a new one waits for the phone; run %s waits for it", id, run.ID)
+	}
+	r.st.Do(func(d *persisted) {
+		i := tasksOf(d).Instances[id]
+		if i == nil {
+			err = notFound("no such task instance: %s", id)
 			return
 		}
 		run.Template = i.Template
@@ -1110,8 +1159,7 @@ func (r *Router) StopRun(runID string) error {
 				continue
 			}
 			found = true
-			if finished(x.Phase) {
-				err = conflict("the run has finished")
+			if finished(x.Phase) { // already over: what was asked for holds
 				return
 			}
 			now := time.Now().UTC()
