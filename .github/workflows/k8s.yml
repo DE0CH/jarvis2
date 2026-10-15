@@ -4,12 +4,21 @@ name: k8s
 on:
   push:
     branches: [main]
-    paths: [k8s/**, infra/router-secrets.py, .github/workflows/k8s.yml]
+    paths: [k8s/**, infra/router-secrets.py, infra/flux-dryrun.sh, .github/workflows/k8s.yml]
 jobs:
   manifests:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      # Flux refuses a whole tree when it can't apply one object (and nothing reaches the box): dry-run it as
+      # flux-applier on top of the previous main, against a throwaway kube-apiserver (infra/flux-dryrun.sh)
+      - uses: actions/setup-go@v5
+        with: { go-version: stable }
+      - run: |
+          base="${{ github.event.before }}"
+          git cat-file -e "$base^{commit}" 2>/dev/null || base=HEAD~1
+          PATH="$PATH:$(go env GOPATH)/bin" infra/flux-dryrun.sh "$base"
       - run: |
           kubectl kustomize k8s/apps > /tmp/apps.yaml
           deps="$(awk '/^kind: Deployment/{f=1} f&&/^  name:/{print $2;f=0}' /tmp/apps.yaml | sort | tr '\n' ' ')"

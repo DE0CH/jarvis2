@@ -9,6 +9,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
+	"log"
 	"net"
 	"net/http"
 	"net/netip"
@@ -68,31 +69,32 @@ func b64hex(s string) (string, error) {
 	return hex.EncodeToString(b), nil
 }
 
-// serveWG brings the peer up and serves h on its private address, port `port`. It blocks.
-func serveWG(path string, port int, h http.Handler) error {
+// serveWG brings the box's WireGuard peer up and serves h on it; stop takes the peer down (the leader's handover,
+// leader.go) and ends the serve. err reports a failure to come up.
+func serveWG(path string, port int, h http.Handler) (stop func(), err error) {
 	c, err := parseWG(path)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	pfx, err := netip.ParsePrefix(c.Address)
 	if err != nil {
-		return fmt.Errorf("Address: %w", err)
+		return nil, fmt.Errorf("Address: %w", err)
 	}
 	tdev, tnet, err := netstack.CreateNetTUN([]netip.Addr{pfx.Addr()}, nil, 1420)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	ep, err := net.ResolveUDPAddr("udp", c.Endpoint)
 	if err != nil {
-		return fmt.Errorf("endpoint %s: %w", c.Endpoint, err)
+		return nil, fmt.Errorf("endpoint %s: %w", c.Endpoint, err)
 	}
 	priv, err := b64hex(c.PrivateKey)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	pub, err := b64hex(c.PublicKey)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	ipc := fmt.Sprintf("private_key=%s\npublic_key=%s\nendpoint=%s\n", priv, pub, ep.String())
 	for _, a := range strings.Split(c.AllowedIPs, ",") {
@@ -105,14 +107,20 @@ func serveWG(path string, port int, h http.Handler) error {
 	}
 	dev := device.NewDevice(tdev, conn.NewDefaultBind(), device.NewLogger(device.LogLevelError, "wg: "))
 	if err := dev.IpcSet(ipc); err != nil {
-		return err
+		return nil, err
 	}
 	if err := dev.Up(); err != nil {
-		return err
+		return nil, err
 	}
 	l, err := tnet.ListenTCP(&net.TCPAddr{IP: pfx.Addr().AsSlice(), Port: port})
 	if err != nil {
-		return err
+		return nil, err
 	}
-	return http.Serve(l, h)
+	srv := &http.Server{Handler: h}
+	go func() {
+		if err := srv.Serve(l); err != nil && err != http.ErrServerClosed {
+			log.Printf("wg: serve: %v", err)
+		}
+	}()
+	return func() { srv.Close(); dev.Close() }, nil
 }
