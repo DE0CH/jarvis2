@@ -1585,3 +1585,36 @@ snapshot failed with "no space left on device", the machine was destroyed anyway
      *Trusted to the router*: which earlier cert of a line is the newest (an older one has fewer stores; a downgrade's
      key signs the snapshot) and that an earlier line isn't taken over twice from two of its machines: once per
      machine, for claimed cores only.
+
+## Claude accounts: one Claude key store per account, 2026-10-15
+
+185. **Several Claude accounts, one Claude key store each (`claude-<name>`); a session's account is picked when it is
+     made and kept for its life** (Deyao, 2026-10-15: "there should be multiple claude key stores, one per account, so I
+     can choose which account a session starts with and the session uses it (refreshed automatically), and I can manage
+     the accounts in the dashboard"). Replaces 116's "the router alone picks which Claude account sessions use".
+     *Built* (`router/claudeaccounts.go`, `router/claudelogin.go`, `machine/claudelogin.go`; API "Claude accounts";
+     RUNBOOK "The Claude accounts"): one login hub per account, its pair on the router's volume
+     (`claude-accounts/<store>.json`), each refreshed by the router alone with the same refresh protocol (115-118), its
+     participants the machines of its own sessions. `Session.ClaudeAccount` is set when the session is made (New session
+     in the app and web page, `jarvis2-request new-session --account`, a prompt task's instance, a restore: the account
+     it ran on, a Jarvis 1 import) — named, else the default one Deyao sets — and a resume keeps it; a running session
+     never switches. Harnesses that need one say so in the policy (`claudeAccount`: claude, openclaw). Settings → Claude
+     accounts (web and iPhone): each account's login state and usage, Refresh token, Re-login (must be the same Claude
+     account; another one is refused, and one account can't be in two stores), Make default, Remove (refused while any
+     session uses it, and for the default), Add (a name, then the sign-in).
+     *Why the router's stores, not the core's*: the pair rotates every 8 hours with nobody there (115), and the core's
+     stores take keys only from the setup session or a session, so the router can't write one; an empty core store can't
+     be put in a cert or unlocked. The account is therefore the router's word (Session.ClaudeAccount), like the pair
+     itself: Deyao, 2026-10-15, "trust the router", no machine-side account check. Not signed in the cert's config: the
+     phone app refuses settings it can't show, so that waits for an app that renders it (it is shown beside the approval
+     as `options.claudeAccount`).
+     *A broken login*: no automatic action (Deyao, 2026-10-15): its sessions stop on "Please run /login" when their
+     token runs out; the dead-login DM names the account; Deyao re-logs it in, and "continue" follows as before.
+     *The clean cut* (CLAUDE.md "Migrations: clean cuts"): every reference to the core's store `claude` changes at once,
+     with no alias. The first router with accounts turns `claude-login.json` into `claude-<its email's name>` (the
+     default, and the account Jarvis 1 follows) and gives it to every session and record whose cert names `claude`:
+     running sessions keep what they have (their machines keep polling and now get that account's pair; nothing is done
+     to them), paused ones resume on it. New sessions no longer get `claude` (the policy brings `tunnel` only), the
+     router refuses it in `stores` and add-store, and the pickers hide it; the store stays in the core for the older
+     lines (a store can't be deleted). Machines ask the router whether their session has an account (404 `noAccount`
+     otherwise) instead of looking for the store in their cert. A new box with no account starts sessions logged out.

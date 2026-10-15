@@ -22,7 +22,7 @@ func signIn(t *testing.T, r *Router, startPath, startBody string) (int, map[stri
 	return appDo(t, r, "POST", "/api/claude-accounts/"+store+"/code", `{"code":"abc#`+u.Query().Get("state")+`"}`)
 }
 
-// Add, Re-login, Make default, Remove (DECISIONS 181)
+// Add, Re-login, Make default, Remove (DECISIONS 185)
 func TestClaudeAccountsManage(t *testing.T) {
 	f := newFakeAnthropic(t)
 	r := newTestRouter(t)

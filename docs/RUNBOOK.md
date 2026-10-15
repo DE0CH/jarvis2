@@ -379,27 +379,35 @@ infra/backup-read-key.py login` when they aren't in the env):
    `k8s/secrets/router-backup.enc.yaml` and `k8s/apps/router.yaml` (the router restarts with it). Stop the Chrome
    and delete its profile.
 
-## The Claude login
+## The Claude accounts
 
-The router holds the one Claude OAuth pair every Claude session shares (`router/claudelogin.go`, API.md "The Claude
-login", DECISIONS 115-121), on its volume, and is its ONLY refresher (Jarvis 2 never calls Jarvis 1; Jarvis 1, while it
-still runs, follows the pair from here through `/peer/claude-login`). `infra/setup.py claude-login` shows it (no
-secrets): account, expiry, last refresh, the participants of the refresh protocol (`m:<machine>` per session, `jarvis1`
-while Jarvis 1 follows).
+The router holds one Claude key store per Claude account, `claude-<name>` (`router/claudeaccounts.go`,
+`router/claudelogin.go`, API.md "Claude accounts", DECISIONS 115-121 and 185): each account's OAuth pair on its volume
+(`claude-accounts/<store>.json`), and it is the ONLY refresher of each (Jarvis 2 never calls Jarvis 1; Jarvis 1, while it
+still runs, follows one account through `/peer/claude-login`). `infra/setup.py claude-accounts` shows them (no secrets):
+per account its email, expiry, last refresh, the participants of its refresh protocol (`m:<machine>` per session,
+`jarvis1`), the sessions using it, and the default.
 
-- **Re-login:** Settings → Claude account → Re-login (web page or app): the sign-in page opens; sign in, copy the code
-  it shows (`code#state`), paste, Sign in. A new box starts with no login:
-  Re-login once. A Re-login to another Claude account needs nothing else: every running and new session follows it
-  within a minute (DECISIONS 116).
-- **A dead login** (the refresh was refused) DMs Deyao once; sessions stuck on "Please run /login" get "continue" after
-  the Re-login.
-- **Sessions:** a machine whose cert names the store `claude` takes the pair at boot and keeps a long poll open
-  (`jarvis2-machine creds-sync`, its log in the machine's output), writing every newer pair, whatever its account. A pair
-  for another account than the machine's replaces the one there even when it expires sooner; creds-sync then leaves the
-  account record in `~/.claude/.account-switch.json` and restarts the claude host once it is idle (no turn, no
-  background shell), so its Remote Control comes up under the new account; the supervisor merges the record into
-  `~/.claude.json` before claude starts. The router never writes a login into a session (no login repair); a turn that
-  stopped on "Please run /login" gets "continue" once the session's pair is in step.
+- **Pick an account:** New session (app, web page) lists the accounts with the default pre-picked; `jarvis2-request
+  new-session --account NAME`; a prompt task's account is picked when the task is made. A session keeps its account for
+  its life (resumes included) and shows up in that account's Claude app (lessons/59). A running session can't switch.
+- **Manage:** Settings → Claude accounts (web page or app). Add: a name, then the sign-in page opens; sign in, copy the
+  code it shows (`code#state`), paste, Sign in. Re-login: the same for an existing account, and it must be that same
+  Claude account (another one is refused: add it as a new account). Make default. Remove: refused while any session
+  (running, paused, waiting, failed) uses it, and for the default. A new box starts with no account: sessions start
+  logged out until one is added.
+- **A dead login** (the refresh was refused) DMs Deyao once, naming the account; nothing else happens by itself: only
+  that account's sessions stop on "Please run /login" once their token runs out, and get "continue" after its Re-login.
+- **Sessions:** a machine asks the router for its session's account's pair at boot (404 `noAccount`: no login, e.g.
+  OpenCode) and keeps a long poll open (`jarvis2-machine creds-sync`, its log in the machine's output), writing every
+  newer pair. A pair for another account than the machine's (only a session from before accounts, whose shared login
+  was re-logged) replaces the one there; creds-sync then leaves the account record in `~/.claude/.account-switch.json`
+  and restarts the claude host once it is idle, so its Remote Control comes up under the new account. The router never
+  writes a login into a session (no login repair).
+- **Before accounts (the clean cut, 2026-10-15):** the first router with accounts turned `claude-login.json` into the
+  account `claude-<its email's name>` (the default and Jarvis 1's; the old file is kept as `claude-login.json.migrated`)
+  and gave it to every session whose cert names the core's old store `claude`. New sessions don't get that store; it
+  stays in the core (a store can't be deleted) for those older lines.
 
 ## Transcript search and the iCloud index
 

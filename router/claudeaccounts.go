@@ -2,7 +2,7 @@ package main
 
 // Claude accounts (Deyao, 2026-10-15: "there should be multiple claude key stores, one per account, so I can choose
 // which account a session starts with and the session uses it (refreshed automatically), and I can manage the accounts
-// in the dashboard"; DECISIONS 181). Each account is a Claude key store of the router's own, named `claude-<name>`:
+// in the dashboard"; DECISIONS 185). Each account is a Claude key store of the router's own, named `claude-<name>`:
 // its OAuth pair and account record (claude-accounts/<store>.json on the volume, 0600, one loginHub each,
 // claudelogin.go), refreshed by this router alone. They are the router's, not the core's: the pair rotates every 8
 // hours with nobody there (DECISIONS 115), and the core's stores take keys only from the setup session or a session.
