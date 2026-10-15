@@ -101,6 +101,7 @@ app.get("/readyz", (req, res) => res.status(ready && !draining ? 200 : 503).json
 // every TICK_MS: renew/take the writer lease, pick up a reindex request, reload when the writer changed the index,
 // record a heartbeat with the memory reading (the last one is what /status shows after a kill)
 const TICK_MS = 10000;
+let beats = 0;
 function tick() {
   if (draining) return;
   try {
@@ -111,7 +112,7 @@ function tick() {
     if (writer) { const r = lease.takeReindex(); if (r) indexer.run({ full: !!r.full }); lease.write("indexer_status", indexer.status); }
     const v = lease.indexVersion();
     if (v !== seenVersion) { seenVersion = v; if (!writer) searcher.load(); }
-    lease.heartbeat({ memory: memory(), role: writer ? "writer" : "reader" });
+    if (writer || ++beats % 3 === 0) lease.heartbeat({ memory: memory(), role: writer ? "writer" : "reader" });
   } catch (e) { log(`tick: ${e.message}`); }
 }
 
@@ -145,8 +146,12 @@ async function main() {
   if (!process.env.LOCAL_ROOT) log(`seed: ${await dbcopy.seed(DB_FILE, process.env, log)}`);
   db = open(DB_FILE);
   lease = new Lease(db, { holder: POD });
-  lease.runStarted({ started: STARTED, memory: memory() });
-  const prev = lease.read(`run:${POD}`).restartedAfter;
+  // another replica may hold a long write transaction: retry, and never let the record stop this replica serving
+  for (let i = 0; ; i++) {
+    try { lease.runStarted({ started: STARTED, memory: memory() }); break; }
+    catch (e) { if (i >= 60) { log(`run record not written: ${e.message}`); break; } await new Promise((r) => setTimeout(r, 500)); }
+  }
+  const prev = (lease.read(`run:${POD}`) || {}).restartedAfter;
   if (prev) log(`restarted in the same pod; the previous run: ${JSON.stringify(prev)}`);
   seenVersion = lease.indexVersion();
   searcher = new Searcher(db, log);

@@ -28,6 +28,10 @@ class Lease {
 
   // takes or renews the lease; true when this replica is the writer afterwards
   tryAcquire() {
+    // a plain read first (WAL: no lock), so a reader never queues behind the writer's long transactions just to learn
+    // that the lease is still held
+    const peek = this.read("writer");
+    if (peek && peek.holder !== this.holder && peek.until > this.now()) return false;
     return this.db.transaction(() => {
       const cur = this.read("writer"), t = this.now();
       if (cur && cur.holder !== this.holder && cur.until > t) return false;
