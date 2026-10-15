@@ -904,7 +904,7 @@ func (r *Router) deliverToSession(sid, from, text, after string) error {
 	case "paused":
 		if sensitive && !r.hasPhoneGrant(sid, "scheduler") {
 			// it would only be refused: don't start a machine for nothing
-			return errors.New("the machine refused or failed: this session holds a sensitive store: only a phone grant opens a shell")
+			return errors.New("the machine refused or failed: this session holds a sensitive store, so only a phone grant opens a shell: grant the scheduler from the phone (the session files it with `jarvis2-request grant scheduler`)")
 		}
 		if err := r.Resume(sid, false); err != nil {
 			if errors.Is(err, errBusy) {
@@ -915,7 +915,7 @@ func (r *Router) deliverToSession(sid, from, text, after string) error {
 	case "pausing", "destroying", "approval":
 		return fmt.Errorf("%w: the session is %s", errSkip, state)
 	case "failed":
-		return errors.New("the session has failed")
+		return errors.New("the session has failed: Restart it (or Resume) and it gets this")
 	}
 	if err := r.waitStarted(sid); err != nil {
 		return err

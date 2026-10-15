@@ -217,8 +217,20 @@ func TestIndexArchiveByHand(t *testing.T) {
 	if tail, st, err := r.RecordTail(rec.ID); err != nil || st != 200 || len(tail.Messages) != 1 {
 		t.Fatalf("tail %v %d %+v", err, st, tail)
 	}
-	if code, _ := appDo(t, r, "POST", "/api/records", jsonString(map[string]any{"archiveDir": dir, "transcripts": []string{tr}})); code != 400 {
-		t.Fatal("indexed twice")
+	// indexed again: already on the list, so the existing record is the answer (no second copy)
+	if code, out := appDo(t, r, "POST", "/api/records", jsonString(map[string]any{"archiveDir": dir, "transcripts": []string{tr}})); code != 200 || out["record"] == nil {
+		t.Fatalf("indexed twice: %d %v", code, out)
+	}
+	n := 0
+	r.st.Do(func(d *persisted) {
+		for _, x := range d.Records {
+			if x.ID == rec.ID {
+				n++
+			}
+		}
+	})
+	if n != 1 {
+		t.Fatalf("%d copies", n)
 	}
 	if _, err := r.RestoreRecord(rec.ID, "rq"); err != errHandIndex {
 		t.Fatalf("restore: %v", err)

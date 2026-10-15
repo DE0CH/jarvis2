@@ -357,7 +357,7 @@ func (r *Router) WriteKey(writer, machine, store, key string, in keyWriteIn) (ma
 	// the core's own store never; the deploy-key token store only by the setup session (the core refuses a machine's
 	// write there too: its keys otherwise come only from a phone-approved deploy-key call)
 	if store == flyStore || (store == deployKeyTokenStore && writer != "setup") {
-		return nil, &forbidden{fmt.Sprintf("store %s isn't written this way", store)}
+		return nil, &forbidden{fmt.Sprintf("store %s isn't written this way: the core's Fly token goes through `infra/setup.py backup-core`, the deploy-key token through `infra/setup.py write %s` from the setup session", store, store)}
 	}
 	expl, err := cleanDoc(in.Explanation)
 	if err != nil {
@@ -409,7 +409,7 @@ func (r *Router) WriteKey(writer, machine, store, key string, in keyWriteIn) (ma
 	// the backup first: a key never reaches the core without one (Deyao: "has backup, so can't overwrite")
 	b := backupBucketFromEnv()
 	if b == nil {
-		return nil, errors.New("the router has no backup credential (BACKUP_READ_ACCESS_KEY): no key is written without its backup")
+		return nil, errors.New("the router has no backup credential (BACKUP_READ_ACCESS_KEY): no key is written without its backup. The setup session installs it with infra/backup-read-key.py install (RUNBOOK, the router's secrets)")
 	}
 	obj := map[string]any{"kind": "key-backup", "store": store, "key": key, "deleted": in.Delete, "sealed": sealed,
 		"backupSha256": in.BackupSha256, "e": wrappedE(in), "dataSha256": dataSha(in.Data), "writer": map[string]any{"by": writer, "sig": in.Sig, "cert": core["cert"]},

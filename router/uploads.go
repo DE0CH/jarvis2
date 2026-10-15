@@ -96,7 +96,7 @@ func (r *Router) StageUpload(uploadID, rawName string, body io.Reader) (AttachFi
 		switch {
 		case u == nil:
 		case u.Session != "" && d.Sessions[u.Session] != nil:
-			err = bad("this upload belongs to a session already")
+			err = bad("this upload belongs to a session already: its files are fixed in that session's signed hashes, so start a new upload (a new upload id) for these files")
 		case len(u.Files) >= attachMaxFiles && !hasFile(u, name):
 			err = bad("too many attachments (max %d)", attachMaxFiles)
 		}

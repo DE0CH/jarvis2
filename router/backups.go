@@ -193,7 +193,7 @@ func (r *Router) registerBackups(app func(string, http.HandlerFunc)) {
 	app("GET /api/backups", func(w http.ResponseWriter, req *http.Request) {
 		b := backupBucketFromEnv()
 		if b == nil {
-			writeJSON(w, 503, map[string]string{"error": "the router has no read key for the backups (BACKUP_READ_ACCESS_KEY)"})
+			writeJSON(w, 503, map[string]string{"error": "the router has no read key for the backups (BACKUP_READ_ACCESS_KEY): the setup session installs it with infra/backup-read-key.py install (RUNBOOK, the router's secrets)"})
 			return
 		}
 		objs, err := b.all()

@@ -399,7 +399,7 @@ func (r *Router) deliverVouchedOpts(sid string, d Delivery, boot bool) error {
 	case "pausing", "destroying", "approval":
 		return fmt.Errorf("%w: the session is %s", errSkip, state)
 	case "failed":
-		return errors.New("the session has failed")
+		return errors.New("the session has failed: Restart it (or Resume) and it gets this")
 	}
 	if err := r.waitStarted(sid); err != nil {
 		return err
