@@ -14,6 +14,13 @@ The apps' audiences are not secret: they are in k8s/apps/router.yaml (the script
                                OUT, mode 600) and the Access app jarvis2.deyaochen.com/peer admitting only it; prints
                                the app's audience and the token's client id (k8s/apps/router.yaml ACCESS_PEER_AUD,
                                JARVIS1_LOGIN_CLIENT_ID; neither is secret)
+  infra/cloudflare.py --move OUT | --move-off
+                               the router move (docs/RUNBOOK.md "Moving to the two boxes"): the old box's NodePorts
+                               listen only on its node IP, so the control box's router reaches the old one's move port
+                               through the old box's tunnel: ingress jarvis2.deyaochen.com/move/* → router-private:8082,
+                               behind the Access app jarvis2.deyaochen.com/move admitting only the service token
+                               jarvis2-move (MOVE_ACCESS_ID/SECRET to OUT, mode 600). --move-off removes the ingress rule,
+                               the app and the token after the move
   infra/cloudflare.py --devices  only the paired apps' Access app (CF_JARVIS2_INFRA_TOKEN); prints its audience
   infra/cloudflare.py --health OUT
                                the external uptime probe's way in (router/healthz.go GET /healthz): the service token
@@ -131,6 +138,44 @@ def health(out):
     print(f"ok (k8s/control/apps/router/router.yaml): ACCESS_HEALTH_AUD={aud} HEALTH_CLIENT_ID={tok['client_id']}")
 
 
+MOVE_ORIGIN = "http://router-private.jarvis2-router.svc.cluster.local:8082"
+
+
+def tunnel_rules(edit):
+    """the jarvis2 tunnel's ingress, changed by edit(rules) -> rules (the rest of the config kept)"""
+    tun = call("GET", f"/accounts/{ACCOUNT}/cfd_tunnel?name=jarvis2&is_deleted=false")[0]
+    cfg = call("GET", f"/accounts/{ACCOUNT}/cfd_tunnel/{tun['id']}/configurations")["config"]
+    cfg["ingress"] = edit(cfg["ingress"])
+    call("PUT", f"/accounts/{ACCOUNT}/cfd_tunnel/{tun['id']}/configurations", {"config": cfg})
+    return [r.get("hostname", "") + r.get("path", "") + " -> " + r["service"] for r in cfg["ingress"]]
+
+
+def move(out):
+    big = os.environ["CLOUDFLARE_API"]
+    toks = call("GET", f"/accounts/{ACCOUNT}/access/service_tokens", token=big)
+    tok = next((t for t in toks if t["name"] == "jarvis2-move"), None)
+    if not tok:
+        tok = call("POST", f"/accounts/{ACCOUNT}/access/service_tokens", {"name": "jarvis2-move", "duration": "720h"}, token=big)
+        write_out(out, {"MOVE_ACCESS_ID": tok["client_id"], "MOVE_ACCESS_SECRET": tok["client_secret"]})
+    # the Access app first, so the path is never reachable ungated
+    access_app("Jarvis 2 move", HOST + "/move", {
+        "name": "the control box's router", "decision": "non_identity", "include": [{"service_token": {"token_id": tok["id"]}}]})
+    rule = {"hostname": HOST, "path": "^/move/", "service": MOVE_ORIGIN}
+    print("ingress:", tunnel_rules(lambda rs: [rule] + [r for r in rs if r.get("path") != "^/move/"]))
+
+
+def move_off():
+    print("ingress:", tunnel_rules(lambda rs: [r for r in rs if r.get("path") != "^/move/"]))
+    for a in call("GET", f"/accounts/{ACCOUNT}/access/apps"):
+        if a.get("domain") == HOST + "/move":
+            call("DELETE", f"/accounts/{ACCOUNT}/access/apps/{a['id']}")
+    big = os.environ["CLOUDFLARE_API"]
+    for t in call("GET", f"/accounts/{ACCOUNT}/access/service_tokens", token=big):
+        if t["name"] == "jarvis2-move":
+            call("DELETE", f"/accounts/{ACCOUNT}/access/service_tokens/{t['id']}", token=big)
+    print("ok: the move's path, app and token are gone")
+
+
 DEVICE_PATHS = ["/api/remotes", "/api/sessions/*/start"]
 
 
@@ -203,6 +248,10 @@ def rehearsal(name, out):
 def main():
     if sys.argv[1:2] == ["--peer"]:
         return peer(sys.argv[2])
+    if sys.argv[1:2] == ["--move"]:
+        return move(sys.argv[2])
+    if sys.argv[1:] == ["--move-off"]:
+        return move_off()
     if sys.argv[1:2] == ["--health"]:
         return health(sys.argv[2])
     if sys.argv[1:] == ["--devices"]:
