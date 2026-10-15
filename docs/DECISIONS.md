@@ -1404,3 +1404,21 @@ Deyao: several actions approved together with ONE Face ID; the caller groups the
      - The sessions running when this was released were made by a random-key core: no later core can sign for them,
        so they end once more at this release's restart. `router/corechange.go` now marks only sessions whose cert the
        running core's key didn't sign, and only once the core is set up.
+## The iCloud index rolls out without a gap, 2026-10-15
+
+171. **The iCloud index runs search's pattern: two replicas on one volume, a writer lease in the database** (Deyao,
+     2026-10-15: the box redesign brings the index back on the services box, and "deploy" means zero downtime).
+     `services/icloud-index/icloud_index/lease.py` is the twin of `services/search/lib/lease.js`: kv `writer`
+     {holder, since, until}, renewed every `TICK_S` (5 s) inside BEGIN IMMEDIATE, released on SIGTERM, lapsing 45 s
+     after a kill. Both replicas answer searches; only the holder runs the lister, the worker, the embedder and the
+     backup. Claude's choices:
+     - *Every write and every AI call checks the lease first* (`Indexer.check()`, raising `Stopped`): a replica that
+       lost the lease (frozen past the TTL, then back) can't finish a file it had begun and write it, or spend on it.
+       *Not chosen*: trusting the threads to notice the stop flag (a file can take minutes: ffmpeg, a download).
+     - *A file half read at a clean stop gets its try back*: the 3-try limit is for files that kill the process, and
+       a rollout isn't one.
+     - *A reader's /relist and /retry are kv requests the writer takes at its next tick* (as search's reindex).
+     - *Readers reload their vectors when kv `index_version` moves* (the writer bumps it after each embedding batch).
+     - *The backup's rhythm lives in the database* (kv `last_backup`), so a handover doesn't start a new 8 GB staging
+       copy; *seeding a missing database takes a file lock* beside it, so two replicas starting on an empty volume
+       download the copy once.

@@ -11,6 +11,10 @@ Three threads, each with its own SQLite connection:
   embedder  chunks whose text has no vector yet, in batches.
 
 A dead iCloud session pauses everything and DMs Deyao once (re-login: icloud-drive skill).
+
+Only the replica holding the writer lease runs these (lease.py, server.py). `fence()` says whether it still may
+write: every write and every AI spend checks it first and raises Stopped when the lease is gone or the replica is
+stopping, so a replica that lost the lease never writes again, even with a file half read.
 """
 import hashlib, json, os, re, shutil, threading, time, traceback
 from datetime import datetime, timezone
@@ -51,6 +55,10 @@ def chunk_hash(name, text):
     return hashlib.sha256((name + "\n" + text).encode()).hexdigest()[:32]
 
 
+class Stopped(Exception):
+    """This replica may no longer write (it lost the writer lease or is stopping)."""
+
+
 class Ctx:
     """What an extractor sees: the AI gate (content cache + budget + spend) and the remote."""
 
@@ -67,6 +75,7 @@ class Ctx:
         r = self.db.execute("SELECT result FROM aicache WHERE ckey=? AND stage=?", (ckey, stage)).fetchone()
         if r: return json.loads(r[0])
         if not self.budget_left(): raise X.NeedBudget()
+        self.idx.check()
         try:
             result, cost = fn()
         except ai.Fatal as e:
@@ -90,6 +99,20 @@ class Indexer:
         self.wake = threading.Event()
         self.relist_now = threading.Event()
         self.stop = False
+        self.fence = lambda: True   # server.py: True while this replica holds the writer lease and isn't stopping
+        self.on_change = None       # server.py: called after embeddings changed (bumps the index version)
+        self.threads = []
+
+    def check(self):
+        if self.stop or not self.fence():
+            raise Stopped()
+
+    def stop_all(self):
+        """Stops the loops (each at its next check) and the rclone server."""
+        self.stop = True
+        self.wake.set(); self.relist_now.set()
+        try: self.server.stop()
+        except Exception: pass
 
     def conn(self):
         return D.connect(self.db_file)
@@ -118,6 +141,7 @@ class Indexer:
         while not self.stop:
             try:
                 remote.probe()
+                self.check()
                 self.status["auth"] = "ok"; self.clear_notice(conn, "auth"); self.server.restart()
                 log("iCloud session works again")
                 return
@@ -138,6 +162,7 @@ class Indexer:
             batch = []
             def flush():
                 nonlocal new, changed
+                self.check()
                 conn.execute("BEGIN IMMEDIATE")
                 for it in batch:
                     r = conn.execute("SELECT id, size, mtime FROM files WHERE path=?", (it["path"],)).fetchone()
@@ -159,6 +184,10 @@ class Indexer:
                 if len(batch) >= 500:
                     flush(); self.status["listing"]["files"] = n; self.wake.set()
             if batch: flush()
+        except Stopped:
+            if conn.in_transaction: conn.execute("ROLLBACK")
+            self.status["listing"] = None
+            raise
         except remote.AuthError as e:
             if conn.in_transaction: conn.execute("ROLLBACK")
             self.auth_failed(conn, e); self.status["listing"] = None
@@ -174,6 +203,7 @@ class Indexer:
             log(msg); D.kv_set(conn, "list_error", msg); self.status["listing"] = None
             return False
         moved = gone = 0
+        self.check()
         conn.execute("BEGIN IMMEDIATE")
         for old in conn.execute("SELECT * FROM files WHERE seen IS NOT ? ", (stamp,)).fetchall():
             twin = conn.execute("SELECT id, state FROM files WHERE fid=? AND fid!='' AND seen=? AND id!=? AND size=? AND mtime=?",
@@ -233,6 +263,7 @@ class Indexer:
 
     def store(self, conn, f, parts, note, cost, ckey):
         name = f["path"].rsplit("/", 1)[-1]; total = 0
+        self.check()
         conn.execute("BEGIN IMMEDIATE")
         D.drop_chunks(conn, f["id"])
         for part, src, text in parts:
@@ -263,11 +294,19 @@ class Indexer:
             if (f["tries"] or 0) >= MAX_TRIES:
                 conn.execute("UPDATE files SET state='error', error=? WHERE id=?", (f"not read: stopped the indexer {f['tries']} times (out of memory?)", f["id"]))
                 log(f"gave up on {f['path']}: it stopped the indexer {f['tries']} times"); continue
+            self.check()
             conn.execute("UPDATE files SET tries=tries+1 WHERE id=?", (f["id"],))
-            self.status["current"] = {"path": f["path"], "kind": f["kind"], "size": f["size"], "since": now()}
+            self.status["current"] = {"id": f["id"], "path": f["path"], "kind": f["kind"], "size": f["size"], "since": now()}
             try:
                 parts, note, cost, ckey = self.process(conn, f)
                 self.store(conn, f, parts, note, cost, ckey)
+            except Stopped:
+                # a clean stop (a rollout, the lease gone) is not a crash: the attempt doesn't count; the next writer
+                # reads the file again
+                if conn.in_transaction: conn.execute("ROLLBACK")
+                conn.execute("UPDATE files SET tries=max(tries-1, 0) WHERE id=?", (f["id"],))
+                self.status["current"] = None
+                raise
             except X.NeedBudget:
                 if conn.in_transaction: conn.execute("ROLLBACK")
                 conn.execute("UPDATE files SET state='wait-ai', tries=max(tries-1, 0) WHERE id=?", (f["id"],))
@@ -302,6 +341,7 @@ class Indexer:
                                    WHERE NOT EXISTS (SELECT 1 FROM emb e WHERE e.hash=c.hash) GROUP BY c.hash LIMIT 64""").fetchall()
             if not rows:
                 time.sleep(60); continue
+            self.check()
             try:
                 vecs, cost = ai.embed([r["path"].rsplit("/", 1)[-1] + "\n" + r["text"] for r in rows])
             except ai.Fatal as e:
@@ -310,20 +350,24 @@ class Indexer:
                 self.status["embedError"] = str(e)[:300]; time.sleep(120); continue
             self.status["embedError"] = None
             import numpy as np
+            self.check()
             conn.execute("BEGIN IMMEDIATE")
             for r, v in zip(rows, vecs):
                 conn.execute("INSERT OR REPLACE INTO emb(hash, vec) VALUES(?,?)", (r["hash"], np.asarray(v, dtype=np.float16).tobytes()))
             conn.execute("COMMIT")
             D.kv_add(conn, "embed_spent", cost)
             if self.searcher: self.searcher.dirty = True
+            if self.on_change: self.on_change()
 
     def start(self):
         def keep(fn):
             while not self.stop:  # a bug in one loop must not stop indexing for good
                 try: fn()
+                except Stopped:
+                    return
                 except Exception:
                     log(f"{fn.__name__} crashed, restarting in 60s:\n{traceback.format_exc()[-1500:]}")
                     self.status["lastError"] = f"{fn.__name__}: {traceback.format_exc().splitlines()[-1]}"[:500]
                     time.sleep(60)
         for fn in (self.lister_loop, self.worker_loop, self.embed_loop):
-            threading.Thread(target=keep, args=(fn,), daemon=True, name=fn.__name__).start()
+            t = threading.Thread(target=keep, args=(fn,), daemon=True, name=fn.__name__); t.start(); self.threads.append(t)

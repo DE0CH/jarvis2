@@ -383,6 +383,14 @@ and "iCloud index" for the calls. Check them from any Jarvis 2 session:
   the new one before an old one goes (`maxUnavailable: 0`), and the writer lease (`services/search/lib/lease.js`)
   passes on SIGTERM or lapses 45 s after a kill. `GET /api/search/status` names the writer, this replica's start,
   memory and Kubernetes restarts (`replica`), and how the previous copy ended (`previousReplica`).
+- **The iCloud index has the same pattern** (`services/icloud-index/icloud_index/lease.py`, DECISIONS 171): two
+  replicas on the one volume, every replica answers searches, only the writer-lease holder lists iCloud, reads files,
+  spends the AI budget, embeds and backs up (every write and AI call checks the lease first, so a replica that lost
+  it writes nothing). `GET /ready` (port 8091) turns 503 at SIGTERM; the replica serves `DRAIN_MS` more, stops its
+  indexer (a file half read gets its try back), releases the lease, and the other takes it within `TICK_S`; a killed
+  writer's lease lapses after 45 s. A reader's `POST /relist` / `/retry` waits for the writer's next tick.
+  `GET /api/icloud/status` names `writer`, this `replica` and `previousReplica`. Only one replica seeds a missing
+  database (a file lock beside it).
 - **The iCloud index is identity-level**: sessions reach it only while they hold the `identity` store (router 403
   otherwise; Deyao's app always). Its Storage Box copy is age-encrypted; the private key is `BACKUP_AGE_KEY` in the
   `icloud-index` part and `ICLOUD_BACKUP_AGE_KEY` in the sensitive store `icloud-backup` (re-run the part from that

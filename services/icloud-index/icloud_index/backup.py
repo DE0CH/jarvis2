@@ -41,6 +41,20 @@ def _get(url, auth):
 
 
 def seed(db_file, env=os.environ, log=print):
+    """Two replicas start on one volume: a file lock next to the database lets one seed while the other waits, then
+    finds the database there."""
+    if os.path.exists(db_file):
+        return "exists"
+    import fcntl
+    with open(db_file + ".seed.lock", "w") as lk:
+        fcntl.flock(lk, fcntl.LOCK_EX)
+        try:
+            return _seed(db_file, env, log)
+        finally:
+            fcntl.flock(lk, fcntl.LOCK_UN)
+
+
+def _seed(db_file, env, log):
     if os.path.exists(db_file):
         return "exists"
     required = env.get("SEED_REQUIRED", "") in ("1", "true")
@@ -118,15 +132,25 @@ def backup(db_file, env=os.environ, log=print):
         shutil.rmtree(work, ignore_errors=True)
 
 
-def backup_loop(db_file, env=os.environ, log=print):
+def backup_loop(db_file, env=os.environ, log=print, writer=lambda: True):
+    """Every BACKUP_INTERVAL_H hours while this replica is the writer (writer()); a reader never backs up. The last
+    backup's time is kv 'last_backup' in the database, so a new writer keeps the rhythm instead of starting over."""
     h = float(env.get("BACKUP_INTERVAL_H", "24") or 0)
     if h <= 0 or not _dav(env):
         return
 
+    def last(conn):
+        try: return float(conn.execute("SELECT v FROM kv WHERE k='last_backup'").fetchone()[0])
+        except Exception: return 0.0
+
     def run():
         time.sleep(600)
+        conn = sqlite3.connect(db_file, timeout=120, isolation_level=None)
         while True:
-            try: backup(db_file, env, log)
-            except Exception as e: log(f"backup failed: {type(e).__name__}: {e}")
-            time.sleep(h * 3600)
+            if writer() and time.time() - last(conn) >= h * 3600:
+                try:
+                    if backup(db_file, env, log) and writer():
+                        conn.execute("INSERT INTO kv(k,v) VALUES('last_backup',?) ON CONFLICT(k) DO UPDATE SET v=excluded.v", (str(time.time()),))
+                except Exception as e: log(f"backup failed: {type(e).__name__}: {e}")
+            time.sleep(300)
     threading.Thread(target=run, daemon=True, name="backup").start()

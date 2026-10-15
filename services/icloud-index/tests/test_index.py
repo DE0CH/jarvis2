@@ -134,7 +134,9 @@ class IndexTest(unittest.TestCase):
         self.idx.stop = False
         t = threading.Thread(target=self.idx.worker_loop, daemon=True); t.start()
         for _ in range(300):
-            if self.conn.execute("SELECT count(*) FROM files WHERE state='wait-ai'").fetchone()[0] == 0: break
+            # wait until a read went through, too (a stop mid-file now ends the file unwritten: Stopped)
+            if self.conn.execute("SELECT count(*) FROM files WHERE state IN ('wait-ai','new') AND kind='image'").fetchone()[0] == 0 \
+                    and D.kv_get(self.conn, "notice:billing") is None: break
             time.sleep(0.1)
         self.idx.stop = True; self.idx.wake.set(); t.join(10)
         self.assertEqual(self.conn.execute("SELECT count(*) FROM files WHERE state='wait-ai'").fetchone()[0], 0)

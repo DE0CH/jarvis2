@@ -807,7 +807,7 @@ index), then embeds the text.
 |---|---|
 | `GET /api/icloud/search?q=` | `&limit=` (1-100, 10), `&kind=text,pdf,office,iwork,image,raw,audio,video,archive,other`, `&ext=`, `&under=<folder>`, `&after=`/`&before=`, `&mode=hybrid|keyword|semantic`, `&rerank=0`, `&full=1` → `{query, total, hits: [{path, kind, size, mtime, score, snippet, …}]}`. A hit's `path` is the iCloud path: `rclone copy "icloud:<path>" .` fetches it. |
 | `GET /api/icloud/file?path=` | One file's record and all its extracted text, by part; 404 when it isn't indexed. |
-| `GET /api/icloud/status` | Counts by state and kind, `aiSpentUsd`/`aiBudgetUsd`, `embedSpentUsd`, the last listing, the file being read, recent errors. |
+| `GET /api/icloud/status` | Counts by state and kind, `aiSpentUsd`/`aiBudgetUsd`, `embedSpentUsd`, the last listing, the file being read, recent errors; `replica` (this copy: pod, start, `writer`/`reader`, draining, memory, restarts), `writer` (the lease: holder, since, until), `previousReplica` (the last copy that went and how). |
 | `POST /api/icloud/relist` | List iCloud now → 202. |
 | `POST /api/icloud/retry` | Give failed files another go → 202. |
 
