@@ -16,14 +16,15 @@ Usage:
                                     # Refuses if the store changed remotely since the last pull/push
                                     # (another session pushed) unless --force.
 
-Every transfer goes through Jarvis, authorized by this session's own SESSION_API_TOKEN; the
-session never holds Storage Box credentials for this. Files are capped at 25 MB each (the
-cf-tunnel's request-body limit). Sync state lives in ~/.content-sync/<store>.json.
+Every transfer goes through the machine's local Jarvis API ($JARVIS_URL, default
+http://127.0.0.1:7171), which signs it with the machine key; the session never holds Storage Box
+credentials for this. Files are capped at 25 MB each (the cf-tunnel's request-body limit), checked
+before a push sends anything. Sync state lives in ~/.content-sync/<store>.json.
 """
 import hashlib, json, os, shutil, sys, urllib.error, urllib.parse, urllib.request
 
-JARVIS = os.environ.get("JARVIS_URL", "").rstrip("/")  # the machine's local proxy to Jarvis 2 (jarvis2-machine sets it)
-TOKEN = os.environ.get("SESSION_API_TOKEN", "")
+JARVIS = os.environ.get("JARVIS_URL", "http://127.0.0.1:7171").rstrip("/")  # the machine's local proxy to Jarvis 2 (it signs every call)
+TOKEN = os.environ.get("SESSION_API_TOKEN", "jarvis2-local-proxy")  # a constant: the proxy's machine signature authorises
 SID = os.environ.get("SESSION_ID") or os.environ.get("FLY_MACHINE_ID", "")
 CID, CSEC = os.environ.get("CF_ACCESS_CLIENT_ID", ""), os.environ.get("CF_ACCESS_CLIENT_SECRET", "")
 ROOT = os.path.expanduser("~/content")
@@ -37,8 +38,6 @@ def die(msg, code=1):
 
 
 def call(method, path, body=None, length=None, raw=False):
-    if not JARVIS: die("JARVIS_URL not set (jarvis2-machine sets it on a Jarvis 2 session)")
-    if not TOKEN: die("SESSION_API_TOKEN not set in this session's environment")
     if not SID: die("SESSION_ID / FLY_MACHINE_ID not set (are we on a Fly session machine?)")
     headers = {"Authorization": f"Bearer {TOKEN}",
                # perimeter gate only — Jarvis authorizes by the session token above
@@ -164,9 +163,10 @@ def push(store, force):
     if not (new or changed or deleted):
         print(f"{store}: nothing to push"); return
     loc = local_files(store)
+    big = [f"{p} ({os.path.getsize(loc[p])} bytes)" for p in new + changed if os.path.getsize(loc[p]) > MAX_BYTES]
+    if big: die(f"{store}: over the 25 MB per-file limit, so nothing was pushed: {', '.join(big)} — move those out of ~/content/{store} and push again")
     for p in new + changed:
         size = os.path.getsize(loc[p])
-        if size > MAX_BYTES: die(f"{store}/{p}: {size} bytes is over the 25 MB per-file limit — nothing after it was pushed")
         with open(loc[p], "rb") as f:
             call("PUT", file_url(store, p), body=f, length=size)
         print(f"  {'+' if p in new else '~'} {p}")
