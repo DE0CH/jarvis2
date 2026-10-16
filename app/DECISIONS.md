@@ -349,19 +349,22 @@ fixes, 34–40 carried over from the old app and still true, 41–43 the web pag
     row (absent on an image from before), and the Sessions list shows it as a footnote line under the card's first
     line only while something runs (a list row has no room for "None").
 
-## Supervisor log and lifecycle log (2026-10-16)
+## The session's Log (2026-10-16)
 
-74. **Two read-only logs on every session, beside the terminal** (Deyao, 2026-10-16). Both apps: the session page has
-   **Supervisor log** and **Lifecycle** in every state (running, paused, failed, also while a pause or destroy runs), next
-   to Terminal (iPhone: rows in the actions section, `suplog-<id>` / `lifecycle-<id>`, `Sessions/LogViews.swift`; web: two
-   soft buttons in the card's action row, `pages/Logs.tsx`). The supervisor log (`GET api/sessions/:id/supervisor-log`)
-   is one monospaced list, a line per entry with its local time, a "machine …" header where the machine changes, polled
-   every 2 s with `after` and following the end (iPhone: a Follow toggle; the web page scrolls to the end). Lifecycle
-   (`GET api/sessions/:id/lifecycle`) lists the operations newest first, each a card/row with its kind, start, duration
-   and a running / done / failed badge; opening one (`…/lifecycle/:op`) shows its rows (State, Started, Took, Machines,
-   Error) and then its entries in order, each with time, a source tag (Fly, Router, Supervisor), the machine and the text;
-   it polls every 2 s while the operation runs and stops when it ends. Long lines wrap (no sideways scrolling); there is no
-   action on either page and nothing pops up.
+74. **One read-only Log on every session, beside the terminal** (Deyao, 2026-10-16: "it should be one stream which i can
+   see all events"). Both apps: the session page has **Log** in every state (running, paused, failed, also while a pause
+   or destroy runs), next to Terminal (iPhone: a row in the actions section, `log-<id>`, `Sessions/LogViews.swift`; web:
+   a soft button in the card's action row, `pages/Logs.tsx`). It is ONE chronological stream (`GET
+   api/sessions/:id/events`): every supervisor line of every machine the session had, and each boot, pause, resume,
+   upgrade, restart and destroy from its start ("Pause started", bold, a hairline above it) through the router's steps
+   and Fly's entries to its end ("Pause done after 4 s"; failed / cut off in red with the error). Each entry: its local
+   time, a source tag (Supervisor green/teal, Router blue, Fly amber/purple), the operation's kind as a grey tag when it
+   belongs to one, the machine, then the text (monospaced, wrapping; on a wide web window the time and tags sit in a
+   column left of the text). Newest at the bottom, like the terminal, and it follows the end (iPhone: a Follow toggle);
+   a "Now: pause running" row while an operation runs. It polls every 2 s with the cursor and keeps the list in time
+   order (a Fly event read late slots in where it happened). Every colour is the theme's (web) or semantic (iPhone):
+   readable in light and dark. No action on the page and nothing pops up. The separate Supervisor log and Lifecycle
+   pages are gone.
 
 ## Unfinished / known gaps
 

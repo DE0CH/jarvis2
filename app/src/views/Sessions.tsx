@@ -476,8 +476,7 @@ export function Sessions() {
                     </>}
                   {/* read only, kept for the session's life: beside the terminal, in every state, also while an
                       operation runs (pages/Logs.tsx) */}
-                  <Button variant="soft" color="gray" id={"suplog-" + m.id} onPress={() => openPage("supervisor-log", { id: m.id, title: sessionTitle(m) })}>Supervisor log</Button>
-                  <Button variant="soft" color="gray" id={"lifecycle-" + m.id} onPress={() => openPage("lifecycle", { id: m.id, title: sessionTitle(m) })}>Lifecycle</Button>
+                  <Button variant="soft" color="gray" id={"log-" + m.id} onPress={() => openPage("log", { id: m.id, title: sessionTitle(m) })}>Log</Button>
                 </Flex>
               </Card>
             );
