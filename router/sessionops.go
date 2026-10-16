@@ -504,10 +504,12 @@ func (r *Router) Restart(id string, in RestartRequest) (map[string]any, error) {
 		return nil, err
 	}
 	r.ops.setBusy(id, "restarting")
+	op := r.lcBeginJob(id, "restart") // lifecycle.go: its pause and resume are this one operation
+	op.machine(s.MachineID)
 	go func() {
 		defer endJob()
 		defer r.ops.setBusy(id, "")
-		fail := func(err error) { r.ops.phase(j, "failed", err) }
+		fail := func(err error) { r.ops.phase(j, "failed", err); op.endJob(err) }
 		if s.MachineID != "" {
 			r.ops.phase(j, "snapshotting", nil)
 			if err := r.Pause(id); err != nil {
@@ -558,6 +560,7 @@ func (r *Router) Restart(id string, in RestartRequest) (map[string]any, error) {
 			return
 		}
 		r.ops.phase(j, "done", nil)
+		op.endJob(nil)
 	}()
 	keys := []string{}
 	for k := range patch {

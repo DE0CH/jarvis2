@@ -1,7 +1,7 @@
 package main
 
 // The session-facing API (Jarvis 1's `$JARVIS_URL/api/...` as its session scripts call it). In a Jarvis 2
-// session JARVIS_URL points at the machine's local proxy (`jarvis2-machine agent`, machine/apiproxy.go), which
+// session JARVIS_URL points at the machine's local proxy (the supervisor, `jarvis2-machine supervisor`, machine/apiproxy.go), which
 // signs each request with the machine key and sends it here as /m/api/<rest>. Any session id in the path must
 // be the calling machine's own session.
 //

@@ -517,6 +517,10 @@ var callRules = map[string]callRule{
 	"POST /api/sessions/{id}/start":             callBody,
 	"GET /api/sessions/{id}/tail":               callBody,
 	"GET /api/sessions/{id}/terminal":           callStatus, // another session's screen
+	"GET /api/sessions/{id}/supervisor-log":     callBody,   // the supervisor's own lines, written free of secrets
+	"GET /api/sessions/{id}/lifecycle":          callBody,
+	"GET /api/sessions/{id}/lifecycle/{op}":     callBody,
+	"POST /api/sessions/{id}/harness":           callBody, // pause/resume the Claude process
 	"POST /api/sessions/{id}/terminal":          callBody,
 	"POST /api/sessions/{id}/upgrade":           callBody,
 	"POST /api/sessions/{id}/disk":              callBody,

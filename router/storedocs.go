@@ -505,7 +505,7 @@ func (r *Router) refreshAfterPull(machine string, pulled *Doc) {
 }
 
 // unlockArrived: an unlock for one cert went through (the phone's unlock_finish): when that cert is a running,
-// booted machine's newest, the machine pulls again so ~/.secrets has the store as it is now
+// booted machine's newest, the machine's supervisor pulls again so it holds the store as it is now
 func (r *Router) unlockArrived(answer []byte) {
 	var a struct {
 		Payload string `json:"payload"`

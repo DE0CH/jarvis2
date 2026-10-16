@@ -85,12 +85,15 @@ func (r *Router) finalSnapshotAndKillFor(id, machine string, destroying, force b
 	if vol != nil {
 		r.setWaiting(id, "stopping the machine and taking its volume's backup snapshot (up to "+waitText(killMax)+")")
 	}
+	r.lcNote(id, machine, map[bool]string{true: "asked the core to stop the machine, take its volume's backup snapshot and destroy it on Fly",
+		false: "asked the core to destroy the machine on Fly"}[vol != nil])
 	kd, err := r.killMachine(machine, !destroying) // vouch.go: with the snapshot's hash; a pause only with it vouched for
 	if err != nil && destroying {
 		kd, err = r.destroyKillFallback(id, machine, force, err)
 	}
 	r.setWaiting(id, "")
 	if err != nil {
+		r.lcNote(id, machine, "the kill failed: "+err.Error())
 		r.killFailed(id, machine, vol != nil, destroying, err)
 		if destroying {
 			r.st.Do(func(d *persisted) {
@@ -102,6 +105,7 @@ func (r *Router) finalSnapshotAndKillFor(id, machine string, destroying, force b
 		return false
 	}
 	r.recordKill(id, machine, kd, serr, destroying)
+	r.lcNote(id, machine, "the core confirmed the machine destroyed on Fly")
 	return true
 }
 

@@ -47,10 +47,13 @@ type Router struct {
 	muxOnce               sync.Once
 	publicMux, machineMux *http.ServeMux
 	appPatterns           map[string]bool // http.go: every app route's pattern (apicalls.go classifies them)
+
+	sup *supLogs   // supervisorlog.go: the machines' supervisor logs
+	lc  *lifecycle // lifecycle.go: each session's lifecycle operations and their logs
 }
 
 func NewRouter(cfg Config, st *State, core *CoreClient, policy Policy) *Router {
-	r := &Router{cfg: cfg, st: st, core: core, policy: policy, setupSeen: map[string]time.Time{}, commands: map[string]chan string{}, execs: map[string]chan execItem{}, results: map[string]chan ExecResult{}, snapped: map[string]chan struct{}{}}
+	r := &Router{cfg: cfg, st: st, core: core, policy: policy, setupSeen: map[string]time.Time{}, commands: map[string]chan string{}, execs: map[string]chan execItem{}, results: map[string]chan ExecResult{}, snapped: map[string]chan struct{}{}, sup: &supLogs{next: map[string]int64{}}, lc: newLifecycle()}
 	if core != nil { // linestate.go: the core's line state, kept as its answers name a new one
 		r.lines = newLineKeeper(r.lineStatePath(), core)
 		core.onLineSeq = r.lines.seen
@@ -137,7 +140,7 @@ func (r *Router) machineEnv(s *Session) map[string]string {
 	}
 	if s.Label == "" && s.AppTitle != "" {
 		// the title the Claude app showed: a resumed claude names a fresh Remote Control entry with it (Jarvis 1's
-		// session-supervisor.sh), so the conversation keeps its title in the app
+		// harness-claude.sh), so the conversation keeps its title in the app
 		e["SESSION_RESUME_TITLE"] = s.AppTitle
 	}
 	for _, h := range envHooks {
@@ -189,11 +192,12 @@ var (
 // init command gave its keys → the core's signed "started" document. A machine that never comes up is killed.
 // A core from before R2 answers "started" from /start itself (it waited and retried inside).
 func (r *Router) startMachine(image, size string) (*Doc, error) {
-	return r.startMachineDisk(image, size, 0)
+	return r.startMachineDisk(image, size, 0, nil)
 }
 
 // startMachineDisk: startMachine with the machine's volume size (disk.go; 0 = the core's default)
-func (r *Router) startMachineDisk(image, size string, diskGB int) (*Doc, error) {
+// created: told the machine's id as soon as the core's Fly create made it (lifecycle.go reads its Fly events from then)
+func (r *Router) startMachineDisk(image, size string, diskGB int, created func(id string)) (*Doc, error) {
 	if size == "" {
 		size = "medium"
 	}
@@ -225,6 +229,9 @@ func (r *Router) startMachineDisk(image, size string, diskGB int) (*Doc, error) 
 	d.Decode(&c)
 	if c.Kind != "created" {
 		return d, nil
+	}
+	if created != nil {
+		created(c.ID)
 	}
 	deadline := time.Now().Add(initMax)
 	for {
@@ -293,19 +300,41 @@ func (r *Router) startAndCertify(sid string, approval *Doc) {
 		}
 	})
 	r.setState(sid, "starting", "")
-	d, err := r.startMachineDisk(a.Request.Image, s.Size, s.DiskGB)
+	// lifecycle.go: the operation this start belongs to (a resume's), or a boot of its own (a new session's first start
+	// after the phone's approval, or a resume the phone approved); this function ends it
+	op := r.lcCurrent(sid)
+	if op == nil {
+		op = r.lcBegin(sid, map[bool]string{true: "resume", false: "boot"}[s.Cert != nil])
+	}
+	op.handed.Store(true)
+	fail := func(msg string) {
+		r.setState(sid, "failed", msg)
+		op.note("", msg)
+		op.endJoined("failed", msg)
+	}
+	size := s.Size
+	if size == "" {
+		size = "medium"
+	}
+	op.note("", "asked the core to start a machine ("+size+", image "+a.Request.Image+")")
+	d, err := r.startMachineDisk(a.Request.Image, s.Size, s.DiskGB, func(id string) {
+		op.machine(id)
+		op.note(id, "the core's Fly create made machine "+id+"; waiting for it to come up and give its keys (init)")
+	})
 	if err != nil {
-		r.setState(sid, "failed", "start: "+err.Error())
+		fail("start: " + err.Error())
 		return
 	}
 	var st struct {
 		Machine *Started `json:"machine"`
 	}
 	if d.Decode(&st) != nil || st.Machine == nil {
-		r.setState(sid, "failed", "start: unexpected answer")
+		fail("start: unexpected answer")
 		return
 	}
 	m := st.Machine
+	op.machine(m.ID)
+	op.note(m.ID, "machine "+m.ID+" is up and gave its keys")
 	r.st.Do(func(d *persisted) {
 		d.Started[m.ID] = m
 		d.Machines[m.ID] = sid
@@ -323,10 +352,12 @@ func (r *Router) startAndCertify(sid string, approval *Doc) {
 	}
 	cert, ans, err := r.core.CallAnswer("/certify", map[string]any{"approval": approval, "machine": m.ID, "started": d, "carry": r.readCarry(pred)})
 	if err != nil {
+		op.note(m.ID, "certify refused: "+err.Error()+"; asking the core to kill the machine")
 		r.killUntilDestroyed(map[string]any{"machine": m.ID})
-		r.setState(sid, "failed", "certify: "+err.Error())
+		fail("certify: " + err.Error())
 		return
 	}
+	op.note(m.ID, "the core certified the machine (its succession cert); it boots now: snapshot, secrets, repos, then the harness")
 	r.st.Do(func(d *persisted) {
 		d.Certs[m.ID] = cert
 		if x := d.Sessions[sid]; x != nil {
@@ -337,6 +368,7 @@ func (r *Router) startAndCertify(sid string, approval *Doc) {
 	if p := predOf(cert); p != "" {
 		r.carryAfter(p, m.ID, cert, ans) // carry.go: a resume carries the line's secrets, no store unlocked
 	}
+	go r.lcAwaitBoot(op, sid, m.ID)
 }
 
 func (r *Router) addApproval(a *Approval) {
@@ -863,8 +895,11 @@ func (r *Router) Pause(id string) error {
 		return fmt.Errorf("session %s isn't running (it is %s): nothing to pause", id, orState(s.State))
 	}
 	r.setState(id, "pausing", "")
+	op := r.lcBegin(id, "pause") // lifecycle.go
+	op.machine(s.MachineID)
 	go func() {
 		defer unlock()
+		defer op.endFromState()
 		if !r.finalSnapshotAndKill(id, s.MachineID, false) { // snapsafe.go: kept, failed and DMed
 			return
 		}
@@ -911,16 +946,23 @@ func (r *Router) Resume(id string, upgrade bool) error {
 		unlock()
 		return err
 	}
+	op := r.lcBegin(id, "resume") // lifecycle.go
+	if upgrade {
+		op.note("", "on the newest session image")
+	}
 	if s.Cert == nil {
 		// a new line whose first start failed (a machine left over from it holds no cert, so no secret: the start
 		// again leaves it to the Machines tab)
-		return r.startAgain(s, unlock)
+		return r.startAgain(s, unlock, op)
 	}
 	r.setState(id, "resuming", "")
 	go func() {
 		defer unlock()
+		defer op.endFromState()     // unless startAndCertify took it over
 		defer r.settleFollowups(id) // apicalls.go: a call waiting on this resume learns nothing more comes of it
 		if s.MachineID != "" {
+			op.machine(s.MachineID)
+			op.note(s.MachineID, "finishing the machine's pause first")
 			r.setWaiting(id, "finishing the pause first")
 			if !r.finalSnapshotAndKill(id, s.MachineID, false) { // snapsafe.go: failed again (kept) with its error
 				r.setWaiting(id, "")
@@ -958,6 +1000,7 @@ func (r *Router) Resume(id string, upgrade bool) error {
 			}
 			r.setState(id, "approval", "")
 			r.addApproval(&Approval{Kind: "resume-upgrade", Session: id, Label: s.Label, Challenge: ch, Options: opts})
+			op.note("", "waiting for Deyao's approval in the Inbox (resume-upgrade): the start is its own operation once he allows it")
 		}
 		phoneImage := pinned
 		if upgrade {
@@ -995,6 +1038,7 @@ func (r *Router) Resume(id string, upgrade bool) error {
 			return
 		}
 		r.settleFollowups(id) // no approval follows: the machine starts now
+		op.note("", "the core answered the resume by itself (same line, same image)")
 		r.startAndCertify(id, a)
 	}()
 	return nil
@@ -1003,10 +1047,11 @@ func (r *Router) Resume(id string, upgrade bool) error {
 // startAgain: a new line whose first start failed (the start or certify failed, or a router restart cut it off) gets
 // its new-session approval again, built from the session as it is (vouch.go sessionConfig): one Face ID starts it.
 // Its Deny leaves the session failed (Approval.Again) rather than removing it.
-func (r *Router) startAgain(s Session, unlock func()) error {
+func (r *Router) startAgain(s Session, unlock func(), op *lcHandle) error {
 	r.setState(s.ID, "resuming", "")
 	go func() {
 		defer unlock()
+		defer op.endFromState()
 		defer r.settleFollowups(s.ID)
 		config, err := r.sessionConfig(&s)
 		var ch *Doc
@@ -1025,6 +1070,7 @@ func (r *Router) startAgain(s Session, unlock func()) error {
 		opsOptions(&s, opts)
 		r.setState(s.ID, "approval", "")
 		r.addApproval(&Approval{Kind: "new-session", Session: s.ID, Label: s.Label, Challenge: ch, Options: opts, Again: true})
+		op.note("", "the first start failed: its new-session approval is in the Inbox again; the start is its own operation once Deyao allows it")
 	}()
 	return nil
 }
@@ -1110,8 +1156,16 @@ func (r *Router) destroy(id string, o destroyOpts) error {
 		return fmt.Errorf("no session %s", id)
 	}
 	r.setState(id, "destroying", "")
+	op := r.lcBegin(id, "destroy") // lifecycle.go
+	op.machine(s.MachineID)
+	gone := false
 	go func() {
 		defer unlock()
+		defer func() {
+			if !gone {
+				op.endFromState()
+			}
+		}()
 		if s.MachineID != "" && !r.snapshotAndKill(id, s.MachineID, force) {
 			return
 		}
@@ -1119,7 +1173,16 @@ func (r *Router) destroy(id string, o destroyOpts) error {
 		if o.report != nil {
 			changes = r.snapshotChanges(id) // archive.go: before finish() drops the snapshot
 		}
+		op.note("", "archiving the session to the Storage Box")
 		archived, aerr := r.archive(id)
+		switch {
+		case aerr != nil:
+			op.note("", "the archive failed: "+aerr.Error())
+		case archived != nil:
+			op.note("", "archived to "+archived.Dir)
+		default:
+			op.note("", "nothing to archive")
+		}
 		if aerr != nil && !force {
 			r.setState(id, "paused", "archive: "+aerr.Error()+" — nothing was lost (the session is paused): Destroy again once the Storage Box answers, or Destroy anyway (it goes without its archive)")
 			return
@@ -1136,8 +1199,13 @@ func (r *Router) destroy(id string, o destroyOpts) error {
 			}
 			if err != nil {
 				log.Printf("session %s: burn: %v", id, err)
+				op.note("", "ending the line (burn): "+err.Error())
+			} else {
+				op.note("", "the line ended: the core's burn cert")
 			}
 		}
+		op.note("", "the session's records follow it into the archive (supervisor log, this log); the session becomes a record")
+		op.end("done", "")
 		r.st.Do(func(d *persisted) {
 			if x := d.Sessions[id]; x != nil {
 				s = *x // the latest: titles and hook fields moved on since the destroy began
@@ -1148,6 +1216,9 @@ func (r *Router) destroy(id string, o destroyOpts) error {
 		}
 		liveKept := r.clearArchivedLive(id, archived, aerr) // livearchive.go: only what the archive holds
 		r.finish(id)
+		gone = true
+		r.lcDrop(id)     // lifecycle.go: archived by its destroy hook
+		r.dropSupLog(id) // supervisorlog.go: likewise
 		r.st.Do(func(d *persisted) {
 			if len(d.Records) > 0 && d.Records[0].ID == id {
 				d.Records[0].Archive = archived
@@ -1336,6 +1407,7 @@ func (r *Router) lastSnapshot(id, machine string) error {
 		return
 	}
 	if haveSnapshot(r.st.snapshotPath(machine)) {
+		r.lcNote(id, machine, "the machine's final snapshot is already here")
 		return nil // it already sent its final one (a machine signs only one: a later ask gets the same)
 	}
 	// a machine that has its secrets is seconds from booted (repos, then its first report): wait for it, or a pause
@@ -1346,6 +1418,7 @@ func (r *Router) lastSnapshot(id, machine string) error {
 	}
 	if !booted() {
 		log.Printf("session %s: %s never got past boot; nothing to snapshot", id, machine)
+		r.lcNote(id, machine, "the machine never got past boot: nothing to snapshot")
 		return nil
 	}
 	// a machine that has gone silent (stopped or gone: its agent reports at least every 60 s) can't answer: no wait,
@@ -1358,20 +1431,29 @@ func (r *Router) lastSnapshot(id, machine string) error {
 	})
 	if time.Since(last) > silentAfter {
 		log.Printf("session %s: %s silent since %s; not waiting for a snapshot", id, machine, last.Format(time.RFC3339))
+		r.lcNote(id, machine, "the machine has been silent since "+last.UTC().Format(time.RFC3339)+": not asking it for a snapshot")
 		return fmt.Errorf("its machine has been silent since %s, so it can't send its snapshot", last.UTC().Format("2006-01-02 15:04 UTC"))
 	}
 	done := r.awaitSnapshot(machine)
 	r.send(machine, "snapshot")
+	r.lcNote(id, machine, "asked the supervisor for the final snapshot (it pauses the Claude process and freezes the session first)")
 	r.setWaiting(id, "waiting for the machine's last snapshot (up to "+waitText(r.cfg.SnapshotWait)+")")
 	defer r.setWaiting(id, "")
 	select {
 	case <-done:
 		if err := r.snapshotError(machine); err != nil {
+			r.lcNote(id, machine, "the snapshot failed: "+err.Error())
 			return err
+		}
+		if fi, err := os.Stat(r.st.snapshotPath(machine)); err == nil {
+			r.lcNote(id, machine, fmt.Sprintf("the final snapshot arrived (%.1f MB, signed by the machine)", float64(fi.Size())/(1<<20)))
+		} else {
+			r.lcNote(id, machine, "the machine answered: nothing to snapshot")
 		}
 		return nil // its snapshot, or "nothing to snapshot" from a machine still booting
 	case <-time.After(r.cfg.SnapshotWait):
 		log.Printf("session %s: no snapshot from %s within %s", id, machine, r.cfg.SnapshotWait)
+		r.lcNote(id, machine, "no snapshot from the machine within "+waitText(r.cfg.SnapshotWait))
 		if err := r.snapshotError(machine); err != nil {
 			return err
 		}

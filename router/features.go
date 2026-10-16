@@ -40,11 +40,14 @@ func (r *Router) registerFeatures(app appRoute, m machineRoute, public publicRou
 	r.registerContent(app, m)               // content.go: content stores (Storage Box folders) for the app and the sessions
 	r.registerClaudeLogin(app, m, public)   // claudelogin.go: the Claude login, its refresh, Re-login, the usage quota
 	r.registerDevices(app, public)          // devices.go: pairing Deyao's OpenClaw/Paseo apps, /api/remotes, Start
+	r.registerSupervisorLog(app, m)         // supervisorlog.go: the machines' supervisor logs
+	r.registerLifecycle(app)                // lifecycle.go: each boot/pause/resume/destroy's log, the harness pause
 }
 
 // startFeatures: called once from main after the router is built
 func (r *Router) startFeatures() {
 	r.endCutOff() // drain.go: what a crash cut off becomes a failed or paused session, before any loop looks
+	r.lcCutOff()  // lifecycle.go: an operation log a restart left open is closed as cut off
 	r.startDiscord()
 	r.startAutopilot()
 	go r.scheduleLoop()   // schedule.go: wakeups, crons, resume prompts

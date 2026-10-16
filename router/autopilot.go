@@ -113,7 +113,7 @@ func init() {
 	envHooks = append(envHooks, func(_ *Router, s *Session, e map[string]string) { liveEnv(s, e) })
 }
 
-// liveEnv: what the machine's env needs (session-supervisor.sh reads SESSION_ONE_SHOT)
+// liveEnv: what the machine's env needs (harness-claude.sh reads SESSION_ONE_SHOT)
 func liveEnv(s *Session, e map[string]string) {
 	if s.Live != nil && s.Live.OneShot {
 		e["SESSION_ONE_SHOT"] = "1"

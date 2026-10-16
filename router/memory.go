@@ -286,14 +286,19 @@ func (r *Router) Upgrade(id string) (map[string]any, error) {
 		return nil, err
 	}
 	r.ops.setBusy(id, "upgrading")
+	op := r.lcBeginJob(id, "upgrade") // lifecycle.go: its free, pause and resume are this one operation
+	op.machine(s.MachineID)
+	op.note("", "Upgrade "+sizeText(from)+" → "+sizeText(to))
 	go func() {
 		defer endJob()
 		defer r.ops.setBusy(id, "")
 		fail := func(err error) {
 			log.Printf("[memory] upgrade of %s failed: %v", id, err)
 			r.ops.phase(j, "failed", err)
+			op.endJob(err)
 		}
 		r.ops.phase(j, "freeing", nil)
+		op.note(s.MachineID, "sent the supervisor free (stop the harness and free memory before the snapshot)")
 		r.send(s.MachineID, "free")
 		time.Sleep(memFreeWait)
 		r.ops.phase(j, "snapshotting", nil)
@@ -311,6 +316,7 @@ func (r *Router) Upgrade(id string) (map[string]any, error) {
 			return
 		}
 		r.ops.phase(j, "done", nil)
+		op.endJob(nil)
 		log.Printf("[memory] %s upgraded %s → %s", id, from, to)
 		if err := r.DeliverCanned(id, Delivery{Kind: "upgraded", From: from, To: to}, upgradedText(from, to)); err != nil {
 			log.Printf("[memory] telling %s about its upgrade: %v", id, err)
