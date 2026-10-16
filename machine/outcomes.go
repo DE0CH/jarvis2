@@ -202,7 +202,7 @@ func outcomeResult(a outcomeAsked, it OutcomeItem, cert Cert) (string, error) {
 		}
 		for _, s := range c.Stores {
 			if s == a.Store {
-				return fmt.Sprintf("Checked: this machine's new core-signed cert names the store %q. If `jarvis2-request add-store` filed it, a background waiter pulls it into ~/.secrets by itself (~/.jarvis2-await-%s.log); then load it in a shell with `set -a; . ~/.secrets; set +a`.", a.Store, a.Store), nil
+				return fmt.Sprintf("Checked: this machine's new core-signed cert names the store %q. If `jarvis2-request add-store` filed it, a background waiter has the supervisor pull it by itself (~/.jarvis2-await-%s.log); then run a command with it as `pull-secrets --exec CMD` (this shell's env doesn't change).", a.Store, a.Store), nil
 			}
 		}
 		return "", errors.New("the cert doesn't name the store")
@@ -255,7 +255,7 @@ func outcomeResult(a outcomeAsked, it OutcomeItem, cert Cert) (string, error) {
 			if a.NoStore {
 				return "Checked: the core's signed answer says the deploy key was added. It is in a store of its own, which no session holds until it is added to one (`jarvis2-request add-store <that store>`; the app's Repos list names it).", nil
 			}
-			return "Checked: the core's signed answer says the deploy key was added, in a store of its own. That store comes into this session in the same approval (while it runs): the waiter `jarvis2-request add-repo` started pulls it into ~/.secrets and sets up the repo's SSH key by itself (~/.jarvis2-await-github-*.log). If it hasn't arrived (this session wasn't running, or the app asked for it separately and it lapsed), ask for it with `jarvis2-request add-store <that store>`.", nil
+			return "Checked: the core's signed answer says the deploy key was added, in a store of its own. That store comes into this session in the same approval (while it runs): the waiter `jarvis2-request add-repo` started has the supervisor pull it and set up the repo's SSH key by itself (~/.jarvis2-await-github-*.log). If it hasn't arrived (this session wasn't running, or the app asked for it separately and it lapsed), ask for it with `jarvis2-request add-store <that store>`.", nil
 		}
 		return "Checked: the core's signed answer says the deploy key was removed.", nil
 	case "unlock":

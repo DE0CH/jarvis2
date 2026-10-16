@@ -9,8 +9,8 @@ import (
 )
 
 // Two add-store waiters approved together (2026-10-13): the first pulled with the older cert, the second pulled with
-// the newer one and wrote ~/.secrets, then the first wrote its older pull over it. Under the lock the second pulls
-// only after the first has written, from the router's newest cert at that moment, so the file ends with the newest.
+// the newer one and took it, then the first put its older pull over it. Under the lock the second pulls
+// only after the first has written, from the router's newest cert at that moment, so the copy ends with the newest.
 func TestASlowerWaiterNeverWritesAnOlderPullOverANewerFile(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	var mu sync.Mutex
@@ -48,8 +48,11 @@ func TestASlowerWaiterNeverWritesAnOlderPullOverANewerFile(t *testing.T) {
 		}
 	}()
 	wg.Wait()
-	b, _ := os.ReadFile(filepath.Join(os.Getenv("HOME"), ".secrets"))
-	if string(b) != "IDENTITY='i'\nYYC='y'\n" {
-		t.Fatalf("~/.secrets ends as %q", b)
+	defer held.set(map[string]string{})
+	if got := held.snapshot(); len(got) != 2 || got["IDENTITY"] != "i" {
+		t.Fatalf("the supervisor ends with %v", got)
+	}
+	if _, err := os.Stat(filepath.Join(os.Getenv("HOME"), ".secrets")); err == nil {
+		t.Fatal("~/.secrets written")
 	}
 }

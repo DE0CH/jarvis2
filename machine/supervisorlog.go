@@ -4,8 +4,8 @@ package main
 // (tmpfs, this machine only). Boot, the keeper and the worker append to it (each write opens the file, so a rotation
 // never loses a line); the worker pushes new lines to the router (POST /m/supervisor-log), which keeps the session's
 // log for its whole life and shows it in the app (Supervisor log, and inside each Lifecycle log). The lines name
-// commands, ids, counts and errors, never a command's text, a prompt or a secret value; as a second line of defence
-// every value from ~/.secrets (8 characters or more) is replaced by [secret] before a line leaves the machine.
+// commands, ids, counts, key names and errors, never a command's text, a prompt or a secret value; as a second line
+// of defence every value the supervisor holds (8 characters or more) is replaced by [secret] before a line leaves.
 
 import (
 	"bufio"
@@ -156,15 +156,10 @@ type errHTTP int
 
 func (e errHTTP) Error() string { return "HTTP " + strconv.Itoa(int(e)) }
 
-// secretRedactor: replaces every ~/.secrets value of 8 characters or more
+// secretRedactor: replaces every value the supervisor holds (secrets.go) of 8 characters or more
 var secretRedactor = func() func(string) string {
-	home, _ := os.UserHomeDir()
-	b, err := os.ReadFile(home + "/.secrets")
-	if err != nil {
-		return func(s string) string { return s }
-	}
 	var vals []string
-	for _, v := range parseSecrets(string(b)) {
+	for _, v := range held.snapshot() {
 		if len(v) >= 8 {
 			vals = append(vals, v)
 		}
@@ -182,60 +177,4 @@ var secretRedactor = func() func(string) string {
 		}
 		return s
 	}
-}
-
-// parseSecrets: the values of a ~/.secrets file (KEY='value' with '\” for a quote, as writeSecrets writes, or
-// shlex.quote's form; an unquoted value runs to the end of the line)
-func parseSecrets(s string) []string {
-	var out []string
-	for len(s) > 0 {
-		eq := strings.IndexByte(s, '=')
-		nl := strings.IndexByte(s, '\n')
-		if eq < 0 {
-			break
-		}
-		if nl >= 0 && nl < eq {
-			s = s[nl+1:]
-			continue
-		}
-		s = s[eq+1:]
-		var v strings.Builder
-		for len(s) > 0 && s[0] != '\n' {
-			switch s[0] {
-			case '\'':
-				end := strings.IndexByte(s[1:], '\'')
-				if end < 0 {
-					v.WriteString(s[1:])
-					s = ""
-					continue
-				}
-				v.WriteString(s[1 : 1+end])
-				s = s[end+2:]
-			case '\\':
-				if len(s) > 1 {
-					v.WriteByte(s[1])
-					s = s[2:]
-				} else {
-					s = s[1:]
-				}
-			case '"':
-				end := strings.IndexByte(s[1:], '"')
-				if end < 0 {
-					v.WriteString(s[1:])
-					s = ""
-					continue
-				}
-				v.WriteString(s[1 : 1+end])
-				s = s[end+2:]
-			default:
-				v.WriteByte(s[0])
-				s = s[1:]
-			}
-		}
-		if len(s) > 0 {
-			s = s[1:]
-		}
-		out = append(out, v.String())
-	}
-	return out
 }

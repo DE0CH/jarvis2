@@ -362,9 +362,6 @@ func doRun(template, run string, secrets map[string]string, stores []string, mod
 			return fail(err.Error())
 		}
 	}
-	if err := writeSecrets(secrets); err != nil { // ~/.secrets, as Jarvis 1's entrypoint writes it
-		log.Printf("task: ~/.secrets: %v", err)
-	}
 	logPath, outPath := filepath.Join(runs, run+".log"), filepath.Join(runs, run+".output")
 	args, stdin, err := taskCommand(dir, spec, mode, os.Getenv("TASK_PARAMS"))
 	if err != nil {

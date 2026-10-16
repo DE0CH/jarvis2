@@ -290,7 +290,9 @@ func main() {
 	id := approve(p, a)
 	waitState(id, "started", 6*time.Minute)
 	m1 := machineOf(id)
-	expectOnMachine(m1, "grep -c E2E_SECRET /home/claude/.secrets", "1")
+	expectOnMachine(m1, "pull-secrets --exec env | grep -c E2E_SECRET", "1")
+	// the secrets are in the supervisor's RAM only: no ~/.secrets, no private key under ~/.ssh or /run/jarvis2
+	expectOnMachine(m1, "test -e /home/claude/.secrets && echo present || echo absent; grep -rl 'PRIVATE KEY' /home/claude/.ssh /run/jarvis2 2>/dev/null | wc -l", "absent\n0")
 	if held {
 		step("held core: the harness gets the router's settings as before (title, prompt, model) and the repo is cloned")
 		envOf := "tr '\\0' '\\n' < /proc/$(pgrep -f harness-claude | head -1)/environ"
@@ -415,8 +417,8 @@ func main() {
 	if st, _ := session(id)["stores"].([]any); fmt.Sprint(st) != "[e2e e2e-extra e2e-more]" {
 		log.Fatalf("the session's stores after both answers: %v", st)
 	}
-	expectOnMachine(m1, "for i in $(seq 1 30); do grep -q E2E_EXTRA /home/claude/.secrets && grep -q E2E_MORE /home/claude/.secrets && break; sleep 2; done; "+
-		"sleep 6; grep -c E2E_EXTRA /home/claude/.secrets; grep -c E2E_MORE /home/claude/.secrets; grep -c E2E_SECRET /home/claude/.secrets", "1\n1\n1")
+	expectOnMachine(m1, "for i in $(seq 1 30); do pull-secrets --exec env | grep -q E2E_EXTRA && pull-secrets --exec env | grep -q E2E_MORE && break; sleep 2; done; "+
+		"sleep 6; pull-secrets --exec env | grep -c E2E_EXTRA; pull-secrets --exec env | grep -c E2E_MORE; pull-secrets --exec env | grep -c E2E_SECRET", "1\n1\n1")
 	expectNoUnlocks("after the add-stores' pulls")
 
 	if keysCore {
@@ -439,7 +441,7 @@ func main() {
 		step("a key written into a store the session holds: its copy stays as it was until the phone's refresh, which the router " +
 			"asks for at once; once allowed (an unlock for its cert) the machine pulls by itself, and the other keys are untouched")
 		expectOnMachine(m1, "su - claude -c \"printf more2-"+secret+" | jarvis2 put-key e2e-more E2E_MORE --explain 'the e2e more key'\" >/dev/null 2>&1; "+
-			"grep -c more2- /home/claude/.secrets || true", "0")
+			"pull-secrets --exec env | grep -c more2- || true", "0")
 		if q := waitRequestFor(id, 30*time.Second); q == "" {
 			log.Fatal("no refresh asked for the session that holds the written store")
 		}
@@ -447,8 +449,8 @@ func main() {
 		for _, n := range certStores(cert) {
 			unlock(p, n, nonceOf(cert))
 		}
-		expectOnMachine(m1, "for i in $(seq 1 30); do grep -q more2- /home/claude/.secrets && break; sleep 2; done; "+
-			"grep -c more2- /home/claude/.secrets; grep -c E2E_EXTRA /home/claude/.secrets; grep -c E2E_SECRET /home/claude/.secrets", "1\n1\n1")
+		expectOnMachine(m1, "for i in $(seq 1 30); do pull-secrets --exec env | grep -q more2- && break; sleep 2; done; "+
+			"pull-secrets --exec env | grep -c more2-; pull-secrets --exec env | grep -c E2E_EXTRA; pull-secrets --exec env | grep -c E2E_SECRET", "1\n1\n1")
 		expectNoUnlocks("after the refresh's pull")
 		denyRequestsFor(id) // the harness unlocked as the app would; the request itself is done with
 
@@ -457,7 +459,7 @@ func main() {
 	}
 
 	step("downgrade in place: back to [e2e], new keys, the extra secret shredded")
-	expectOnMachine(m1, "su - claude -c 'jarvis2 downgrade --keep e2e' >/dev/null 2>&1 && grep -c E2E_SECRET /home/claude/.secrets && grep -c E2E_EXTRA /home/claude/.secrets || true", "1\n0")
+	expectOnMachine(m1, "su - claude -c 'jarvis2 downgrade --keep e2e' >/dev/null 2>&1 && pull-secrets --exec env | grep -c E2E_SECRET && pull-secrets --exec env | grep -c E2E_EXTRA || true", "1\n0")
 
 	if keysCore {
 		step("a key written into e2e before the pause, its refresh not allowed: the resumed session's carried copy is behind, " +
@@ -485,10 +487,10 @@ func main() {
 	expectOnMachine(m2, "cat /home/claude/artifacts/e2e-marker", "marker-"+secret)
 	expectOnMachine(m2, "cd /home/claude && cat .paseo/e2e-state .openclaw/devices/e2e-state .local/share/opencode/storage/e2e-state && "+
 		"{ test -e .openclaw/gateway.pid && echo pid || echo no-pid; }", "paseo\nopenclaw\nopencode\nno-pid")
-	expectOnMachine(m2, "grep -c E2E_EXTRA /home/claude/.secrets || true", "0")
-	expectOnMachine(m2, "grep -c E2E_SECRET /home/claude/.secrets", "1")
+	expectOnMachine(m2, "pull-secrets --exec env | grep -c E2E_EXTRA || true", "0")
+	expectOnMachine(m2, "pull-secrets --exec env | grep -c E2E_SECRET", "1")
 	if keysCore {
-		expectOnMachine(m2, "grep -c late- /home/claude/.secrets || true", "0")
+		expectOnMachine(m2, "pull-secrets --exec env | grep -c late- || true", "0")
 		if q := waitRequestFor(id, 60*time.Second); q == "" {
 			log.Fatal("the resumed session's copy is behind a write, and no refresh was asked")
 		}
@@ -496,7 +498,7 @@ func main() {
 		for _, n := range certStores(cert) {
 			unlock(p, n, nonceOf(cert))
 		}
-		expectOnMachine(m2, "for i in $(seq 1 30); do grep -q late- /home/claude/.secrets && break; sleep 2; done; grep -c late- /home/claude/.secrets", "1")
+		expectOnMachine(m2, "for i in $(seq 1 30); do pull-secrets --exec env | grep -q late- && break; sleep 2; done; pull-secrets --exec env | grep -c late-", "1")
 		expectNoUnlocks("after the resumed session's refresh")
 	}
 	expectNoUnlocks("after the resume")
@@ -523,7 +525,7 @@ func main() {
 		must2(call(router, "GET", "/api/sessions/"+id+"/cert", nil, &cd))
 		unlock(p, "e2e", nonceOf(cd))
 		waitState(id, "started", 4*time.Minute)
-		expectOnMachine(machineOf(id), "grep -c E2E_SECRET /home/claude/.secrets", "1")
+		expectOnMachine(machineOf(id), "pull-secrets --exec env | grep -c E2E_SECRET", "1")
 		expectNoUnlocks("after the waiting session's pull")
 	}
 	expectExec(id, "echo the rule still holds", "the rule still holds") // grants name the line, not the machine

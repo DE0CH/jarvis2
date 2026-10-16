@@ -10,7 +10,7 @@ package main
 //	jarvis2 put-key STORE KEY [--explain TEXT] < value     the value from stdin (never an argument)
 //	jarvis2 delete-key STORE KEY
 //
-// The session's own ~/.secrets doesn't change: every running session holding the store (this one too) gets the new
+// The session's own copy doesn't change: every running session holding the store (this one too) gets the new
 // value once Deyao allows the refresh the router files (the phone's unlock), and then pulls it by itself (supervisor:
 // refresh-secrets).
 
@@ -22,7 +22,6 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -199,30 +198,18 @@ func putKeyCmd(args []string, del bool) error {
 		return err
 	}
 	verb := map[bool]string{true: "deleted", false: "written"}[del]
-	fmt.Fprintf(os.Stderr, "%s %s in %s (backed up first). Sessions holding %s get it once Deyao allows their refresh in the Jarvis 2 Inbox (asked for %d running session(s)); this session's ~/.secrets changes then too, if it holds the store.\n",
+	fmt.Fprintf(os.Stderr, "%s %s in %s (backed up first). Sessions holding %s get it once Deyao allows their refresh in the Jarvis 2 Inbox (asked for %d running session(s)); this session's supervisor takes it then too, if it holds the store.\n",
 		key, verb, store, store, len(out.RefreshAsked))
 	return nil
 }
 
-// refreshFromRouter: the router's refresh-secrets (an unlock for this machine's cert went through): pull again with the
-// newest cert and rewrite ~/.secrets and the deploy keys, under the same lock as every other writer of them
+// refreshFromRouter: the router's refresh-secrets (an unlock for this machine's cert went through): the supervisor
+// pulls again with the newest cert into its RAM copy (secrets.go), under the same lock as every other pull
 func refreshFromRouter(c *client) {
-	coreKey, err := readTrim(coreKeyPath)
+	n, err := held.reload(c, false, false)
 	if err != nil {
 		log.Printf("refresh-secrets: %v", err)
 		return
 	}
-	n, err := refreshSecrets(func() error {
-		doc, ok := newestCert(c, coreKey, c.me)
-		if !ok {
-			return errors.New("the router has no cert for this machine")
-		}
-		raw, _ := json.Marshal(doc)
-		return os.WriteFile(certPath, raw, 0o644)
-	}, func() (map[string]string, error) { return pullSecrets(c, coreKey, c.me) })
-	if err != nil {
-		log.Printf("refresh-secrets: %v", err)
-		return
-	}
-	log.Printf("refresh-secrets: ~/.secrets rewritten with the stores as they are now (%d keys)", n)
+	log.Printf("refresh-secrets: the supervisor holds the stores as they are now (%d keys)", n)
 }

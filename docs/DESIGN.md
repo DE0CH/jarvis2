@@ -167,7 +167,7 @@ which stores are behind (`stale`, from each store's version: a hash of its keys'
 router asks the phone to refresh, as an Inbox unlock request for each running session holding the store (one batch
 when several), right after a write and after any pull that comes back behind (a resume whose carried copy predates a
 write). Once the phone's unlock for a running machine's cert goes through, the router tells that machine to pull
-again (`refresh-secrets`) and its `~/.secrets` has the store as it is now.
+again (`refresh-secrets`) and its supervisor holds the store as it is now (RAM only).
 
 **What each key is for** is the router's own record (`store-docs.json`, not a secret and in no trust decision): a new
 key name needs its explanation when it is written, the setup session and Deyao (app, web) can edit them, and every
@@ -706,8 +706,8 @@ machine's first second to the kill; then boot goes on and finally execs the harn
 | API proxy | `apiproxy.go` | — | `$JARVIS_URL` for the session's scripts, each call signed as this machine |
 | live transcript sync | `livesync.go` | no | the transcripts to the Storage Box (through the router) for search (output only) |
 | Claude login sync | `claudelogin.go` | no | the session's Claude pair kept in step with the router's (long poll) |
-| secrets refresh | `putkey.go` | no | `refresh-secrets`: pull the cert's stores again |
 | log | `supervisorlog.go` | no | the supervisor log (below) |
+| secrets | `secrets.go`, `deploykeys.go` | no | the session's secrets, in RAM only (below) |
 
 **The guard** is the supervisor's component that checks the commands coming in and protects only the ones that need
 it: anything that can run code in the session or steer its agent. Execs (shell commands) need the holder's
@@ -726,11 +726,27 @@ watch's check) goes back to the default score first (`jarvis2-machine unprotecte
 free spare the keeper. A restarted worker carries on from files in `/run/jarvis2` (the signed final snapshot, the
 worker count, how far the log was pushed).
 
+**Secrets, in RAM only (Deyao, 2026-10-16).** The supervisor alone pulls the session's secrets from the core (sealed
+to this machine, through the router): at boot when boot asks, on the router's `refresh-secrets`, and when a process of
+the session asks it to reload after a cert change (add-store's waiter, a downgrade, which empties the copy if the pull
+fails). It holds exactly what the core sealed for the cert's stores, in its memory and in a memfd its keeper keeps (so
+a restarted worker has them without a new pull); nothing is written to disk: no `~/.secrets`, nothing in
+`/run/jarvis2`, the await logs, the delivery dir or the snapshot. It serves them on a unix socket only the session's
+user (and root) can reach, `/run/jarvis2/secrets.sock`: `pull-secrets --names | --exec CMD | --write FILE` and boot
+ask there. Each request is logged in the supervisor log with its key names (or a count) and the caller's pid and
+command, never a value. It needs no guard check: it carries no instruction, and it serves only what the core sealed.
+The harness's env carries the values (boot builds it from them, RAM only), so `$VAR` works in the agent's commands; a
+process started before a change sees it through `pull-secrets --exec`. The repos' deploy keys stay in RAM too: the
+supervisor's own ssh-agent (`/run/jarvis2/ssh-agent.sock`, read-only to callers, every signature logged with the
+repo and the caller) holds them, and `~/.ssh` has only their public halves, which each repo's SSH alias names
+(`IdentityFile …pub`, `IdentitiesOnly`, `IdentityAgent`). What stays on disk by Deyao's choice: the Claude login
+(`~/.claude/.credentials.json`) and a file a session writes itself with `pull-secrets --write`.
+
 **The supervisor log.** Boot, the keeper and the worker write each log line as JSON (`{at, text}`, the text prefixed
 `boot:` or `supervisor:`) to `/run/jarvis2/supervisor.log` (tmpfs, rotated once pushed); the worker pushes new lines
 to the router every 2 s (`POST /m/supervisor-log`), which keeps the session's log for its whole life and puts it in
 the session's archive on Destroy. Lines name commands, ids, counts and errors, never a command's text, a prompt or a
-secret value; as a second line of defence every `~/.secrets` value of 8 characters or more is replaced by `[secret]`
+secret value; as a second line of defence every secret value the supervisor holds (8 characters or more) is replaced by `[secret]`
 before a line leaves the machine. The app (iPhone and web) shows it under Supervisor log, next to the read-only
 terminal.
 
@@ -772,7 +788,7 @@ Deyao handing a feature a shell, and the session's own allow list is the session
 | The predecessor's state (transcripts, workspace, artifacts, `~/artifacts/on-start`, `.claude` settings and hooks, the allow list, the line keys) | (b) the one snapshot the cert names, signed by the predecessor |
 | An archived snapshot (restore) | (a) its sha256 in the config, plus the old cert (core-signed) and its machine's signature |
 | Repo contents (CLAUDE.md, hooks, skills) | (d) GitHub, for exactly the repos the cert names (a cert whose config names none: the repos of the deploy-key stores in the cert) |
-| Secrets | the cert's stores, sealed to the machine by the core; written to `~/.secrets` only under env-name keys |
+| Secrets | the cert's stores, sealed to the machine by the core; held by the supervisor in RAM only (env-name keys only), served on its socket and put in the harness's env |
 | The Claude login | (d) Anthropic: the router hands the pair of the session's Claude account (DECISIONS 185: one Claude key store per account, `claude-<name>`, the router's own; picked when the session is made and kept for its life, the router's word) over `/m/claude-login` (machine-signed); taken at boot, kept in step by a long poll with the router's refresh protocol (`machine/claudelogin.go`, `router/claudelogin.go`, `router/claudeaccounts.go`); no router write, no grant, no machine-side account check (Deyao, 2026-10-15) |
 | Wakeups, crons | (c) the session's own signed request + the core's attestation; the line records what it delivered (in the snapshot): a wakeup once, a cron once per run and at most every half period |
 | The watchdog's nudge, "continue" after a re-login, "upgraded" after an Upgrade | the image: texts built into it; the router picks when, never what (numbers, or a size: small, medium, large or a doubling past it) |
@@ -841,7 +857,7 @@ store key P + K and the deploy-key stores stay valid: "Core continuity"); a long
   (`lockedStore`); the session's page and the terminal show "Waiting for store X to be unlocked" with Unlock…, a review
   that unlocks exactly the locked stores of the session's core-signed cert, for that cert only. The machine retries every
   2 s for 10 minutes, then starts the session without any secrets (the core seals all of a cert's stores or none; running
-  without them is the lower-privilege state); the unlock then brings them (refresh-secrets rewrites `~/.secrets`).
+  without them is the lower-privilege state); the unlock then brings them (refresh-secrets: the supervisor pulls again).
 
 ## Guarantees
 

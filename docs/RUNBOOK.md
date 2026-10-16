@@ -293,8 +293,8 @@ Claude never adds a repo or allows anything itself: it files a request and Deyao
 - Inside a session: `jarvis2-request add-repo OWNER/NAME --why "…"`, `jarvis2-request grant HOLDER --minutes 5 --why
   "…"`, `jarvis2-request unlock --why "…"`, `jarvis2-request add-store STORE --why "…"`, `jarvis2-request list`
   (`session-image/bin/jarvis2-request`, through the machine's proxy). `add-store` also starts a background
-  `jarvis2-machine await-store STORE`, which pulls the store into `~/.secrets` once the approval lands in the cert
-  (log `~/.jarvis2-await-STORE.log`); before it did, an approved store stayed unpulled (2026-10-12).
+  `jarvis2-machine await-store STORE`, which has the supervisor pull the store (RAM only) once the approval lands in
+  the cert (log `~/.jarvis2-await-STORE.log`); a command then gets it with `pull-secrets --exec CMD`; before it did, an approved store stayed unpulled (2026-10-12).
 
 The reason is required, plain text, ≤ 600 characters. A request (and an approval in the Inbox) goes after 10 minutes (Deyao, 2026-10-12): ask again if it lapsed.
 

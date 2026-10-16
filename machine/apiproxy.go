@@ -1,13 +1,13 @@
 package main
 
 // The session-facing API, machine side. Jarvis 1's session scripts (schedule-wakeup.sh, schedule-cron.sh,
-// lease.py, transcript-search.py, pull-secrets, content-sync, retire-session.sh, …) call `$JARVIS_URL/api/...`
+// lease.py, transcript-search.py, content-sync, retire-session.sh, …) call `$JARVIS_URL/api/...`
 // with Cloudflare Access headers and the session's SESSION_API_TOKEN. In a Jarvis 2 session JARVIS_URL is this
 // proxy (127.0.0.1:7171, served by the supervisor, `jarvis2-machine supervisor`): it drops those headers and forwards each request to
 // the router as /m/api/<rest>, signed with the machine key like every other /m call.
 //
-// Two calls never leave the machine: GET …/secrets (the session's stores, pulled fresh through the core-signed
-// /m/pull-secrets and answered in Jarvis 1's shape) and GET …/changes (the repos' uncommitted/unpushed work).
+// Two calls never leave the machine: GET …/secrets (refused: the supervisor serves the secrets on its own socket,
+// secrets.go) and GET …/changes (the repos' uncommitted/unpushed work).
 //
 // Arming a wakeup or a cron is the session approving the scheduler for itself: after the router accepts it, the
 // proxy puts the scheduler holder on this session's allow list until the wakeup is due + 1 h (a cron: a month or
@@ -57,7 +57,8 @@ func apiProxyHandler(c *client) http.Handler {
 		if !ownSession(w, c, req.PathValue("id")) {
 			return
 		}
-		localSecrets(w, c)
+		// the secrets don't travel over HTTP: the supervisor serves them on its own socket (secrets.go, pull-secrets)
+		writeJSONResp(w, 410, map[string]string{"error": "the session's secrets come from the supervisor: pull-secrets --names | --exec CMD"})
 	})
 	mux.HandleFunc("GET /api/sessions/{id}/changes", func(w http.ResponseWriter, req *http.Request) {
 		if !ownSession(w, c, req.PathValue("id")) {
@@ -171,58 +172,6 @@ func (c *client) signedDo(method, path, escaped, query string, body []byte, cont
 	defer resp.Body.Close()
 	b, err := io.ReadAll(resp.Body)
 	return resp.StatusCode, resp.Header, b, err
-}
-
-// ---- pull-secrets (Jarvis 1's GET /api/sessions/:id/secrets) ----------------------------------------------
-
-func localSecrets(w http.ResponseWriter, c *client) {
-	cert, err := currentCert()
-	if err != nil {
-		writeJSONResp(w, 409, map[string]string{"error": "no valid cert: " + err.Error()})
-		return
-	}
-	coreKey, err := readTrim(coreKeyPath)
-	if err != nil {
-		writeJSONResp(w, 409, map[string]string{"error": err.Error()})
-		return
-	}
-	var doc SignedDoc
-	if err := c.json("POST", "/m/pull-secrets", map[string]string{}, &doc); err != nil {
-		// never the answer's body: only the error the router or core gave
-		writeJSONResp(w, 502, map[string]string{"error": "pull secrets: " + err.Error()})
-		return
-	}
-	secrets, err := openSecretsDoc(coreKey, c.me, &doc)
-	if err != nil {
-		writeJSONResp(w, 502, map[string]string{"error": err.Error()})
-		return
-	}
-	writeJSONResp(w, 200, map[string]any{"ok": true, "environment": strings.Join(cert.Stores, ","), "secrets": secrets})
-}
-
-// openSecretsDoc: the core-signed secrets answer, opened with this machine's key (as pullSecrets, one attempt)
-func openSecretsDoc(coreKey, me string, doc *SignedDoc) (map[string]string, error) {
-	var out struct {
-		Kind    string `json:"kind"`
-		Machine string `json:"machine"`
-		Sealed  struct {
-			E    string `json:"e"`
-			Data string `json:"data"`
-		} `json:"sealed"`
-	}
-	if err := verifyDoc(coreKey, doc, &out); err != nil || out.Kind != "secrets" || out.Machine != me {
-		return nil, fmt.Errorf("the secrets answer isn't core-signed for this machine (%v)", err)
-	}
-	priv, err := loadPrivate()
-	if err != nil {
-		return nil, err
-	}
-	plain, err := openSealed(priv.enc, out.Sealed.E, out.Sealed.Data, "jarvis2/secrets")
-	if err != nil {
-		return nil, fmt.Errorf("the secrets don't decrypt with this machine's key: %w", err)
-	}
-	m := map[string]string{}
-	return m, json.Unmarshal(plain, &m)
 }
 
 // ---- changes (Jarvis 1's GET /api/sessions/:id/changes, archive.REPO_CHANGES_SH) ---------------------------

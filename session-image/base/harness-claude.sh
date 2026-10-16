@@ -10,8 +10,8 @@ SESSION=claude
 export PATH="$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin"
 export HOME=/home/claude
 
-# make the environment's secrets available to claude + every Bash tool it spawns
-[ -f "$HOME/.secrets" ] && { set -a; . "$HOME/.secrets"; set +a; }
+# the session's secrets are already in this env (boot took them from the supervisor; RAM only), so claude and
+# every Bash tool it spawns have them
 
 # Another harness than the Claude-app host: its own launcher. opencode = an OpenRouter model
 # under OpenCode + Paseo; openclaw = claw-code as the agent loop inside an OpenClaw gateway.

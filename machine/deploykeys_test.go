@@ -2,11 +2,15 @@ package main
 
 import (
 	"encoding/base64"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+
+	"golang.org/x/crypto/ssh/agent"
 )
 
 func testKey(t *testing.T) string {
@@ -48,15 +52,21 @@ func TestDeployKeysGiveEachRepoItsOwnKey(t *testing.T) {
 	if err := setupDeployKeys(secrets); err != nil {
 		t.Fatal(err)
 	}
-	// the keys, one per repo, private to the user
+	// the keys, one per repo, in the supervisor's agent; on disk only their public halves
 	for _, n := range []string{"DE0CH__claude-env", "DE0CH__jarvis2"} {
-		fi, err := os.Stat(filepath.Join(home, deployKeyDir, n))
-		if err != nil || fi.Mode().Perm() != 0o600 {
-			t.Fatalf("%s: %v %v", n, err, fi)
+		b, err := os.ReadFile(filepath.Join(home, deployKeyDir, n+".pub"))
+		if err != nil || !strings.HasPrefix(string(b), "ssh-ed25519 ") {
+			t.Fatalf("%s: %v %q", n, err, b)
 		}
 	}
 	if es, _ := os.ReadDir(filepath.Join(home, deployKeyDir)); len(es) != 2 {
 		t.Fatalf("%d key files", len(es))
+	}
+	if out, _ := exec.Command("grep", "-rl", "PRIVATE KEY", home).Output(); len(out) > 0 {
+		t.Fatalf("a private key on disk: %s", out)
+	}
+	if ks, _ := deployAgent.List(); len(ks) != 2 {
+		t.Fatalf("%d keys in the agent", len(ks))
 	}
 	// git sends exactly these repos to their own alias; anything else stays as it was
 	for in, want := range map[string]string{
@@ -84,7 +94,7 @@ func TestDeployKeysGiveEachRepoItsOwnKey(t *testing.T) {
 		}
 		g := string(out)
 		for _, want := range []string{"hostname github.com\n", "user git\n", "identitiesonly yes\n", "stricthostkeychecking true\n",
-			"identityfile " + filepath.Join(home, deployKeyDir, "DE0CH__jarvis2") + "\n", "userknownhostsfile " + filepath.Join(home, githubKnownHosts) + "\n"} {
+			"identityfile " + filepath.Join(home, deployKeyDir, "DE0CH__jarvis2.pub") + "\n", "identityagent " + sshAgentSock + "\n", "userknownhostsfile " + filepath.Join(home, githubKnownHosts) + "\n"} {
 			if !strings.Contains(g, want) {
 				t.Errorf("ssh -G lacks %q", want)
 			}
@@ -100,8 +110,11 @@ func TestDeployKeysGiveEachRepoItsOwnKey(t *testing.T) {
 	if err := setupDeployKeys(secrets); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(filepath.Join(home, deployKeyDir, "DE0CH__jarvis2")); err == nil {
+	if _, err := os.Stat(filepath.Join(home, deployKeyDir, "DE0CH__jarvis2.pub")); err == nil {
 		t.Fatal("the dropped repo's key stayed")
+	}
+	if ks, _ := deployAgent.List(); len(ks) != 1 || ks[0].Comment != "DE0CH/claude-env" {
+		t.Fatalf("the agent after the downgrade: %v", ks)
 	}
 	if got := getURL(t, "https://github.com/DE0CH/jarvis2.git"); got != "https://github.com/DE0CH/jarvis2.git" {
 		t.Fatal("the dropped repo's rewrite stayed:", got)
@@ -122,5 +135,44 @@ func TestCloneURL(t *testing.T) {
 		if got := cloneURL(in); got != want {
 			t.Errorf("%q → %q", in, got)
 		}
+	}
+}
+
+// the supervisor's agent signs with the deploy keys it holds and takes no key from outside
+func TestTheSupervisorsSSHAgent(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+	old := sshAgentSock
+	defer func() { sshAgentSock = old }()
+	sshAgentSock = filepath.Join(t.TempDir(), "a.sock")
+	if err := setupDeployKeys(map[string]string{"GITHUB_DEPLOY_REPO_X": "DE0CH/x", "GITHUB_DEPLOY_KEY_X": testKey(t)}); err != nil {
+		t.Fatal(err)
+	}
+	go serveSSHAgent()
+	var conn net.Conn
+	var err error
+	for i := 0; i < 100; i++ {
+		if conn, err = net.Dial("unix", sshAgentSock); err == nil {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	ac := agent.NewClient(conn)
+	ks, err := ac.List()
+	if err != nil || len(ks) != 1 {
+		t.Fatalf("%v %v", ks, err)
+	}
+	if _, err := ac.Sign(ks[0], []byte("data")); err != nil {
+		t.Fatal(err)
+	}
+	if ac.RemoveAll() == nil {
+		t.Fatal("the agent took a change from a caller")
+	}
+	if ks, _ := deployAgent.List(); len(ks) != 1 {
+		t.Fatal("a caller removed a key")
 	}
 }

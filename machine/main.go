@@ -13,8 +13,8 @@
 //	                           every store and the key NAMES it holds (never a value), to know which store to
 //	                           ask for (stores.go).
 //	jarvis2-machine add-store <name>
-//	                           asks Deyao to add one store to this session; on approval re-pulls the
-//	                           secrets into ~/.secrets.
+//	                           asks Deyao to add one store to this session; on approval the supervisor
+//	                           pulls the secrets again (RAM only).
 //
 // It trusts only what it can check: the core's public key arrives through Fly exec (written by the core at
 // start), the cert and the secrets are core-signed, and the predecessor's snapshot is signed by the
@@ -332,24 +332,25 @@ func prepare() error {
 	}
 	trustLineKeys(cert) // deliver.go: this line's signing keys, for what it asked to be delivered later
 
-	// 3. the secrets, sealed to this machine's encryption key. A store still locked after the wait doesn't stop the
-	// start: the session runs with none of its secrets (the lower-privilege state; the core seals all or nothing) and
-	// gets them when Deyao's unlock goes through (the router's refresh-secrets rewrites ~/.secrets)
-	secrets, err := pullSecrets(c, coreKey, me)
-	if errors.Is(err, errStoresLocked) {
-		log.Printf("%v: starting without secrets; ~/.secrets fills in once the store is unlocked (Unlock… in the app, or `jarvis2-request unlock`)", err)
-		secrets, err = map[string]string{}, nil
-	}
-	if err != nil {
+	// 3. the secrets, sealed to this machine's encryption key: the supervisor pulls them and holds them in RAM
+	// (secrets.go); boot takes them from it for the harness's env. A store still locked after the wait doesn't stop
+	// the start: the session runs with none of its secrets (the lower-privilege state; the core seals all or nothing)
+	// and gets them when Deyao's unlock goes through (the router's refresh-secrets)
+	secrets := map[string]string{}
+	if _, err := askSecrets(secretsReq{Op: "pull"}, 20*time.Minute); errors.Is(err, errStoresLocked) {
+		log.Printf("%v: starting without secrets; the supervisor takes them once the store is unlocked (Unlock… in the app, or `jarvis2-request unlock`)", err)
+	} else if err != nil {
 		return err
+	} else {
+		r, err := askSecrets(secretsReq{Op: "all"}, time.Minute)
+		if err != nil {
+			return err
+		}
+		secrets = r.Secrets
 	}
-	sj, _ := json.Marshal(secrets)
-	log.Printf("secrets ok: %d keys", len(secrets))
+	log.Printf("secrets ok: %d keys (held by the supervisor, in RAM)", len(secrets))
 
-	// 4. repos: each repo's deploy key from its store (SSH, that repo only), then the clones the cert names
-	if err := setupDeployKeys(secrets); err != nil {
-		log.Printf("deploy keys: %v", err)
-	}
+	// 4. repos: each repo's deploy key is in the supervisor's ssh-agent (deploykeys.go), then the clones the cert names
 	cloneRepos(reposToClone(v, secrets))
 	placeImportedTranscripts()     // jarvis1import.go: an import's transcripts, under the working dir's project
 	rearmJarvis1(c, sessionID(me)) // jarvis1import.go: its wakeups and crons, as this line's own requests
@@ -373,7 +374,7 @@ func prepare() error {
 		secrets = maps.Clone(secrets)
 		secrets["CLAUDE_ACCOUNT"] = account // Jarvis 1's entrypoint merges it into ~/.claude.json
 	}
-	env := harnessEnv(clean, v, me, firstMachine, string(sj), secrets)
+	env := harnessEnv(clean, v, me, firstMachine, secrets)
 	if !firstMachine && v.Once.Prompt != "" {
 		home, _ := os.UserHomeDir()
 		os.Remove(filepath.Join(home, ".claude", ".first-prompt-sent")) // the supervisor types the approved resume prompt
@@ -835,18 +836,11 @@ func awaitStore(name string) error {
 		if !hasStore(certStores(c, coreKey, me), name) {
 			continue
 		}
-		n, err := refreshSecrets(func() error {
-			doc, ok := newestCert(c, coreKey, me)
-			if !ok {
-				return errors.New("the router has no cert for this machine")
-			}
-			raw, _ := json.Marshal(doc)
-			return os.WriteFile(certPath, raw, 0o644)
-		}, func() (map[string]string, error) { return pullSecrets(c, coreKey, me) })
+		r, err := askSecrets(secretsReq{Op: "reload"}, 20*time.Minute)
 		if err != nil {
 			return err
 		}
-		fmt.Fprintf(os.Stderr, "added %s: ~/.secrets rewritten (%d keys); run `set -a; . ~/.secrets; set +a` in a shell to load them\n", name, n)
+		fmt.Fprintf(os.Stderr, "added %s: the supervisor holds it now (%d keys); `pull-secrets --exec CMD` runs a command with them\n", name, r.N)
 		return nil
 	}
 	return errors.New("no approval within 1 h")
@@ -889,13 +883,13 @@ func hasStore(stores []string, name string) bool {
 	return false
 }
 
-// secretsLockPath: one writer of ~/.secrets at a time (with the cert file and the deploy keys it implies)
+// secretsLockPath: one pull into the supervisor's copy at a time (with the cert file and the deploy keys it implies)
 func secretsLockPath() string {
 	home, _ := os.UserHomeDir()
 	return filepath.Join(home, ".jarvis2-secrets.lock")
 }
 
-// withSecretsLock: run fn holding the machine-wide lock on ~/.secrets
+// withSecretsLock: run fn holding the machine-wide secrets lock
 func withSecretsLock(fn func() error) error {
 	lock, err := os.OpenFile(secretsLockPath(), os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
@@ -907,32 +901,6 @@ func withSecretsLock(fn func() error) error {
 	}
 	defer syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
 	return fn()
-}
-
-// refreshSecrets: under the lock, take the newest cert (prepare) and pull with it, then write ~/.secrets and the deploy
-// keys. Two waiters (two add-stores approved together) used to pull and write side by side, and the slower one could
-// write an older pull over a newer file; under the lock each pull happens after the previous write, from the router's
-// newest cert at that moment, so the last file written is always the newest.
-func refreshSecrets(prepare func() error, pull func() (map[string]string, error)) (int, error) {
-	n := 0
-	err := withSecretsLock(func() error {
-		if err := prepare(); err != nil {
-			return err
-		}
-		secrets, err := pull()
-		if err != nil {
-			return err
-		}
-		if err := writeSecrets(secrets); err != nil {
-			return err
-		}
-		if err := setupDeployKeys(secrets); err != nil { // a repo's store: its key and rewrites now
-			return err
-		}
-		n = len(secrets)
-		return nil
-	})
-	return n, err
 }
 
 // downgradeSpec: what `downgrade` was asked, before it is checked against the stores this session holds. The
@@ -1021,8 +989,8 @@ func (sp downgradeSpec) keepFor(held []string) ([]string, error) {
 
 // downgrade: keep only the named stores, in place. A new key pair; the core's challenge signed with the old
 // key; the new cert checked; only then the old keys and the secrets of the dropped stores are shredded (the
-// old cert still pulls, but sealed to a key that no longer exists). Under the ~/.secrets lock, so an add-store's
-// waiter neither pulls with the keys being replaced nor writes over the downgraded file; an add-store answered
+// old cert still pulls, but sealed to a key that no longer exists). Under the secrets lock, so an add-store's
+// waiter neither pulls with the keys being replaced nor puts an older pull over the downgraded copy; an add-store answered
 // between the challenge and its answer makes the challenge stale (the core takes only the newest cert), and the
 // downgrade starts again from the new cert, with a new key pair (nothing was kept from the stale try).
 func downgrade(sp downgradeSpec) error {
@@ -1105,21 +1073,11 @@ func downgradeOnce(sp downgradeSpec) error {
 	os.WriteFile(keysPath, pub, 0o644)
 	raw, _ := json.Marshal(fin.Cert)
 	os.WriteFile(certPath, raw, 0o644)
-	c2, err := newClient()
+	r, err := askSecrets(secretsReq{Op: "reload", Drop: true, Held: true}, 20*time.Minute) // the supervisor's RAM copy, at once
 	if err != nil {
-		return err
+		r.N = 0 // locked or empty: nothing kept
 	}
-	secrets, err := pullSecrets(c2, coreKey, c.me)
-	if err != nil {
-		secrets = map[string]string{} // locked or empty: nothing kept
-	}
-	if err := writeSecrets(secrets); err != nil {
-		return err
-	}
-	if err := setupDeployKeys(secrets); err != nil { // a dropped repo store's key and rewrites go
-		return err
-	}
-	fmt.Fprintf(os.Stderr, "downgraded to %v: old keys shredded, ~/.secrets rewritten (%d keys). Values already loaded in running processes stay there until they exit.\n", cert.Stores, len(secrets))
+	fmt.Fprintf(os.Stderr, "downgraded to %v: old keys shredded, the supervisor holds %d keys. Values already loaded in running processes stay there until they exit.\n", cert.Stores, r.N)
 	return nil
 }
 
@@ -1173,26 +1131,6 @@ func sameStores(a, b []string) bool {
 	sort.Strings(x)
 	sort.Strings(y)
 	return strings.Join(x, "\x00") == strings.Join(y, "\x00")
-}
-
-// writeSecrets: ~/.secrets in the format Jarvis 1's entrypoint writes (shell-quoted export lines). A key that isn't
-// an env name is left out (a store's writer isn't vouched for by this machine; the file is sourced by shells).
-func writeSecrets(m map[string]string) error {
-	home, _ := os.UserHomeDir()
-	keys := make([]string, 0, len(m))
-	for k := range m {
-		if !envNameRE.MatchString(k) {
-			log.Printf("~/.secrets: left out a key that isn't an env name (%d bytes)", len(k))
-			continue
-		}
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	var b strings.Builder
-	for _, k := range keys {
-		b.WriteString(k + "='" + strings.ReplaceAll(m[k], "'", `'\''`) + "'\n")
-	}
-	return shredWrite(filepath.Join(home, ".secrets"), []byte(b.String()), 0o600)
 }
 
 // ---- the router client (over Fly's private network; every request signed by this machine) -----------

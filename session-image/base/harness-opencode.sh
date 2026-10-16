@@ -23,7 +23,7 @@ WD="${1:-$HOME/workspace}"
 SESSION=claude
 export HOME=/home/claude
 export PATH="$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin"
-[ -f "$HOME/.secrets" ] && { set -a; . "$HOME/.secrets"; set +a; }
+# the session's secrets are already in this env (boot took them from the supervisor; RAM only)
 
 export PASEO_HOME="$HOME/.paseo"
 export OPENROUTER_API_KEY="${OPENROUTER_API_KEY:-${OPENROUTER_API:-}}"

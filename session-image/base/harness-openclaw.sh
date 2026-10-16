@@ -21,7 +21,7 @@ WD="${1:-$HOME/workspace}"
 SESSION=claude
 export HOME=/home/claude
 export PATH="$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin"
-[ -f "$HOME/.secrets" ] && { set -a; . "$HOME/.secrets"; set +a; }
+# the session's secrets are already in this env (boot took them from the supervisor; RAM only)
 
 MACHINE="${SESSION_ID:-${FLY_MACHINE_ID:-$(hostname)}}"
 WEB_HOST="$MACHINE-s.deyaochen.com"

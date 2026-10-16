@@ -3,26 +3,35 @@ package main
 // Per-repo deploy keys (docs/DESIGN.md "Deploy keys"). A repo's store (github-<repo>, made by the core when Deyao
 // added the repo in Settings) holds two values: GITHUB_DEPLOY_REPO_<SLUG> = "owner/name" and
 // GITHUB_DEPLOY_KEY_<SLUG> = the base64 of an OpenSSH private key that GitHub accepts for that one repo only
-// (read + push). For every such pair in the session's secrets the machine writes:
+// (read + push). The private keys never touch the disk: the supervisor holds them in RAM in its own ssh-agent
+// (sshAgentSock; part of its secrets component, secrets.go), and every signature it makes is logged with the caller.
+// For every such pair in the session's secrets the supervisor sets up:
 //
-//   - the key, ~/.ssh/jarvis2-deploy/<owner>__<name> (0600);
-//   - an SSH host alias github.com-jarvis2-<slug> → github.com with that key only (IdentitiesOnly) and GitHub's
-//     published host keys pinned (StrictHostKeyChecking, its own known_hosts file);
+//   - the key in its ssh-agent, and its PUBLIC half in ~/.ssh/jarvis2-deploy/<owner>__<name>.pub;
+//   - an SSH host alias github.com-jarvis2-<slug> → github.com with that key only (IdentityFile = the public half,
+//     IdentitiesOnly, IdentityAgent = the supervisor's agent) and GitHub's published host keys pinned
+//     (StrictHostKeyChecking, its own known_hosts file);
 //   - git rewrites from https://github.com/<owner>/<name>.git and git@github.com:<owner>/<name>.git to the alias,
 //     so clone, pull and push of that repo go over SSH with its key, with no setup in the session.
 //
 // Nothing else reaches the alias: other repos keep plain HTTPS (no credentials). The set is rewritten whole
-// at boot and after add-store / downgrade, so a dropped store's key and rewrites go with it.
+// whenever the supervisor's secrets change (boot, refresh, add-store, downgrade), so a dropped store's key and
+// rewrites go with it at once.
 
 import (
 	"encoding/base64"
 	"fmt"
 	"log"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
+
+	"golang.org/x/crypto/ssh"
+	"golang.org/x/crypto/ssh/agent"
 )
 
 const (
@@ -92,21 +101,35 @@ func setupDeployKeys(secrets map[string]string) error {
 	os.Chmod(filepath.Join(home, ".ssh"), 0o700)
 	old, _ := os.ReadDir(dir)
 	for _, e := range old {
-		shredWrite(filepath.Join(dir, e.Name()), nil, 0o600)
+		shredWrite(filepath.Join(dir, e.Name()), nil, 0o600) // a key file an earlier image wrote, too
 		os.Remove(filepath.Join(dir, e.Name()))
 	}
+	deployAgent.RemoveAll()
 	if err := os.WriteFile(filepath.Join(home, githubKnownHosts), []byte(strings.Join(githubHostKeys, "\n")+"\n"), 0o644); err != nil {
 		return err
 	}
 	var block strings.Builder
 	block.WriteString(sshConfigBegin + "\n")
 	for _, k := range keys {
-		f := filepath.Join(dir, strings.ReplaceAll(k.Repo, "/", "__"))
-		if err := os.WriteFile(f, k.Key, 0o600); err != nil {
+		priv, err := ssh.ParseRawPrivateKey(k.Key)
+		if err != nil {
+			log.Printf("deploy key for %s: %v; skipped", k.Repo, err)
+			continue
+		}
+		signer, err := ssh.NewSignerFromKey(priv)
+		if err != nil {
+			log.Printf("deploy key for %s: %v; skipped", k.Repo, err)
+			continue
+		}
+		if err := deployAgent.Add(agent.AddedKey{PrivateKey: priv, Comment: k.Repo}); err != nil {
 			return err
 		}
-		fmt.Fprintf(&block, "Host %s\n  HostName github.com\n  User git\n  IdentityFile %s\n  IdentitiesOnly yes\n  UserKnownHostsFile %s\n  StrictHostKeyChecking yes\n",
-			k.Alias, f, filepath.Join(home, githubKnownHosts))
+		f := filepath.Join(dir, strings.ReplaceAll(k.Repo, "/", "__")+".pub")
+		if err := os.WriteFile(f, ssh.MarshalAuthorizedKey(signer.PublicKey()), 0o644); err != nil {
+			return err
+		}
+		fmt.Fprintf(&block, "Host %s\n  HostName github.com\n  User git\n  IdentityFile %s\n  IdentitiesOnly yes\n  IdentityAgent %s\n  UserKnownHostsFile %s\n  StrictHostKeyChecking yes\n",
+			k.Alias, f, sshAgentSock, filepath.Join(home, githubKnownHosts))
 	}
 	block.WriteString(sshConfigEnd + "\n")
 	if err := writeSSHConfig(filepath.Join(home, ".ssh", "config"), block.String()); err != nil {
@@ -169,4 +192,74 @@ func cloneURL(u string) string {
 		}
 	}
 	return u
+}
+
+// ---- the supervisor's ssh-agent ------------------------------------------------------------------------------
+
+var (
+	sshAgentSock = dir + "/ssh-agent.sock"
+	deployAgent  = agent.NewKeyring().(agent.ExtendedAgent)
+)
+
+// loggedAgent: the keyring, with every signature logged (the key's repo and the caller, never the key)
+type loggedAgent struct {
+	agent.ExtendedAgent
+	caller string
+}
+
+func (a loggedAgent) Sign(key ssh.PublicKey, data []byte) (*ssh.Signature, error) {
+	return a.SignWithFlags(key, data, 0)
+}
+
+func (a loggedAgent) SignWithFlags(key ssh.PublicKey, data []byte, flags agent.SignatureFlags) (*ssh.Signature, error) {
+	repo := "?"
+	if ks, err := a.ExtendedAgent.List(); err == nil {
+		for _, k := range ks {
+			if string(k.Marshal()) == string(key.Marshal()) {
+				repo = k.Comment
+			}
+		}
+	}
+	sig, err := a.ExtendedAgent.SignWithFlags(key, data, flags)
+	log.Printf("ssh-agent: signed with the deploy key of %s for %s%s", repo, a.caller, map[bool]string{true: " (refused)", false: ""}[err != nil])
+	return sig, err
+}
+
+// the agent accepts no key from outside: only the supervisor's own secrets put keys in it
+func (a loggedAgent) Add(agent.AddedKey) error   { return errReadOnlyAgent }
+func (a loggedAgent) Remove(ssh.PublicKey) error { return errReadOnlyAgent }
+func (a loggedAgent) RemoveAll() error           { return errReadOnlyAgent }
+func (a loggedAgent) Lock([]byte) error          { return errReadOnlyAgent }
+func (a loggedAgent) Unlock([]byte) error        { return errReadOnlyAgent }
+func (a loggedAgent) Extension(string, []byte) ([]byte, error) {
+	return nil, agent.ErrExtensionUnsupported
+}
+
+var errReadOnlyAgent = fmt.Errorf("the supervisor's ssh-agent takes no changes")
+
+// serveSSHAgent: the agent's socket (0600, user claude; started by supervise)
+func serveSSHAgent() {
+	os.Remove(sshAgentSock)
+	ln, err := net.Listen("unix", sshAgentSock)
+	if err != nil {
+		log.Printf("ssh-agent: %v", err)
+		return
+	}
+	os.Chmod(sshAgentSock, 0o600)
+	for {
+		conn, err := ln.Accept()
+		if err != nil {
+			time.Sleep(time.Second)
+			continue
+		}
+		go func() {
+			defer conn.Close()
+			pid, uid, comm := peerOf(conn)
+			if uid != os.Getuid() && uid != 0 {
+				log.Printf("ssh-agent: refused a caller of uid %d (pid %d %s)", uid, pid, comm)
+				return
+			}
+			agent.ServeAgent(loggedAgent{deployAgent, fmt.Sprintf("pid %d %s", pid, comm)}, conn)
+		}()
+	}
 }

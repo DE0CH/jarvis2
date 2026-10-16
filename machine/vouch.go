@@ -333,7 +333,7 @@ func fetchExceptions(c *client) FormatExceptions {
 
 // harnessEnv: the clean env plus exactly what the cert, the secrets and the format exceptions give.
 // firstMachine: the first machine of a new line (the first prompt and its attachments are its alone).
-func harnessEnv(clean []string, v Vouched, me string, firstMachine bool, secretsJSON string, secrets map[string]string) []string {
+func harnessEnv(clean []string, v Vouched, me string, firstMachine bool, secrets map[string]string) []string {
 	m := map[string]string{}
 	for _, kv := range clean {
 		if k, val, ok := strings.Cut(kv, "="); ok {
@@ -344,7 +344,11 @@ func harnessEnv(clean []string, v Vouched, me string, firstMachine bool, secrets
 	if sid == "" {
 		sid = me
 	}
-	m["SESSION_SECRETS_JSON"] = secretsJSON
+	for k, val := range secrets { // the secrets in the harness's env (RAM only; the supervisor holds them, secrets.go)
+		if envNameRE.MatchString(k) {
+			m[k] = val
+		}
+	}
 	m["SESSION_HARNESS"], m["SESSION_PERMISSION_MODE"] = v.Cert.Options.Harness, certMode(v.Cert)
 	m["SESSION_ID"], m["JARVIS2_SESSION_ID"], m["TUNNEL_ID"] = sid, sid, sid
 	m["JARVIS_URL"], m["SESSION_API_TOKEN"] = "http://"+apiProxyAddr, "jarvis2-local-proxy"
@@ -358,11 +362,6 @@ func harnessEnv(clean []string, v Vouched, me string, firstMachine bool, secrets
 	}
 	if v.Ex.TunnelProof != "" {
 		m["TUNNEL_AGENT_SECRET"] = v.Ex.TunnelProof
-	}
-	for _, k := range []string{"CLAUDE_CREDENTIALS", "CLAUDE_ACCOUNT"} {
-		if s := secrets[k]; s != "" {
-			m[k] = s
-		}
 	}
 	c := v.Config
 	if c.Label != "" {

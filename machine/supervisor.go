@@ -26,7 +26,10 @@ package main
 //	live transcript sync       livesync.go       no       the transcripts to the Storage Box for search (output only)
 //	Claude login sync          claudelogin.go    no       the session's Claude pair kept in step with the router's
 //	log                        supervisorlog.go  no       the supervisor log, pushed to the router (output only)
-//	secrets refresh            putkey.go         no       refresh-secrets: pull the cert's stores again
+//	secrets                    secrets.go,       no       pulls the cert's stores from the core, holds them in RAM
+//	                           deploykeys.go              (never on disk) and serves them over its socket, every
+//	                                                      request logged; the deploy keys in its ssh-agent;
+//	                                                      refresh-secrets pulls again (putkey.go)
 //
 // It is kept out of the OOM killer's reach: `jarvis2-machine supervisor` (the keeper) sets its own oom_score_adj to
 // -1000 through sudo, then runs the worker (`supervisor --worker`, which inherits it) and starts it again whenever it
@@ -63,11 +66,19 @@ func supervisor(worker bool) error {
 		return supervise()
 	}
 	protectFromOOM(os.Getpid())
+	mem, err := newMemfd() // secrets.go: the RAM copy of the secrets, kept across worker restarts
+	if err != nil {
+		log.Printf("secrets memfd: %v (a restarted worker pulls again)", err)
+	}
 	backoff := time.Second
 	for {
 		started := time.Now()
 		cmd := exec.Command("/proc/self/exe", "supervisor", "--worker")
 		cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
+		if mem != nil {
+			cmd.ExtraFiles = []*os.File{mem} // fd 3
+			cmd.Env = append(os.Environ(), secretsFDEnv+"=3")
+		}
 		err := cmd.Run()
 		if time.Since(started) > time.Minute {
 			backoff = time.Second
@@ -144,6 +155,9 @@ func supervise() error {
 	if _, _, err := finalSnapshotSum(); err == nil {
 		frozen.Store(true) // an earlier worker of this machine took the final snapshot: nothing guarded runs again
 	}
+	held.loadHeld()         // secrets.go: what an earlier worker held
+	go serveSecrets(c)      // secrets.go: the session's secrets, RAM only
+	go serveSSHAgent()      // deploykeys.go: the deploy keys, RAM only
 	go pushSupervisorLog(c) // supervisorlog.go
 	workers = newWorkerCount(workersState)
 	go serveWorkerCount(workers) // workers.go: the hook's notifications

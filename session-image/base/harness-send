@@ -15,7 +15,9 @@
 #                                       file; delivery (with retries) is local.
 set -u
 export HOME=/home/claude PATH="/home/claude/.local/bin:/usr/local/bin:/usr/bin:/bin"
-[ -f "$HOME/.secrets" ] && { set -a; . "$HOME/.secrets"; set +a; }
+# the session's secrets, from the supervisor (RAM only), for a direct send: this runs from the supervisor, whose env
+# holds none (--queue only writes a file)
+[ "${1:-}" = "--queue" ] || [ -n "${JARVIS2_SECRETS_IN_ENV:-}" ] || exec env JARVIS2_SECRETS_IN_ENV=1 /usr/local/bin/pull-secrets --exec "$0" "$@"
 INBOX="$HOME/.claude/harness-inbox"
 if pgrep -u "$(id -u)" -f harness-opencode.sh >/dev/null; then HARNESS=opencode
 elif pgrep -u "$(id -u)" -f harness-openclaw.sh >/dev/null; then HARNESS=openclaw

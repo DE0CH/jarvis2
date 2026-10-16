@@ -3,7 +3,7 @@
 # Injected by Jarvis via Fly Machine env:
 #   CLAUDE_CREDENTIALS      contents of ~/.claude/.credentials.json (OAuth; enables remote-control)
 #   CLAUDE_ACCOUNT          minimal ~/.claude.json (oauthAccount + userID)  [optional]
-#   SESSION_SECRETS_JSON    the chosen environment's secrets as a JSON object (-> ~/.secrets + env)
+#   (the secrets)           every key of the session's stores, as its own env var (from the supervisor, RAM only)
 #   SESSION_REPOS           comma-separated git URLs to clone into ~/workspace
 #   SESSION_CONTENT         comma-separated content store names, pulled into ~/content/<store>/ (content-sync)
 #   SESSION_API_PROXY       "1": harness-claude.sh runs claude through api-proxy.js (logs ~/artifacts/api-log)
@@ -18,8 +18,8 @@
 #                           archives + destroys the machine (see one_shot_watch in harness-claude.sh)
 #   SESSION_MODEL           model id (default claude-opus-5-5, see harness-claude.sh)
 # Fly itself sets FLY_MACHINE_ID. jarvis2-machine runs first (machine/main.go): it restores the predecessor's signed
-# snapshot (transcripts placed under the project, ~/.claude.json, ~/workspace, ~/artifacts), pulls the secrets and
-# sets the env, then execs this script; harness-claude.sh then `claude --resume`s the newest transcript.
+# snapshot (transcripts placed under the project, ~/.claude.json, ~/workspace, ~/artifacts), has the supervisor pull
+# the secrets and sets the env, then execs this script; harness-claude.sh then `claude --resume`s the newest transcript.
 set -uo pipefail
 HOME=/home/claude; cd "$HOME"
 # ~/artifacts: anything the session puts (or symlinks) here is archived to the Storage Box by
@@ -27,20 +27,8 @@ HOME=/home/claude; cd "$HOME"
 mkdir -p "$HOME/.claude" "$HOME/workspace" "$HOME/artifacts"
 
 # --- environment secrets ---------------------------------------------------
-# Written shell-quoted so values with spaces/quotes/newlines (Fly tokens, PEM certs) survive
-# `. ~/.secrets`. The old KEY=VALUE format silently dropped any value containing a space.
-if [ -n "${SESSION_SECRETS_JSON:-}" ]; then
-  python3 - <<'PY'
-import json,os,shlex
-d=json.loads(os.environ["SESSION_SECRETS_JSON"])
-p=os.path.expanduser("~/.secrets")
-with open(p,"w") as f:
-    for k,v in d.items():
-        if k.replace("_","").isalnum(): f.write(f"{k}={shlex.quote(str(v))}\n")
-os.chmod(p,0o600)
-PY
-  set -a; . "$HOME/.secrets"; set +a
-fi
+# The secrets are already in this process's env (RAM only): jarvis2-machine boot took them from the supervisor,
+# which holds them and serves them later (`pull-secrets`). Nothing writes them to disk.
 
 # --- secret-store merge conflicts ------------------------------------------
 # When a session is booted from SEVERAL secret stores (jarvis multi-select) that define the SAME

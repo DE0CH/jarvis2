@@ -41,7 +41,7 @@ func legacyMoveStep(p *phone, master *ecdsa.PrivateKey, phoneAgreement string, r
 	id2 := approve(p, a)
 	waitState(id2, "started", 6*time.Minute)
 	m2 := machineOf(id2)
-	expectOnMachine(m2, "grep -c E2E_SECRET /home/claude/.secrets", "1")
+	expectOnMachine(m2, "pull-secrets --exec env | grep -c E2E_SECRET", "1")
 	expectOnMachine(m2, "echo paused-"+secret+" > /home/claude/artifacts/e2e-marker && chown claude /home/claude/artifacts/e2e-marker && echo ok", "ok")
 	wakeAt := time.Now().Add(6 * time.Minute)
 	expectOnMachine(m2, sessionAPI("POST", "/api/sessions/"+id2+"/wakeups", fmt.Sprintf(`{"prompt":"e2e legacy-move wake","at":%d,"name":"e2e-lm"}`, wakeAt.UnixMilli()))+" | grep -c '\"ok\":true'", "1")
@@ -121,7 +121,7 @@ func legacyMoveStep(p *phone, master *ecdsa.PrivateKey, phoneAgreement string, r
 	waitState(id2, "started", 6*time.Minute)
 	note("%s started again (snapshot + secrets)", id2)
 	m2 = machineOf(id2)
-	expectOnMachine(m2, "grep -c E2E_SECRET /home/claude/.secrets", "1")
+	expectOnMachine(m2, "pull-secrets --exec env | grep -c E2E_SECRET", "1")
 	expectOnMachine(m2, "cat /home/claude/artifacts/e2e-marker", "paused-"+secret)
 	wakeupBug := false
 	for deadline := time.Now().Add(5 * time.Minute); !strings.Contains(readFile(logB), `[wakeup] `+id2+` "e2e-lm" delivered`); time.Sleep(2 * time.Second) {
@@ -175,7 +175,7 @@ func legacyMoveStep(p *phone, master *ecdsa.PrivateKey, phoneAgreement string, r
 	denyRequestsFor(id)
 	waitState(id, "started", 6*time.Minute)
 	expectOnMachine(machineOf(id), "cat /home/claude/artifacts/e2e-marker", "running-"+secret)
-	expectOnMachine(machineOf(id), "grep -c E2E_SECRET /home/claude/.secrets", "1")
+	expectOnMachine(machineOf(id), "pull-secrets --exec env | grep -c E2E_SECRET", "1")
 	note("%s resumed in %s (one unlock), snapshot and secrets back", id, time.Since(t).Round(time.Second))
 	expectNoUnlocks("at the end")
 	_ = movedAt

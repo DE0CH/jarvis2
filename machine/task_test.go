@@ -139,8 +139,8 @@ exit 0`})
 	if strings.Contains(string(disk), "s3cr3t") {
 		t.Fatal("the log on disk keeps the secret")
 	}
-	if b, _ := os.ReadFile(filepath.Join(home, ".secrets")); !strings.Contains(string(b), "API_KEY='s3cr3t-value'") {
-		t.Fatal("~/.secrets not written")
+	if _, err := os.Stat(filepath.Join(home, ".secrets")); err == nil {
+		t.Fatal("~/.secrets written: secrets stay in RAM")
 	}
 	t.Setenv("PARAM_FAIL", "true")
 	res = doRun("job", "r2", secrets, nil, "auto")

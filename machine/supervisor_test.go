@@ -90,12 +90,13 @@ func TestUnprotectedCommand(t *testing.T) {
 }
 
 // the supervisor log: boot's and the supervisor's lines, pushed once each (also across a worker restart), with any
-// ~/.secrets value replaced, rotated once pushed
+// value the supervisor holds replaced, rotated once pushed
 func TestSupervisorLogPush(t *testing.T) {
 	d := t.TempDir()
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	os.WriteFile(filepath.Join(home, ".secrets"), []byte("A='hunter2hunter2'\nB='it'\\''s a long one'\nC=short\n"), 0o600)
+	t.Setenv("HOME", t.TempDir()) // held.set rewrites the deploy keys under $HOME
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+	held.set(map[string]string{"A": "hunter2hunter2", "B": "it's a long one", "C": "short"})
+	defer held.set(map[string]string{})
 	oldP, oldS, oldR := supervisorLogPath, supervisorLogSent, supervisorLogRoll
 	defer func() { supervisorLogPath, supervisorLogSent, supervisorLogRoll = oldP, oldS, oldR }()
 	supervisorLogPath, supervisorLogSent, supervisorLogRoll = filepath.Join(d, "s.log"), filepath.Join(d, "s.sent"), 400
@@ -140,14 +141,6 @@ func TestSupervisorLogPush(t *testing.T) {
 	}
 	if st, err := os.Stat(supervisorLogPath); err == nil && st.Size() > 400 {
 		t.Fatalf("not rotated: %d bytes", st.Size())
-	}
-}
-
-func TestParseSecrets(t *testing.T) {
-	got := parseSecrets("A='x y'\nB='it'\\''s'\nC=plain\nD='multi\nline'\nE=\"dq\"\n")
-	want := []string{"x y", "it's", "plain", "multi\nline", "dq"}
-	if strings.Join(got, "|") != strings.Join(want, "|") {
-		t.Fatalf("%q", got)
 	}
 }
 
