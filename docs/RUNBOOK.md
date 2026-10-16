@@ -92,12 +92,13 @@ The moment:
 5. One commit: `MOVE_AT` (a few minutes ahead) in `k8s/control/apps/router/router.yaml`, `CORE_URL` → core-green and
    `NEXT_CORE_URL` → core-blue, `k8s/control/apps/core/active.txt` = green. At `MOVE_AT` the move runs as the table below
    shows; the old routers proxy to the new one from then on.
-6. Right after `MOVED`: the control box's cloudflared to 2 and the old box's to 0 (one commit).
+6. Right after `MOVED`: the control box's cloudflared to 2 and the old box's to 0 (one commit), and `keys/box-next.pub` →
+   `keys/box.pub` BEFORE Deyao Recovers: the app checks the core it sets up against `keys/box.pub` on GitHub's main.
 7. **Deyao Recovers** in the app (the ordinary Reset-or-Recover page, now on the control box's empty core). Until then
    the core is empty: running sessions go on (the table), but anything that needs the core waits: a store pull or
    add-store, a resume, a new session. After the Recover the router takes production's sessions over (DECISIONS 184):
    paused ones at once (their first resume waits on one unlock it files), running ones at their next pause.
-8. After: `infra/cloudflare.py --move-off`; `keys/box-next.pub` → `keys/box.pub`; `backup-read-key.py policies` (drops
+8. After: `infra/cloudflare.py --move-off`; `backup-read-key.py policies` (drops
    the old box's read key); the old box deleted a day later with `k8s/apps`, `k8s/bootstrap`, `k8s/secrets`,
    `k8s/flux/sync.yaml`, `infra/cloud-init.sh`'s single-box path and the bridges.
 
