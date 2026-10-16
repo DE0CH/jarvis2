@@ -247,7 +247,7 @@ type gateWriter struct {
 // with a bare 502 and nothing in the logs said where it came from). Error bodies carry messages, not values; Alloy
 // also scrubs secret shapes before a line leaves the box.
 func (w *gateWriter) logFailure(req *http.Request) {
-	if w.code >= 500 {
+	if w.code >= 500 && req.URL.Path != "/healthz" { // the uptime probe's 503 (core empty) is its own alert
 		log.Printf("[5xx] %s %s: %d %s", req.Method, req.URL.Path, w.code, strings.TrimSpace(string(w.head)))
 	}
 }
