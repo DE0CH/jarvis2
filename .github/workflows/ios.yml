@@ -76,7 +76,9 @@ jobs:
   simulator:
     needs: compile
     runs-on: xcode-27
-    timeout-minutes: 150
+    # a hung UI test must not hold the workflow's concurrency slot for long (passing runs take 54-73 min, failing ones
+    # up to 100)
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -151,6 +153,10 @@ jobs:
             grep -q "TEST EXECUTE SUCCEEDED\|\*\* TEST SUCCEEDED" test-$a.log || ok=1
           done
           exit $ok
+      - name: Failures as annotations (readable without signing in)
+        if: failure()
+        run: |
+          grep -hE "error: .*(XCTAssert|failed|Fail)" test-*.log 2>/dev/null | sed -E 's/.*error: //' | head -40 | while IFS= read -r l; do echo "::error::$l"; done || true
       - name: Export results
         if: always()
         run: |
