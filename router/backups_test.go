@@ -94,3 +94,61 @@ func TestBackupsSignatureOnHetzner(t *testing.T) {
 	}
 	t.Logf("%d backup objects readable", len(objs))
 }
+
+// 2026-10-16: the bucket's store (Hetzner fsn1) was down during a Recover; an export the app saved earlier is served
+// instead, only while the bucket fails, and marked as such
+func TestBackupsFallbackWhileTheBucketFails(t *testing.T) {
+	down := true
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		if down {
+			w.WriteHeader(503)
+			fmt.Fprint(w, "<Error><Code>ServiceUnavailable</Code></Error>")
+			return
+		}
+		fmt.Fprint(w, `<ListBucketResult><IsTruncated>false</IsTruncated></ListBucketResult>`)
+	}))
+	defer s.Close()
+	for k, v := range map[string]string{"BACKUP_READ_ACCESS_KEY": "ak", "BACKUP_READ_SECRET_KEY": "sk", "BACKUP_ENDPOINT": s.URL, "BACKUP_BUCKET": "bkt"} {
+		t.Setenv(k, v)
+	}
+	r := newTestRouter(t)
+	h := r.Handler()
+	do := func(method, path, body string) (int, map[string]any) {
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest(method, path, strings.NewReader(body)))
+		var m map[string]any
+		json.Unmarshal(rec.Body.Bytes(), &m)
+		return rec.Code, m
+	}
+	if code, m := do("GET", "/api/backups", ""); code != 502 || !strings.Contains(fmt.Sprint(m["error"]), "ServiceUnavailable") {
+		t.Fatalf("no fallback: got %d %v", code, m)
+	}
+	for _, bad := range []string{`{}`, `{"format":"jarvis2-backup-export","version":1,"objects":[]}`,
+		`{"format":"jarvis2-backup-export","version":1,"objects":[{"key":"etc/passwd.json","body":"x"}]}`} {
+		if code, _ := do("POST", "/api/backups/fallback", bad); code != 400 {
+			t.Fatalf("%s: got %d", bad, code)
+		}
+	}
+	exp := `{"format":"jarvis2-backup-export","version":1,"bucket":"bkt","fetchedAt":"2026-10-14T03:19:04Z","setupKey":"k","objects":[{"key":"stores/a.json","body":"{\"doc\":\"a\",\"sig\":\"x\"}"}]}`
+	if code, m := do("POST", "/api/backups/fallback", exp); code != 200 || m["objects"] != float64(1) {
+		t.Fatalf("keep: got %d %v", code, m)
+	}
+	code, m := do("GET", "/api/backups", "")
+	if code != 200 || m["fallback"].(map[string]any)["fetchedAt"] != "2026-10-14T03:19:04Z" {
+		t.Fatalf("fallback: got %d %v", code, m)
+	}
+	if o := m["objects"].([]any)[0].(map[string]any); o["key"] != "stores/a.json" || o["body"] != `{"doc":"a","sig":"x"}` {
+		t.Fatalf("changed on the way: %v", o)
+	}
+	down = false // the bucket answers again: it wins over the fallback
+	if code, m := do("GET", "/api/backups", ""); code != 200 || m["fallback"] != nil {
+		t.Fatalf("bucket back: got %d %v", code, m)
+	}
+	down = true
+	if code, _ := do("DELETE", "/api/backups/fallback", ""); code != 200 {
+		t.Fatal("delete")
+	}
+	if code, _ := do("GET", "/api/backups", ""); code != 502 {
+		t.Fatalf("after delete: got %d", code)
+	}
+}

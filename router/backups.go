@@ -16,12 +16,15 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"encoding/xml"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -198,9 +201,89 @@ func (r *Router) registerBackups(app func(string, http.HandlerFunc)) {
 		}
 		objs, err := b.all()
 		if err != nil {
+			if f := r.backupFallback(); f != nil {
+				log.Printf("GET /api/backups: the bucket failed (%v): serving the fallback export of %s", err, f.FetchedAt)
+				writeJSON(w, 200, map[string]any{"bucket": f.Bucket, "objects": f.Objects,
+					"fallback": map[string]string{"fetchedAt": f.FetchedAt, "reason": err.Error()}})
+				return
+			}
+			log.Printf("GET /api/backups: %v", err)
 			writeJSON(w, 502, map[string]string{"error": err.Error()})
 			return
 		}
 		writeJSON(w, 200, map[string]any{"bucket": b.bucket, "objects": objs})
 	})
+	// A fallback for when the bucket can't be read (2026-10-16: Hetzner's fsn1 Object Storage outage blocked a
+	// Recover): an export the app saved earlier (Settings → Encrypted backup, format jarvis2-backup-export), served by
+	// GET /api/backups only while the bucket fails. It adds no trust: the app checks every object's signature against
+	// keys/setup.pub as it does for the bucket's, and the router could always serve an older version anyway.
+	app("POST /api/backups/fallback", func(w http.ResponseWriter, req *http.Request) {
+		b, _ := io.ReadAll(io.LimitReader(req.Body, 16<<20))
+		var f backupExport
+		if err := json.Unmarshal(b, &f); err != nil {
+			writeJSON(w, 400, map[string]string{"error": "not an export: " + err.Error()})
+			return
+		}
+		if err := f.check(); err != nil {
+			writeJSON(w, 400, map[string]string{"error": err.Error()})
+			return
+		}
+		if err := writeFileAtomic(filepath.Join(r.cfg.DataDir, backupFallbackFile), b); err != nil {
+			writeJSON(w, 500, map[string]string{"error": err.Error()})
+			return
+		}
+		log.Printf("backups: a fallback export of %s is kept (%d objects)", f.FetchedAt, len(f.Objects))
+		writeJSON(w, 200, map[string]any{"ok": true, "fetchedAt": f.FetchedAt, "objects": len(f.Objects)})
+	})
+	app("DELETE /api/backups/fallback", func(w http.ResponseWriter, req *http.Request) {
+		err := os.Remove(filepath.Join(r.cfg.DataDir, backupFallbackFile))
+		if err != nil && !os.IsNotExist(err) {
+			writeJSON(w, 500, map[string]string{"error": err.Error()})
+			return
+		}
+		writeJSON(w, 200, map[string]bool{"ok": true})
+	})
+}
+
+const backupFallbackFile = "backups-fallback.json"
+
+// backupExport: the app's saved copy of the bucket (ios CoreSetup.exportFormat, tools/decrypt-backup.py)
+type backupExport struct {
+	Format    string         `json:"format"`
+	Version   int            `json:"version"`
+	Bucket    string         `json:"bucket"`
+	FetchedAt string         `json:"fetchedAt"`
+	Objects   []backupObject `json:"objects"`
+}
+
+func (f *backupExport) check() error {
+	if f.Format != "jarvis2-backup-export" || f.Version != 1 {
+		return fmt.Errorf("not a jarvis2-backup-export version 1 file")
+	}
+	if len(f.Objects) == 0 {
+		return fmt.Errorf("the export holds no objects")
+	}
+	for _, o := range f.Objects {
+		ok := false
+		for _, p := range []string{"stores/", "keys/", "sensitive/"} {
+			ok = ok || strings.HasPrefix(o.Key, p)
+		}
+		if !ok || !strings.HasSuffix(o.Key, ".json") || o.Body == "" {
+			return fmt.Errorf("not a backup object: %q", o.Key)
+		}
+	}
+	return nil
+}
+
+// backupFallback: the kept export, or nil
+func (r *Router) backupFallback() *backupExport {
+	b, err := os.ReadFile(filepath.Join(r.cfg.DataDir, backupFallbackFile))
+	if err != nil {
+		return nil
+	}
+	var f backupExport
+	if json.Unmarshal(b, &f) != nil || f.check() != nil {
+		return nil
+	}
+	return &f
 }

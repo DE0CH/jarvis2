@@ -407,6 +407,8 @@ var callRules = map[string]callRule{
 	"POST /api/approvals/{id}/respond":          callNo,     // the Inbox
 	"GET /api/auth/start":                       callNo,     // hands out Deyao's Access login (a jarvis2:// redirect carrying it)
 	"GET /api/backups":                          callStatus, // every store's sealed backup
+	"POST /api/backups/fallback":                callBody,   // an export the app saved, served only while the bucket fails
+	"DELETE /api/backups/fallback":              callBody,
 	"DELETE /api/claude-accounts/{store}":       callBody,
 	"GET /api/claude-accounts":                  callBody,
 	"GET /api/claude-accounts/{store}/usage":    callBody,
