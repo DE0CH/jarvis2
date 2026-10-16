@@ -7,7 +7,7 @@ metadata: { name: cloudflared, namespace: jarvis2-edge }
 # the new one has registered its connections (/ready); on SIGTERM cloudflared stops taking new requests and drains
 # for its --grace-period before it exits.
 spec:
-  replicas: 2
+  replicas: 0
   minReadySeconds: 5
   strategy: { type: RollingUpdate, rollingUpdate: { maxUnavailable: 0, maxSurge: 1 } }
   selector: { matchLabels: { app: cloudflared } }

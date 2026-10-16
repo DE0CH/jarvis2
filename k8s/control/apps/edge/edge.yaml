@@ -10,7 +10,7 @@ metadata: { name: cloudflared, namespace: jarvis2-edge }
 spec:
   # 0 until the move (RUNBOOK "Moving to the two boxes"): a connector here joins the live tunnel at once, and before
   # the move this box's router can only proxy to the old box, which needs the Network and the old router's NodePort.
-  replicas: 0
+  replicas: 2
   minReadySeconds: 5
   strategy: { type: RollingUpdate, rollingUpdate: { maxUnavailable: 0, maxSurge: 1 } }
   selector: { matchLabels: { app: cloudflared } }
