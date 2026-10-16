@@ -1,15 +1,10 @@
-# rehearsal-box.sh — sourced by infra/rehearse-recover.sh and infra/phone-replica.sh: a throwaway Jarvis 2 box built the
-# way production is (infra/cloudflare.py, infra/create.sh, infra/cloud-init.sh, Flux applying ./k8s/apps at a pinned
-# commit with the production images), in the Hetzner project "runners", never touching production. See those
-# scripts' headers for what each one tests, and docs/RUNBOOK.md "Rehearsing Recover" / "The phone replica".
+# rehearsal-box.sh — sourced by infra/rehearse-recover.sh: a throwaway Jarvis 2 box built the way production is
+# (infra/cloudflare.py, infra/create.sh, infra/cloud-init.sh, Flux applying ./k8s/apps at a pinned commit with the
+# production images), in the Hetzner project "runners", never touching production. See that script's header for what
+# it tests, and docs/RUNBOOK.md "Rehearsing Recover".
 #
-# The caller sets MODE before sourcing:
-#   rehearse   one Access app on the hostname whose only policy is the service token NAME; the router runs
-#              NO_ACCESS=1 (the test client can't hold Deyao's email login), so the edge is the only gate
-#   replica    as production: the hostname for one email (REHEARSAL_EMAIL, a real Access one-time-PIN login, the
-#              bot's mailbox) and NAME.deyaochen.com/setup for the service token; the router checks both JWTs, with
-#              ALLOWED_EMAIL = that email
-# Both: MACHINE_URL → the peer NAME, BACKUP_BUCKET → a bucket of its own, RECORDS_OFF=1 and Discord off (no Storage
+# One Access app on the hostname whose only policy is the service token NAME; the router runs NO_ACCESS=1 (the test
+# client can't hold Deyao's email login), so the edge is the only gate. MACHINE_URL → the peer NAME, BACKUP_BUCKET → a bucket of its own, RECORDS_OFF=1 and Discord off (no Storage
 # Box or Discord keys on a test box), no k8s/secrets Kustomization (encrypted to production's age key); the router's
 # backup read key is the admin S3 key, in user-data only (a narrowed one is Console-only), and its FLY_READ_TOKEN a
 # fresh read-only narrowing of JARVIS2_FLY_TOKEN (infra/fly-read-token.sh), as production's. All of it rides in the box's
@@ -23,8 +18,8 @@
 # hostname, Access apps, service token and bucket are all named NAME = <base>-<run id> (the box also carries the label
 # rehearsal-base=<base>). A run refuses to start while another run of the same base has a server, bucket or tunnel
 # (a run in flight, or one's leftovers: `<script> teardown <run id>` removes exactly that run's), and teardown only
-# ever removes its own run's resources. (Two parallel replicas with one shared name each deleted the other's token,
-# PAT and bucket, 2026-10-13.)
+# ever removes its own run's resources. (Two parallel runs with one shared name each deleted the other's token and
+# bucket, 2026-10-13.)
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BASE="${REHEARSAL_NAME:-jarvis2-rehearsal}"
 case "$BASE" in jarvis2-rehearsal*) ;; *) echo "REHEARSAL_NAME must start with jarvis2-rehearsal"; exit 2 ;; esac
@@ -103,8 +98,7 @@ teardown() {
     sleep 5
   done
   FLY_API_TOKEN="$JARVIS2_FLY_TOKEN" flyctl wireguard remove jarvis2-370 "$NAME" >/dev/null 2>&1 && echo "WireGuard peer $NAME removed"
-  # the session machines the rehearsal's cores started (each machine names its core: JARVIS2_CORE_KEY); the
-  # replica's cores are learned from the box itself while it runs (cores file)
+  # the session machines the rehearsal's cores started (each machine names its core: JARVIS2_CORE_KEY; cores file)
   if [ -s "$W/cores" ]; then
     FLY_API_TOKEN="$JARVIS2_FLY_TOKEN" flyctl machines list -a jarvis2-sessions --json 2>/dev/null | python3 -c "
 import json,sys
@@ -135,16 +129,12 @@ PY
 # prepare: Cloudflare, the bucket, the core's Fly token, the box's Flux sync and Secrets, the env for setup.py
 prepare() {
   REF="${REHEARSAL_REF:-$(git -C "$ROOT" ls-remote https://github.com/DE0CH/jarvis2 refs/heads/main | cut -f1)}"
-  echo "$MODE $NAME: https://$HOST/, bucket $BUCKET, Flux at commit $REF"
+  echo "rehearsal $NAME: https://$HOST/, bucket $BUCKET, Flux at commit $REF"
   refuse_if_others
 
-  step "Cloudflare: tunnel, hostname, Access, service token ($NAME, $MODE)"
-  if [ "$MODE" = replica ]; then
-    REHEARSAL="$NAME" REHEARSAL_EMAIL="${REHEARSAL_EMAIL:?}" python3 "$ROOT/infra/cloudflare.py" "$W/cloudflare.env"
-  else
-    REHEARSAL="$NAME" python3 "$ROOT/infra/cloudflare.py" "$W/cloudflare.env"
-  fi
-  set -a; . "$W/cloudflare.env"; set +a   # SETUP_ACCESS_ID/SECRET, TUNNEL_TOKEN (+ APP_AUD, SETUP_AUD); not printed
+  step "Cloudflare: tunnel, hostname, Access, service token ($NAME)"
+  REHEARSAL="$NAME" python3 "$ROOT/infra/cloudflare.py" "$W/cloudflare.env"
+  set -a; . "$W/cloudflare.env"; set +a   # SETUP_ACCESS_ID/SECRET, TUNNEL_TOKEN; not printed
 
   step "the bucket $BUCKET (versioned, as production's)"
   python3 - "$BUCKET" <<'PY'
@@ -168,14 +158,6 @@ PY
   step "the core's Fly token (narrowed as production's, expiring in 6 h)"
   FLY_TOKEN_HOURS=6 bash "$ROOT/infra/fly-token.sh" "$W/fly.tok"
 
-  local access_env
-  if [ "$MODE" = replica ]; then
-    access_env="                    - { name: ACCESS_APP_AUD, value: \"$APP_AUD\" }
-                    - { name: ACCESS_SETUP_AUD, value: \"$SETUP_AUD\" }
-                    - { name: ALLOWED_EMAIL, value: \"$REHEARSAL_EMAIL\" }"
-  else
-    access_env="                    - { name: NO_ACCESS, value: \"1\" }"
-  fi
   # the box's Flux sync: production's ./k8s/apps at commit REF, with the test's router env (no k8s/secrets)
   cat > "$W/sync.yaml" <<EOF
 apiVersion: source.toolkit.fluxcd.io/v1
@@ -214,7 +196,7 @@ spec:
                     - { name: BACKUP_BUCKET, value: "$BUCKET" }
                     - { name: RECORDS_OFF, value: "1" }
                     - { name: DISCORD_SESSION_CHANNELS, value: "off" }
-$access_env
+                    - { name: NO_ACCESS, value: "1" }
     - target: { kind: Deployment, name: core, namespace: jarvis2-core }
       patch: |
         apiVersion: apps/v1
@@ -237,24 +219,6 @@ $access_env
         spec:
           replicas: 2
 EOF
-  # REHEARSAL_CORE_IMAGE: the box runs that core instead of the pinned one (the phone replica runs the core main
-  # builds while a core change waits for Deyao: jarvis2/core-pin hold), as one more documented patch
-  if [ -n "${REHEARSAL_CORE_IMAGE:-}" ]; then
-    cat >> "$W/sync.yaml" <<EOF
-    - target: { kind: Deployment, name: core, namespace: jarvis2-core }
-      patch: |
-        apiVersion: apps/v1
-        kind: Deployment
-        metadata: { name: core, namespace: jarvis2-core }
-        spec:
-          template:
-            spec:
-              containers:
-                - name: core
-                  image: "$REHEARSAL_CORE_IMAGE"
-EOF
-    echo "the core: $REHEARSAL_CORE_IMAGE (not the pinned one)"
-  fi
   # the router's read-only Fly token (budget cap, Also on Fly, the Machines tab), as production's router has it
   "$ROOT/infra/fly-read-token.sh" "$W/fly-read" >/dev/null
   (umask 077; FLY_READ_FILE="$W/fly-read" python3 - > "$W/extra.yaml" <<'PY'

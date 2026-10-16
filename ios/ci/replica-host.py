@@ -1,24 +1,25 @@
 #!/usr/bin/env python3
-"""The phone replica's host helper (replica.yml): what a person and the setup session do around the phone, served to
-the UI test (ReplicaUITests) on 127.0.0.1:18300.
+"""The phone replica's host helper (ios.yml job `replica`): what a person and the setup session do around the phone,
+served to the UI test (ReplicaUITests) on 127.0.0.1:18300.
 
   GET /faceid/match?for=N   Face ID matches for the next N seconds (each prompt that appears is matched)
   GET /faceid/nomatch       the next prompt fails (a face that isn't enrolled): no match is sent, and a nomatch every
                             1.5 s for 30 s (or until /faceid/match), so the prompt fails whenever it comes up
-  GET /relay?msg=M          M to the setup session (infra/phone-replica.sh) through the piping relay; its answer back
+  GET /relay?msg=M          M to the setup session (HANDLER M, ios/ci/replica-setup.sh, on this runner); its stdout back
   GET /log?msg=M            a line in this helper's log
   GET /memwarn              the simulator's memory warning (Debug → Simulate Memory Warning)
   GET /backup-open?kit=K    the app's saved encrypted backup (its tmp/backups/*.json) opened offline with this run's
-                            throwaway kit by tools/decrypt-backup.py (checked against keys/setup.pub): "ok <store>,…"
+                            throwaway kit by tools/decrypt-backup.py (checked against setup.pub in JARVIS2_KEYS_DIR, the
+                            run's throwaway keys; else keys/): "ok <store>,…"
                             (a sensitive store ends in *; no values), or why not
 
-  (transitions.yml runs it too, with RELAY_URL "-": no relay there)
+  (transitions.yml runs it too, with HANDLER "-": no setup session there)
 
-  replica-host.py UDID RELAY_URL     (RELAY_URL: https://ppng.io/<random>; /req and /resp under it)
+  replica-host.py UDID HANDLER
 """
-import glob, http.server, json, os, subprocess, sys, tempfile, threading, time, urllib.parse, urllib.request
+import glob, http.server, json, os, subprocess, sys, tempfile, threading, time, urllib.parse
 
-UDID, RELAY = sys.argv[1], sys.argv[2].rstrip("/")
+UDID, HANDLER = sys.argv[1], sys.argv[2]
 state = {"until": 0.0, "fail_until": 0.0}
 lock = threading.Lock()
 
@@ -42,9 +43,9 @@ def matcher():
 
 
 def relay(msg):
-    req = urllib.request.Request(RELAY + "/req", data=msg.encode(), method="POST")
-    urllib.request.urlopen(req, timeout=600).read()
-    return urllib.request.urlopen(RELAY + "/resp", timeout=900).read().decode()
+    if HANDLER == "-":
+        return "no setup session here"
+    return subprocess.run([HANDLER, msg], capture_output=True, text=True, timeout=900).stdout.strip()
 
 
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -58,7 +59,7 @@ def backup_open(kit):
         return f"no saved backup in {data}/tmp/backups"
     out = os.path.join(tempfile.mkdtemp(), "plain.json")
     p = subprocess.run([sys.executable, os.path.join(REPO, "tools", "decrypt-backup.py"), files[-1], "--kit-file", "-",
-                        "--setup-pub", os.path.join(REPO, "keys", "setup.pub"), "--out", out], input=kit, capture_output=True, text=True)
+                        "--setup-pub", os.path.join(os.environ.get("JARVIS2_KEYS_DIR") or os.path.join(REPO, "keys"), "setup.pub"), "--out", out], input=kit, capture_output=True, text=True)
     if p.returncode != 0:
         return f"decrypt-backup exit {p.returncode}: {p.stderr.strip()[-400:]}"
     with open(out) as f:

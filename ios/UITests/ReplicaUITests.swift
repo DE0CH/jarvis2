@@ -1,14 +1,13 @@
 import XCTest
 
-/// The phone replica (infra/phone-replica.sh, .github/workflows/replica.yml): the RELEASE build of the native app on the
-/// simulator matching Deyao's iPhone, against a real throwaway box (its own Cloudflare tunnel + Access login, core,
-/// router, backups) and real Fly sessions, every flow tapped as a person would. Face ID is enrolled on the simulator and
-/// each match or failure is sent by the runner (ios/ci/replica-host.py on 127.0.0.1:18300), which also relays to the
-/// setup session (the Access login code from the bot's mailbox; "reset done" → the stores are written; "session-file" →
-/// the image attached on New session is on the session's machine). A step fails on
-/// a blank screen, a stuck state (a session not running within its time) or a broken transition.
+/// The phone replica (ios.yml job `replica`): the RELEASE build of the native app on the simulator matching Deyao's
+/// iPhone, against a real throwaway Jarvis 2 on the runner (ios/ci/replica-stack.sh: this commit's core and router,
+/// backups) and real Fly sessions, every flow tapped as a person would. Face ID is enrolled on the simulator and each
+/// match or failure is sent by the runner (ios/ci/replica-host.py on 127.0.0.1:18300), which also passes messages to the
+/// setup session's part on the same runner (ios/ci/replica-setup.sh: "reset done" → the stores are written;
+/// "session-file" → the image attached on New session is on the session's machine). A step fails on a blank screen, a
+/// stuck state (a session not running within its time) or a broken transition.
 final class ReplicaUITests: JarvisUITestCase {
-  let safari = XCUIApplication(bundleIdentifier: "com.apple.SafariViewService")
   var kit = ""
 
   func must(_ ok: Bool) throws { if !ok { throw XCTSkip("stopping: an earlier step failed") } }
@@ -30,38 +29,12 @@ final class ReplicaUITests: JarvisUITestCase {
   func background(_ seconds: UInt32 = 5) { XCUIDevice.shared.press(.home); sleep(seconds); app.activate(); sleep(2) }
   func relaunch() { app.terminate(); sleep(2); app.launch() }
 
-  // ---- the Access login, as on the phone: the system sheet, the email, the code from the mailbox ----
+  // ---- waiting on the first of several elements (a Cancel that may sit in the app, SpringBoard or the Face ID sheet) ----
   func waitAny(_ es: [XCUIElement], _ s: TimeInterval) -> XCUIElement? {
     let until = Date().addingTimeInterval(s)
     while Date() < until { if let e = es.first(where: { $0.exists }) { return e }; usleep(500_000) }
     return nil
   }
-  func tapButton(_ labels: [String]) {
-    for l in labels { for b in [safari.buttons[l], app.webViews.buttons[l]] where b.exists { b.tap(); return } }
-    XCTFail("no button \(labels) on the login page"); note("login-tree", safari.debugDescription)
-  }
-  func signInIfAsked(_ s: TimeInterval) {
-    let cont = springboard.buttons["Continue"]
-    guard cont.waitForExistence(timeout: s) else { return }
-    shot("signin-ask")
-    cont.tap()
-    guard let field = waitAny([safari.textFields.firstMatch, app.webViews.textFields.firstMatch], 60) else { XCTFail("the Access login page didn't show"); return }
-    shot("signin-page")
-    field.tap(); field.typeText((env["REPLICA_EMAIL"] ?? "") + "\n")
-    sleep(2)
-    if field.exists && (field.value as? String ?? "").contains("@") { tapButton(["Send login code", "Send me a code", "Send code", "Continue"]) }
-    let notEmail = NSPredicate(format: "label != 'Email' AND placeholderValue != 'example@email.com'")
-    sleep(3)
-    let code = relay("otp").trimmingCharacters(in: .whitespacesAndNewlines)
-    XCTAssertEqual(code.count, 6, "a 6-digit Access code from the mailbox (got \(code.count) chars)")
-    guard let cf = waitAny([safari.textFields.matching(notEmail).firstMatch, app.webViews.textFields.matching(notEmail).firstMatch], 30) else { XCTFail("no code field"); return }
-    cf.tap(); cf.typeText(code)
-    shot("signin-code")
-    cf.typeText("\n")
-    sleep(2)
-    if cf.waitForExistence(timeout: 1), !gone(cf, 8) { tapButton(["Sign in", "Log in", "Verify", "Submit", "Continue"]) }
-  }
-
   func openNewSession() -> Bool {
     sessionsList()
     guard wait(el("newBtn"), 30, "sessions") else { return false }
@@ -118,7 +91,6 @@ final class ReplicaUITests: JarvisUITestCase {
     continueAfterFailure = true
     tag = "replica"
     app.launch()
-    signInIfAsked(30)
 
     // ---- Reset: a new kit, copied and confirmed; the core is set up with no stores ----
     try must(wait(el("setup-state-empty"), 180, "Reset or recover: the core is empty"))
@@ -175,7 +147,7 @@ final class ReplicaUITests: JarvisUITestCase {
     scrolledTo(el("secure-store-rh-plain"), max: 4)
     if wait(el("secure-store-rh-plain"), 30, "rh-plain offered") { el("secure-store-rh-plain").tap() }
     XCTAssertFalse(el("secure-store-claude").exists, "the harness's own store isn't offered as a pick")
-    // an image from Photos (replica.yml added one): Start uploads it and signs its sha256 + size with the session
+    // an image from Photos (the replica job added one): Start uploads it and signs its sha256 + size with the session
     for _ in 0..<3 { app.swipeDown() }
     let image = attachImage()
     shot("new-session-picked")
@@ -208,9 +180,8 @@ final class ReplicaUITests: JarvisUITestCase {
       back()
     }
 
-    // ---- a kill and relaunch mid-flow: no setup page, still signed in ----
+    // ---- a kill and relaunch mid-flow: no setup page, the session still there ----
     relaunch()
-    signInIfAsked(10)
     XCTAssertFalse(el("setup-state-empty").waitForExistence(timeout: 10), "no Reset or recover after a relaunch")
     sessionsList()
     try must(wait(el("srow-\(sid)"), 90, "the running session after a relaunch"))

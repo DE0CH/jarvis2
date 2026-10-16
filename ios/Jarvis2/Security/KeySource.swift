@@ -2,8 +2,8 @@
 // core's identity, keys/setup.pub for the backups), fetched from GitHub — never from the router. A CI build
 // (compiled with JARVIS_CI, simulator walkthrough only) may point at a local stand-in through its Info.plist.
 // Any build may name another git ref of the same repo (JarvisKeysRef, a branch name only): the phone replica's
-// Release build reads its throwaway box's keys from a rehearsal branch (infra/phone-replica.sh). The TestFlight
-// archive must leave it empty (app.yml checks).
+// Release build reads its throwaway stack's keys from a branch replica-keys-<run> (ios.yml job `replica`). The
+// TestFlight archive must leave it empty (ios.yml checks).
 import Foundation
 
 enum KeySource {

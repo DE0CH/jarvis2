@@ -247,7 +247,7 @@ class JarvisUITestCase: XCTestCase {
     return out
   }
 
-  /// New session: one image added from Photos (ios.yml / replica.yml put a test image in the library with
+  /// New session: one image added from Photos (ios.yml's walkthrough and replica put a test image in the library with
   /// `simctl addmedia`), the picker driven as a person would; the clipboard's PasteButton when the picker shows no photo.
   /// The attachment's name on the page, nil when none arrived.
   @discardableResult func attachImage() -> String? {

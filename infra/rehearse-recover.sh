@@ -21,7 +21,7 @@
 # The app's side (Reset, Recover, unlock, approving a session) is the shell's own CoreSetup/CoreCrypto in
 # ios/interop's Rehearse target (needs a swift.org toolchain on Linux: SWIFT_BIN, default ~/swift/*/usr/bin).
 #
-# Test-only differences from production: infra/rehearsal-box.sh (MODE=rehearse: the router runs NO_ACCESS=1 behind an
+# Test-only differences from production: infra/rehearsal-box.sh (the router runs NO_ACCESS=1 behind an
 # Access app for the rehearsal's service token only). The kit is the public TEST master key, so the bucket holds
 # nothing secret: dummy values, and a Fly token narrowed as production's AND expiring after 6 h.
 #
@@ -30,7 +30,6 @@
 #      REHEARSAL_REF (the commit Flux applies; default origin/main), SERVER_TYPE (cx23), SKIP_REBUILD=1.
 # Prints no secret. Logs: $REHEARSAL_LOGS (default /tmp/jarvis2-rehearsal-logs).
 set -euo pipefail
-MODE=rehearse
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/rehearsal-box.sh"
 SWIFT_BIN="${SWIFT_BIN:-$(ls -d "$HOME"/swift/*/usr/bin 2>/dev/null | tail -1)}"
 if [ "${1:-}" = teardown ]; then teardown; exit 0; fi

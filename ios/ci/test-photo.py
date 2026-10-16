@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""A test photo for the simulator's library (ios.yml, replica.yml: `simctl addmedia`): New session's UI tests attach it
+"""A test photo for the simulator's library (ios.yml walkthrough and replica: `simctl addmedia`): New session's UI tests attach it
 from Photos. A 640x480 PNG, a checkerboard with a bar, made with the standard library only.
 
   test-photo.py OUT.png

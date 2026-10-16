@@ -72,12 +72,12 @@ fixes, 34–40 carried over from the old app and still true, 41–43 the web pag
 20. **Version 2.0**, build number = the `ios` workflow's run number + 1000 (above the old app's builds).
 21. **TestFlight from GitHub Actions** (`ios.yml`), archived unsigned and cloud-signed at export with the App Store Connect
     API key (lessons/75), bundle id `dev.de0ch.jarvis2`, the job in the `release` environment (main only). It ships only
-    when a phone replica passed on the same `ios/` and `policy/`, and checks the archive carries no CI key source, no
+    when the walkthrough, the interop test and the phone replica of the same run passed (75), and checks the archive carries no CI key source, no
     other keys ref, and the pinned policy is git's.
 22. **Tests**: the walkthrough (`UITests/Jarvis2UITests.swift`, light and dark against the real core and router on the
     runner), the transitions run (`TransitionsUITests`: every tab, push, pop, edge swipe, sheet, background and relaunch,
     recorded; a blank screen over 1.5 s or a near-uniform screenshot fails it), the phone replica (`ReplicaUITests`, the
-    Release build against a real box with Face ID driven by the runner) and the crypto interop test against the real core.
+    Release build against a real throwaway Jarvis 2 on the runner and real Fly sessions, Face ID driven by the runner; 75) and the crypto interop test against the real core.
     The old Back-stress test (an extension killed or slow) has nothing left to test and is gone.
 
 ## The audit's app findings (2026-10-11) and their fixes
@@ -365,6 +365,29 @@ fixes, 34–40 carried over from the old app and still true, 41–43 the web pag
    order (a Fly event read late slots in where it happened). Every colour is the theme's (web) or semantic (iPhone):
    readable in light and dark. No action on the page and nothing pops up. The separate Supervisor log and Lifecycle
    pages are gone.
+
+## The phone replica in CI (2026-10-16)
+
+75. **The phone replica is a job of the `ios` workflow, with no box** (Deyao, 2026-10-16: "the phone replica must run on
+    GitHub CI, not on a Hetzner box"). The job `replica` runs on the `xcode-27` runner: the Release build on the
+    iPhone18,3 / iOS 27.0 simulator, Face ID enrolled and driven, Keychain, background and relaunch, every flow of
+    `ReplicaUITests` recorded, against this commit's real core and router on the same runner and real Fly session
+    machines that reach the router over the run's own WireGuard peer (`ios/ci/replica-stack.sh`; the setup session's
+    answers: `ios/ci/replica-setup.sh`). TestFlight needs it in the same run, so every push to main touching the app
+    ships once the walkthrough, the interop test and the replica pass; no session runs anything and nothing is
+    dispatched by hand. Its secrets sit in the GitHub environment `replica` (main only), which only that job names.
+    Claude's choices: *No Cloudflare Access in front of the test router* (`NO_ACCESS=1` on 127.0.0.1): Access in CI
+    would need the account-wide Cloudflare token (the per-run service token can't be minted with the scoped one) and
+    the bot's mailbox password in GitHub; the sign-in sheet is Cloudflare's own page and the router's JWT checks have
+    their unit tests, so the replica covers everything after the sign-in. *One permanent test repo*
+    (`DE0CH/jarvis2-replica-test`) with a fine-grained token for it alone, instead of a repo and a PAT made per run
+    (that needed Deyao's GitHub password and TOTP in CI); runs take turns (concurrency group `replica`) and each clears
+    its deploy keys before and after. *Keys from a branch the job pushes* (`replica-keys-<run>-<attempt>`, deleted at
+    the end): the Release build reads keys only from a git ref of this repo, so the job's GITHUB_TOKEN gets
+    `contents: write`; the ruleset's `update` rule keeps it off main. *The core and router built from source on the
+    runner*, not the pinned images: the same code, and the shipped app is tested against the core main builds also
+    while the production core is held. *A leftover sweep at the start* (machines naming any `jarvis2-replica-*` peer,
+    those peers) rather than relying on teardown alone: a cancelled job may never reach its teardown.
 
 ## Unfinished / known gaps
 

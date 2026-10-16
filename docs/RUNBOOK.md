@@ -29,7 +29,8 @@ and pushes with its deploy key, which runs `images`. By hand: the same `gh workf
 GitHub settings (R1 audit, 2026-10-11; `gh api`): ruleset "main: only admins and deploy keys update it" (deletion,
 non_fast_forward, update; bypass: the admin role and deploy keys); environment `release` (deployment branches: main only)
 with secrets ASC_KEY_ID / ASC_ISSUER_ID / ASC_PRIVATE_KEY (ios.yml's TestFlight job), CI_IMAGE_KEY (the private half of
-`keys/ci.pub`), PIN_DEPLOY_KEY and FORK_PIN_DEPLOY_KEY (`fork-pin.yml`, deploy key `jarvis2-fork-pin`). A workflow that must push to main gets its own deploy key in `release`, never
+`keys/ci.pub`), PIN_DEPLOY_KEY and FORK_PIN_DEPLOY_KEY (`fork-pin.yml`, deploy key `jarvis2-fork-pin`); environment `replica`
+(main only) with REPLICA_FLY_TOKEN and REPLICA_REPO_TOKEN (ios.yml's phone replica, "The phone replica"). A workflow that must push to main gets its own deploy key in `release`, never
 `contents: write` on GITHUB_TOKEN. Rotating the CI key: a new P-256 key into CI_IMAGE_KEY and its public half (base64
 X9.63) into `keys/ci.pub` in one go, then run `images` so the router gets a fresh signature. The core's tag moves only when `core/` changed (a core restart is a
 new, empty core: see "Setting the core up"), and never while the core Deployment in `k8s/apps/core.yaml` carries the
@@ -651,7 +652,8 @@ Storage Box copies. Nothing else waits on it; the router reports search unreacha
 - App code that needs no simulator (ResumeOnce: a continuation answered at most once): `swift run Units` in
   `ios/interop` (the interop job runs it first).
 - The iOS app on a simulator: the `ios` workflow (compile both flavours, the walkthrough in light and dark against a
-  real core and router on the runner, recorded); `transitions.yml` taps every navigation and fails on a blank screen.
+  real core and router on the runner, recorded, and the phone replica below); `transitions.yml` taps every navigation
+  and fails on a blank screen.
 - The web page: the `web` workflow (typecheck + export of `app/`).
 - End to end on real Fly with a software phone and the public TEST master key: `infra/e2e.sh` (a local core
   and router, a throwaway WireGuard peer, the session image; set `E2E_SESSION_IMAGE` to a pinned tag). It sets its
@@ -687,8 +689,7 @@ in `ios/interop`, the app's own CoreSetup/CoreCrypto):
    Cloudflare tunnel/DNS/app/token, every object version and the bucket: this run's only. After a crash:
    `infra/rehearse-recover.sh teardown <run>`.
 
-Test-only differences (all in the box's user-data, none in git; `infra/rehearsal-box.sh`, shared with the phone
-replica): the router runs `NO_ACCESS=1` behind an Access app whose only policy is the rehearsal service token (the
+Test-only differences (all in the box's user-data, none in git; `infra/rehearsal-box.sh`): the router runs `NO_ACCESS=1` behind an Access app whose only policy is the rehearsal service token (the
 router's own check wants Deyao's email login); a Flux patch sets `MACHINE_URL` (the peer `jarvis2-rehearsal-<run>`),
 `BACKUP_BUCKET`, `RECORDS_OFF=1` and Discord off, and there is no `k8s/secrets` Kustomization (encrypted to
 production's age key); the router's backup read key is the admin S3 key (a narrowed one is Console-only); the kit is
@@ -699,55 +700,64 @@ locked store is destroyed within 90 s.
 
 ### The phone replica (the gate before a TestFlight build)
 
-`infra/phone-replica.sh` (one command, about 70 minutes): a throwaway box as above but with Access as in production
-(`MODE=replica`: the hostname admits one email, `bot@deyaochen.com`, by a real one-time-PIN login, and `/setup` the
-service token; the router checks both JWTs with `ALLOWED_EMAIL` = that email), then `.github/workflows/replica.yml` on
-a free GitHub macOS runner: the app's Release build (the TestFlight configuration of the native app in `ios/`; only
-`JARVIS_BASE` and `JARVIS_KEYS_REF` point at the box) on an iPhone 17 simulator (Deyao's iPhone18,3) on iOS 27.0,
-Face ID enrolled. `ios/UITests/ReplicaUITests.swift` taps every flow: the Access
-sign-in sheet (the PIN read from the bot's mailbox by this script and relayed to the runner through ppng.io), Reset
-(the kit read off the page, backgrounded mid-flow), stores (a Face ID failure, then unlock and lock), New session (one
-page, its stores and the harness's unlocked) running on Fly within 10 minutes, a kill and relaunch, the terminal
-(the router's page in a WebView: turned away → the grant review → Deny, then Allow with Face ID → a command's output), Grants (a standing rule,
-forgotten), the Inbox from a session (`jarvis2-request` run in its machine by this script with `flyctl machine exec`:
-a grant request denied, another allowed with Face ID; the badge, the three fields, the caller; then a batch of two
-grants filed with `jarvis2-request batch`, allowed with ONE Face ID), Settings → Repos (a
-throwaway repo's deploy key added and removed by the core; the script checks GitHub), the Inbox from the setup session
-(`setup.py request remove-repo` denied with the repo kept, then `request add-repo` allowed: the key made on GitHub),
-a session stuck at boot (its store locked right after Create) destroyed within 90 s, Destroy, then Recover with the
-kit (restart and recover) and every store back with its sensitivity, and a relaunch. A step fails on a missing
-element within its time, a near-blank screenshot, or a session not running in time. The run's video, screenshots and
-logs land in `~/artifacts/replica/<run>/`. Teardown also removes the keys branch `rehearsal-keys-<run>`, the repo
-`DE0CH/jarvis2-replica-<run>` and its 7-day PAT `jarvis2-replica-deploy-keys-<run>`. `infra/phone-replica.sh teardown
-<run>` after a crash.
+The `ios` workflow's job `replica` (main only, about 70 minutes, on GitHub's free `xcode-27` macOS runner; nothing
+outside GitHub and Fly): the app's Release build (the TestFlight configuration of the native app in `ios/`; only
+`JARVIS_BASE` = the runner's router and `JARVIS_KEYS_REF` = this run's keys branch differ) on an iPhone 17 simulator
+(Deyao's iPhone18,3) on iOS 27.0, Face ID enrolled and driven by `ios/ci/replica-host.py`, against a real throwaway
+Jarvis 2 on the same runner (`ios/ci/replica-stack.sh`):
 
-**One run at a time, and each run's resources are its own** (`infra/rehearsal-box.sh`): every name carries the run id
-(`<base>-<run>`: box, firewall, WireGuard peer, tunnel, hostname, Access apps, service token, bucket; the box is also
-labelled `rehearsal-base=<base>`), the script finds its workflow run by name (`replica rehearsal-keys-<run>`), and
-teardown removes only its own run's. A run refuses to start while another run of the same base has a server, bucket
-or tunnel, anywhere (it lists them: a run in flight, or a crashed run's leftovers, removed with `teardown <run>`); two
-runs started at the same moment both see each other's bucket and both stop. The rehearsal (`jarvis2-rehearsal`) and
-the replica (`jarvis2-rehearsal-replica`) are different bases and can run together. Before this, two sessions' replicas
-under one shared name deleted each other's service token, PAT and bucket (2026-10-13).
+- this commit's core and router, built from source (the real core, not the fakefly build), the core started again
+  whenever it ends (a Reset or the app's restart-and-recover wipes it, as Kubernetes starts an empty one); the router
+  with production's session image and signatures (`k8s/control/apps/router`), `policy/stores.json`, the web page and a
+  read-only Fly token, on 127.0.0.1:18080 with `NO_ACCESS=1` (the simulator talks to it directly: no Cloudflare);
+- real Fly session machines in `jarvis2-sessions`, reaching the router over this run's WireGuard peer
+  `jarvis2-replica-<run>-<attempt>`, which the router runs in userspace as production's does; the core's Fly token
+  narrowed as production's and expiring after 6 hours (`infra/fly-token.sh`);
+- a throwaway box key and setup key (their public halves on the branch `replica-keys-<run>-<attempt>`, which the
+  Release build reads them from; the job's GITHUB_TOKEN can push it, never main: the ruleset's `update` rule), the
+  backup bucket on rclone's S3 server on the runner;
+- the setup session's part (`ios/ci/replica-setup.sh`, called by the host helper for each message from the test): the
+  stores written with `infra/setup.py` after the Reset, `jarvis2-request` run inside the session's machine with
+  `flyctl machine exec`, `setup.py request add-repo/remove-repo`, and the test repo's deploy keys checked on GitHub.
 
-- **The gate:** the `ios` workflow's TestFlight job (environment `release`, main only) ships only when a `replica` run
-  passed on a commit with the same `ios/` and `policy/` (it checks the last 30 successful replica runs). After an app
-  change: `infra/phone-replica.sh`, then run the `ios` workflow with `only=testflight`. `replica_gate=skip` ships without it (say why in the commit or the run).
-- **The core it runs:** while `k8s/apps/core.yaml` carries `jarvis2/core-pin: hold` (a core change waiting for
-  Deyao's go), the replica runs the core main builds — the one the shipped app expects — not the pinned one;
-  `REPLICA_PINNED_CORE=1` runs the pinned core (what production has today: e.g. Settings → Repos says "the running
-  core predates deploy keys").
-- **The simulator:** the composite action `.github/actions/ios-simulator`, shared by `replica.yml`, `ios.yml`'s
-  walkthrough and `transitions.yml`: Xcode 27.0 (build 27A266a), the iOS 27.0 runtime (Deyao's phone runs 27.0) and
-  the device type whose profile says iPhone18,3 (iPhone 17), all pinned; a missing pin fails the run rather than
-  falling back. It runs on GitHub's free `xcode-27` runner image, which ships that Xcode and runtime, so nothing is
-  downloaded (only if the runtime were missing does it fetch it with `xcodebuild -downloadPlatform`). The jobs address
-  the simulator by `$SIM_UDID` (the image has stock devices with the same name); `device.txt` and the run summary say
-  what was used. A new iOS on his phone = bump the action's `ios`/`xcode`/`xcode-build` defaults (and `runs-on` when
-  the Xcode moves to another image).
+`ios/UITests/ReplicaUITests.swift` taps every flow: Reset (the kit read off the page, backgrounded mid-flow), stores (a
+Face ID failure, then unlock and lock), the encrypted backup opened offline with the kit, New session (one page, its
+stores and the harness's unlocked, an image from Photos) running on Fly within 10 minutes and the image on its machine,
+the Machines page, a kill and relaunch, the terminal (turned away → the grant review → Deny, then Allow with Face ID →
+a command's output; backgrounded), the session's Log (supervisor lines and Fly steps), the Inbox from a session (a grant
+request denied, another allowed with Face ID; a batch of two grants allowed with ONE Face ID), Grants (a standing rule,
+forgotten), Settings → Repos (the test repo's deploy key added and removed by the core, checked on GitHub), the Inbox
+from the setup session (remove-repo denied with the repo kept, add-repo allowed: the key made on GitHub), a session
+stuck at boot destroyed within 90 s, Destroy, Recover with the kit (restart and recover) and every store back with its
+sensitivity, and a relaunch. A step fails on a missing element within its time, a near-blank screenshot, or a session
+not running in time. The video, screenshots and logs (core, router, the setup answers) are the run's artifact
+`replica`; failed assertions are also the job's annotations.
+
+- **Its secrets:** the GitHub environment `replica` (deployment branches: main only), used by that job alone:
+  `REPLICA_FLY_TOKEN` (an org token of `jarvis2-370`: the peer, the machines, `flyctl machine exec`; the job narrows
+  it for the core and the router) and `REPLICA_REPO_TOKEN` (a fine-grained token for the test repo
+  `DE0CH/jarvis2-replica-test` only, Administration read and write: its deploy keys). The job fails at its first step
+  naming a missing one.
+- **One run at a time** (the job's concurrency group `replica`): the test repo's deploy keys are shared, and each run
+  starts by sweeping earlier runs' leftovers (machines whose router address names a `jarvis2-replica-*` peer, those
+  peers, the repo's deploy keys); its teardown (always) removes its own machines and their volumes, its peer, the keys
+  branch and the repo's deploy keys.
+- **The gate:** the `ios` workflow's TestFlight job (environment `release`, main only) needs the walkthrough, the
+  interop test and the replica of the same run: every push to main touching the app ships once all three pass. Nothing
+  is dispatched by hand.
+- **The core it runs:** this commit's `core/`, also while `k8s/apps/core.yaml` carries `jarvis2/core-pin: hold` (the
+  shipped app is tested against the core main builds, not the held production one).
+- **The simulator:** the composite action `.github/actions/ios-simulator`, shared by the replica, the walkthrough and
+  `transitions.yml`: Xcode 27.0 (build 27A266a), the iOS 27.0 runtime (Deyao's phone runs 27.0) and the device type
+  whose profile says iPhone18,3 (iPhone 17), all pinned; a missing pin fails the run rather than falling back. It runs
+  on GitHub's free `xcode-27` runner image, which ships that Xcode and runtime, so nothing is downloaded (only if the
+  runtime were missing does it fetch it with `xcodebuild -downloadPlatform`). The jobs address the simulator by
+  `$SIM_UDID` (the image has stock devices with the same name); `device.txt` and the run summary say what was used. A
+  new iOS on his phone = bump the action's `ios`/`xcode`/`xcode-build` defaults (and `runs-on` when the Xcode moves to
+  another image).
 - **What only the replica differs in:** `JARVIS_BASE` and `JARVIS_KEYS_REF` in the Release build; Face ID on the
-  simulator is LAContext in front of the software key (no Secure Enclave there); the Access login admits the bot's
-  mailbox, not Deyao's.
+  simulator is LAContext in front of the software key (no Secure Enclave there); no Cloudflare Access in front of the
+  router (its sign-in sheet is Cloudflare's own page; the router's Access checks are its unit tests').
 
 ## Looking at things
 

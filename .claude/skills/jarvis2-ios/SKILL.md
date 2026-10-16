@@ -1,6 +1,6 @@
 ---
 name: jarvis2-ios
-description: Work on the Jarvis 2 iPhone/iPad app, the native SwiftUI app in ios/ (bundle dev.de0ch.jarvis2, TestFlight "Jarvis 2"). How it is laid out, the security rules every review page must keep, how to build and test it with no Mac (GitHub macOS runners), the walkthrough, transitions and phone-replica tests, and shipping to TestFlight. Use when a task touches ios/, the app's Face ID review pages, its CI (ios.yml, transitions.yml, replica.yml) or a TestFlight build. Follow the swiftui-pro and swift-concurrency-pro skills for code style.
+description: Work on the Jarvis 2 iPhone/iPad app, the native SwiftUI app in ios/ (bundle dev.de0ch.jarvis2, TestFlight "Jarvis 2"). How it is laid out, the security rules every review page must keep, how to build and test it with no Mac (GitHub macOS runners), the walkthrough, transitions and phone-replica tests, and shipping to TestFlight. Use when a task touches ios/, the app's Face ID review pages, its CI (ios.yml, transitions.yml) or a TestFlight build. Follow the swiftui-pro and swift-concurrency-pro skills for code style.
 ---
 
 # jarvis2-ios
@@ -26,7 +26,8 @@ Jarvis2/<feature>    Sessions (split view, detail, terminal WebView, grants, sch
                      Previous, Search, Stores, Tasks, Settings (usage, Fly, repos, machines), Setup (Reset or recover)
 UITests/             UITestKit (helpers, blank checks), Jarvis2UITests (walkthrough), TransitionsUITests, ReplicaUITests
 interop/             swift run Interop / Rehearse: the Security files (symlinks) against the real core
-ci/                  standins.sh (keys, S3 stand-in, core + router), standin.py, replica-host.py (Face ID, relay)
+ci/                  standins.sh (keys, S3 stand-in, core + router), standin.py, replica-stack.sh (the replica's Jarvis 2),
+                     replica-setup.sh (the setup session's answers), replica-host.py (Face ID, those answers)
 ```
 
 ## Rules for any page that signs (keep them)
@@ -68,13 +69,15 @@ ci/                  standins.sh (keys, S3 stand-in, core + router), standin.py,
   blank screen over 1.5 s or a near-uniform screenshot.
 - **Interop** (`ios.yml` interop): `ios/ci/standins.sh W` then `swift run Interop` in `ios/interop` (also on Linux
   with a swift.org toolchain and swift-crypto).
-- **Phone replica** (`infra/phone-replica.sh`, about 70 min, a throwaway box, cents; log the spend): the Release
-  build against a real box, Face ID driven by the runner. TestFlight ships only after a passing replica on the same
-  `ios/` and `policy/`.
+- **Phone replica** (`ios.yml` job `replica`, main only, about 70 min on the `xcode-27` runner): the Release build
+  against a real throwaway Jarvis 2 on the runner (`ios/ci/replica-stack.sh`: this commit's core and router, real Fly
+  session machines over the run's own WireGuard peer), Face ID driven by `ios/ci/replica-host.py`, the setup session's
+  answers by `ios/ci/replica-setup.sh`. Secrets: GitHub environment `replica` (REPLICA_FLY_TOKEN, REPLICA_REPO_TOKEN for
+  `DE0CH/jarvis2-replica-test`). docs/RUNBOOK.md "The phone replica".
 
 ## Ship
 
-Push to main → `ios.yml`. After a passing replica: `gh workflow run ios.yml -R DE0CH/jarvis2 -f only=testflight`.
+Push to main → `ios.yml`: TestFlight ships when the walkthrough, the interop test and the replica of that run pass.
 The job runs in environment `release` (main only; ASC secrets there), archives unsigned and cloud-signs at export
 (lessons/75), build number = run number + 1000. Check with the apple-dev skill's
 `testflight-status.py dev.de0ch.jarvis2`. Never use Deyao's iPhone to test.
