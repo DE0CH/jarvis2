@@ -8,7 +8,7 @@ through git, and a box git can't fix is replaced.
 
 `git push` to main. The `images` workflow builds the core, router and session images, then pins them by digest in
 `k8s/apps/` (and signs the session image for the phone, `SESSION_IMAGE_SIG`); Flux applies within a minute.
-The session image stands on its base, `session-image/base/` (every tool, harness, the entrypoint and supervisor: add a
+The session image stands on its base, `session-image/base/` (every tool, harness launcher and the entrypoint: add a
 tool a session should always have to `session-image/base/Dockerfile` and push). The workflow's `base` job rebuilds the base
 only when that directory changed since the base pinned in `session-image/Dockerfile` (`ARG BASE=…jarvis2-session:base-sha-<12>@sha256:…`),
 or on `gh workflow run images -R DE0CH/jarvis2 -f base=true` (newer tools, the latest claude CLI); it takes 20-30 min,
@@ -753,7 +753,16 @@ under one shared name deleted each other's service token, PAT and bucket (2026-1
 
 - What the core did: it keeps no log of its own (R2: as small and stateless as it can be); every change it makes is a
   signed answer the router keeps (certs, the input log in the router's `input-log.jsonl`).
+- A session's supervisor log (boot and the supervisor, DESIGN "The supervisor and the guard"): the app's Supervisor
+  log beside the terminal, or `GET /api/sessions/:id/supervisor-log`; kept for the session's life, and in its archive
+  (`jarvis2/supervisor-log.jsonl`) after Destroy. On the machine itself: `/run/jarvis2/supervisor.log`.
+- What a boot, pause, resume, Upgrade or destroy did, step by step (the router's steps, Fly's events and platform log,
+  the supervisor's lines): the app's Lifecycle, or `GET /api/sessions/:id/lifecycle[/:op]`; archived as
+  `jarvis2/lifecycle.json`.
 - A session machine's log: `FLY_API_TOKEN=$JARVIS2_FLY_TOKEN flyctl logs -a jarvis2-sessions --machine <id> --no-tail`
+- The supervisor stopped answering (a pause waits on "the machine never reported"): its keeper restarts the worker
+  within 30 s; the restarts are in the supervisor log ("supervisor worker exited …"). It is out of the OOM killer's
+  reach (`oom_score_adj` -1000), so an out-of-memory machine loses harness processes, not the supervisor.
 - The boxes themselves: no way in by design; their logs and metrics are in Grafana Cloud (next section): Flux's
   reconciles (`container="manager"`), the kubelet and the kernel (`source="journal"`), every pod.
 

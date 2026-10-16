@@ -46,7 +46,7 @@ func readDisk() (diskSample, error) {
 	return s, nil
 }
 
-// diskReporter: the agent's disk loop (started with the status reports, once booted)
+// diskReporter: the supervisor's disk report (started with the status reports, once booted)
 func diskReporter(c *client) {
 	for ; ; time.Sleep(diskEvery) {
 		s, err := readDisk()

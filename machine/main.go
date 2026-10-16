@@ -6,6 +6,9 @@
 //	                           hand over to Jarvis 1's entrypoint (the harness). Any failed check → start
 //	                           nothing.
 //	jarvis2-machine init       what the core runs through Fly exec (no arguments): asks boot to go on.
+//	jarvis2-machine supervisor started by boot before anything else: the machine's long-running process that
+//	                           talks to the router (supervisor.go), with the guard (guard.go) in front of the
+//	                           commands that need it.
 //	jarvis2-machine stores [--json]
 //	                           every store and the key NAMES it holds (never a value), to know which store to
 //	                           ask for (stores.go).
@@ -105,7 +108,7 @@ func main() {
 	log.SetFlags(0)
 	log.SetPrefix("[jarvis2] ")
 	if len(os.Args) < 2 {
-		log.Fatal("usage: jarvis2-machine boot | init | stores [--json] | put-key <store> <key> [--explain <text>] < value | delete-key <store> <key> | add-store <name> | await-store <name> | downgrade --keep <store>… | --drop <store>… | --none | allow [<holder> <duration> | --remove <holder>]")
+		log.Fatal("usage: jarvis2-machine boot | init | stores [--json] | put-key <store> <key> [--explain <text>] < value | delete-key <store> <key> | add-store <name> | await-store <name> | downgrade --keep <store>… | --drop <store>… | --none | allow [<holder> <duration> | --remove <holder>] | supervisor")
 	}
 	var err error
 	switch os.Args[1] {
@@ -134,13 +137,13 @@ func main() {
 		if sp, err = downgradeArgs(os.Args[2:]); err == nil {
 			err = downgrade(sp)
 		}
-	case "agent":
-		err = agent()
+	case "supervisor": // supervisor.go: started by boot; restarts its worker if it dies
+		err = supervisor(len(os.Args) > 2 && os.Args[2] == "--worker")
+	case "unprotected": // supervisor.go: a child of the supervisor, back under the OOM killer, then exec
+		err = unprotected(os.Args[2:])
 	case "workers-hook":
 		workersHook() // workers.go: a Claude Code hook; never fails
 		return
-	case "creds-sync":
-		credsSync() // claudelogin.go: started by boot for a session with the `claude` store; never returns
 	case "allow":
 		err = allowCmd(os.Args[2:])
 	case "allow-at-least":
@@ -165,6 +168,7 @@ func boot() error {
 	if err := keygen(); err != nil {
 		return fmt.Errorf("keygen: %w", err)
 	}
+	logToSupervisorLog() // supervisorlog.go: boot's lines are the first of the supervisor log
 	log.Printf("keys ready; waiting for init")
 	for {
 		if _, err := os.Stat(goPath); err == nil {
@@ -245,15 +249,16 @@ func prepare() error {
 	if err != nil {
 		return err
 	}
-	// 0. the agent, first: it answers the router's commands at every stage of this machine's life, so a pause or
-	// destroy never waits on a machine still booting (e.g. looping on a locked store): until bootedPath exists a
-	// snapshot command gets "nothing to snapshot" (agent())
+	// 0. the supervisor, first (supervisor.go): it answers the router's commands at every stage of this machine's
+	// life, so a pause or destroy never waits on a machine still booting (e.g. looping on a locked store): until
+	// bootedPath exists a snapshot command gets "nothing to snapshot"
 	os.Remove(bootedPath)
-	agentCmd := exec.Command("/proc/self/exe", "agent")
-	agentCmd.Stdout, agentCmd.Stderr = os.Stdout, os.Stderr
-	agentCmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
-	if err := agentCmd.Start(); err != nil {
-		return fmt.Errorf("agent: %w", err)
+	os.WriteFile(harnessPIDPath, []byte(strconv.Itoa(os.Getpid())), 0o644) // this process becomes the harness (exec below)
+	supCmd := exec.Command("/proc/self/exe", "supervisor")
+	supCmd.Stdout, supCmd.Stderr = os.Stdout, os.Stderr
+	supCmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	if err := supCmd.Start(); err != nil {
+		return fmt.Errorf("supervisor: %w", err)
 	}
 
 	// 1. this machine's succession cert: core-signed, naming this machine and its own keys
@@ -388,7 +393,7 @@ func prepare() error {
 	return syscall.Exec(baseEntry, []string{baseEntry}, env)
 }
 
-// waitAPIProxy: the agent starts the local Jarvis API once bootedPath exists (agent(), polled every second); the
+// waitAPIProxy: the supervisor starts the local Jarvis API once bootedPath exists (polled every second); the
 // harness's entrypoint calls it at once (content-sync pull), so wait until it accepts connections (at most d)
 func waitAPIProxy(d time.Duration) {
 	addr := os.Getenv("JARVIS2_API_ADDR")
@@ -711,67 +716,7 @@ func unpackReader(r io.Reader) (int, error) {
 	return n, nil
 }
 
-// ---- agent: the router's commands (pause = snapshot) -----------------------------------------------
-
-// agent: started first thing at boot (prepare), it is the machine's one reader of the router's commands for its
-// whole life. While the machine boots it answers a snapshot with "nothing to snapshot" (no workspace of its own yet:
-// a resumed line's files are the predecessor's snapshot, which the router already holds); once booted it uploads
-// real snapshots and starts the status reports (the router's sign that the machine got past boot), the local
-// Jarvis API and the live transcript sync.
-func agent() error {
-	c, err := newClient()
-	if err != nil {
-		return err
-	}
-	go func() {
-		for !booted() {
-			time.Sleep(time.Second)
-		}
-		go statusReporter(c)
-		go memoryReporter(c) // memory.go: RAM for the router's starvation watch
-		go diskReporter(c)   // disk.go: the root disk and the volume, for the router's low-disk warning
-		go screenReporter(c) // screen.go: the pane for the read-only terminal
-		go serveAPIProxy(c)  // apiproxy.go: $JARVIS_URL for Jarvis 1's session scripts
-		go liveSync(c)       // livesync.go: the transcripts to the Storage Box (through the router) for search
-	}()
-	for {
-		var out struct {
-			Commands   []string   `json:"commands"`
-			Execs      []Exec     `json:"execs"`
-			Deliveries []Delivery `json:"deliveries"` // deliver.go: vouched, core-attested inputs
-		}
-		if err := c.json("GET", "/m/commands", nil, &out); err != nil {
-			time.Sleep(5 * time.Second)
-			continue
-		}
-		for _, e := range out.Execs {
-			go runExec(c, e)
-		}
-		for _, d := range out.Deliveries {
-			go runDelivery(c, d)
-		}
-		for _, cmd := range out.Commands {
-			if cmd == "free" && booted() && !frozen.Load() { // memory.go: an Upgrade, before its snapshot
-				freeMemory()
-				continue
-			}
-			if cmd == "refresh-secrets" && booted() { // putkey.go: an unlock for this cert went through
-				go refreshFromRouter(c)
-				continue
-			}
-			if cmd == "snapshot" {
-				if !booted() {
-					if err := bootingSnapshot(c); err != nil { // snapstream.go: the predecessor's, carried over
-						log.Printf("answering the snapshot while booting: %v", err)
-					}
-				} else if err := uploadSnapshot(c); err != nil {
-					log.Printf("snapshot failed: %v", err)
-					reportSnapshotFailed(c, err) // snapstream.go: the pause stops waiting, and nothing is lost
-				}
-			}
-		}
-	}
-}
+// ---- the snapshot (the supervisor's snapshot command: pause or destroy) ------------------------------
 
 func booted() bool { _, err := os.Stat(bootedPath); return err == nil }
 
@@ -796,7 +741,7 @@ func noSnapshot(c *client) error {
 var (
 	finalSnapshot    = dir + "/final-snapshot.tar.gz"
 	finalSnapshotSig = dir + "/final-snapshot.sig"
-	// snapshotKey: the machine's current signing key (re-read: a downgrade changes it under the agent)
+	// snapshotKey: the machine's current signing key (re-read: a downgrade changes it under the supervisor)
 	snapshotKey = func() (*ecdh.PrivateKey, error) { p, err := loadPrivate(); return p.sig, err }
 )
 
@@ -807,16 +752,6 @@ func notFrozen() error {
 		return errors.New("the session is stopped for its final snapshot")
 	}
 	return nil
-}
-
-// freezeSession: SIGSTOP to every process this user may signal except this one (kill(-1)); only on a Fly machine
-var freezeSession = func() {
-	if os.Getenv("FLY_MACHINE_ID") == "" {
-		return
-	}
-	if err := syscall.Kill(-1, syscall.SIGSTOP); err != nil {
-		log.Printf("freezing the session: %v", err)
-	}
 }
 
 // finalSnapshotSum: the kept final snapshot's sha256 and signature ("" when there is none yet)

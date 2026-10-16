@@ -677,14 +677,69 @@ the machine; only the core's token, and the setup session's org token, can creat
 the router's is read-only), fetches its core-signed succession cert through the router, checks it against the
 core key and that it names its own keys; if the predecessor is a real machine it fetches the snapshot and checks
 it against the hash the cert names and the predecessor's signing key from the cert. Then it starts the harness from
-the cert's options and pulls its secrets. Any failed check → start nothing. Everything else it takes: below.
+the cert's options and pulls its secrets. Any failed check → start nothing. Everything else it takes: below. Before
+any of this, boot starts the supervisor ("The supervisor and the guard").
 
 **The volume (`machine/volume.go`).** A machine with a volume (mounted at `/data` by Fly, as the core asked) keeps the
 session's state on it: before restoring anything, boot bind-mounts each of the snapshot's directories (`~/workspace`,
 `~/artifacts`, `~/.claude/projects`, the harnesses' state) from `/data/home/<path>`, so every path stays the same, and
-the agent copies the snapshot's single files (`~/.claude.json`, the Jarvis records) there every minute and before the
+the supervisor copies the snapshot's single files (`~/.claude.json`, the Jarvis records) there every minute and before the
 final snapshot. The volume is always new and empty at boot; the successor's state still comes only from the
-predecessor's signed snapshot. The agent reports the root disk and the volume every 30 s (`POST /m/disk`).
+predecessor's signed snapshot. The supervisor reports the root disk and the volume every 30 s (`POST /m/disk`).
+
+### The supervisor and the guard (Deyao, 2026-10-16)
+
+**The supervisor** is the machine's one long-running process that talks to the control plane (`jarvis2-machine
+supervisor`, `machine/supervisor.go`). Boot starts it before anything else, so it answers the router from the
+machine's first second to the kill; then boot goes on and finally execs the harness's launcher (for Claude
+`harness-claude.sh`, which only keeps the `claude --remote-control` host alive in tmux). Its components:
+
+| component | file | guarded | what it does |
+|---|---|---|---|
+| the guard | `guard.go` | — | checks what comes in and lets through only what is vouched for (below) |
+| commands and deliveries | `supervisor.go` | execs and deliveries: yes; commands: no | reads `/m/commands` for the machine's life: execs (a router feature's shell command with its grant) and deliveries (prompts into the harness) through the guard; one-word commands as they are |
+| snapshot and freeze | `snapstream.go`, `main.go`, `memory.go` | no | `snapshot`: the final snapshot (pause, destroy): the session stopped, the state taken and signed once; while booting "nothing to snapshot" or the predecessor's; `free` before an Upgrade's snapshot |
+| Claude pause and resume | `supervisor.go` | no | `pause-harness` / `resume-harness`: SIGSTOP / SIGCONT the Claude process (the launcher, the tmux panes and everything under them); the freeze for the snapshot starts with it. The router's `POST /api/sessions/:id/harness`; no app button |
+| worker count | `workers.go` | no | subagents and background jobs: the harness's hook only notifies the supervisor over a local socket (ids, types, the event name; never a command), the supervisor holds the count and the status report carries it; the hook never fails a turn |
+| screen | `screen.go` | no | the harness's pane for the read-only terminal (output only) |
+| status, memory, disk | `status.go`, `memory.go`, `disk.go` | no | the reports the router's card and watches read (output only) |
+| API proxy | `apiproxy.go` | — | `$JARVIS_URL` for the session's scripts, each call signed as this machine |
+| live transcript sync | `livesync.go` | no | the transcripts to the Storage Box (through the router) for search (output only) |
+| Claude login sync | `claudelogin.go` | no | the session's Claude pair kept in step with the router's (long poll) |
+| secrets refresh | `putkey.go` | no | `refresh-secrets`: pull the cert's stores again |
+| log | `supervisorlog.go` | no | the supervisor log (below) |
+
+**The guard** is the supervisor's component that checks the commands coming in and protects only the ones that need
+it: anything that can run code in the session or steer its agent. Execs (shell commands) need the holder's
+signature and a phone grant, a standing rule or the session's allow list ("Grants" below); deliveries (wakeups,
+crons, watches, Inbox outcomes, leases, the image's own texts) need their voucher and the core's attestation, each
+once ("Inputs to a machine"). The one-word commands (snapshot, free, refresh-secrets, pause-harness,
+resume-harness), the hook's count notifications and everything the supervisor only sends out (screen, status, log)
+can't carry an instruction and are not guarded. Nothing guarded runs once the session is frozen for its final
+snapshot, and resume-harness is refused then too.
+
+**Kept alive.** The supervisor is protected from the OOM killer: `jarvis2-machine supervisor` (the keeper) sets its
+own `oom_score_adj` to -1000 through the sudo the session user has, then runs the worker (`supervisor --worker`, which
+inherits it) and starts it again whenever it exits (backoff 1 s doubling to 30 s). The harness and the session's
+other processes are not protected: what the supervisor starts for the session (an exec, the text into the harness, a
+watch's check) goes back to the default score first (`jarvis2-machine unprotected`). The freeze and the Upgrade's
+free spare the keeper. A restarted worker carries on from files in `/run/jarvis2` (the signed final snapshot, the
+worker count, how far the log was pushed).
+
+**The supervisor log.** Boot, the keeper and the worker write each log line as JSON (`{at, text}`, the text prefixed
+`boot:` or `supervisor:`) to `/run/jarvis2/supervisor.log` (tmpfs, rotated once pushed); the worker pushes new lines
+to the router every 2 s (`POST /m/supervisor-log`), which keeps the session's log for its whole life and puts it in
+the session's archive on Destroy. Lines name commands, ids, counts and errors, never a command's text, a prompt or a
+secret value; as a second line of defence every `~/.secrets` value of 8 characters or more is replaced by `[secret]`
+before a line leaves the machine. The app (iPhone and web) shows it under Supervisor log, next to the read-only
+terminal.
+
+**The lifecycle log** (router, `router/lifecycle.go`). Each boot, pause, resume, Upgrade and destroy is an operation
+with its own log: the router's own steps, what Fly is doing (the machine's Fly events and Fly's platform log lines:
+create, image pull, start, stop, destroy, with times), read by the router with its read-only Fly token while the
+operation runs, and the supervisor log lines of the operation's machines in that window, merged in time order. The
+app shows each operation under Lifecycle, live while it runs; kept for the session's life and archived on Destroy.
+The core takes no part.
 
 ## Inputs to a machine (Deyao, 2026-10-11)
 
@@ -700,7 +755,7 @@ and later (wakeups, nudges, attachments, an added store) — is vouched for by o
 - **(d) a trusted provider over an authenticated channel**: GitHub over SSH with the repo's deploy key (or HTTPS for a
   public repo the cert names), the GitHub release a runtime bundle is pinned to by sha256.
 
-Router-only data never reaches a program or the agent, **except values whose strict format can't carry an
+Router-only data never reaches a program or the session's agent (the model), **except values whose strict format can't carry an
 instruction** (listed below). "Data" is no exemption: a prompt, a title, a transcript all steer the agent. This
 guards the **entry points** only: it establishes a chain of trust from Deyao's approval to the running agent that
 the router or box can't break. What the session itself chooses to read afterwards (the web, email, files it fetches,
@@ -848,7 +903,7 @@ the holders' shell grants ("Grants" above), the core's automatic locks and the C
 | layer | parts | trust |
 |---|---|---|
 | Kernel | log notary, succession notarizer, grant mover, grant merger, spawner, identity signer, gullible signer, secrets | trusted; each small and isolated, a separate component; checks only exact-string set operations and a policy table |
-| Interpreters | the guard (each machine's entry point), the iPhone app | give the strings meaning; can only refuse, or act within the grant they hold |
+| Interpreters | the guard (in each machine's supervisor), the iPhone app | give the strings meaning; can only refuse, or act within the grant they hold |
 | Router | everything else on the box | untrusted. Authenticates its callers (Cloudflare Access, API keys, machine signatures); the kernel trusts it only for transport over the k8s network. It stores, carries and schedules; it can deny service but grants nothing. **Writing secrets is protected only by the router.** |
 
 **Objects**
@@ -933,7 +988,7 @@ and end are lifecycles the router manages, each certified by succession certs:
   P_add = (`{shell}`, `{session:S, until:T}`); the router moves M's main grant along (M, M, (everything, `{until:T}`)) so
   the conditions match, and merges. The main grant stays untouched for after T; extending signs only a new small grant.
 
-**The guard** (the image's entry point, one process that pulls everything)
+**The guard** (the supervisor's component that checks inputs; the supervisor, started at the image's entry point, pulls everything)
 
 - Accepts exactly one grant at a time: signed by the grant mover or merger, naming this machine.
 - Reads the start settings from its source (fixed for the session's life: the permission mode never changes).

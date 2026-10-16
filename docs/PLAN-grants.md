@@ -330,7 +330,7 @@ It is added to `snapshotPaths` and replaces `allowFile`, `lineKeysFile` and `del
 | file:line | |
 |---|---|
 | session-image/base/set-permission-mode (whole); Dockerfile:152,186 | delete |
-| session-supervisor.sh:78-92 (reads `~/.claude/.permission-mode`), :311 comment | read `SESSION_PERMISSION_MODE` only |
+| harness-claude.sh:78-92 (reads `~/.claude/.permission-mode`), :311 comment | read `SESSION_PERMISSION_MODE` only |
 | harness-opencode.sh:19,46,233-238; harness-openclaw.sh:36,192-197 | same |
 | router/sessionops.go:5-6, 241, 255-310, 611 (`POST …/permission-mode`) | delete |
 | router/flows.go:751-769 (resume in another mode → phone) | delete (mode fixed) |

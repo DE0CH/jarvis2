@@ -47,7 +47,7 @@ func TestGrants(t *testing.T) {
 	}
 	ok := func(name string, e Exec, want bool) {
 		t.Helper()
-		_, err := authorise(e, now)
+		_, err := authoriseExec(e, now)
 		if (err == nil) != want {
 			t.Fatalf("%s: err=%v, want allowed=%v", name, err, want)
 		}

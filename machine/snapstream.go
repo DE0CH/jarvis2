@@ -27,7 +27,6 @@ import (
 	"os"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 )
 
@@ -40,21 +39,11 @@ var (
 	certFile   = certPath // a var: tests move it
 )
 
-// thawSession: SIGCONT to the session (the counterpart of freezeSession); only on a Fly machine
-var thawSession = func() {
-	if os.Getenv("FLY_MACHINE_ID") == "" {
-		return
-	}
-	if err := syscall.Kill(-1, syscall.SIGCONT); err != nil {
-		log.Printf("thawing the session: %v", err)
-	}
-}
-
 func uploadSnapshot(c *client) error {
 	signedMu.Lock()
 	defer signedMu.Unlock()
 	if signedSum == "" {
-		if sum, sig, err := finalSnapshotSum(); err == nil { // an earlier agent of this machine signed one
+		if sum, sig, err := finalSnapshotSum(); err == nil { // an earlier supervisor worker of this machine signed one
 			signedSum, signedSig = sum, sig
 		}
 	}

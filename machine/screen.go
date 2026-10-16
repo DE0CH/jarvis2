@@ -42,7 +42,7 @@ func readScreen() (screen, cursor string, ok bool) {
 	return screen, cursor, cursor != ""
 }
 
-// screenReporter: the agent's screen loop (started by agent())
+// screenReporter: the supervisor's screen component (started by supervise once booted); output only, unguarded
 func screenReporter(c *client) {
 	var last string
 	var sent time.Time

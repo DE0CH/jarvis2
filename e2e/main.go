@@ -293,7 +293,7 @@ func main() {
 	expectOnMachine(m1, "grep -c E2E_SECRET /home/claude/.secrets", "1")
 	if held {
 		step("held core: the harness gets the router's settings as before (title, prompt, model) and the repo is cloned")
-		envOf := "tr '\\0' '\\n' < /proc/$(pgrep -f session-supervisor | head -1)/environ"
+		envOf := "tr '\\0' '\\n' < /proc/$(pgrep -f harness-claude | head -1)/environ"
 		expectOnMachine(m1, envOf+" | grep -c '^SESSION_LABEL=e2e test$'", "1")
 		expectOnMachine(m1, envOf+" | grep -c '^SESSION_PROMPT=e2e held-core prompt$'", "1")
 		expectOnMachine(m1, envOf+" | grep -c '^SESSION_MODEL=.'", "1")
@@ -355,7 +355,7 @@ func main() {
 	if u := flyMachineEnv(m1)["JARVIS2_URL"]; strings.Contains(u, "jarvis2-box") {
 		log.Fatalf("an e2e machine points at production's router (%s)", u)
 	}
-	expectOnMachine(m1, "tr '\\0' '\\n' < /proc/$(pgrep -f session-supervisor | head -1)/environ | grep -cE '^(JARVIS2_REPOS|SESSION_RESUME_TITLE|JARVIS2_ROLLBACK|JARVIS2_RESTORE_CERT|SESSION_REPOS)=' || true", "0")
+	expectOnMachine(m1, "tr '\\0' '\\n' < /proc/$(pgrep -f harness-claude | head -1)/environ | grep -cE '^(JARVIS2_REPOS|SESSION_RESUME_TITLE|JARVIS2_ROLLBACK|JARVIS2_RESTORE_CERT|SESSION_REPOS)=' || true", "0")
 
 	step("status: the machine reports itself; the session's local Jarvis API arms a wakeup (delivered later as its own signed request: no scheduler shell)")
 	for i := 0; ; i++ {

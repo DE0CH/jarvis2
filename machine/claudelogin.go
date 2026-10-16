@@ -3,7 +3,7 @@ package main
 // The Claude login: the OAuth pair of the session's Claude account, kept and refreshed by the router
 // (router/claudelogin.go, claudeaccounts.go: one account per session, picked when it is made and fixed). A session
 // with an account (the router says so: /m/claude-login answers 404 noAccount otherwise) takes the pair at boot over the
-// signed /m channel and keeps in step for the machine's life (credsSync, its own process): a long poll that answers
+// signed /m channel and keeps in step for the machine's life (credsSync, the supervisor's Claude login sync): a long poll that answers
 // with a newer pair, or with "a refresh is coming" — then credsSync takes the CLI's own refresh lock
 // (~/.claude/.oauth_refresh.lock, lessons/74) until the new pair is written, so a claude process that gets a 401 in
 // between waits and adopts it instead of burning its refresh token.
@@ -185,20 +185,17 @@ func mergeAccount(account string) error {
 	return writeAtomic(p, b)
 }
 
-// startCredsSync: credsSync in its own process (`jarvis2-machine creds-sync`) for the machine's life; a var so
-// tests don't start one
+// startCredsSync: tells the supervisor to run credsSync for the machine's life (its Claude login sync component,
+// supervisor.go): boot leaves claudeLoginOn, the supervisor starts it once booted. A var so tests don't.
 var startCredsSync = func() {
-	cmd := exec.Command("/proc/self/exe", "creds-sync")
-	home, _ := os.UserHomeDir()
-	cmd.Env = []string{"HOME=" + home, "PATH=" + os.Getenv("PATH")}
-	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true} // outlives the exec into Jarvis 1's entrypoint
-	if err := cmd.Start(); err != nil {
-		log.Printf("claude login: credsSync: %v", err)
+	if err := os.WriteFile(claudeLoginOn, []byte("1"), 0o644); err != nil {
+		log.Printf("claude login: %v", err)
 		return
 	}
-	log.Printf("claude login: credsSync running (long poll on the router)")
+	log.Printf("claude login: the supervisor keeps the pair in step (long poll on the router)")
 }
+
+var claudeLoginOn = dir + "/claude-login"
 
 // writeAtomic: 0600, through a rename
 func writeAtomic(path string, b []byte) error {

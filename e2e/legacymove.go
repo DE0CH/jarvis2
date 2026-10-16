@@ -50,7 +50,7 @@ func legacyMoveStep(p *phone, master *ecdsa.PrivateKey, phoneAgreement string, r
 	note("%s paused on production's core (wakeup e2e-lm due at T+%s)", id2, wakeAt.Sub(t0).Round(time.Second))
 	expectOnMachine(m1, "echo running-"+secret+" > /home/claude/artifacts/e2e-marker && chown claude /home/claude/artifacts/e2e-marker && echo ok", "ok")
 	oldKey := coreKey
-	bootBefore, _, _ := flyExec(m1, []string{"sh", "-c", "cat /proc/sys/kernel/random/boot_id; pgrep -f session-supervisor | head -1"})
+	bootBefore, _, _ := flyExec(m1, []string{"sh", "-c", "cat /proc/sys/kernel/random/boot_id; pgrep -f harness-claude | head -1"})
 
 	moveAt := time.Now().Add(75 * time.Second).Truncate(time.Second)
 	step("legacy-move: router B (its own core: this tree's, empty) is the candidate; MOVE_AT T+%s; the running machine probes", moveAt.Sub(t0).Round(time.Second))
@@ -144,7 +144,7 @@ func legacyMoveStep(p *phone, master *ecdsa.PrivateKey, phoneAgreement string, r
 	}
 
 	step("legacy-move: the running session kept running (same machine, boot, supervisor); it pauses (taken over at its kill) and resumes")
-	if after, _, _ := flyExec(m1, []string{"sh", "-c", "cat /proc/sys/kernel/random/boot_id; pgrep -f session-supervisor | head -1"}); after != bootBefore {
+	if after, _, _ := flyExec(m1, []string{"sh", "-c", "cat /proc/sys/kernel/random/boot_id; pgrep -f harness-claude | head -1"}); after != bootBefore {
 		log.Fatalf("the running session's machine restarted: %q → %q", bootBefore, after)
 	}
 	out, _, _ := flyExec(m1, []string{"cat", "/tmp/move-probe.log"})

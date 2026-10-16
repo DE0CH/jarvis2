@@ -1,5 +1,7 @@
 #!/bin/bash
-# Keeps a `claude --remote-control` host alive in a tmux session for this machine's
+# harness-claude.sh: the Claude harness's launcher (the entrypoint execs it). It is NOT the supervisor: that is
+# jarvis2-machine's (machine/supervisor.go), which talks to the router. This one only
+# keeps a `claude --remote-control` host alive in a tmux session for this machine's
 # whole lifetime (foreground, so the Fly Machine stays up until Jarvis stops it).
 # tmux lets the Claude app spawn extra sessions inside this same container/env.
 set -u
@@ -11,7 +13,7 @@ export HOME=/home/claude
 # make the environment's secrets available to claude + every Bash tool it spawns
 [ -f "$HOME/.secrets" ] && { set -a; . "$HOME/.secrets"; set +a; }
 
-# Another harness than the Claude-app host: its own supervisor. opencode = an OpenRouter model
+# Another harness than the Claude-app host: its own launcher. opencode = an OpenRouter model
 # under OpenCode + Paseo; openclaw = claw-code as the agent loop inside an OpenClaw gateway.
 [ "${SESSION_HARNESS:-claude}" = "opencode" ] && exec /usr/local/bin/harness-opencode.sh "$WD"
 [ "${SESSION_HARNESS:-claude}" = "openclaw" ] && exec /usr/local/bin/harness-openclaw.sh "$WD"
@@ -100,7 +102,7 @@ start() {
   export SESSION_RESUME_FLAG=""
   local rid="" latest="" f
   for f in $(ls -t "$HOME"/.claude/projects/*/*.jsonl 2>/dev/null); do
-    if head -c 4000 "$f" | grep -q 'You are a delivery relay'; then echo "[supervisor] skipping relay transcript $(basename "$f")"; continue; fi
+    if head -c 4000 "$f" | grep -q 'You are a delivery relay'; then echo "[harness-claude] skipping relay transcript $(basename "$f")"; continue; fi
     latest="$f"; break
   done
   [ -n "$latest" ] && rid="$(basename "$latest" .jsonl)"
@@ -150,7 +152,7 @@ PY
   # through the API proxy when it is on (explicit, in case the tmux server predates the export)
   [ -n "${ANTHROPIC_BASE_URL:-}" ] && CMD="ANTHROPIC_BASE_URL=$ANTHROPIC_BASE_URL $CMD"
   tmux new-session -d -s "$SESSION" -x 120 -y 40 -c "$WD" "$CMD"
-  echo "[supervisor] started remote-control host in $WD (name: ${SESSION_LABEL:-${SESSION_RC_TITLE:-auto}}, model: $SESSION_MODEL, perm: ${SESSION_PERMISSION_MODE:-auto}, resume: ${rid:-none})"
+  echo "[harness-claude] started remote-control host in $WD (name: ${SESSION_LABEL:-${SESSION_RC_TITLE:-auto}}, model: $SESSION_MODEL, perm: ${SESSION_PERMISSION_MODE:-auto}, resume: ${rid:-none})"
 }
 
 # First prompt (optional, SESSION_PROMPT from the machine env): once the remote-control host
@@ -192,7 +194,7 @@ send_first_prompt() {
     if tmux capture-pane -p -t "$SESSION" 2>/dev/null | grep -Eq 'remote-control is active|/rc active'; then ready=1; break; fi
     sleep 2
   done
-  [ "$ready" = 1 ] || { echo "[supervisor] first prompt NOT sent: host never became ready"; return 0; }
+  [ "$ready" = 1 ] || { echo "[harness-claude] first prompt NOT sent: host never became ready"; return 0; }
   sleep 3   # let the input box settle
   # Build the text + image buffers (attachments need a downloaded copy first; the plain case is
   # just the prose).
@@ -208,10 +210,10 @@ send_first_prompt() {
   if [ "$ok" = 1 ] && { [ -s "$f" ] || [ -s "$imgf" ]; }; then
     tmux send-keys -t "$SESSION" Enter
     touch "$marker"
-    echo "[supervisor] first prompt sent (text $(wc -c < "$f" 2>/dev/null || echo 0) bytes$([ -s "$imgf" ] && echo ", +images"))"
+    echo "[harness-claude] first prompt sent (text $(wc -c < "$f" 2>/dev/null || echo 0) bytes$([ -s "$imgf" ] && echo ", +images"))"
     return 0
   fi
-  echo "[supervisor] first prompt NOT sent (nothing to type or typing failed)"
+  echo "[harness-claude] first prompt NOT sent (nothing to type or typing failed)"
 }
 
 # One-shot session (SESSION_ONE_SHOT=1 from the machine env): the first prompt is the whole
@@ -228,7 +230,7 @@ send_first_prompt() {
 # the tmux session is killed if it lingers) and the marker ~/.claude/.one-shot-done is written.
 # The JARVIS does the rest: its one-shot loop sees the marker via the registry exec, archives
 # the transcript + ~/artifacts to the Storage Box, and destroys the machine (force: even with
-# uncommitted/unpushed work — it DMs Deyao on Discord when that was the case). The supervisor
+# uncommitted/unpushed work — it DMs Deyao on Discord when that was the case). This launcher
 # therefore keeps the machine alive after claude exits (the watchdog below does not relaunch
 # once the marker exists); nothing here talks to Jarvis.
 ONE_SHOT_IDLE_S=60
@@ -290,10 +292,10 @@ one_shot_watch() {
 if [ "${SESSION_API_PROXY:-}" = 1 ]; then
   export API_PROXY_PORT="${API_PROXY_PORT:-8788}"
   ( while true; do node /usr/local/lib/api-proxy.js >> "$HOME/.claude/api-proxy.log" 2>&1
-      echo "[supervisor] api-proxy exited; restarting in 1 s" >> "$HOME/.claude/api-proxy.log"; sleep 1; done ) &
+      echo "[harness-claude] api-proxy exited; restarting in 1 s" >> "$HOME/.claude/api-proxy.log"; sleep 1; done ) &
   for _ in $(seq 1 40); do curl -s -o /dev/null "http://127.0.0.1:$API_PROXY_PORT/" && break; sleep 0.25; done
   export ANTHROPIC_BASE_URL="http://127.0.0.1:$API_PROXY_PORT"
-  echo "[supervisor] api proxy on 127.0.0.1:$API_PROXY_PORT (log: ~/artifacts/api-log)"
+  echo "[harness-claude] api proxy on 127.0.0.1:$API_PROXY_PORT (log: ~/artifacts/api-log)"
 fi
 start
 send_first_prompt &
@@ -302,10 +304,10 @@ one_shot_watch &
 # are jarvis2-machine's (machine/claudelogin.go, the agent's live sync): nothing here.
 while true; do
   # Liveness by a token present in every launch form (--model is always passed; the
-  # supervisor/push-creds processes don't contain it).
+  # launcher processes don't contain it).
   if [ -e "$HOME/.claude/.one-shot-done" ]; then :   # one-shot finished: claude stays down, Jarvis destroys the machine
   elif ! pgrep -u "$(id -u)" -f 'claude .*--model' >/dev/null 2>&1; then
-    echo "[supervisor] host gone; restarting"
+    echo "[harness-claude] host gone; restarting"
     start
   fi
   sleep 5   # short poll so an in-place permission-mode switch (kills claude) relaunches promptly

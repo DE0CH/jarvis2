@@ -65,7 +65,7 @@ func (l *liveSyncer) once() int {
 	return n
 }
 
-// liveSync: the agent's loop (started by agent())
+// liveSync: the supervisor's live transcript sync (started by supervise once booted)
 func liveSync(c *client) {
 	l := &liveSyncer{sent: map[string]time.Time{}, send: func(name string, body []byte) error {
 		b, _, status, err := c.raw("POST", "/m/live-transcript", body, "X-Name", name)

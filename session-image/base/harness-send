@@ -9,7 +9,7 @@
 #                                       (agent:main:main) — the one the Control UI and the app open;
 #                                       it answers "started" at once, the turn runs in the gateway.
 #   harness-send [--images <file with space-separated image paths>] < prompt.txt
-#   harness-send --queue < prompt.txt   spool it for the supervisor's inbox loop and return at once.
+#   harness-send --queue < prompt.txt   spool it for the harness launcher's inbox loop and return at once.
 #                                       What the JARVIS uses: delivery can take seconds (paseo) and
 #                                       a Fly exec is cut off at ~60 s, so the exec only writes a
 #                                       file; delivery (with retries) is local.
@@ -23,14 +23,14 @@ else HARNESS=""; fi
 
 if [ "${1:-}" = "--queue" ]; then
   TEXT="$(cat)"; [ -n "$TEXT" ] || { echo "harness-send: empty prompt" >&2; exit 2; }
-  [ -n "$HARNESS" ] || { echo "harness-send: no harness supervisor is running" >&2; exit 3; }
+  [ -n "$HARNESS" ] || { echo "harness-send: no harness launcher is running" >&2; exit 3; }
   mkdir -p "$INBOX"; f="$INBOX/$(date +%s%N).txt"; (umask 077; printf '%s' "$TEXT" > "$f.tmp") && mv "$f.tmp" "$f"
   echo '{"ok":true,"queued":true}'; exit 0
 fi
 IMGS=()
 if [ "${1:-}" = "--images" ]; then read -r -a IMGS < "${2:-/dev/null}" || true; fi
 TEXT="$(cat)"; [ -n "$TEXT" ] || { echo "harness-send: empty prompt" >&2; exit 2; }
-# SESSION_* are the machine's env, which a Fly exec does not inherit: read them off the supervisor
+# SESSION_* are the machine's env, which a Fly exec does not inherit: read them off the harness launcher
 envof() { tr '\0' '\n' < "/proc/$(pgrep -o -u "$(id -u)" -f "harness-$2.sh")/environ" 2>/dev/null | sed -n "s/^$1=//p" | head -1; }
 
 # ---------------------------------------------------------------- openclaw (gateway) -------------
@@ -44,7 +44,7 @@ if [ "$HARNESS" = openclaw ]; then
 fi
 
 # ---------------------------------------------------------------- opencode (Paseo) ---------------
-[ "$HARNESS" = opencode ] || { echo "harness-send: no harness supervisor is running" >&2; exit 3; }
+[ "$HARNESS" = opencode ] || { echo "harness-send: no harness launcher is running" >&2; exit 3; }
 export PASEO_HOME="$HOME/.paseo"
 REC="$HOME/.claude/.paseo-agent"
 IMG_ARGS=(); for i in "${IMGS[@]:-}"; do [ -n "$i" ] && IMG_ARGS+=(--image "$i"); done

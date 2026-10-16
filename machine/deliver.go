@@ -342,31 +342,9 @@ func runDelivery(c *client, d Delivery) {
 }
 
 func deliver(c *client, d Delivery) error {
-	cert, err := currentCert()
+	text, d, cert, err := guardDelivery(c, d) // guard.go
 	if err != nil {
 		return err
-	}
-	coreKey, err := readTrim(coreKeyPath)
-	if err != nil {
-		return err
-	}
-	text, attested, err := deliveryText(d, readLineKeys())
-	if err != nil {
-		return err
-	}
-	if err := checkAttest(coreKey, c.me, d.Kind, attested, d.Attest); err != nil {
-		return err
-	}
-	if err := notFrozen(); err != nil {
-		return err
-	}
-	if d.Kind == "request-outcome" && d.Request != nil {
-		if f := outcomeFresh(d); len(f.Outcomes) != len(d.Outcomes) {
-			if text, _, err = deliveryText(f, readLineKeys()); err != nil { // the same checks, on the items still untold
-				return err
-			}
-			d = f
-		}
 	}
 	deliverOrderMu.Lock() // one delivery at a time between the check and the record
 	defer deliverOrderMu.Unlock()
@@ -390,14 +368,14 @@ func deliver(c *client, d Delivery) error {
 func sendToHarness(harness, mode, from, text string) error {
 	var cmd *exec.Cmd
 	if harness == "opencode" || harness == "openclaw" {
-		cmd = exec.Command("/usr/local/bin/harness-send", "--queue")
+		cmd = unprotectedCommand(nil, "/usr/local/bin/harness-send", "--queue")
 		cmd.Stdin = strings.NewReader(text)
 	} else {
 		fm := "prompting"
 		if mode == "bypass" {
 			fm = "bypass"
 		}
-		cmd = exec.Command("python3", "-I", "-c", peerPy, base64.StdEncoding.EncodeToString([]byte(text)), "", fm, from)
+		cmd = unprotectedCommand(nil, "python3", "-I", "-c", peerPy, base64.StdEncoding.EncodeToString([]byte(text)), "", fm, from)
 	}
 	done := make(chan struct{})
 	var out []byte
@@ -648,7 +626,7 @@ func rerunCheck(w *watchReq) string {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), rerunTimeout)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "bash", "-l", f)
+	cmd := unprotectedCommand(ctx, "bash", "-l", f)
 	cmd.Dir = dir
 	cmd.Env = append(os.Environ(), "WATCH_NAME="+w.Name)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}

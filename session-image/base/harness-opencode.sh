@@ -1,6 +1,6 @@
 #!/bin/bash
 # Supervisor for a session whose harness is OpenCode on OpenRouter (SESSION_HARNESS=opencode),
-# exec'd by session-supervisor.sh in place of the `claude --remote-control` host.
+# exec'd by harness-claude.sh in place of the `claude --remote-control` host.
 #
 #   OpenCode      the agent loop; LLM = OpenRouter, model = SESSION_MODEL ("openrouter/<slug>"),
 #                 key = OPENROUTER_API from the session's secrets.

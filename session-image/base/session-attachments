@@ -2,7 +2,7 @@
 # First-prompt attachments (SESSION_ATTACHMENTS_JSON): download the files the New Session form
 # staged on the Storage Box into ~/uploads, write the text buffer (prompt + paths of non-image
 # files) to $1 and the image buffer (space-separated image paths) to $2, then delete the staging
-# dir. Shared by session-supervisor.sh (claude) and harness-opencode.sh. Never echoes the creds.
+# dir. Shared by harness-claude.sh (claude) and harness-opencode.sh. Never echoes the creds.
 python3 - "$1" "$2" <<'PY'
 import base64, json, os, sys, urllib.parse, urllib.request
 textf, imgf = sys.argv[1], sys.argv[2]
@@ -29,7 +29,7 @@ for it in items:
                 out.write(chunk)
         (images if it.get("isImage") else files).append(dest)
     except Exception as e:
-        sys.stderr.write(f"[supervisor] attachment download failed: {name}: {e}\n")
+        sys.stderr.write(f"[attachments] attachment download failed: {name}: {e}\n")
 parts = []
 if prompt.strip(): parts.append(prompt)
 if files: parts.append("Attached files (in ~/uploads): " + " ".join(files))
@@ -39,7 +39,7 @@ if refused: parts.append("Attachments refused by this machine (not the files Dey
 if images: parts.append("Attached images:")
 open(textf, "w").write("\n\n".join(parts))
 open(imgf, "w").write(" ".join(images))
-sys.stderr.write(f"[supervisor] attachments: {len(images)} image(s), {len(files)} file(s) downloaded\n")
+sys.stderr.write(f"[attachments] attachments: {len(images)} image(s), {len(files)} file(s) downloaded\n")
 PY
 # staging is a one-time hand-off; drop it once downloaded (best effort, creds not echoed)
 if [ -n "${SESSION_ATTACH_DAV_BASE:-}" ] && [ -n "${SESSION_ATTACH_DIR:-}" ]; then

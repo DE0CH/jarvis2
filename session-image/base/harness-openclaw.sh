@@ -1,6 +1,6 @@
 #!/bin/bash
 # Supervisor for a session whose harness is claw-code inside an OpenClaw gateway (SESSION_HARNESS=openclaw),
-# exec'd by session-supervisor.sh in place of the `claude --remote-control` host.
+# exec'd by harness-claude.sh in place of the `claude --remote-control` host.
 #
 #   claw-code      the agent loop (Deyao's fork DE0CH/claw-code, the editable Rust Claude Code), run per turn
 #                  by the openclaw-claw-harness plugin; model = SESSION_MODEL ("openclaw/<Claude model id>").

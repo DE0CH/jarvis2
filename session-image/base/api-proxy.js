@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Transparent logging proxy between the claude CLI and the Anthropic API (Deyao, 2026-10-02).
-// The supervisor starts it for a session created with "API proxy" on (SESSION_API_PROXY=1) and runs
+// harness-claude.sh starts it for a session created with "API proxy" on (SESSION_API_PROXY=1) and runs
 // claude with ANTHROPIC_BASE_URL=http://127.0.0.1:$API_PROXY_PORT. Every request is forwarded to
 // $API_PROXY_UPSTREAM (default https://api.anthropic.com) unchanged, the response is streamed back
 // chunk by chunk, and the exchange is logged under ~/artifacts/api-log/ (archived with the session).

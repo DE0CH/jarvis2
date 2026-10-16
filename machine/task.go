@@ -337,7 +337,7 @@ func runTask(c *client, template string, secrets map[string]string, stores []str
 		}
 		time.Sleep(taskReportWait)
 	}
-	select {} // the router pauses this machine (snapshot through the agent, then the core's kill)
+	select {} // the router pauses this machine (snapshot through the supervisor, then the core's kill)
 }
 
 func doRun(template, run string, secrets map[string]string, stores []string, mode string) TaskResult {

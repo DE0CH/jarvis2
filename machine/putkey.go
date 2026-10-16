@@ -11,7 +11,7 @@ package main
 //	jarvis2 delete-key STORE KEY
 //
 // The session's own ~/.secrets doesn't change: every running session holding the store (this one too) gets the new
-// value once Deyao allows the refresh the router files (the phone's unlock), and then pulls it by itself (agent:
+// value once Deyao allows the refresh the router files (the phone's unlock), and then pulls it by itself (supervisor:
 // refresh-secrets).
 
 import (

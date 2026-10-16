@@ -1,0 +1,385 @@
+package main
+
+// The supervisor (docs/DESIGN.md "The supervisor and the guard"): the machine's one long-running process that talks
+// to the router, from the first second of boot to the kill. Boot starts it before anything else (prepare). Its
+// components, each in its own file:
+//
+//	component                  file              guarded  what it does
+//	the guard                  guard.go          —        checks execs and deliveries; lets through only what is vouched for
+//	commands and deliveries    supervisor.go     execs, deliveries: yes; commands: no
+//	                                                      reads /m/commands for the machine's life: execs (a router
+//	                                                      feature's shell command, with its grant) and deliveries
+//	                                                      (prompts into the harness) through the guard; the one-word
+//	                                                      commands below run as they are
+//	snapshot and freeze        snapstream.go,    no       the final snapshot (pause, destroy): the session stopped,
+//	                           main.go                    the state taken, signed once; "nothing to snapshot" or the
+//	                                                      predecessor's while booting; free before an Upgrade (memory.go)
+//	Claude pause and resume    supervisor.go     no       pause-harness / resume-harness: SIGSTOP / SIGCONT the Claude
+//	                                                      process (launcher, tmux panes, their children); the freeze
+//	                                                      starts with it
+//	worker count               workers.go        no       subagents and background jobs, from the harness hook's
+//	                                                      notifications (a count, never a command)
+//	screen                     screen.go         no       the harness's pane for the read-only terminal (output only)
+//	status, memory, disk       status.go,        no       the reports the router's card and watches read (output only)
+//	                           memory.go, disk.go
+//	API proxy                  apiproxy.go       —        $JARVIS_URL for the session's scripts, signed as this machine
+//	live transcript sync       livesync.go       no       the transcripts to the Storage Box for search (output only)
+//	Claude login sync          claudelogin.go    no       the session's Claude pair kept in step with the router's
+//	log                        supervisorlog.go  no       the supervisor log, pushed to the router (output only)
+//	secrets refresh            putkey.go         no       refresh-secrets: pull the cert's stores again
+//
+// It is kept out of the OOM killer's reach: `jarvis2-machine supervisor` (the keeper) sets its own oom_score_adj to
+// -1000 through sudo, then runs the worker (`supervisor --worker`, which inherits it) and starts it again whenever it
+// exits. What the supervisor starts for the session (exec commands, the text into the harness, a watch's check)
+// goes back to the default score first (`jarvis2-machine unprotected`), so only the supervisor itself is protected;
+// the harness and everything else in the session are not.
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"log"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"sort"
+	"strconv"
+	"strings"
+	"syscall"
+	"time"
+)
+
+const oomProtected = "-1000"
+
+var (
+	harnessPIDPath    = dir + "/harness.pid"    // the boot process's pid, which became the harness (exec)
+	harnessPausedPath = dir + "/harness-paused" // the pids pause-harness stopped, for resume-harness
+)
+
+// supervisor: the keeper (no flag) or the worker (--worker)
+func supervisor(worker bool) error {
+	logToSupervisorLog()
+	if worker {
+		return supervise()
+	}
+	protectFromOOM(os.Getpid())
+	backoff := time.Second
+	for {
+		started := time.Now()
+		cmd := exec.Command("/proc/self/exe", "supervisor", "--worker")
+		cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
+		err := cmd.Run()
+		if time.Since(started) > time.Minute {
+			backoff = time.Second
+		}
+		log.Printf("supervisor worker exited (%v); starting it again in %s", exitText(err), backoff)
+		time.Sleep(backoff)
+		backoff = min(2*backoff, 30*time.Second)
+	}
+}
+
+func exitText(err error) string {
+	if err == nil {
+		return "exit 0"
+	}
+	return err.Error()
+}
+
+// protectFromOOM: oom_score_adj -1000 (never chosen by the OOM killer) for pid, through the sudo the session user
+// has; only on a Fly machine
+var protectFromOOM = func(pid int) {
+	if os.Getenv("FLY_MACHINE_ID") == "" {
+		return
+	}
+	cmd := exec.Command("sudo", "-n", "tee", fmt.Sprintf("/proc/%d/oom_score_adj", pid))
+	cmd.Stdin = strings.NewReader(oomProtected + "\n")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		log.Printf("OOM protection: %v %s", err, strings.TrimSpace(string(out)))
+		return
+	}
+	log.Printf("OOM protection on (oom_score_adj %s)", oomProtected)
+}
+
+// unprotectedCommand: a command the supervisor starts for the session, run through `jarvis2-machine unprotected` so
+// it (and anything it leaves running) is back at the default OOM score; ctx may be nil. Off a Fly machine (tests)
+// nothing is protected, so the command runs as is.
+func unprotectedCommand(ctx context.Context, name string, args ...string) *exec.Cmd {
+	argv := append([]string{"unprotected", "--", name}, args...)
+	if os.Getenv("FLY_MACHINE_ID") == "" {
+		name, argv = argv[2], argv[3:]
+		if ctx == nil {
+			return exec.Command(name, argv...)
+		}
+		return exec.CommandContext(ctx, name, argv...)
+	}
+	if ctx == nil {
+		return exec.Command("/proc/self/exe", argv...)
+	}
+	return exec.CommandContext(ctx, "/proc/self/exe", argv...)
+}
+
+// unprotected: oom_score_adj 0 for this process (raising it needs no privilege), then exec the command
+func unprotected(args []string) error {
+	if len(args) > 0 && args[0] == "--" {
+		args = args[1:]
+	}
+	if len(args) == 0 {
+		return errors.New("usage: jarvis2-machine unprotected -- <command> [args…]")
+	}
+	os.WriteFile("/proc/self/oom_score_adj", []byte("0\n"), 0o644)
+	path, err := exec.LookPath(args[0])
+	if err != nil {
+		return err
+	}
+	return syscall.Exec(path, args, os.Environ())
+}
+
+// supervise: the worker. While the machine boots it answers a snapshot with the predecessor's (or "nothing to
+// snapshot"); once booted it uploads real snapshots and starts the reports, the local Jarvis API and the live sync.
+func supervise() error {
+	c, err := newClient()
+	if err != nil {
+		return err
+	}
+	if _, _, err := finalSnapshotSum(); err == nil {
+		frozen.Store(true) // an earlier worker of this machine took the final snapshot: nothing guarded runs again
+	}
+	go pushSupervisorLog(c) // supervisorlog.go
+	workers = newWorkerCount(workersState)
+	go serveWorkerCount(workers) // workers.go: the hook's notifications
+	go func() {
+		for !booted() {
+			time.Sleep(time.Second)
+		}
+		go statusReporter(c) // status.go
+		go memoryReporter(c) // memory.go: RAM for the router's starvation watch
+		go diskReporter(c)   // disk.go: the root disk and the volume, for the router's low-disk warning
+		go screenReporter(c) // screen.go: the pane for the read-only terminal
+		go serveAPIProxy(c)  // apiproxy.go: $JARVIS_URL for the session scripts
+		go liveSync(c)       // livesync.go: the transcripts to the Storage Box (through the router) for search
+		if _, err := os.Stat(claudeLoginOn); err == nil {
+			go credsSync() // claudelogin.go: the Claude login sync (boot left the marker)
+		}
+	}()
+	log.Printf("supervisor up (pid %d)", os.Getpid())
+	for {
+		var out struct {
+			Commands   []string   `json:"commands"`
+			Execs      []Exec     `json:"execs"`
+			Deliveries []Delivery `json:"deliveries"` // deliver.go: vouched, core-attested inputs
+		}
+		if err := c.json("GET", "/m/commands", nil, &out); err != nil {
+			time.Sleep(5 * time.Second)
+			continue
+		}
+		for _, e := range out.Execs { // guarded (guard.go guardExec)
+			go runExec(c, e)
+		}
+		for _, d := range out.Deliveries { // guarded (guard.go guardDelivery)
+			go runDelivery(c, d)
+		}
+		for _, cmd := range out.Commands {
+			runCommand(c, cmd)
+		}
+	}
+}
+
+// runCommand: the unguarded commands, which carry no instruction (a word each)
+func runCommand(c *client, cmd string) {
+	switch cmd {
+	case "free": // memory.go: an Upgrade, before its snapshot
+		if booted() && !frozen.Load() {
+			log.Printf("free: stopping the session's processes for an Upgrade")
+			freeMemory()
+		}
+	case "refresh-secrets": // putkey.go: an unlock for this cert went through
+		if booted() {
+			go refreshFromRouter(c)
+		}
+	case "pause-harness":
+		if err := pauseHarness(); err != nil {
+			log.Printf("pause-harness: %v", err)
+		}
+	case "resume-harness":
+		if frozen.Load() {
+			log.Printf("resume-harness refused: the session is stopped for its final snapshot")
+		} else if err := resumeHarness(); err != nil {
+			log.Printf("resume-harness: %v", err)
+		}
+	case "snapshot":
+		if !booted() {
+			if err := bootingSnapshot(c); err != nil { // snapstream.go: the predecessor's, carried over
+				log.Printf("answering the snapshot while booting: %v", err)
+			}
+		} else if err := uploadSnapshot(c); err != nil {
+			log.Printf("snapshot failed: %v", err)
+			reportSnapshotFailed(c, err) // snapstream.go: the pause stops waiting, and nothing is lost
+		}
+	default:
+		log.Printf("unknown command %q ignored", clip(cmd, 40))
+	}
+}
+
+func clip(s string, n int) string {
+	if len(s) > n {
+		return s[:n] + "…"
+	}
+	return s
+}
+
+// ---- the Claude process: pause and resume -----------------------------------------------------------------
+
+// harnessPID: the harness's launcher (boot exec'd into it)
+func harnessPID() int {
+	s, _ := readTrim(harnessPIDPath)
+	n, _ := strconv.Atoi(s)
+	return n
+}
+
+// keeperPID: the supervisor's keeper (the worker's parent), never stopped or killed by the supervisor itself
+func keeperPID() int { return os.Getppid() }
+
+// children: pid → its children, from /proc
+var children = func() map[int][]int {
+	out := map[int][]int{}
+	ents, _ := os.ReadDir(procRoot)
+	for _, e := range ents {
+		pid, err := strconv.Atoi(e.Name())
+		if err != nil {
+			continue
+		}
+		b, err := os.ReadFile(filepath.Join(procRoot, e.Name(), "stat"))
+		if err != nil {
+			continue
+		}
+		// pid (comm) state ppid …: comm may hold spaces and parentheses, so cut at the last ')'
+		s := string(b)
+		i := strings.LastIndexByte(s, ')')
+		if i < 0 {
+			continue
+		}
+		f := strings.Fields(s[i+1:])
+		if len(f) < 2 {
+			continue
+		}
+		ppid, _ := strconv.Atoi(f[1])
+		out[ppid] = append(out[ppid], pid)
+	}
+	return out
+}
+
+// tmuxPanes: the pid of every pane's process (the Claude host runs in tmux session `claude`, whose server is not a
+// child of the launcher)
+var tmuxPanes = func() []int {
+	out, err := exec.Command("tmux", "list-panes", "-a", "-F", "#{pane_pid}").Output()
+	if err != nil {
+		return nil
+	}
+	var pids []int
+	for _, l := range strings.Fields(string(out)) {
+		if n, err := strconv.Atoi(l); err == nil {
+			pids = append(pids, n)
+		}
+	}
+	return pids
+}
+
+// harnessTree: the launcher, every tmux pane's process and all their descendants, parents first; never the
+// supervisor (worker or keeper) or pid 1
+func harnessTree() []int {
+	kids := children()
+	skip := map[int]bool{os.Getpid(): true, keeperPID(): true, 1: true, 0: true}
+	seen := map[int]bool{}
+	var order []int
+	var walk func(int)
+	walk = func(p int) {
+		if seen[p] || skip[p] {
+			return
+		}
+		seen[p] = true
+		order = append(order, p)
+		k := append([]int(nil), kids[p]...)
+		sort.Ints(k)
+		for _, c := range k {
+			walk(c)
+		}
+	}
+	if h := harnessPID(); h > 1 {
+		walk(h)
+	}
+	for _, p := range tmuxPanes() {
+		walk(p)
+	}
+	return order
+}
+
+// pauseHarness: SIGSTOP the Claude process (its launcher, the tmux panes and everything under them), parents first
+// so nothing restarts a stopped child; the stopped pids are kept for resumeHarness
+func pauseHarness() error {
+	pids := harnessTree()
+	if len(pids) == 0 {
+		return errors.New("no harness process found")
+	}
+	stopped := []string{}
+	for _, p := range pids {
+		if signalProc(p, syscall.SIGSTOP) == nil {
+			stopped = append(stopped, strconv.Itoa(p))
+		}
+	}
+	if err := os.WriteFile(harnessPausedPath, []byte(strings.Join(stopped, "\n")), 0o600); err != nil {
+		return err
+	}
+	log.Printf("pause-harness: stopped the Claude process (%d processes)", len(stopped))
+	return nil
+}
+
+// resumeHarness: SIGCONT what pauseHarness stopped, children first
+func resumeHarness() error {
+	b, err := os.ReadFile(harnessPausedPath)
+	if err != nil {
+		return errors.New("the harness isn't paused")
+	}
+	pids := strings.Fields(string(b))
+	n := 0
+	for i := len(pids) - 1; i >= 0; i-- {
+		if p, err := strconv.Atoi(pids[i]); err == nil && signalProc(p, syscall.SIGCONT) == nil {
+			n++
+		}
+	}
+	os.Remove(harnessPausedPath)
+	log.Printf("resume-harness: let the Claude process go on (%d processes)", n)
+	return nil
+}
+
+// ---- the whole session, for the final snapshot -------------------------------------------------------------
+
+// freezeSession: the Claude process first (pauseHarness), then SIGSTOP to every other process this user may signal
+// (kill(-1) spares the caller); the keeper is let go on at once. Only on a Fly machine.
+var freezeSession = func() {
+	if os.Getenv("FLY_MACHINE_ID") == "" {
+		return
+	}
+	if err := pauseHarness(); err != nil {
+		log.Printf("freezing the session: %v", err)
+	}
+	if err := syscall.Kill(-1, syscall.SIGSTOP); err != nil {
+		log.Printf("freezing the session: %v", err)
+	}
+	if k := keeperPID(); k > 1 {
+		syscall.Kill(k, syscall.SIGCONT)
+	}
+	log.Printf("session stopped for the final snapshot")
+}
+
+// thawSession: SIGCONT to the session (the counterpart of freezeSession, after a failed snapshot); only on a Fly
+// machine
+var thawSession = func() {
+	if os.Getenv("FLY_MACHINE_ID") == "" {
+		return
+	}
+	if err := syscall.Kill(-1, syscall.SIGCONT); err != nil {
+		log.Printf("thawing the session: %v", err)
+	}
+	os.Remove(harnessPausedPath)
+	log.Printf("session let go on")
+}

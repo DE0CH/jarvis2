@@ -395,7 +395,7 @@ func harnessEnv(clean []string, v Vouched, me string, firstMachine bool, secrets
 	return out
 }
 
-// vouchedPath: what the agent process (started before the cert is read) needs of the vouched values
+// vouchedPath: what the supervisor process (started before the cert is read) needs of the vouched values
 var vouchedPath = dir + "/vouched.json" // a var so tests can move it
 
 func writeVouched(v Vouched) {

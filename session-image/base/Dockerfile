@@ -1,4 +1,4 @@
-# Jarvis 2 session image, base layer: the tools, harnesses, entrypoint and supervisor every session machine runs.
+# Jarvis 2 session image, base layer: the tools, harnesses, entrypoint and harness launchers every session machine runs.
 # session-image/Dockerfile puts Jarvis 2's machine side (jarvis2-machine) on top of it, FROM this image pinned by digest.
 # Built by .github/workflows/images.yml (job `base`) only when session-image/base/ changes, pushed to the public
 # package ghcr.io/de0ch/jarvis2-session as tag base-sha-<commit>; the pin job moves session-image/Dockerfile's BASE.
@@ -145,14 +145,14 @@ RUN pip3 install --no-cache-dir --break-system-packages asyncvnc "camoufox[geoip
  && apt-get update && apt-get install -y --no-install-recommends libgtk-3-0t64 libdbus-glib-1-2 libasound2t64 libx11-xcb1 xdotool xclip \
  && rm -rf /var/lib/apt/lists/*
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
-COPY session-supervisor.sh /usr/local/bin/session-supervisor.sh
+COPY harness-claude.sh /usr/local/bin/harness-claude.sh
 COPY workspace-layer.sh /usr/local/bin/workspace-layer.sh
 COPY pull-secrets /usr/local/bin/pull-secrets
 COPY content-sync /usr/local/bin/content-sync
 COPY set-permission-mode /usr/local/bin/set-permission-mode
 # The OpenRouter harness (an OpenRouter model): OpenCode is the agent, the Paseo daemon drives it and is the
 # remote control (its app over its relay + a web UI published through the cf-tunnel agent, cf-tunnel-agent.js).
-# harness-opencode.sh is its supervisor; `ws` is global.
+# harness-opencode.sh is its launcher; `ws` is global.
 # Size: trim in the SAME layer: opencode runs bin/opencode.exe, a copy of its platform package (both platform packages
 # = 2 x 185 MB more), and Paseo's bundled Claude Agent SDK binary (248 MB) becomes a link to the image's own claude.
 RUN npm install -g opencode-ai@1.18.31 @getpaseo/cli@0.8.0 && npm cache clean --force \
@@ -183,7 +183,7 @@ COPY openclaw-claw-harness /usr/local/lib/openclaw-claw-harness
 COPY harness-openclaw.sh /usr/local/bin/harness-openclaw.sh
 COPY openclaw-transcript /usr/local/bin/openclaw-transcript
 RUN chmod +x /usr/local/bin/harness-openclaw.sh /usr/local/bin/openclaw-transcript
-RUN chmod +x /usr/local/bin/entrypoint.sh /usr/local/bin/session-supervisor.sh /usr/local/bin/workspace-layer.sh /usr/local/bin/pull-secrets /usr/local/bin/content-sync /usr/local/bin/set-permission-mode
+RUN chmod +x /usr/local/bin/entrypoint.sh /usr/local/bin/harness-claude.sh /usr/local/bin/workspace-layer.sh /usr/local/bin/pull-secrets /usr/local/bin/content-sync /usr/local/bin/set-permission-mode
 USER claude
 WORKDIR /home/claude
 # Native claude binary for the claude user.

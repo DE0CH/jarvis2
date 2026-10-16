@@ -6,20 +6,20 @@
 #   SESSION_SECRETS_JSON    the chosen environment's secrets as a JSON object (-> ~/.secrets + env)
 #   SESSION_REPOS           comma-separated git URLs to clone into ~/workspace
 #   SESSION_CONTENT         comma-separated content store names, pulled into ~/content/<store>/ (content-sync)
-#   SESSION_API_PROXY       "1": the supervisor runs claude through api-proxy.js (logs ~/artifacts/api-log)
+#   SESSION_API_PROXY       "1": harness-claude.sh runs claude through api-proxy.js (logs ~/artifacts/api-log)
 #   SESSION_LABEL           session title; blank => the Claude session names itself
 #   SESSION_PERMISSION_MODE auto | bypass
-#   SESSION_PROMPT          [optional] first prompt, typed into the host once it is up (supervisor)
-#   SESSION_ATTACHMENTS_JSON [optional] first-prompt attachments as [{name,isImage}] — the supervisor
+#   SESSION_PROMPT          [optional] first prompt, typed into the host once it is up (harness-claude.sh)
+#   SESSION_ATTACHMENTS_JSON [optional] first-prompt attachments as [{name,isImage}] — harness-claude.sh
 #                           downloads them (SESSION_ATTACH_DAV_BASE/_DIR/_DAV_USER/_DAV_PASS point at
 #                           their Storage Box staging dir) into ~/uploads and references them in the
-#                           first message (images become inline [Image #N]); see session-supervisor.sh
+#                           first message (images become inline [Image #N]); see harness-claude.sh
 #   SESSION_ONE_SHOT        "1" = one-shot: claude exits once SESSION_PROMPT is done and Jarvis
-#                           archives + destroys the machine (see one_shot_watch in the supervisor)
-#   SESSION_MODEL           model id (default claude-opus-5-5, see session-supervisor.sh)
+#                           archives + destroys the machine (see one_shot_watch in harness-claude.sh)
+#   SESSION_MODEL           model id (default claude-opus-5-5, see harness-claude.sh)
 # Fly itself sets FLY_MACHINE_ID. jarvis2-machine runs first (machine/main.go): it restores the predecessor's signed
 # snapshot (transcripts placed under the project, ~/.claude.json, ~/workspace, ~/artifacts), pulls the secrets and
-# sets the env, then execs this script; session-supervisor.sh then `claude --resume`s the newest transcript.
+# sets the env, then execs this script; harness-claude.sh then `claude --resume`s the newest transcript.
 set -uo pipefail
 HOME=/home/claude; cd "$HOME"
 # ~/artifacts: anything the session puts (or symlinks) here is archived to the Storage Box by
@@ -153,4 +153,4 @@ if [ -d "$HOME/artifacts/on-start" ]; then
   done
 fi
 
-exec /usr/local/bin/session-supervisor.sh "$WD"
+exec /usr/local/bin/harness-claude.sh "$WD"

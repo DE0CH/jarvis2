@@ -30,7 +30,7 @@ func moveStep(id, m string) {
 	}
 	step("move: the session's identity before (Fly machine, boot, supervisor) and a terminal grant for the exec probe")
 	ident := func() string {
-		out, _, err := flyExec(m, []string{"sh", "-c", "cat /proc/sys/kernel/random/boot_id; pgrep -f session-supervisor | head -1"})
+		out, _, err := flyExec(m, []string{"sh", "-c", "cat /proc/sys/kernel/random/boot_id; pgrep -f harness-claude | head -1"})
 		if err != nil {
 			log.Fatalf("identity of %s: %v", m, err)
 		}

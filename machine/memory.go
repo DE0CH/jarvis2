@@ -4,13 +4,13 @@ package main
 // same numbers by Fly exec: lib/memory.js REG_SECTION), and the "free" command that goes before an Upgrade's
 // snapshot.
 //
-// Every memEvery the agent reads /proc (MemTotal, MemAvailable, the kernel's oom_kill count, PSI memory "full"
+// Every memEvery the supervisor reads /proc (MemTotal, MemAvailable, the kernel's oom_kill count, PSI memory "full"
 // avg60, the three biggest processes) and POSTs it to /m/memory. A machine too starved to send it is itself the
 // signal: the router counts a silent machine whose last sample was short as starving.
 //
 // free (router command, an Upgrade only): the session is about to be snapshotted and moved to a bigger machine,
 // so its work stops early to give the snapshot the memory: the harness (the machine's main process, whose exit
-// stops the Fly machine) is SIGSTOPped, and every other process of this user except the agent is SIGKILLed (Jarvis
+// stops the Fly machine) is SIGSTOPped, and every other process of this user except the supervisor is SIGKILLed (Jarvis
 // 1's FREEZE_CMD; Deyao, 2026-10-10: kill the AI too, or it starts the build again). The list of what was killed
 // goes to ~/artifacts/jarvis2-upgrade-freed.txt, inside the snapshot, for the next machine's "upgraded" message.
 
@@ -140,7 +140,7 @@ func processes(keep func(pid, uid int) bool) []proc {
 	return out
 }
 
-// memoryReporter: the agent's memory loop (started with the status reports, once booted)
+// memoryReporter: the supervisor's memory report (started with the status reports, once booted)
 func memoryReporter(c *client) {
 	for ; ; time.Sleep(memEvery) {
 		s, err := readMemory()
@@ -161,13 +161,13 @@ var freedFile = "artifacts/jarvis2-upgrade-freed.txt"
 // signalProc: the kill(2) the free step uses (a test replaces it)
 var signalProc = func(pid int, sig syscall.Signal) error { return syscall.Kill(pid, sig) }
 
-// freeMemory: stop the harness (the main process: the agent's parent, which boot exec'd into it), kill every
-// other process of this user except the agent itself, and record what was killed. Only on a Fly machine.
+// freeMemory: stop the harness (the process boot exec'd into), kill every other process of this user except the
+// supervisor (its worker and its keeper), and record what was killed. Only on a Fly machine.
 func freeMemory() {
 	if os.Getenv("FLY_MACHINE_ID") == "" || os.Getuid() == 0 { // never as root: it would kill the whole machine
 		return
 	}
-	freeProcesses(os.Getpid(), os.Getppid(), os.Getuid())
+	freeProcesses(os.Getpid(), harnessPID(), os.Getuid())
 }
 
 func freeProcesses(self, main, uid int) []proc {
@@ -176,7 +176,7 @@ func freeProcesses(self, main, uid int) []proc {
 			log.Printf("free: stopping the harness (%d): %v", main, err)
 		}
 	}
-	victims := processes(func(pid, u int) bool { return u == uid && pid != self && pid != main && pid > 1 })
+	victims := processes(func(pid, u int) bool { return u == uid && pid != self && pid != main && pid != keeperPID() && pid > 1 })
 	sort.Slice(victims, func(i, j int) bool { return victims[i].rssKb > victims[j].rssKb })
 	var killed []proc
 	for _, p := range victims {

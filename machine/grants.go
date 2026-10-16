@@ -17,7 +17,6 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -109,83 +108,6 @@ func readAllow() []allowEntry {
 	return out
 }
 
-// authorise: nil when the request may run
-func authorise(e Exec, now time.Time) (ExecRequest, error) {
-	var r ExecRequest
-	if err := json.Unmarshal([]byte(e.Request), &r); err != nil {
-		return r, errors.New("bad request")
-	}
-	if !verify(r.Holder, []byte(e.Request), e.Sig) {
-		return r, errors.New("not signed by the holder it names")
-	}
-	if at := time.Unix(r.At, 0); now.Sub(at) > 2*time.Minute || at.Sub(now) > 2*time.Minute {
-		return r, errors.New("request too old or from the future")
-	}
-	seenMu.Lock()
-	for id, t := range seen {
-		if now.Sub(t) > 5*time.Minute {
-			delete(seen, id)
-		}
-	}
-	dup := seen[r.ID] != time.Time{}
-	seen[r.ID] = now
-	seenMu.Unlock()
-	if r.ID == "" || dup {
-		return r, errors.New("request id missing or already used")
-	}
-	cert, err := currentCert()
-	if err != nil {
-		return r, fmt.Errorf("no valid cert: %v", err)
-	}
-	me := cert.Line // core-signed, so the router can't relabel a machine to reuse another line's grant
-	if me == "" || r.Session != me {
-		return r, fmt.Errorf("request is for line %s, this is %s", r.Session, me)
-	}
-	if r.PhoneOnly && e.Grant == nil {
-		return r, fmt.Errorf("this request needs a phone grant: file `jarvis2-request grant %s --minutes N --why …` and Deyao approves it with Face ID", r.Holder)
-	}
-	if e.Grant == nil {
-		if cert.Sensitive {
-			return r, fmt.Errorf("this session holds a sensitive store, so only a phone grant opens a shell: `jarvis2-request grant %s --minutes N --why …`", r.Holder)
-		}
-		for _, a := range readAllow() {
-			if u, err := time.Parse(time.RFC3339, a.Until); err == nil && a.Holder == r.Holder && now.Before(u) {
-				return r, nil
-			}
-		}
-		return r, fmt.Errorf("no grant, and %s isn't on this session's allow list: `jarvis2-machine allow %s DURATION` (non-sensitive sessions), or `jarvis2-request grant %s --why …`", r.Holder, r.Holder, r.Holder)
-	}
-	var g Grant
-	if cert.Phone == "" || verifyDoc(cert.Phone, e.Grant, &g) != nil {
-		return r, errors.New("the grant isn't signed by the phone named in this machine's cert")
-	}
-	if g.Holder != r.Holder || g.Session != me || g.Scope != "shell" {
-		return r, errors.New("the grant is for another holder, session or scope")
-	}
-	switch g.Kind {
-	case "grant":
-		iss, err1 := time.Parse(time.RFC3339, g.Issued)
-		exp, err2 := time.Parse(time.RFC3339, g.Expires)
-		if err1 != nil || err2 != nil || exp.Sub(iss) > maxGrant || !now.Before(exp) || now.Before(iss.Add(-2*time.Minute)) {
-			return r, fmt.Errorf("the grant is expired, or longer than 10 minutes: ask for a new one (`jarvis2-request grant %s --minutes N --why …`)", r.Holder)
-		}
-	case "rule":
-		if r.PhoneOnly {
-			return r, fmt.Errorf("this request needs a phone grant, not a standing rule: `jarvis2-request grant %s --minutes N --why …`", r.Holder)
-		}
-		if cert.Sensitive {
-			return r, fmt.Errorf("this session holds a sensitive store, so standing rules don't apply: `jarvis2-request grant %s --minutes N --why …` (at most 10 minutes)", r.Holder)
-		}
-		u, err := time.Parse(time.RFC3339, g.Until)
-		if err != nil || !now.Before(u) {
-			return r, fmt.Errorf("the standing rule has expired: ask again (`jarvis2-request grant %s --days N --why …`)", r.Holder)
-		}
-	default:
-		return r, errors.New("unknown grant kind")
-	}
-	return r, nil
-}
-
 type capped struct{ bytes.Buffer }
 
 func (c *capped) Write(p []byte) (int, error) {
@@ -196,18 +118,15 @@ func (c *capped) Write(p []byte) (int, error) {
 }
 
 func runExec(c *client, e Exec) {
-	r, err := authorise(e, time.Now())
-	if err == nil {
-		err = notFrozen()
-	}
+	r, err := guardExec(e, time.Now()) // guard.go
 	res := ExecResult{ID: r.ID}
 	if err != nil {
 		res.Code, res.Error = -1, err.Error()
-		log.Printf("exec refused: %v", err)
+		log.Printf("exec %s refused: %v", r.ID, err)
 	} else {
 		t := time.Duration(max(1, min(r.Timeout, 600))) * time.Second
 		ctx, cancel := context.WithTimeout(context.Background(), t)
-		cmd := exec.CommandContext(ctx, "bash", "-lc", r.Cmd)
+		cmd := unprotectedCommand(ctx, "bash", "-lc", r.Cmd) // supervisor.go: back under the OOM killer
 		var out, errb capped
 		cmd.Stdout, cmd.Stderr = &out, &errb
 		err := cmd.Run()
