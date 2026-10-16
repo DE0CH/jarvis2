@@ -7,7 +7,8 @@ import XCTest
 /// Reset or recover (an old kit refused; Recover with the public TEST kit) → stores (create, unlock) → the encrypted
 /// backup (download, checked, share sheet) → New session (the
 /// one page; Start also opens the locked harness store) → grants (a 10-minute grant and a standing rule on the Face ID
-/// review, one denied, one forgotten) → schedules → terminal (the router's page in a WebView) → pause → transcript →
+/// review, one denied, one forgotten) → schedules → terminal (the router's page in a WebView) → supervisor log + lifecycle → pause → transcript
+/// → the logs again →
 /// resume with a prompt (signed, shown on the approval) → permission mode → resume with the latest image → destroy →
 /// Previous → search → repos (add with its deploy key, Jarvis 2's own repo comes up sensitive, remove; claude-env
 /// pre-selected on New session only when listed) → tasks → Reset (the kit ends the core; a new kit; the stores empty).
@@ -410,6 +411,9 @@ final class Jarvis2UITests: JarvisUITestCase {
       back()
     }
 
+    // ---- the supervisor log and the lifecycle log (the fake machine writes no supervisor lines; the router records the boot)
+    checkLogs(sid, supervisorLine: false, flyStep: false, "running")
+
     // ---- pause → transcript → resume with a prompt (a one-time input the phone signs: the approval shows it)
     guard wait(el("pause-\(sid)"), 60, "Pause") else { return }
     el("pause-\(sid)").tap()
@@ -423,6 +427,7 @@ final class Jarvis2UITests: JarvisUITestCase {
       shot("transcript")
       back()
     }
+    checkLogs(sid, supervisorLine: false, flyStep: false, "paused")
     el("resume-\(sid)").tap()
     answer("Resume", text: "carry on")
     if arrives(el("secure-approve"), 90, "the resume-prompt approval") {

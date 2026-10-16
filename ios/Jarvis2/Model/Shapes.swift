@@ -408,3 +408,39 @@ struct TasksOverview: Equatable {
     schedules = j["schedules"].array.map(TaskSchedule.init)
   }
 }
+
+/// one line of a session's supervisor log (GET api/sessions/:id/supervisor-log): the machine's supervisor wrote it
+struct SupervisorLine: Equatable, Hashable, Identifiable {
+  let j: JSON
+  var id: Int { seq }
+  var seq: Int { j["seq"].int ?? 0 }
+  var at: Date? { j["at"].string?.isoDate }
+  var machine: String { j["machine"].string ?? "" }
+  var text: String { j["text"].string ?? "" }
+}
+
+/// one lifecycle operation of a session (GET api/sessions/:id/lifecycle): a boot, pause, resume, upgrade or destroy
+struct LifecycleOp: Equatable, Hashable, Identifiable {
+  let j: JSON
+  var id: String { j["id"].string ?? "" }
+  var kind: String { j["kind"].string ?? "operation" }
+  var started: Date? { j["started"].string?.isoDate }
+  var ended: Date? { j["ended"].string?.isoDate }
+  /// running | done | failed (a router that also says `running: true` counts as running)
+  var state: String { j["running"].bool == true ? "running" : (j["state"].text ?? (ended == nil ? "running" : "done")) }
+  var running: Bool { state == "running" }
+  var error: String? { j["error"].text }
+  var machines: [String] { j["machines"].strings }
+  var entries: [LifecycleEntry] { j["entries"].array.enumerated().map { LifecycleEntry(n: $0.offset, j: $0.element) } }
+}
+
+/// one step of a lifecycle operation's log, in order: what Fly did, what the router did, what the supervisor wrote
+struct LifecycleEntry: Equatable, Hashable, Identifiable {
+  let n: Int
+  let j: JSON
+  var id: Int { n }
+  var at: Date? { j["at"].string?.isoDate }
+  var source: String { j["source"].string ?? "" }
+  var machine: String { j["machine"].string ?? "" }
+  var text: String { j["text"].string ?? "" }
+}

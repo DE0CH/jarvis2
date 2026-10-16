@@ -305,3 +305,37 @@ class JarvisUITestCase: XCTestCase {
     return arrives(el("newBtn"), 60, "the session list after setup")
   }
 }
+
+extension JarvisUITestCase {
+  /// the session page's two read-only logs (Sessions/LogViews.swift): the supervisor log opens (with a line when
+  /// `supervisorLine`), Lifecycle lists an operation and opens its log (with a Fly step when `flyStep`); back on the
+  /// session page after each
+  func checkLogs(_ sid: String, supervisorLine: Bool, flyStep: Bool, _ what: String) {
+    if scrolledTo(el("suplog-\(sid)")) {
+      el("suplog-\(sid)").tap()
+      if arrives(el("supervisor-log"), 20, "the supervisor log (\(what))") {
+        if supervisorLine { wait(prefixed("suplog-line-"), 90, "a supervisor log line (\(what))") }
+        else { sleep(3) }
+        shot("supervisor-log-\(what)")
+      }
+      back()
+    } else { XCTFail("[\(tag)] Supervisor log on the session page (\(what))") }
+    if scrolledTo(el("lifecycle-\(sid)")) {
+      el("lifecycle-\(sid)").tap()
+      if arrives(el("lifecycle"), 20, "the lifecycle list (\(what))"), wait(prefixed("lc-op-"), 60, "a lifecycle operation (\(what))") {
+        shot("lifecycle-\(what)")
+        prefixed("lc-op-").tap()
+        if arrives(el("lifecycle-op"), 20, "the operation's log (\(what))") {
+          if flyStep {
+            let fly = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH 'lc-entry-' AND label CONTAINS 'Fly'")).firstMatch
+            wait(fly, 60, "a Fly step in the operation's log (\(what))")
+          }
+          sleep(1)
+          shot("lifecycle-op-\(what)")
+        }
+        back()
+      }
+      back()
+    } else { XCTFail("[\(tag)] Lifecycle on the session page (\(what))") }
+  }
+}

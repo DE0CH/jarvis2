@@ -474,6 +474,10 @@ export function Sessions() {
                       {paused && <Button variant="soft" color="gray" id={"tail-" + m.id} onPress={() => openPage("transcript", { title: sessionTitle(m), note: ["Paused", m.pausedAt ? ago(m.pausedAt) : "—"], path: `api/sessions/${m.id}/tail`, action: { label: "Resume", run: () => resumeSession(m.id) } })}>Transcript</Button>}
                       <MoreButton m={m} cool={cool} />
                     </>}
+                  {/* read only, kept for the session's life: beside the terminal, in every state, also while an
+                      operation runs (pages/Logs.tsx) */}
+                  <Button variant="soft" color="gray" id={"suplog-" + m.id} onPress={() => openPage("supervisor-log", { id: m.id, title: sessionTitle(m) })}>Supervisor log</Button>
+                  <Button variant="soft" color="gray" id={"lifecycle-" + m.id} onPress={() => openPage("lifecycle", { id: m.id, title: sessionTitle(m) })}>Lifecycle</Button>
                 </Flex>
               </Card>
             );

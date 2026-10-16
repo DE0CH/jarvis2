@@ -349,6 +349,20 @@ fixes, 34–40 carried over from the old app and still true, 41–43 the web pag
     row (absent on an image from before), and the Sessions list shows it as a footnote line under the card's first
     line only while something runs (a list row has no room for "None").
 
+## Supervisor log and lifecycle log (2026-10-16)
+
+74. **Two read-only logs on every session, beside the terminal** (Deyao, 2026-10-16). Both apps: the session page has
+   **Supervisor log** and **Lifecycle** in every state (running, paused, failed, also while a pause or destroy runs), next
+   to Terminal (iPhone: rows in the actions section, `suplog-<id>` / `lifecycle-<id>`, `Sessions/LogViews.swift`; web: two
+   soft buttons in the card's action row, `pages/Logs.tsx`). The supervisor log (`GET api/sessions/:id/supervisor-log`)
+   is one monospaced list, a line per entry with its local time, a "machine …" header where the machine changes, polled
+   every 2 s with `after` and following the end (iPhone: a Follow toggle; the web page scrolls to the end). Lifecycle
+   (`GET api/sessions/:id/lifecycle`) lists the operations newest first, each a card/row with its kind, start, duration
+   and a running / done / failed badge; opening one (`…/lifecycle/:op`) shows its rows (State, Started, Took, Machines,
+   Error) and then its entries in order, each with time, a source tag (Fly, Router, Supervisor), the machine and the text;
+   it polls every 2 s while the operation runs and stops when it ends. Long lines wrap (no sideways scrolling); there is no
+   action on either page and nothing pops up.
+
 ## Unfinished / known gaps
 
 - Free text (prompt, title) reaches the machine signed only with a core that vouches (the held core doesn't).

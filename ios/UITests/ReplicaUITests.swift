@@ -261,6 +261,9 @@ final class ReplicaUITests: JarvisUITestCase {
     }
     back()
 
+    // ---- the supervisor log (the real machine's supervisor writes its boot) and the lifecycle log (the boot's Fly steps)
+    checkLogs(sid, supervisorLine: true, flyStep: true, "running")
+
     // ---- the Inbox, from a session: deny one grant request, allow another with Face ID ----
     XCTAssertEqual(relay("inbox-session:\(sid):status"), "ok", "the session filed a grant request")
     if inboxReview("session-deny") {
