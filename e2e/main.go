@@ -587,7 +587,30 @@ func main() {
 	om := machineOf(os1)
 	step("a new session's Claude is logged in with no grant: the machine took its account's pair from the router at boot")
 	expectOnMachine(om, "grep -c e2e-fake-refresh /home/claude/.claude/.credentials.json; stat -c %a /home/claude/.claude/.credentials.json", "1\n600")
-	expectOnMachine(om, "for p in /proc/[0-9]*; do tr '\\0' ' ' < $p/cmdline 2>/dev/null; echo; done | grep -c '^/proc/self/exe creds-sync $'", "1")
+	// the Claude login sync is the supervisor's (machine/claudelogin.go credsSync, started once booted)
+	expectOnMachine(om, "grep -c 'the supervisor keeps the pair in step' /run/jarvis2/supervisor.log", "1")
+	// the supervisor (keeper and worker) is out of the OOM killer's reach; the harness is not
+	expectOnMachine(om, "for p in /proc/[0-9]*; do case \"$(tr '\\0' ' ' < $p/cmdline 2>/dev/null)\" in '/proc/self/exe supervisor '*) cat $p/oom_score_adj;; esac; done | sort | uniq -c | awk '{print $1, $2}'", "2 -1000")
+	expectOnMachine(om, "cat /proc/$(pgrep -o -f harness-claude)/oom_score_adj", "0")
+	// its log reaches the router
+	for i := 0; ; i++ {
+		var sl struct {
+			Lines []struct{ Text string } `json:"lines"`
+		}
+		call(router, "GET", "/api/sessions/"+os1+"/supervisor-log", nil, &sl)
+		found := false
+		for _, l := range sl.Lines {
+			found = found || strings.Contains(l.Text, "supervisor up")
+		}
+		if found {
+			log.Printf("   the supervisor log is at the router (%d lines)", len(sl.Lines))
+			break
+		}
+		if i > 30 {
+			log.Fatalf("the supervisor log never reached the router (%d lines)", len(sl.Lines))
+		}
+		time.Sleep(2 * time.Second)
+	}
 	if ng, _ := session(os1)["needsGrant"].(string); ng != "" {
 		log.Fatalf("a new session with a Claude account asks for a grant: %q", ng)
 	}

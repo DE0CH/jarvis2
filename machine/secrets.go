@@ -354,7 +354,15 @@ func peerOf(conn net.Conn) (int, int, string) {
 		return 0, -1, "?"
 	}
 	comm, _ := os.ReadFile(filepath.Join(procRoot, strconv.Itoa(int(cred.Pid)), "comm"))
-	return int(cred.Pid), int(cred.Uid), strings.TrimSpace(string(comm))
+	name := strings.TrimSpace(string(comm))
+	if name == "exe" { // jarvis2-machine started as /proc/self/exe: its subcommand says more
+		if cl, err := os.ReadFile(filepath.Join(procRoot, strconv.Itoa(int(cred.Pid)), "cmdline")); err == nil {
+			if f := strings.Split(string(cl), "\x00"); len(f) > 1 {
+				name = "jarvis2-machine " + clip(f[1], 20)
+			}
+		}
+	}
+	return int(cred.Pid), int(cred.Uid), name
 }
 
 // ---- the client side (boot, the CLI) -----------------------------------------------------------------------

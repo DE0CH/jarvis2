@@ -346,7 +346,9 @@ func prepare() error {
 		if err != nil {
 			return err
 		}
-		secrets = r.Secrets
+		for k, v := range r.Secrets { // (an empty answer carries no map)
+			secrets[k] = v
+		}
 	}
 	log.Printf("secrets ok: %d keys (held by the supervisor, in RAM)", len(secrets))
 
