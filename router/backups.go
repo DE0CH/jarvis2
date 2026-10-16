@@ -228,6 +228,23 @@ func (r *Router) registerBackups(app func(string, http.HandlerFunc)) {
 			writeJSON(w, 400, map[string]string{"error": err.Error()})
 			return
 		}
+		// an export over an API call's body limit comes in parts: a part of the same export (same bucket and
+		// fetchedAt) adds its objects to the kept ones (a key sent again replaces its object)
+		if old := r.backupFallback(); old != nil && old.Bucket == f.Bucket && old.FetchedAt == f.FetchedAt {
+			byKey := map[string]int{}
+			for i, o := range old.Objects {
+				byKey[o.Key] = i
+			}
+			for _, o := range f.Objects {
+				if i, ok := byKey[o.Key]; ok {
+					old.Objects[i] = o
+				} else {
+					old.Objects = append(old.Objects, o)
+				}
+			}
+			f.Objects = old.Objects
+		}
+		b, _ = json.Marshal(f)
 		if err := writeFileAtomic(filepath.Join(r.cfg.DataDir, backupFallbackFile), b); err != nil {
 			writeJSON(w, 500, map[string]string{"error": err.Error()})
 			return

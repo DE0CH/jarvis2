@@ -133,8 +133,12 @@ func TestBackupsFallbackWhileTheBucketFails(t *testing.T) {
 	if code, m := do("POST", "/api/backups/fallback", exp); code != 200 || m["objects"] != float64(1) {
 		t.Fatalf("keep: got %d %v", code, m)
 	}
+	part2 := `{"format":"jarvis2-backup-export","version":1,"bucket":"bkt","fetchedAt":"2026-10-14T03:19:04Z","objects":[{"key":"stores/b.json","body":"{\"doc\":\"b\",\"sig\":\"y\"}"}]}`
+	if code, m := do("POST", "/api/backups/fallback", part2); code != 200 || m["objects"] != float64(2) {
+		t.Fatalf("second part: got %d %v", code, m)
+	}
 	code, m := do("GET", "/api/backups", "")
-	if code != 200 || m["fallback"].(map[string]any)["fetchedAt"] != "2026-10-14T03:19:04Z" {
+	if code != 200 || m["fallback"].(map[string]any)["fetchedAt"] != "2026-10-14T03:19:04Z" || len(m["objects"].([]any)) != 2 {
 		t.Fatalf("fallback: got %d %v", code, m)
 	}
 	if o := m["objects"].([]any)[0].(map[string]any); o["key"] != "stores/a.json" || o["body"] != `{"doc":"a","sig":"x"}` {
