@@ -40,7 +40,8 @@ func (r *Router) registerFeatures(app appRoute, m machineRoute, public publicRou
 	r.registerContent(app, m)               // content.go: content stores (Storage Box folders) for the app and the sessions
 	r.registerClaudeLogin(app, m, public)   // claudelogin.go: the Claude login, its refresh, Re-login, the usage quota
 	r.registerDevices(app, public)          // devices.go: pairing Deyao's OpenClaw/Paseo apps, /api/remotes, Start
-	r.registerSupervisorLog(app, m)         // supervisorlog.go: the machines' supervisor logs
+	r.registerSupervisorLog(m)              // supervisorlog.go: the machines' supervisor logs
+	r.registerSessionEvents(app)            // sessionevents.go: a session's one event stream (supervisor + lifecycle)
 	r.registerLifecycle(app)                // lifecycle.go: each boot/pause/resume/destroy's log, the harness pause
 }
 

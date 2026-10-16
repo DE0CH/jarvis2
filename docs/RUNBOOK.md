@@ -753,11 +753,11 @@ under one shared name deleted each other's service token, PAT and bucket (2026-1
 
 - What the core did: it keeps no log of its own (R2: as small and stateless as it can be); every change it makes is a
   signed answer the router keeps (certs, the input log in the router's `input-log.jsonl`).
-- A session's supervisor log (boot and the supervisor, DESIGN "The supervisor and the guard"): the app's Supervisor
-  log beside the terminal, or `GET /api/sessions/:id/supervisor-log`; kept for the session's life, and in its archive
+- A session's supervisor log (boot and the supervisor, DESIGN "The supervisor and the guard"): the app's Log beside
+  the terminal (source Supervisor), or `GET /api/sessions/:id/events`; kept for the session's life, and in its archive
   (`jarvis2/supervisor-log.jsonl`) after Destroy. On the machine itself: `/run/jarvis2/supervisor.log`.
 - What a boot, pause, resume, Upgrade or destroy did, step by step (the router's steps, Fly's events and platform log,
-  the supervisor's lines): the app's Lifecycle, or `GET /api/sessions/:id/lifecycle[/:op]`; archived as
+  the supervisor's lines): the same Log, each operation from its start mark to its end mark; archived as
   `jarvis2/lifecycle.json`.
 - A session machine's log: `FLY_API_TOKEN=$JARVIS2_FLY_TOKEN flyctl logs -a jarvis2-sessions --machine <id> --no-tail`
 - The supervisor stopped answering (a pause waits on "the machine never reported"): its keeper restarts the worker

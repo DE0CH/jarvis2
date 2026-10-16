@@ -1,7 +1,8 @@
 package main
 
 // The lifecycle log (Deyao, 2026-10-16): every boot, pause, resume, upgrade, restart and destroy of a session is an
-// operation with its own log, which the app and the web page show behind a button, live while it runs and afterwards.
+// operation with its own log; the app and the web page show it in the session's one event stream (sessionevents.go),
+// together with the supervisor's lines, live while it runs and afterwards.
 // An operation's log is, in time order:
 //
 //   - the router's own steps (source "router"): asked the core to start a machine, the machine is up, the cert, asked
@@ -600,22 +601,6 @@ func (r *Router) lcOpLog(op LcOp, own []LcEntry, sup []SupLine) []LcEntry {
 	return out
 }
 
-// lcView: one operation as the API answers it
-func (r *Router) lcView(session, opID string) (map[string]any, bool) {
-	ops, entries := r.lcRead(r.lcPath(session))
-	for _, op := range ops {
-		if op.ID != opID {
-			continue
-		}
-		r.sup.mu.Lock()
-		sup := readSupLog(r.supLogPath(session))
-		r.sup.mu.Unlock()
-		return map[string]any{"id": op.ID, "kind": op.Kind, "started": op.Started, "ended": op.Ended, "state": op.State,
-			"error": op.Error, "machines": op.Machines, "running": op.State == "running", "entries": r.lcOpLog(op, entries[op.ID], sup)}, true
-	}
-	return nil, false
-}
-
 // lcAll: every operation of the session, each with its log (the archive's lifecycle.json), oldest first
 func (r *Router) lcAll(session string) []map[string]any {
 	ops, entries := r.lcRead(r.lcPath(session))
@@ -672,32 +657,6 @@ func (r *Router) registerLifecycle(app appRoute) {
 		})
 		return
 	}
-	app("GET /api/sessions/{id}/lifecycle", func(w http.ResponseWriter, req *http.Request) {
-		id := req.PathValue("id")
-		if _, ok := exists(id); !ok {
-			writeJSON(w, 404, map[string]string{"error": "no session " + id})
-			return
-		}
-		ops, _ := r.lcRead(r.lcPath(id))
-		out := make([]LcOp, 0, len(ops))
-		for i := len(ops) - 1; i >= 0; i-- {
-			out = append(out, ops[i])
-		}
-		writeJSON(w, 200, map[string]any{"ops": out})
-	})
-	app("GET /api/sessions/{id}/lifecycle/{op}", func(w http.ResponseWriter, req *http.Request) {
-		id := req.PathValue("id")
-		if _, ok := exists(id); !ok {
-			writeJSON(w, 404, map[string]string{"error": "no session " + id})
-			return
-		}
-		v, ok := r.lcView(id, req.PathValue("op"))
-		if !ok {
-			writeJSON(w, 404, map[string]string{"error": "no such operation"})
-			return
-		}
-		writeJSON(w, 200, v)
-	})
 	// the supervisor's pause and resume of the Claude process (machine/supervisor.go), unguarded like snapshot and free
 	app("POST /api/sessions/{id}/harness", func(w http.ResponseWriter, req *http.Request) {
 		id := req.PathValue("id")

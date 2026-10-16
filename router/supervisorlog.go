@@ -2,10 +2,10 @@ package main
 
 // The supervisor's log (Deyao, 2026-10-16): each session machine's supervisor (machine/supervisor.go) pushes its own
 // log lines here (POST /m/supervisor-log), from its first second (also while it boots, before its first status
-// report). The router keeps them per session on its volume (supervisor-log/<session>.jsonl), for the session's life,
-// and the app and web page read them (GET /api/sessions/{id}/supervisor-log) next to the read-only terminal. The
-// lifecycle log (lifecycle.go) merges the lines of an operation's machines into that operation's log. On Destroy both
-// go into the session's Storage Box archive (jarvis2/supervisor-log.jsonl), then off the volume.
+// report). The router keeps them per session on its volume (supervisor-log/<session>.jsonl), for the session's life;
+// the app and web page read them in the session's one event stream with the lifecycle log (sessionevents.go,
+// GET /api/sessions/{id}/events). On Destroy both go into the session's Storage Box archive
+// (jarvis2/supervisor-log.jsonl), then off the volume.
 //
 // The lines are the machine's own words: the supervisor writes no secret into them (machine side), and the router
 // shows them only to Deyao's login.
@@ -18,7 +18,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"strconv"
 	"sync"
 	"time"
 )
@@ -137,26 +136,6 @@ func (r *Router) appendSupLog(session, machine string, lines []SupLine) error {
 	return nil
 }
 
-// supLogLines: a session's lines after seq after (at most limit), and the seq to ask after next
-func (r *Router) supLogLines(session string, after int64, limit int) ([]SupLine, int64) {
-	r.sup.mu.Lock()
-	all := readSupLog(r.supLogPath(session))
-	r.sup.mu.Unlock()
-	out := []SupLine{}
-	next := after
-	for _, l := range all {
-		if l.Seq <= after {
-			continue
-		}
-		if len(out) >= limit {
-			break
-		}
-		out = append(out, l)
-		next = l.Seq
-	}
-	return out, next
-}
-
 // dropSupLog: the session is gone (a record now, its archive holds the log)
 func (r *Router) dropSupLog(session string) {
 	r.sup.mu.Lock()
@@ -165,7 +144,7 @@ func (r *Router) dropSupLog(session string) {
 	delete(r.sup.next, session)
 }
 
-func (r *Router) registerSupervisorLog(app appRoute, m machineRoute) {
+func (r *Router) registerSupervisorLog(m machineRoute) {
 	m("POST /m/supervisor-log", func(w http.ResponseWriter, req *http.Request, machine string, body []byte) {
 		var in struct {
 			Lines []struct {
@@ -205,25 +184,5 @@ func (r *Router) registerSupervisorLog(app appRoute, m machineRoute) {
 			return
 		}
 		writeJSON(w, 200, map[string]bool{"ok": true})
-	})
-	app("GET /api/sessions/{id}/supervisor-log", func(w http.ResponseWriter, req *http.Request) {
-		id := req.PathValue("id")
-		found, machine := false, ""
-		r.st.Do(func(d *persisted) {
-			if s := d.Sessions[id]; s != nil {
-				found, machine = true, s.MachineID
-			}
-		})
-		if !found {
-			writeJSON(w, 404, map[string]string{"error": "no session " + id})
-			return
-		}
-		after, _ := strconv.ParseInt(req.URL.Query().Get("after"), 10, 64)
-		limit, _ := strconv.Atoi(req.URL.Query().Get("limit"))
-		if limit <= 0 || limit > supLogReadMax {
-			limit = supLogReadMax
-		}
-		lines, next := r.supLogLines(id, after, limit)
-		writeJSON(w, 200, map[string]any{"lines": lines, "next": next, "machine": machine})
 	})
 }

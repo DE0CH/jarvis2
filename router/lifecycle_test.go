@@ -20,7 +20,8 @@ func supPush(t *testing.T, r *Router, m testMachine, lines ...string) int {
 	return code
 }
 
-// the machine pushes its lines; the app reads them after a seq; a machine of no session is refused
+// the machine pushes its lines; the app reads them in the session's events, after a cursor; a machine of no session
+// is refused
 func TestSupervisorLogPushAndRead(t *testing.T) {
 	r := newTestRouter(t)
 	addSession(r, "sA", "started", "mA", false)
@@ -31,17 +32,16 @@ func TestSupervisorLogPushAndRead(t *testing.T) {
 	if c := supPush(t, r, m, strings.Repeat("x", 3000)); c != 200 {
 		t.Fatal(c)
 	}
-	code, v := appDo(t, r, "GET", "/api/sessions/sA/supervisor-log", "")
-	lines, _ := v["lines"].([]any)
-	if code != 200 || len(lines) != 3 || v["machine"] != "mA" || v["next"].(float64) != 3 {
-		t.Fatalf("%d %v", code, v)
+	es, next, v := eventsOf(t, r, "sA", "")
+	if len(es) != 3 || v["machine"] != "mA" || next != "3.0" {
+		t.Fatalf("%v", v)
 	}
-	if l := lines[2].(map[string]any); len(l["text"].(string)) > supLogMaxLine+4 || l["machine"] != "mA" {
+	if l := es[2]; len(l["text"].(string)) > supLogMaxLine+4 || l["machine"] != "mA" || l["source"] != "supervisor" || l["key"] != "s3" {
 		t.Fatal("a long line wasn't clipped")
 	}
-	_, v = appDo(t, r, "GET", "/api/sessions/sA/supervisor-log?after=2", "")
-	if ls := v["lines"].([]any); len(ls) != 1 || ls[0].(map[string]any)["seq"].(float64) != 3 {
-		t.Fatalf("after: %v", v)
+	es, _, _ = eventsOf(t, r, "sA", "2.0")
+	if len(es) != 1 || es[0]["key"] != "s3" {
+		t.Fatalf("after: %v", es)
 	}
 	stray := newTestMachine(r, "mX") // started by the core, but no session's
 	if c := supPush(t, r, stray, "hello"); c != 404 {
@@ -53,8 +53,8 @@ func TestSupervisorLogPushAndRead(t *testing.T) {
 	}
 	// a paused session keeps its log
 	r.st.Do(func(d *persisted) { d.Sessions["sA"].State, d.Sessions["sA"].MachineID = "paused", "" })
-	if _, v := appDo(t, r, "GET", "/api/sessions/sA/supervisor-log", ""); len(v["lines"].([]any)) != 3 {
-		t.Fatalf("paused: %v", v)
+	if es, _, _ := eventsOf(t, r, "sA", ""); len(es) != 3 {
+		t.Fatalf("paused: %v", es)
 	}
 	// the seq goes on after a router restart (read back from the file)
 	r2 := NewRouter(r.cfg, r.st, nil, Policy{})
@@ -62,8 +62,8 @@ func TestSupervisorLogPushAndRead(t *testing.T) {
 	if err := r2.appendSupLog("sA", "mA", []SupLine{{At: nowText(), Text: "after restart"}}); err != nil {
 		t.Fatal(err)
 	}
-	if ls, next := r2.supLogLines("sA", 0, 100); len(ls) != 4 || next != 4 {
-		t.Fatalf("%v %d", ls, next)
+	if es, next, _ := eventsOf(t, r2, "sA", ""); len(es) != 4 || next != "4.0" {
+		t.Fatalf("%v %s", es, next)
 	}
 }
 
@@ -81,7 +81,7 @@ func TestSupervisorLogCap(t *testing.T) {
 	if fi.Size() > 4000+200 {
 		t.Fatalf("file %d bytes", fi.Size())
 	}
-	ls, _ := r.supLogLines("sA", 0, 1000)
+	ls := readSupLog(r.supLogPath("sA"))
 	if !strings.Contains(ls[0].Text, "oldest lines were dropped") || ls[len(ls)-1].Text != "line 099" {
 		t.Fatalf("first %q last %q", ls[0].Text, ls[len(ls)-1].Text)
 	}
@@ -137,21 +137,45 @@ func (f *lcFakeFly) log(m, provider, msg string, at time.Time) {
 	f.mu.Unlock()
 }
 
-func opEntries(t *testing.T, r *Router, session string) (map[string]any, []map[string]any) {
+// eventsOf: GET …/events (after: a cursor, "" for the newest)
+func eventsOf(t *testing.T, r *Router, session, after string, q ...string) ([]map[string]any, string, map[string]any) {
 	t.Helper()
-	code, v := appDo(t, r, "GET", "/api/sessions/"+session+"/lifecycle", "")
-	ops, _ := v["ops"].([]any)
-	if code != 200 || len(ops) == 0 {
-		t.Fatalf("ops: %d %v", code, v)
+	target := "/api/sessions/" + session + "/events"
+	if after != "" {
+		target += "?after=" + after
+	} else if len(q) > 0 {
+		target += "?" + q[0]
 	}
-	id := ops[0].(map[string]any)["id"].(string)
-	code, op := appDo(t, r, "GET", "/api/sessions/"+session+"/lifecycle/"+id, "")
+	code, v := appDo(t, r, "GET", target, "")
 	if code != 200 {
-		t.Fatalf("op: %d %v", code, op)
+		t.Fatalf("events: %d %v", code, v)
 	}
 	es := []map[string]any{}
-	for _, e := range op["entries"].([]any) {
+	for _, e := range v["events"].([]any) {
 		es = append(es, e.(map[string]any))
+	}
+	next, _ := v["next"].(string)
+	return es, next, v
+}
+
+// opEntries: the session's latest operation (its kind, state, running, from the stream's start and end marks) and
+// the whole stream
+func opEntries(t *testing.T, r *Router, session string) (map[string]any, []map[string]any) {
+	t.Helper()
+	es, _, v := eventsOf(t, r, session, "")
+	op := map[string]any{"running": v["running"] != nil}
+	for _, e := range es {
+		switch e["mark"] {
+		case "start":
+			op = map[string]any{"running": v["running"] != nil, "kind": e["op"], "id": e["opId"], "state": "running"}
+		case "end":
+			if e["opId"] == op["id"] {
+				op["state"], op["text"] = e["state"], e["text"]
+			}
+		}
+	}
+	if op["kind"] == nil {
+		t.Fatalf("no operation in %v", es)
 	}
 	return op, es
 }
@@ -189,7 +213,7 @@ func TestPauseRecordsItsLifecycleLog(t *testing.T) {
 	waitFor(t, "Fly read three times", func() bool { fly.mu.Lock(); defer fly.mu.Unlock(); return fly.calls >= 3 })
 	op, es := opEntries(t, rg.r, "s1")
 	all := texts(es)
-	if op["kind"] != "pause" || op["state"] != "done" || op["running"] != false || fmt.Sprint(op["machines"]) != "[m2]" {
+	if op["kind"] != "pause" || op["state"] != "done" || op["running"] != false || !strings.HasPrefix(op["text"].(string), "Pause done after ") {
 		t.Fatalf("op %v", op)
 	}
 	for _, want := range []string{"router|the machine's final snapshot is already here", "router|asked the core to destroy the machine on Fly",
@@ -340,7 +364,92 @@ func TestLifecycleCutOff(t *testing.T) {
 	r2 := NewRouter(r.cfg, r.st, nil, Policy{})
 	r2.lcCutOff()
 	op, _ := opEntries(t, r2, "sA")
-	if op["state"] != "cut off" || op["ended"] == "" {
+	if op["state"] != "cut off" || !strings.Contains(op["text"].(string), "the router restarted while it ran") {
 		t.Fatalf("%v", op)
 	}
+}
+
+// the session's one stream: the supervisor's lines from every machine and each operation's start, steps, Fly entries
+// and end, all in time order; the cursor gives only what was written since, also an entry that sorts before others
+func TestSessionEventsOneStream(t *testing.T) {
+	r := newTestRouter(t)
+	addSession(r, "sA", "started", "m1", false)
+	t0 := time.Now().UTC().Add(-time.Minute)
+	at := func(s int) string { return t0.Add(time.Duration(s) * time.Second).Format(time.RFC3339Nano) }
+	r.appendSupLog("sA", "m0", []SupLine{{At: at(0), Text: "s0 old machine"}})
+	op := LcOp{ID: "o1", Session: "sA", Kind: "pause", Started: at(1), State: "running", Machines: []string{"m1"}}
+	r.lcWrite("sA", lcRec{Op: &op})
+	r.lcWrite("sA", lcRec{OpID: "o1", Entry: &LcEntry{At: at(2), Source: "router", Text: "r2"}})
+	r.appendSupLog("sA", "m1", []SupLine{{At: at(3), Text: "s3"}})
+	r.lcWrite("sA", lcRec{OpID: "o1", Entry: &LcEntry{At: at(4), Source: "fly", Machine: "m1", Text: "f4"}})
+
+	es, next, v := eventsOf(t, r, "sA", "")
+	if got := strings.Join(keysTexts(es), ","); got != "s0 old machine,Pause started,r2,s3,f4" {
+		t.Fatalf("%s", got)
+	}
+	if run, _ := v["running"].(map[string]any); run == nil || run["kind"] != "pause" || run["id"] != "o1" {
+		t.Fatalf("running %v", v["running"])
+	}
+	if es[1]["mark"] != "start" || es[1]["op"] != "pause" || es[2]["op"] != "pause" || es[2]["source"] != "router" ||
+		es[3]["source"] != "supervisor" || es[3]["op"] != nil || es[4]["source"] != "fly" || es[4]["machine"] != "m1" {
+		t.Fatalf("%v", es)
+	}
+	if next != "2.3" {
+		t.Fatalf("next %s", next)
+	}
+	// nothing new: nothing
+	if es, n2, _ := eventsOf(t, r, "sA", next); len(es) != 0 || n2 != next {
+		t.Fatalf("%v %s", es, n2)
+	}
+	// later: a Fly event read late (it happened before s3), a supervisor line, and the end
+	r.lcWrite("sA", lcRec{OpID: "o1", Entry: &LcEntry{At: at(2) /* sorts before s3 */, Source: "fly", Text: "f2 late"}})
+	r.appendSupLog("sA", "m1", []SupLine{{At: at(6), Text: "s6"}})
+	op.State, op.Ended, op.Error = "failed", at(7), "the snapshot never came"
+	r.lcWrite("sA", lcRec{Op: &op})
+	es, next, v = eventsOf(t, r, "sA", next)
+	if got := strings.Join(keysTexts(es), ","); got != "f2 late,s6,Pause failed after 6 s: the snapshot never came" {
+		t.Fatalf("%s", got)
+	}
+	if v["running"] != nil || es[2]["mark"] != "end" || es[2]["state"] != "failed" || next != "3.5" {
+		t.Fatalf("%v %s", v, next)
+	}
+	// the whole stream again, in time order, and the newest only with a limit
+	es, _, _ = eventsOf(t, r, "sA", "")
+	if got := strings.Join(keysTexts(es), ","); got != "s0 old machine,Pause started,r2,f2 late,s3,f4,s6,Pause failed after 6 s: the snapshot never came" {
+		t.Fatalf("%s", got)
+	}
+	es, _, v = eventsOf(t, r, "sA", "", "limit=2")
+	if got := strings.Join(keysTexts(es), ","); got != "s6,Pause failed after 6 s: the snapshot never came" || v["more"] != true {
+		t.Fatalf("%s %v", got, v["more"])
+	}
+	// a backlog of supervisor lines comes limit at a time
+	if es, _, _ := eventsOf(t, r, "sA", "0.5"); len(es) != 3 {
+		t.Fatalf("%v", es)
+	}
+	if code, _ := appDo(t, r, "GET", "/api/sessions/sA/events?after=1.5&limit=1", ""); code != 200 {
+		t.Fatal(code)
+	}
+	if _, v := appDo(t, r, "GET", "/api/sessions/sA/events?after=0.5&limit=1", ""); v["more"] != true || v["next"] != "1.5" {
+		t.Fatalf("%v", v)
+	}
+	if code, _ := appDo(t, r, "GET", "/api/sessions/sA/events?after=nonsense", ""); code != 400 {
+		t.Fatal(code)
+	}
+	if code, _ := appDo(t, r, "GET", "/api/sessions/nope/events", ""); code != 404 {
+		t.Fatal(code)
+	}
+	// the old separate views are gone (no API answer: the web page's files)
+	for _, p := range []string{"supervisor-log", "lifecycle", "lifecycle/o1"} {
+		if _, v := appDo(t, r, "GET", "/api/sessions/sA/"+p, ""); len(v) != 0 {
+			t.Fatalf("%s still answers", p)
+		}
+	}
+}
+
+func keysTexts(es []map[string]any) []string {
+	out := []string{}
+	for _, e := range es {
+		out = append(out, e["text"].(string))
+	}
+	return out
 }

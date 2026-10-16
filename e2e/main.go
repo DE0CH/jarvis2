@@ -595,19 +595,19 @@ func main() {
 	// its log reaches the router
 	for i := 0; ; i++ {
 		var sl struct {
-			Lines []struct{ Text string } `json:"lines"`
+			Events []struct{ Source, Text string } `json:"events"`
 		}
-		call(router, "GET", "/api/sessions/"+os1+"/supervisor-log", nil, &sl)
+		call(router, "GET", "/api/sessions/"+os1+"/events", nil, &sl)
 		found := false
-		for _, l := range sl.Lines {
-			found = found || strings.Contains(l.Text, "supervisor up")
+		for _, l := range sl.Events {
+			found = found || l.Source == "supervisor" && strings.Contains(l.Text, "supervisor up")
 		}
 		if found {
-			log.Printf("   the supervisor log is at the router (%d lines)", len(sl.Lines))
+			log.Printf("   the supervisor log is at the router, in the session's events (%d events)", len(sl.Events))
 			break
 		}
 		if i > 30 {
-			log.Fatalf("the supervisor log never reached the router (%d lines)", len(sl.Lines))
+			log.Fatalf("the supervisor log never reached the router (%d events)", len(sl.Events))
 		}
 		time.Sleep(2 * time.Second)
 	}

@@ -747,14 +747,15 @@ repo and the caller) holds them, and `~/.ssh` has only their public halves, whic
 to the router every 2 s (`POST /m/supervisor-log`), which keeps the session's log for its whole life and puts it in
 the session's archive on Destroy. Lines name commands, ids, counts and errors, never a command's text, a prompt or a
 secret value; as a second line of defence every secret value the supervisor holds (8 characters or more) is replaced by `[secret]`
-before a line leaves the machine. The app (iPhone and web) shows it under Supervisor log, next to the read-only
-terminal.
+before a line leaves the machine. The app (iPhone and web) shows it in the session's Log, next to the read-only
+terminal: one stream with the lifecycle log below (`GET /api/sessions/:id/events`).
 
 **The lifecycle log** (router, `router/lifecycle.go`). Each boot, pause, resume, Upgrade and destroy is an operation
 with its own log: the router's own steps, what Fly is doing (the machine's Fly events and Fly's platform log lines:
 create, image pull, start, stop, destroy, with times), read by the router with its read-only Fly token while the
 operation runs, and the supervisor log lines of the operation's machines in that window, merged in time order. The
-app shows each operation under Lifecycle, live while it runs; kept for the session's life and archived on Destroy.
+app shows the operations in the session's Log, one stream with every supervisor line (each entry with its time and a
+source tag), live while it runs; kept for the session's life and archived on Destroy.
 The core takes no part.
 
 ## Inputs to a machine (Deyao, 2026-10-11)
