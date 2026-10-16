@@ -292,3 +292,28 @@ func TestASuccessorWithNoSnapshotImportsAgain(t *testing.T) {
 		t.Fatal("took a manifest the cert doesn't name")
 	}
 }
+
+// the import's staging dir and the volume-backed state dirs are different filesystems: a move copies across
+func TestMoveAcrossFilesystems(t *testing.T) {
+	other, err := os.MkdirTemp("/dev/shm", "j2move")
+	if err != nil {
+		t.Skip("no /dev/shm")
+	}
+	defer os.RemoveAll(other)
+	src := filepath.Join(t.TempDir(), "d")
+	os.MkdirAll(filepath.Join(src, "sub"), 0o755)
+	os.WriteFile(filepath.Join(src, "sub", "f"), []byte("x"), 0o640)
+	dst := filepath.Join(other, "d")
+	if err := moveAcross(src, dst); err != nil {
+		t.Fatal(err)
+	}
+	if b, err := os.ReadFile(filepath.Join(dst, "sub", "f")); err != nil || string(b) != "x" {
+		t.Fatalf("%q %v", b, err)
+	}
+	if fi, _ := os.Stat(filepath.Join(dst, "sub", "f")); fi.Mode().Perm() != 0o640 {
+		t.Fatal("mode not kept")
+	}
+	if _, err := os.Stat(src); err == nil {
+		t.Fatal("the source stayed")
+	}
+}

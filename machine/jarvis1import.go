@@ -25,6 +25,7 @@ import (
 	"archive/tar"
 	"compress/gzip"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -34,6 +35,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -199,14 +201,14 @@ func j1Extract(c *client, f j1File, stage string, roots []string) error {
 			ents, _ := os.ReadDir(src)
 			for _, e := range ents {
 				os.RemoveAll(filepath.Join(dst, e.Name()))
-				if err := os.Rename(filepath.Join(src, e.Name()), filepath.Join(dst, e.Name())); err != nil {
+				if err := moveAcross(filepath.Join(src, e.Name()), filepath.Join(dst, e.Name())); err != nil {
 					return err
 				}
 			}
 			continue
 		}
 		os.RemoveAll(dst)
-		if err := os.Rename(src, dst); err != nil {
+		if err := moveAcross(src, dst); err != nil {
 			return err
 		}
 	}
@@ -391,7 +393,7 @@ func placeImportedTranscripts() {
 		return
 	}
 	for _, e := range ents {
-		if err := os.Rename(filepath.Join(src, e.Name()), filepath.Join(pdir, e.Name())); err != nil {
+		if err := moveAcross(filepath.Join(src, e.Name()), filepath.Join(pdir, e.Name())); err != nil {
 			log.Printf("jarvis1 import: transcript %s: %v", e.Name(), err)
 		}
 	}
@@ -559,4 +561,17 @@ func rearmJarvis1(c *client, sid string) {
 	}
 	os.WriteFile(filepath.Join(out, "rearmed.txt"), []byte(strings.Join(lines, "\n")+"\n"), 0o600)
 	os.RemoveAll(filepath.Join(home, j1StageDir))
+}
+
+// moveAcross: a rename, or (the state directories are bind-mounted from the volume, volume.go, so the import's
+// staging dir on the root disk is another filesystem) a copy that keeps modes, links and times, then the source goes
+func moveAcross(src, dst string) error {
+	err := os.Rename(src, dst)
+	if !errors.Is(err, syscall.EXDEV) {
+		return err
+	}
+	if out, err := exec.Command("cp", "-a", "--", src, dst).CombinedOutput(); err != nil {
+		return fmt.Errorf("copying %s across filesystems: %v %s", filepath.Base(src), err, strings.TrimSpace(string(out)))
+	}
+	return os.RemoveAll(src)
 }
