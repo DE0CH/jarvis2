@@ -1,10 +1,10 @@
 // One session: its status, what waits on it (a grant, a locked store, a queued prompt, schedules), its details, and
 // every action Jarvis 1's card had (Terminal or Remote, Pause / Resume, Transcript, Grants, Schedules, the switches,
-// the supervisor's log and the lifecycle log (LogViews.swift),
+// the Log (the supervisor's lines and the lifecycle operations in one stream, LogViews.swift),
 // the permission mode, Resume with the latest image, Destroy).
 import SwiftUI
 
-enum SessionRoute: Hashable { case terminal, remote, transcript, grants, schedules, supervisorLog, lifecycle, lifecycleOp(String) }
+enum SessionRoute: Hashable { case terminal, remote, transcript, grants, schedules, log }
 
 struct SessionDetailView: View {
   @Environment(AppModel.self) private var model
@@ -35,9 +35,7 @@ struct SessionDetailView: View {
                                            actionTitle: "Resume", onAction: { Task { await model.resume(m.id) } })
           case .grants: GrantsView(sessionId: m.id)
           case .schedules: SchedulesView(sessionId: m.id)
-          case .supervisorLog: SupervisorLogView(sessionId: m.id, title: m.title)
-          case .lifecycle: LifecycleListView(sessionId: m.id, title: m.title)
-          case .lifecycleOp(let op): LifecycleOpView(sessionId: m.id, opId: op)
+          case .log: SessionLogView(sessionId: m.id, title: m.title)
           }
         }
       .task(id: id) {
@@ -124,8 +122,7 @@ private struct SessionDetailList: View {
           }
         }
         // read only, kept for the session's life: beside the terminal, in every state
-        NavigationLink(value: SessionRoute.supervisorLog) { Label("Supervisor log", systemImage: "doc.plaintext") }.accessibilityIdentifier("suplog-\(m.id)")
-        NavigationLink(value: SessionRoute.lifecycle) { Label("Lifecycle", systemImage: "clock.arrow.circlepath") }.accessibilityIdentifier("lifecycle-\(m.id)")
+        NavigationLink(value: SessionRoute.log) { Label("Log", systemImage: "doc.plaintext") }.accessibilityIdentifier("log-\(m.id)")
         if !["approval", "destroying"].contains(m.state) {
           NavigationLink(value: SessionRoute.grants) { Label("Grants", systemImage: "checkmark.shield") }.accessibilityIdentifier("grants-\(m.id)")
           NavigationLink(value: SessionRoute.schedules) { Label("Schedules", systemImage: "alarm") }.accessibilityIdentifier("schedules-\(m.id)")

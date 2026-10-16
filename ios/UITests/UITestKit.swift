@@ -307,35 +307,24 @@ class JarvisUITestCase: XCTestCase {
 }
 
 extension JarvisUITestCase {
-  /// the session page's two read-only logs (Sessions/LogViews.swift): the supervisor log opens (with a line when
-  /// `supervisorLine`), Lifecycle lists an operation and opens its log (with a Fly step when `flyStep`); back on the
-  /// session page after each
+  /// the session page's read-only Log (Sessions/LogViews.swift): one stream of supervisor lines and lifecycle
+  /// operations; it opens (with a supervisor line when `supervisorLine`, an operation's start and a Fly step when
+  /// `flyStep`), then back on the session page
   func checkLogs(_ sid: String, supervisorLine: Bool, flyStep: Bool, _ what: String) {
-    if scrolledTo(el("suplog-\(sid)")) {
-      el("suplog-\(sid)").tap()
-      if arrives(el("supervisor-log"), 20, "the supervisor log (\(what))") {
-        if supervisorLine { wait(prefixed("suplog-line-"), 90, "a supervisor log line (\(what))") }
-        else { sleep(3) }
-        shot("supervisor-log-\(what)")
+    guard scrolledTo(el("log-\(sid)")) else { XCTFail("[\(tag)] Log on the session page (\(what))"); return }
+    el("log-\(sid)").tap()
+    if arrives(el("session-log"), 20, "the session's log (\(what))") {
+      func entry(_ label: String) -> XCUIElement {
+        app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH 'ev-' AND label CONTAINS %@", label)).firstMatch
       }
-      back()
-    } else { XCTFail("[\(tag)] Supervisor log on the session page (\(what))") }
-    if scrolledTo(el("lifecycle-\(sid)")) {
-      el("lifecycle-\(sid)").tap()
-      if arrives(el("lifecycle"), 20, "the lifecycle list (\(what))"), wait(prefixed("lc-op-"), 60, "a lifecycle operation (\(what))") {
-        shot("lifecycle-\(what)")
-        prefixed("lc-op-").tap()
-        if arrives(el("lifecycle-op"), 20, "the operation's log (\(what))") {
-          if flyStep {
-            let fly = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH 'lc-entry-' AND label CONTAINS 'Fly'")).firstMatch
-            wait(fly, 60, "a Fly step in the operation's log (\(what))")
-          }
-          sleep(1)
-          shot("lifecycle-op-\(what)")
-        }
-        back()
+      if supervisorLine { wait(entry("Supervisor"), 90, "a supervisor line in the log (\(what))") }
+      if flyStep {
+        wait(entry("started"), 60, "an operation's start in the log (\(what))")
+        wait(entry("Fly"), 60, "a Fly step in the log (\(what))")
       }
-      back()
-    } else { XCTFail("[\(tag)] Lifecycle on the session page (\(what))") }
+      if !supervisorLine && !flyStep { sleep(3) }
+      shot("session-log-\(what)")
+    }
+    back()
   }
 }
