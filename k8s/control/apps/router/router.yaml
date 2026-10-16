@@ -41,8 +41,8 @@ spec:
           env:
             - { name: POD_IP, valueFrom: { fieldRef: { fieldPath: status.podIP } } }  # the standby proxies to the leader's
             # the cores (k8s/control/apps/core): CORE_URL serves until a flip, NEXT_CORE_URL is the other one
-            - { name: CORE_URL, value: "http://core-blue.jarvis2-core.svc.cluster.local:8090" }
-            - { name: NEXT_CORE_URL, value: "http://core-green.jarvis2-core.svc.cluster.local:8090" }
+            - { name: CORE_URL, value: "http://core-green.jarvis2-core.svc.cluster.local:8090" }
+            - { name: NEXT_CORE_URL, value: "http://core-blue.jarvis2-core.svc.cluster.local:8090" }
             - { name: FLIP_AUTO, value: "1" }  # flip as soon as the next core is Recovered alongside (a standby)
             # the services box over the Hetzner Network (k8s/services)
             - { name: SEARCH_URL, value: "http://10.77.0.3:30090" }
@@ -55,7 +55,7 @@ spec:
             - { name: MOVE_FROM, value: "https://jarvis2.deyaochen.com" }
             - { name: MOVE_PUBLIC, value: "http://10.77.0.9:30080" }
             - { name: MOVE_SELF, value: "http://10.77.0.2:30080" }
-            - { name: MOVE_AT, value: "" }
+            - { name: MOVE_AT, value: "2026-10-16T00:54:07Z" }
             # its /data, age-encrypted to this key, to the Storage Box (router/backup.go); the private half is
             # ROUTER_BACKUP_AGE_KEY in the infra store
             - { name: ROUTER_BACKUP_AGE_PUB, value: "age1zkvnmh6wu5hyvxppvxf9c83l6q5af7xqqlxtmahkz0l5hhwqq90s8edvu0" }
