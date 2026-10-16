@@ -227,6 +227,15 @@ $access_env
                 - name: core
                   env:
                     - { name: MACHINE_URL, value: "http://$NAME._peer.internal:8081" }
+    # the old box's tunnel connectors went to 0 when the control box took the tunnel over (the move, 2026-10-16); the
+    # test box is built from ./k8s/apps and its own tunnel needs them
+    - target: { kind: Deployment, name: cloudflared, namespace: jarvis2-edge }
+      patch: |
+        apiVersion: apps/v1
+        kind: Deployment
+        metadata: { name: cloudflared, namespace: jarvis2-edge }
+        spec:
+          replicas: 2
 EOF
   # REHEARSAL_CORE_IMAGE: the box runs that core instead of the pinned one (the phone replica runs the core main
   # builds while a core change waits for Deyao: jarvis2/core-pin hold), as one more documented patch
