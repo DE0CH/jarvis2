@@ -120,6 +120,7 @@ type NewSession struct {
 	AutoPause      *bool          `json:"autoPause"`   // default on
 	APIProxy       bool           `json:"apiProxy"`    // SESSION_API_PROXY (sessionops.go)
 	Attachments    *AttachmentsIn `json:"attachments"` // first-prompt attachments (uploads.go)
+	AttachOwner    string         `json:"-"`           // uploads.go: whose uploads Attachments may name (the proposing session; "" = the app's)
 	Origin         *Origin        `json:"-"`           // inbox.go: who asked, from the credential (the handler sets it)
 	Explanation    string         `json:"-"`           // a session's proposal: its reason, shown with the approval (sessionapi.go)
 	Task           *TaskConfig    `json:"-"`           // tasks.go: a task line's instance and parameters (into the cert's config)

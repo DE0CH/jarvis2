@@ -391,6 +391,7 @@ func (r *Router) FileBatch(c Caller, method, path string, body []byte, signed *S
 	}
 	items := []*batchItem{}
 	keys := map[string]int{}
+	uploadsUsed := map[string]int{} // each upload binds to one new session
 	proposes := false
 	for i, raw := range in.Items {
 		it, err := r.checkBatchItem(c, raw)
@@ -415,6 +416,12 @@ func (r *Router) FileBatch(c Caller, method, path string, body []byte, signed *S
 		}
 		if j, ok := keys[k]; ok {
 			return 400, map[string]any{"error": fmt.Sprintf("item %d is the same as item %d", i, j), "item": i}
+		}
+		if it.intent == "new-session" && it.ns.Attachments != nil {
+			if j, ok := uploadsUsed[it.ns.Attachments.UploadID]; ok {
+				return 400, map[string]any{"error": fmt.Sprintf("item %d attaches upload %s, as item %d does: each new session needs its own upload", i, it.ns.Attachments.UploadID, j), "item": i}
+			}
+			uploadsUsed[it.ns.Attachments.UploadID] = i
 		}
 		keys[k] = i
 		proposes = proposes || it.intent == "new-session"

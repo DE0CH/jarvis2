@@ -16,11 +16,16 @@ this session as the caller, from the machine's key) and the reason given here, a
                                     one more store for this running session (its machine keeps its keys); once
                                     approved (within 1 h) the supervisor pulls it (a background waiter asks)
   jarvis2-request new-session --label TEXT --prompt-file FILE [--stores a,b] [--repos URL,URL] [--model M]
-                  [--size small|medium|large] [--harness claude] [--account NAME] [--request-id ID] --why TEXT
+                  [--size small|medium|large] [--harness claude] [--account NAME] [--request-id ID]
+                  [--attach FILE]… --why TEXT
                                     propose a NEW session: it appears in the Inbox like the app's New session and starts
-                                    only when Deyao approves it with Face ID (no attachments; at most 3 waiting).
+                                    only when Deyao approves it with Face ID (at most 3 waiting).
                                     --account: its Claude account (claude-<name> or <name>; Settings → Claude
-                                    accounts lists them), kept for the session's life; default: Deyao's default one
+                                    accounts lists them), kept for the session's life; default: Deyao's default one.
+                                    --attach (repeatable, at most 20 files, 25 MB each): files sent with the first
+                                    prompt, as the app's New session attaches them: uploaded to the router first, their
+                                    sha256 + size signed with the line (the approval shows each, images with a preview),
+                                    and the new session finds them in ~/uploads
   jarvis2-request batch (--file FILE | --item ITEM… | --item-json JSON…) --summary TEXT
                                     several of the above as ONE Inbox entry, allowed together under one Face ID (or
                                     denied together). FILE: a JSON list of items, each {"intent": …} plus that
@@ -30,7 +35,8 @@ this session as the caller, from the machine's key) and the reason given here, a
                                     {"intent":"call","method":"POST","path":"/api/sessions/ID/resume","body":{…}}
                                     (an app API call run as Deyao, as `jarvis2-actions.py request call`; read its result
                                     with `jarvis2-actions.py call-result ID`),
-                                    {"intent":"new-session","label":…,"prompt":…,"stores":[…],"repos":…};
+                                    {"intent":"new-session","label":…,"prompt":…,"stores":[…],"repos":…,
+                                    "attach":["FILE",…]} (attach: files uploaded first, as --attach);
                                     or --item INTENT,key=value,… once per item (e.g. --item grant,holder=status,minutes=5),
                                     or --item-json '{"intent":…}' for an item with a JSON body or commas;
                                     an item may carry its own "explanation"; --summary (required) says what the
@@ -67,6 +73,42 @@ def call(method, path, body=None):
         except Exception:
             msg = b[:300]
         raise SystemExit(f"{method} {path}: HTTP {e.code}: {msg}")
+
+
+def upload(paths):
+    """--attach: the files staged on the router as one upload (PUT /api/sessions/ID/uploads/UPLOAD/NAME, raw bytes)
+    -> the proposal's attachments {uploadId, files: [{name}]} (the names as the router made them safe)"""
+    import secrets, urllib.parse
+    sid = os.environ.get("JARVIS2_SESSION_ID") or os.environ.get("SESSION_ID")
+    if not sid:
+        raise SystemExit("--attach: no JARVIS2_SESSION_ID in the environment (not a Jarvis 2 session?)")
+    if len(paths) > 20:
+        raise SystemExit(f"--attach: {len(paths)} files, at most 20")
+    uid, names = "p" + secrets.token_hex(8), []
+    for p in paths:
+        p = os.path.expanduser(p)
+        if not os.path.isfile(p):
+            raise SystemExit(f"--attach {p}: not a file")
+        if os.path.getsize(p) > 25 << 20:
+            raise SystemExit(f"--attach {p}: larger than 25 MB")
+        with open(p, "rb") as f:
+            data = f.read()
+        path = f"/api/sessions/{sid}/uploads/{uid}/" + urllib.parse.quote(os.path.basename(p), safe="")
+        req = urllib.request.Request(BASE + path, method="PUT", data=data, headers={"Content-Type": "application/octet-stream"})
+        try:
+            out = json.load(urllib.request.urlopen(req, timeout=300))
+        except urllib.error.HTTPError as e:
+            b = e.read()
+            try:
+                msg = json.loads(b).get("error", b[:300])
+            except Exception:
+                msg = b[:300]
+            raise SystemExit(f"--attach {p}: HTTP {e.code}: {msg}")
+        if out["name"] in names:
+            raise SystemExit(f"--attach {p}: another file is already named {out['name']}")
+        names.append(out["name"])
+        print(f"attached {p} as {out['name']} ({out['size']} bytes)", file=sys.stderr)
+    return {"uploadId": uid, "files": [{"name": n} for n in names]}
 
 
 def parse_item(spec):
@@ -189,6 +231,18 @@ def main():
         if not isinstance(items, list):
             raise SystemExit("FILE must hold a JSON list of items")
         items = items + inline
+        # a new-session item's "attach": every item checked here first, then each one's files uploaded
+        for x in items:
+            if x.get("intent") == "new-session" and "attach" in x:
+                a = x["attach"]
+                if isinstance(a, str):
+                    a = [a]
+                if not isinstance(a, list) or not a or not all(isinstance(p, str) and os.path.isfile(os.path.expanduser(p)) for p in a):
+                    raise SystemExit(f"item {items.index(x)}: attach must name existing files")
+        for x in items:
+            if x.get("intent") == "new-session" and "attach" in x:
+                a = x.pop("attach")
+                x["attachments"] = upload([a] if isinstance(a, str) else a)
         out = call("POST", "/api/requests/batch", {"summary": summary, "items": items})
         # the added stores are pulled by a waiter each, as for a single add-store
         for x in items:
@@ -213,6 +267,9 @@ def main():
             v = opt(args, flag)
             if v:
                 new_session[key] = v
+        attach = []
+        while "--attach" in args:
+            attach.append(opt(args, "--attach"))
         stores, repos = opt(args, "--stores"), opt(args, "--repos")
         if stores:
             new_session["stores"] = [s for s in stores.split(",") if s]
@@ -243,6 +300,8 @@ def main():
     elif kind == "unlock" and not rest:
         out = call("POST", "/api/requests/unlock", {"explanation": why})
     elif kind == "new-session" and not rest and new_session:
+        if attach:
+            new_session["attachments"] = upload(attach)
         out = call("POST", "/api/sessions", dict(new_session, explanation=why))
     elif kind == "add-store" and len(rest) == 1:
         out = call("POST", "/api/requests/add-store", {"store": rest[0], "explanation": why})

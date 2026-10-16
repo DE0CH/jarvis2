@@ -391,9 +391,9 @@ func mxRaw(t *testing.T, m testMachine, h http.Handler, req *http.Request) *http
 
 func TestSweepUploads(t *testing.T) {
 	r := newTestRouter(t)
-	r.StageUpload("old", "a.txt", strings.NewReader("a"))
-	r.StageUpload("new", "b.txt", strings.NewReader("b"))
-	r.StageUpload("orphan", "c.txt", strings.NewReader("c"))
+	r.StageUpload("old", "", "a.txt", strings.NewReader("a"))
+	r.StageUpload("new", "", "b.txt", strings.NewReader("b"))
+	r.StageUpload("orphan", "", "c.txt", strings.NewReader("c"))
 	r.st.Do(func(d *persisted) {
 		d.Uploads["old"].Created = time.Now().Add(-25 * time.Hour)
 		d.Uploads["orphan"].Session = "sGone"
@@ -404,7 +404,7 @@ func TestSweepUploads(t *testing.T) {
 			t.Fatalf("%v", d.Uploads)
 		}
 	})
-	if _, err := r.StageUpload("big", "x.bin", io.LimitReader(zeros{}, attachMaxBytes+10)); err == nil {
+	if _, err := r.StageUpload("big", "", "x.bin", io.LimitReader(zeros{}, attachMaxBytes+10)); err == nil {
 		t.Fatal("an oversize file was accepted")
 	}
 }

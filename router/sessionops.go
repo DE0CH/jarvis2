@@ -227,7 +227,7 @@ func admitSession(d *persisted, s *Session, in NewSession) (dup string, err erro
 	}
 	s.Ops = &SessionOps{APIProxy: in.APIProxy}
 	if in.Attachments != nil && len(in.Attachments.Files) > 0 {
-		files, err := bindUpload(d, s.ID, in.Attachments)
+		files, err := bindUpload(d, s.ID, in.AttachOwner, in.Attachments)
 		if err != nil {
 			return "", err
 		}

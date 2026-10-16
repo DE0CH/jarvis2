@@ -120,13 +120,13 @@ func TestBatchChecksEveryItemFirst(t *testing.T) {
 		body string
 		code int
 	}{
-		"a Jarvis 1 import":       {batchBody("s", `{"intent": "jarvis1-import", "id": "x", "stores": ["default"]}`), 403},
-		"no summary":              {batchBody("  ", ok), 400},
-		"unknown intent":          {batchBody("s", `{"intent": "format-disk"}`), 400},
-		"the same twice":          {batchBody("s", ok, `{"intent": "repo/add", "repo": "https://github.com/DE0CH/a"}`), 400},
-		"empty":                   {batchBody("s"), 400},
-		"too many":                {batchBody("s", strings.Repeat(ok+",", batchMaxItems)+ok), 400},
-		"an attachment":           {batchBody("s", `{"intent": "new-session", "prompt": "p", "attachments": {"uploadId": "u"}}`), 400},
+		"a Jarvis 1 import":          {batchBody("s", `{"intent": "jarvis1-import", "id": "x", "stores": ["default"]}`), 403},
+		"no summary":                 {batchBody("  ", ok), 400},
+		"unknown intent":             {batchBody("s", `{"intent": "format-disk"}`), 400},
+		"the same twice":             {batchBody("s", ok, `{"intent": "repo/add", "repo": "https://github.com/DE0CH/a"}`), 400},
+		"empty":                      {batchBody("s"), 400},
+		"too many":                   {batchBody("s", strings.Repeat(ok+",", batchMaxItems)+ok), 400},
+		"an attachment not uploaded": {batchBody("s", `{"intent": "new-session", "prompt": "p", "attachments": {"uploadId": "u"}}`), 400},
 	} {
 		if code, out := m.do(t, h, "POST", "/m/api/requests/batch", c.body); code != c.code {
 			t.Fatalf("%s: %d %v", name, code, out)

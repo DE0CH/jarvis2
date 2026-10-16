@@ -104,7 +104,8 @@ func (r *Router) registerSessionAPI(app appRoute, m machineRoute) {
 	})
 	// a session proposes a new session (Deyao, 2026-10-12: "launch a new session through jarvis 2"): the same line as
 	// the app's New session, so nothing starts until Deyao approves the core's succession from null with Face ID; the
-	// approval names the proposing session and carries its reason. No attachments (uploads are the app's).
+	// approval names the proposing session and carries its reason. Attachments: files this session staged
+	// (PUT /m/api/sessions/{id}/uploads/…, uploads.go), signed by hash with the line as the app's are.
 	own("POST /m/api/sessions", func(w http.ResponseWriter, req *http.Request, sid string, b []byte) {
 		r.proposeSession(w, Caller{Kind: "session", Session: sid}, sid, b, signedRequestOf(req, req.Header.Get("X-Machine"), b))
 	})
@@ -319,7 +320,7 @@ func (r *Router) postNotifyIdle(w http.ResponseWriter, sid string, body []byte) 
 
 // proposeSession: a caller that isn't Deyao (a session, the actions key) proposes a new session — the same line as
 // the app's New session, so nothing starts until Deyao approves the core's succession from null with Face ID; the
-// approval names the caller and carries its reason. No attachments (uploads are the app's). prefix keeps the
+// approval names the caller and carries its reason. Attachments only from a session, its own uploads (uploads.go). prefix keeps the
 // caller's request ids apart from the app's and every other caller's.
 func (r *Router) proposeSession(w http.ResponseWriter, c Caller, prefix string, b []byte, signed *SignedRequest) {
 	var in proposalIn
@@ -362,9 +363,6 @@ func (r *Router) checkProposal(c Caller, prefix string, in proposalIn, explRequi
 	if err != nil {
 		return NewSession{}, &badRequest{err.Error()}
 	}
-	if in.Attachments != nil {
-		return NewSession{}, &badRequest{"a new session proposed here can't carry attachments: put them where the new session can fetch them"}
-	}
 	if strings.TrimSpace(in.Prompt) == "" {
 		return NewSession{}, &badRequest{"prompt is required"}
 	}
@@ -372,6 +370,31 @@ func (r *Router) checkProposal(c Caller, prefix string, in proposalIn, explRequi
 		in.RequestID = randID()
 	}
 	in.RequestID = prefix + ":" + in.RequestID
+	var attached []string
+	if in.Attachments != nil {
+		if c.Kind != "session" {
+			return NewSession{}, &badRequest{"attachments come only with a session's own proposal (jarvis2-request new-session --attach FILE)"}
+		}
+		var err error
+		r.st.Do(func(d *persisted) {
+			sid := "" // a repeat of a proposal already made: its own upload
+			for _, x := range d.Sessions {
+				if x.RequestID == in.RequestID {
+					sid = x.ID
+				}
+			}
+			var files []AttachFile
+			if files, _, err = checkUpload(d, sid, c.Session, in.Attachments); err == nil {
+				for _, f := range files {
+					attached = append(attached, f.Name)
+				}
+			}
+		})
+		if err != nil {
+			return NewSession{}, &badRequest{err.Error()}
+		}
+		in.AttachOwner = c.Session
+	}
 	args := map[string]any{"label": in.Label, "harness": in.Harness, "stores": in.Stores, "model": in.Model, "permissionMode": in.PermissionMode,
 		"size": in.Size, "prompt": fmt.Sprintf("(%d characters)", len([]rune(in.Prompt)))}
 	if len(in.Content) > 0 {
@@ -379,6 +402,9 @@ func (r *Router) checkProposal(c Caller, prefix string, in proposalIn, explRequi
 	}
 	if in.Repos != "" {
 		args["repos"] = in.Repos
+	}
+	if len(attached) > 0 {
+		args["attachments"] = attached
 	}
 	ns := in.NewSession
 	ns.Origin = &Origin{Caller: c, Call: APICall{Method: "POST", Path: "/api/sessions", Args: args}}
