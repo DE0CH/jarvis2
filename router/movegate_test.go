@@ -1,10 +1,13 @@
 package main
 
 import (
+	"bytes"
 	"errors"
 	"io"
+	"log"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -204,5 +207,27 @@ func TestScheduleSleepsUntilNextDue(t *testing.T) {
 	r.st.Do(func(d *persisted) { sched(d, "s1").Wakeups["w"].At = now.Add(-time.Minute).UnixMilli() })
 	if d := r.untilNextDue(now, 30*time.Second); d < 30*time.Second {
 		t.Fatalf("one overdue retries on the ticks: %s", d)
+	}
+}
+
+// every 5xx the public listener answers is logged with its path and the start of its body
+func TestGateLogs5xx(t *testing.T) {
+	r := newTestRouter(t)
+	var buf bytes.Buffer
+	log.SetOutput(&buf)
+	defer log.SetOutput(os.Stderr)
+	h := r.gated(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		if req.URL.Path == "/bad" {
+			writeJSON(w, 502, map[string]string{"error": "the backup bucket refused GET: SlowDown"})
+			return
+		}
+		writeJSON(w, 200, map[string]string{"ok": "yes"})
+	}))
+	for _, p := range []string{"/ok", "/bad"} {
+		h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest("GET", p, nil))
+	}
+	out := buf.String()
+	if !strings.Contains(out, `[5xx] GET /bad: 502 {"error":"the backup bucket refused GET: SlowDown"}`) || strings.Contains(out, "/ok") {
+		t.Fatalf("log: %q", out)
 	}
 }

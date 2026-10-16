@@ -191,6 +191,7 @@ func (r *Router) gatedAs(h http.Handler, fallbackOK bool) http.Handler {
 		}
 		defer leave()
 		tw := &gateWriter{ResponseWriter: w, r: r}
+		defer tw.logFailure(req)
 		// the machines' listener keeps serving after the freeze began, until its peer goes (the state is saved after
 		// that, so what is served here is in what the next leader loads); only its long polls end at once (their
 		// context is cancelled). A refusal here would be a failed call: the machine's proxy doesn't retry.
@@ -238,11 +239,23 @@ type gateWriter struct {
 	http.ResponseWriter
 	r     *Router
 	wrote bool
+	code  int
+	head  []byte // the start of a 5xx answer's body, for its log line
+}
+
+// logFailure: every 5xx the router answers, with its path and the start of its body (2026-10-16: a Recover failed
+// with a bare 502 and nothing in the logs said where it came from). Error bodies carry messages, not values; Alloy
+// also scrubs secret shapes before a line leaves the box.
+func (w *gateWriter) logFailure(req *http.Request) {
+	if w.code >= 500 {
+		log.Printf("[5xx] %s %s: %d %s", req.Method, req.URL.Path, w.code, strings.TrimSpace(string(w.head)))
+	}
 }
 
 func (w *gateWriter) WriteHeader(code int) {
 	if !w.wrote {
 		w.wrote = true
+		w.code = code
 		if w.r.frozenNow() {
 			w.ResponseWriter.Header().Set("Connection", "close")
 		}
@@ -253,6 +266,9 @@ func (w *gateWriter) WriteHeader(code int) {
 func (w *gateWriter) Write(b []byte) (int, error) {
 	if !w.wrote {
 		w.WriteHeader(http.StatusOK)
+	}
+	if w.code >= 500 && len(w.head) < 300 {
+		w.head = append(w.head, b[:min(len(b), 300-len(w.head))]...)
 	}
 	return w.ResponseWriter.Write(b)
 }
