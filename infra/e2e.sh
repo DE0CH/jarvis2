@@ -31,7 +31,8 @@ PEER="${E2E_PEER:-jarvis2-e2e}"; PP="${E2E_PORT:-28}"
 [ "$PEER" != jarvis2-box ] || { echo "E2E_PEER jarvis2-box is production's" >&2; exit 1; }
 # sweep: destroy every machine in jarvis2-sessions whose JARVIS2_URL names THIS run's peer (earlier runs' leftovers at the
 # start, this run's own at the end, on success, failure or interruption). Never one naming another peer: production's
-# machines name jarvis2-box.
+# machines name jarvis2-box. An earlier run's bare volume (its machine gone) can't be told from production's and is
+# left (docs/RUNBOOK.md "Leftover volumes"); cleanup deletes this run's own from its records (infra/run-volumes.py).
 sweep() {
   curl -fsS -H "Authorization: Bearer $JARVIS2_FLY_TOKEN" https://api.machines.dev/v1/apps/jarvis2-sessions/machines 2>/dev/null \
     | python3 -I -c '
@@ -63,6 +64,10 @@ cleanup() {
   for p in "${SUDO_PIDS[@]}"; do sudo -n pkill -P "$p" 2>/dev/null || true; sudo -n kill "$p" 2>/dev/null || true; done
   [ -e "$W/router-b" ] && { pkill -f "$W/router-b" 2>/dev/null; sudo -n pkill -f "$W/router-b" 2>/dev/null; } || true
   sweep
+  # this run's volumes whose machine is already gone (a kill whose delete failed, a core restarted mid-run): only ids
+  # this run's routers and cores recorded, never another run's or production's (infra/run-volumes.py)
+  FLY_TOKEN="$JARVIS2_FLY_TOKEN" python3 -I "$ROOT/infra/run-volumes.py" "$W/data/state.json" "$W/data-b/state.json" \
+    "$W/core.log" "$W/core-b.log" || true
   FLY_API_TOKEN="$JARVIS2_FLY_TOKEN" flyctl wireguard remove jarvis2-370 "$PEER" >/dev/null 2>&1 || true
   rm -rf "$W"
 }

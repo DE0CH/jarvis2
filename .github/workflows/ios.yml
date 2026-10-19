@@ -6,7 +6,7 @@ name: ios
 # only when the walkthrough, the interop test and the replica of this very commit pass.
 on:
   push:
-    paths: [ios/**, core/**, router/**, tasks/**, infra/setup.py, infra/fly-token.sh, infra/fly-read-token.sh, e2e/testdata/**, policy/**, tools/**, .github/workflows/ios.yml, .github/actions/ios-simulator/**]
+    paths: [ios/**, core/**, router/**, tasks/**, infra/setup.py, infra/fly-token.sh, infra/fly-read-token.sh, infra/run-volumes.py, infra/run_volumes_test.py, e2e/testdata/**, policy/**, tools/**, .github/workflows/ios.yml, .github/actions/ios-simulator/**]
   workflow_dispatch:
 concurrency:
   group: ios-${{ github.ref }}-${{ github.event_name }}
@@ -208,6 +208,8 @@ jobs:
         run: |
           mkdir -p out && echo "device: $SIM_DEVICE" | tee out/device.txt
       - run: brew install xcodegen flyctl rclone
+      - name: The teardown's volume sweep (infra/run-volumes.py) against a fake Fly
+        run: python3 -I infra/run_volumes_test.py
       - name: Earlier runs' leftovers (machines, peers, the test repo's deploy keys)
         env: { GH_TOKEN: "${{ secrets.REPLICA_REPO_TOKEN }}" }
         run: |

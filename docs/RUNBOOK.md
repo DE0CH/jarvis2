@@ -661,7 +661,8 @@ Storage Box copies. Nothing else waits on it; the router reports search unreacha
   passwordless sudo, which sessions have): the router in its own mount namespace whose /etc/hosts sends
   jarvis.deyaochen.com to a listener that fails the test on any connection, each machine with it blackholed; search, the
   watch runner and the Storage Box are local stand-ins, so it also covers a search, a device lease, a watch, a content
-  store pulled at boot and pushed back, and a newer Claude pair reaching a running machine.
+  store pulled at boot and pushed back, and a newer Claude pair reaching a running machine. Its cleanup also deletes the
+  run's own volumes whose machine is already gone (`infra/run-volumes.py`, from the run's router state and core log).
   `E2E_ONLY=drain` (with its own `E2E_PEER`/`E2E_PORT` when another run is going) checks a rollout's drain instead of
   the rest: SIGTERM to the router while the first session's pause waits for its snapshot → reads served, new actions
   503, the pause ends `paused`, the router exits.
@@ -741,7 +742,8 @@ not running in time. The video, screenshots and logs (core, router, the setup an
 - **One run at a time** (the job's concurrency group `replica`): the test repo's deploy keys are shared, and each run
   starts by sweeping earlier runs' leftovers (machines whose router address names a `jarvis2-replica-*` peer, those
   peers, the repo's deploy keys); its teardown (always) removes its own machines and their volumes, its peer, the keys
-  branch and the repo's deploy keys.
+  branch and the repo's deploy keys. It also deletes the run's volumes whose machine is already gone
+  (`infra/run-volumes.py`: only ids the run's router state and core log name; "Leftover volumes" below).
 - **The gate:** the `ios` workflow's TestFlight job (environment `release`, main only) needs the walkthrough, the
   interop test and the replica of the same run: every push to main touching the app ships once all three pass. Nothing
   is dispatched by hand.
@@ -775,6 +777,23 @@ not running in time. The video, screenshots and logs (core, router, the setup an
   reach (`oom_score_adj` -1000), so an out-of-memory machine loses harness processes, not the supervisor.
 - The boxes themselves: no way in by design; their logs and metrics are in Grafana Cloud (next section): Flux's
   reconciles (`container="manager"`), the kubelet and the kernel (`source="journal"`), every pod.
+
+### Leftover volumes
+
+A session volume (`jarvis2_state`, core/volumes.go) whose machine is gone shows on the Machines tab under
+jarvis2-sessions' volumes as "not attached". The core deletes a machine's volume at its kill only while it remembers the
+volume (DECISIONS 194), so one can be left by a kill whose delete failed, a line from before a Reset, or a test core that
+exited. Test runs delete their own (`infra/run-volumes.py` in the replica's `down` and the e2e's cleanup); an earlier
+run's can't be told from production's by anything Fly shows, so nothing sweeps it.
+- **Jarvis 2 has no Destroy volume yet**: it needs a core operation (DECISIONS 194, waiting for Deyao's go on a core
+  release). Until then a leftover is deleted only with Deyao's OK for that volume, by hand with the org token, after
+  checking on a fresh list that it is named `jarvis2_state`, in state `created`, attached to nothing, mounted by no
+  machine (`GET /v1/apps/jarvis2-sessions/machines`, `config.mounts`), older than 15 minutes, and named by no session
+  (`GET /api/state`: no session's `backups` and no current machine's volume):
+  `curl -X DELETE -H "Authorization: Bearer $JARVIS2_FLY_TOKEN" https://api.machines.dev/v1/apps/jarvis2-sessions/volumes/<id>`.
+  Its snapshots stay for their retention.
+- A test run's own leftovers by hand (a teardown that didn't run): `FLY_TOKEN=$JARVIS2_FLY_TOKEN python3 -I
+  infra/run-volumes.py <the run's DATA_DIR>/state.json <its core.log>` deletes only what those files name.
 
 ## Logs, metrics and alerts (DESIGN "Logs and metrics")
 

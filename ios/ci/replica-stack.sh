@@ -15,9 +15,14 @@
 # front (app/DECISIONS.md "The phone replica").
 #
 #   replica-stack.sh up W      bring it up (W: the run's work directory, mode 700); writes W/env for the setup answers
-#   replica-stack.sh down W    this run's machines and their volumes, its peer, the processes; idempotent
+#   replica-stack.sh down W    this run's machines and their volumes, its peer, the processes; idempotent. Also the
+#                              run's volumes whose machine is already gone (infra/run-volumes.py: only ids this run's
+#                              router state and core log name, so never production's)
 #   replica-stack.sh sweep     every earlier replica run's leftovers (machines naming a jarvis2-replica-* peer, and
-#                              those peers): one run at a time (ios.yml's concurrency group), so none is in flight
+#                              those peers): one run at a time (ios.yml's concurrency group), so none is in flight.
+#                              NOT an earlier run's bare volume (its machine gone): Fly keeps no label on a volume and
+#                              every core names its volumes jarvis2_state, so it can't be told from production's
+#                              (docs/RUNBOOK.md "Leftover volumes"); `down` deletes them while the run's records exist
 # Env: REPLICA_FLY_TOKEN (an org token of jarvis2-370: peers, machines, exec), REPLICA_RUN (digits and dashes).
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -67,6 +72,7 @@ if [ "$CMD" = down ]; then
   for f in "$W"/*.pid; do [ -s "$f" ] && kill "$(cat "$f")" 2>/dev/null; done
   pkill -f "$W/core" 2>/dev/null; pkill -f "$W/router" 2>/dev/null
   destroy_machines "$(printf '%s' "$PEER" | sed 's/[.-]/\\&/g')"
+  FLY_TOKEN="$REPLICA_FLY_TOKEN" python3 -I "$ROOT/infra/run-volumes.py" "$W/data/state.json" "$W/core.log"
   FLY_API_TOKEN="$REPLICA_FLY_TOKEN" flyctl wireguard remove "$ORG" "$PEER" >/dev/null 2>&1 && echo "peer $PEER removed"
   for f in "$W/fly.tok" "$W/fly-read" "$W/wg.conf" "$W/box-key.pem" "$W/setup-key.pem"; do [ -f "$f" ] && rm -P "$f" 2>/dev/null || rm -f "$f"; done
   exit 0
