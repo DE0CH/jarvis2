@@ -1832,6 +1832,9 @@ snapshot failed with "no space left on device", the machine was destroyed anyway
        always cleaned up; it is not made asynchronous because the cert depends on it.
      - *A router restart mid-handover* loses the spare (in memory): its machine has no cert and no line, and it shows
        on the Machines tab as an orphan after 15 min, as a start cut off by a restart always did.
+     - *The resume after the pause tries again on "busy"* (`handoverResume`, Upgrade, Restart, More disk): a pause marks
+       the session paused a moment before it lets go of the session's lock, so a resume that comes right away could be
+       refused as busy and fail the whole job (it also made `TestNoSnapshotStopsTheResumeAndNamesTheBackup` flaky).
      *Not chosen*: starting the spare at the start of the job, before the stop is sent (a pause that keeps the machine
      would waste it more often, and Deyao's rule names the stop); keeping spares warm ahead of any handover (a machine
      per session, billed and counted toward the cap).

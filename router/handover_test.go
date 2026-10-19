@@ -217,6 +217,7 @@ func TestASpareIsDestroyedWhenTheResumeGoesToThePhone(t *testing.T) {
 	if index(c.log(), "certify m2") >= 0 {
 		t.Fatalf("certified the spare: %v", c.log())
 	}
+	waitFor(t, "the approval", func() bool { return sessionOf(rg).State != "resuming" })
 	if s := sessionOf(rg); s.State != "approval" {
 		t.Fatalf("the resume waits for the phone: %s %q", s.State, s.Error)
 	}

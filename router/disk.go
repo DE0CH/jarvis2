@@ -270,7 +270,7 @@ func (r *Router) MoreDisk(id string) (map[string]any, error) {
 				return
 			}
 			r.ops.phase(j, "resuming", nil)
-			if err := r.resumeWithPrompt(id, false, ""); err != nil {
+			if err := r.handoverResume(id, ""); err != nil {
 				fail(err)
 				return
 			}

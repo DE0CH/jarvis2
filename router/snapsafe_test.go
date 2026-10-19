@@ -177,6 +177,13 @@ func TestNoSnapshotStopsTheResumeAndNamesTheBackup(t *testing.T) {
 	if err := rg.r.waitState("s1", "paused", 5*time.Second); err != nil {
 		t.Fatal(err)
 	}
+	waitFor(t, "the pause's end", func() bool { // paused a moment before the pause lets go of the session
+		u, err := rg.r.lock("s1", "test")
+		if err == nil {
+			u()
+		}
+		return err == nil
+	})
 	s := sessionS1(rg)
 	if vc.kills != 1 || len(s.Backups) != 1 || s.Backups[0].Snapshot != "vs_m2" || s.Backups[0].RetentionDays != 60 || s.Backups[0].Signed {
 		t.Fatalf("kills %d, backups %+v", vc.kills, s.Backups)

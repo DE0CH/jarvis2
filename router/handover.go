@@ -27,6 +27,7 @@ package main
 //     and the start makes its machine after the kill, as before.
 
 import (
+	"errors"
 	"log"
 	"slices"
 	"sync"
@@ -193,4 +194,16 @@ func (r *Router) dropSpare(sid string, sp *spare, why string) {
 			log.Printf("session %s: the unused spare %s: kill: %v (the Machines tab lists it)", sid, id, err)
 		}
 	}()
+}
+
+// handoverResume: a handover's resume right after its pause. The pause marks the session paused a moment before it
+// releases the session's lock, so a resume that comes at once can meet errBusy: it tries again for a while.
+func (r *Router) handoverResume(id, prompt string) error {
+	err := errBusy
+	for end := time.Now().Add(30 * time.Second); errors.Is(err, errBusy) && time.Now().Before(end); {
+		if err = r.resumeWithPrompt(id, false, prompt); errors.Is(err, errBusy) {
+			time.Sleep(opsPoll)
+		}
+	}
+	return err
 }

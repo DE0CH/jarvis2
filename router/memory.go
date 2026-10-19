@@ -337,7 +337,7 @@ func (r *Router) resumeBigger(id, from, to string) error {
 	if err := r.applyResumeOptions(id, ResumeOptions{Size: to}); err != nil {
 		return err
 	}
-	if err := r.resumeWithPrompt(id, false, ""); err != nil {
+	if err := r.handoverResume(id, ""); err != nil {
 		return err
 	}
 	msg := r.waitStartOutcome(id, upgradeStartWait)

@@ -565,7 +565,7 @@ func (r *Router) Restart(id string, in RestartRequest) (map[string]any, error) {
 			return
 		}
 		r.ops.phase(j, "resuming", nil)
-		if err := r.resumeWithPrompt(id, false, prompt); err != nil {
+		if err := r.handoverResume(id, prompt); err != nil {
 			fail(err)
 			return
 		}
