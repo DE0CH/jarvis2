@@ -7,8 +7,8 @@ import XCTest
 /// Reset or recover (an old kit refused; Recover with the public TEST kit) → stores (create, unlock) → the encrypted
 /// backup (download, checked, share sheet) → New session (the
 /// one page; Start also opens the locked harness store) → grants (a 10-minute grant and a standing rule on the Face ID
-/// review, one denied, one forgotten) → schedules → terminal (the router's page in a WebView) → supervisor log + lifecycle → pause → transcript
-/// → the logs again →
+/// review, one denied, one forgotten) → schedules (listed, nothing to arm: the session arms its own) → terminal (the
+/// router's page in a WebView) → the session's Log (the boot's start) → pause → transcript → the Log again →
 /// resume with a prompt (signed, shown on the approval) → permission mode → resume with the latest image → destroy →
 /// Previous → search → repos (add with its deploy key, Jarvis 2's own repo comes up sensitive, remove; claude-env
 /// pre-selected on New session only when listed) → tasks → Reset (the kit ends the core; a new kit; the stores empty).
@@ -383,20 +383,16 @@ final class Jarvis2UITests: JarvisUITestCase {
       el("srow-\(sid)").tap()
     }
 
-    // ---- schedules: a wakeup in an hour and a daily cron
+    // ---- schedules: only the session arms its wakeups and crons (the router refuses the app), so the page lists them
+    // (none here) with the scheduler's standing rule, and has no arming form
     if wait(el("schedules-\(sid)"), 20, "Schedules") {
       el("schedules-\(sid)").tap()
-      if wait(el("sch-prompt"), 20, "schedules page") {
-        el("sch-prompt").tap(); el("sch-prompt").typeText("CI wakeup: check the build")
-        el("sch-save").tap()
-        wait(el("sch-cancel-w-default"), 20, "wakeup armed")
-        app.buttons["Repeating"].firstMatch.tap()
-        el("sch-prompt").tap(); el("sch-prompt").typeText("CI cron: daily summary")
-        el("sch-save").tap()
-        wait(el("sch-cancel-c-daily"), 20, "cron armed")
+      if arrives(el("sch-none"), 20, "the schedules page (nothing armed)") {
+        XCTAssertTrue(el("sch-rule").exists, "[\(tag)] the scheduler's standing rule")
+        XCTAssertFalse(el("sch-prompt").exists || el("sch-save").exists, "[\(tag)] no arming form")
         shot("schedules")
-        back()
       }
+      back()
     }
 
     // ---- the terminal: the router's page in a WebView (a fake machine answers nothing: the page, its status, its keys)
@@ -411,7 +407,7 @@ final class Jarvis2UITests: JarvisUITestCase {
       back()
     }
 
-    // ---- the supervisor log and the lifecycle log (the fake machine writes no supervisor lines; the router records the boot)
+    // ---- the session's Log (the fake machine writes no supervisor lines; the router records the boot's start)
     checkLogs(sid, supervisorLine: false, flyStep: false, "running")
 
     // ---- pause → transcript → resume with a prompt (a one-time input the phone signs: the approval shows it)

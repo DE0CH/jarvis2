@@ -232,7 +232,7 @@ final class ReplicaUITests: JarvisUITestCase {
     }
     back()
 
-    // ---- the supervisor log (the real machine's supervisor writes its boot) and the lifecycle log (the boot's Fly steps)
+    // ---- the session's Log: the real machine's supervisor lines, the boot's start (Router) and its Fly steps, one stream
     checkLogs(sid, supervisorLine: true, flyStep: true, "running")
 
     // ---- the Inbox, from a session: deny one grant request, allow another with Face ID ----

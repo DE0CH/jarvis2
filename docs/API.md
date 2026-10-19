@@ -640,8 +640,9 @@ starts again at seq 0. The core before R2 (the running one until its release) ke
 
 ## Wakeups and crons (`router/schedule.go`)
 
-Jarvis 1's shapes. The app calls them under `/api/sessions/:id/…`; the session itself under `/m/api/sessions/:id/…`
-(through its machine's local proxy, below). At the due time the router delivers the prompt as a peer message
+Jarvis 1's shapes. The session arms them under `/m/api/sessions/:id/…` (through its machine's local proxy, below: its
+own signed request is what vouches for the delivery); the app lists and cancels them under `/api/sessions/:id/…`, and
+its `POST` (wakeup or cron) answers 400 saying the session arms them. At the due time the router delivers the prompt as a peer message
 (holder `scheduler`), resuming a paused session first. A wakeup or cron belongs to its session and ends with it.
 
 | Call | Does |

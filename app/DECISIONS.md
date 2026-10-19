@@ -368,7 +368,10 @@ fixes, 34–40 carried over from the old app and still true, 41–43 the web pag
    a "Now: pause running" row while an operation runs. It polls every 2 s with the cursor and keeps the list in time
    order (a Fly event read late slots in where it happened). Every colour is the theme's (web) or semantic (iPhone):
    readable in light and dark. No action on the page and nothing pops up. The separate Supervisor log and Lifecycle
-   pages are gone.
+   pages are gone. Where the two differ it is the platform's idiom: the iPhone's is a plain native List with a Follow
+   toggle in the toolbar (off to read back without the list jumping), the web follows the end always and puts the tags in a
+   column on a wide window. The walkthrough opens it running and paused and needs router entries in it (never blank);
+   the replica also needs a supervisor line and a Fly step.
 
 ## The phone replica in CI (2026-10-16)
 
@@ -399,3 +402,12 @@ fixes, 34–40 carried over from the old app and still true, 41–43 the web pag
 - Content stores: the web page has the Content tab and both apps pick them on New session (66); the iPhone app has Settings → Content (list, files, delete, new store; uploads are the web page's). Devices and lease pills are in the web page only (65); attachments are images only (no other files).
 - After a reinstall that loses the Keychain, the phone's keys and device key are new: an already-recovered core refuses a
   second claim; restart the core (a new, empty core) and Recover.
+
+## Schedules: listed and cancelled, armed only by the session (2026-10-19)
+
+76. **No arming form on Schedules** (both apps). The router refuses a wakeup or cron armed from the app (docs/DECISIONS
+    190, refusal audit: only the session's own signed request vouches for the delivery, so an app-armed one failed at
+    every firing), so the "New" form and its Arm button were a form that could only fail; they are gone. Schedules
+    lists what the session armed (each with Cancel) and keeps "Standing rule for the scheduler…"; one fixed line says
+    the session arms its own (ask it in its chat). The walkthrough checks the page opens with "Nothing armed", the
+    standing rule and no form.

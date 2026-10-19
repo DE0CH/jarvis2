@@ -307,22 +307,23 @@ class JarvisUITestCase: XCTestCase {
 }
 
 extension JarvisUITestCase {
-  /// the session page's read-only Log (Sessions/LogViews.swift): one stream of supervisor lines and lifecycle
-  /// operations; it opens (with a supervisor line when `supervisorLine`, an operation's start and a Fly step when
-  /// `flyStep`), then back on the session page
+  /// the session page's read-only Log (Sessions/LogViews.swift): ONE stream of supervisor lines and lifecycle
+  /// operations. It opens and is never blank: the router's entries are always there (every session had a boot; the list
+  /// follows the end, so the check takes any router entry, not the first one), plus a supervisor line when
+  /// `supervisorLine` and a Fly step when `flyStep` (the replica's real machines); then back on the session page
   func checkLogs(_ sid: String, supervisorLine: Bool, flyStep: Bool, _ what: String) {
     guard scrolledTo(el("log-\(sid)")) else { XCTFail("[\(tag)] Log on the session page (\(what))"); return }
     el("log-\(sid)").tap()
     if arrives(el("session-log"), 20, "the session's log (\(what))") {
-      func entry(_ label: String) -> XCUIElement {
-        app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH 'ev-' AND label CONTAINS %@", label)).firstMatch
+      func entry(_ labels: String...) -> XCUIElement {
+        let p = NSPredicate(format: "identifier BEGINSWITH 'ev-'")
+        let all = labels.map { NSPredicate(format: "label CONTAINS %@", $0) }
+        return app.descendants(matching: .any).matching(NSCompoundPredicate(andPredicateWithSubpredicates: [p] + all)).firstMatch
       }
+      wait(entry("Router"), 60, "a router entry in the log (\(what))")
+      XCTAssertFalse(el("log-empty").exists, "[\(tag)] the log isn't empty (\(what))")
       if supervisorLine { wait(entry("Supervisor"), 90, "a supervisor line in the log (\(what))") }
-      if flyStep {
-        wait(entry("started"), 60, "an operation's start in the log (\(what))")
-        wait(entry("Fly"), 60, "a Fly step in the log (\(what))")
-      }
-      if !supervisorLine && !flyStep { sleep(3) }
+      if flyStep { wait(entry("Fly"), 60, "a Fly step in the log (\(what))") }
       shot("session-log-\(what)")
     }
     back()
