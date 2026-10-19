@@ -22,6 +22,6 @@ reject an approval and pause/resume/destroy; approvals happen only in the app (i
 
 ## CI
 
-`.github/workflows/web.yml`: typecheck + the web export. The iOS app's CI (compile, interop, the simulator
+`.github/workflows/web.yml`: typecheck, the tests (`npm test`, node's test runner over `test/*.test.mjs`) + the web export. The iOS app's CI (compile, interop, the simulator
 walkthrough, the phone replica, TestFlight) is `ios.yml`, the transitions run `transitions.yml`; see
 docs/RUNBOOK.md "Testing" and the `jarvis2-ios` skill (`.claude/skills/jarvis2-ios`).

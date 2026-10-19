@@ -654,7 +654,7 @@ Storage Box copies. Nothing else waits on it; the router reports search unreacha
 - The iOS app on a simulator: the `ios` workflow (compile both flavours, the walkthrough in light and dark against a
   real core and router on the runner, recorded, and the phone replica below); `transitions.yml` taps every navigation
   and fails on a blank screen.
-- The web page: the `web` workflow (typecheck + export of `app/`).
+- The web page: the `web` workflow (typecheck, `npm test`, export of `app/`).
 - End to end on real Fly with a software phone and the public TEST master key: `infra/e2e.sh` (a local core
   and router, a throwaway WireGuard peer, the session image; set `E2E_SESSION_IMAGE` to a pinned tag). It sets its
   own core up and never touches the production core. It always runs with Jarvis 1 unreachable (DECISIONS 155; needs

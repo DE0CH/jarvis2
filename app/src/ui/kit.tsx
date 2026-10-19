@@ -309,12 +309,13 @@ export function Pill({ kind, children, spin }: { kind: "ok" | "dim" | "wait" | "
 export function Rows({ children, mt, mb, id, data }: { children: ReactNode; mt?: Sp; mb?: Sp; id?: string; data?: Record<string, string> }) {
   return <View {...ids(id, data)} style={{ marginTop: sp(mt), marginBottom: sp(mb), gap: 2 }}>{children}</View>;
 }
-export function Row({ label, children, id, mono: m, color, lines, selectable, data }: { label: string; children?: ReactNode; id?: string; mono?: boolean; color?: ColorName; lines?: number; selectable?: boolean; data?: Record<string, string> }) {
+export function Row({ label, children, id, mono: m, color, lines, selectable, data, part }: { label: string; children?: ReactNode; id?: string; mono?: boolean; color?: ColorName; lines?: number; selectable?: boolean; data?: Record<string, string>; part?: string }) {
   const t = useTheme();
   const plain = typeof children === "string" || typeof children === "number";
-  // in a grid of cards, the same row lines up across the cards of one grid row (align.tsx)
+  // in a grid of cards, the same row lines up across the cards of one grid row (align.tsx); `part` names the row when
+  // its label isn't unique in the card (a log line's time, a waiter's Purpose next to the holder's)
   return (
-    <Aligned part={"row:" + label}><View {...ids(id, { row: label, ...data })} style={{ flexDirection: "row", alignItems: "flex-start", gap: 12, minHeight: 20 }}>
+    <Aligned part={part || "row:" + label}><View {...ids(id, { row: label, ...data })} style={{ flexDirection: "row", alignItems: "flex-start", gap: 12, minHeight: 20 }}>
       <RNText style={{ width: 104, flexShrink: 0, color: t.gray.a[11], fontSize: 13, lineHeight: 20 }}>{label}</RNText>
       {plain
         ? <RNText numberOfLines={lines} selectable={selectable} style={{ flex: 1, minWidth: 0, color: color ? t.c[color].a[11] : t.gray[12], fontSize: m ? 12.5 : 14, lineHeight: 20, fontFamily: m ? mono : undefined }}>{children}</RNText>

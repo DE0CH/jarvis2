@@ -87,13 +87,13 @@ function DeviceCard({ l }: { l: Lease }) {
       </Rows>
       {l.queue.map((w) => (
         <Rows key={w.sid} mt={2} data={{ waiter: w.sid }}>
-          <Row label={"#" + w.position}>{title(w.sid) + (w.interrupted ? " · interrupted" : "")}</Row>
-          {!!w.purpose && <Row label="Purpose">{w.purpose}</Row>}
-          {!!w.description && <Row label="Waiting to">{w.description}</Row>}
+          <Row label={"#" + w.position} part={"waiter:" + w.position}>{title(w.sid) + (w.interrupted ? " · interrupted" : "")}</Row>
+          {!!w.purpose && <Row label="Purpose" part={"waiter:" + w.position + ":purpose"}>{w.purpose}</Row>}
+          {!!w.description && <Row label="Waiting to" part={"waiter:" + w.position + ":description"}>{w.description}</Row>}
         </Rows>
       ))}
       {l.log.length > 0 && <Rows mt={2}>
-        {l.log.slice(-5).reverse().map((e, i) => <Row key={i} label={ago(new Date(e.at).toISOString())}>{e.kind + " · " + title(e.sid) + (e.note ? " · " + e.note : "")}</Row>)}
+        {l.log.slice(-5).reverse().map((e, i) => <Row key={i} label={ago(new Date(e.at).toISOString())} part={"log:" + i}>{e.kind + " · " + title(e.sid) + (e.note ? " · " + e.note : "")}</Row>)}
       </Rows>}
       <Flex gap={2} pt={3} wrap style={{ marginTop: "auto" }}>
         {h?.human

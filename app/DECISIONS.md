@@ -159,7 +159,8 @@ fixes, 34–40 carried over from the old app and still true, 41–43 the web pag
     generator are gone.
 42. It can view everything, request a new session (any stores, sensitive ones badged; docs/DECISIONS.md 164), reject approvals, pause, resume and destroy;
     where the app would open a review, it files an Inbox request ("approve it in the Jarvis 2 app").
-43. `web.yml` typechecks and exports it; the router serves the export at `/`.
+43. `web.yml` typechecks it, runs its tests (`npm test`: node's test runner over `app/test/*.test.mjs`) and exports it; the router
+    serves the export at `/`.
 
 ## Finishing the native app (2026-10-11, late; decided while Deyao was away)
 
@@ -266,6 +267,9 @@ fixes, 34–40 carried over from the old app and still true, 41–43 the web pag
     what it waits to do) and the last five events; Take over / Hand back (a note in the dialog) and Force return, each
     two-phase (the card changes when /api/state shows it). Session cards carry lease pills ("holds iphone", "#2 for
     mac"). No Face ID: moving a lease reaches no secret. The iOS app has neither yet.
+    Both read `leases` from /api/state through `lib/state.ts` `stateFrom`, which keeps every field the router sends
+    (2026-10-19: a list of fields to copy had left `leases` out, so the tab said "No devices." from the start; test
+    `app/test/state.test.mjs`). A card's log and queue rows align across cards by position, not by label.
 66. **Content stores** (docs/DECISIONS.md 132-133): the web page's Content tab (`views/Content.tsx`, a store's files on its
     own page `pages/ContentStore.tsx`: upload from a file picker into an optional folder, download, delete, delete the
     store with its name typed) and a Content stores picker on New session in both apps (checkbox cards; the iPhone's

@@ -34,7 +34,8 @@
     "start": "expo start",
     "web": "expo start --web",
     "build:web": "expo export --platform web --output-dir ../web",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "node --experimental-strip-types --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --disable-warning=ExperimentalWarning --test test/*.test.mjs"
   },
   "private": true
 }

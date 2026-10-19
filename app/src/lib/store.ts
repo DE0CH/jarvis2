@@ -4,6 +4,7 @@
 import { useSyncExternalStore } from "react";
 import { AppState, Platform } from "react-native";
 import { api, coreStores, loadPolicy, RUN_ACTIVE, type Choice, type CoreStore, type Policy, type Rec, type State, type TasksOverview, type Machine, type FlyOrgView, type MachinesOverview, type InboxItem, type InboxBatch } from "./api";
+import { stateFrom } from "./state";
 
 export type Tab = "sessions" | "inbox" | "search" | "stores" | "content" | "records" | "tasks" | "schedules" | "machines" | "devices" | "settings";
 export const TABS: [Tab, string][] = [["sessions", "Sessions"], ["inbox", "Inbox"], ["search", "Search"], ["stores", "Stores"], ["content", "Content"], ["records", "Previous"], ["tasks", "Tasks"], ["schedules", "Schedules"], ["machines", "Machines"], ["devices", "Devices"], ["settings", "Settings"]];
@@ -121,7 +122,7 @@ let fastUntil = 0;
 const pollState = coalesce(async () => {
   try {
     const st = await api<State>("GET", "api/state");
-    S.state = { sessions: st.sessions || [], approvals: st.approvals || [], core: st.core || { up: false }, budget: st.budget ?? null, fly: st.fly ?? null, flyApp: st.flyApp, repos: st.repos || [], inbox: st.inbox || [], inboxBatches: st.inboxBatches || [], loaded: true, loadError: null };
+    S.state = stateFrom(st);
   } catch (e: any) { S.state = { ...S.state, loadError: e.message }; }
   S.refreshing = false; emit();
   // a session is on its way somewhere: follow it closely
