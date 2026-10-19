@@ -20,6 +20,7 @@ package main
 import (
 	"fmt"
 	"log"
+	"sync"
 	"time"
 )
 
@@ -73,12 +74,35 @@ func (r *Router) finalSnapshotAndKill(id, machine string, force bool) bool {
 
 // finalSnapshotAndKillFor: destroying = a destroy's (archive.go snapshotAndKill: its kill falls back, DECISIONS 181)
 func (r *Router) finalSnapshotAndKillFor(id, machine string, destroying, force bool) bool {
-	serr := r.lastSnapshot(id, machine)
+	return r.finalSnapshotAndKillWith(id, machine, destroying, force, nil)
+}
+
+// finalSnapshotAndKillNext: a pause's end that hands over to next (handover.go; nil = a plain pause)
+func (r *Router) finalSnapshotAndKillNext(id, machine string, next *nextMachine) bool {
+	return r.finalSnapshotAndKillWith(id, machine, false, false, next)
+}
+
+// finalSnapshotAndKillWith: next (a handover's next machine) starts as soon as the old one has been told to stop —
+// the snapshot command, or the kill when no snapshot is asked for — and its cert still waits for this kill
+// (handover.go). A machine kept here drops it.
+func (r *Router) finalSnapshotAndKillWith(id, machine string, destroying, force bool, next *nextMachine) bool {
+	stopSent := func() {}
+	if next != nil {
+		stopSent = sync.OnceFunc(func() { r.launchSpare(id, next) })
+	}
+	ok := false
+	defer func() {
+		if !ok && next != nil {
+			r.cancelSpare(id, "the old machine was kept")
+		}
+	}()
+	serr := r.lastSnapshotThen(id, machine, stopSent)
 	vol := r.machineVolume(machine)
 	if serr != nil && vol == nil && !force {
 		r.keepMachine(id, machine, serr)
 		return false
 	}
+	stopSent() // the kill below is the stop when no snapshot was asked for (one already here, or a machine never booted)
 	if serr != nil {
 		log.Printf("session %s: %s's final snapshot: %v; going on (%s)", id, machine, serr, map[bool]string{true: "its volume is backed up first", false: "destroy anyway"}[vol != nil])
 	}
@@ -106,6 +130,7 @@ func (r *Router) finalSnapshotAndKillFor(id, machine string, destroying, force b
 	}
 	r.recordKill(id, machine, kd, serr, destroying)
 	r.lcNote(id, machine, "the core confirmed the machine destroyed on Fly")
+	ok = true
 	return true
 }
 

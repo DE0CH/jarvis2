@@ -509,10 +509,20 @@ func (r *Router) Restart(id string, in RestartRequest) (map[string]any, error) {
 	go func() {
 		defer endJob()
 		defer r.ops.setBusy(id, "")
-		fail := func(err error) { r.ops.phase(j, "failed", err); op.endJob(err) }
+		fail := func(err error) {
+			r.cancelSpare(id, "the restart failed")
+			r.ops.phase(j, "failed", err)
+			op.endJob(err)
+		}
 		if s.MachineID != "" {
+			// handover.go: an unattended restart (no prompt, no rollback: those go to the phone) starts its next
+			// machine as soon as the old one is told to stop
+			var next *nextMachine
+			if prompt == "" && marker == "" {
+				next = r.handoverNext(s, in.ResumeOptions.Size, 0)
+			}
 			r.ops.phase(j, "snapshotting", nil)
-			if err := r.Pause(id); err != nil {
+			if err := r.pauseWith(id, next); err != nil {
 				fail(err)
 				return
 			}

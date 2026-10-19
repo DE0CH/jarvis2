@@ -1798,3 +1798,40 @@ snapshot failed with "no space left on device", the machine was destroyed anyway
        operation says so once and shows events only. Operations end when the machine reports in (boot/resume), the pause
        or destroy finishes, or after 15 min; the API's single-operation read has no cursor (late Fly events can carry
        earlier times), clients re-read it while it runs.
+
+## A handover starts the next machine while the old one stops, 2026-10-19
+
+193. **The next machine starts as soon as the old one has been told to stop; only its cert waits for Fly's
+     "destroyed"** (Deyao, 2026-10-19: "you can start a new machine before the old machine has completely shut down, as
+     reported by Fly, as long as the stop command has been sent"; `router/handover.go`). Upgrade, Restart, More disk and
+     the Resume of a failed session that still has its machine used to run in a row: the final snapshot, the kill until
+     Fly reported the old machine destroyed (the serving core: stop, the volume's backup snapshot until Fly reports it
+     created, destroy), then the core's start of the new machine (volume and machine create, the image pull, boot,
+     init), then its cert. Now the router asks the core for the new machine (a *spare*) the moment the old one is told
+     to stop: when the supervisor is sent `snapshot` (it stops the Claude process and freezes the session first), `free`
+     for an Upgrade, or the kill itself when no snapshot needs asking for. The spare's create, pull and boot overlap the
+     snapshot and the kill; the start after the kill takes it (`startAndCertify`) instead of making another.
+     **Kept in a row, and why:**
+     - *The cert waits for the kill* (the core's Certify needs the predecessor killed, Fly-confirmed, with the final
+       snapshot named). A machine with no cert has no secrets, restores nothing and has no identity: it prints its keys
+       and waits. So the new machine always restores the old one's final snapshot, never an older one (the kill names
+       it, the cert names the kill's), and by the time it gets its identity (cert, stores, tunnel proof, Remote Control,
+       leases, which all follow the cert) the old machine is gone and can't write state or clash with it. Certifying
+       once the stop is *sent* would be a core change (Certify, Kill, ApproveByDeadMachine all read "killed" as
+       Fly-confirmed destroyed), and a core release needs Deyao's Recover, so it is not part of this change. What a
+       handover still waits for is only the part of the snapshot and the kill that outlasts the new machine's boot.
+     - *A spare is used only when it is exactly the machine the start asks for* (image, size, disk; "" = medium) and
+       only for a resume the core answers by itself (the cert's own image). A resume the phone approves (newer image,
+       resume prompt or rollback, another permission mode, the Claude login's legacy image) gets its own machine after
+       the approval; a spare already made for it is destroyed.
+     - *An unused spare is destroyed in the background*: the pause kept the old machine (its snapshot failed), the
+       resume went to the phone or failed, the job failed, or nothing took it within 8 min (`spareMaxAge`: the machine
+       asks for its cert for about 10 min, then refuses to start). Fly's org machine cap counts it until then
+       (lessons/58), so a spare never waits out the cap: at the cap it gives up and the start after the kill makes the
+       machine, as before. The old machine's kill is unchanged (the core's stop, backup, destroy, volume delete), so it is
+       always cleaned up; it is not made asynchronous because the cert depends on it.
+     - *A router restart mid-handover* loses the spare (in memory): its machine has no cert and no line, and it shows
+       on the Machines tab as an orphan after 15 min, as a start cut off by a restart always did.
+     *Not chosen*: starting the spare at the start of the job, before the stop is sent (a pause that keeps the machine
+     would waste it more often, and Deyao's rule names the stop); keeping spares warm ahead of any handover (a machine
+     per session, billed and counted toward the cap).

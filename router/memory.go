@@ -294,15 +294,20 @@ func (r *Router) Upgrade(id string) (map[string]any, error) {
 		defer r.ops.setBusy(id, "")
 		fail := func(err error) {
 			log.Printf("[memory] upgrade of %s failed: %v", id, err)
+			r.cancelSpare(id, "the upgrade failed")
 			r.ops.phase(j, "failed", err)
 			op.endJob(err)
 		}
+		// handover.go: the bigger machine starts as soon as the old one is told to stop ("free" stops the harness),
+		// and gets its cert once the old one is killed
+		next := r.handoverNext(s, to, 0)
 		r.ops.phase(j, "freeing", nil)
 		op.note(s.MachineID, "sent the supervisor free (stop the harness and free memory before the snapshot)")
 		r.send(s.MachineID, "free")
+		r.launchSpare(id, next)
 		time.Sleep(memFreeWait)
 		r.ops.phase(j, "snapshotting", nil)
-		if err := r.Pause(id); err != nil {
+		if err := r.pauseWith(id, next); err != nil {
 			fail(err)
 			return
 		}

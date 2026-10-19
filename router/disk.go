@@ -239,6 +239,7 @@ func (r *Router) MoreDisk(id string) (map[string]any, error) {
 		defer r.ops.setBusy(id, "")
 		fail := func(err error) {
 			log.Printf("[disk] more disk for %s failed: %v", id, err)
+			r.cancelSpare(id, "more disk failed")
 			r.ops.phase(j, "failed", err)
 		}
 		r.ops.phase(j, "extending", nil)
@@ -258,7 +259,9 @@ func (r *Router) MoreDisk(id string) (map[string]any, error) {
 		})
 		if ext.NeedsRestart && s.State == "started" {
 			r.ops.phase(j, "snapshotting", nil)
-			if err := r.Pause(id); err != nil {
+			// handover.go: the machine on the bigger volume starts as soon as the old one is told to stop
+			next := r.handoverNext(s, "", to)
+			if err := r.pauseWith(id, next); err != nil {
 				fail(err)
 				return
 			}

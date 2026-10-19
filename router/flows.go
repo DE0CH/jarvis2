@@ -50,6 +50,8 @@ type Router struct {
 
 	sup *supLogs   // supervisorlog.go: the machines' supervisor logs
 	lc  *lifecycle // lifecycle.go: each session's lifecycle operations and their logs
+
+	spares sync.Map // handover.go: session id → *spare, the next machine started while the old one stops
 }
 
 func NewRouter(cfg Config, st *State, core *CoreClient, policy Policy) *Router {
@@ -199,6 +201,11 @@ func (r *Router) startMachine(image, size string) (*Doc, error) {
 // startMachineDisk: startMachine with the machine's volume size (disk.go; 0 = the core's default)
 // created: told the machine's id as soon as the core's Fly create made it (lifecycle.go reads its Fly events from then)
 func (r *Router) startMachineDisk(image, size string, diskGB int, created func(id string)) (*Doc, error) {
+	return r.startMachineWith(image, size, diskGB, created, true)
+}
+
+// startMachineWith: waitLimit = wait out Fly's org machine limit (a handover's spare doesn't: handover.go)
+func (r *Router) startMachineWith(image, size string, diskGB int, created func(id string), waitLimit bool) (*Doc, error) {
 	if size == "" {
 		size = "medium"
 	}
@@ -210,7 +217,7 @@ func (r *Router) startMachineDisk(image, size string, diskGB int, created func(i
 	// Fly's org machine limit (lessons/58): nothing was created and the approval is still unused, so wait for a
 	// machine to go (sessions pause by themselves) instead of failing a start Deyao already approved
 	// A drain (drain.go) doesn't wait out the limit: the start ends with errLimitDraining and Deyao starts it again.
-	for waited := time.Duration(0); err != nil && flyMachineLimit(err) && waited < machineLimitWait; waited += machineLimitStep {
+	for waited := time.Duration(0); waitLimit && err != nil && flyMachineLimit(err) && waited < machineLimitWait; waited += machineLimitStep {
 		if r.draining() {
 			return nil, errLimitDraining
 		}
@@ -317,11 +324,18 @@ func (r *Router) startAndCertify(sid string, approval *Doc) {
 	if size == "" {
 		size = "medium"
 	}
-	op.note("", "asked the core to start a machine ("+size+", image "+a.Request.Image+")")
-	d, err := r.startMachineDisk(a.Request.Image, s.Size, s.DiskGB, func(id string) {
-		op.machine(id)
-		op.note(id, "the core's Fly create made machine "+id+"; waiting for it to come up and give its keys (init)")
-	})
+	// handover.go: the machine started while the old one stopped, when it is the one this start asks for
+	d := r.takeSpare(sid, nextMachine{Image: a.Request.Image, Size: s.Size, DiskGB: s.DiskGB})
+	var err error
+	if d != nil {
+		op.note("", "taking the next machine started while the old one stopped ("+size+", image "+a.Request.Image+")")
+	} else {
+		op.note("", "asked the core to start a machine ("+size+", image "+a.Request.Image+")")
+		d, err = r.startMachineDisk(a.Request.Image, s.Size, s.DiskGB, func(id string) {
+			op.machine(id)
+			op.note(id, "the core's Fly create made machine "+id+"; waiting for it to come up and give its keys (init)")
+		})
+	}
 	if err != nil {
 		fail("start: " + err.Error())
 		return
@@ -876,7 +890,10 @@ func orState(state string) string {
 
 // ---- pause ---------------------------------------------------------------------------------------------
 
-func (r *Router) Pause(id string) error {
+func (r *Router) Pause(id string) error { return r.pauseWith(id, nil) }
+
+// pauseWith: next = a handover's next machine, started as soon as the old one is told to stop (handover.go)
+func (r *Router) pauseWith(id string, next *nextMachine) error {
 	unlock, err := r.lock(id, "pausing")
 	if err != nil {
 		return err
@@ -901,7 +918,7 @@ func (r *Router) Pause(id string) error {
 	go func() {
 		defer unlock()
 		defer op.endFromState()
-		if !r.finalSnapshotAndKill(id, s.MachineID, false) { // snapsafe.go: kept, failed and DMed
+		if !r.finalSnapshotAndKillNext(id, s.MachineID, next) { // snapsafe.go: kept, failed and DMed
 			return
 		}
 		now := time.Now().UTC()
@@ -961,11 +978,18 @@ func (r *Router) Resume(id string, upgrade bool) error {
 		defer unlock()
 		defer op.endFromState()     // unless startAndCertify took it over
 		defer r.settleFollowups(id) // apicalls.go: a call waiting on this resume learns nothing more comes of it
+		// handover.go: startAndCertify takes the spare, else it goes
+		defer r.cancelSpare(id, "the resume started no machine")
 		if s.MachineID != "" {
 			op.machine(s.MachineID)
 			op.note(s.MachineID, "finishing the machine's pause first")
 			r.setWaiting(id, "finishing the pause first")
-			if !r.finalSnapshotAndKill(id, s.MachineID, false) { // snapsafe.go: failed again (kept) with its error
+			// handover.go: the next machine starts once the old one is told to stop (an unattended resume only)
+			var next *nextMachine
+			if !upgrade {
+				next = r.handoverNext(s, "", 0)
+			}
+			if !r.finalSnapshotAndKillNext(id, s.MachineID, next) { // snapsafe.go: failed again (kept) with its error
 				r.setWaiting(id, "")
 				return
 			}
@@ -991,6 +1015,7 @@ func (r *Router) Resume(id string, upgrade bool) error {
 		// change the iPhone approves, like a newer image
 		modeChange := certMode(s.Cert) != normMode(s.PermissionMode)
 		phone := func(image string, opts map[string]string) {
+			r.cancelSpare(id, "the resume waits for Deyao's approval") // handover.go: its start makes its own machine
 			ch, err := r.succession(s.Cert, "", s.Stores, s.Harness, s.PermissionMode, image, lineConfig(&s), once)
 			if err != nil {
 				r.setState(id, "paused", "resume: "+err.Error())
@@ -1398,7 +1423,11 @@ func (r *Router) send(machine, cmd string) {
 // silentAfter: a booted machine whose last report is older than this isn't asked for a snapshot
 var silentAfter = 3 * time.Minute
 
-func (r *Router) lastSnapshot(id, machine string) error {
+func (r *Router) lastSnapshot(id, machine string) error { return r.lastSnapshotThen(id, machine, nil) }
+
+// lastSnapshotThen: stopSent runs once the supervisor has been sent the snapshot command, which stops the session
+// (handover.go: a handover's next machine starts then)
+func (r *Router) lastSnapshotThen(id, machine string, stopSent func()) error {
 	booted := func() (b bool) {
 		r.st.Do(func(d *persisted) {
 			if x := d.Sessions[id]; x != nil {
@@ -1438,6 +1467,9 @@ func (r *Router) lastSnapshot(id, machine string) error {
 	done := r.awaitSnapshot(machine)
 	r.send(machine, "snapshot")
 	r.lcNote(id, machine, "asked the supervisor for the final snapshot (it pauses the Claude process and freezes the session first)")
+	if stopSent != nil {
+		stopSent()
+	}
 	r.setWaiting(id, "waiting for the machine's last snapshot (up to "+waitText(r.cfg.SnapshotWait)+")")
 	defer r.setWaiting(id, "")
 	select {
