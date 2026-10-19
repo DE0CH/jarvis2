@@ -12,6 +12,7 @@ import { BadgeList, Button, Card, Flex, Heading, Muted, P, Pill, Row, Rows, Spin
 import { LastMessage, PButton } from "../ui/bits";
 import { Cards } from "../ui/cards";
 import { openPage } from "../ui/page";
+import { Boundary } from "../ui/boundary";
 
 const recTitle = (r: Rec) => r.archive?.title || sessionTitle(r);
 
@@ -69,6 +70,7 @@ export function Records() {
           const signed = !!a?.signer;
           return (
             <Card key={m.id} data={{ record: m.id }}>
+              <Boundary what={"The record " + (m.id || "")} reset={m}>
               <Flex justify="space-between" align="flex-start" gap={2} mb={1}>
                 <Heading size={3} style={{ flex: 1 }}>{recTitle(m)}</Heading>
                 {n ? <Pill kind="ok">{"restored" + (n > 1 ? ` ×${n}` : "")}</Pill> : <Pill kind="dim">destroyed</Pill>}
@@ -87,7 +89,7 @@ export function Records() {
                 {!!m.model && <Row label="Model">{models.find((x) => x.id === m.model)?.label || m.model}</Row>}
                 {!!m.size && <Row label="Size">{m.size}</Row>}
                 {a ? <>
-                  <Row label="Transcripts">{String(a.transcripts.length)}</Row>
+                  <Row label="Transcripts">{String((a.transcripts || []).length)}</Row>
                   <Row label="Artifact files">{String(a.artifacts)}</Row>
                   {!signed && <Row label="Snapshot">None (indexed by hand)</Row>}
                 </> : <Row label="Archive" color={m.archiveError ? "red" : undefined}>{m.archiveError || "None"}</Row>}
@@ -99,6 +101,7 @@ export function Records() {
                 <Button variant="soft" color="gray" id={"rremove-" + m.id} disabled={busy} onPress={() => remove(m, false)}>Remove</Button>
                 {a && <Button variant="soft" color="red" id={"rpurge-" + m.id} disabled={busy} onPress={() => remove(m, true)}>Delete</Button>}
               </Flex>
+              </Boundary>
             </Card>
           );
         })}

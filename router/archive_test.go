@@ -461,7 +461,7 @@ func TestPausedTailAndChanges(t *testing.T) {
 func TestPurgeRecord(t *testing.T) {
 	rg := newRig(t)
 	rg.r.Destroy("s1")
-	waitFor(t, "the record", func() bool { return rg.r.record("s1") != nil })
+	waitFor(t, "the record", func() bool { return rg.r.record("s1") != nil && rg.r.record("s1").Archive != nil }) // finish lists it a moment before its archive is set (flows.go)
 	dir := rg.r.record("s1").Archive.Dir
 	// a second record sharing the dir keeps the shared files
 	rg.r.st.Do(func(d *persisted) {
@@ -490,7 +490,7 @@ func TestPurgeRecord(t *testing.T) {
 func TestRestoreRecord(t *testing.T) {
 	rg := newRig(t)
 	rg.r.Destroy("s1")
-	waitFor(t, "the record", func() bool { return rg.r.record("s1") != nil })
+	waitFor(t, "the record", func() bool { return rg.r.record("s1") != nil && rg.r.record("s1").Archive != nil }) // finish lists it a moment before its archive is set (flows.go)
 	sid, err := rg.r.RestoreRecord("s1", "req1")
 	if err != nil {
 		t.Fatal(err)
@@ -549,7 +549,7 @@ func TestRestoreRecord(t *testing.T) {
 func TestRestoreRefusesBadSignature(t *testing.T) {
 	rg := newRig(t)
 	rg.r.Destroy("s1")
-	waitFor(t, "the record", func() bool { return rg.r.record("s1") != nil })
+	waitFor(t, "the record", func() bool { return rg.r.record("s1") != nil && rg.r.record("s1").Archive != nil }) // finish lists it a moment before its archive is set (flows.go)
 	dir := rg.r.record("s1").Archive.Dir
 	rg.r.box().PutBytes(dir+"/jarvis2/snapshot.tar.gz", []byte("tampered"))
 	if _, err := rg.r.RestoreRecord("s1", "r"); err == nil || !strings.Contains(err.Error(), "isn't signed") {
@@ -578,5 +578,35 @@ func TestArchiveDirFor(t *testing.T) {
 	}
 	if got := archiveDirFor(s, ""); got != "claude-records/2026-10-01 s1" {
 		t.Fatal(got)
+	}
+}
+
+// A snapshot with no transcript (a session destroyed before its first conversation) archived with Transcripts nil,
+// which went out as "transcripts": null and blanked the web page's Previous tab (Records.tsx read its .length).
+// GET /api/records always lists them as an array, old records included.
+func TestRecordsListNoTranscriptsAsArray(t *testing.T) {
+	rg := newRig(t)
+	r := rg.r
+	r.cfg.NoAccess = true
+	r.st.Do(func(d *persisted) {
+		d.Records = append(d.Records, &Record{Session: Session{ID: "s9"}, DestroyedAt: time.Now(),
+			Archive: &ArchiveInfo{Dir: "claude-records/2026-10-16 s9", Title: "s9", Signer: "m9"}})
+	})
+	req := httptest.NewRequest("GET", "/api/records", nil)
+	w := httptest.NewRecorder()
+	r.Handler().ServeHTTP(w, req)
+	if w.Code != 200 {
+		t.Fatalf("GET /api/records: %d %s", w.Code, w.Body)
+	}
+	var out struct {
+		Records []struct {
+			Archive map[string]json.RawMessage `json:"archive"`
+		} `json:"records"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil || len(out.Records) == 0 {
+		t.Fatalf("records %v %s", err, w.Body)
+	}
+	if got := string(out.Records[len(out.Records)-1].Archive["transcripts"]); got != "[]" {
+		t.Fatalf("transcripts = %s, want []", got)
 	}
 }

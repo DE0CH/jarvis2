@@ -78,6 +78,17 @@ type ArchiveInfo struct {
 	NoSnapshot string `json:"noSnapshot,omitempty"`
 }
 
+// MarshalJSON: transcripts always go out as an array. A snapshot with no transcript (a session destroyed before its
+// first conversation) leaves the slice nil, and "transcripts": null blanked the web page's Previous tab; records
+// already stored that way are covered too.
+func (a ArchiveInfo) MarshalJSON() ([]byte, error) {
+	type plain ArchiveInfo
+	if a.Transcripts == nil {
+		a.Transcripts = []string{}
+	}
+	return json.Marshal(plain(a))
+}
+
 type RestoreMark struct {
 	Session string    `json:"sessionId"`
 	At      time.Time `json:"at"`

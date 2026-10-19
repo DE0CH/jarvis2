@@ -11,6 +11,7 @@ import { BadgeList, Button, Callout, Heading, IconButton, P, Row, Rows, Spinner,
 import { TopBar, openPage } from "../ui/page";
 import { openNewSession } from "../lib/sessions";
 import { useWide } from "../ui/overlays";
+import { Boundary } from "../ui/boundary";
 import { Sessions } from "../views/Sessions";
 import { Inbox } from "../views/Inbox";
 import { Records } from "../views/Records";
@@ -63,6 +64,7 @@ export default function Dashboard() {
           <Banners />
           {!wide && <Tabs value={tab} onChange={(v) => setTab(v as Tab)} items={TABS} badges={{ inbox }} />}
           <View nativeID={"view-" + tab}>
+            <Boundary what={"This tab"} reset={tab}>
             {tab === "sessions" && <Sessions />}
             {tab === "inbox" && <Inbox />}
             {tab === "search" && <Search />}
@@ -74,6 +76,7 @@ export default function Dashboard() {
             {tab === "machines" && <Machines />}
             {tab === "devices" && <Devices />}
             {tab === "settings" && <Settings />}
+            </Boundary>
           </View>
         </View>
       </ScrollView>
