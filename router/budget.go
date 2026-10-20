@@ -8,6 +8,7 @@ package main
 // blind while the router is down, bounded by maxDeltaH per gap). FLY_BUDGET_WARN_USD (default 35) → one DM;
 // FLY_BUDGET_USD (default 40, Deyao 2026-10-20; 0 = off) → pause every running session (r.Pause: snapshot, then the core's
 // kill) and DM, and keep pausing anything started while the month stays over the cap.
+// Raising a line above the month's spend so far re-arms it: its DM fires again when the spend reaches the new line.
 //
 // Volume snapshots count too (DECISIONS 179): the sessions' volumes are backed up at every kill (core/volumes.go) and
 // Fly bills their snapshots' stored size, including those of volumes already deleted (kept for their retention). Every
