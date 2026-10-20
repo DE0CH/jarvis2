@@ -33,7 +33,7 @@ spec:
       securityContext: { fsGroup: 65532 }
       containers:
         - name: router
-          image: ghcr.io/de0ch/jarvis2-router:sha-db1e9ed28a5c@sha256:ec670b788083ea0a20216ed963b1a7f622172931e98efd90c40cc766b9793152
+          image: ghcr.io/de0ch/jarvis2-router:sha-b97ed53f04b6@sha256:fc5b717981bd5fb62f9c9e442061c02b5809ca5c4b45b231858eb5c3fa8c6850
           ports: [{ containerPort: 8080 }, { containerPort: 8082 }]  # 8082: the move (MOVE_KEY, router/move.go)
           readinessProbe: { tcpSocket: { port: 8080 }, periodSeconds: 2, failureThreshold: 2 }
           env:
@@ -43,9 +43,9 @@ spec:
             # its /data, age-encrypted, to the Storage Box every 15 min and at the move's freeze (router/backup.go);
             # the private half is ROUTER_BACKUP_AGE_KEY in jarvis2-ops
             - { name: ROUTER_BACKUP_AGE_PUB, value: "age1zkvnmh6wu5hyvxppvxf9c83l6q5af7xqqlxtmahkz0l5hhwqq90s8edvu0" }
-            - { name: SESSION_IMAGE, value: "ghcr.io/de0ch/jarvis2-session:sha-db1e9ed28a5c@sha256:905626783ab3d51f75ae220f46398f6ab9a8a9831671ae749a49a6cbe47baa2a" }
+            - { name: SESSION_IMAGE, value: "ghcr.io/de0ch/jarvis2-session:sha-b97ed53f04b6@sha256:7f4cfa99778dd905bda46431c8a049d673b37fdb946cd487d008f7507633d78f" }
             # the CI key's signature over "jarvis2-session-image <SESSION_IMAGE>" (images.yml, keys/ci.pub): the phone checks it
-            - { name: SESSION_IMAGE_SIG, value: "MEQCIF8GME1I7tVFoprZ/J6CuOzwdXlRtP1oW+0lggTcVX49AiBsmSGvk98S8Bsad/HwrCoVtpUUFihA55yvWIw6qBss1g==" }
+            - { name: SESSION_IMAGE_SIG, value: "MEUCIQCH95pC9gRZCJHZwh0cg//FkL0bOHN+tR8t491GcK3pdQIgL9sREFFLKrsb127DlggFX3xeYNX9a+mGjDOBPyNmIV8=" }
             # every earlier CI-pinned session image with its signature (k8s/apps/session-image-sigs.txt, images.yml)
             - { name: SESSION_IMAGE_SIGS_FILE, value: /sigs/session-image-sigs.txt }
             - { name: FLY_REGION, value: lhr }
