@@ -55,7 +55,7 @@ made around it; the app's own list is `app/DECISIONS.md`.
 16. **Box**: Hetzner cx23 (2 vCPU, 4 GB, 40 GB) in fsn1, EUR 6.588/month gross, IPv6-only (DECISIONS 156), in the
     `jarvis2-mock` project (renaming a Hetzner project needs the console).
 17. **Fly**: app `jarvis2-sessions` in org `jarvis2-370`, region `lhr`, sizes small/medium/large = 2/4/8 shared
-    CPUs with 2/4/8 GB, then every doubling past large, named by its memory (16gb, 32gb, …; DECISIONS 167). The router's budget cap (Jarvis 1's: DM at USD 25, pause all at USD 30) reads the app with a
+    CPUs with 2/4/8 GB, then every doubling past large, named by its memory (16gb, 32gb, …; DECISIONS 167). The router's budget cap (DM at USD 35, pause all at USD 40 a month; Deyao raised it from Jarvis 1's 25/30 on 2026-10-20) reads the app with a
     read-only Fly token (`infra/fly-read-token.sh`).
 18. **Images** on GHCR (public, like the repo), with GitHub build attestations (the phone doesn't check them
     yet).
@@ -1245,16 +1245,16 @@ Deyao: several actions approved together with ONE Face ID; the caller groups the
      *Prices* in lhr (fly.io/docs/about/pricing, its calculator read 2026-10-15: a vCPU-second shared 8.465e-7 /
      performance 1.2732e-5 with 0.25 / 2 GB included per CPU, a further GB-second 2.316e-6, lhr markup 1.134615385):
 
-     | size | guest | USD/hour | hours to the USD 30 cap |
+     | size | guest | USD/hour | hours to the USD 40 cap |
      |---|---|---|---|
-     | small | 2×shared · 2 GB | 0.0211 | 1421 |
-     | medium | 4×shared · 4 GB | 0.0422 | 711 |
-     | large | 8×shared · 8 GB | 0.0844 | 355 |
-     | 16gb | 8×shared · 16 GB | 0.1601 | 187 |
-     | 32gb | 8×performance · 32 GB | 0.5674 | 53 |
-     | 64gb | 8×performance · 64 GB | 0.8701 | 34 |
-     | 128gb | 16×performance · 128 GB | 1.7402 | 17 |
-     | 256gb | 32×performance · 256 GB | 3.4805 | 8.6 (Fly's preset list ends at performance-16x; Fly decides) |
+     | small | 2×shared · 2 GB | 0.0211 | 1896 |
+     | medium | 4×shared · 4 GB | 0.0422 | 948 |
+     | large | 8×shared · 8 GB | 0.0844 | 474 |
+     | 16gb | 8×shared · 16 GB | 0.1601 | 250 |
+     | 32gb | 8×performance · 32 GB | 0.5674 | 70 |
+     | 64gb | 8×performance · 64 GB | 0.8701 | 46 |
+     | 128gb | 16×performance · 128 GB | 1.7402 | 23 |
+     | 256gb | 32×performance · 256 GB | 3.4805 | 11 (Fly's preset list ends at performance-16x; Fly decides) |
 
      The budget's rates (`router/budget.go`) are now that calculator's, so the cap counts big rungs right.
      *No invented limit*: a size Fly can't make fails at Fly; the Upgrade job then ends with Fly's own error and the
