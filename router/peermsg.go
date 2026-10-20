@@ -137,9 +137,9 @@ func peerExplanation(from, to *Session) string {
 	if modeUp {
 		why = append(why, "the receiver runs in bypass mode and the sender doesn't")
 	}
-	return fmt.Sprintf("Session “%s” (%s; stores %s; %s mode) wants to tell session “%s” (%s; stores %s; %s mode) the message below.\nUpward: %s.",
-		clip(sessionTitle(*from), 80), from.ID, listOrNone(sortedStores(peerStores(from))), modeOf(from),
-		clip(sessionTitle(*to), 80), to.ID, listOrNone(sortedStores(peerStores(to))), modeOf(to), strings.Join(why, "; "))
+	return fmt.Sprintf("Upward: %s.\nSession “%s” (%s; stores %s; %s mode) wants to tell session “%s” (%s; stores %s; %s mode) the message above.",
+		strings.Join(why, "; "), clip(sessionTitle(*from), 80), from.ID, listOrNone(sortedStores(peerStores(from))), modeOf(from),
+		clip(sessionTitle(*to), 80), to.ID, listOrNone(sortedStores(peerStores(to))), modeOf(to))
 }
 
 // SendPeer: the sending session's message → delivered at once (equal, downward) or filed in the Inbox (upward)
