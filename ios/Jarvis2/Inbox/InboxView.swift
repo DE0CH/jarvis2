@@ -114,7 +114,7 @@ private struct InboxRow: View {
       let d = p["days"].int ?? 0
       return [Holder.title(p["holder"].string ?? ""), who, d > 0 ? "\(d) d" : "\(p["minutes"].int ?? 10) min"].compactMap { $0 }
     case "add-store": return [it.j["options"]["store"].string, who].compactMap { $0 }
-    case "api-call": return [callTarget, p["body"].string].compactMap { $0 }
+    case "api-call": return [it.does, callTarget, p["body"].string].compactMap { $0 }
     case "peer-message": return ["to " + (who ?? "?"), p["text"].string].compactMap { $0 }
     case "restore": return [p["store"].string, p["seq"].int.map { "Version \($0)" }].compactMap { $0 }
     default:

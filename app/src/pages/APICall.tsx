@@ -62,6 +62,7 @@ export function APICallPage({ spec }: { spec: APICallSpec }) {
     <Page title="API call" right={right} id="api-call-page">
       <Lbl>Runs as you</Lbl>
       <Rows id="call-rows">
+        {!!it.does && <Row label="Does" id="call-does">{it.does}</Row>}
         <Row label="Method" mono id="call-method">{p.method}</Row>
         <Row label="Path" mono selectable id="call-path">{p.path}</Row>
         {!p.body && <Row label="Body" id="call-body">None</Row>}

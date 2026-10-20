@@ -67,6 +67,7 @@ private struct SessionDetailList: View {
         if let info = autoPauseInfo { LabeledContent(info.label, value: info.value).accessibilityIdentifier("autopause-\(m.id)") }
         if m.authFailed { ErrorRow(text: "Claude login failed") }
         if let e = m.error { ErrorRow(text: e, id: "session-error") }
+        if busy == nil, m.wakeKind == "account", m.wakePhase == "failed" { ErrorRow(text: "Account switch failed: " + (m.wakeError ?? "no reason given"), id: "account-failed") }
         if let rp = m.resumePrompt {
           VStack(alignment: .leading, spacing: 2) {
             Label(m.state == "paused" ? "Queued for the next resume" : "Queued until it is up", systemImage: "text.bubble").font(.footnote).foregroundStyle(.secondary)

@@ -5,6 +5,7 @@ import { useStore, setTab, getStore, pend, refresh, refreshUntil, pendUntil, set
 import { hasShell, requestSecure } from "../lib/shell";
 import { requestGrant } from "../lib/grants";
 import { inboxToast, modeOutcome, modeWaitingText } from "../lib/modeswitch";
+import { ACCOUNT_PHASE } from "../lib/accountswap";
 import { canCopy, copyText } from "../lib/clipboard";
 import { BadgeList, Box, Button, Callout, CalloutText, Card, Flex, Heading, Lbl, Muted, P, Pill, Quote, Row, Rows } from "../ui/kit";
 import type { AskRow } from "../lib/store";
@@ -29,13 +30,16 @@ const clip = (t: string) => t.length > 90 ? t.slice(0, 90) + "…" : t;
 const UPGRADE_PHASE: Record<string, string> = { freeing: "Freeing memory…", snapshotting: "Snapshotting…", resuming: "Resuming…" };
 // the steps of a More disk job (wake.kind "disk", router/disk.go)
 const DISK_PHASE: Record<string, string> = { extending: "Growing the disk…", snapshotting: "Snapshotting…", resuming: "Resuming…" };
-// what the router is doing to this session right now (its lifecycle lock, or a mode / restart job), as a
+// the steps of a Claude account switch (wake.kind "account", router/accountswap.go): lib/accountswap.ts ACCOUNT_PHASE
+const phaseLabel = (w: { kind: string; phase: string }) => (w.kind === "upgrade" && UPGRADE_PHASE[w.phase]) || (w.kind === "disk" && DISK_PHASE[w.phase]) || (w.kind === "account" && ACCOUNT_PHASE[w.phase]) || null;
+// what the router is doing to this session right now (its lifecycle lock, or a mode / restart / account job), as a
 // button label — seen on every device, not only the one that started it
 export function serverBusy(m: Session): string | null {
   if (m.busy?.kind === "upgrading" && m.wake?.kind === "upgrade" && UPGRADE_PHASE[m.wake.phase]) return UPGRADE_PHASE[m.wake.phase];
   if (m.busy?.kind === "growing-disk" && m.wake?.kind === "disk" && DISK_PHASE[m.wake.phase]) return DISK_PHASE[m.wake.phase];
+  if (m.busy?.kind === "account" && m.wake?.kind === "account" && ACCOUNT_PHASE[m.wake.phase]) return ACCOUNT_PHASE[m.wake.phase];
   if (m.busy) return BUSY_LABEL[m.busy.kind] || "Working…";
-  if (m.wake && !["done", "failed"].includes(m.wake.phase)) return (m.wake.kind === "upgrade" && UPGRADE_PHASE[m.wake.phase]) || (m.wake.kind === "disk" && DISK_PHASE[m.wake.phase]) || BUSY_LABEL[m.wake.kind] || "Working…";
+  if (m.wake && !["done", "failed"].includes(m.wake.phase)) return phaseLabel(m.wake) || BUSY_LABEL[m.wake.kind] || "Working…";
   return null;
 }
 // sessions the Claude app does not see: their primary action is the Remote page
@@ -247,6 +251,7 @@ function menuItems(m: Session): MenuItem[] {
   if (m.state === "started" || m.state === "paused") items.push(m.permissionMode === "bypass"
     ? { label: "Switch to auto mode", sub: "Permission prompts gated by the classifier", onClick: () => switchMode(m, "auto") }
     : { label: "Switch to bypass mode", sub: "No permission prompts; the iPhone allows it", onClick: () => switchMode(m, "bypass") });
+  if (m.claudeAccount && ["started", "paused", "failed"].includes(m.state)) items.push({ label: "Switch Claude account…", sub: "Now: " + m.claudeAccount, onClick: () => openPage("account", { id: m.id }) });
   if (m.state === "paused") items.push({ label: "Resume with latest image", sub: "Newest session image; the iPhone approves", onClick: () => upgrade(m.id) });
   if (canCopy) items.push({ label: "Copy session id", sub: m.id, onClick: () => copyText(m.id).then(() => toast("Session id copied", "ok"), (e) => failed(e, "Could not copy: ")) });
   items.push({ label: "Destroy", sub: "Archive transcripts + ~/artifacts, then burn the machine", danger: true, onClick: () => destroySession(m.id) });
@@ -477,6 +482,7 @@ export function Sessions() {
                 <ModeWaiting m={m} />
                 <LockedStore m={m} />
                 <Schedules m={m} />
+                {m.wake?.kind === "account" && m.wake.phase === "failed" && <P size={2} color="red" mt={1} id={"account-failed-" + m.id}>{"Account switch failed: " + (m.wake.error || "no reason given")}</P>}
                 {!!m.error && <P size={2} color="red" mt={1}>{m.error}</P>}
                 <Backups m={m} />
                 {!!m.discordChannel && <Flex mt={1}><Button size={1} variant="ghost" color="gray" id={"discord-" + m.id} onPress={() => openDiscord(m.discordChannel!)}>Discord channel ↗</Button></Flex>}

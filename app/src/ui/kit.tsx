@@ -206,15 +206,15 @@ export function TextArea({ id, rows = 3, mono: m, style, disabled, onFocus, onBl
 
 // ---- choice controls --------------------------------------------------------------------------
 // a card per option; the chosen one gets the accent border (RadioCards / CheckboxCards)
-function ChoiceCard({ on, onPress, children, check, id, data }: { on: boolean; onPress: () => void; children: ReactNode; check?: boolean; id?: string; data?: Record<string, string> }) {
+function ChoiceCard({ on, onPress, children, check, id, data, disabled }: { on: boolean; onPress: () => void; children: ReactNode; check?: boolean; id?: string; data?: Record<string, string>; disabled?: boolean }) {
   const t = useTheme();
   return (
-    <Pressable {...ids(id, { ...data, state: on ? "checked" : "unchecked" })} accessibilityRole={check ? "checkbox" : "radio"} accessibilityState={check ? { checked: on } : { selected: on }} onPress={onPress}
-      style={({ pressed }) => [{
+    <Pressable {...ids(id, { ...data, state: on ? "checked" : "unchecked" })} accessibilityRole={check ? "checkbox" : "radio"} accessibilityState={check ? { checked: on, disabled: !!disabled } : { selected: on, disabled: !!disabled }} onPress={onPress} disabled={disabled}
+      style={({ pressed }) => [{ opacity: disabled ? 0.5 : 1,
         flexDirection: "row", alignItems: "center", gap: 8, borderRadius: radius[3], backgroundColor: pressed ? t.gray.a[2] : t.surface,
         borderWidth: !check && on ? 2 : 1, borderColor: !check && on ? t.accent[9] : t.gray.a[6],
         paddingVertical: !check && on ? 9 : 10, paddingHorizontal: !check && on ? 11 : 12,
-      }, Platform.OS === "web" ? ({ cursor: "pointer" } as any) : null]}>
+      }, Platform.OS === "web" ? ({ cursor: disabled ? "default" : "pointer" } as any) : null]}>
       <View style={{ flex: 1, minWidth: 0 }}>{children}</View>
       {check && <View style={{ width: 16, height: 16, borderRadius: 4, backgroundColor: on ? t.accent[9] : t.surface, borderWidth: on ? 0 : 1, borderColor: t.gray.a[7], alignItems: "center", justifyContent: "center" }}>
         {on && <RNText style={{ color: "#fff", fontSize: 11, lineHeight: 14, fontWeight: "700" }}>✓</RNText>}
@@ -222,13 +222,13 @@ function ChoiceCard({ on, onPress, children, check, id, data }: { on: boolean; o
     </Pressable>
   );
 }
-export type Choice = { value: string; title: ReactNode; sub?: ReactNode };
+export type Choice = { value: string; title: ReactNode; sub?: ReactNode; disabled?: boolean };
 export function ChoiceText({ title, sub }: { title: ReactNode; sub?: ReactNode }) {
   return <><P size={2} weight="medium">{title}</P>{sub ? (typeof sub === "string" || typeof sub === "number" ? <P size={1} color="gray">{sub}</P> : <View style={{ marginTop: 4 }}>{sub}</View>) : null}</>;
 }
 export function RadioCards({ value, onChange, options, id }: { value: string; onChange: (v: string) => void; options: Choice[]; id?: string }) {
   // each option is `<id>-<value>` too (the UI tests tap them)
-  return <View {...ids(id)} style={{ gap: 8 }}>{options.map((o) => <ChoiceCard key={o.value} id={id ? id + "-" + o.value : undefined} data={{ value: o.value }} on={o.value === value} onPress={() => onChange(o.value)}><ChoiceText title={o.title} sub={o.sub} /></ChoiceCard>)}</View>;
+  return <View {...ids(id)} style={{ gap: 8 }}>{options.map((o) => <ChoiceCard key={o.value} id={id ? id + "-" + o.value : undefined} data={{ value: o.value }} on={o.value === value} disabled={o.disabled} onPress={() => onChange(o.value)}><ChoiceText title={o.title} sub={o.sub} /></ChoiceCard>)}</View>;
 }
 export function CheckboxCards({ value, onChange, options, id }: { value: string[]; onChange: (v: string[]) => void; options: Choice[]; id?: string }) {
   const flip = (v: string) => onChange(value.includes(v) ? value.filter((x) => x !== v) : [...value, v]);

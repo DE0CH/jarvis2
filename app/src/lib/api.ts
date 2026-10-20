@@ -128,7 +128,7 @@ export type Session = {
   claudeAccount?: string | null;
   // the store the machine is waiting on at boot (the core answered 423 "store X is locked" to its secrets pull)
   lockedStore?: string;
-  busy?: { kind: string; since?: string } | null; wake?: { kind: string; phase: string; error?: string } | null; apiProxy?: "on" | "off";
+  busy?: { kind: string; since?: string } | null; wake?: { kind: string; phase: string; error?: string; finishedAt?: string | null } | null; apiProxy?: "on" | "off";
   // a memory-starvation episode (router, mirrors Jarvis 1's lib/memory.js): why, the memory now, and the size
   // the Upgrade button moves it to (always one: the next size doubles the memory, router/sizes.go), its memory and its
   // Fly guest ("8×performance · 32 GB"); absent outside an episode
@@ -208,6 +208,7 @@ export type InboxItem = {
   options?: Record<string, string>; open: { kind: string; options: Record<string, unknown> };
   batch?: string; // router/batches.go: filed in this batch
   viaCall?: string; // router/apicalls.go: the API-call request whose approved call brought this approval about
+  does?: string; // api-call: what the call does, in words the router renders from the call (e.g. an account switch)
 };
 // several Inbox items a caller filed together (router/batches.go): one entry, allowed together on the phone under one
 // Face ID, denied together here or there. `summary` is the caller's words (unverified).

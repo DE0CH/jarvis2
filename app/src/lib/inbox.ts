@@ -59,6 +59,7 @@ export function inboxRows(it: InboxItem, approvals: Approval[] = [], policy: Pol
       add("text", "Message", p.text);
       return rows;
     case "api-call":
+      add("does", "Does", it.does);
       add("request", "Runs", `${p.method} ${p.path}`);
       if (p.body) add("body", "Body", p.contentType === "application/json" ? p.body : `${p.contentType}: ${p.body}`);
       return rows;

@@ -40,6 +40,7 @@ struct APICallReviewView: View {
         Section { Label("No longer in the Inbox", systemImage: "tray").foregroundStyle(.orange).accessibilityElement(children: .combine).accessibilityIdentifier("request-gone") }
       } else if let item {
         Section {
+          if let d = item.does { LabeledContent("Does", value: d).accessibilityIdentifier("call-does") }
           LabeledContent("Method") { Text(p["method"].string ?? "").font(.body.monospaced()) }.accessibilityIdentifier("call-method")
           LabeledContent("Path") { Text(p["path"].string ?? "").font(.footnote.monospaced()).textSelection(.enabled) }
             .accessibilityElement(children: .combine).accessibilityIdentifier("call-path")

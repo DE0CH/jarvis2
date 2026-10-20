@@ -411,3 +411,17 @@ fixes, 34–40 carried over from the old app and still true, 41–43 the web pag
     lists what the session armed (each with Cancel) and keeps "Standing rule for the scheduler…"; one fixed line says
     the session arms its own (ask it in its chat). The walkthrough checks the page opens with "Nothing armed", the
     standing rule and no form.
+
+## Switch Claude account (2026-10-20)
+
+77. **"Switch Claude account…" in a session's More menu** (both apps), for a session whose harness runs on a Claude
+    account (`claudeAccount` set), running, paused or failed. It opens a picker (the iPhone app: a sheet; the web page:
+    a page) with the session's current account, the other accounts (store, email; one not signed in or with an expired
+    login is shown but can't be picked, with the reason), and for a running session the switch "Type “continue” after
+    the switch" (on by default). Switch calls `POST api/sessions/{id}/account`; a refusal shows in the picker, never a
+    popup. A running session's switch is the router's `wake` job (kind "account"): its phases are the session's busy
+    label (Switching account… / Taking the login… / Restarting Claude… / Typing “continue”…) on every device, and a
+    failed one stays on the session as "Account switch failed: …" until the next job. A paused or failed session takes
+    the account at its next start (a notice says so). Claude's choice: the continue switch is not offered for a paused
+    session, since there is no conversation running to continue. An API-call Inbox item's router-rendered `does` is its
+    first row ("Does") on the Inbox list, the API-call page and a batch's review.

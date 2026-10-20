@@ -180,6 +180,35 @@ extension AppModel {
     }
   }
 
+  /// Switch the session's Claude account (router/accountswap.go). Running: a router job takes the new account's login
+  /// and restarts Claude in the same conversation (its `wake`, kind "account"), typing "continue" when asked; the
+  /// pending label holds until the job is done or failed. Paused or failed: applies at its next start. Returns nil when
+  /// the router took the request (the sheet closes), else its error for the sheet to show.
+  func switchAccount(_ id: String, to account: String, continue cont: Bool) async -> String? {
+    var refused: String? = "Still busy with the last action on this session."
+    await exclusive("s:" + id) {
+      refused = nil
+      pend("s:" + id, "Switching account…")
+      defer { pend("s:" + id, nil) }
+      let j: JSON
+      do { j = try await RouterClient.shared.switchAccount(id: id, account: account, continue: cont) } catch { refused = errText(error); return }
+      accountSwitch = nil
+      if j["unchanged"].bool == true { say("It already uses \(account)"); return }
+      if j["nextStart"].bool == true { say("Switches to \(account) at its next start"); await refresh(); return }
+      await refreshUntil(10 * 60) { m in
+        guard let x = m.session(id) else { return true }
+        return x.state == "failed" || x.state == "paused" || (x.serverBusy == nil && x.wakeKind == "account" && (x.wakePhase == "done" || x.wakePhase == "failed"))
+      }
+      if let x = session(id), x.wakeKind == "account", x.wakePhase == "failed" {
+        failure = "Account switch failed" + (x.wakeError.map { ": \($0)" } ?? "")
+      } else if let x = session(id), x.wakeKind == "account", x.wakePhase == "done" {
+        say("Switched to \(account)")
+      }
+      settle(30)
+    }
+    return refused
+  }
+
   /// Auto-pause when idle / Idle notifications: two-phase, the menu shows the router's value
   func toggle(_ m: Session, _ what: String, on: Bool) async {
     await pendUntil("s:" + m.id, on ? "Turning on…" : "Turning off…", 20,

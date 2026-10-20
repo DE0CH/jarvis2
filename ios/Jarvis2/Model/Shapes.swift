@@ -85,15 +85,18 @@ struct Session: Identifiable, Equatable, Hashable {
   var noSnapshot: String? { j["noSnapshot"].text }
   /// the final snapshot failed and the machine (no volume) is kept: Pause again or Destroy anyway
   var snapshotFailed: String? { j["snapshotFailed"].text }
-  /// the router's last restart / upgrade job (kind, phase, error)
+  /// the router's last restart / upgrade / account-switch job (kind, phase, error)
   var wakeKind: String? { j["wake"]["kind"].text }
   var wakePhase: String? { j["wake"]["phase"].text }
   var wakeError: String? { j["wake"]["error"].text }
   /// what the router is doing to it right now (its lifecycle lock, or a mode / restart job), seen on every device
   var serverBusy: String? {
     if j["busy"]["kind"].string == "growing-disk", j["wake"]["kind"].string == "disk", let p = j["wake"]["phase"].string, let l = Fmt.diskPhase[p] { return l }
+    if j["busy"]["kind"].string == "account", j["wake"]["kind"].string == "account", let p = j["wake"]["phase"].string, let l = Fmt.accountPhase[p] { return l }
     if let k = j["busy"]["kind"].string { return Fmt.busyLabel[k] ?? "Working…" }
-    if let k = j["wake"]["kind"].string, let p = j["wake"]["phase"].string, p != "done", p != "failed" { return Fmt.busyLabel[k] ?? "Working…" }
+    if let k = j["wake"]["kind"].string, let p = j["wake"]["phase"].string, p != "done", p != "failed" {
+      return (k == "account" ? Fmt.accountPhase[p] : nil) ?? Fmt.busyLabel[k] ?? "Working…"
+    }
     return nil
   }
 }
@@ -183,6 +186,8 @@ struct InboxItem: Identifiable, Equatable, Hashable {
   var openOptions: JSON { j["open"]["options"] }
   /// the batch it was filed in (router/batches.go)
   var batch: String? { j["batch"].text }
+  /// api-call: what the call does, in words the router renders from the call (e.g. an account switch)
+  var does: String? { j["does"].text }
   /// the call as one line: POST /api/requests/repo/add {"repo":"DE0CH/claude-env"}
   var callLine: String {
     let c = j["call"]

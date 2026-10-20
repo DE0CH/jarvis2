@@ -70,6 +70,8 @@ final class AppModel {
   /// an action failed: one alert
   var failure: String?
   var question: Ask?
+  /// the Switch Claude account sheet (Sessions/SwitchAccountView.swift), opened from a session's More menu
+  var accountSwitch: AccountSwitchAsk?
   /// the review sheet up now, and what runs when it closes (true = it went through)
   var secure: SecureRequest?
   @ObservationIgnored private var secureDone: ((Bool) -> Void)?

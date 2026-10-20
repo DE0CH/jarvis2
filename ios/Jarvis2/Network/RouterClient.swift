@@ -118,6 +118,11 @@ final class RouterClient: NSObject, ASWebAuthenticationPresentationContextProvid
     return JSON.parse(data)
   }
   func get(_ path: String) async throws -> JSON { try await call("GET", path) }
+  /// switch a session's Claude account (router/accountswap.go): 202 {started} for a running session (its `wake` job,
+  /// kind "account"), 200 {nextStart} for a paused or failed one, 200 {unchanged} when it already uses it
+  func switchAccount(id: String, account: String, continue cont: Bool) async throws -> JSON {
+    try await call("POST", "api/sessions/\(id)/account", ["account": account, "continue": cont])
+  }
 
   // ---- first-prompt attachments (router/uploads.go) ----
   /// the router's record of one uploaded file: the name it made safe, the size it stored

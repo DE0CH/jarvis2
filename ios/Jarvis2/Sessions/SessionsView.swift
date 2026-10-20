@@ -211,6 +211,9 @@ struct SessionMenu: View {
         Button("Switch to bypass mode", systemImage: "shield.slash") { Task { await model.switchMode(m, to: "bypass") } }
       }
     }
+    if m.claudeAccount != nil, ["started", "paused", "failed"].contains(m.state) {
+      Button("Switch Claude account…", systemImage: "person.2.circle") { model.accountSwitch = AccountSwitchAsk(id: m.id) }
+    }
     if m.state == "started", let a = m.memAlert, a.nextSize != nil {
       Button(Fmt.upgradeTitle(a), systemImage: "arrow.up.circle") { Task { await model.upgrade(m.id) } }
     }

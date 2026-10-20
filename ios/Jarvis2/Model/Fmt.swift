@@ -6,9 +6,12 @@ enum Fmt {
     "mad": "Madrid", "iad": "Virginia", "ord": "Chicago", "sjc": "San Jose", "lax": "Los Angeles", "sin": "Singapore", "nrt": "Tokyo",
     "hkg": "Hong Kong", "syd": "Sydney"]
   static let busyLabel: [String: String] = ["starting": "Starting…", "restarting": "Restarting…", "pausing": "Pausing…", "destroying": "Destroying…", "mode": "Switching mode…",
-                                              "upgrading": "Upgrading…", "upgrade": "Upgrading…", "growing-disk": "Adding disk…", "disk": "Adding disk…"]
+                                              "upgrading": "Upgrading…", "upgrade": "Upgrading…", "growing-disk": "Adding disk…", "disk": "Adding disk…", "account": "Switching account…"]
   /// the More disk job's steps (router/disk.go), as the busy label
   static let diskPhase: [String: String] = ["extending": "Adding disk…", "snapshotting": "Snapshotting…", "resuming": "Resuming…"]
+  /// a Claude account switch's steps (router/accountswap.go), as the busy label
+  static let accountPhase: [String: String] = ["starting": "Switching account…", "switching": "Switching account…", "taking the login": "Taking the login…",
+                                               "restarting Claude": "Restarting Claude…", "delivering continue": "Typing “continue”…"]
   /// "Upgrade to Large (8 GB)"; past the named sizes, which are named by their memory ("16gb"), "Upgrade to 16 GB"
   /// (router/sizes.go: every next size doubles the memory)
   static func upgradeTitle(_ a: MemAlert) -> String {

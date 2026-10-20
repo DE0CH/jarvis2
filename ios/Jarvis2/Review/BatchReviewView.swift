@@ -209,6 +209,7 @@ enum BatchPrepare {
     let p = it.params
     var facts: [SignedFact] = [.init(id: "kind", label: "Kind", value: "API call, runs as you (no signature)"),
                                .init(id: "call", label: "Runs", value: "\(p["method"].string ?? "") \(p["path"].string ?? "")", style: .code)]
+    if let d = it.does { facts.insert(.init(id: "does", label: "Does", value: d), at: 0) }
     if let b = p["body"].text { facts.append(.init(id: "body", label: "Body", value: APICallReviewView.pretty(b), style: .code)) }
     return BatchPrepared(facts: facts) { _, progress in
       let out = try await RouterClient.shared.inboxApproveCall(id)
