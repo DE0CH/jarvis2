@@ -1975,3 +1975,20 @@ snapshot failed with "no space left on device", the machine was destroyed anyway
      - **Not done:** grants in the direction (they admit router features, not more for the session's Claude). Sessions on older images still accept direct SendMessage under
        mode parity until they are replaced (changing Jarvis never touches sessions), and can't take a `peer`
        delivery (the sender is told it failed).
+200. **A session whose Claude never comes up fails visibly; the image checks its own permissions (2026-10-20).** The
+     image of 40a7ab5 copied the managed settings with `COPY --chmod=644 … /etc/claude-code/`, which also made the new
+     DIRECTORY 644: user claude couldn't search it, Claude Code stopped at its interactive "Settings Error … EACCES"
+     prompt before Remote Control, and every new or restored session sat on "booting…" with nothing failing. Now the
+     Dockerfile makes the directory 755 first and checks, as user claude, that everything under /etc/claude-code is
+     readable and valid JSON (the build fails otherwise, so nothing is pinned). And the router's autopilot fails a
+     `claude` session whose booted machine has shown no live Remote Control host for 4 min, with the last lines of its
+     pane as the error (`harness-check` in the lifecycle, one DM); Resume retries on a new machine. **Not chosen:** the
+     supervisor answering the prompt by itself (a prompt it doesn't know must reach Deyao as a failure, not be clicked
+     through), or failing at boot from the router's lifecycle wait only (a router restart would lose it: the clock is in
+     the persisted liveness).
+201. **The final snapshot shows its progress (Deyao, 2026-10-20).** The supervisor measures the snapshot (sizes only),
+     counts the bytes as the tar.gz is made and reports numbers every 3 s (`POST /m/snapshot-progress`); the router
+     writes the words itself into the session's `waiting` (shown as "pausing: uploading snapshot 1.2/3.4 GB (35%), 40
+     MB/s, 55 s left", also "upgrading: …" in the app) and a lifecycle line every 20 s; the supervisor logs every 10 s.
+     The rate is the phase's average (the bytes read over the time since it began), the ETA the rest at that rate; the
+     percentage is of the measured size, so files that grow during the walk end at 100 %, not past it.

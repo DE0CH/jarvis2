@@ -56,7 +56,10 @@ func uploadSnapshot(c *client) error {
 		writeChanges() // restore.go: the repos' state, for the router's uncommitted-work check
 		mirrorVolumeFiles()
 	}
+	prog := startProgress(c) // snapprogress.go: measured, then counted as it streams
+	prog.setPhase("uploading")
 	sum, n, err := streamSnapshot(c)
+	prog.end(err)
 	if errors.Is(err, errNoStreaming) {
 		return uploadSnapshotFile(c)
 	}

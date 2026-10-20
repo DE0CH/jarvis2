@@ -542,6 +542,7 @@ func (r *Router) buildHandlers() {
 	// the snapshot streams to the volume (a session's workspace can be several GB; the router has 1 GiB of memory):
 	// hashed on the way, the machine's request signature checked against that hash, then put in place
 	r.registerSnapStream(mmux, m) // snapstream.go: the final snapshot streamed, committed, carried or failed
+	r.registerSnapProgress(m)     // snapprogress.go: the final snapshot's progress, into the session's waiting line
 	mmux.Handle("POST /m/snapshot", r.requireMachineStream(func(w http.ResponseWriter, req *http.Request, machine, tmp string) {
 		p := r.st.snapshotPath(machine)
 		if req.Header.Get("X-Snapshot-None") != "" {

@@ -20,7 +20,8 @@ struct StatusPill: View {
 extension Session {
   /// the pill: what the router is doing, the machine's own status (working / needs you / idle), or the state
   var pill: (text: String, color: Color, spin: Bool) {
-    if let b = serverBusy, state != "destroying" { return (b.lowercased(), .orange, true) }
+    // what the router is doing, with what it waits on (e.g. "upgrading: uploading snapshot 1.2/3.4 GB, 40 MB/s, 55 s left")
+    if let b = serverBusy, state != "destroying" { return (waiting.map { "\(b.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "…"))): \($0)" } ?? b.lowercased(), .orange, true) }
     switch state {
     case "failed": return ("failed", .red, false)
     case "paused": return hasSchedule ? ("scheduled", .blue, false) : ("paused", .secondary, false)

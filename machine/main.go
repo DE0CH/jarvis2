@@ -556,7 +556,8 @@ func makeSnapshot(path string) (string, int64, error) {
 func writeSnapshot(w io.Writer) (string, int64, error) {
 	home, _ := os.UserHomeDir()
 	h := sha256.New()
-	cw := &countWriter{w: io.MultiWriter(w, h)}
+	prog := curProgress.Load() // snapprogress.go: the running snapshot's numbers (nil: not counted)
+	cw := &countWriter{w: io.MultiWriter(w, h), prog: prog}
 	gz := gzip.NewWriter(cw)
 	tw := tar.NewWriter(gz)
 	for _, rel := range snapshotPaths {
@@ -594,7 +595,11 @@ func writeSnapshot(w io.Writer) (string, int64, error) {
 					return err
 				}
 				// a file that shrank while being read would break the archive: pad to the header's size
-				n, err := io.Copy(tw, io.LimitReader(f, h.Size))
+				var src io.Reader = f
+				if prog != nil {
+					src = countReader{f, prog}
+				}
+				n, err := io.Copy(tw, io.LimitReader(src, h.Size))
 				if err == nil && n < h.Size {
 					_, err = io.Copy(tw, io.LimitReader(zeros{}, h.Size-n))
 				}
@@ -616,13 +621,17 @@ func writeSnapshot(w io.Writer) (string, int64, error) {
 }
 
 type countWriter struct {
-	w io.Writer
-	n int64
+	w    io.Writer
+	n    int64
+	prog *snapProgress
 }
 
 func (c *countWriter) Write(p []byte) (int, error) {
 	n, err := c.w.Write(p)
 	c.n += int64(n)
+	if c.prog != nil {
+		c.prog.sent.Store(c.n)
+	}
 	return n, err
 }
 
@@ -777,7 +786,11 @@ func uploadSnapshotFile(c *client) error {
 		frozen.Store(true)
 		freezeSession()
 		writeChanges() // restore.go: the repos' state, for the router's uncommitted-work check
-		if sum, _, err = makeSnapshot(finalSnapshot); err != nil {
+		prog := startProgress(c)
+		prog.setPhase("writing")
+		sum, _, err = makeSnapshot(finalSnapshot)
+		prog.end(err)
+		if err != nil {
 			return err
 		}
 		key, err := snapshotKey()
