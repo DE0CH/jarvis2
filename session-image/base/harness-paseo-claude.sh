@@ -55,8 +55,9 @@ export PASEO_CORS_ORIGINS="https://app.paseo.sh,https://$WEB_HOST"
 export PASEO_HOSTNAMES="$WEB_HOST,localhost,127.0.0.1"
 
 # Claude Code's login: the proxy's. The placeholder is never sent upstream (api-proxy swaps it); the scopes and
-# plan are the real login's, so Claude Code offers what the account has. Inherited by everything Claude Code
-# starts, so a `claude -p` in a Bash tool also goes through the proxy on the session's current account.
+# plan are the real login's, so Claude Code offers what the account has. Claude Code scrubs the token from its
+# tools' env (ANTHROPIC_BASE_URL stays), so a `claude -p` in a Bash tool goes through the proxy but logs in from
+# ~/.claude/.credentials.json like any claude on the machine.
 # Any other Anthropic credential would win over the OAuth token and be billed elsewhere: none reaches the daemon.
 claude_env() {
   unset ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN

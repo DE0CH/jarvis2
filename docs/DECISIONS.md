@@ -2064,7 +2064,12 @@ snapshot failed with "no space left on device", the machine was destroyed anyway
        pair under the CLI's lock and checks its account with Anthropic as for `claude`; the proxy sends it from the
        next request, a turn in flight included (tested: a pair swapped during a three-step tool turn was used by the
        very next request; the conversation then went on with "continue"). The router lifts its "pause it, switch,
-       resume" refusal for this harness only; openclaw keeps it.
+       resume" refusal for this harness only; openclaw keeps it. Live test (2026-10-20, throwaway session
+       s8cbfb4a1c936febf, destroyed): first prompt and a peer message ran on chendeyao000; switched to chendeyao-uk
+       while running, its very next request was answered by that account ("You've hit your weekly limit"); switched
+       back with continue, "continue" went in and the same conversation went on, nothing restarted.
+     - Inside its Bash tools Claude Code scrubs `CLAUDE_CODE_OAUTH_TOKEN` (`ANTHROPIC_BASE_URL` stays), so a nested
+       `claude -p` logs in from `~/.claude/.credentials.json` like any claude on the machine.
      - **Jarvis's messages wait for an idle agent**: Paseo's send interrupts a running turn (`activeTurnBehavior`
        "interrupt"; its CLI can't steer), so `harness-send` answers 75 while the main agent runs and the inbox loop
        tries again without counting it as a failure. "continue" after a switch goes the same way.
