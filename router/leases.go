@@ -632,14 +632,14 @@ func leaseGrantedText(device string, ttlMin int64, handover, interrupted bool, p
 func leaseTakenText(device string) string {
 	return fmt.Sprintf("[lease %q taken over] Deyao has taken the shared device %q himself. Stop using it now: every device action is refused while he has it. ", device, device) +
 		"You are first in the queue; when he hands it back you'll be woken. Then look at the device first: it will be in whatever state he left it. " +
-		"This is an automated message from Jarvis, not an answer to any open question."
+		"This is an automated message from Jarvis."
 }
 
 func leaseBackText(device string) string {
 	return fmt.Sprintf("[lease %q handed back] Deyao has handed the shared device %q back. Earlier this session found it taken over: that no longer applies. ", device, device) +
 		fmt.Sprintf("Run scripts/lease.py status %s to see whether it is free or who holds it now, and acquire it if this session still needs it (scripts/lease.py acquire %s --purpose \"…\"). ", device, device) +
 		"If you told Deyao or planned around it being unavailable, reconsider now. It is in whatever state he left it: look at it first. " +
-		"This is an automated message from Jarvis, not an answer to any open question."
+		"This is an automated message from Jarvis."
 }
 
 // signedPrompt: the prompt of a signed acquire request (what the machine reads from it too)

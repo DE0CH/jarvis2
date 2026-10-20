@@ -63,7 +63,7 @@ var (
 // outcomeCoreKey: the core's key (a seam for tests)
 var outcomeCoreKey = func() (string, error) { return readTrim(coreKeyPath) }
 
-const outcomeFooter = "This is an automated message from Jarvis, not from Deyao, and not an answer to any open question."
+const outcomeFooter = "This is an automated message from Jarvis."
 
 // outcomeAsked: one item of the filing, as the session signed it
 type outcomeAsked struct {

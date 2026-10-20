@@ -298,7 +298,7 @@ func deliveryText(d Delivery, keys []string) (text string, attested []byte, err 
 		t := fmt.Sprintf("Jarvis watchdog: this session has been idle for %d min while %s been running, and none has finished or woken you. ", d.Minutes, jobs) +
 			"Check on them now: read their output, and if a job is hung or no longer needed, stop it and continue the task another way. " +
 			"If a job is legitimately still running, make sure it will end on its own (a timeout or deadline), then end your turn — this check repeats while the state lasts. " +
-			"This is an automated message from Jarvis, not from Deyao, and not an answer to any open question."
+			"This is an automated message from Jarvis."
 		return t, []byte(t), nil
 	case "upgraded":
 		t, err := upgradedText(d.From, d.To)
@@ -557,8 +557,8 @@ func upgradedText(from, to string) (string, error) {
 	}
 	return fmt.Sprintf("Jarvis: this session ran out of memory and was moved from a %s to a %s machine. ", sizeText(from), sizeText(to)) +
 		"To free memory for the move, every process of the old machine was stopped: Claude itself, background jobs, builds, dev servers, browsers. " +
-		"Their list is in ~/artifacts/jarvis2-upgrade-freed.txt. Check which of them the task still needs, restart only those (and keep an eye on memory: run fewer heavy things at once), then carry on with the task. " +
-		"This is an automated message from Jarvis, not from Deyao, and not an answer to any open question.", nil
+		"Their list is in ~/artifacts/jarvis2-upgrade-freed.txt. Check which of them the task still needs, restart only those, then carry on with the task as before: the bigger machine has the room, so do not cut back on parallel work. " +
+		"This is an automated message from Jarvis.", nil
 }
 
 // ---- leases (router/leases.go builds the same texts) ------------------------------------------------------------
@@ -580,12 +580,12 @@ func leaseText(d Delivery, keys []string) (string, error) {
 	case "lease-taken":
 		return fmt.Sprintf("[lease %q taken over] Deyao has taken the shared device %q himself. Stop using it now: every device action is refused while he has it. ", dev, dev) +
 			"You are first in the queue; when he hands it back you'll be woken. Then look at the device first: it will be in whatever state he left it. " +
-			"This is an automated message from Jarvis, not an answer to any open question.", nil
+			"This is an automated message from Jarvis.", nil
 	case "lease-back":
 		return fmt.Sprintf("[lease %q handed back] Deyao has handed the shared device %q back. Earlier this session found it taken over: that no longer applies. ", dev, dev) +
 			fmt.Sprintf("Run scripts/lease.py status %s to see whether it is free or who holds it now, and acquire it if this session still needs it (scripts/lease.py acquire %s --purpose \"…\"). ", dev, dev) +
 			"If you told Deyao or planned around it being unavailable, reconsider now. It is in whatever state he left it: look at it first. " +
-			"This is an automated message from Jarvis, not an answer to any open question.", nil
+			"This is an automated message from Jarvis.", nil
 	}
 	prompt := ""
 	if d.Request != nil {

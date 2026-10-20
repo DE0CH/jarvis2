@@ -537,7 +537,7 @@ func nudgeText(bgTasks int, stalled time.Duration) string {
 	return fmt.Sprintf("Jarvis watchdog: this session has been idle for %d min while %s been running, and none has finished or woken you. ", int(stalled.Round(time.Minute)/time.Minute), jobs) +
 		"Check on them now: read their output, and if a job is hung or no longer needed, stop it and continue the task another way. " +
 		"If a job is legitimately still running, make sure it will end on its own (a timeout or deadline), then end your turn — this check repeats while the state lasts. " +
-		"This is an automated message from Jarvis, not from Deyao, and not an answer to any open question."
+		"This is an automated message from Jarvis."
 }
 
 // freshRefusals: events newer than since (ms), de-duplicated by uuid
