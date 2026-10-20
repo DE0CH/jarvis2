@@ -29,6 +29,11 @@ USER root
 RUN mkdir -p /opt/jarvis2 && env | grep -Ev '^(HOSTNAME|HOME|PWD|OLDPWD|SHLVL|_|TERM|USER|LOGNAME|SHELL)=' | sort > /opt/jarvis2/image.env
 COPY session-image/openclaw-runtime.json /opt/jarvis2/openclaw-runtime.json
 COPY --chmod=755 session-image/bin/openclaw /usr/local/bin/openclaw
+# Claude Code's managed settings (crossSessionInbound refuse) and the Jarvis channel's MCP config. The directory is made
+# first: a COPY --chmod=644 that creates it gives the DIRECTORY 644 too (no search bit), and then Claude Code, as user
+# claude, stops at its "Settings Error … EACCES" prompt before Remote Control comes up: every new session stuck on
+# "booting…" (2026-10-20). The check below (as claude) fails the build if anything here is unreadable again.
+RUN install -d -m 755 -o root -g root /etc/claude-code
 COPY --chmod=644 session-image/claude-code/managed-settings.json session-image/claude-code/jarvis-channel.json /etc/claude-code/
 # the one command the core runs through Fly (core/fly.go initPath): no arguments; it prints this machine's
 # public keys and lets boot go on
@@ -37,4 +42,11 @@ RUN printf '#!/bin/sh\nexec /usr/local/bin/jarvis2-machine init\n' > /usr/local/
  && ln -s /usr/local/bin/jarvis2-machine /usr/local/bin/jarvis2 \
  && chmod -R a+rX,go-w /opt/jarvis2/tasks
 USER claude
+# what the harness reads as user claude must be readable by it (see /etc/claude-code above): every directory searchable,
+# every file readable, the JSON valid, the channel server runnable
+RUN set -e; for d in $(find /etc/claude-code -type d); do [ -r "$d" ] && [ -x "$d" ] || { echo "unreadable dir $d" >&2; exit 1; }; done; \
+    for f in $(find /etc/claude-code -type f); do [ -r "$f" ] || { echo "unreadable file $f" >&2; exit 1; }; done; \
+    for f in /etc/claude-code/*.json; do python3 -c 'import json,sys; json.load(open(sys.argv[1]))' "$f"; done; \
+    for b in jarvis2-machine jarvis2-request jarvis2-message jarvis-channel jarvis-channel-send; do [ -x /usr/local/bin/$b ] || { echo "not runnable: $b" >&2; exit 1; }; done; \
+    ls /etc/claude-code/managed-settings.d >/dev/null 2>&1 || [ ! -e /etc/claude-code/managed-settings.d ]
 ENTRYPOINT ["/usr/local/bin/jarvis2-machine", "boot"]

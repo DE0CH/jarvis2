@@ -44,6 +44,10 @@ type Liveness struct {
 	AttentionSent string    `json:"attentionSent,omitempty"`
 	Reg           *Registry `json:"registry,omitempty"`
 	LastReport    time.Time `json:"lastReport,omitempty"`
+	// the harness check: when the running machine first reported (it had booted), and the machine whose Claude host
+	// has reported since (a live Remote Control host in the registry). Kept across a router restart.
+	BootedAt time.Time `json:"bootedAt,omitempty"`
+	HostUp   string    `json:"hostUp,omitempty"`
 
 	waiting         *waitEpisode
 	settled         *settledEpisode
@@ -88,11 +92,13 @@ type repairMark struct {
 
 type pilotConfig struct {
 	IdlePause, WaitingCancel, Attention, StallNudge, StaleReport, GrantRetry, RepairEvery, DowngradeLookback time.Duration
+	HarnessUp                                                                                                time.Duration
 }
 
 var defaultPilot = pilotConfig{
 	IdlePause: time.Hour, WaitingCancel: time.Hour, Attention: 5 * time.Minute, StallNudge: 15 * time.Minute,
 	StaleReport: 3 * time.Minute, GrantRetry: 10 * time.Minute, RepairEvery: 10 * time.Minute, DowngradeLookback: 15 * time.Minute,
+	HarnessUp: 4 * time.Minute,
 }
 
 const pilotTick = 30 * time.Second
@@ -201,7 +207,13 @@ func (r *Router) registerAutopilot(app appRoute, m machineRoute) {
 				s.Live = &Liveness{}
 			}
 			s.Live.Reg, s.Live.LastReport = reg, time.Now().UTC()
+			if s.Booted != machine || s.Live.BootedAt.IsZero() {
+				s.Live.BootedAt = s.Live.LastReport // the harness check's clock (planTick)
+			}
 			s.Booted = machine // its agent reports only once the machine has booted (machine/main.go)
+			if reg != nil {
+				s.Live.HostUp = machine
+			}
 			s.Status = ""
 			if reg != nil {
 				s.Status = reg.Status
@@ -277,8 +289,9 @@ func (r *Router) registerAutopilot(app appRoute, m machineRoute) {
 // ---- the loop ---------------------------------------------------------------------------------------------
 
 type pilotAction struct {
-	Kind    string // dm | escape | dialog | nudge | login | pause | destroy
+	Kind    string // dm | escape | dialog | nudge | login | pause | destroy | harness-stuck
 	Session string
+	Machine string // harness-stuck: the machine whose harness never came up
 	Text    string // dm, nudge
 	Repair  string // login: the uuid of the "Please run /login" reply being repaired
 	// login: the machine keeps its account's pair in step (machine/claudelogin.go): no write, only
@@ -406,6 +419,19 @@ func planTick(d *persisted, now time.Time, storedExp map[string]int64, c pilotCo
 		}
 		operating := busy(id)
 		name := sessionName(s, g)
+
+		// the harness check: a booted machine whose Claude never came up (no live host in the registry) for HarnessUp
+		// is failed with what its screen shows (2026-10-20: an unreadable /etc/claude-code left every new session
+		// on Claude Code's "Settings Error" prompt, shown as "booting…" for ever). Resume tries again on a new machine.
+		if s.Harness == "claude" && !operating && c.HarnessUp > 0 && l.HostUp != s.MachineID && s.Booted == s.MachineID &&
+			!l.BootedAt.IsZero() && now.Sub(l.BootedAt) >= c.HarnessUp {
+			screen := ""
+			if l.screen != nil {
+				screen = l.screen.snap.Screen
+			}
+			add(pilotAction{Kind: "harness-stuck", Session: id, Machine: s.MachineID, Name: name, Text: harnessStuckText(c.HarnessUp, screen)})
+			continue
+		}
 
 		// one-shot: the prompt is done → destroy
 		if l.OneShot && g != nil && g.OneShotDone && !l.oneShotFiring && !operating {
@@ -587,8 +613,57 @@ func promptOnScreen(screen string) bool {
 
 // ---- running the actions ----------------------------------------------------------------------------------
 
+// harnessStuckText: the failed session's error — the wait and the last lines of the pane (what blocks it, usually a
+// prompt Claude Code put up before its Remote Control host)
+func harnessStuckText(wait time.Duration, screen string) string {
+	msg := "the harness didn't come up within " + waitText(wait) + " of boot (Claude Code never reported a live Remote Control host)"
+	var lines []string
+	for _, l := range strings.Split(stripANSI(screen), "\n") {
+		if l = strings.Join(strings.Fields(l), " "); l != "" && strings.Trim(l, "─━-—╌ ") != "" {
+			lines = append(lines, l)
+		}
+	}
+	if len(lines) > 8 {
+		lines = lines[len(lines)-8:]
+	}
+	tail := strings.Join(lines, " / ")
+	if r := []rune(tail); len(r) > 500 {
+		tail = "…" + string(r[len(r)-500:])
+	}
+	if tail != "" {
+		msg += "; its screen ends: " + tail
+	} else {
+		msg += "; no screen from it"
+	}
+	return msg + ". Resume starts it again on a new machine."
+}
+
+// harnessStuck: fail the session (the machine stays until a Resume finishes its pause, or a Destroy), log it in the
+// lifecycle, DM once
+func (r *Router) harnessStuck(a pilotAction) {
+	failed := false
+	r.st.Do(func(d *persisted) {
+		s := d.Sessions[a.Session]
+		if s == nil || s.State != "started" || s.MachineID != a.Machine || (s.Live != nil && s.Live.HostUp == a.Machine) {
+			return
+		}
+		s.State, s.Error, failed = "failed", a.Text, true
+	})
+	if !failed {
+		return
+	}
+	log.Printf("session %s: failed: %s", a.Session, a.Text)
+	h := r.lcBegin(a.Session, "harness-check")
+	h.machine(a.Machine)
+	h.note(a.Machine, a.Text)
+	h.end("failed", a.Text)
+	r.DM(fmt.Sprintf("🔴 Session “%s” didn't come up: %s", a.Name, a.Text))
+}
+
 func (r *Router) runAction(a pilotAction) {
 	switch a.Kind {
+	case "harness-stuck":
+		r.harnessStuck(a)
 	case "dm":
 		r.DM(a.Text)
 	case "pause":

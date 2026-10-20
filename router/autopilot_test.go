@@ -580,3 +580,91 @@ func TestStallNudgeWhileBusyWithJobs(t *testing.T) {
 		t.Fatal("no screen dropped the clock")
 	}
 }
+
+// a booted machine whose Claude never came up (2026-10-20: Claude Code stuck on its "Settings Error" prompt) fails
+// after HarnessUp with what its screen shows; a host that came up, a busy session or a router-restart without the
+// clock are left alone
+func TestHarnessNeverCameUp(t *testing.T) {
+	c, now := defaultPilot, time.Now()
+	c.Attention = 1000 * time.Hour
+	l := &Liveness{}
+	d := running("s1", l)
+	s := d.Sessions["s1"]
+	s.Booted = "m1"
+	no := func(string) bool { return false }
+	report(l, now, nil) // the machine reports, no Claude host in the registry
+	l.BootedAt = now
+	l.screen = &pushedScreen{snap: TermSnap{Screen: "\x1b[1mSettings Error\x1b[0m\n\n /etc/claude-code/managed-settings.json\n   └ Settings file could not be read: EACCES: permission denied, stat\n\n ❯ 1. Fix with Claude\n   2. Exit and fix manually\n   3. Continue without these settings\n"}, at: now}
+	if a := planTick(d, now.Add(c.HarnessUp-time.Second), nil, c, no, no); strings.Contains(kinds(a), "harness-stuck") {
+		t.Fatal("failed before HarnessUp")
+	}
+	if a := planTick(d, now.Add(c.HarnessUp), nil, c, fakeLocks{"s1": true}.busy, no); strings.Contains(kinds(a), "harness-stuck") {
+		t.Fatal("failed a session a lifecycle action holds")
+	}
+	a := planTick(d, now.Add(c.HarnessUp), nil, c, no, no)
+	if len(a) != 1 || a[0].Kind != "harness-stuck" || a[0].Machine != "m1" {
+		t.Fatalf("got %+v", a)
+	}
+	for _, want := range []string{"didn't come up within 4 min", "Settings Error", "EACCES: permission denied", "3. Continue without these settings", "Resume starts it again"} {
+		if !strings.Contains(a[0].Text, want) {
+			t.Fatalf("%q lacks %q", a[0].Text, want)
+		}
+	}
+	// the router fails it: state failed with the reason, once
+	r := newTestRouter(t)
+	r.st.Do(func(p *persisted) {
+		p.Sessions["s1"] = &Session{ID: "s1", State: "started", MachineID: "m1", Booted: "m1", Harness: "claude", Live: &Liveness{}}
+	})
+	r.harnessStuck(a[0])
+	var st, er string
+	r.st.Do(func(p *persisted) { st, er = p.Sessions["s1"].State, p.Sessions["s1"].Error })
+	if st != "failed" || !strings.Contains(er, "Settings Error") {
+		t.Fatalf("state %q error %q", st, er)
+	}
+	// a host that came up: nothing
+	l2 := &Liveness{BootedAt: now, HostUp: "m1"}
+	d2 := running("s2", l2)
+	d2.Sessions["s2"].Booted = "m1"
+	report(l2, now, &Registry{Status: "busy"})
+	if a := planTick(d2, now.Add(time.Hour), nil, c, no, no); strings.Contains(kinds(a), "harness-stuck") {
+		t.Fatal("failed a session whose host came up")
+	}
+	// another harness, or no boot clock (booted under a router from before the check): nothing
+	l3 := &Liveness{}
+	d3 := running("s3", l3)
+	d3.Sessions["s3"].Booted = "m1"
+	report(l3, now, nil)
+	if a := planTick(d3, now.Add(time.Hour), nil, c, no, no); strings.Contains(kinds(a), "harness-stuck") {
+		t.Fatal("failed a session with no boot clock")
+	}
+	l3.BootedAt = now
+	d3.Sessions["s3"].Harness = "opencode"
+	if a := planTick(d3, now.Add(time.Hour), nil, c, no, no); strings.Contains(kinds(a), "harness-stuck") {
+		t.Fatal("failed another harness")
+	}
+}
+
+// /m/status keeps the harness check's clock: the boot time of the machine, and whether its host came up
+func TestStatusSetsHarnessClock(t *testing.T) {
+	r := newTestRouter(t)
+	addSession(r, "s1", "started", "m1", false)
+	m := newTestMachine(r, "m1")
+	post := func(raw string) {
+		t.Helper()
+		if code, out := m.do(t, r.MachineHandler(), "POST", "/m/status", jsonString(map[string]string{"raw": raw})); code != 200 {
+			t.Fatalf("status: %d %v", code, out)
+		}
+	}
+	post("")
+	var l Liveness
+	r.st.Do(func(p *persisted) { l = *p.Sessions["s1"].Live })
+	if l.BootedAt.IsZero() || l.HostUp != "" {
+		t.Fatalf("after an empty report: %+v", l)
+	}
+	first := l.BootedAt
+	post(sampleRaw)
+	r.st.Do(func(p *persisted) { l = *p.Sessions["s1"].Live })
+	if l.HostUp != "m1" || !l.BootedAt.Equal(first) {
+		t.Fatalf("after a host: %+v", l)
+	}
+}
