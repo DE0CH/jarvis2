@@ -336,9 +336,9 @@ func appCaller(req *http.Request) Caller {
 func callerText(d *persisted, c Caller) string {
 	switch c.Kind {
 	case "web":
-		return "the web page"
+		return "Deyao, from the web page"
 	case "app":
-		return "the Jarvis 2 app"
+		return "Deyao, from the Jarvis 2 app"
 	case "setup":
 		return "Claude (setup session)"
 	case "actions":

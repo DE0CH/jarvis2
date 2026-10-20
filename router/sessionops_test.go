@@ -1,7 +1,10 @@
 package main
 
 import (
+	"crypto/ecdh"
+	"crypto/rand"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -65,12 +68,12 @@ func TestPermissionModeInPlaceAndPaused(t *testing.T) {
 	cmds := answerExecs(r, "mA", 0, stop)
 
 	// raising to bypass needs a fresh phone grant (a rule or the allow list isn't enough)
-	code, out := appDo(t, r, "POST", "/api/sessions/sA/permission-mode", `{"mode":"bypass"}`)
+	code, out := inboxDo(t, r, "POST", "/api/sessions/sA/permission-mode", `{"mode":"bypass"}`, true)
 	if code != 403 || out["needsGrant"] != "terminal" || out["phoneGrant"] != true {
 		t.Fatalf("without a phone grant: %d %v", code, out)
 	}
 	addGrant(r, "sA", "terminal", "rule")
-	if code, _ := appDo(t, r, "POST", "/api/sessions/sA/permission-mode", `{"mode":"bypass"}`); code != 403 {
+	if code, _ := inboxDo(t, r, "POST", "/api/sessions/sA/permission-mode", `{"mode":"bypass"}`, true); code != 403 {
 		t.Fatalf("a standing rule raised to bypass: %d", code)
 	}
 	addGrant(r, "sA", "terminal", "grant")
@@ -540,5 +543,150 @@ func TestWebRequestTakesSensitiveStores(t *testing.T) {
 		if code, out := appDo(t, r, "POST", "/api/sessions", `{"requestId":"web-`+bad+`","harness":"claude","stores":["`+bad+`"]}`); code == 200 {
 			t.Fatalf("store %s was accepted: %v", bad, out)
 		}
+	}
+}
+
+// phoneSession: a running session whose cert names a phone key, so AddGrant takes what that key signs
+func phoneSession(t *testing.T, r *Router, id, machine string) func(holder, kind string) {
+	t.Helper()
+	phone, _ := ecdh.P256().GenerateKey(rand.Reader)
+	cert, _ := json.Marshal(map[string]any{"line": "L" + id, "phone": base64.StdEncoding.EncodeToString(phone.PublicKey().Bytes())})
+	r.st.Do(func(d *persisted) {
+		d.Sessions[id] = &Session{ID: id, State: "started", MachineID: machine, Label: "label " + id, Harness: "claude", PermissionMode: "auto", Cert: &Doc{Payload: string(cert)}}
+		d.Machines[machine] = id
+	})
+	return func(holder, kind string) {
+		t.Helper()
+		pub, err := r.HolderPublicKeys()
+		if err != nil {
+			t.Fatal(err)
+		}
+		now := time.Now().UTC()
+		g := map[string]any{"kind": kind, "holder": pub[holder], "session": "L" + id, "scope": "shell", "issued": now.Format(time.RFC3339)}
+		if kind == "grant" {
+			g["expires"] = now.Add(10 * time.Minute).Format(time.RFC3339)
+		} else {
+			g["until"] = now.Add(24 * time.Hour).Format(time.RFC3339)
+		}
+		text, _ := json.Marshal(g)
+		sig, _ := signP256(phone, text)
+		if _, err := r.AddGrant(id, &Doc{Payload: string(text), Sig: sig}); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// The web page's "Switch to bypass mode" (Deyao, 2026-10-20: it showed "this needs a fresh phone grant" instead of
+// asking): the router files the terminal grant in the Inbox as the web's request and switches once the phone signs it.
+// The iPhone app still gets the 403 and opens its own grant review.
+func TestBypassFromTheWebWaitsInTheInbox(t *testing.T) {
+	r := newTestRouter(t)
+	sign := phoneSession(t, r, "sW", "mW")
+	stop := make(chan struct{})
+	defer close(stop)
+	cmds := answerExecs(r, "mW", 0, stop)
+
+	if code, out := inboxDo(t, r, "POST", "/api/sessions/sW/permission-mode", `{"mode":"bypass"}`, true); code != 403 || out["needsGrant"] != "terminal" {
+		t.Fatalf("the app: %d %v", code, out)
+	}
+	if len(r.Inbox()) != 0 {
+		t.Fatal("the app's 403 filed a request")
+	}
+	code, out := appDo(t, r, "POST", "/api/sessions/sW/permission-mode", `{"mode":"bypass"}`)
+	if code != 202 || out["waiting"] != "inbox" || out["needsGrant"] != "terminal" || out["inboxId"] == nil {
+		t.Fatalf("the web: %d %v", code, out)
+	}
+	qid := out["inboxId"].(string)
+	it, ok := r.InboxItem(qid)
+	if !ok || it.Kind != requestKindGrant || it.Params.Holder != "terminal" || it.Params.Minutes != 10 || it.Caller.Kind != "web" ||
+		it.Call.Path != "/api/sessions/sW/permission-mode" || it.Call.Args["mode"] != "bypass" || it.Open["kind"] != "grant" {
+		t.Fatalf("%+v", it)
+	}
+	// who and what asked, never "Jarvis 2" itself (Deyao, 2026-10-20)
+	if it.CallerText != "Deyao, from the web page" || it.SessionName != "label sW" ||
+		!strings.HasPrefix(it.Explanation, "Switch session “label sW” (sW) to bypass permission mode") || strings.Contains(it.CallerText, "Jarvis 2") {
+		t.Fatalf("named as %q: %q", it.CallerText, it.Explanation)
+	}
+	if code, out := appDo(t, r, "POST", "/api/sessions/sW/permission-mode", `{"mode":"bypass"}`); code != 202 || out["inboxId"] != qid || out["duplicate"] != true {
+		t.Fatalf("again: %d %v", code, out)
+	}
+	r.core = &CoreClient{base: "http://127.0.0.1:1", http: http.DefaultClient}
+	_, st := appDo(t, r, "GET", "/api/state", "")
+	var view map[string]any
+	for _, x := range st["sessions"].([]any) {
+		if v := x.(map[string]any); v["id"] == "sW" {
+			view = v
+		}
+	}
+	if mg, _ := view["modeAfterGrant"].(map[string]any); mg == nil || mg["mode"] != "bypass" || mg["inbox"] != qid {
+		t.Fatalf("the state doesn't show the waiting switch: %v", view["modeAfterGrant"])
+	}
+
+	// signed: the request is answered and the switch runs under the grant
+	sign("terminal", "grant")
+	if _, still := r.InboxItem(qid); still {
+		t.Fatal("the grant request stayed in the Inbox")
+	}
+	waitFor(t, "mode switched", func() bool {
+		var m string
+		r.st.Do(func(d *persisted) { m = d.Sessions["sW"].PermissionMode })
+		return m == "bypass"
+	})
+	waitFor(t, "job done", func() bool { j := r.ops.jobView("sW"); return j != nil && j["phase"] == "done" })
+	if len(*cmds) != 1 || (*cmds)[0] != "/usr/local/bin/set-permission-mode bypass" {
+		t.Fatalf("%v", *cmds)
+	}
+	r.st.Do(func(d *persisted) {
+		if d.Sessions["sW"].Ops.ModeAfterGrant != nil {
+			t.Fatal("the switch stayed waiting")
+		}
+	})
+}
+
+// a standing rule answers the request but doesn't allow bypass: nothing switches, and the waiting switch goes
+func TestBypassRequestAnsweredByARule(t *testing.T) {
+	r := newTestRouter(t)
+	sign := phoneSession(t, r, "sW", "mW")
+	stop := make(chan struct{})
+	defer close(stop)
+	cmds := answerExecs(r, "mW", 0, stop)
+	if code, out := appDo(t, r, "POST", "/api/sessions/sW/permission-mode", `{"mode":"bypass"}`); code != 202 || out["waiting"] != "inbox" {
+		t.Fatalf("%d %v", code, out)
+	}
+	sign("terminal", "rule")
+	time.Sleep(100 * time.Millisecond)
+	r.st.Do(func(d *persisted) {
+		s := d.Sessions["sW"]
+		if s.PermissionMode != "auto" || s.Ops.ModeAfterGrant != nil {
+			t.Fatalf("%s %+v", s.PermissionMode, s.Ops.ModeAfterGrant)
+		}
+	})
+	if len(*cmds) != 0 {
+		t.Fatalf("%v", *cmds)
+	}
+}
+
+// the same switch asked for by a session's actions as an API call (how it was reproduced, 2026-10-20): the approved
+// call answers 202 and its review sheet follows the grant it filed
+func TestBypassAsAnAPICallFollowsItsGrant(t *testing.T) {
+	r := newTestRouter(t)
+	r.cfg.NoAccess = true
+	phoneSession(t, r, "sW", "mW")
+	addSession(r, "sR", "started", "mR", false)
+	m, mh := newTestMachine(r, "mR"), r.MachineHandler()
+	code, out := m.do(t, mh, "POST", "/m/api/actions/requests/call", `{"method": "POST", "path": "/api/sessions/sW/permission-mode", "body": {"mode": "bypass"}, "explanation": "bypass for the build"}`)
+	if code != 200 {
+		t.Fatalf("%d %v", code, out)
+	}
+	id := out["id"].(string)
+	if code, out := inboxDo(t, r, "POST", "/api/requests/"+id+"/approve", "", true); code != 200 || out["status"] != float64(202) {
+		t.Fatalf("approve: %d %v", code, out)
+	}
+	f, ok := r.CallFollowupsOf(id)
+	if !ok || len(f.Followups) != 1 || !f.Followups[0].Open || f.Followups[0].Item.Kind != requestKindGrant || f.Followups[0].Item.Caller.Kind != "actions" {
+		t.Fatalf("%+v", f)
+	}
+	if g := f.Followups[0].Item; g.CallerText != "the actions of session “label sR” (sR)" || !strings.HasPrefix(g.Explanation, "Switch session “label sW” (sW) to bypass") {
+		t.Fatalf("named as %q: %q", g.CallerText, g.Explanation)
 	}
 }

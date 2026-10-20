@@ -23,6 +23,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"regexp"
 	"strings"
@@ -37,6 +38,17 @@ type SessionOps struct {
 	Rollback *RollbackMark     `json:"rollback,omitempty"` // for the next start only (see rollbackEnv)
 	Upload   string            `json:"upload,omitempty"`   // first-prompt attachments (uploads.go)
 	Attach   []AttachFile      `json:"attachments,omitempty"`
+	// a switch to bypass that waits on a terminal grant in the Inbox (askModeGrant): it runs once the phone signs it
+	ModeAfterGrant *ModeAfterGrant `json:"modeAfterGrant,omitempty"`
+}
+
+// ModeAfterGrant: raising a running session to bypass needs a fresh phone grant for the terminal. Asked for where no
+// Face ID sheet can open (the web page, an approved API call, a session's actions), the router files that grant in
+// the Inbox and keeps the switch here; when the phone signs the grant (answering request Inbox), AddGrant runs it.
+type ModeAfterGrant struct {
+	Mode  string    `json:"mode"`
+	Inbox string    `json:"inbox"` // the grant request
+	Until time.Time `json:"until"` // the request's expiry
 }
 
 // RollbackMark: drop every transcript line from the first one containing Marker, in the snapshot of machine
@@ -204,6 +216,9 @@ func opsView(s *Session, v map[string]any) {
 		return
 	}
 	v["apiProxy"] = onOff(!s.Ops.APIProxy)
+	if m := s.Ops.ModeAfterGrant; m != nil && time.Now().Before(m.Until) {
+		v["modeAfterGrant"] = map[string]any{"mode": m.Mode, "inbox": m.Inbox, "until": m.Until}
+	}
 	if len(s.Ops.Env) > 0 {
 		keys := make([]string, 0, len(s.Ops.Env))
 		for k := range s.Ops.Env {
@@ -308,6 +323,65 @@ func (r *Router) SetPermissionMode(id, mode string) (map[string]any, error) {
 		r.ops.phase(j, "done", nil)
 	}()
 	return map[string]any{"started": true, "kind": "permission-mode", "permissionMode": mode, "inPlace": true}, nil
+}
+
+// askModeGrant: the switch to mode waits on a fresh phone grant for holder: a grant request (10 minutes) goes into
+// the Inbox, filed as the caller's, and the switch is kept on the session until that request lapses
+func (r *Router) askModeGrant(req *http.Request, id, mode, holder string) (map[string]any, error) {
+	o := Origin{Caller: appCaller(req), Call: APICall{Method: req.Method, Path: req.URL.Path, Args: map[string]any{"mode": mode}}, ViaCall: viaCall(req)}
+	title := id
+	r.st.Do(func(d *persisted) { title = inboxSessionName(d, id) })
+	// says what asked and for what: the caller is named from its credential (callerText), this names the session
+	why := fmt.Sprintf("Switch session “%s” (%s) to %s permission mode: Claude relaunches in it at once. Raising it to bypass needs this fresh 10-minute terminal grant; the switch runs as soon as it is signed.", title, id, mode)
+	q, dup, err := r.FileRequest(requestKindGrant, RequestParams{Session: id, Holder: holder, Minutes: 10}, why, o)
+	if err != nil {
+		return nil, err
+	}
+	r.st.Do(func(d *persisted) {
+		if s := d.Sessions[id]; s != nil {
+			if s.Ops == nil {
+				s.Ops = &SessionOps{}
+			}
+			s.Ops.ModeAfterGrant = &ModeAfterGrant{Mode: mode, Inbox: q.ID, Until: q.Expires}
+		}
+		// an approved API call's review sheet follows the grant it brought about (apicalls.go)
+		if x := d.CallResults[o.ViaCall]; x != nil {
+			if !containsString(x.Followups, q.ID) {
+				x.Followups = append(x.Followups, q.ID)
+			}
+			x.Awaiting = nil
+		}
+	})
+	return map[string]any{"waiting": "inbox", "inboxId": q.ID, "duplicate": dup, "needsGrant": holder, "phoneGrant": true, "permissionMode": mode}, nil
+}
+
+// modeAfterGrant: the switch kept for the grant request just answered, if a phone grant answered it (answered: request
+// id → by a grant, not a rule); taken off the session once answered or lapsed. Inside st.Do.
+func modeAfterGrant(s *Session, answered map[string]bool, now time.Time) string {
+	if s == nil || s.Ops == nil || s.Ops.ModeAfterGrant == nil {
+		return ""
+	}
+	m := s.Ops.ModeAfterGrant
+	phone, hit := answered[m.Inbox]
+	if !hit && now.Before(m.Until) {
+		return ""
+	}
+	s.Ops.ModeAfterGrant = nil // answered (a standing rule doesn't allow bypass: nothing runs) or lapsed
+	if !phone {
+		return ""
+	}
+	return m.Mode
+}
+
+// runModeAfterGrant: the switch a signed grant was waiting for; its outcome is the session's `wake` job, as when
+// it is asked for directly
+func (r *Router) runModeAfterGrant(id, mode string) {
+	if _, err := r.SetPermissionMode(id, mode); err != nil {
+		log.Printf("session %s: the switch to %s after the grant: %v", id, mode, err)
+		if j, e := r.ops.startJob(id, "permission-mode"); e == nil {
+			r.ops.phase(j, "failed", err)
+		}
+	}
 }
 
 // markRefused: a grant refusal shows as the session's needsGrant, so the app offers a grant
@@ -626,12 +700,18 @@ func (r *Router) registerSessionOps(app appRoute, m machineRoute) {
 		}
 		json.NewDecoder(io.LimitReader(req.Body, 1<<16)).Decode(&in)
 		out, err := r.SetPermissionMode(req.PathValue("id"), in.Mode)
+		// the iPhone app opens its own grant review on the 403 and switches again once it is signed; everyone else
+		// (the web page, an approved API call) gets the grant filed in the Inbox, with the switch run when it is signed
+		var gn *GrantNeeded
+		if errors.As(err, &gn) && gn.Phone && appCaller(req).Kind != "app" {
+			out, err = r.askModeGrant(req, req.PathValue("id"), in.Mode, gn.Holder)
+		}
 		if err != nil {
 			scheduleErr(w, err)
 			return
 		}
 		code := 200
-		if out["started"] == true {
+		if out["started"] == true || out["waiting"] == "inbox" {
 			code = 202
 		}
 		writeJSON(w, code, out)

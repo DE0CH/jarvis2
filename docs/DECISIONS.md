@@ -1935,3 +1935,15 @@ snapshot failed with "no space left on device", the machine was destroyed anyway
        its config; paseo's daemon, started by the launcher with the session's env, runs the agents); e2e and the
        Recover rehearsal check names with `session-secret --names` and values with `--keys K --exec env`; the
        messages of add-store's waiter, the Inbox outcome and the local API's 410 name `session-secret`.
+197. **A switch to bypass asked for away from the iPhone waits in the Inbox, it doesn't fail (Deyao, 2026-10-20).** The
+     web page's "Switch to bypass mode" and an approved `request call POST /api/sessions/ID/permission-mode` answered
+     403 "this needs a fresh phone grant for terminal" and nothing reached the Inbox: only the iPhone app turned that
+     403 into its grant review. Now the router does it for every caller but the app: it files the 10-minute `terminal`
+     grant request as that caller's (named from its credential: "Deyao, from the web page", "the actions of session
+     “X” (s…)", never Jarvis 2 itself; the reason names the session and the mode), answers 202 `{waiting: "inbox"}`,
+     shows the switch as the session's `modeAfterGrant`, and runs it when the phone signs that grant. The app keeps
+     its 403 and its in-place review (one Face ID, no Inbox round trip).
+     - **Not chosen:** a separate Inbox item for the switch itself. The grant is the only thing the phone signs (the
+       mode in a running session is not in the core's cert); a second item would be a tap that signs nothing.
+     - The caller texts of Deyao's own logins became "Deyao, from the web page" / "Deyao, from the Jarvis 2 app", so
+       every Inbox item says who asked.

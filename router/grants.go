@@ -186,6 +186,7 @@ func (r *Router) AddGrant(session string, doc *Doc) (*StoredGrant, error) {
 		return nil, errors.New("the grant names no holder of this router, or has no end")
 	}
 	var sg *StoredGrant
+	then := "" // the permission mode to switch to now (askModeGrant)
 	r.st.Do(func(d *persisted) {
 		s := d.Sessions[session]
 		if s == nil || certField(s.Cert, "line") != g.Session {
@@ -207,13 +208,21 @@ func (r *Router) AddGrant(session string, doc *Doc) (*StoredGrant, error) {
 				s.Live.NeedsGrant = ""
 			}
 		}
+		answered := map[string]bool{}
 		for id, q := range d.Inbox { // a pending request for this feature is answered (inbox.go)
 			if q.Kind == requestKindGrant && q.Params.Session == session && q.Params.Holder == holder {
 				delete(d.Inbox, id)
 				noteOutcome(d, &q.Origin, q.Kind, q.ID, outcomeApproved, 0, doc) // the phone-signed grant vouches
+				answered[id] = g.Kind == "grant"                                 // a rule doesn't allow bypass
 			}
 		}
+		if holder == "terminal" { // a switch to bypass that waited on this grant (sessionops.go askModeGrant)
+			then = modeAfterGrant(s, answered, time.Now())
+		}
 	})
+	if err == nil && then != "" {
+		go r.runModeAfterGrant(session, then)
+	}
 	return sg, err
 }
 

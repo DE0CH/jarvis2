@@ -4,6 +4,7 @@ import { api, ago, isTaskLine, challengeRequest, cronEvery, holderTitle, HOLDERS
 import { useStore, setTab, getStore, pend, refresh, refreshUntil, pendUntil, settle, ask, askText, toast, failed, exclusive, BUSY_LABEL } from "../lib/store";
 import { hasShell, requestSecure } from "../lib/shell";
 import { requestGrant } from "../lib/grants";
+import { inboxToast, modeOutcome, modeWaitingText } from "../lib/modeswitch";
 import { canCopy, copyText } from "../lib/clipboard";
 import { BadgeList, Box, Button, Callout, CalloutText, Card, Flex, Heading, Lbl, Muted, P, Pill, Quote, Row, Rows } from "../ui/kit";
 import type { AskRow } from "../lib/store";
@@ -195,8 +196,8 @@ export const destroySession = (id: string) => exclusive("s:" + id, async () => {
   finally { pend("s:" + id, null); }
 });
 // Permission mode (signed in the line's cert). Running: switched in place; raising to bypass needs a fresh
-// phone grant for the terminal feature, so a 403 {phoneGrant} opens the grant page and the switch runs again
-// once it is signed. Paused: kept for the next resume, which the iPhone approves.
+// phone grant for the terminal feature: the router files it in the Inbox and switches once the phone signs it
+// (202 {waiting: "inbox"}; the card shows it waiting). Paused: kept for the next resume, which the iPhone approves.
 export const switchMode = (m: Session, mode: "auto" | "bypass") => exclusive("s:" + m.id, async () => {
   const title = sessionTitle(m);
   if (!(await ask({ title: "Switch permission mode?", rows: [
@@ -209,7 +210,9 @@ export const switchMode = (m: Session, mode: "auto" | "bypass") => exclusive("s:
     pend("s:" + m.id, "Switching mode…");
     try {
       const j = await api<any>("POST", `api/sessions/${m.id}/permission-mode`, { mode });
-      if (j.nextStart) { toast("Applies at the next resume.", "ok"); await refresh(false); return; }
+      const o = modeOutcome(j);
+      if (o === "next") { toast("Applies at the next resume.", "ok"); await refresh(false); return; }
+      if (o === "inbox") { toast(inboxToast(j, mode), "ok"); await refresh(false); settle(5000); return; }
       await refreshUntil((s) => { const x = find(s, m.id); return !!x && x.permissionMode === mode && !serverBusy(x); }, 120000);
     } catch (e: any) {
       if (e.status === 403 && e.body?.needsGrant && hasShell) {
@@ -364,6 +367,12 @@ function Backups({ m }: { m: Session }) {
     </Box>
   );
 }
+// a bypass switch waiting on its terminal grant in the Inbox (router sessionops.go askModeGrant)
+function ModeWaiting({ m }: { m: Session }) {
+  const text = modeWaitingText(m.modeAfterGrant);
+  if (!text) return null;
+  return <Callout color="amber" mt={2} data={{ modeAfterGrant: m.modeAfterGrant!.mode }}>{text}</Callout>;
+}
 // a feature the machine refused without a grant (needs Deyao's approval): one tap to allow it for 10 minutes, or a standing rule
 function NeedsGrant({ m }: { m: Session }) {
   if (!m.needsGrant) return null;
@@ -458,6 +467,7 @@ export function Sessions() {
                 <DiskAlert m={m} busy={busy || null} />
                 <SnapshotTrouble m={m} busy={busy || null} />
                 <NeedsGrant m={m} />
+                <ModeWaiting m={m} />
                 <LockedStore m={m} />
                 <Schedules m={m} />
                 {!!m.error && <P size={2} color="red" mt={1}>{m.error}</P>}

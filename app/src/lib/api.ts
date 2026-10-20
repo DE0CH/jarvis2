@@ -117,6 +117,7 @@ export type Session = {
   permissionMode?: string; guest?: string; stores?: string[] | null; content?: string[] | null; size?: string; image?: string; pausedAt?: string | null; error?: string | null; title?: string; destroyedAt?: string;
   // live fields (docs/API.md "Sessions"): the machine's report, the autopilot's settings, the schedule
   aiTitle?: string; liveName?: string; userTitle?: string; serverTitle?: string; liveSync?: { at: string; files: Record<string, number>; stored: boolean; error?: string } | null; bgTasks?: number; needsGrant?: string; pauseInMs?: number;
+  modeAfterGrant?: { mode: string; inbox: string; until: string } | null; // a bypass switch waiting on its Inbox grant (router sessionops.go)
   autoPause?: "on" | "off"; notifyIdle?: "on" | "off"; oneShot?: boolean; oneShotDone?: boolean; authFailed?: boolean;
   credsExpiresAt?: string | number; discordChannel?: string; statusUpdatedAt?: string; lastReport?: string; refusals?: Refusal[];
   wakeups?: Wakeup[]; crons?: Cron[]; watches?: Watch[]; resumePrompt?: string; createRequestId?: string; repos?: string;

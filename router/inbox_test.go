@@ -88,10 +88,10 @@ func TestInboxFromEachCaller(t *testing.T) {
 	if g := byKind["grant "]; g.Open["kind"] != "grant" || g.Open["options"].(map[string]any)["minutes"] != 5 || g.Open["options"].(map[string]any)["sessionId"] != "sA" {
 		t.Fatalf("grant: %+v", g)
 	}
-	if u := byKind["unlock "]; u.CallerText != "the web page" || u.Explanation != "" {
+	if u := byKind["unlock "]; u.CallerText != "Deyao, from the web page" || u.Explanation != "" {
 		t.Fatalf("unlock: %+v", u)
 	}
-	if rm := byKind["repo-key remove"]; rm.CallerText != "the Jarvis 2 app" {
+	if rm := byKind["repo-key remove"]; rm.CallerText != "Deyao, from the Jarvis 2 app" {
 		t.Fatalf("remove: %+v", rm)
 	}
 	// a session lists only its own
@@ -211,7 +211,7 @@ func TestApprovalsInTheInboxWithTheirCaller(t *testing.T) {
 		}
 		switch it.Kind {
 		case "resume-upgrade":
-			if it.CallerText != "the web page" || it.Call.Path != "/api/sessions/sA/resume" {
+			if it.CallerText != "Deyao, from the web page" || it.Call.Path != "/api/sessions/sA/resume" {
 				t.Fatalf("%+v", it)
 			}
 		case "add-store":
