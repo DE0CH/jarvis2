@@ -5,20 +5,25 @@ package main
 // request; no secret sits in plain text on disk (Deyao, 2026-10-16).
 //
 //   - Pulls: the supervisor alone pulls (/m/pull-secrets): at boot when boot asks (op "pull"), on the router's
-//     refresh-secrets, and when a process of the session asks for a reload after a cert change (add-store's waiter,
-//     a downgrade: op "reload"). The values it holds are always exactly what the core sealed for the cert's stores.
+//     refresh-secrets, and when a process of the session asks for one (`pull-secrets`, add-store's waiter, a
+//     downgrade: op "reload": the router's newest cert, then a pull with it). A pull hands no value to anyone: its
+//     answer is the key names and the cert's stores. The values it holds are always exactly what the core sealed
+//     for the cert's stores.
 //   - RAM only: the values live in the worker's memory and in a memfd the keeper holds (secretsFD), so a restarted
 //     worker has them again without a new pull (the core may have locked the stores again since). A memfd is anonymous
 //     memory, not a file on any filesystem; nothing is written to ~/.secrets, /run/jarvis2 or the snapshot.
 //   - Serving: the unix socket secretsSock (0600, user claude; root may connect too): one JSON request per
-//     connection, {"op": "names" | "get" (with "keys") | "all" | "pull" | "reload"}. Each request is logged in the
-//     supervisor log with its op, the key names (or a count) and the caller's pid and command name (SO_PEERCRED),
-//     never a value. `pull-secrets` (--names, --exec, --write) and boot use it. It needs no guard check: it carries no
-//     instruction, and it serves only what the core sealed for this machine's cert.
+//     connection, {"op": "names" | "get" (with "keys") | "pull" | "reload" | "boot-env"}. A process gets values only
+//     with "get", naming each key it needs: there is no request for all keys (answerSecrets). Asking never pulls;
+//     pulling never answers values. Each request is logged in the supervisor log with its op, the key names (or a
+//     count) and the caller's pid and command name (SO_PEERCRED), never a value. `session-secret` (asking),
+//     `pull-secrets` (pulling) and boot use it. It needs no guard check: it carries no instruction, and it serves
+//     only what the core sealed for this machine's cert.
 //   - Deploy keys: the private keys of the repo stores stay in RAM too, in the supervisor's ssh-agent
 //     (sshAgentSock, deploykeys.go); ~/.ssh holds only their public halves, which name the key for each repo's alias.
 //   - The harness's env: boot builds the harness's environment from the values (RAM only), so `$VAR` works in the
-//     agent's commands; a later pull reaches the environment of processes started through `pull-secrets --exec`.
+//     agent's commands (op "boot-env", answered only to boot before the machine has booted); a later pull reaches a
+//     process only through `session-secret --keys … --exec`.
 
 import (
 	"encoding/json"
@@ -29,6 +34,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -39,7 +45,7 @@ import (
 )
 
 var (
-	secretsSock = dir + "/secrets.sock"
+	secretsSock  = dir + "/secrets.sock"
 	secretsFDEnv = "JARVIS2_SECRETS_FD" // the worker's fd of the keeper's memfd
 )
 
@@ -213,6 +219,7 @@ type secretsResp struct {
 	Error   string            `json:"error,omitempty"`
 	Locked  bool              `json:"locked,omitempty"`
 	Names   []string          `json:"names,omitempty"`
+	Stores  []string          `json:"stores,omitempty"` // pull/reload: the stores of the cert the pull used
 	Secrets map[string]string `json:"secrets,omitempty"`
 	N       int               `json:"n,omitempty"`
 }
@@ -248,12 +255,21 @@ func handleSecrets(c *client, conn net.Conn) {
 	if err := json.NewDecoder(io.LimitReader(conn, 1<<16)).Decode(&req); err != nil {
 		return
 	}
-	resp := answerSecrets(c, req, fmt.Sprintf("pid %d %s", pid, comm))
+	resp := answerSecrets(c, req, pid, fmt.Sprintf("pid %d %s", pid, comm))
 	json.NewEncoder(conn).Encode(resp)
 }
 
-// answerSecrets: one request, logged with the key names and the caller, never a value
-func answerSecrets(c *client, req secretsReq, caller string) secretsResp {
+// answerSecrets: one request, logged with the key names and the caller, never a value. Two kinds of request, kept
+// strictly apart (Deyao, 2026-10-20):
+//   - pulling ("pull", "reload"): the supervisor fetches the stores from the core into its RAM; the answer carries the
+//     key names and the cert's stores, never a value.
+//   - asking ("get"): a process gets exactly the keys it names, from what is held now (it never pulls). There is no
+//     way to ask for every key: a request must name each key it needs (no "all" op, no empty list, no wildcard),
+//     and a name not held is an error naming it.
+//
+// The one hand-over of every value is "boot-env": the harness's environment, built by boot before anything of the
+// agent runs (only to the boot process, harness.pid, and only before bootedPath exists).
+func answerSecrets(c *client, req secretsReq, pid int, caller string) secretsResp {
 	switch req.Op {
 	case "names":
 		m := held.snapshot()
@@ -261,39 +277,70 @@ func answerSecrets(c *client, req secretsReq, caller string) secretsResp {
 		log.Printf("secrets: names (%d) for %s", len(names), caller)
 		return secretsResp{OK: true, Names: names}
 	case "get":
-		m := held.snapshot()
-		out := map[string]string{}
-		var missing []string
-		for _, k := range req.Keys {
-			if v, ok := m[k]; ok {
-				out[k] = v
-			} else {
-				missing = append(missing, k)
-			}
+		return answerGet(req.Keys, caller)
+	case "boot-env":
+		if booted() {
+			log.Printf("secrets: refused boot-env for %s: the machine has booted", caller)
+			return secretsResp{Error: "boot-env is only for the boot, before the harness starts; ask for the keys a command needs (session-secret --keys K1,K2 …)"}
 		}
-		log.Printf("secrets: get %s for %s%s", strings.Join(clipNames(req.Keys), " "), caller, missingText(missing))
-		return secretsResp{OK: true, Secrets: out}
-	case "all":
+		if s, _ := readTrim(harnessPIDPath); s != strconv.Itoa(pid) {
+			log.Printf("secrets: refused boot-env for %s: not the boot process", caller)
+			return secretsResp{Error: "boot-env is only for the boot process"}
+		}
 		m := held.snapshot()
-		log.Printf("secrets: all (%d keys: %s) for %s", len(m), strings.Join(clipNames(sortedKeys(m)), " "), caller)
+		log.Printf("secrets: boot-env (%d keys: %s) for %s", len(m), strings.Join(clipNames(sortedKeys(m)), " "), caller)
 		return secretsResp{OK: true, Secrets: m}
-	case "pull":
-		n, err := held.pull(c)
-		log.Printf("secrets: pull for %s: %s", caller, resultText(n, err))
+	case "pull", "reload":
+		var n int
+		var err error
+		if req.Op == "pull" {
+			n, err = held.pull(c)
+		} else {
+			n, err = held.reload(c, req.Drop, req.Held)
+		}
+		log.Printf("secrets: %s for %s: %s", req.Op, caller, resultText(n, err))
 		if err != nil {
 			return secretsResp{Error: err.Error(), Locked: errors.Is(err, errStoresLocked)}
 		}
-		return secretsResp{OK: true, N: n}
-	case "reload":
-		n, err := held.reload(c, req.Drop, req.Held)
-		log.Printf("secrets: reload for %s: %s", caller, resultText(n, err))
-		if err != nil {
-			return secretsResp{Error: err.Error(), Locked: errors.Is(err, errStoresLocked)}
+		r := secretsResp{OK: true, N: n, Names: sortedKeys(held.snapshot())}
+		if cert, err := currentCert(); err == nil {
+			r.Stores = cert.Stores
 		}
-		return secretsResp{OK: true, N: n}
+		return r
 	}
 	log.Printf("secrets: unknown op %q from %s", clip(req.Op, 20), caller)
 	return secretsResp{Error: "unknown op"}
+}
+
+// answerGet: exactly the named keys, or an error; never all of them
+func answerGet(keys []string, caller string) secretsResp {
+	if len(keys) == 0 {
+		log.Printf("secrets: refused get with no keys for %s", caller)
+		return secretsResp{Error: "name the keys you need (session-secret --keys K1,K2 …); there is no request for all keys"}
+	}
+	for _, k := range keys {
+		if !envNameRE.MatchString(k) || len(k) > 100 {
+			log.Printf("secrets: refused get with a key that isn't an env name for %s", caller)
+			return secretsResp{Error: fmt.Sprintf("%q isn't a key name", clip(k, 40))}
+		}
+	}
+	m := held.snapshot()
+	out := map[string]string{}
+	var missing []string
+	for _, k := range keys {
+		if v, ok := m[k]; ok {
+			out[k] = v
+		} else if !slices.Contains(missing, k) {
+			missing = append(missing, k)
+		}
+	}
+	names := strings.Join(clipNames(keys), " ")
+	if len(missing) > 0 {
+		log.Printf("secrets: refused get %s for %s%s", names, caller, missingText(missing))
+		return secretsResp{Error: "not held in this session: " + strings.Join(missing, ", ") + " (session-secret --names lists what it holds; `jarvis2 stores` shows which store has a key)"}
+	}
+	log.Printf("secrets: get %s for %s", names, caller)
+	return secretsResp{OK: true, Secrets: out}
 }
 
 func resultText(n int, err error) string {

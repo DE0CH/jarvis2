@@ -126,7 +126,7 @@ func continuityStep(p *phone, master *ecdsa.PrivateKey, phoneAgreement string, r
 	unlock(p, "e2e", nonceOf(*a.Challenge))
 	id2 := approve(p, a)
 	waitState(id2, "started", 6*time.Minute)
-	expectOnMachine(machineOf(id2), "pull-secrets --exec env | grep -c E2E_SECRET", "1")
+	expectOnMachine(machineOf(id2), "session-secret --names | grep -cx E2E_SECRET", "1")
 	must2(call(router, "POST", "/api/sessions/"+id2+"/pause", nil, nil))
 	waitState(id2, "paused", 12*time.Minute)
 	key := coreKey
@@ -166,8 +166,8 @@ func continuityStep(p *phone, master *ecdsa.PrivateKey, phoneAgreement string, r
 	pending := waitApprovals("add-store", id, 1)
 	unlock(p, "e2e-more", nonceOf(*pending[0].Challenge))
 	approve(p, pending[0])
-	expectOnMachine(m1, "for i in $(seq 1 30); do pull-secrets --exec env | grep -q E2E_MORE && break; sleep 2; done; "+
-		"pull-secrets --exec env | grep -c E2E_MORE; pull-secrets --exec env | grep -c E2E_SECRET", "1\n1")
+	expectOnMachine(m1, "for i in $(seq 1 30); do session-secret --names | grep -qx E2E_MORE && break; sleep 2; done; "+
+		"session-secret --names | grep -cx E2E_MORE; session-secret --names | grep -cx E2E_SECRET", "1\n1")
 	expectNoUnlocks("after the add-store on the Recovered core")
 	if session(id)["oldCore"] == true {
 		log.Fatal("the running session was taken for an earlier core's")
@@ -176,7 +176,7 @@ func continuityStep(p *phone, master *ecdsa.PrivateKey, phoneAgreement string, r
 	step("continuity: the paused session resumes unattended (no approval, no unlock) with its carried secrets")
 	must2(call(router, "POST", "/api/sessions/"+id2+"/resume", map[string]bool{"upgrade": false}, nil))
 	waitState(id2, "started", 8*time.Minute)
-	expectOnMachine(machineOf(id2), "pull-secrets --exec env | grep -c E2E_SECRET", "1")
+	expectOnMachine(machineOf(id2), "session-secret --names | grep -cx E2E_SECRET", "1")
 	expectNoUnlocks("after the resume on the Recovered core")
 
 	step("continuity: destroy goes through on the Recovered core")

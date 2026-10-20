@@ -837,7 +837,7 @@ signed as every `/m` call). Any `:id` in the path must be the calling machine's 
 
 | Path | Served by |
 |---|---|
-| `GET /api/sessions/:id/secrets` | The machine itself: `/m/pull-secrets`, opened with its key → `{ok, environment, secrets}` (Jarvis 1's shape). |
+| `GET /api/sessions/:id/secrets` | 410: the secrets don't travel over HTTP; they come from the supervisor's socket (below). |
 | `GET /api/sessions/:id/changes` | The machine itself: `{checked, repos: [{name, uncommitted, unpushed /* -1 no upstream */}], status}`. |
 | wakeups, crons, notify-idle | The router (above). Arming also puts holder `scheduler` on the session's allow list (a wakeup: due + 1 h; a cron: max(31 d, 2 periods + 1 h), renewed at each firing by `jarvis2-machine allow-at-least`). |
 | `DELETE /api/sessions/:id` | The router: the session retires itself (Destroy) → 202 `{started}`; 409 `{pending}` while it has wakeups, crons or watches. |
@@ -848,6 +848,21 @@ signed as every `/m` call). Any `:id` in the path must be the calling machine's 
 | anything else | 404 |
 
 Nothing is forwarded to Jarvis 1.
+
+### The supervisor's secrets socket (`/run/jarvis2/secrets.sock`)
+
+Not HTTP: a unix socket on the machine (0600, the session user; root may connect), one JSON request per connection,
+one JSON answer `{ok, error?, locked?, names?, stores?, secrets?, n?}` (machine/secrets.go). Callers are identified by
+SO_PEERCRED; every request is logged in the supervisor log with its op, the key names and the caller's pid and command,
+never a value. Pulling and asking are separate: a pull never answers a value, and asking never pulls.
+
+| Request | Who | Answer |
+|---|---|---|
+| `{"op":"names"}` | `session-secret --names` | `names`: the key names held now |
+| `{"op":"get","keys":["K1","K2"]}` | `session-secret --keys K1,K2 --exec CMD \| --write FILE` | `secrets`: exactly those keys. Refused: no keys, a name that isn't an env name, a key not held (the error names it). There is no request for all keys. |
+| `{"op":"reload"}` (`drop`, `held`: a downgrade's) | `pull-secrets`, add-store's waiter, `downgrade` | the router's newest cert, then a pull with it into RAM: `n`, `names`, `stores`; no value. `locked` when a store is locked. |
+| `{"op":"pull"}` | boot | a pull with the cert on disk (waits for a locked store): `n`, `names`, `stores`; no value |
+| `{"op":"boot-env"}` | boot only | every held value, for the harness's env: answered only to the boot process (`harness.pid`) before `/run/jarvis2/booted` exists; refused to anyone else and after the boot |
 
 ## Transcript search (`services/search`)
 

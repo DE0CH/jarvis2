@@ -57,8 +57,8 @@ func apiProxyHandler(c *client) http.Handler {
 		if !ownSession(w, c, req.PathValue("id")) {
 			return
 		}
-		// the secrets don't travel over HTTP: the supervisor serves them on its own socket (secrets.go, pull-secrets)
-		writeJSONResp(w, 410, map[string]string{"error": "the session's secrets come from the supervisor: pull-secrets --names | --exec CMD"})
+		// the secrets don't travel over HTTP: the supervisor serves them on its own socket (secrets.go, session-secret)
+		writeJSONResp(w, 410, map[string]string{"error": "the session's secrets come from the supervisor: session-secret --names | --keys K1,K2 --exec CMD"})
 	})
 	mux.HandleFunc("GET /api/sessions/{id}/changes", func(w http.ResponseWriter, req *http.Request) {
 		if !ownSession(w, c, req.PathValue("id")) {

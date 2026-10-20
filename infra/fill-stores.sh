@@ -20,6 +20,15 @@
 # deletes the same-name token first, so the old PAT is revoked).
 set -euo pipefail
 cd "$(dirname "$0")/.."
+LAYOUT="${STORES_LAYOUT:-$HOME/workspace/claude-env/.claude/skills/jarvis2/stores.txt}"
+# the values as the supervisor holds them now (a store added after this shell started): re-run with exactly the keys
+# this script uses, by name (session-secret; there is no request for all keys)
+if [ -z "${FILL_STORES_KEYS_IN_ENV:-}" ]; then
+  keys="CLOUDFLARE_API JARVIS2_FLY_TOKEN LOBSTER_TOKEN OPENROUTER_API EXA_API JARVIS2_SETUP_KEY JARVIS2_SETUP_ACCESS_ID
+    JARVIS2_SETUP_ACCESS_SECRET HETZNER_S3_ENDPOINT HETZNER_S3_REGION HETZNER_S3_ACCESS_KEY HETZNER_S3_SECRET_KEY
+    $(grep -v '^#' "$LAYOUT" | cut -s -d' ' -f2- | tr ' ' '\n' | grep -v '=')"
+  exec env FILL_STORES_KEYS_IN_ENV=1 session-secret --keys "$(printf '%s\n' $keys | sort -u | paste -sd,)" --exec bash "$0" "$@"
+fi
 D=~/.jarvis2; mkdir -p "$D"; chmod 700 "$D"
 GW="${GITHUB_WEB_DIR:-$HOME/workspace/claude-env/.claude/skills/github-web}"
 for v in CLOUDFLARE_API JARVIS2_FLY_TOKEN LOBSTER_TOKEN OPENROUTER_API EXA_API; do
@@ -78,7 +87,6 @@ for n in default openrouter tunnel shopping; do
 done
 # Deyao's own stores, by kind, from the layout file (key names only; private, in claude-env): each line is
 # "<store> KEY…", values from this session's env. Only `default` and `shopping` are created (not sensitive); the rest are sensitive.
-LAYOUT="${STORES_LAYOUT:-$HOME/workspace/claude-env/.claude/skills/jarvis2/stores.txt}"
 grep -v '^#' "$LAYOUT" | while read -r store keys; do
   [ -n "$store" ] || continue
   # shellcheck disable=SC2086

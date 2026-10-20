@@ -63,13 +63,13 @@ session_check() { # a session with rh-plain + rh-secret (+ the harness's tunnel)
   for kv in "RH_PLAIN=$V_PLAIN" "RH_SECRET=$V_SECRET" "CF_ACCESS_CLIENT_ID=$V_TUNNEL"; do
     got=""
     for i in $(seq 1 12); do
-      got=$(on_machine "$m" "pull-secrets --exec env | grep -E '^${kv%%=*}=' | grep -c -F '${kv#*=}' || true" 2>/dev/null || true)  # that key's line holds that value (the supervisor's RAM copy)
+      got=$(on_machine "$m" "session-secret --keys ${kv%%=*} --exec env | grep -E '^${kv%%=*}=' | grep -c -F '${kv#*=}' || true" 2>/dev/null || true)  # that key's line holds that value (the supervisor's RAM copy)
       [ "$got" = 1 ] && break; sleep 5
     done
     [ "$got" = 1 ] || { echo "FAIL ${kv%%=*} isn't on machine $m with the written value"; exit 1; }
     echo "ok   ${kv%%=*} is on machine $m with the value written before the failure"
   done
-  got=$(on_machine "$m" "pull-secrets --exec env | grep -c RH_MARKED || true")
+  got=$(on_machine "$m" "session-secret --names | grep -cx RH_MARKED || true")
   [ "$got" = 0 ] || { echo "FAIL a store that wasn't picked is on the machine"; exit 1; }
   echo "ok   rh-marked (not picked) is not on the machine"
   "$RH" destroy "$sid"

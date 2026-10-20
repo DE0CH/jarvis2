@@ -210,8 +210,8 @@ and its backup (sealed to the new master key, read from the core's signed state)
 whose value lived only in the old stores and backups, sends the core its Fly token (`backup-core` with a fresh
 `infra/fly-token.sh`), and deletes the local copies. The stores and their keys: Deyao's own stores by kind, `default` (not sensitive), `identity`, `infra`,
 `money`, `devices`, `work` and `jarvis1` (sensitive), whose key names are listed in the private claude-env repo
-(`.claude/skills/jarvis2/stores.txt`, read by the script; run it under `pull-secrets --exec` so it sees the setup
-session's live store values); `github-deploy-keys` (sensitive; GITHUB_DEPLOY_KEYS_TOKEN: a new fine-grained PAT
+(`.claude/skills/jarvis2/stores.txt`, read by the script, which re-runs itself under `session-secret --keys …` with exactly
+those names so it sees the setup session's live store values); `github-deploy-keys` (sensitive; GITHUB_DEPLOY_KEYS_TOKEN: a new fine-grained PAT
 `jarvis2-deploy-keys`, all repositories, Repository "Administration: read and write" only, minted by `github-web
 pat-create-all`, which deletes the same-name token first; its line is in the layout file too); the harness stores
 `openrouter` (OPENROUTER_API), `claude` (no keys: a cert naming it gets the router's Claude login; made empty, not
@@ -295,7 +295,7 @@ Claude never adds a repo or allows anything itself: it files a request and Deyao
   "…"`, `jarvis2-request unlock --why "…"`, `jarvis2-request add-store STORE --why "…"`, `jarvis2-request list`
   (`session-image/bin/jarvis2-request`, through the machine's proxy). `add-store` also starts a background
   `jarvis2-machine await-store STORE`, which has the supervisor pull the store (RAM only) once the approval lands in
-  the cert (log `~/.jarvis2-await-STORE.log`); a command then gets it with `pull-secrets --exec CMD`; before it did, an approved store stayed unpulled (2026-10-12).
+  the cert (log `~/.jarvis2-await-STORE.log`); a command then gets the keys it needs with `session-secret --keys K1,K2 --exec CMD`, and `pull-secrets` makes the supervisor pull again at once (it hands out no value); before the waiter, an approved store stayed unpulled (2026-10-12).
 
 The reason is required, plain text, ≤ 600 characters. A request (and an approval in the Inbox) goes after 10 minutes (Deyao, 2026-10-12): ask again if it lapsed.
 
@@ -459,8 +459,8 @@ bucket is versioned), and the admin key removes the marker.
 
 Making a new one (a box rebuild doesn't need one; a leak does): `infra/backup-read-key.py`, one step at a time,
 with a headed Chrome on CDP port 9333 (`Xvfb :99` + `google-chrome --remote-debugging-port=9333 --disable-quic`;
-the Console logs in with password only) and `HETZNER_USER`/`HETZNER_PASSWORD` (`pull-secrets --exec python3
-infra/backup-read-key.py login` when they aren't in the env):
+the Console logs in with password only) and `HETZNER_USER`/`HETZNER_PASSWORD` (`session-secret --keys
+HETZNER_USER,HETZNER_PASSWORD --exec python3 infra/backup-read-key.py login` when they aren't in the env):
 
 1. `login`, then `generate` — Console only (no API): Security → S3 credentials → a new `jarvis2-backup-read`
    (the Console accepts the same description twice), written straight to `~/.jarvis2/backup-read.env`

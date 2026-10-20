@@ -728,19 +728,29 @@ worker count, how far the log was pushed).
 
 **Secrets, in RAM only (Deyao, 2026-10-16).** The supervisor alone pulls the session's secrets from the core (sealed
 to this machine, through the router): at boot when boot asks, on the router's `refresh-secrets`, and when a process of
-the session asks it to reload after a cert change (add-store's waiter, a downgrade, which empties the copy if the pull
+the session asks it to pull (`pull-secrets`, add-store's waiter, a downgrade, which empties the copy if the pull
 fails). It holds exactly what the core sealed for the cert's stores, in its memory and in a memfd its keeper keeps (so
 a restarted worker has them without a new pull); nothing is written to disk: no `~/.secrets`, nothing in
-`/run/jarvis2`, the await logs, the delivery dir or the snapshot. It serves them on a unix socket only the session's
-user (and root) can reach, `/run/jarvis2/secrets.sock`: `pull-secrets --names | --exec CMD | --write FILE` and boot
-ask there. Each request is logged in the supervisor log with its key names (or a count) and the caller's pid and
-command, never a value. It needs no guard check: it carries no instruction, and it serves only what the core sealed.
-The harness's env carries the values (boot builds it from them, RAM only), so `$VAR` works in the agent's commands; a
-process started before a change sees it through `pull-secrets --exec`. The repos' deploy keys stay in RAM too: the
+`/run/jarvis2`, the await logs, the delivery dir or the snapshot. It answers on a unix socket only the session's
+user (and root) can reach, `/run/jarvis2/secrets.sock`, and keeps two kinds of request strictly apart (Deyao,
+2026-10-20):
+- **Pulling** (`pull-secrets`): the supervisor pulls the session's stores from the core into its RAM now. Agents and
+  scripts may call it, but it hands the caller no secret: no value, nothing in its env, no file; it prints only the
+  cert's stores and the key names now held.
+- **Asking** (`session-secret --keys K1,K2 --exec CMD | --write FILE`, `--names`): a process gets exactly the keys it
+  names, from what the supervisor holds; it never triggers a pull. There is no request for all keys: the supervisor
+  refuses a request with no keys (and has no "all" op), and a key the session doesn't hold is an error naming it.
+
+No mode of either prints a value, and a malformed invocation prints usage without asking. Each request is logged in
+the supervisor log with its op, the key names asked for (or a count) and the caller's pid and command, never a value.
+It needs no guard check: it carries no instruction, and it serves only what the core sealed. The harness's env carries
+the values (boot builds it from them, RAM only, through the one hand-over of every value, `boot-env`, which the
+supervisor answers only to the boot process before the machine has booted), so `$VAR` works in the agent's commands;
+a process started before a change gets a key through `session-secret --keys KEY --exec`. The repos' deploy keys stay in RAM too: the
 supervisor's own ssh-agent (`/run/jarvis2/ssh-agent.sock`, read-only to callers, every signature logged with the
 repo and the caller) holds them, and `~/.ssh` has only their public halves, which each repo's SSH alias names
 (`IdentityFile …pub`, `IdentitiesOnly`, `IdentityAgent`). What stays on disk by Deyao's choice: the Claude login
-(`~/.claude/.credentials.json`) and a file a session writes itself with `pull-secrets --write`.
+(`~/.claude/.credentials.json`) and a file a session writes itself with `session-secret --keys … --write`.
 
 **The supervisor log.** Boot, the keeper and the worker write each log line as JSON (`{at, text}`, the text prefixed
 `boot:` or `supervisor:`) to `/run/jarvis2/supervisor.log` (tmpfs, rotated once pushed); the worker pushes new lines

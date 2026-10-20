@@ -28,7 +28,8 @@ mkdir -p "$HOME/.claude" "$HOME/workspace" "$HOME/artifacts"
 
 # --- environment secrets ---------------------------------------------------
 # The secrets are already in this process's env (RAM only): jarvis2-machine boot took them from the supervisor,
-# which holds them and serves them later (`pull-secrets`). Nothing writes them to disk.
+# which holds them and later serves a command the keys it names (`session-secret --keys …`; `pull-secrets` has it
+# pull from the core again, handing out nothing). Nothing writes them to disk.
 
 # --- secret-store merge conflicts ------------------------------------------
 # When a session is booted from SEVERAL secret stores (jarvis multi-select) that define the SAME

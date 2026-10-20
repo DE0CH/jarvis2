@@ -15,9 +15,8 @@
 #                                       file; delivery (with retries) is local.
 set -u
 export HOME=/home/claude PATH="/home/claude/.local/bin:/usr/local/bin:/usr/bin:/bin"
-# the session's secrets, from the supervisor (RAM only), for a direct send: this runs from the supervisor, whose env
-# holds none (--queue only writes a file)
-[ "${1:-}" = "--queue" ] || [ -n "${JARVIS2_SECRETS_IN_ENV:-}" ] || exec env JARVIS2_SECRETS_IN_ENV=1 /usr/local/bin/pull-secrets --exec "$0" "$@"
+# no secrets needed: the openclaw CLI reads the gateway token from its config, and paseo's daemon (started by the
+# harness launcher, with the session's env) runs the agents; this client only talks to them
 INBOX="$HOME/.claude/harness-inbox"
 if pgrep -u "$(id -u)" -f harness-opencode.sh >/dev/null; then HARNESS=opencode
 elif pgrep -u "$(id -u)" -f harness-openclaw.sh >/dev/null; then HARNESS=openclaw

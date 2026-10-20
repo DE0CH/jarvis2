@@ -342,7 +342,7 @@ func prepare() error {
 	} else if err != nil {
 		return err
 	} else {
-		r, err := askSecrets(secretsReq{Op: "all"}, time.Minute)
+		r, err := askSecrets(secretsReq{Op: "boot-env"}, time.Minute) // the harness's env: the one hand-over of every value
 		if err != nil {
 			return err
 		}
@@ -721,7 +721,7 @@ func unpackReader(r io.Reader) (int, error) {
 
 // ---- the snapshot (the supervisor's snapshot command: pause or destroy) ------------------------------
 
-func booted() bool { _, err := os.Stat(bootedPath); return err == nil }
+var booted = func() bool { _, err := os.Stat(bootedPath); return err == nil } // a var so tests can set it
 
 // noSnapshot: the answer to a snapshot command while booting — nothing to snapshot, so the router kills at once
 func noSnapshot(c *client) error {
@@ -842,7 +842,7 @@ func awaitStore(name string) error {
 		if err != nil {
 			return err
 		}
-		fmt.Fprintf(os.Stderr, "added %s: the supervisor holds it now (%d keys); `pull-secrets --exec CMD` runs a command with them\n", name, r.N)
+		fmt.Fprintf(os.Stderr, "added %s: the supervisor holds it now (%d keys); `session-secret --keys K1,K2 --exec CMD` runs a command with the keys it needs\n", name, r.N)
 		return nil
 	}
 	return errors.New("no approval within 1 h")

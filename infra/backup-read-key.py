@@ -4,7 +4,8 @@ credential"). Values never print.
 
 S3 credentials exist only in the Hetzner Console (no API), so the Console steps drive a Chrome over CDP
 (CDP, default http://127.0.0.1:9333 — e.g. a headed google-chrome on Xvfb with --remote-debugging-port=9333),
-logged in as HETZNER_USER / HETZNER_PASSWORD (run under `pull-secrets --exec` when they aren't in the env).
+logged in as HETZNER_USER / HETZNER_PASSWORD (when they aren't in the env, run it under `session-secret --keys
+HETZNER_USER,HETZNER_PASSWORD,HETZNER_S3_ENDPOINT,HETZNER_S3_REGION,HETZNER_S3_ACCESS_KEY,HETZNER_S3_SECRET_KEY --exec`).
 The admin key HETZNER_S3_* does the bucket policies and the cleanup. The new keys live in FILE
 (~/.jarvis2/backup-read.env, mode 600: ACCESS_KEY=… / SECRET_KEY=…) until `install` is done; then shred it.
 

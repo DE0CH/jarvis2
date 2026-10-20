@@ -23,7 +23,7 @@ func legacyStep(p *phone, master *ecdsa.PrivateKey, phoneAgreement string, recov
 	id2 := approve(p, a)
 	waitState(id2, "started", 6*time.Minute)
 	m2 := machineOf(id2)
-	expectOnMachine(m2, "pull-secrets --exec env | grep -c E2E_SECRET", "1")
+	expectOnMachine(m2, "session-secret --names | grep -cx E2E_SECRET", "1")
 	expectOnMachine(m2, "echo paused-"+secret+" > /home/claude/artifacts/e2e-marker && chown claude /home/claude/artifacts/e2e-marker && echo ok", "ok")
 	must2(call(router, "POST", "/api/sessions/"+id2+"/pause", nil, nil))
 	waitState(id2, "paused", 12*time.Minute)
@@ -79,7 +79,7 @@ func legacyStep(p *phone, master *ecdsa.PrivateKey, phoneAgreement string, recov
 		denyRequestsFor(sid)
 		waitState(sid, "started", 4*time.Minute)
 		m := machineOf(sid)
-		expectOnMachine(m, "pull-secrets --exec env | grep -c E2E_SECRET", "1")
+		expectOnMachine(m, "session-secret --names | grep -cx E2E_SECRET", "1")
 		expectOnMachine(m, "cat /home/claude/artifacts/e2e-marker", want)
 		expectNoUnlocks("after " + sid + "'s pull")
 	}
@@ -115,7 +115,7 @@ func legacyStep(p *phone, master *ecdsa.PrivateKey, phoneAgreement string, recov
 	waitState(id, "paused", 12*time.Minute)
 	must2(call(router, "POST", "/api/sessions/"+id+"/resume", map[string]bool{"upgrade": false}, nil))
 	waitState(id, "started", 8*time.Minute)
-	expectOnMachine(machineOf(id), "pull-secrets --exec env | grep -c E2E_SECRET", "1")
+	expectOnMachine(machineOf(id), "session-secret --names | grep -cx E2E_SECRET", "1")
 	expectNoUnlocks("after the second resume")
 	log.Printf("E2E PASSED (legacy: the earlier core's running and paused sessions went on under the new core)")
 }

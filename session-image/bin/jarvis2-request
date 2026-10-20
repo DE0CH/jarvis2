@@ -153,8 +153,8 @@ def start_await(store):
     with open(log, "ab") as f:
         subprocess.Popen(["jarvis2-machine", "await-store", store], stdout=f, stderr=f, stdin=subprocess.DEVNULL,
                          start_new_session=True)
-    print(f"Once he allows {store}, the supervisor pulls it by itself (log: {log}); then run a command with it as "
-          "`pull-secrets --exec CMD` (this shell's env doesn't change).", file=sys.stderr)
+    print(f"Once he allows {store}, the supervisor pulls it by itself (log: {log}); then run a command with the keys it "
+          "needs as `session-secret --keys K1,K2 --exec CMD` (this shell's env doesn't change).", file=sys.stderr)
 
 
 def show(o):

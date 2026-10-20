@@ -202,7 +202,7 @@ func outcomeResult(a outcomeAsked, it OutcomeItem, cert Cert) (string, error) {
 		}
 		for _, s := range c.Stores {
 			if s == a.Store {
-				return fmt.Sprintf("Checked: this machine's new core-signed cert names the store %q. If `jarvis2-request add-store` filed it, a background waiter has the supervisor pull it by itself (~/.jarvis2-await-%s.log); then run a command with it as `pull-secrets --exec CMD` (this shell's env doesn't change).", a.Store, a.Store), nil
+				return fmt.Sprintf("Checked: this machine's new core-signed cert names the store %q. If `jarvis2-request add-store` filed it, a background waiter has the supervisor pull it by itself (~/.jarvis2-await-%s.log); then run a command with the keys it needs as `session-secret --keys K1,K2 --exec CMD` (this shell's env doesn't change; `pull-secrets` makes the supervisor pull again now).", a.Store, a.Store), nil
 			}
 		}
 		return "", errors.New("the cert doesn't name the store")

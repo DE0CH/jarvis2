@@ -1783,15 +1783,15 @@ snapshot failed with "no space left on device", the machine was destroyed anyway
        socket (`pull`, `reload`). A worker restart keeps the values through a **memfd the keeper holds** (fd 3), since a
        new pull may meet a store the core has locked again. Callers are checked by SO_PEERCRED (the session user or
        root); each request is logged with names and pid/comm. The harness's env carries every env-name key (boot builds
-       it from the supervisor's answer). The local Jarvis API's old `GET …/secrets` answers 410 (pull-secrets uses the
-       socket); `harness-send`, which runs from the supervisor, re-execs itself through `pull-secrets --exec` for a
-       direct send. *Not chosen*: a CLI handing the supervisor a pulled map (any process could then plant values).
+       it from the supervisor's `boot-env` answer). The local Jarvis API's old `GET …/secrets` answers 410 (the
+       secrets come from the socket; asking and pulling are split by 196). *Not chosen*: a CLI handing the supervisor
+       a pulled map (any process could then plant values).
      - **Deploy keys through the supervisor's ssh-agent** (golang.org/x/crypto/ssh/agent): read-only to callers (no
        add/remove/lock), every signature logged with the repo; `~/.ssh/jarvis2-deploy/*.pub` names which key each
        repo's alias uses (`IdentityFile` + `IdentitiesOnly` + `IdentityAgent`), since GitHub takes the first deploy
        key offered and would then refuse the other repos.
      - **Not covered (Deyao's choice or outside the supervisor):** `~/.claude/.credentials.json`; a file written with
-       `pull-secrets --write` (if it is under `~/workspace` or `~/artifacts`, the snapshot takes it); the harnesses' own
+       `session-secret --keys … --write` (if it is under `~/workspace` or `~/artifacts`, the snapshot takes it); the harnesses' own
        state the snapshot already carried (`.openclaw`, `.paseo`).
      - **The lifecycle log reads Fly with the router's read-only token**: the machine's events (deduplicated: Fly keeps
        only a few) and Fly's logs API without the app's own lines; if the read-only token can't read the logs API, the
@@ -1909,3 +1909,29 @@ snapshot failed with "no space left on device", the machine was destroyed anyway
        delete 200 (once Fly has purged the volume, a 404, which the core logs at each kill as a failed delete until
        it restarts: noise, no harm). Nothing signed records the sweep's deletes; its log line and `/setup/status` `volumeSweep` do.
      - **Kept from 194:** test runs still delete their own at teardown.
+196. **Pulling secrets and asking for them are two commands; nothing asks for all keys (Deyao, 2026-10-20; DESIGN
+     "Secrets, in RAM only", API "The supervisor's secrets socket").** Every `pull-secrets --exec`/`--write` used to
+     send op `all`, so the supervisor log showed every use as a request for every key, even when a command needed one.
+     Deyao decided: `pull-secrets` means the supervisor pulls the stores from the core into its RAM, and a separate
+     mechanism lets agents and scripts ask for keys; a request for all keys is denied. Claude chose how:
+     - **`pull-secrets`** sends `reload` (the router's newest cert, then a pull: what add-store's waiter does) and
+       prints the cert's stores and the key names held. Any agent or script may call it; it hands the caller no
+       secret (no value, nothing in its env, no file). `--quiet` prints a count.
+     - **`session-secret`** (`--names`; `--keys K1,K2 --exec CMD [ARG...]`; `--keys K1,K2 --write FILE`) sends `get`
+       with the names and never pulls. The refusal is the supervisor's (`answerGet`), not only the client's: op `all`
+       is gone (an unknown op), a `get` with no keys or a name that isn't an env name is refused, and a key not held is
+       an error naming it (the old `get` answered the rest silently). The client also validates before asking and
+       prints usage without asking on anything malformed; no mode prints a value.
+     - **Boot keeps one hand-over of every value, `boot-env`**, because the harness's env carries the session's keys
+       (`$VAR` in the agent's commands). The supervisor answers it only to the boot process (the pid in `harness.pid`,
+       which boot writes before starting the supervisor) and only before `/run/jarvis2/booted` exists, so no process
+       of the agent can use it. The agent runs as the same user, so this is a line the log shows, not a wall: the
+       aim is that every request names what it takes.
+     - **Not chosen:** refusing a `get` that names every held key. It makes a script that needs many keys (`infra/
+       fill-stores.sh`, which now re-runs itself under `session-secret --keys` with the layout file's names) fail
+       depending on which other stores the session happens to hold; a request listing every name is still logged
+       name by name.
+     - **Callers moved at once:** `harness-send` no longer takes secrets (the openclaw CLI reads its gateway token from
+       its config; paseo's daemon, started by the launcher with the session's env, runs the agents); e2e and the
+       Recover rehearsal check names with `session-secret --names` and values with `--keys K --exec env`; the
+       messages of add-store's waiter, the Inbox outcome and the local API's 410 name `session-secret`.

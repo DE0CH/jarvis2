@@ -9,7 +9,7 @@ package main
 // retiring itself.
 // Transcript search and the iCloud index: the box's own services (searchsvc.go). Device leases: leases.go; content
 // stores: content.go.
-// The shared Claude login (`/api/credentials`): claudelogin.go. Nothing is forwarded to Jarvis 1. The pull-secrets and
+// The shared Claude login (`/api/credentials`): claudelogin.go. Nothing is forwarded to Jarvis 1. The secrets and
 // changes calls never reach the router: the machine answers them itself (it holds its secrets and its repos).
 
 import (
