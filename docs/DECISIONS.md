@@ -2084,3 +2084,33 @@ snapshot failed with "no space left on device", the machine was destroyed anyway
      - **Not chosen:** giving Claude Code the real access token in its env (side calls would work until it expires,
        then fail silently, and a switch would leave them on the old account); a TLS-intercepting proxy for
        api.anthropic.com (all of the session's HTTPS would pass through it).
+205. **The single box is gone; two boxes only (Deyao, 2026-10-20: "finish the two-box move", RUNBOOK step 8).** The old
+     box `jarvis2` was snapshotted and deleted on 2026-10-19 (its primary IPs released; the snapshot, image 445549097,
+     stays at Deyao's word as the way back). Then, in git: `k8s/apps`, `k8s/bootstrap`, `k8s/secrets`,
+     `k8s/flux/sync.yaml` and `keys/box-age.pub` deleted; cloud-init.sh, create.sh, router-secrets.py and
+     backup-read-key.py require a box kind (`--box`); CI pins only `k8s/control/apps` (router, session image, blue/green
+     cores with the per-Deployment `jarvis2/core-pin: hold`) and `k8s/services/apps`; k8s.yml dry-runs and checks both
+     boxes. Outside git: `cloudflare.py --move-off` (the `/move` tunnel path, its Access app and the `jarvis2-move`
+     token), the old box's backup read credential deleted in the Console before the bucket policies dropped it (a key the
+     Deny no longer names is unrestricted, so delete first), the control router's move settings (`MOVE_*`, the move key,
+     port 8082, the `router-private` and `core-blue-private` NodePorts, every 10.77.0.9 rule) removed. Choices:
+     - **The move mechanism stays** (`router/move.go`, `E2E_ONLY=move`): it is how a control box is replaced with no gap.
+       Its wiring (a `move` secret part, the NodePorts, `MOVE_*`) is added for a move and removed after it, so the
+       manifests carry none of it at rest (RUNBOOK "Moving the router (and the core) to another box: the move"). The
+       old box's tunnel route (`cloudflare.py --move`, the joiner's Access headers) is deleted: boxes on the Network
+       reach each other's NodePorts directly.
+     - **A control box makes its key as `keys/box-next.pub`** (it becomes `box.pub` by a commit before its core is set
+       up), and create.sh no longer waits on `setup.py identity` for it: a new box's core can't pass that check until the
+       rename. A rebuild with the old box gone: `WG_PEER=jarvis2-box` (the default `none` protects a live peer).
+     - **The Recover rehearsal builds a control box** (`BOX_KIND=control PRIVATE_IP=none`: no Network in the runners
+       project, so no search or watches there), one Flux Kustomization per app as production's, `MACHINE_URL` patched
+       into both cores.
+     - **The router's service URLs default to the services box** (`10.77.0.3:30090/30091/30095`), not the single box's
+       in-cluster names.
+     - **Both boxes' private guards still let 10.77.0.9 in** (written at their creation; a box changes only through
+       git): harmless while no server holds that address, so none may be attached there until both boxes are rebuilt;
+       the NetworkPolicies admit only 10.77.0.2.
+     - **`flux-dryrun.sh` takes free ports per run**: k8s.yml runs it four times in a row, and the second run on fixed
+       ports met the first's exiting apiserver, which had failed every k8s run since 2026-10-15.
+     - **A comment in `core/` is a core release** (CI pins on any change there), so `core/vouch.go`'s comment naming
+       `k8s/apps/core.yaml` waits for the next real core change.

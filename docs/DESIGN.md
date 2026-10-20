@@ -247,7 +247,7 @@ them as usual.
 **A core that is already set up** takes neither path: Reset or Recover first asks for the kit it was set up with
 and sends `wipe` signed by that master key; the core exits and a new, empty one takes its place. Without that kit
 (a lost kit, or a core someone else claimed first) the core is emptied only by a restart from git (the
-`jarvis2/restart` annotation in `k8s/apps/core.yaml`).
+`jarvis2/restart` annotation of the serving core's Deployment in `k8s/control/apps/core/core.yaml`).
 
 **The router's part** is to admit a claim or a wipe only from the app's device login and to serve the backups.
 It can withhold a backup or serve an older signed version (the bucket is versioned), never read, change or forge
@@ -353,12 +353,13 @@ own single-node k3s with its own Flux, joined only by a Hetzner Network (`jarvis
   standby; measured 48–171 MB, 512 Mi requested) and cloudflared. Nothing
   else: its bootstrap gives each namespace a ResourceQuota that Flux's `admin` role can read but not change, the control
   plane a PriorityClass, and the kubelet reserved memory with eviction thresholds, so even a push can't put a heavy job
-  there. On the private interface only answers and the old box (during the move) come in (`jarvis2-private-guard`,
-  mangle PREROUTING, before any NodePort).
+  there. On the private interface only answers come in (`jarvis2-private-guard`, mangle PREROUTING, before any
+  NodePort).
 - **The services box** (`jarvis2-services`, cx33, 10.77.0.3; `k8s/services`, `k8s/bootstrap-services`,
   `k8s/flux/services.yaml`): transcript search, the watch runner, the iCloud index (each two replicas, rolled with no
   gap) and `jarvis2-poc` for experiments (quota 1.5 GiB, one core). The router reaches them on NodePorts that listen on
-  the private address only (`nodeport-addresses`), and their NetworkPolicies admit only the routers' addresses. No
+  the private address only (`nodeport-addresses`); the box's private guard and their NetworkPolicies admit only the
+  control box's address (10.77.0.2). No
   service calls the router, so a services box that is broken into or thrashing has no way into the control box.
 - **Each box's Flux** applies only its own tree, one Kustomization per app, so a manifest Flux refuses holds back only
   that app (2026-10-15: one refused RoleBinding held every rollout for 40 min), and a services commit never touches the
@@ -373,9 +374,11 @@ the public repo. A box git can't fix is replaced (`BOX_KIND=control|services inf
 the router over Fly's private network (the control box's router is a WireGuard peer of the org), not through
 Cloudflare, so no credential on a machine opens anything on the edge.
 
-**Now (2026-10-15):** the services box runs and is checked through its logs; the old single box (`k8s/apps`) still runs
-the control plane and its own search and watch until the move (RUNBOOK "Moving to the two boxes"), after which it is
-deleted and `k8s/apps`, `k8s/bootstrap`, `k8s/secrets` and `k8s/flux/sync.yaml` go with it.
+**A core release never empties the serving core.** CI pins a new core only into the core that doesn't serve
+(`k8s/control/apps/core/active.txt` names the serving one; never one whose Deployment carries `jarvis2/core-pin:
+hold`); Deyao Recovers it alongside as a standby and the router flips to it ("Core continuity", "The flip"); a commit
+then names the new serving colour in `active.txt` (and swaps the router's `CORE_URL`/`NEXT_CORE_URL`), so the next
+release goes into the other core. RUNBOOK "A core release: blue/green and the flip".
 
 ### Logs and metrics
 
@@ -906,7 +909,7 @@ challenge field and refuses anything it can't: store names; "Claude" / "opencode
 build" / "CI build from <date>" (verified with CI's signature over the image, `keys/ci.pub` from GitHub: the key
 exists only in the GitHub environment `release`, which admits refs/heads/main only; the router passes it on as the
 approval's `imageSig` and can only withhold it; every image CI ever pinned keeps its signature in
-`k8s/apps/session-image-sigs.txt`, so a resume on a session's own older image is still a CI build);
+`k8s/control/apps/router/session-image-sigs.txt`, so a resume on a session's own older image is still a CI build);
 machine ids and public keys are signed but not shown.
 
 ## iOS app structure: one native app (Deyao, 2026-10-11)

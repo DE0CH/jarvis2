@@ -505,7 +505,7 @@ router serves the call through its own public mux with the approving request's A
 
 Every call carries `X-Setup-Time` (unix seconds) and `X-Setup-Sig` = base64 DER ECDSA-P256-SHA256 signature
 by the setup key over `"<METHOD> <path> <time> <sha256hex of body>"` (the router's path); the router checks it
-against `SETUP_KEY` (`k8s/apps/router.yaml`), within ±2 min, each signature once. Client: `infra/setup.py`.
+against `SETUP_KEY` (`k8s/control/apps/router/router.yaml`), within ±2 min, each signature once. Client: `infra/setup.py`.
 
 | Call | Core path |
 |---|---|
@@ -542,7 +542,7 @@ Every `/api/core/*` call takes `X-Jarvis2-Core: next` (or `?core=next`) to reach
 instead of the serving one: "Recover alongside" sends it on identity, store-key and claim. `GET /api/state`'s `core`
 has `next: {up, serving, signingKey}` when there is a next core.
 
-The move's own listener (the old box, `MOVE_ADDR` :8082, `Authorization: Bearer <MOVE_KEY>`): `GET /move/files`,
+The move's own listener (the sending box's router, `MOVE_ADDR` :8082, `Authorization: Bearer <MOVE_KEY>`): `GET /move/files`,
 `GET /move/file?path=…`, `POST /move/freeze {finalizeCore}` → `{files, wg, coreFinal}`, `POST /move/done {url}`,
 `POST /move/abort`.
 
@@ -798,7 +798,7 @@ retried every 30 s (20 tries). A destroyed session's holder or queue place goes 
 ## Watches (`router/watches.go`, `services/watch`)
 
 Conditional wakeups, Jarvis 1's shapes. The session arms one (its own signed request); the router runs the check on the
-watch runner (k8s/apps/watch.yaml: no secrets, public internet only) every `interval`, whether the session runs or is
+watch runner (k8s/services/apps/watch/, on the services box: no secrets, public internet only) every `interval`, whether the session runs or is
 paused. Exit 0 = met → `watch` delivery (the session's request: `[watch "<name>" met] <prompt>`); exit 3, or
 `maxSeconds` past arming = give up → `watch-fail` (`failPrompt`, or a default). Any other exit, or a runner error =
 not yet. The machine runs the check once more itself (its own env, 40 s) and appends that output; the runner's output
@@ -816,7 +816,7 @@ watch view = { name, prompt, failPrompt, interval, maxSeconds, armedAt, armedAtI
 | `GET /api/sessions/:id/watches`, `/m/api/…` | `{watches}` (no script bodies) |
 | `DELETE /api/sessions/:id/watches/:name`, `/m/api/…` | `{ok}` |
 
-The runner (`POST http://watch.jarvis2-edge.svc.cluster.local:8095/run {script, name, timeout}` →
+The runner (`POST http://10.77.0.3:30095/run {script, name, timeout}` on the services box →
 `{exit, stdout, stderr, timedOut, ms}`, router env `WATCH_URL`): a check gets PATH, HOME and TMPDIR (a throwaway
 directory), LANG and WATCH_NAME; bash, curl, python3, git, openssl, jq; 90 s; stdout capped at 16 KB.
 
@@ -925,7 +925,7 @@ never a value. Pulling and asking are separate: a pull never answers a value, an
 
 ## Transcript search (`services/search`)
 
-Two replicas (`k8s/apps/search.yaml`, namespace jarvis2-edge; any one answers, rolled one at a time with no gap), reached only through the router (above). One of them, the writer (a lease in the database), crawls; the other reloads when the index changes. It crawls
+Two replicas (`k8s/services/apps/search/`, namespace jarvis2-services on the services box; any one answers, rolled one at a time with no gap), reached only through the router (above). One of them, the writer (a lease in the database), crawls; the other reloads when the index changes. It crawls
 `claude-records/` on the Storage Box every 10 minutes (and when the router archives a session): archived sessions of
 both Jarvises (`<dir>/transcript-<id>.jsonl`), Jarvis 1's pause snapshots (`.paused/<id>/`), running sessions of both
 (`.live/<id>/`) and the text records in archive dirs (`.md .txt .html .log`, the task records). Other dot-dirs
@@ -944,8 +944,8 @@ on the Storage Box, which the pod rewrites daily.
 
 ## iCloud index (`services/icloud-index`)
 
-Its own pod (`k8s/apps/icloud-index.yaml`, namespace jarvis2-edge), reached only through the router. It lists Deyao's
-iCloud Drive daily (rclone, the saved login in `k8s/secrets/icloud-session.enc.yaml`) and reads each file: text,
+Its own pod (`k8s/services/apps/icloud-index/`, namespace jarvis2-services on the services box), reached only through the router. It lists Deyao's
+iCloud Drive daily (rclone, the saved login in `k8s/services/secrets/icloud-session.enc.yaml`) and reads each file: text,
 OCR of scans and photos, video frames and speech (AI reading capped by `AI_BUDGET_USD`, a lifetime total kept in the
 index), then embeds the text.
 

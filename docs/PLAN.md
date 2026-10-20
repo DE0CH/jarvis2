@@ -8,11 +8,11 @@ it is**: nothing here touches Jarvis 1's box, cluster, repo paths, session image
 
 | Piece | Where |
 |---|---|
-| Cluster | Its own Hetzner Cloud project (`jarvis2`), one box, single-node **k3s** reconciled by **Flux** from this repo (public). **Changes only through git** (Deyao, 2026-10-09): no SSH, no reachable k8s API, no inbound port; a box git can't fix is replaced and set up again (Recover) |
-| Core (secrets controller) | Go, its own namespace + pod on that box, minimal network surface; all state in memory |
-| Router | The Jarvis 2 backend (API for the app and the web page); outside the core; untrusted |
+| Boxes | Its own Hetzner Cloud project (`jarvis2`), two boxes (DESIGN "The boxes"), each a single-node **k3s** reconciled by its own **Flux** from this repo (public), joined by the Hetzner Network `jarvis2`: the control box (`jarvis2-control`, cx23: the cores, the router, cloudflared) and the services box (`jarvis2-services`, cx33: transcript search, the watch runner, the iCloud index, experiments). **Changes only through git** (Deyao, 2026-10-09): no SSH, no reachable k8s API, no inbound port; a box git can't fix is replaced (a control box: set up again with Recover) |
+| Core (secrets controller) | Go, two pods on the control box, blue and green (DESIGN "Core continuity"): one serves, the other takes the next release and is Recovered alongside, then the router flips; minimal network surface; all state in memory |
+| Router | The Jarvis 2 backend (API for the app and the web page) on the control box; outside the core; untrusted |
 | Sessions | Fly Machines in a **new Fly organisation** (`jarvis2-370`), so Jarvis 1's budget scan never sees them |
-| Public address | `jarvis2.deyaochen.com`, a Cloudflare Tunnel (cloudflared on the box) behind its own Cloudflare Access app: Deyao's login; `/setup` admits only the setup session's service token. Session machines never come through Cloudflare: they reach the router over Fly's private network (the box is a WireGuard peer of the org), because Jarvis 1's Access apps admit any service token of the account |
+| Public address | `jarvis2.deyaochen.com`, a Cloudflare Tunnel (cloudflared on the control box) behind its own Cloudflare Access app: Deyao's login; `/setup` admits only the setup session's service token. Session machines never come through Cloudflare: they reach the router over Fly's private network (the control box's router is a WireGuard peer of the org), because Jarvis 1's Access apps admit any service token of the account |
 | iPhone app | "Jarvis 2" (`dev.de0ch.jarvis2`, its own TestFlight app): one native SwiftUI app for iPhone and iPad (`ios/`, Apple frameworks only) |
 | CI | GitHub Actions (this repo is public, so macOS runners are free): images to GHCR, the app to TestFlight |
 
@@ -30,19 +30,17 @@ every store back from the backups). docs/DESIGN.md "Setting a core up".
 4. Session image: Jarvis 1's image adapted: an init entry point that pulls its cert and secrets.
 5. App: the mock's shell + extension pointed at the router; TestFlight.
 
-## Status (2026-10-08)
+## Status
 
-- Core: `core/`, tests pass; now also hands each machine the core's key through Fly, waits for slow first
-  pulls. Running on the box, **empty, waiting for Reset in the app** (docs/RUNBOOK.md "After a Reset").
-- Infra: box `jarvis2` (cx23, fsn1) with k3s + Flux from this repo; tunnel `jarvis2` + Access apps
-  (`jarvis2.deyaochen.com` for Deyao, `/m` for machines); Fly app `jarvis2-sessions` in org `jarvis2-370`.
+- Core: `core/`, tests pass; the per-key core (stores made of keys, store versions, the phone-signed restore: DECISIONS
+  163, 165) serves on the control box (which colour: `/setup/status` → `core`, `jarvis2 stores --json` → `keysFrom`).
+- Infra: the control box and the services box (DESIGN "The boxes"); tunnel `jarvis2` + Access apps on
+  `jarvis2.deyaochen.com`; Fly app `jarvis2-sessions` in org `jarvis2-370`; logs, metrics and alerts in Grafana Cloud.
 - Router: `router/` (docs/API.md), deployed.
-- Session image: `session-image/` (its base in `session-image/base/`, no longer Jarvis 1's image) + `machine/`, built by CI.
-- End-to-end test on real Fly with a software phone: passed (every flow).
+- Session image: `session-image/` (its base in `session-image/base/`) + `machine/`, built by CI.
+- End-to-end test on real Fly with a software phone (`infra/e2e.sh`), the Recover rehearsal on a real throwaway control
+  box (`infra/rehearse-recover.sh`), the phone replica in CI before every TestFlight build.
 - iOS app: `ios/`; web page: `app/` — see app/DECISIONS.md.
-- Held core (`jarvis2/core-pin: hold`, waiting for Deyao's go and a Recover): stores made of keys (DECISIONS 163) and
-  store versions with the phone-signed restore (DECISIONS 165), one release (RUNBOOK "Deploying"). Router, setup.py,
-  web page and app work with either core.
 - Decisions to review: docs/DECISIONS.md.
 
 ## Later (Deyao, 2026-10-09)

@@ -1,13 +1,16 @@
 # Jarvis 2 — runbook
 
-Everything here runs from a Claude session whose env has Jarvis 1's `default` store (JARVIS2_* keys,
-HETZNER_JARVIS2_MOCK_API, HETZNER_S3_*, CF tokens). The box has no SSH and no reachable k8s API: it changes only
-through git, and a box git can't fix is replaced.
+Everything here runs from a Jarvis 2 session holding the `infra` store (JARVIS2_* keys, HETZNER_JARVIS2_MOCK_API,
+HETZNER_S3_*, CF tokens), with `JARVIS2_URL=https://jarvis2.deyaochen.com` for `infra/setup.py`. Jarvis 2 runs on two
+Hetzner boxes (DESIGN "The boxes"): the control box (`jarvis2-control`: the blue and green cores, the router,
+cloudflared) and the services box (`jarvis2-services`: transcript search, the watch runner, the iCloud index). Neither
+has SSH or a reachable k8s API: they change only through git, and a box git can't fix is replaced.
 
 ## Deploying
 
 `git push` to main. The `images` workflow builds the core, router and session images, then pins them by digest in
-`k8s/apps/` (and signs the session image for the phone, `SESSION_IMAGE_SIG`); Flux applies within a minute.
+`k8s/control/apps/` (and signs the session image for the phone, `SESSION_IMAGE_SIG`); `services.yml` builds and pins
+the services box's images in `k8s/services/apps/`. Each box's Flux applies its own tree within a minute.
 The session image stands on its base, `session-image/base/` (every tool, harness launcher and the entrypoint: add a
 tool a session should always have to `session-image/base/Dockerfile` and push). The workflow's `base` job rebuilds the base
 only when that directory changed since the base pinned in `session-image/Dockerfile` (`ARG BASE=…jarvis2-session:base-sha-<12>@sha256:…`),
@@ -32,82 +35,71 @@ with secrets ASC_KEY_ID / ASC_ISSUER_ID / ASC_PRIVATE_KEY (ios.yml's TestFlight 
 `keys/ci.pub`), PIN_DEPLOY_KEY and FORK_PIN_DEPLOY_KEY (`fork-pin.yml`, deploy key `jarvis2-fork-pin`); environment `replica`
 (main only) with REPLICA_FLY_TOKEN and REPLICA_REPO_TOKEN (ios.yml's phone replica, "The phone replica"). A workflow that must push to main gets its own deploy key in `release`, never
 `contents: write` on GITHUB_TOKEN. Rotating the CI key: a new P-256 key into CI_IMAGE_KEY and its public half (base64
-X9.63) into `keys/ci.pub` in one go, then run `images` so the router gets a fresh signature. The core's tag moves only when `core/` changed (a core restart is a
-new, empty core: see "Setting the core up"), and never while the core Deployment in `k8s/apps/core.yaml` carries the
-annotation `jarvis2/core-pin: hold`: a core change that waits for Deyao's go (he then Recovers). To roll it out once
-he says so, delete the annotation, push, then `gh workflow run images -R DE0CH/jarvis2` (a k8s/ push alone doesn't
-run it): it pins the newest core and Flux restarts it. The held core now (2026-10-13) is stores made of keys (6fc20f8) with
-store versions and the phone-signed restore (ad17fec): one release. Before it: the router (already live) and an app
-build from the same main (TestFlight, after the phone replica) that speaks per-key unlock, the keys-format Recover
-and restore-written key backups; after it Deyao Recovers (the bucket has every whole-store backup and every key backup
-since, restores' included), every earlier session is destroyed once paused (DESIGN "Carried secrets"), and the setup
-session checks `infra/setup.py versions default` answers (the history starts at the Recover). A core from aa0443a on starts no machine without `MACHINE_URL`: in the same commit
-add `- { name: MACHINE_URL, value: "http://jarvis2-box._peer.internal:8081" }` to the core container's env (test cores
-get their own peer's address from `infra/e2e.sh` / `infra/rehearsal-box.sh`).
+X9.63) into `keys/ci.pub` in one go, then run `images` so the router gets a fresh signature.
 
-A router rollout drains (`router/drain.go`): the old pod refuses new lifecycle actions with 503 "router updating, try
-again shortly" and exits once the running ones have finished (its log: `draining: … waiting for N running: [...]`, every
-minute `still running`, then `drained`); the new pod starts only then (strategy Recreate), so a deploy during a pause can
-take up to the snapshot wait (10 min) to go live, at most 30 min (`terminationGracePeriodSeconds: 1800`, `DRAIN_SECONDS`
-1740). Watch it with `kubectl -n jarvis2-router logs deploy/router -f`. A start waiting out Fly's machine limit ends
-when the drain begins ("…start it again"). After a crash (OOM, node reboot), sessions cut off mid-action show `failed`
-(a resume: `paused`) with "cut off by a router crash" and are started, paused or destroyed again from the app; a
-cut-off start may leave an uncertified machine that the Machines tab flags with no session (Destroy it there).
+`k8s.yml` (every push touching `k8s/`) dry-runs each box's tree as its Flux applies it (`infra/flux-dryrun.sh`: on top of
+the previous main, and on an empty cluster as a new box meets it) and checks every Deployment is there and pinned by
+digest (Flux prunes what a commit drops, so an emptied file would delete the router and its volume).
 
-### Moving the router (and the core) to another box
+### A core release: blue/green and the flip
 
-The move is git only (`router/move.go`, DESIGN "The box"); the boxes reach each other over their private network.
+The control box runs two cores, `core-blue` and `core-green` (`k8s/control/apps/core/core.yaml`, DESIGN "Core
+continuity"). One serves (`k8s/control/apps/core/active.txt` names it; the router's `CORE_URL`), the other is the next
+core (`NEXT_CORE_URL`): empty, or Recovered alongside as a standby. A core restart is a new, empty core, so:
 
-1. The old box's router gets `MOVE_KEY` (its own secret part) and a NodePort for 8080 and 8082 on the private address;
-   a rollout (gapless) brings them. `/setup/status` → `move.role` = `sender`.
-2. The new box's router starts with `MOVE_FROM` (`http://<old private IP>:<8082 NodePort>`), `MOVE_PUBLIC`
-   (`…:<8080 NodePort>`), `MOVE_SELF` (its own public URL as the old box reaches it), the same `MOVE_KEY` and no
-   `MOVE_AT`: it proxies to the old box and copies `/data` every minute (`move.role` = `candidate`, `lastPrecopy`).
-3. To carry the core: the old router gets `NEXT_CORE_URL` = the new box's core, and Deyao Recovers it alongside
-   (`?core=next`; `core.next.serving` = `standby`).
-4. Set `MOVE_AT` (RFC3339, a minute ahead) on the new box's router and push. At that time it freezes the old box, takes
-   the delta and the peer, and serves; `move.gapMs` is the gap. The old box's routers are proxies from then on
-   (`/data/router.moved`); scale its cloudflared to 0 and retire it.
-5. A failed move logs `[move] … FAILED` and aborts: the old box serves again. A new `MOVE_AT` tries again.
+1. CI moves a core only when `core/` changed (the CI-only fake and the tests don't count), and only the core that
+   doesn't serve, never while that core's Deployment carries `jarvis2/core-pin: hold` (`metadata: { name: core-<colour>,
+   namespace: jarvis2-core, annotations: { jarvis2/core-pin: hold } }`; a core change that waits for Deyao's go: delete
+   the annotation, push, `gh workflow run images -R DE0CH/jarvis2`). The serving core is never restarted by CI. Even a
+   comment in `core/` is a release (the next core restarts empty): keep such edits for a real core change.
+2. Deyao Recovers the new core alongside in the app (its Reset-or-Recover page reaches the next core with `?core=next`;
+   `/setup/status` → `core.next.serving` = `standby`). Nothing waits on him meanwhile: the serving core goes on.
+3. The router flips by itself (`FLIP_AUTO=1`), or `POST /setup/core/flip` (setup-signed): drain, `POST /handoff` to the
+   serving core (its final line state), `POST /takeover` on the standby, every later core call to it. It records the
+   flip in its state (`activeCore`), so a restarted router talks to the same core. `/setup/status` → `core.current` /
+   `core.next` show each core's URL, `serving` and identity. A refused takeover leaves no core serving and DMs Deyao; run
+   the flip again (it reuses the kept final state; a handed-off core stays handed off).
+4. Then one commit: `active.txt` = the new serving colour, and the router's `CORE_URL` / `NEXT_CORE_URL` swapped to
+   match, so the next release goes into the core that now doesn't serve.
 
-### Moving to the two boxes (one time, at a moment Deyao picks)
+`infra/setup.py identity` and `jarvis2 stores --json` (its `keysFrom`) say which core is live and what it serves; the
+pin annotations and PLAN.md don't.
 
-The control plane leaves the old single box (`jarvis2`, 10.77.0.9 on the Network) for the control box (`jarvis2-control`,
-10.77.0.2), and the core release happens in the same event (Deyao, 2026-10-15): the control box's core-green runs the
-new-design core, empty; production's core 06ab245 is never restarted, it just stops being used.
+A router rollout drains (`router/drain.go`): the rollout's surge pod starts next to the leader as its standby and
+proxies to it; the old pod refuses new lifecycle actions with 503 "router updating, try again shortly", lets the
+running ones finish (its log: `draining: … waiting for N running: [...]`, every minute `still running`, then
+`drained`), then hands over and the standby leads (`terminationGracePeriodSeconds: 1800`, `DRAIN_SECONDS` 1740). Its
+log is in Grafana (`namespace="jarvis2-router"`, "Logs, metrics and alerts"). A start waiting out Fly's machine limit
+ends when the drain begins ("…start it again"). After a crash (OOM, node reboot), sessions cut off mid-action show
+`failed` (a resume: `paused`) with "cut off by a router crash" and are started, paused or destroyed again from the app;
+a cut-off start may leave an uncertified machine that the Machines tab flags with no session (Destroy it there).
 
-Ready (each step done without more than a router rollout's handover for sessions):
+### Moving the router (and the core) to another box: the move
 
-1. **Services off the old box:** it joined the Network (hot attach, no reboot); socat bridges (`k8s/apps/services-bridge.yaml`)
-   keep the old service names and pass them on to the services box; the old box's own search, watch and iCloud index are gone.
-2. **The old router** rolls with one pod plus a surge standby, has the move key and port 8082 and backs its state up.
-3. **The move path:** the old box's kube-proxy serves NodePorts only on its node IP, so the control router reaches the old
-   one's move port through the old box's tunnel, `jarvis2.deyaochen.com/move/*`, behind its own Access app (service token
-   `jarvis2-move`; `infra/cloudflare.py --move`, `--move-off` afterwards). The way back (`MOVE_SELF`,
-   `http://10.77.0.2:30080`) is the control box's private NodePort, which admits only the old box.
-4. **The control router is a candidate** pre-copying `/data` every minute (0.27 GB on 2026-10-15; 15 MB/s through the
-   tunnel); its cloudflared stays at 0, so no request reaches it before the move.
+`router/move.go` (DESIGN "The router moves between boxes with no gap") hands the router's leadership, its `/data` and
+the machines' WireGuard peer from one box's router to another's over the private Network, with a gap of about a
+second; the serving core can go along (the old router's `NEXT_CORE_URL` = the new box's core, Recovered alongside). It
+is how a control box is replaced with no gap. The control box's manifests carry no move settings; a move adds them:
 
-The moment:
+1. On both routers: a Secret with the same `MOVE_KEY` (a `move` part in `infra/router-secrets.py` for each box) in the
+   router's `envFrom`, and container port 8082.
+2. The old router: a NodePort Service for 8080 and 8082 (NodePorts listen on the private address only) and NetworkPolicy
+   ingress from the new box's private address; `/setup/status` → `move.role` = `sender`.
+3. The new router: `MOVE_FROM` (`http://<old private IP>:<8082 NodePort>`), `MOVE_PUBLIC` (`…:<8080 NodePort>`),
+   `MOVE_SELF` (its own address as the old box reaches it), the same `MOVE_KEY`, no `MOVE_AT`: it proxies to the old
+   router and copies `/data` every minute (`move.role` = `candidate`, `lastPrecopy`). Both boxes' private guards
+   (`/etc/jarvis2/private-allow`, set by `create.sh`'s `PRIVATE_ALLOW` at creation) must let the other in, and the
+   services box's NetworkPolicies must admit the new router's address.
+4. `MOVE_AT` (RFC3339, a few minutes ahead) on the new router, pushed. At that time it freezes the old router, takes
+   the delta and the peer, and serves; `move.gapMs` is the gap. The old routers are proxies from then on
+   (`/data/router.moved`); the new box's cloudflared goes to 2 and the old box's to 0 (one commit), and its
+   `keys/box-next.pub` becomes `keys/box.pub` before Deyao Recovers or flips onto its core.
+5. A failed move logs `[move] … FAILED` and aborts: the old router serves again. A new `MOVE_AT` tries again.
+6. Afterwards: the move settings out of both trees, the old box and its tree deleted.
 
-5. One commit: `MOVE_AT` (a few minutes ahead) in `k8s/control/apps/router/router.yaml`, `CORE_URL` → core-green and
-   `NEXT_CORE_URL` → core-blue, `k8s/control/apps/core/active.txt` = green. At `MOVE_AT` the move runs as the table below
-   shows; the old routers proxy to the new one from then on.
-6. Right after `MOVED`: the control box's cloudflared to 2 and the old box's to 0 (one commit), and `keys/box-next.pub` →
-   `keys/box.pub` BEFORE Deyao Recovers: the app checks the core it sets up against `keys/box.pub` on GitHub's main.
-7. **Deyao Recovers** in the app (the ordinary Reset-or-Recover page, now on the control box's empty core). Until then
-   the core is empty: running sessions go on (the table), but anything that needs the core waits: a store pull or
-   add-store, a resume, a new session. After the Recover the router takes production's sessions over (DECISIONS 184):
-   paused ones at once (their first resume waits on one unlock it files), running ones at their next pause.
-8. After: `infra/cloudflare.py --move-off`; `backup-read-key.py policies` (drops
-   the old box's read key); the old box deleted a day later with `k8s/apps`, `k8s/bootstrap`, `k8s/secrets`,
-   `k8s/flux/sync.yaml`, `infra/cloud-init.sh`'s single-box path and the bridges.
-
-### Moving to the two boxes: what a running session sees
-
-Measured with `E2E_ONLY=move infra/e2e.sh` (two routers on one host, a real session machine on Fly over Fly's private
-network, the WireGuard peer moving between them, 2026-10-15; two runs, the second on a host at load 30): gap **396 ms /
-1.36 s**, no failed call in either. Step by step:
+`E2E_ONLY=move infra/e2e.sh` measures it (two routers on one host, a real session machine on Fly over Fly's private
+network, the WireGuard peer moving between them): on 2026-10-15 the gap was **396 ms / 1.36 s** in two runs with no
+failed call, and production's move on 2026-10-16 had a gap of 746 ms. What a running session sees:
 
 | Step | What a running session sees | How long |
 |---|---|---|
@@ -121,33 +113,11 @@ network, the WireGuard peer moving between them, 2026-10-15; two runs, the secon
 | Remote Control | unaffected: the `claude --remote-control` host talks to claude.ai directly, never through the router; only the Claude login's credentials come through the router (`/m/claude-login`, a long poll that answers what it has at the freeze), and the old router lets a refresh in flight finish before it freezes | none |
 
 The session is never restarted, paused or destroyed: the same Fly machine, boot and supervisor before and after (the
-e2e checks it).
-
-### The real move rehearsed (`E2E_CORE_REF=06ab2452f8ad E2E_ONLY=legacy-move infra/e2e.sh`)
-
-Router A on production's core (random keys) with a running session R and a paused one P (a wakeup armed, due ~6 min
-later); router B with its own core (this tree's, empty, no standby); the move; Deyao's seeded Recover on B; the legacy
-takeover. Measured on Fly, 2026-10-15 (the passing run; earlier runs found and fixed the issues below):
-
-| | What R (running) saw | What P (paused) saw |
-|---|---|---|
-| The move (gap 889 ms) | nothing failed: ≈400 calls per path (session API, lease, search), the longest 3.4 s at the freeze; same machine, boot and supervisor | nothing (paused) |
-| After the move, before the Recover | both routers' addresses answer only B's empty core; R keeps running | still paused, untouched |
-| The Recover on B | keeps running | taken over (CarryLost) 33–37 s after the Recover (the corechange tick) |
-| Its wakeup comes due | — | the scheduler resumes it; it waits on one unlock (the machine's boot: 12 s – 1 m 50 s after due), starts with its snapshot and secrets, and the wakeup is delivered once (26 s – 2 m 5 s after due) |
-| Its pause | paused in 12–13 s, taken over at its kill; resumed with one unlock, snapshot and secrets back (17 s – 6 min, Fly's boot) | — |
-
-Found on the way and fixed: a wakeup into a harness still booting was burned by the machine (it recorded the delivery
-before the harness took it; machine `38ac038` — sessions on an older image keep it until they move to a newer one);
-a POST racing the FIN of a pooled connection at the freeze (connections are one-shot from the drain on, 3 s before
-the freeze); the old machine listener refusing a request after the freeze (it serves until its peer goes); a search
-in flight cancelled at the freeze (only the long polls end).
-
-### Flipping to the next core
-
-With `NEXT_CORE_URL` set and the next core Recovered alongside (a standby): `POST /setup/core/flip` (setup-signed),
-or `FLIP_AUTO=1` in the router's env. `/setup/status` → `core.current` / `core.next` show each core's `serving`.
-A refused takeover leaves no core serving and DMs Deyao; run the flip again (it reuses the kept final state).
+e2e checks it). Pitfalls the move's rehearsals found (all fixed, keep them in mind when changing `move.go`): a POST
+racing the FIN of a pooled connection at the freeze (connections are one-shot from the drain on, 3 s before the
+freeze); the old machine listener refusing a request after the freeze (it serves until its peer goes); a search in
+flight cancelled at the freeze (only the long polls end); a wakeup into a harness still booting burned by the machine
+(machine `38ac038` on).
 
 ### The router's state backup
 
@@ -159,10 +129,11 @@ Box env and `ROUTER_BACKUP_AGE_KEY`.
 
 ## The keys (`keys/`)
 
-- `box.pub` — written by `infra/create.sh` with each new box; commit it. The app and `setup.py` check a core's
-  keys against it.
-- `box-age.pub` — the box's age key (SOPS recipient of the router's secrets), also from `infra/create.sh`.
-- `setup.pub` — the setup key (private half JARVIS2_SETUP_KEY); also `SETUP_KEY` in `k8s/apps/router.yaml`. It
+- `box.pub` — the control box's key. The app and `setup.py` check a core's keys against it (on GitHub's main).
+  `infra/create.sh BOX_KIND=control` writes a new box's key to `box-next.pub`; it becomes `box.pub` (a commit) before
+  Deyao sets that box's core up.
+- `control-age.pub`, `services-age.pub` — each box's age key (SOPS recipient of its secrets), from `infra/create.sh`.
+- `setup.pub` — the setup key (private half JARVIS2_SETUP_KEY); also `SETUP_KEY` in `k8s/control/apps/router/router.yaml`. It
   signs every `/setup` call, every store backup and every store blob (the writer signature the phone checks).
 - `ci.pub` — CI's image key (private half: secret CI_IMAGE_KEY of the environment `release`): the phone shows a session
   image as a CI build only with its signature.
@@ -324,8 +295,8 @@ id). No polling needed; a paused session hears at its next start. `jarvis2-reque
 
 A set-up core ends from the app only with the kit it was set up with (Reset or Recover asks for it). Without that
 kit — a lost kit, or a core someone else claimed first (the app says "set up with a different recovery kit") —
-change the `jarvis2/restart` annotation in `k8s/apps/core.yaml` and push: Flux restarts the core, and the new one
-is empty.
+change the `jarvis2/restart` annotation of the serving core's Deployment (`active.txt` names its colour) in
+`k8s/control/apps/core/core.yaml` and push: Flux restarts that core, and the new one is empty.
 
 ## Stores
 
@@ -367,78 +338,64 @@ the bucket like any key write's, so a later Recover brings the restored store ba
 
 ## The router's secrets
 
-Non-sensitive only (nothing that can reach a code push), SOPS-encrypted to `keys/box-age.pub`; Flux decrypts them
-on the box with the age key the box got in user-data. Four Secrets, each rewritten whole by
-`infra/router-secrets.py` (nobody can read the old values back), so name every key of the one you write:
+Non-sensitive only (nothing that can reach a code push), SOPS-encrypted to each box's age key (`keys/control-age.pub`,
+`keys/services-age.pub`); each box's Flux decrypts its own with the age key the box got in user-data. Each part is one
+Secret, rewritten whole by `infra/router-secrets.py --box control|services` (nobody can read the old values back), so
+name every key of the one you write; the run bumps the part's annotation in the manifest, so the pod restarts with it.
 
-- `infra/router-secrets.py KEY[=SRC]…` → `k8s/secrets/router.enc.yaml`:
+The control box (`k8s/control/secrets/`, annotations in `k8s/control/apps/router/router.yaml`):
+
+- `infra/router-secrets.py --box control KEY[=SRC]…` → `router.enc.yaml`:
   `LOBSTER_TOKEN STORAGEBOX_HOST STORAGEBOX_USER STORAGEBOX_PASSWORD FLY_READ_TOKEN=file:~/.jarvis2/fly-read.tok
   JARVIS2_TUNNEL_KEY=file:…` (`JARVIS2_TUNNEL_KEY`: the tunnel proof key, the same value as the cf-tunnel Worker's
-  secret `JARVIS2_TUNNEL_KEY` — without it no OpenCode/OpenClaw web UI) (the read-only Fly token:
-  `infra/fly-read-token.sh`). The file written 2026-10-09 still carries four keys the router no longer reads
-  (`JARVIS1_CREDENTIALS_ID/SECRET`, `JARVIS1_SERVICES_ID/SECRET`, Jarvis 1 Access service tokens) and the stale
-  `GITHUB_READ_TOKEN` (DECISIONS 153): the next rewrite of this part leaves all five out. That rewrite needs every value
-  above, and nobody can read the old `JARVIS2_TUNNEL_KEY` back: mint a new one and set it on the Worker in the same step
-  (`wrangler secret put JARVIS2_TUNNEL_KEY` in claude-env `cf-tunnel/`); running OpenCode/OpenClaw sessions keep their
-  old proof until they restart.
-- `infra/router-secrets.py --part github GITHUB_READ_TOKEN=file:…` → `k8s/secrets/router-github.enc.yaml`: the
-  repo picker's list token, the fine-grained PAT `jarvis2-repo-list` (`github-web pat-create-read jarvis2-repo-list
-  <out>`: all repositories, no expiry, **Metadata read picked explicitly**). A fine-grained token with NO permission
-  picked sees public repos only, even on "All repositories" (0 private; Settings → Repos says "No match." for a
-  private repo). Check after a rollout with `infra/setup.py status`: `githubRepos.private` > 0. The default part
-  (`router.enc.yaml`, written 2026-10-10) still holds an older public-only `GITHUB_READ_TOKEN` (that token is
-  deleted on GitHub); `router-secrets-github` is the LAST `envFrom` in `k8s/apps/router.yaml`, so it wins. The next
-  time the default part is rewritten, leave `GITHUB_READ_TOKEN` out of it.
-- `infra/router-secrets.py --part backup BACKUP_READ_ACCESS_KEY BACKUP_READ_SECRET_KEY` →
-  `k8s/secrets/router-backup.enc.yaml`: the backup bucket's read credential, with which the router serves the
-  locked backups to the app's Recover (`infra/backup-read-key.py install` writes it; below).
+  secret `JARVIS2_TUNNEL_KEY_NEXT` — without it no OpenCode/OpenClaw web UI) (the read-only Fly token:
+  `infra/fly-read-token.sh`). Nobody can read the old `JARVIS2_TUNNEL_KEY` back: a rewrite mints a new one and sets it on
+  the Worker in the same step (`wrangler secret put` in claude-env `cf-tunnel/`); running OpenCode/OpenClaw sessions keep
+  their old proof until they restart.
+- `--part github GITHUB_READ_TOKEN=file:…` → `router-github.enc.yaml`: the repo picker's list token, the fine-grained
+  PAT `jarvis2-repo-list-control` (`github-web pat-create-read <name> <out>`: all repositories, no expiry, **Metadata read
+  picked explicitly**). A fine-grained token with NO permission picked sees public repos only, even on "All
+  repositories" (0 private; Settings → Repos says "No match." for a private repo). Check after a rollout with
+  `infra/setup.py status`: `githubRepos.private` > 0. It is the LAST `envFrom` in the router, so it wins over any
+  `GITHUB_READ_TOKEN` in another part.
+- `--part backup BACKUP_READ_ACCESS_KEY BACKUP_READ_SECRET_KEY` → `router-backup.enc.yaml`: the backup bucket's read
+  credential, with which the router serves the locked backups to the app's Recover (`infra/backup-read-key.py install`
+  writes it; below).
+- `--part flyorgs FLY_ORG_READ_TOKENS=file:…` → `router-flyorgs.enc.yaml`: the Machines view's other orgs, JSON
+  `{"jarvis2-370": "<token>", …}`, each `fly tokens create readonly -o <org>` (named "Jarvis 2 Machines tab
+  (read-only)"; revoke with `fly tokens list -o <org>` + `fly tokens revoke`). The empty org kamyee has none (no store
+  holds a token for it).
+- `--part flypersonal FLY_PERSONAL_READ_TOKEN=file:…` → `router-flypersonal.enc.yaml`: org personal for the Machines
+  view. `FLY_PERSONAL_ORG_TOKEN=<an org token of personal> infra/fly-personal-read-token.sh OUT` attenuates it offline to
+  Organization read (it checks the result lists apps and can't create a machine). It reads every machine's config in
+  personal, env included (DECISIONS 138); it dies only with the token it was made from.
+- `--part flyvolumes FLY_VOLUME_TOKEN=file:…` → `router-flyvolumes.enc.yaml`: the leftover-volume sweep's token
+  (`router/volsweep.go`). `JARVIS2_FLY_TOKEN=… infra/fly-volume-token.sh OUT` attenuates the org token to delete on app
+  jarvis2-sessions plus a Volumes caveat (any volume, delete), which refuses every call that names no volume: it can
+  only `DELETE /v1/apps/jarvis2-sessions/volumes/<id>` (proof: DECISIONS 195). It dies with the token it was made from.
+- `--part browserbase BROWSERBASE_API_KEY` → `router-browserbase.enc.yaml`: the Browserbase spend DM
+  (`router/bbbudget.go`; cap and warn line are `BROWSERBASE_BUDGET_USD` / `_WARN_USD` in the router's env).
+- `--part devices CF_DEVICE_TOKENS_API=file:…` → `router-devices.enc.yaml`: the Cloudflare token with which the router
+  mints and deletes the paired apps' tokens (Access: Service Tokens read + write on the account, nothing else).
+  **Not written yet** (pairing NEW OpenClaw/Paseo apps waits on it; paired ones keep working): a Cloudflare API token can
+  only be minted in the dashboard (`CLOUDFLARE_API` gets 9109 on both `/user/tokens` and `/accounts/<id>/tokens`); mint it
+  with claude-env's `cloudflare-dash` skill (`cf_token.js jarvis2-device-tokens-control OUT
+  a1c0fec57cf94af79479a6d827fa518c 91f7ce32fa614d73b7e1fc8f0e78582b`), then this part.
+- `--part alloy GRAFANA_LOGS_URL GRAFANA_LOGS_USER GRAFANA_METRICS_URL GRAFANA_METRICS_USER GRAFANA_WRITE_TOKEN` →
+  `alloy.enc.yaml` (both boxes have one): the host's Grafana Alloy ("Logs, metrics and alerts").
 
-- `infra/router-secrets.py --part flyorgs FLY_ORG_READ_TOKENS=file:…` → `k8s/secrets/router-flyorgs.enc.yaml`: the
-  Machines view's other orgs, JSON `{"jarvis2-370": "<token>", "kamyee": "<token>"}`, each `fly tokens create readonly -o <org>`
-  (named "Jarvis 2 Machines tab (read-only)"; revoke with `fly tokens list -o <org>` + `fly tokens revoke`).
-- `infra/router-secrets.py --part flypersonal FLY_PERSONAL_READ_TOKEN=file:…` → `k8s/secrets/router-flypersonal.enc.yaml`:
-  org personal for the Machines view. `FLY_PERSONAL_ORG_TOKEN=<an org token of personal> infra/fly-personal-read-token.sh OUT`
-  attenuates it offline to Organization read (it checks the result lists apps and can't create a machine). It reads every
-  machine's config in personal, env included (DECISIONS 138); it dies only with the token it was made from.
-- `infra/router-secrets.py --part flyvolumes FLY_VOLUME_TOKEN=file:…` → `k8s/secrets/router-flyvolumes.enc.yaml`: the
-  leftover-volume sweep's token (`router/volsweep.go`). `JARVIS2_FLY_TOKEN=… infra/fly-volume-token.sh OUT` attenuates
-  the org token to delete on app jarvis2-sessions plus a Volumes caveat (any volume, delete), which refuses every call
-  that names no volume: it can only `DELETE /v1/apps/jarvis2-sessions/volumes/<id>` (proof: DECISIONS 195). It dies with
-  the token it was made from.
-- `infra/router-secrets.py --part browserbase BROWSERBASE_API_KEY` → `k8s/secrets/router-browserbase.enc.yaml`: the
-  Browserbase spend DM (`router/bbbudget.go`; cap and warn line are `BROWSERBASE_BUDGET_USD` / `_WARN_USD` in
-  `k8s/apps/router.yaml`).
-- `infra/router-secrets.py --part devices CF_DEVICE_TOKENS_API=file:…` → `k8s/secrets/router-devices.enc.yaml`: the
-  Cloudflare token `jarvis2-device-tokens` (Access: Service Tokens read + write on the account, nothing else; minted with
-  claude-env's `cloudflare-dash` skill, `cf_token.js jarvis2-device-tokens OUT a1c0fec57cf94af79479a6d827fa518c
-  91f7ce32fa614d73b7e1fc8f0e78582b`), with which the router mints and deletes the paired apps' tokens.
+The services box (`k8s/services/secrets/`, Secrets in jarvis2-services):
 
-The box's services have their own parts (Secrets in jarvis2-edge):
+- `infra/router-secrets.py --box services --part search STORAGEBOX_HOST STORAGEBOX_USER STORAGEBOX_PASSWORD
+  OPENROUTER_API` → `search.enc.yaml` (transcript search).
+- `--part icloud-index OPENROUTER_API LOBSTER_TOKEN STORAGEBOX_HOST STORAGEBOX_USER STORAGEBOX_PASSWORD
+  BACKUP_AGE_KEY=env:ICLOUD_BACKUP_AGE_KEY` (the last from the store `icloud-backup`) → `icloud-index.enc.yaml` (the
+  iCloud index; LOBSTER_TOKEN for its DMs: login expired, budget used up).
+- `--part icloud-session ICLOUD_RCLONE_CONF=file:<rclone.conf with the [icloud] section>` → `icloud-session.enc.yaml`:
+  the saved iCloud login. After a re-login (claude-env `icloud-drive` skill), write it again and push; the pod reads the
+  mounted file and switches by itself (no restart needed).
 
-- `infra/router-secrets.py --part search STORAGEBOX_HOST STORAGEBOX_USER STORAGEBOX_PASSWORD OPENROUTER_API` →
-  `k8s/secrets/search.enc.yaml` (transcript search).
-- `infra/router-secrets.py --part icloud-index OPENROUTER_API LOBSTER_TOKEN STORAGEBOX_HOST STORAGEBOX_USER STORAGEBOX_PASSWORD BACKUP_AGE_KEY=env:ICLOUD_BACKUP_AGE_KEY`
-  (the last from the store `icloud-backup`)
-  → `k8s/secrets/icloud-index.enc.yaml` (the iCloud index; LOBSTER_TOKEN for its DMs: login expired, budget used up).
-- `infra/router-secrets.py --part icloud-session ICLOUD_RCLONE_CONF=file:<rclone.conf with the [icloud] section>` →
-  `k8s/secrets/icloud-session.enc.yaml`: the saved iCloud login. After a re-login (claude-env `icloud-drive` skill),
-  write it again and push; the pod reads the mounted file and switches by itself (no restart needed).
-
-After a box rebuild, re-run all of them (the age key is new).
-
-**The two boxes:** `--box control` writes the control box's parts (to `keys/control-age.pub`, `k8s/control/secrets/`, the
-annotations in `k8s/control/apps/router/router.yaml`): the default part, `backup`, `github`, `flyorgs`, `flypersonal`,
-`flyvolumes`, `browserbase`, `devices`, `move` and `alloy`; `--box services` the services box's (`search`, `icloud-index`,
-`icloud-session`, `alloy`). The control box's router got fresh values (2026-10-15): its own Fly read token, a new
-repo-list PAT (`jarvis2-repo-list-control`), read-only tokens for jarvis2-370 and personal (the empty org kamyee has none:
-no store holds a token for it), a new tunnel-proof key (the Worker's `JARVIS2_TUNNEL_KEY_NEXT`, so running sessions keep
-their old proofs), and a second backup read credential (`backup-read-key.py policies --both` names it beside the old
-box's; a plain `policies` run drops the old one once the old box is gone). **Not yet: `CF_DEVICE_TOKENS_API`** (pairing
-NEW OpenClaw/Paseo apps; paired ones keep working): a Cloudflare API token can only be minted in the dashboard
-(`CLOUDFLARE_API` gets 9109 on both `/user/tokens` and `/accounts/<id>/tokens`), and the dashboard's login didn't pass its
-Turnstile from a session on 2026-10-15; mint it with the `cloudflare-dash` skill
-(`cf_token.js jarvis2-device-tokens-control OUT a1c0fec57cf94af79479a6d827fa518c 91f7ce32fa614d73b7e1fc8f0e78582b`) and
-`router-secrets.py --box control --part devices CF_DEVICE_TOKENS_API=file:OUT`.
+After a box rebuild, re-run all of that box's parts (its age key is new).
 
 ### The backup bucket's read credential
 
@@ -457,7 +414,7 @@ ACL changes are refused, and everything on the other bucket. A Ceph quirk seen w
 delete (no version id) of an existing object may add a delete marker; that hides a backup but loses nothing (the
 bucket is versioned), and the admin key removes the marker.
 
-Making a new one (a box rebuild doesn't need one; a leak does): `infra/backup-read-key.py`, one step at a time,
+Making a new one (a control box rebuild needs one, since the value exists only in the box's Secret; so does a leak): `infra/backup-read-key.py`, one step at a time,
 with a headed Chrome on CDP port 9333 (`Xvfb :99` + `google-chrome --remote-debugging-port=9333 --disable-quic`;
 the Console logs in with password only) and `HETZNER_USER`/`HETZNER_PASSWORD` (`session-secret --keys
 HETZNER_USER,HETZNER_PASSWORD --exec python3 infra/backup-read-key.py login` when they aren't in the env):
@@ -468,9 +425,13 @@ HETZNER_USER,HETZNER_PASSWORD --exec python3 infra/backup-read-key.py login` whe
 2. `policies` — the new access key replaces the old one as the principal in both bucket policies (admin key).
    Wait a minute, then `test` (the checks above, throwaway names only, cleaned up): seconds after a policy write a
    multi-delete once went through, a gateway not yet holding the new policy.
-3. `delete-old` — the old credential's row ⋯ → Delete → OK (real mouse clicks; the menu ignores synthetic ones).
-4. `install` — `infra/router-secrets.py --part backup` from the file, then the file is shredded; commit and push
-   `k8s/secrets/router-backup.enc.yaml` and `k8s/apps/router.yaml` (the router restarts with it). Stop the Chrome
+3. `delete-old` — the old credential's row ⋯ → Delete → OK (real mouse clicks; the menu ignores synthetic ones). Don't
+   leave a gap after `policies`: the policies are a Deny naming the key, so the old key, no longer named, can do
+   anything in the project until it is deleted. The new key has to be in the router already (`install` first when the
+   old router still serves with the old key).
+4. `install` — `infra/router-secrets.py --box control --part backup` from the file, then the file is shredded; commit
+   and push `k8s/control/secrets/router-backup.enc.yaml` and `k8s/control/apps/router/router.yaml` (the router restarts
+   with it). Stop the Chrome
    and delete its profile.
 
 ## The Claude accounts
@@ -504,7 +465,7 @@ per account its email, expiry, last refresh, the participants of its refresh pro
 - **The account in the cert:** set the router's env `CLAUDE_STORE_IN_CERT=1` only once Deyao's iPhone runs an app build
   that accepts the router as a key's writer (the TestFlight after DECISIONS 190): new sessions' certs then name their
   account's store and the phone unlocks it at Start; an older build refuses that unlock.
-- **The account in the signed settings:** set the router's env `SIGN_CLAUDE_ACCOUNT=1` (k8s/apps/router.yaml) only once
+- **The account in the signed settings:** set the router's env `SIGN_CLAUDE_ACCOUNT=1` (k8s/control/apps/router/router.yaml) only once
   Deyao's iPhone runs an app build that knows `claudeAccount` (the TestFlight after 2026-10-15's first accounts build):
   an older build refuses every New session whose settings carry it. New lines only; existing ones keep their config.
 - **Before accounts (the clean cut, 2026-10-15):** the first router with accounts turned `claude-login.json` into the
@@ -514,9 +475,10 @@ per account its email, expiry, last refresh, the participants of its refresh pro
 
 ## Transcript search and the iCloud index
 
-Two pods in jarvis2-edge (`services/search`, `services/icloud-index`; `k8s/apps/search.yaml`, `icloud-index.yaml`),
-built by `.github/workflows/services.yml` (only the service that changed; its unit tests run inside the image build)
-and pinned by digest like the router. Only the router reaches them (`router/searchsvc.go`); API.md "Transcript search"
+On the services box, in jarvis2-services (`services/search`, `services/icloud-index`; `k8s/services/apps/search/`,
+`k8s/services/apps/icloud-index/`), built by `.github/workflows/services.yml` (only the service that changed; its unit
+tests run inside the image build) and pinned by digest like the router. The router reaches them on the box's NodePorts
+over the Network (`SEARCH_URL` http://10.77.0.3:30090, `ICLOUD_INDEX_URL` …:30091, `WATCH_URL` …:30095). Only the router reaches them (`router/searchsvc.go`); API.md "Transcript search"
 and "iCloud index" for the calls. Check them from any Jarvis 2 session:
 `curl -s "$JARVIS_URL/api/search/status"` and `curl -s "$JARVIS_URL/api/icloud/status"`.
 
@@ -541,7 +503,7 @@ and "iCloud index" for the calls. Check them from any Jarvis 2 session:
   that copy at start. The iCloud index refuses to start without one (`SEED_REQUIRED=1`): its database holds the AI
   budget's lifetime ledger (`ai_spent`, USD 25 cap, Deyao 2026-10-01), and starting empty would spend it again. To
   really start from nothing, set `SEED_REQUIRED` to "0" for one rollout.
-- **The AI budget**: `AI_BUDGET_USD` in `k8s/apps/icloud-index.yaml`. At the move (2026-10-13) it was used up
+- **The AI budget**: `AI_BUDGET_USD` in `k8s/services/apps/icloud-index/icloud-index.yaml`. At the move (2026-10-13) it was used up
   (USD 25.00 spent), so images, scans, video and speech wait (`wait-ai`); names and text documents are still read.
   Raising it is Deyao's call.
 - **The iCloud login expired**: the pod DMs Deyao once and pauses. A session re-logs in (claude-env `icloud-drive`
@@ -550,8 +512,7 @@ and "iCloud index" for the calls. Check them from any Jarvis 2 session:
   `error: not read: stopped the indexer N times`; images over 40 megapixels are decoded small (JPEG) or skipped.
 - **Moving from Jarvis 1** (done 2026-10-13): Jarvis 1's session token can't exec into its pods, so a temporary
   read-only Job in claude-env (`selfhost/k8s/jarvis2-export`) copied both databases (SQLite online backup) and the
-  iCloud pod's own rclone session (SOPS-encrypted to `keys/box-age.pub`) to the Storage Box; the Jarvis 2 pods
-  seeded from it. Jarvis 1's two pods keep running until its freeze: scale them to 0 then, so only one index reads
+  iCloud pod's own rclone session to the Storage Box; the Jarvis 2 pods seeded from it. Jarvis 1's two pods keep running until its freeze: scale them to 0 then, so only one index reads
   iCloud and spends on embeddings.
 
 ## Importing a paused Jarvis 1 session
@@ -598,7 +559,7 @@ credentials. A task picks them with a field `optionsFrom: "content"` (`tasks/enc
 
 Deyao's OpenClaw and Paseo apps pair with `GET /api/devices/pair` (his Access login) and get their own Access service token;
 Settings → Paired apps (web) lists and removes them. The Access app "Jarvis 2 devices" (`infra/cloudflare.py --devices`;
-paths `/api/remotes`, `/api/sessions/*/start`; audience `ACCESS_DEVICES_AUD` in `k8s/apps/router.yaml`) lets any service
+paths `/api/remotes`, `/api/sessions/*/start`; audience `ACCESS_DEVICES_AUD` in the router's env) lets any service
 token through to those two paths and the router admits only paired ones. Check from outside: a service token that isn't
 a paired app gets the router's 403 `{"error":"Access login required"}` on `/api/remotes` (not Cloudflare's login page).
 The apps call `JarvisConfig.baseURL` (DE0CH/openclaw `apps/ios/Sources/Jarvis/JarvisModels.swift`) and `jarvis.url`
@@ -608,7 +569,14 @@ Paseo: Settings → Jarvis → Pair; each opens the Access sign-in sheet for thi
 Jarvis checks only with a paired device token (`JARVIS_E2E_CLIENT_ID/SECRET` in the fork's secrets); while the old
 Jarvis 1 token is there, it only installs and launches the app.
 
-## The box's network: IPv6-only, IPv4 out through WARP
+## The boxes' network: IPv6-only, IPv4 out through WARP, the private Network
+
+The two boxes talk over the Hetzner Network `jarvis2` (10.77.0.0/24; control 10.77.0.2, services 10.77.0.3, fixed by
+`create.sh`). NodePorts listen on the private address only (`nodeport-addresses`), and each box's private guard
+(`jarvis2-private-guard`, mangle PREROUTING, from `/etc/jarvis2/private-allow` written at creation) lets in only answers
+and the allowed peers: on the services box the control box's router (10.77.0.2), on the control box nobody. The boxes
+running now were made during the move and also allow 10.77.0.9 (the retired single box's address) until they are
+rebuilt, so never attach a server to the Network at 10.77.0.9 (the NetworkPolicies admit only 10.77.0.2).
 
 Every box has no public IPv4 (Deyao, 2026-10-13: the Hetzner account is at its limit of 10 primary IPs; DECISIONS 159).
 `infra/warp-host.sh` (run by cloud-init, and by the unit `jarvis2-warp-host.service` on a converted box) installs
@@ -619,14 +587,6 @@ is down: jarvis2.deyaochen.com unreachable (tunnel down), Flux "failed to checko
 peer. There is no way in to look; WARP reconnects by itself (warp-svc, always on), and a box git can't fix is
 rebuilt. The same WARP steps for every other Hetzner server Claude makes: claude-env `scripts/hetzner-warp.sh`.
 
-### Converting a box that still has its IPv4 (not planned: production keeps its IPv4, Deyao 2026-10-13)
-
-`CONFIRM=yes infra/convert-ipv6.sh` (env `HETZNER_JARVIS2_MOCK_API`, plus `JARVIS2_SETUP_ACCESS_ID/SECRET` for the
-wait): graceful shutdown, the primary IPv4 unassigned and deleted, a single-use rescue boot (throwaway SSH key, over
-IPv6) that writes `warp-host.sh` and its boot unit onto the disk, then a boot into the box's own system; it waits until
-the core answers through the tunnel. About 10 minutes of downtime. The box keeps its keys, Secrets and Flux state, but
-it reboots, so the core starts empty: Deyao Recovers in the app (as after a power failure). DECISIONS 160.
-
 ## Rebuilding a box
 
 **The services box** (`jarvis2-services`): delete the server, `BOX_KIND=services infra/create.sh` (a new age key,
@@ -635,20 +595,22 @@ it reboots, so the core starts empty: Deyao Recovers in the app (as after a powe
 `default`, `icloud-backup`, `identity` and `jarvis2-ops`), commit and push. Search and the iCloud index seed from their
 Storage Box copies. Nothing else waits on it; the router reports search unreachable meanwhile.
 
-**The control box** (and, until the move, the old single box):
+**The control box** (`jarvis2-control`), when it is gone (otherwise replace it with a move, above, with no gap):
 
 1. Delete the server in the jarvis2 Hetzner project (API or console).
 2. `infra/cloudflare.py ~/.jarvis2/cloudflare.env` (with `ROTATE=1` if that file is gone: a new setup service
-   token; put it in the `default` store as JARVIS2_SETUP_ACCESS_ID/SECRET).
-3. `infra/create.sh` — a new box key and age key (commit `keys/box.pub`, `keys/box-age.pub`), a new WireGuard
-   peer, no SSH, no open port, no IPv4 (above). Then both `infra/router-secrets.py …` runs (above; the backup read credential
-   needs a new one, since its old value exists nowhere but the old box's Secret). It waits until
-   `setup.py identity` answers.
+   token; put it in the `infra` store as JARVIS2_SETUP_ACCESS_ID/SECRET).
+3. `BOX_KIND=control WG_PEER=jarvis2-box infra/create.sh` — a new box key (`keys/box-next.pub`: rename it to
+   `keys/box.pub`) and age key (`keys/control-age.pub`), the WireGuard peer made again (the old router held the old
+   one), attached to the Network at 10.77.0.2, no SSH, no open port, no IPv4 (above). Then every control part of
+   `infra/router-secrets.py --box control` (above; the backup read credential needs a new one, since its old value
+   exists nowhere but the old box's Secret). Commit and push; wait until `setup.py identity` answers.
 4. Deyao sets the core up in the app: Recover (above). With continuity the sessions go on, provided the router's line
    state reached the new box: it is on the router's volume (`line-state.json`) and in the backup bucket
    (`keys/_jarvis2/line-state.json`, at most 5 minutes old, and fresh at the old router's drain); a new router reads
-   the bucket's copy when its volume has none. The carry blobs and snapshots are on the router's volume: move it, or a
-   resumed session waits for an Unlock of its stores. Without a line state the sessions are lost as before.
+   the bucket's copy when its volume has none. The router's own state comes back from its Storage Box backup ("The
+   router's state backup": `ROUTER_RESTORE=1` for its first start); without it a resumed session waits for an Unlock of
+   its stores. Without a line state the sessions are lost as before.
 
 ## Testing
 
@@ -675,9 +637,10 @@ Storage Box copies. Nothing else waits on it; the router reports search unreacha
 
 ### Rehearsing Recover on a real box
 
-`infra/rehearse-recover.sh` proves Reset → backups → failure → Recover → a session, on a REAL throwaway box built
-the way production is (`infra/cloudflare.py`, `infra/create.sh`, `infra/cloud-init.sh`, Flux applying `./k8s/apps`
-with the production images at a pinned commit), in the Hetzner project **runners** (`HCLOUD_TOKEN`). It never
+`infra/rehearse-recover.sh` proves Reset → backups → failure → Recover → a session, on a REAL throwaway control box
+built the way production's is (`infra/cloudflare.py`, `BOX_KIND=control infra/create.sh` with `PRIVATE_IP=none`,
+`infra/cloud-init.sh`, Flux applying `./k8s/control/apps` with the production images at a pinned commit; no services
+box, so search and watches don't answer there), in the Hetzner project **runners** (`HCLOUD_TOKEN`). It never
 touches the production box, core, router, tunnel, Access apps, WireGuard peer or bucket. About 45 minutes; one
 cx23 for about an hour plus a second one for the rebuild (EUR 0.01056/h each; IPv6-only, no IPv4), a few minutes of small Fly
 machines. Run it from a setup session (needs `JARVIS2_FLY_TOKEN`, `JARVIS2_SETUP_KEY`, `CF_JARVIS2_INFRA_TOKEN`,
@@ -697,9 +660,9 @@ in `ios/interop`, the app's own CoreSetup/CoreCrypto):
    `infra/rehearse-recover.sh teardown <run>`.
 
 Test-only differences (all in the box's user-data, none in git; `infra/rehearsal-box.sh`): the router runs `NO_ACCESS=1` behind an Access app whose only policy is the rehearsal service token (the
-router's own check wants Deyao's email login); a Flux patch sets `MACHINE_URL` (the peer `jarvis2-rehearsal-<run>`),
-`BACKUP_BUCKET`, `RECORDS_OFF=1` and Discord off, and there is no `k8s/secrets` Kustomization (encrypted to
-production's age key); the router's backup read key is the admin S3 key (a narrowed one is Console-only); the kit is
+router's own check wants Deyao's email login); Flux patches set `MACHINE_URL` (the peer `jarvis2-rehearsal-<run>`) on
+both cores and the router, and `BACKUP_BUCKET`, `RECORDS_OFF=1` and Discord off on the router, and there is no secrets
+Kustomization (encrypted to production's age key); the router's backup read key is the admin S3 key (a narrowed one is Console-only); the kit is
 the public test key, so the bucket holds only dummy values and the expiring Fly token. A hard reset waits 90 s after
 the stores are written: a power cut seconds after the images were pulled leaves them truncated on disk ("exec
 /router: exec format error" for ever after; only a rebuild cures it). Also checked: a session stuck at boot on a
@@ -755,8 +718,8 @@ not running in time. The video, screenshots and logs (core, router, the setup an
 - **The gate:** the `ios` workflow's TestFlight job (environment `release`, main only) needs the walkthrough, the
   interop test and the replica of the same run: every push to main touching the app ships once all three pass. Nothing
   is dispatched by hand.
-- **The core it runs:** this commit's `core/`, also while `k8s/apps/core.yaml` carries `jarvis2/core-pin: hold` (the
-  shipped app is tested against the core main builds, not the held production one).
+- **The core it runs:** this commit's `core/`, also while a core Deployment carries `jarvis2/core-pin: hold` (the
+  shipped app is tested against the core main builds).
 - **The simulator:** the composite action `.github/actions/ios-simulator`, shared by the replica, the walkthrough and
   `transitions.yml`: Xcode 27.0 (build 27A266a), the iOS 27.0 runtime (Deyao's phone runs 27.0) and the device type
   whose profile says iPhone18,3 (iPhone 17), all pinned; a missing pin fails the run rather than falling back. It runs
