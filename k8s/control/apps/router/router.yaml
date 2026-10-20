@@ -24,8 +24,8 @@ spec:
   strategy: { type: RollingUpdate, rollingUpdate: { maxUnavailable: 0, maxSurge: 1 } }
   selector: { matchLabels: { app: router } }
   template:
-    # secrets-rev(-backup|-github|-flyorgs|-flypersonal|-browserbase|-devices): bumped by infra/router-secrets.py so a changed Secret restarts the pod (envFrom is read at start)
-    metadata: { labels: { app: router }, annotations: { jarvis2/secrets-rev: "c2c489835ffe", jarvis2/secrets-rev-backup: "c4f45c49fd68", jarvis2/secrets-rev-github: "0e610b6a5b30", jarvis2/secrets-rev-flyorgs: "996d8d86c52f", jarvis2/secrets-rev-flypersonal: "395160d44a7c", jarvis2/secrets-rev-browserbase: "e3698a23cc2f", jarvis2/secrets-rev-devices: "000000000000", jarvis2/secrets-rev-move: "29f649081ab6" } }
+    # secrets-rev(-backup|-github|-flyorgs|-flypersonal|-flyvolumes|-browserbase|-devices): bumped by infra/router-secrets.py so a changed Secret restarts the pod (envFrom is read at start)
+    metadata: { labels: { app: router }, annotations: { jarvis2/secrets-rev: "c2c489835ffe", jarvis2/secrets-rev-backup: "c4f45c49fd68", jarvis2/secrets-rev-github: "0e610b6a5b30", jarvis2/secrets-rev-flyorgs: "996d8d86c52f", jarvis2/secrets-rev-flypersonal: "395160d44a7c", jarvis2/secrets-rev-flyvolumes: "0773751ac2dd", jarvis2/secrets-rev-browserbase: "e3698a23cc2f", jarvis2/secrets-rev-devices: "000000000000", jarvis2/secrets-rev-move: "29f649081ab6" } }
     spec:
       priorityClassName: jarvis2-control
       automountServiceAccountToken: false
@@ -92,7 +92,7 @@ spec:
           # k8s/secrets/router-backup.enc.yaml, and the repo picker's GITHUB_READ_TOKEN: k8s/secrets/router-github.enc.yaml
           # — all SOPS-encrypted to the box's age key (infra/router-secrets.py). router-secrets-github stays LAST: with a
           # key in several envFrom sources the last one wins, and the default part still holds an old GITHUB_READ_TOKEN
-          envFrom: [{ secretRef: { name: router-secrets, optional: true } }, { secretRef: { name: router-secrets-backup, optional: true } }, { secretRef: { name: router-secrets-github, optional: true } }, { secretRef: { name: router-secrets-flyorgs, optional: true } }, { secretRef: { name: router-secrets-flypersonal, optional: true } }, { secretRef: { name: router-secrets-browserbase, optional: true } }, { secretRef: { name: router-secrets-devices, optional: true } }, { secretRef: { name: router-move, optional: true } }]
+          envFrom: [{ secretRef: { name: router-secrets, optional: true } }, { secretRef: { name: router-secrets-backup, optional: true } }, { secretRef: { name: router-secrets-github, optional: true } }, { secretRef: { name: router-secrets-flyorgs, optional: true } }, { secretRef: { name: router-secrets-flypersonal, optional: true } }, { secretRef: { name: router-secrets-flyvolumes, optional: true } }, { secretRef: { name: router-secrets-browserbase, optional: true } }, { secretRef: { name: router-secrets-devices, optional: true } }, { secretRef: { name: router-move, optional: true } }]
           ports: [{ containerPort: 8080 }, { containerPort: 8082 }]
           readinessProbe: { tcpSocket: { port: 8080 }, periodSeconds: 2, failureThreshold: 2 }
           volumeMounts: [{ name: data, mountPath: /data }, { name: wg, mountPath: /wg, readOnly: true }, { name: sigs, mountPath: /sigs, readOnly: true }]

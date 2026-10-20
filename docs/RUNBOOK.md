@@ -400,6 +400,11 @@ on the box with the age key the box got in user-data. Four Secrets, each rewritt
   org personal for the Machines view. `FLY_PERSONAL_ORG_TOKEN=<an org token of personal> infra/fly-personal-read-token.sh OUT`
   attenuates it offline to Organization read (it checks the result lists apps and can't create a machine). It reads every
   machine's config in personal, env included (DECISIONS 138); it dies only with the token it was made from.
+- `infra/router-secrets.py --part flyvolumes FLY_VOLUME_TOKEN=file:…` → `k8s/secrets/router-flyvolumes.enc.yaml`: the
+  leftover-volume sweep's token (`router/volsweep.go`). `JARVIS2_FLY_TOKEN=… infra/fly-volume-token.sh OUT` attenuates
+  the org token to delete on app jarvis2-sessions plus a Volumes caveat (any volume, delete), which refuses every call
+  that names no volume: it can only `DELETE /v1/apps/jarvis2-sessions/volumes/<id>` (proof: DECISIONS 195). It dies with
+  the token it was made from.
 - `infra/router-secrets.py --part browserbase BROWSERBASE_API_KEY` → `k8s/secrets/router-browserbase.enc.yaml`: the
   Browserbase spend DM (`router/bbbudget.go`; cap and warn line are `BROWSERBASE_BUDGET_USD` / `_WARN_USD` in
   `k8s/apps/router.yaml`).
@@ -423,7 +428,7 @@ After a box rebuild, re-run all of them (the age key is new).
 
 **The two boxes:** `--box control` writes the control box's parts (to `keys/control-age.pub`, `k8s/control/secrets/`, the
 annotations in `k8s/control/apps/router/router.yaml`): the default part, `backup`, `github`, `flyorgs`, `flypersonal`,
-`browserbase`, `devices`, `move` and `alloy`; `--box services` the services box's (`search`, `icloud-index`,
+`flyvolumes`, `browserbase`, `devices`, `move` and `alloy`; `--box services` the services box's (`search`, `icloud-index`,
 `icloud-session`, `alloy`). The control box's router got fresh values (2026-10-15): its own Fly read token, a new
 repo-list PAT (`jarvis2-repo-list-control`), read-only tokens for jarvis2-370 and personal (the empty org kamyee has none:
 no store holds a token for it), a new tunnel-proof key (the Worker's `JARVIS2_TUNNEL_KEY_NEXT`, so running sessions keep
@@ -784,18 +789,23 @@ not running in time. The video, screenshots and logs (core, router, the setup an
 
 A session volume (`jarvis2_state`, core/volumes.go) whose machine is gone shows on the Machines tab under
 jarvis2-sessions' volumes as "not attached". The core deletes a machine's volume at its kill only while it remembers the
-volume (DECISIONS 194), so one can be left by a kill whose delete failed, a line from before a Reset, or a test core that
-exited. Test runs delete their own (`infra/run-volumes.py` in the replica's `down` and the e2e's cleanup); an earlier
-run's can't be told from production's by anything Fly shows, so nothing sweeps it.
-- **Jarvis 2 has no Destroy volume yet**: it needs a core operation (DECISIONS 194, waiting for Deyao's go on a core
-  release). Until then a leftover is deleted only with Deyao's OK for that volume, by hand with the org token, after
-  checking on a fresh list that it is named `jarvis2_state`, in state `created`, attached to nothing, mounted by no
-  machine (`GET /v1/apps/jarvis2-sessions/machines`, `config.mounts`), older than 15 minutes, and named by no session
-  (`GET /api/state`: no session's `backups` and no current machine's volume):
-  `curl -X DELETE -H "Authorization: Bearer $JARVIS2_FLY_TOKEN" https://api.machines.dev/v1/apps/jarvis2-sessions/volumes/<id>`.
-  Its snapshots stay for their retention.
-- A test run's own leftovers by hand (a teardown that didn't run): `FLY_TOKEN=$JARVIS2_FLY_TOKEN python3 -I
-  infra/run-volumes.py <the run's DATA_DIR>/state.json <its core.log>` deletes only what those files name.
+volume, so one can be left by a kill whose delete failed, a line from before a core restart or Reset, or a test core that
+exited (DECISIONS 194).
+- **The router sweeps them** (`router/volsweep.go`, DECISIONS 195): every 10 minutes (the first 2 minutes after a leader
+  starts) it lists the app's volumes and machines with `FLY_READ_TOKEN` and deletes, with `FLY_VOLUME_TOKEN`, each volume
+  named `jarvis2_state`, state `created`, attached to nothing, in no listed machine's `config.mounts`, at least 15 minutes
+  old, and named by no session it knows (a session's current or booted machine's cert or start record, or a backup whose
+  retention runs). At most 20 a sweep; a failed delete is looked at again next sweep, 404 counts as done. Each sweep logs
+  one line, `[volsweep] N volumes, M machines …: deleted [...], failed map[...], kept map[category:count]` (Grafana:
+  `{box="control",container="router"} |= "volsweep"`), and `infra/setup.py status` shows the last one as `volumeSweep`
+  (with `FLY_VOLUME_TOKEN` among `secrets`). Without either token the sweep is off and says so once at start.
+- A volume the sweep keeps because a session still names it (`named`) and that is really left over (a failed session
+  whose machine is gone, say) goes once that session is destroyed or its backup's retention ends. Its snapshots stay for
+  their retention either way.
+- Test runs still delete their own at teardown (`infra/run-volumes.py` in the replica's `down` and the e2e's cleanup);
+  for a teardown that didn't run: `FLY_TOKEN=$JARVIS2_FLY_TOKEN python3 -I infra/run-volumes.py <the run's
+  DATA_DIR>/state.json <its core.log>` deletes only what those files name. What it misses, the production sweep takes
+  once it is 15 minutes old.
 
 ## Logs, metrics and alerts (DESIGN "Logs and metrics")
 

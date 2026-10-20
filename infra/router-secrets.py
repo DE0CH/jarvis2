@@ -2,12 +2,12 @@
 """router-secrets.py — write the router's non-sensitive secrets into git, SOPS-encrypted to the box's age key
 (keys/box-age.pub); Flux decrypts them on the box (k8s/flux/sync.yaml, Kustomization jarvis2-secrets).
 
-    infra/router-secrets.py [--box control|services] [--part backup|github|flyorgs|flypersonal|browserbase|devices|search|icloud-index|icloud-session|alloy|move] KEY[=SRC] …
+    infra/router-secrets.py [--box control|services] [--part backup|github|flyorgs|flypersonal|flyvolumes|browserbase|devices|search|icloud-index|icloud-session|alloy|move] KEY[=SRC] …
 
 --box picks the box (docs/DESIGN.md "The boxes"): its age key (keys/<box>-age.pub), its secrets directory
 (k8s/<box>/secrets/) and its manifests (k8s/<box>/apps/<app>/). Without --box: the old single box (keys/box-age.pub,
 k8s/secrets/, k8s/apps/), until it is retired. Each box gets only its own parts:
-  control   (default), backup, github, flyorgs, flypersonal, browserbase, devices, alloy, move
+  control   (default), backup, github, flyorgs, flypersonal, flyvolumes, browserbase, devices, alloy, move
   services  search, icloud-index, icloud-session, alloy
   --part alloy   Secret alloy in jarvis2-obs — GRAFANA_LOGS_URL/USER, GRAFANA_METRICS_URL/USER, GRAFANA_WRITE_TOKEN: the
                  host's Grafana Alloy reads it (infra/alloy/; no pod uses it, so no manifest annotation)
@@ -26,6 +26,9 @@ every key of that part (nobody can read the old values back: only the box holds 
                  {"<org slug>": "<read-only org token>"} for the Machines view's other orgs (router/flyorgs.go)
   --part flypersonal  k8s/secrets/router-flypersonal.enc.yaml — FLY_PERSONAL_READ_TOKEN only: org personal's read-only
                  token for the Machines view (infra/fly-personal-read-token.sh; router/flyorgs.go)
+  --part flyvolumes  k8s/secrets/router-flyvolumes.enc.yaml — FLY_VOLUME_TOKEN only: the token that can do nothing but
+                 delete volumes in jarvis2-sessions (infra/fly-volume-token.sh), for the leftover-volume sweep
+                 (router/volsweep.go, DECISIONS 195)
   --part browserbase  k8s/secrets/router-browserbase.enc.yaml — BROWSERBASE_API_KEY only (router/bbbudget.go: the
                  spend DM reads the session list)
   --part devices k8s/secrets/router-devices.enc.yaml — CF_DEVICE_TOKENS_API only: the Cloudflare token "jarvis2-device-tokens"
@@ -46,7 +49,7 @@ BOXES = {  # box → (age recipient file, secrets dir, {part: manifest path unde
     "": ("keys/box-age.pub", "k8s/secrets", None),
     "control": ("keys/control-age.pub", "k8s/control/secrets", {
         "": "router/router.yaml", "backup": "router/router.yaml", "github": "router/router.yaml",
-        "flyorgs": "router/router.yaml", "flypersonal": "router/router.yaml", "browserbase": "router/router.yaml",
+        "flyorgs": "router/router.yaml", "flypersonal": "router/router.yaml", "flyvolumes": "router/router.yaml", "browserbase": "router/router.yaml",
         "devices": "router/router.yaml", "move": "router/router.yaml", "alloy": None}),
     "services": ("keys/services-age.pub", "k8s/services/secrets", {
         "search": "search/search.yaml", "icloud-index": "icloud-index/icloud-index.yaml",
@@ -58,6 +61,7 @@ PARTS = {  # part → (file, Secret name, annotation, namespace, manifest carryi
     "github": ("router-github.enc.yaml", "router-secrets-github", "jarvis2/secrets-rev-github", "jarvis2-router", "router.yaml"),
     "flyorgs": ("router-flyorgs.enc.yaml", "router-secrets-flyorgs", "jarvis2/secrets-rev-flyorgs", "jarvis2-router", "router.yaml"),
     "flypersonal": ("router-flypersonal.enc.yaml", "router-secrets-flypersonal", "jarvis2/secrets-rev-flypersonal", "jarvis2-router", "router.yaml"),
+    "flyvolumes": ("router-flyvolumes.enc.yaml", "router-secrets-flyvolumes", "jarvis2/secrets-rev-flyvolumes", "jarvis2-router", "router.yaml"),
     "browserbase": ("router-browserbase.enc.yaml", "router-secrets-browserbase", "jarvis2/secrets-rev-browserbase", "jarvis2-router", "router.yaml"),
     "devices": ("router-devices.enc.yaml", "router-secrets-devices", "jarvis2/secrets-rev-devices", "jarvis2-router", "router.yaml"),
     "search": ("search.enc.yaml", "search-secrets", "jarvis2/secrets-rev-search", "jarvis2-edge", "search.yaml"),

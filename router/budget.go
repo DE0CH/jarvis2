@@ -15,8 +15,9 @@ package main
 // names a backup of (still within its retention), sums their sizes once each, takes off Fly's free 10 GB and adds that
 // GB-month rate to the burn.
 //
-// The router has no Fly token that can change anything: FLY_READ_TOKEN is read-only on app jarvis2-sessions
-// (infra/fly-read-token.sh). It lists machines, volumes and the volumes' snapshots, nothing else.
+// The budget uses FLY_READ_TOKEN, read-only on app jarvis2-sessions (infra/fly-read-token.sh): it lists machines,
+// volumes and the volumes' snapshots, nothing else. The router's only Fly token that changes anything is
+// FLY_VOLUME_TOKEN, which can only delete volumes (volsweep.go, DECISIONS 195).
 
 import (
 	"encoding/json"

@@ -674,7 +674,7 @@ A batch is told once, all items together; a paused session hears at its next sta
 Boot makes the machine's keys and waits. `jarvis2-init` (run by the core through Fly, no arguments) prints the
 public keys and lets boot go on: it takes the core's key from its own Fly config (the core sets it when it creates
 the machine; only the core's token, and the setup session's org token, can create or change machines in the app,
-the router's is read-only), fetches its core-signed succession cert through the router, checks it against the
+the router's are read-only, plus one that can only delete volumes: DECISIONS 195), fetches its core-signed succession cert through the router, checks it against the
 core key and that it names its own keys; if the predecessor is a real machine it fetches the snapshot and checks
 it against the hash the cert names and the predecessor's signing key from the cert. Then it starts the harness from
 the cert's options and pulls its secrets. Any failed check → start nothing. Everything else it takes: below. Before

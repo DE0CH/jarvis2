@@ -113,7 +113,7 @@ func (r *Router) buildHandlers() {
 		for _, k := range []string{"LOBSTER_TOKEN", "STORAGEBOX_HOST", "STORAGEBOX_USER", "STORAGEBOX_PASSWORD", "FLY_READ_TOKEN",
 			"JARVIS2_TUNNEL_KEY",
 			"GITHUB_READ_TOKEN", "BACKUP_READ_ACCESS_KEY", "BACKUP_READ_SECRET_KEY", "FLY_ORG_READ_TOKENS",
-			"FLY_PERSONAL_READ_TOKEN", "BROWSERBASE_API_KEY", "CF_DEVICE_TOKENS_API"} {
+			"FLY_PERSONAL_READ_TOKEN", "FLY_VOLUME_TOKEN", "BROWSERBASE_API_KEY", "CF_DEVICE_TOKENS_API"} {
 			if os.Getenv(k) != "" {
 				present = append(present, k)
 			}
@@ -147,7 +147,8 @@ func (r *Router) buildHandlers() {
 				"attention": flyAttentionCount([]flyOrgView{o})})
 		}
 		writeJSON(w, 200, map[string]any{"secrets": present, "sessionImage": r.cfg.SessionImage, "coreUp": coreErr == nil, "version": os.Getenv("VERSION"), "githubRepos": gh, "flyOrgs": flyOrgs,
-			"move": moveStatusNow(), "backup": backupStatus(), "core": r.nextCoreStatus(), "process": processStatus()})
+			"move": moveStatusNow(), "backup": backupStatus(), "core": r.nextCoreStatus(), "process": processStatus(),
+			"volumeSweep": volumeSweepStatus()})
 	}))
 	setup("GET /setup/identity", "GET", "/identity")
 	setup("POST /setup/stores", "POST", "/stores")

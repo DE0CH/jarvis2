@@ -1839,54 +1839,73 @@ snapshot failed with "no space left on device", the machine was destroyed anyway
      would waste it more often, and Deyao's rule names the stop); keeping spares warm ahead of any handover (a machine
      per session, billed and counted toward the cap).
 
-## Leftover volumes: test runs delete their own; Destroy volume and the kill's fix wait for a core release, 2026-10-19
+## Leftover volumes: test runs delete their own, the router sweeps the rest, 2026-10-19
 
-194. **Session volumes no machine mounts any more are cleaned up in three parts; only the first ships now.** On
-     2026-10-19 two unattached `jarvis2_state` volumes (state `created`, made 2026-10-16 by a phone-replica run) were found
-     in `jarvis2-sessions` and deleted by hand with the org token as a one-time exception (no Jarvis 2 mechanism can
-     delete a volume). Why they leaked: the test teardowns (`ios/ci/replica-stack.sh` down/sweep, `infra/e2e.sh`) find
-     volumes only through the machines Fly still lists (`config.mounts`), so a volume whose machine is already gone is
-     never seen; and the core's kill (`dropVolume`, `core/volumes.go`) deletes only the volumes it holds in memory
-     (`vol.live`, carried in its line state) or failed deletes it is still retrying (`vol.orphans`, tried again only at
-     the next kill). After a Reset, or when a test core exits, the volume is forgotten.
-     - **Now: each test run deletes its own leftover volumes from its own records** (`infra/run-volumes.py`, called by
-       the replica's `down` and the e2e's cleanup). A volume carries no label (every core names its volumes
-       `jarvis2_state`, production's too, in the same app, with tokens of the same org), so Fly alone can't tell a
-       run's volume from production's. What can: the run's router state (`state.json`: `started[*].volume`, every
-       kill's backup) and its core's log (the ids it logs at a kill), which name only volumes the run's own core made.
-       A volume is deleted only when its id is in those files AND Fly lists it named `jarvis2_state`, state `created`,
-       attached to nothing and mounted by no machine; one still attached (its machine going away) is looked at again
-       for a minute. An id the run didn't record is never touched. **Not done:** sweeping EARLIER runs' bare volumes at
-       a run's start (their records went with their runner), and sweeping by age or by "no machine": a production
-       volume between its create and its machine's, or between a kill's destroy and its delete, looks the same.
-       Those stay for Destroy volume (below); until then RUNBOOK "Leftover volumes".
-     - **Waits for Deyao's go (a core release, then his Recover): Destroy volume on the Machines tab.** The core has no
-       volume delete it can be asked for, and the router's Fly tokens are all read-only (`FLY_READ_TOKEN`,
-       `FLY_ORG_READ_TOKENS`, `FLY_PERSONAL_READ_TOKEN`), so it needs a new core operation. Ready design:
-       core `POST /volumes/destroy {volume}`: the core lists the app's volumes and machines itself and deletes only a
-       volume named `jarvis2_state`, state `created`, attached to nothing, mounted by no machine Fly lists, at least 15
-       minutes old, and not in its own `vol.live` (a machine of its lines); then drops it from `vol.orphans` and signs
-       `{kind: "volume-destroyed", volume, at}`. Router `POST /api/volumes/:id/destroy` (Deyao's login, like
-       `/api/machines/:id/destroy`): re-checks on a fresh Fly list and refuses (409) while the volume is attached or
-       mounted, under 15 minutes old, or named by any session or line it knows (`started`, certs, a session's
-       backups); 400 for an id Fly doesn't list in `jarvis2-sessions`; otherwise the core's call, logged like an
-       orphan machine's destroy. `GET /api/machines` gives each volume of the own app `noDestroy` (why not, "" =
-       offered), and the web Machines tab shows a Destroy button next to each volume (in-page confirm, no popup).
-       **A router-only design is possible but not chosen:** a fourth router token, the org token narrowed to delete
-       volumes in `jarvis2-sessions` only (a Fly macaroon `Volumes` caveat beside `Apps`; that it really refuses
-       machine deletes would need testing as `infra/fly-token.sh`'s caveats were). For: no core release, no Recover,
-       could ship today. Against: the router is the only service reachable from outside (behind Access) and holds no
-       Fly write power today; DESIGN puts every Fly change in the core, which signs it. A router bug or compromise
-       could delete an unattached volume the core still counts on: the core's own orphan list would then retry a
-       delete that 404s at every kill (`FlyAPI.DeleteVolume` doesn't treat 404 as done), and nothing signed records
-       the delete. The volumes' data is never what a resume needs (every successor gets a new volume and the signed
-       snapshot; the kill's backup snapshot outlives its volume), so the damage is bounded, but the design rule isn't.
-     - **Waits for a core release (needs Recover): the kill finds the volume from Fly, and failed deletes retry on a
-       timer.** In `backupVolume`/`dropVolume`, when `vol.live` has no entry for the machine (a line from before a
-       Reset, a core restarted), the core reads the machine's `config.mounts` from Fly's Inspect before it stops it
-       and treats a mounted `jarvis2_state` volume as the machine's: the same stop → backup snapshot → destroy →
-       delete. So the Machines tab's orphan Destroy (which goes through the kill) takes the volume along too.
-       `vol.orphans` is retried every 10 minutes by the core itself, not only at the next kill; a delete that Fly
-       answers 404 (already gone) counts as done. Also in that release: each deployment names its volumes
-       (`VOLUME_NAME`: production `jarvis2_state`, the replica `jarvis2_replica`, the e2e `jarvis2_e2e`), so a test
-       run's start can sweep earlier runs' bare volumes by name, which today it can't do safely.
+194. **Session volumes no machine mounts any more are cleaned up in two places: each test run deletes its own, and the
+     production router sweeps every leftover (195).** On 2026-10-19 two unattached `jarvis2_state` volumes (state
+     `created`, made 2026-10-16 by a phone-replica run) were found in `jarvis2-sessions` and deleted by hand with the org
+     token as a one-time exception. Why they leak: the test teardowns (`ios/ci/replica-stack.sh` down/sweep,
+     `infra/e2e.sh`) find volumes only through the machines Fly still lists (`config.mounts`), so a volume whose machine
+     is already gone is never seen; and the core's kill (`dropVolume`, `core/volumes.go`) deletes only the volumes it
+     holds in memory (`vol.live`, carried in its line state) or failed deletes it is still retrying (`vol.orphans`,
+     tried again only at the next kill). After a core restart or Reset, or when a test core exits, the volume is
+     forgotten.
+     - **Each test run deletes its own leftover volumes from its own records** (`infra/run-volumes.py`, called by the
+       replica's `down` and the e2e's cleanup). A volume carries no label (every core names its volumes
+       `jarvis2_state`, production's too, in the same app, with tokens of the same org), so Fly alone can't tell a run's
+       volume from production's. What can: the run's router state (`state.json`: `started[*].volume`, every kill's
+       backup) and its core's log (the ids it logs at a kill), which name only volumes the run's own core made. A volume
+       is deleted only when its id is in those files AND Fly lists it named `jarvis2_state`, state `created`, attached
+       to nothing and mounted by no machine; one still attached (its machine going away) is looked at again for a
+       minute. An id the run didn't record is never touched.
+     - **Everything else: the production router's sweep (195)**, with the checks first designed here for a Destroy
+       volume button: refuse while attached or mounted, under 15 minutes old (a volume between its create and its
+       machine's), or named by a session or line the router knows; failed deletes retry, 404 is done. It replaces the
+       core operation `POST /volumes/destroy` and the Machines tab's Destroy volume, which needed a core release and
+       Deyao's Recover; neither is built.
+     - **Not built, by Deyao's choice (2026-10-20: no core release for this):** the core's kill reading a machine's
+       mounts from Fly when `vol.live` has no entry, `vol.orphans` retried on a timer and 404 counted as done, and a
+       per-deployment `VOLUME_NAME`. The sweep removes what they would have left behind. What stays: a kill of a line
+       the core forgot leaves its volume for up to 25 minutes (15 minutes of age, plus one sweep interval).
+
+## Leftover volumes are swept by the router with a token that can only delete volumes, 2026-10-20
+
+195. **The router holds a fourth Fly token, `FLY_VOLUME_TOKEN`, which can do nothing but delete volumes in
+     `jarvis2-sessions`, and sweeps leftover session volumes with it every 10 minutes (`router/volsweep.go`).** Deyao
+     decided (2026-10-20) against a core release for 194's Destroy volume, since a core release needs his Recover. 194
+     had weighed this router-only design and noted what it costs: until now the router held no Fly write power at all
+     (`FLY_READ_TOKEN`, `FLY_ORG_READ_TOKENS`, `FLY_PERSONAL_READ_TOKEN` are read-only), and DESIGN puts every Fly change
+     that matters in the core, which signs it.
+     - **The token** (`infra/fly-volume-token.sh`): the org token attenuated with two caveats,
+       `Apps {<jarvis2-sessions id>: "d"}` and `Volumes {"": "d"}` (`""` = any volume id). Fly's resource-set check
+       refuses an access that names no resource of a caveat's kind (`resset.ErrResourceUnspecified`), so the Volumes
+       caveat alone shuts out everything that isn't about one volume: machines, the app itself, its secrets, other apps,
+       org features, GraphQL mutations; and `d` only leaves no read, create, extend or snapshot. **Tested 2026-10-20**
+       with the same caveats on a throwaway app `voltoken-test-*` (a machine with a mounted volume, two unattached
+       volumes, a second app with a volume; all deleted afterwards with the org token). Refused, 403 `unauthorized`:
+       list, get, create, update, stop, start, exec, force-delete a machine; create, list, get, extend, update, snapshot
+       a volume; list and set secrets; get the app, list the org's apps, create an app, delete the app; list machines or
+       volumes of `jarvis2-sessions`, create a volume in `jarvis2-log-shipper`, delete the second app's real volume.
+       GraphQL: read the app ("Not authorized to access this firecrackerapp"), `deleteApp` ("Not authorized to destroy
+       this app"), `createApp` and `addWireGuardPeer` ("Not authorized to access this organization"), `setSecrets`
+       ("Not authorized to manage this app"). Allowed: deleting an unattached volume (200, state `destroyed`; a repeated
+       delete answers the same 200). Deleting the mounted volume: Fly's own 412 "volume is currently bound to machine".
+       Afterwards the machine was still `started` and the other volumes `created`. The production token was then checked
+       with harmless calls only: list machines, get the app, list volumes, list secrets, create a machine or a volume
+       (invalid bodies), list `jarvis2-log-shipper`'s machines, GraphQL read: all refused; ids that don't exist answer
+       404 before any permission check, which shows nothing. Listing stays the read-only token's job.
+     - **What the sweep deletes** (194's checks, made on fresh Fly lists each time): named `jarvis2_state`, state
+       `created`, attached to nothing, in no listed machine's `config.mounts`, at least 15 minutes old, and named by no
+       session the router knows. "Named" means: the volume in the cert or start record of a session's current machine
+       (`MachineID`) or booted machine (`Booted`), the line's latest cert, or a backup (of a session or a record) whose
+       retention still runs. An EARLIER machine of a session doesn't count: the router keeps every machine's start
+       record forever, and those old machines' volumes are exactly the ones a core that forgot leaves behind; once the
+       machine is gone nothing reads its volume (a successor gets a new volume and the signed snapshot, and a kill's
+       backup is a snapshot that outlives its volume). At most 20 deletes a sweep, so a bug can't empty the app at once.
+       Only the leader runs it, and only with both tokens set, so test routers (replica, e2e) never sweep.
+     - **Why the risk is acceptable:** the worst a router bug or a stolen token can do is delete an unattached
+       volume; Fly refuses to delete an attached one. Session state never depends on a volume after its machine is
+       gone. The core's `vol.orphans` entry for a volume the sweep deleted first is harmless: Fly answers its later
+       delete 200 (once Fly has purged the volume, a 404, which the core logs at each kill as a failed delete until
+       it restarts: noise, no harm). Nothing signed records the sweep's deletes; its log line and `/setup/status` `volumeSweep` do.
+     - **Kept from 194:** test runs still delete their own at teardown.
