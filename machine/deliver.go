@@ -358,10 +358,29 @@ func deliver(c *client, d Delivery) error {
 			text += rerunCheck(w)
 		}
 	}
-	if err := sendToHarness(cert.Options.Harness, certMode(cert), "jarvis", text); err != nil {
+	if err := sendToHarness(cert.Options.Harness, liveMode(cert), "jarvis", text); err != nil {
 		return err
 	}
 	return replayGuard(d, now, true)
+}
+
+// modeFile: the in-place permission mode (session-image set-permission-mode writes it, harness-claude.sh launches
+// claude in it); relative to claudeHome
+var modeFile = ".claude/.permission-mode"
+
+// liveMode: the mode claude actually runs in, decided exactly as harness-claude.sh decides it: the in-place file when
+// there is one, else the cert's. A session raised to bypass in place keeps its older cert (auto), so sending as the
+// cert's mode put the message in the "prompting" class while claude bypasses, and Claude Code held every Jarvis message
+// ("the sending session's permission mode class doesn't match this session's", 2026-10-20).
+func liveMode(cert Cert) string {
+	b, err := os.ReadFile(filepath.Join(claudeHome, modeFile))
+	if err != nil {
+		return certMode(cert)
+	}
+	if strings.TrimSpace(string(b)) == "bypass" {
+		return "bypass"
+	}
+	return "auto"
 }
 
 // sendToHarness: the text into the harness (the same as the router's old exec path, run here)

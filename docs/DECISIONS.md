@@ -1947,3 +1947,10 @@ snapshot failed with "no space left on device", the machine was destroyed anyway
        mode in a running session is not in the core's cert); a second item would be a tap that signs nothing.
      - The caller texts of Deyao's own logins became "Deyao, from the web page" / "Deyao, from the Jarvis 2 app", so
        every Inbox item says who asked.
+198. **Jarvis's own messages go in the permission class claude actually runs in (2026-10-20).** The machine sent its
+     deliveries (watchdog, wakeups, Inbox outcomes) with `from-mode` from the session's cert, but a switch to bypass
+     in place doesn't change the cert (the next one signs it), so after the switch Claude Code held every Jarvis
+     message as a mode mismatch ("the sending session's permission mode class doesn't match this session's … set
+     crossSessionInbound to accept"). The machine now reads the mode exactly as harness-claude.sh launches claude:
+     `~/.claude/.permission-mode` when present, else the cert. Not chosen: `crossSessionInbound: accept` in managed
+     settings, which would also let other senders past the hold.
