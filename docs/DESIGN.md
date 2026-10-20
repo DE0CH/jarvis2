@@ -705,7 +705,7 @@ machine's first second to the kill; then boot goes on and finally execs the harn
 | status, memory, disk | `status.go`, `memory.go`, `disk.go` | no | the reports the router's card and watches read (output only) |
 | API proxy | `apiproxy.go` | — | `$JARVIS_URL` for the session's scripts, each call signed as this machine |
 | live transcript sync | `livesync.go` | no | the transcripts to the Storage Box (through the router) for search (output only) |
-| Claude login sync | `claudelogin.go` | no | the session's Claude pair kept in step with the router's (long poll) |
+| Claude login sync | `claudelogin.go` | no | the session's Claude pair kept in step with the router's (long poll); on an account switch (command `claude-account`) the new pair is taken and the host restarted on the same conversation once idle, at most 60 s later |
 | log | `supervisorlog.go` | no | the supervisor log (below) |
 | secrets | `secrets.go`, `deploykeys.go` | no | the session's secrets, in RAM only (below) |
 
@@ -824,7 +824,7 @@ Deyao handing a feature a shell, and the session's own allow list is the session
 | An archived snapshot (restore) | (a) its sha256 in the config, plus the old cert (core-signed) and its machine's signature |
 | Repo contents (CLAUDE.md, hooks, skills) | (d) GitHub, for exactly the repos the cert names (a cert whose config names none: the repos of the deploy-key stores in the cert) |
 | Secrets | the cert's stores, sealed to the machine by the core; held by the supervisor in RAM only (env-name keys only), served on its socket and put in the harness's env |
-| The Claude login | (d) Anthropic: the router hands the pair of the session's Claude account (DECISIONS 185: one Claude key store per account, `claude-<name>`, the router's own; picked when the session is made and kept for its life, the router's word) over `/m/claude-login` (machine-signed); taken at boot, kept in step by a long poll with the router's refresh protocol (`machine/claudelogin.go`, `router/claudelogin.go`, `router/claudeaccounts.go`); no router write, no grant, no machine-side account check (Deyao, 2026-10-15) |
+| The Claude login | (d) Anthropic: the router hands the pair of the session's Claude account (DECISIONS 185: one Claude key store per account, `claude-<name>`, the router's own; picked when the session is made and kept until Deyao switches it, `POST /api/sessions/:id/account` (DECISIONS 202), the router's word) over `/m/claude-login` (machine-signed); taken at boot, kept in step by a long poll with the router's refresh protocol (`machine/claudelogin.go`, `router/claudelogin.go`, `router/claudeaccounts.go`); no router write, no grant, no machine-side account check (Deyao, 2026-10-15) |
 | Wakeups, crons | (c) the session's own signed request + the core's attestation; the line records what it delivered (in the snapshot): a wakeup once, a cron once per run and at most every half period |
 | The watchdog's nudge, "continue" after a re-login, "upgraded" after an Upgrade | the image: texts built into it; the router picks when, never what (numbers, or a size: small, medium, large or a doubling past it) |
 | An Inbox request's outcome | (c) the session's own signed filing + image texts; per item the router names an outcome word, an id, a status number, and a proof the machine checks for approvals (phone grant, core-signed cert or approval, core key answer); the core attests it; each item once |

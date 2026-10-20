@@ -1993,3 +1993,18 @@ snapshot failed with "no space left on device", the machine was destroyed anyway
      MB/s, 55 s left", also "upgrading: …" in the app) and a lifecycle line every 20 s; the supervisor logs every 10 s.
      The rate is the phase's average (the bytes read over the time since it began), the ETA the rest at that rate; the
      percentage is of the measured size, so files that grow during the walk end at 100 %, not past it.
+
+202. **A session's Claude account can be switched (Deyao, 2026-10-20: "I ran out of usage on the chendeyao.uk account;
+     swap its session to chendeyao000@gmail.com, and then type continue into the chat").** `POST
+     /api/sessions/:id/account {account, continue}` (`router/accountswap.go`), in the session's More menu and requestable
+     as an Inbox API call whose item says from → to. Choices: the switch is the router's word, like the account at New
+     session (the login travels over the machine-signed long poll, not the cert), so it needs no core change and no Face
+     ID of its own; a running session's host is restarted on the SAME conversation (`--resume`), and only the host: the
+     machine, its background servers and tunnels stay. The machine restarts it once idle, at most 60 s after the
+     switch (a host out of usage never goes idle by itself); for images from before the `claude-account` command the
+     router does it after 2 minutes through the `terminal` holder, as the in-place permission-mode switch does. Success
+     is checked from the machine's own status (the new pair's expiry on disk, then a new host pid with Remote Control
+     up), never assumed. "continue" uses the canned delivery the login repair uses; for a paused session it waits on the
+     session (`ops.continueAfterStart`) until its next start's host is up and idle. With `CLAUDE_STORE_IN_CERT=1` the
+     new account's store is added through the existing add-store flow (Face ID); a paused session is refused there,
+     since its next cert comes from its line as it is.
