@@ -8,8 +8,8 @@ package main
 //   resume options    POST /api/sessions/:id/resume {size, model, apiProxy}: applied before the resume.
 //                     None of them is in the core's Options (only the harness is), so the dead-machine rule
 //                     still approves the resume: they are the router's unsigned word, like at New session.
-//   restart           POST /api/sessions/:id/restart {env, rollback: {dropFromMarker}, prompt}: pause (if
-//                     running) + resume on the same image. `env` patches the machine env with NON-secret
+//   restart           POST /api/sessions/:id/restart {env, rollback: {dropFromMarker}, prompt, upgrade}: pause (if
+//                     running) + resume on the same image (upgrade: the newest, through its resume-upgrade approval). `env` patches the machine env with NON-secret
 //                     keys only (secrets come from stores); a rollback is applied by the next machine to the
 //                     snapshot it has verified (machine/rollback.go), since the router can't edit a
 //                     machine-signed snapshot.
@@ -485,6 +485,9 @@ type RestartRequest struct {
 		DropFromMarker string `json:"dropFromMarker"`
 	} `json:"rollback"`
 	Prompt string `json:"prompt"`
+	// Upgrade: resume on the newest session image (its resume-upgrade approval in the Inbox, one Face ID) instead of
+	// the same image, e.g. to bring a fixed supervisor to a running session (2026-10-20)
+	Upgrade bool `json:"upgrade"`
 	ResumeOptions
 }
 
@@ -602,7 +605,7 @@ func (r *Router) Restart(id string, in RestartRequest) (map[string]any, error) {
 			// handover.go: an unattended restart (no prompt, no rollback: those go to the phone) starts its next
 			// machine as soon as the old one is told to stop
 			var next *nextMachine
-			if prompt == "" && marker == "" {
+			if prompt == "" && marker == "" && !in.Upgrade { // a spare runs the same image: not for an upgrade
 				next = r.handoverNext(s, in.ResumeOptions.Size, 0)
 			}
 			r.ops.phase(j, "snapshotting", nil)
@@ -649,7 +652,7 @@ func (r *Router) Restart(id string, in RestartRequest) (map[string]any, error) {
 			return
 		}
 		r.ops.phase(j, "resuming", nil)
-		if err := r.handoverResume(id, prompt); err != nil {
+		if err := r.handoverResume(id, prompt, in.Upgrade); err != nil {
 			fail(err)
 			return
 		}
@@ -660,7 +663,7 @@ func (r *Router) Restart(id string, in RestartRequest) (map[string]any, error) {
 	for k := range patch {
 		keys = append(keys, k)
 	}
-	return map[string]any{"started": true, "kind": "restart", "env": keys, "rollback": marker != ""}, nil
+	return map[string]any{"started": true, "kind": "restart", "env": keys, "rollback": marker != "", "upgrade": in.Upgrade}, nil
 }
 
 func certMachine(c *Doc) string {

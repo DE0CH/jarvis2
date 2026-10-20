@@ -198,10 +198,10 @@ func (r *Router) dropSpare(sid string, sp *spare, why string) {
 
 // handoverResume: a handover's resume right after its pause. The pause marks the session paused a moment before it
 // releases the session's lock, so a resume that comes at once can meet errBusy: it tries again for a while.
-func (r *Router) handoverResume(id, prompt string) error {
+func (r *Router) handoverResume(id, prompt string, upgrade bool) error {
 	err := errBusy
 	for end := time.Now().Add(30 * time.Second); errors.Is(err, errBusy) && time.Now().Before(end); {
-		if err = r.resumeWithPrompt(id, false, prompt); errors.Is(err, errBusy) {
+		if err = r.resumeWithPrompt(id, upgrade, prompt); errors.Is(err, errBusy) {
 			time.Sleep(opsPoll)
 		}
 	}

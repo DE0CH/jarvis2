@@ -241,3 +241,21 @@ func TestAFailedNewLineStartsAgain(t *testing.T) {
 		}
 	})
 }
+
+// Restart {upgrade: true}: the resume after the pause goes on the newest image, through its resume-upgrade approval
+// (how a fixed supervisor reaches a running session in one Inbox ask)
+func TestRestartWithUpgradeAsksForTheNewestImage(t *testing.T) {
+	rg, _ := v2Rig(t)
+	pausedOnAPin(rg)
+	rg.r.cfg.NoAccess = true
+	code, out := appDo(t, rg.r, "POST", "/api/sessions/s1/restart", `{"upgrade":true}`)
+	if code != 202 || out["upgrade"] != true {
+		t.Fatalf("%d %v", code, out)
+	}
+	var a *Approval
+	waitFor(t, "approval", func() bool { a = approvalOf(rg, "s1"); return a != nil })
+	if a.Kind != "resume-upgrade" {
+		t.Fatalf("%+v", a)
+	}
+	waitFor(t, "job finished", func() bool { j := rg.r.ops.jobView("s1"); return j != nil && j["finishedAt"] != nil })
+}
