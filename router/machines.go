@@ -24,7 +24,7 @@ import (
 	"time"
 )
 
-// production's router address on the Fly private network (k8s/apps/router.yaml MACHINE_URL); any other
+// production's router address on the Fly private network (k8s/control/apps/router/router.yaml MACHINE_URL); any other
 // JARVIS2_URL is a test router's (infra/e2e.sh, a rehearsal box)
 const productionRouterHost = "jarvis2-box._peer.internal"
 

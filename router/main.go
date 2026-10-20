@@ -225,7 +225,7 @@ func main() {
 	// polls (directly, and through the next pod's standby proxy). Then a Claude login refresh in flight is let
 	// finish, so its answer reaches the volume (the old refresh token is dead the moment the token endpoint answers).
 	// Then the handover (leader.go): the next pod leads, and what still reaches this one is proxied there.
-	// DRAIN_SECONDS stays under the pod's terminationGracePeriodSeconds (k8s/apps/router.yaml).
+	// DRAIN_SECONDS stays under the pod's terminationGracePeriodSeconds (k8s/control/apps/router/router.yaml).
 	<-sig
 	if sender != nil && sender.moved() {
 		time.Sleep(time.Duration(handoverLingerSeconds()) * time.Second)

@@ -11,7 +11,7 @@ package main
 // and a scheduler/autopilot/task tick sees errBusy and tries again on its next tick, i.e. in the next pod — while
 // everything already running finishes. Reads, the machines' reports (/m: status, snapshots — a pause in flight needs
 // its snapshot) and the Claude login's long polls go on being served throughout. Then the process exits.
-// k8s/apps/router.yaml gives the drain terminationGracePeriodSeconds: the longest job is a pause waiting
+// k8s/control/apps/router/router.yaml gives the drain terminationGracePeriodSeconds: the longest job is a pause waiting
 // SnapshotWait for the snapshot plus the kill.
 //
 // A crash (OOM, node reboot, a drain past the grace period) still cuts actions off; endCutOff (below) turns what

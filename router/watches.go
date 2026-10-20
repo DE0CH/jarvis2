@@ -2,7 +2,7 @@ package main
 
 // Watches (conditional wakeups; Jarvis 1's lib/watch.js and its server.js loop, in Jarvis 2's shape). A session arms a
 // watch with its own signed request: a check script, the prompt for when the condition is met, a "fail" prompt for when
-// it gives up, an interval and a maximum age. The router runs the check on the box's watch runner (k8s/apps/watch.yaml,
+// it gives up, an interval and a maximum age. The router runs the check on the box's watch runner (k8s/services/apps/watch/watch.yaml,
 // services/watch) every interval, whether the session is running or paused; the runner holds no secrets and reaches
 // only the public internet, so a check gets none of the session's stores (docs/DECISIONS.md 101). Exit 0 = met: the
 // prompt is delivered (the session resumed first when it is paused); exit 3, or the maximum age passed = give up: the
@@ -189,7 +189,7 @@ type checkResult struct {
 }
 
 func watchRunnerURL() string {
-	return strings.TrimSuffix(env("WATCH_URL", "http://watch.jarvis2-edge.svc.cluster.local:8095"), "/")
+	return strings.TrimSuffix(env("WATCH_URL", "http://10.77.0.3:30095"), "/")
 }
 
 var watchClient = &http.Client{Timeout: (watchCheckTimeout + 45) * time.Second}

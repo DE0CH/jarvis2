@@ -2,7 +2,7 @@ package main
 
 // Features outside the lifecycle (Jarvis 1 parity, docs/PARITY.md). Each lives in its own file, registers its
 // routes in registerFeatures and its background loop in startFeatures, and reads its own settings from the
-// environment (secrets come from k8s/secrets/router.enc.yaml via envFrom). They act on sessions only through
+// environment (secrets come from k8s/control/secrets/router.enc.yaml via envFrom). They act on sessions only through
 // the router's own flows and through grants (grants.go); none talks to the core directly, except machines.go's Destroy
 // of a machine with no session (the core's kill, as a pause makes it).
 

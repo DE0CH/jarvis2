@@ -420,7 +420,7 @@ func (r *Router) addApproval(a *Approval) {
 	}
 }
 
-// loadImageSigs reads k8s/apps/session-image-sigs.txt as mounted ("<image> <sig>" per line; images.yml appends one per
+// loadImageSigs reads k8s/control/apps/router/session-image-sigs.txt as mounted ("<image> <sig>" per line; images.yml appends one per
 // pin). The phone checks each signature itself (keys/ci.pub): the router can only pass one on or withhold it.
 func loadImageSigs(path string) map[string]string {
 	out := map[string]string{}

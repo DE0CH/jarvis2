@@ -2,7 +2,7 @@ package main
 
 // Gapless rollouts (Deyao, 2026-10-15: "deploy" means zero downtime). The router's state is one process's memory
 // (state.json on the volume is its copy), so exactly ONE router process may own it: the LEADER. A rollout starts the
-// new pod next to the old one (RollingUpdate, maxUnavailable 0, k8s/apps/router.yaml); the handover is an flock on
+// new pod next to the old one (RollingUpdate, maxUnavailable 0, k8s/control/apps/router/router.yaml); the handover is an flock on
 // the shared volume (both pods are on the box's one node, so they share the file and its lock):
 //
 //   1. The new pod can't take the lock: it is a STANDBY. It listens at once and is ready, and it reverse-proxies

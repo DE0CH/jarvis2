@@ -1,7 +1,7 @@
 package main
 
-// Transcript search and the iCloud index: their own pods on this box (services/search, services/icloud-index;
-// k8s/apps/search.yaml, k8s/apps/icloud-index.yaml, namespace jarvis2-edge). The router forwards to them, for the
+// Transcript search and the iCloud index: their own pods on the services box (services/search, services/icloud-index;
+// k8s/services/apps/search, k8s/services/apps/icloud-index, namespace jarvis2-services). The router forwards to them, for the
 // app's Search tab (/api/...) and for sessions (/m/api/..., the machine's local proxy; any session may search).
 // The iCloud index is identity-level (Deyao, 2026-10-13): its paths, OCR'd text and downloads act as Deyao's own
 // files, so a session reaches it only while its cert holds the `identity` store (where the iCloud login lives);
@@ -10,8 +10,8 @@ package main
 // is behind Cloudflare Access (the app) or the machine signature (sessions). Shapes: docs/API.md "Transcript
 // search", "iCloud index" (unchanged from Jarvis 1, whose services these were).
 //
-// router env: SEARCH_URL (default http://search.jarvis2-edge.svc.cluster.local:8090), ICLOUD_INDEX_URL (default
-// http://icloud-index.jarvis2-edge.svc.cluster.local:8091).
+// router env: SEARCH_URL (default http://10.77.0.3:30090), ICLOUD_INDEX_URL (default
+// http://10.77.0.3:30091).
 
 import (
 	"bytes"
@@ -46,9 +46,9 @@ var searchClient = &http.Client{Timeout: 2 * time.Minute}
 
 func serviceBase(svc string) (base, name string) {
 	if svc == "icloud" {
-		return strings.TrimSuffix(env("ICLOUD_INDEX_URL", "http://icloud-index.jarvis2-edge.svc.cluster.local:8091"), "/"), "the iCloud index"
+		return strings.TrimSuffix(env("ICLOUD_INDEX_URL", "http://10.77.0.3:30091"), "/"), "the iCloud index"
 	}
-	return strings.TrimSuffix(env("SEARCH_URL", "http://search.jarvis2-edge.svc.cluster.local:8090"), "/"), "transcript search"
+	return strings.TrimSuffix(env("SEARCH_URL", "http://10.77.0.3:30090"), "/"), "transcript search"
 }
 
 func (r *Router) registerSearchServices(app appRoute, m machineRoute) {

@@ -35,7 +35,7 @@ import (
 )
 
 // claudeStoreInCert: a new session's cert names its account's store (claude-<name>), so the phone vouches for the
-// account and the session gets its pair from its store. The router's env CLAUDE_STORE_IN_CERT=1 (k8s/apps/router.yaml),
+// account and the session gets its pair from its store. The router's env CLAUDE_STORE_IN_CERT=1 (k8s/control/apps/router/router.yaml),
 // set only once Deyao's iPhone runs an app that accepts the router as a key's writer (ios Checks.keyWriter "router"):
 // an older app refuses to unlock such a store, so Start would fail. Like SIGN_CLAUDE_ACCOUNT.
 var claudeStoreInCert = os.Getenv("CLAUDE_STORE_IN_CERT") == "1"

@@ -1,8 +1,0 @@
-# The old box only, until the move: watch runs on the services box (k8s/services/apps/watch); this Service keeps
-# the in-cluster name the old router calls, answered by its socat bridge (services-bridge.yaml).
-apiVersion: v1
-kind: Service
-metadata: { name: watch, namespace: jarvis2-edge }
-spec:
-  selector: { app: watch }
-  ports: [{ port: 8095, targetPort: 8095 }]

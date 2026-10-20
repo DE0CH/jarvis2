@@ -1,7 +1,7 @@
 package main
 
 // The Storage Box (Hetzner, WebDAV over https on 443) with the router's own credentials: router env
-// STORAGEBOX_HOST, STORAGEBOX_USER, STORAGEBOX_PASSWORD (k8s/secrets/router.enc.yaml). The archives of
+// STORAGEBOX_HOST, STORAGEBOX_USER, STORAGEBOX_PASSWORD (k8s/control/secrets/router.enc.yaml). The archives of
 // destroyed sessions live there, in Jarvis 1's layout (claude-records/<yyyy-mm-dd> <title>/), so Jarvis 1's
 // transcript search picks them up.
 
