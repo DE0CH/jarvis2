@@ -687,6 +687,30 @@ the supervisor copies the snapshot's single files (`~/.claude.json`, the Jarvis 
 final snapshot. The volume is always new and empty at boot; the successor's state still comes only from the
 predecessor's signed snapshot. The supervisor reports the root disk and the volume every 30 s (`POST /m/disk`).
 
+**Harnesses.** The cert's options name the harness; `harness-claude.sh` (the entrypoint's launcher) execs the others'
+launchers. Each keeps what Jarvis reads in a Claude session's shape (a registry entry in `~/.claude/sessions/`,
+transcripts in `~/.claude/projects/`, the tmux session `claude` for the terminal), so auto-pause, attention, the stall
+watchdog, one-shot, snapshots and archives have one path; all but `claude` take Jarvis's messages through
+`harness-send` and publish their front end on the session's tunnel origin (store `tunnel`).
+
+| harness | agent | front end | LLM login |
+|---|---|---|---|
+| `claude` | `claude --remote-control` in tmux | the Claude app (Remote Control) | the session's Claude account, read by claude from `~/.claude/.credentials.json` |
+| `opencode` | OpenCode, driven by a Paseo daemon | the Paseo app (relay) + the daemon's web UI | OpenRouter key from the store `openrouter` |
+| `openclaw` | claw-code, run per turn by an OpenClaw gateway | the OpenClaw app + Control UI | the session's Claude account, sent by `api-proxy.js` |
+| `paseo-claude` (Deyao, 2026-10-20) | the image's unmodified Claude Code, driven by a Paseo daemon through the Claude Agent SDK | the Paseo app (relay) + the daemon's web UI | the session's Claude account, sent by `api-proxy.js` per request |
+
+Claude Code · Paseo (`harness-paseo-claude.sh`, DECISIONS 204): Claude Code loads the working dir's CLAUDE.md, skills,
+settings, hooks (the worker count) and MCP servers itself; its transcripts are its own; a pause keeps `~/.paseo` and the
+transcripts, so the resumed daemon's agent resumes the same Claude conversation. Claude Code runs with a placeholder
+OAuth token (`CLAUDE_CODE_OAUTH_TOKEN`) and `ANTHROPIC_BASE_URL` = the local `api-proxy.js` (`API_PROXY_CLAUDE_AUTH=1`),
+which sends `~/.claude/.credentials.json`'s access token on every request. So Claude Code holds no refresh token and
+never refreshes (the router stays the only refresher, DECISIONS 185), and an account switch (DECISIONS 202) is the new
+pair on disk: the next request goes out on the new account, a turn in flight included, nothing restarted. A Jarvis
+message waits until the main agent is idle (Paseo's send interrupts a running turn). Claude Code's own calls outside
+the API base URL (its profile, claude.ai connectors, bootstrap, telemetry) go to Anthropic with the placeholder and are
+refused, so claude.ai MCP connectors are not available in these sessions.
+
 ### The supervisor and the guard (Deyao, 2026-10-16)
 
 **The supervisor** is the machine's one long-running process that talks to the control plane (`jarvis2-machine
@@ -705,7 +729,7 @@ machine's first second to the kill; then boot goes on and finally execs the harn
 | status, memory, disk | `status.go`, `memory.go`, `disk.go` | no | the reports the router's card and watches read (output only) |
 | API proxy | `apiproxy.go` | — | `$JARVIS_URL` for the session's scripts, each call signed as this machine |
 | live transcript sync | `livesync.go` | no | the transcripts to the Storage Box (through the router) for search (output only) |
-| Claude login sync | `claudelogin.go` | no | the session's Claude pair kept in step with the router's (long poll); on an account switch the new pair and account record are installed under the running claude (no restart), the token's account checked with Anthropic, Remote Control started again |
+| Claude login sync | `claudelogin.go` | no | the session's Claude pair kept in step with the router's (long poll); on an account switch the new pair and account record are installed under the running claude (no restart), the token's account checked with Anthropic, Remote Control started again (Claude Code · Paseo: nothing to start, its API proxy sends the new pair) |
 | log | `supervisorlog.go` | no | the supervisor log (below) |
 | secrets | `secrets.go`, `deploykeys.go` | no | the session's secrets, in RAM only (below) |
 

@@ -468,6 +468,10 @@ func afterSwitch(l routerLogin, c *client) {
 			log.Printf("claude login: ~/.claude.json had the old account again (claude's own profile fetch): set again")
 		}
 	}
+	if proxyLogin(certHarness()) { // harnesses.go: Claude Code · Paseo, no Remote Control; api-proxy.js sends the new pair
+		log.Printf("claude login: the harness's API proxy sends the new account's login from its next request (no Remote Control here)")
+		return
+	}
 	enableRemoteControl(oldBridge)
 }
 

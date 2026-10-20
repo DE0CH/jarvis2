@@ -463,7 +463,7 @@ func fileExists(p string) bool { _, err := os.Stat(p); return err == nil }
 // sendToHarness: the text into the harness (the same as the router's old exec path, run here)
 func sendToHarness(harness, mode, from, text string) error {
 	var cmd *exec.Cmd
-	if harness == "opencode" || harness == "openclaw" {
+	if viaHarnessSend(harness) { // harnesses.go
 		cmd = unprotectedCommand(nil, "/usr/local/bin/harness-send", "--queue")
 		cmd.Stdin = strings.NewReader(text)
 	} else if channelSend != "" && fileExists(channelSend) && fileExists(channelConfig) {

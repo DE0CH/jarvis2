@@ -5,6 +5,7 @@
 # pending permission ask. Which harness is running decides the route:
 #   opencode    (harness-opencode.sh)   `paseo send` to the session's MAIN agent (recorded in
 #                                       ~/.claude/.paseo-agent); with no main agent yet it creates one.
+#   paseo-claude (harness-paseo-claude.sh) the same, with Claude Code as the agent (`--provider claude`).
 #   openclaw    (harness-openclaw.sh)   the gateway's `chat.send` into its main session
 #                                       (agent:main:main) — the one the Control UI and the app open;
 #                                       it answers "started" at once, the turn runs in the gateway.
@@ -19,6 +20,7 @@ export HOME=/home/claude PATH="/home/claude/.local/bin:/usr/local/bin:/usr/bin:/
 # harness launcher, with the session's env) runs the agents; this client only talks to them
 INBOX="$HOME/.claude/harness-inbox"
 if pgrep -u "$(id -u)" -f harness-opencode.sh >/dev/null; then HARNESS=opencode
+elif pgrep -u "$(id -u)" -f harness-paseo-claude.sh >/dev/null; then HARNESS=paseo-claude
 elif pgrep -u "$(id -u)" -f harness-openclaw.sh >/dev/null; then HARNESS=openclaw
 else HARNESS=""; fi
 
@@ -44,20 +46,35 @@ if [ "$HARNESS" = openclaw ]; then
   exec /usr/local/bin/openclaw gateway call chat.send --json --timeout 45000 --params "$params"
 fi
 
-# ---------------------------------------------------------------- opencode (Paseo) ---------------
-[ "$HARNESS" = opencode ] || { echo "harness-send: no harness launcher is running" >&2; exit 3; }
+# ---------------------------------------------------------------- Paseo: opencode | paseo-claude ---
+[ "$HARNESS" = opencode ] || [ "$HARNESS" = paseo-claude ] || { echo "harness-send: no harness launcher is running" >&2; exit 3; }
 export PASEO_HOME="$HOME/.paseo"
 REC="$HOME/.claude/.paseo-agent"
 IMG_ARGS=(); for i in "${IMGS[@]:-}"; do [ -n "$i" ] && IMG_ARGS+=(--image "$i"); done
 WD="$HOME/workspace"; mapfile -t DIRS < <(find "$WD" -mindepth 1 -maxdepth 1 -type d 2>/dev/null); [ "${#DIRS[@]}" = 1 ] && WD="${DIRS[0]}"
-MODEL="${SESSION_MODEL:-$(envof SESSION_MODEL opencode)}"; LABEL="${SESSION_LABEL:-$(envof SESSION_LABEL opencode)}"
+MODEL="${SESSION_MODEL:-$(envof SESSION_MODEL "$HARNESS")}"; LABEL="${SESSION_LABEL:-$(envof SESSION_LABEL "$HARNESS")}"
 
 id="$(cat "$REC" 2>/dev/null)"
 if [ -n "$id" ] && ls "$PASEO_HOME"/agents/*/"$id".json >/dev/null 2>&1; then
+  # Paseo's send interrupts a running turn (activeTurnBehavior "interrupt"; the CLI can't steer): for Claude Code
+  # a message waits until the main agent is idle instead. 75 = busy, try again later (the inbox loop doesn't
+  # count it as a failed try).
+  if [ "$HARNESS" = paseo-claude ] && python3 -c 'import glob,json,sys; a=json.load(open(glob.glob(sys.argv[1])[0])); sys.exit(0 if a.get("lastStatus") in ("running","initializing") else 1)' "$PASEO_HOME/agents/*/$id.json" 2>/dev/null; then
+    echo "harness-send: the main agent is running a turn; the message waits for it to end" >&2; exit 75
+  fi
   f="$(mktemp)"; printf '%s' "$TEXT" > "$f"
   paseo send "$id" --no-wait --prompt-file "$f" "${IMG_ARGS[@]}" --json; rc=$?; rm -f "$f"; exit $rc
 fi
-out="$(cd "$WD" && paseo run -d --provider opencode --model "${MODEL:-openrouter/z-ai/glm-5.3}" --mode build ${LABEL:+--title "$LABEL"} "${IMG_ARGS[@]}" --json -- "$TEXT")" || { echo "$out" >&2; exit 1; }
+if [ "$HARNESS" = paseo-claude ]; then
+  # the permission mode as harness-paseo-claude.sh maps it (the in-place file wins over the boot env)
+  PERM="$(cat "$HOME/.claude/.permission-mode" 2>/dev/null || envof SESSION_PERMISSION_MODE paseo-claude)"
+  MODE=auto; [ "$PERM" = bypass ] && MODE=bypassPermissions
+  MODEL="${MODEL:-paseo/claude-opus-5-5}"
+  RUN=(--provider claude --model "${MODEL#paseo/}" --mode "$MODE")
+else
+  RUN=(--provider opencode --model "${MODEL:-openrouter/z-ai/glm-5.3}" --mode build)
+fi
+out="$(cd "$WD" && paseo run -d "${RUN[@]}" ${LABEL:+--title "$LABEL"} "${IMG_ARGS[@]}" --json -- "$TEXT")" || { echo "$out" >&2; exit 1; }
 id="$(printf '%s' "$out" | python3 -c 'import json,sys;s=sys.stdin.read();print(json.loads(s[s.index("{"):]).get("agentId",""))' 2>/dev/null)"
 [ -n "$id" ] || { echo "harness-send: no agent id in: $out" >&2; exit 1; }
 printf '%s' "$id" > "$REC"; echo "{\"ok\":true,\"agentId\":\"$id\",\"created\":true}"

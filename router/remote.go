@@ -1,10 +1,10 @@
 package main
 
-// Remote access to an OpenCode or OpenClaw session (Jarvis 1's remoteInfo, /api/sessions/:id/remote and
-// /api/remotes). Both harnesses publish their front end through the session's own cf-tunnel origin
-// https://<session id>-s.deyaochen.com/ (behind Cloudflare Access, Deyao's login):
-//   opencode  the Paseo daemon's web UI; the daemon also prints a pairing offer for the Paseo app (its relay is
-//             end-to-end encrypted, the link IS the secret)
+// Remote access to a Paseo (OpenCode, Claude Code) or OpenClaw session (Jarvis 1's remoteInfo,
+// /api/sessions/:id/remote and /api/remotes). These harnesses publish their front end through the session's own
+// cf-tunnel origin https://<session id>-s.deyaochen.com/ (behind Cloudflare Access, Deyao's login):
+//   opencode, paseo-claude  the Paseo daemon's web UI; the daemon also prints a pairing offer for the Paseo app (its
+//             relay is end-to-end encrypted, the link IS the secret)
 //   openclaw  the OpenClaw gateway: Control UI over HTTPS and the app's WebSocket on the same origin; the gateway
 //             token (~/.openclaw/jarvis-remote.json, written by harness-openclaw.sh) is the secret
 // The router reads those secrets on demand through a grant for holder "remote" (grants.go): its own key, so
@@ -35,7 +35,7 @@ import (
 
 const remoteHolder = "remote"
 
-var remoteHarnesses = map[string]bool{"opencode": true, "openclaw": true}
+var remoteHarnesses = map[string]bool{"opencode": true, "openclaw": true, "paseo-claude": true}
 
 // the commands the remote holder runs (bash -lc as the session user)
 const (
@@ -46,8 +46,8 @@ const (
 type RemoteInfo struct {
 	WebURL  string `json:"webUrl"`
 	Harness string `json:"harness"`
-	PairURL string `json:"pairUrl,omitempty"` // opencode
-	Relay   bool   `json:"relay,omitempty"`   // opencode
+	PairURL string `json:"pairUrl,omitempty"` // a Paseo harness
+	Relay   bool   `json:"relay,omitempty"`   // a Paseo harness
 	URL     string `json:"url,omitempty"`     // openclaw: the gateway's WebSocket
 	Token   string `json:"token,omitempty"`   // openclaw: the gateway token
 	Error   string `json:"error,omitempty"`
@@ -72,7 +72,7 @@ type remoteHit struct {
 func parseRemote(harness, id, stdout string) RemoteInfo {
 	web := "https://" + tunnelHost(id) + "/"
 	info := RemoteInfo{WebURL: web, Harness: harness}
-	if harness == "opencode" {
+	if paseoHarness(harness) {
 		var pair struct {
 			URL          string `json:"url"`
 			RelayEnabled bool   `json:"relayEnabled"`
@@ -96,7 +96,7 @@ func parseRemote(harness, id, stdout string) RemoteInfo {
 	return info
 }
 
-// RemoteInfo: a started OpenCode/OpenClaw session's remote, read through the remote holder
+// RemoteInfo: a started Paseo/OpenClaw session's remote, read through the remote holder
 func (r *Router) RemoteInfo(s Session) RemoteInfo {
 	remoteCache.Lock()
 	hit, ok := remoteCache.m[s.MachineID]
@@ -105,7 +105,7 @@ func (r *Router) RemoteInfo(s Session) RemoteInfo {
 		return hit.info
 	}
 	cmd, wait := openclawRemote, 15*time.Second
-	if s.Harness == "opencode" {
+	if paseoHarness(s.Harness) {
 		cmd, wait = paseoPairCmd, 30*time.Second
 	}
 	res, err := r.Exec(s.ID, remoteHolder, cmd, wait)
@@ -138,7 +138,7 @@ func (r *Router) registerRemote(app appRoute, m machineRoute, public publicRoute
 			writeJSON(w, 404, map[string]string{"error": "no such session"})
 			return
 		case !remoteHarnesses[s.Harness]:
-			writeJSON(w, 400, map[string]string{"error": "only OpenCode and OpenClaw sessions have a remote here — a Claude session is in the Claude app"})
+			writeJSON(w, 400, map[string]string{"error": "only Paseo and OpenClaw sessions have a remote here — a Claude session is in the Claude app"})
 			return
 		case s.State != "started" || s.MachineID == "":
 			writeJSON(w, 409, map[string]string{"error": "session is " + s.State})
@@ -180,18 +180,20 @@ func tunnelProof(key, id string) string {
 	return hex.EncodeToString(h.Sum(nil))
 }
 
-// GET /api/remotes?harness=openclaw|opencode → {sessions: [{id, title, state, model, + url, token, webUrl
-// (openclaw) | pairUrl (opencode) — only on a started session whose front end is up, else error}]}
+// GET /api/remotes?harness=openclaw|opencode|paseo-claude|paseo → {sessions: [{id, title, state, model, harness, +
+// url, token, webUrl (openclaw) | pairUrl (a Paseo harness) — only on a started session whose front end is up, else
+// error}]}. harness=paseo: every session a Paseo daemon fronts (opencode and paseo-claude), what the Paseo app lists.
 func (r *Router) remotes(w http.ResponseWriter, req *http.Request) {
 	harness := req.URL.Query().Get("harness")
-	if !remoteHarnesses[harness] {
-		writeJSON(w, 400, map[string]string{"error": "harness must be openclaw or opencode"})
+	if !remoteHarnesses[harness] && harness != "paseo" {
+		writeJSON(w, 400, map[string]string{"error": "harness must be openclaw, opencode, paseo-claude or paseo"})
 		return
 	}
+	match := func(h string) bool { return h == harness || harness == "paseo" && paseoHarness(h) }
 	var all []Session
 	r.st.Do(func(d *persisted) {
 		for _, s := range d.Sessions {
-			if s.Harness == harness && s.State != "destroying" && s.State != "approval" {
+			if match(s.Harness) && s.State != "destroying" && s.State != "approval" {
 				all = append(all, *s)
 			}
 		}
@@ -200,7 +202,7 @@ func (r *Router) remotes(w http.ResponseWriter, req *http.Request) {
 	out := make([]map[string]any, len(all))
 	var wg sync.WaitGroup
 	for i, s := range all {
-		o := map[string]any{"id": s.ID, "title": sessionTitle(s), "state": s.State, "model": s.Model}
+		o := map[string]any{"id": s.ID, "title": sessionTitle(s), "state": s.State, "model": s.Model, "harness": s.Harness}
 		out[i] = o
 		if s.State != "started" || s.MachineID == "" {
 			continue

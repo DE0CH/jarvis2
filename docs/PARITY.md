@@ -13,7 +13,7 @@ snapshots, live transcripts, task results).
 
 ## Session lifecycle
 - **Create** (FT, AT): present. Idempotent `requestId`: present (a repeat answers the session it made). Lifecycle lock: 409 and `busy {kind, since}` in `/api/state`.
-- **Pause / resume / resume on newer image**: present (snapshot on the router volume, machine-signed, not encrypted). The snapshot holds the transcripts, `~/.claude.json`, `~/workspace`, `~/artifacts` and, as in Jarvis 1, the OpenCode/Paseo and OpenClaw harnesses' state (`~/.paseo`, `~/.claude/.paseo-agent`, `~/.local/share/opencode`, `~/.openclaw`, without their logs, pid files and caches: `machine/main.go` `snapshotPaths`/`snapshotSkip`), so their apps stay paired across a pause.
+- **Pause / resume / resume on newer image**: present (snapshot on the router volume, machine-signed, not encrypted). The snapshot holds the transcripts, `~/.claude.json`, `~/workspace`, `~/artifacts` and, as in Jarvis 1, the Paseo (OpenCode, Claude Code) and OpenClaw harnesses' state (`~/.paseo`, `~/.claude/.paseo-agent`, `~/.local/share/opencode`, `~/.openclaw`, without their logs, pid files and caches: `machine/main.go` `snapshotPaths`/`snapshotSkip`), so their apps stay paired across a pause.
 - **Resume prompt**: present (`POST /api/sessions/:id/resume {prompt}`, delivered as a peer message once started; router/schedule.go). Jarvis 1 typed it as a user prompt instead.
 - **Start on another size / model**: present (`POST …/resume {size, model, apiProxy}`), unsigned: no phone step.
 - **Wake job status**: present for permission-mode and restart (`wake {kind, phase, error, finishedAt}` in `/api/state`).
@@ -35,9 +35,9 @@ snapshots, live transcripts, task results).
 - Registry read: present (the machine reports it: `/m/status {raw}`, `router/registry.go`).
 - Live terminal: present (`router/terminal.go`, holder `terminal`; the app draws tmux's capture, app/DECISIONS 27).
 - **App title sync (AT)**: present. The machine reads the Claude app's title of its Remote Control entry with its own Claude login and reports it (`/m/status {appTitle}`, `machine/apptitle.go`); it names the card, the Discord channel and the archive folder first (Jarvis 1's pickTitle: app title → CLI-pinned name → label → AI title), is kept while paused, and a resume without a label passes it as `SESSION_RESUME_TITLE`. Not ported: Jarvis 1's rename-back of a fresh Remote Control entry after a Start (`keepAppTitle`; DECISIONS 39).
-- Remote page for opencode/openclaw: present (`GET /api/sessions/:id/remote`, `router/remote.go`, holder `remote`).
+- Remote page for opencode/openclaw/paseo-claude: present (`GET /api/sessions/:id/remote`, `router/remote.go`, holder `remote`).
 - `/api/remotes?harness=` and `POST /api/sessions/:id/start`: present (`router/devices.go`), for Deyao and his paired OpenClaw/Paseo apps ("Device pairing" below).
-- Per-session tunnel origin (CFA): present — harnesses opencode/openclaw bring the store `tunnel` (Access service token `jarvis2-tunnel`); the machine fetches a proof for its own session id (`GET /m/tunnel-proof`); the cf-tunnel Worker confines the token to `AGENT jarvis2` with that proof (claude-env `cf-tunnel/wrangler.toml` `CONFINED_TOKENS`). A paused Jarvis 2 session's link gives the Worker's bare 503 (its Unpause page is for Jarvis 1 ids only).
+- Per-session tunnel origin (CFA): present — harnesses opencode/openclaw/paseo-claude bring the store `tunnel` (Access service token `jarvis2-tunnel`); the machine fetches a proof for its own session id (`GET /m/tunnel-proof`); the cf-tunnel Worker confines the token to `AGENT jarvis2` with that proof (claude-env `cf-tunnel/wrangler.toml` `CONFINED_TOKENS`). A paused Jarvis 2 session's link gives the Worker's bare 503 (its Unpause page is for Jarvis 1 ids only).
 
 ## Automatic behaviour
 - Auto-pause, Escape-cancel of a stale prompt (holder `status`), "needs you"/idle/dead DMs (+ `notify-idle` mute), model-downgrade DM (holder `status`), stall nudge, one-shot destroy: present (`router/autopilot.go`, `router/oneshot.go`). Refused commands set `needsGrant`.
@@ -69,6 +69,7 @@ snapshots, live transcripts, task results).
 
 ## Harnesses and image
 - Claude: present. OpenCode + Paseo, OpenClaw + claw-code: present (policy: opencode brings `openrouter` + `tunnel`, openclaw brings `claude` + `tunnel`; `GET /api/models[?harness=]`; the harness is signed in the cert's options). `harness-send`: present (the machine's own delivery). API proxy: present.
+- Claude Code + Paseo (`paseo-claude`): new in Jarvis 2 (Deyao, 2026-10-20; DECISIONS 204), no Jarvis 1 counterpart. Brings `tunnel`, runs on a Claude account; the only harness besides `claude` whose running session switches accounts (no restart: its API proxy sends the new pair). Differences from `claude`: no Remote Control (the Paseo app and web UI instead), no claude.ai MCP connectors, Jarvis messages wait for the agent to be idle.
 - Session image: Jarvis 2 builds all of it. The base (tools, harnesses, entrypoint, supervisor, workspace layer, api-proxy,
   content-sync, pull-secrets, session-secret) is `session-image/base/`, carried over from Jarvis 1's `selfhost/session-image/` (DECISIONS 100-102);
   Jarvis 1's image is no longer used. Fork pins (Jarvis 1's `fork-pin.yml`): present (`.github/workflows/fork-pin.yml`; the

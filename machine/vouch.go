@@ -352,9 +352,9 @@ func harnessEnv(clean []string, v Vouched, me string, firstMachine bool, secrets
 	m["SESSION_HARNESS"], m["SESSION_PERMISSION_MODE"] = v.Cert.Options.Harness, certMode(v.Cert)
 	m["SESSION_ID"], m["JARVIS2_SESSION_ID"], m["TUNNEL_ID"] = sid, sid, sid
 	m["JARVIS_URL"], m["SESSION_API_TOKEN"] = "http://"+apiProxyAddr, "jarvis2-local-proxy"
-	if v.Cert.Options.Harness != "opencode" && v.Cert.Options.Harness != "openclaw" {
-		// Jarvis 1's scripts insist on these before calling the local API; OpenCode/OpenClaw take them as "publish
-		// the web UI through the tunnel" (the router's old sessionAPIEnv rule)
+	if !viaHarnessSend(v.Cert.Options.Harness) {
+		// Jarvis 1's scripts insist on these before calling the local API; the Paseo and OpenClaw harnesses take them as
+		// "publish the web UI through the tunnel" (the router's old sessionAPIEnv rule)
 		m["CF_ACCESS_CLIENT_ID"], m["CF_ACCESS_CLIENT_SECRET"] = "jarvis2-local-proxy", "jarvis2-local-proxy"
 	}
 	if v.Ex.DiscordChannel != "" {

@@ -7,6 +7,8 @@ package main
 //   opencode  OpenCode on OpenRouter (`openrouter/<slug>`), driven by a Paseo daemon: the Paseo app + web UI
 //   openclaw  claw-code inside an OpenClaw gateway (`openclaw/<Claude model id>`), Claude subscription: the
 //             OpenClaw app + Control UI
+//   paseo-claude  Claude Code driven by a Paseo daemon (`paseo/<Claude model id>`), Claude subscription through
+//             api-proxy.js (so an account switch needs no restart, accountswap.go): the Paseo app + web UI
 // The OpenCode list is Jarvis 1's curated one (every slug checked for tool calling on OpenRouter; prices are $/M
 // tokens in/out at curation).
 
@@ -32,6 +34,8 @@ var modelCatalog = []ModelChoice{
 	{"openrouter/minimax/minimax-m3", "MiniMax M3 — $0.30 / $1.20", "opencode"},
 	{"openclaw/claude-opus-5-5", "Opus 5.5", "openclaw"},
 	{"openclaw/claude-fable-5-1", "Fable 5.1", "openclaw"},
+	{"paseo/claude-opus-5-5", "Opus 5.5", "paseo-claude"},
+	{"paseo/claude-fable-5-1", "Fable 5.1", "paseo-claude"},
 }
 
 // the first model of each harness is its default
@@ -39,7 +43,16 @@ var harnessInfo = map[string]map[string]string{
 	"claude":   {"label": "Claude Code", "detail": "Claude subscription · Claude app"},
 	"opencode": {"label": "OpenCode · OpenRouter", "detail": "Paseo app + web UI"},
 	"openclaw": {"label": "claw-code · OpenClaw", "detail": "Claude subscription · OpenClaw app + Control UI"},
+	"paseo-claude": {"label": "Claude Code · Paseo", "detail": "Claude subscription · Paseo app + web UI"},
 }
+
+// paseoHarness: a Paseo daemon fronts the session (its app pairs with the daemon, its web UI is the session's tunnel
+// origin): OpenCode on OpenRouter, or Claude Code
+func paseoHarness(h string) bool { return h == "opencode" || h == "paseo-claude" }
+
+// proxyLoginHarness: Claude Code reaches the API only through api-proxy.js, which sends the session's current Claude
+// login per request (session-image harness-paseo-claude.sh): a running session switches accounts with no restart
+func proxyLoginHarness(h string) bool { return h == "paseo-claude" }
 
 func defaultModel(harness string) string {
 	for _, m := range modelCatalog {

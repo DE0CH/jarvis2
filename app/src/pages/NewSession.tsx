@@ -179,6 +179,7 @@ export function NewSession() {
           { value: "claude", title: "Claude Code", sub: "Claude subscription · Claude app" },
           { value: "opencode", title: "OpenCode · OpenRouter", sub: "Paseo app + web UI" },
           { value: "openclaw", title: "claw-code · OpenClaw", sub: "Claude subscription · OpenClaw app + Control UI" },
+          { value: "paseo-claude", title: "Claude Code · Paseo", sub: "Claude subscription · Paseo app + web UI" },
         ]} />
       </>
       {takesAccount && <><Lbl>Claude account</Lbl>
@@ -186,7 +187,7 @@ export function NewSession() {
           : accounts.accounts.length ? <RadioCards id="ns-account" value={account} onChange={setAccount} options={accounts.accounts.map((a) => ({ value: a.store, title: a.store + (a.default ? " (default)" : ""),
               sub: [a.email || "not signed in", a.needLogin ? "Re-login needed" : ""].filter(Boolean).join(" · ") }))} />
           : <Muted>No Claude account yet (Settings → Claude accounts): the session starts logged out.</Muted>}
-        <Muted mt={1}>The session keeps this account; it shows up in that account's Claude app.</Muted></>}
+        <Muted mt={1}>{harness === "claude" ? "The session keeps this account; it shows up in that account's Claude app." : "The session keeps this account until you switch it."}</Muted></>}
       <Lbl>Repos</Lbl>
       {repoList.length ? <CheckboxCards id="ns-repo" value={repos} onChange={setRepos} options={repoList.map((r) => ({ value: r.name, title: r.repo, sub: r.store }))} />
         : <Muted>No repos (Settings → Repos).</Muted>}

@@ -31,6 +31,12 @@ package main
 //                        (a core-attested delivery; into a session holding a sensitive store it waits in the Inbox for
 //                        Deyao to deliver, messages.go).
 //
+// Claude Code · Paseo (proxyLoginHarness, harness.go) is switched while running the same way, minus step 4: its
+// Claude Code holds only a placeholder token and reaches the API through api-proxy.js, which sends the pair on disk
+// per request, so step 2 is the switch (the next request goes out on the new account, a turn in flight included)
+// and there is no Remote Control. Its "continue" waits until the agent is idle (harness-send: Paseo's send would
+// interrupt a running turn).
+//
 // A session image from before 2026-10-20 (no __ACCOUNT__ in its status) restarts its host on the new account instead
 // (its harness merges the record at start, --resume): the machine does it once the host is idle; after
 // swapRestartWait the router kills the host's tmux session through the "terminal" holder (as the in-place
@@ -127,6 +133,9 @@ func accountSwitchDoes(d *persisted, sid string, body string) string {
 		}
 	}
 	out := fmt.Sprintf("Switch session “%s” (%s) from Claude account %s to %s: its Claude restarts on the same conversation", title, sid, from, to)
+	if s := d.Sessions[sid]; s != nil && proxyLoginHarness(s.Harness) {
+		out = fmt.Sprintf("Switch session “%s” (%s) from Claude account %s to %s: its next request goes out on the new account, nothing restarts", title, sid, from, to)
+	}
 	if in.Continue {
 		out += ", then “continue” is typed into its chat"
 	}
@@ -190,7 +199,7 @@ func (r *Router) SwitchAccount(req *http.Request, id string, in accountSwitchIn)
 		})
 		return map[string]any{"ok": true, "nextStart": true, "from": nullIfEmpty(from), "to": store, "continue": in.Continue}, nil
 	}
-	if harness != "claude" {
+	if harness != "claude" && !proxyLoginHarness(harness) {
 		return nil, fmt.Errorf("session is running the %s harness: pause it, switch its account, then resume it", harness)
 	}
 	if s.State != "started" {
@@ -223,7 +232,7 @@ func (r *Router) SwitchAccount(req *http.Request, id string, in accountSwitchIn)
 	r.send(s.MachineID, "claude-account") // machine/supervisor.go (images from 2026-10-20; older ones log it as unknown)
 	go func() {
 		defer unlock()
-		err := r.runAccountSwitch(j, id, s.MachineID, before, to, in.Continue)
+		err := r.runAccountSwitch(j, id, s.MachineID, harness, before, to, in.Continue)
 		if err != nil {
 			log.Printf("[account] %s: %v", id, err)
 			r.ops.phase(j, "failed", err)
@@ -278,7 +287,7 @@ func (r *Router) waitReg(id, machine string, d time.Duration, cond func(*Registr
 
 var errSwapTimeout = errors.New("timed out")
 
-func (r *Router) runAccountSwitch(j *wakeJob, id, machine string, before Registry, to *loginHub, cont bool) error {
+func (r *Router) runAccountSwitch(j *wakeJob, id, machine, harness string, before Registry, to *loginHub, cont bool) error {
 	r.ops.phase(j, "switching", nil)
 	if before.HostPid == 0 { // no status since this router started: the next report says what runs now
 		if g, err := r.waitReg(id, machine, swapLoginWait, func(g *Registry) bool { return g.HostPid != 0 }); err == nil {
@@ -303,7 +312,7 @@ func (r *Router) runAccountSwitch(j *wakeJob, id, machine string, before Registr
 			return fmt.Errorf("the machine didn't confirm %s's token with Anthropic: %w", to.store, err)
 		}
 		log.Printf("[account] %s: the installed token is %s's (Anthropic's profile, asked by the machine)", id, to.store)
-		if before.BridgeSessionID != "" {
+		if before.BridgeSessionID != "" && !proxyLoginHarness(harness) { // Claude Code · Paseo has no Remote Control
 			r.ops.phase(j, "Remote Control", nil)
 			if _, err := r.waitReg(id, machine, swapRCWait, func(g *Registry) bool {
 				return g.BridgeSessionID != "" && g.BridgeSessionID != before.BridgeSessionID

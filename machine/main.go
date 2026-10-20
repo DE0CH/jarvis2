@@ -382,7 +382,7 @@ func prepare() error {
 	if firstMachine && len(v.Config.Attachments) > 0 {
 		env = append(env, fetchAttachments(c, coreKey, v.Config.Attachments)...) // attachments.go: hash-checked against the cert
 	}
-	if h := cert.Options.Harness; h == "" || h == "claude" {
+	if runsClaudeCode(cert.Options.Harness) { // harnesses.go
 		if home, err := os.UserHomeDir(); err == nil {
 			if err := installWorkerHooks(home); err != nil { // workers.go: the subagent/background-job count
 				log.Printf("workers hooks: %v", err)

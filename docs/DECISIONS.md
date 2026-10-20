@@ -2040,3 +2040,42 @@ snapshot failed with "no space left on device", the machine was destroyed anyway
        message is Deyao's approval, so he answers once.
      - **Not chosen:** time windows ("allow messages for 10 minutes") or a standing grant per feature; Deyao wants each
        message, and a rule per kind and session is the one explicit opt-out.
+204. **A new harness, Claude Code · Paseo (`paseo-claude`), an option next to the default (Deyao, 2026-10-20: Claude Code
+     as the agent loop, Paseo as the front end, transparent account switching, "without breaking the existing
+     workflow").** `session-image/base/harness-paseo-claude.sh`; models `paseo/claude-opus-5-5`, `paseo/claude-fable-5-1`;
+     policy: brings `tunnel`, `claudeAccount`. Choices:
+     - **The agent is the image's own unmodified `claude`**, driven by Paseo's daemon through the Claude Agent SDK
+       (Paseo's bundled SDK binary is already a link to it). It loads CLAUDE.md with its imports, skills, settings, hooks
+       and MCP servers itself (settingSources user/project/local), writes its own transcripts, and runs the workers hook,
+       so the card's subagent/background-job count works. Not claw-code (research 2026-10-20: CLAUDE.md truncated,
+       subagents and background shells die per turn, and it reaches the subscription only by posing as Claude Code).
+     - **The login is the proxy's, not Claude Code's.** `CLAUDE_CODE_OAUTH_TOKEN` is a placeholder and
+       `ANTHROPIC_BASE_URL` the local `api-proxy.js` with `API_PROXY_CLAUDE_AUTH=1`, which sends
+       `~/.claude/.credentials.json`'s access token per request. Claude Code then holds `{refreshToken: null, expiresAt:
+       null}`: it has nothing to refresh with, and on a 401 it logs "keeping the user-supplied CLAUDE_CODE_OAUTH_TOKEN
+       instead of adopting the stored credential" and never refreshes or rewrites the file. Verified on claude 2.1.304
+       (its code: the env token's credential object, the 401 handler `xB`; and a run with a forced 401 behind the proxy,
+       an expired pair with a refresh token in its config dir, and a CONNECT-logging HTTPS proxy: the file's sha256 was
+       unchanged and no connection went to the token endpoint `platform.claude.com`). So the router stays the only
+       refresher (DECISIONS 185). The scopes and plan of the real login go in as `CLAUDE_CODE_OAUTH_SCOPES` /
+       `_SUBSCRIPTION_TYPE` / `_RATE_LIMIT_TIER`; `ANTHROPIC_API_KEY`/`ANTHROPIC_AUTH_TOKEN` are unset for the daemon so
+       nothing bills elsewhere.
+     - **Account switching with no restart** (DECISIONS 202's job, minus Remote Control): the machine installs the new
+       pair under the CLI's lock and checks its account with Anthropic as for `claude`; the proxy sends it from the
+       next request, a turn in flight included (tested: a pair swapped during a three-step tool turn was used by the
+       very next request; the conversation then went on with "continue"). The router lifts its "pause it, switch,
+       resume" refusal for this harness only; openclaw keeps it.
+     - **Jarvis's messages wait for an idle agent**: Paseo's send interrupts a running turn (`activeTurnBehavior`
+       "interrupt"; its CLI can't steer), so `harness-send` answers 75 while the main agent runs and the inbox loop
+       tries again without counting it as a failure. "continue" after a switch goes the same way.
+     - **Permission modes**: auto → Claude Code's `auto`, bypass → `bypassPermissions`; an in-place switch sets every
+       Claude agent's mode with `paseo agent mode` (no daemon restart, no cut-off turn).
+     - **The Paseo app** lists these sessions with `GET /api/remotes?harness=paseo` (every Paseo-fronted session);
+       until its build asks for that, it pairs from the Remote page's link.
+     - **Costs, said plainly:** no Remote Control and so no Claude app entry (any proxy in front of Claude Code turns it
+       off); Claude Code's own calls that don't use the API base URL (profile, claude.ai MCP connectors, bootstrap,
+       telemetry) go to Anthropic with the placeholder and are refused, so claude.ai connectors are not available;
+       every exchange is logged to `~/artifacts/api-log` as for openclaw.
+     - **Not chosen:** giving Claude Code the real access token in its env (side calls would work until it expires,
+       then fail silently, and a switch would leave them on the old account); a TLS-intercepting proxy for
+       api.anthropic.com (all of the session's HTTPS would pass through it).

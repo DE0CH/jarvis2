@@ -162,6 +162,9 @@ RUN npm install -g opencode-ai@1.18.31 @getpaseo/cli@0.8.0 && npm cache clean --
  && f=/usr/lib/node_modules/@getpaseo/cli/node_modules/@anthropic-ai/claude-agent-sdk-linux-x64/claude \
  && rm -f "$f" && ln -s /home/claude/.local/bin/claude "$f"
 COPY harness-opencode.sh /usr/local/bin/harness-opencode.sh
+# Claude Code · Paseo (harness paseo-claude): the same daemon drives the image's own claude through that SDK link,
+# behind api-proxy.js (the session's current Claude login per request).
+COPY harness-paseo-claude.sh /usr/local/bin/harness-paseo-claude.sh
 COPY opencode-instructions.py /usr/local/bin/opencode-instructions.py
 COPY harness-send /usr/local/bin/harness-send
 COPY session-attachments /usr/local/bin/session-attachments
@@ -169,7 +172,7 @@ COPY opencode-transcript.py /usr/local/bin/opencode-transcript.py
 COPY paseo-front.js /usr/local/lib/paseo-front.js
 COPY api-proxy.js /usr/local/lib/api-proxy.js
 COPY cf-tunnel-agent.js /usr/local/lib/cf-tunnel-agent.js
-RUN chmod +x /usr/local/bin/harness-opencode.sh /usr/local/bin/harness-send /usr/local/bin/session-attachments /usr/local/bin/opencode-transcript.py /usr/local/bin/opencode-instructions.py
+RUN chmod +x /usr/local/bin/harness-opencode.sh /usr/local/bin/harness-paseo-claude.sh /usr/local/bin/harness-send /usr/local/bin/session-attachments /usr/local/bin/opencode-transcript.py /usr/local/bin/opencode-instructions.py
 # The claw-code harness (a "claw-code · OpenClaw" model): claw-code (DE0CH/claw-code) is the agent loop, an OpenClaw
 # gateway (DE0CH/openclaw) the front end. claw (~20 MB) is baked in from the release pinned in forks.json, checked by
 # sha256 (.github/workflows/fork-pin.yml writes the pin). OpenClaw + its Node 26 (~900 MB) are NOT in the image:

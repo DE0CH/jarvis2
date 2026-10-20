@@ -17,6 +17,9 @@ func TestSessionModel(t *testing.T) {
 		{"opencode", "claude-opus-5-5", "openrouter/z-ai/glm-5.3"}, // the shell picked another harness than the form's model
 		{"openclaw", "claude-fable-5-1", "openclaw/claude-opus-5-5"},
 		{"openclaw", "openclaw/claude-fable-5-1", "openclaw/claude-fable-5-1"},
+		{"paseo-claude", "", "paseo/claude-opus-5-5"},
+		{"paseo-claude", "paseo/claude-fable-5-1", "paseo/claude-fable-5-1"},
+		{"paseo-claude", "claude-fable-5-1", "paseo/claude-opus-5-5"},
 	}
 	for _, c := range cases {
 		if got, err := sessionModel(c.harness, c.in); err != nil || got != c.want {
@@ -121,6 +124,7 @@ func TestRemotePage(t *testing.T) {
 	addHarnessSession(r, "sOP", "opencode", "started", "mOP")
 	addHarnessSession(r, "sCL", "claude", "started", "mCL")
 	addHarnessSession(r, "sPA", "opencode", "paused", "")
+	addHarnessSession(r, "sPC", "paseo-claude", "started", "mPC")
 	calls := 0
 	defer fakeMachine(t, r, "mOC", func(holder, cmd string) ExecResult {
 		calls++
@@ -131,6 +135,12 @@ func TestRemotePage(t *testing.T) {
 	})()
 	defer fakeMachine(t, r, "mOP", func(holder, cmd string) ExecResult {
 		return ExecResult{Error: "the remote holder is not on this session's allow list and no phone grant is given"}
+	})()
+	defer fakeMachine(t, r, "mPC", func(holder, cmd string) ExecResult {
+		if holder != "remote" || cmd != paseoPairCmd {
+			return ExecResult{Error: "unexpected " + holder + ": " + cmd}
+		}
+		return ExecResult{Stdout: `{"url":"https://app.paseo.sh/#offer=pc","relayEnabled":true}`}
 	})()
 	h := r.Handler()
 	get := func(path string) (int, map[string]any) {
@@ -177,6 +187,21 @@ func TestRemotePage(t *testing.T) {
 	}
 	code, out = get("/api/remotes?harness=openclaw")
 	if s := out["sessions"].([]any)[0].(map[string]any); code != 200 || s["token"] != "tok123" || s["title"] != "label sOC" {
+		t.Fatalf("%d %v", code, out)
+	}
+	// Claude Code · Paseo: the Paseo pairing offer; listed on its own and with every Paseo session (harness=paseo)
+	if code, out = get("/api/sessions/sPC/remote"); code != 200 || out["pairUrl"] != "https://app.paseo.sh/#offer=pc" || out["webUrl"] != "https://sPC-s.deyaochen.com/" {
+		t.Fatalf("%d %v", code, out)
+	}
+	if code, out = get("/api/remotes?harness=paseo-claude"); code != 200 || len(out["sessions"].([]any)) != 1 {
+		t.Fatalf("%d %v", code, out)
+	}
+	code, out = get("/api/remotes?harness=paseo")
+	got := map[string]string{}
+	for _, s := range out["sessions"].([]any) {
+		got[s.(map[string]any)["id"].(string)] = s.(map[string]any)["harness"].(string)
+	}
+	if code != 200 || len(got) != 3 || got["sPC"] != "paseo-claude" || got["sOP"] != "opencode" || got["sPA"] != "opencode" {
 		t.Fatalf("%d %v", code, out)
 	}
 	if code, _ = get("/api/remotes?harness=claude"); code != 400 {
