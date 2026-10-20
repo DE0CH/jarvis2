@@ -36,7 +36,10 @@ this session as the caller, from the machine's key) and the reason given here, a
                                     (an app API call run as Deyao, as `jarvis2-actions.py request call`; read its result
                                     with `jarvis2-actions.py call-result ID`),
                                     {"intent":"new-session","label":…,"prompt":…,"stores":[…],"repos":…,
-                                    "attach":["FILE",…]} (attach: files uploaded first, as --attach);
+                                    "attach":["FILE",…]} (attach: files uploaded first, as --attach),
+                                    {"intent":"peer","to":SESSION,"text":…} (a message to another session, as
+                                    `jarvis2-message`: upward waits in the batch for Deyao's tap, equal or downward
+                                    is delivered at once when the batch is filed: its item says "delivering");
                                     or --item INTENT,key=value,… once per item (e.g. --item grant,holder=status,minutes=5),
                                     or --item-json '{"intent":…}' for an item with a JSON body or commas;
                                     an item may carry its own "explanation"; --summary (required) says what the
@@ -251,6 +254,9 @@ def main():
             elif x.get("intent") == "repo/add" and x.get("repo") and not x.get("noStore"):
                 start_await(repo_store(x["repo"]))  # its store comes in the same approval
         print(json.dumps(out))
+        if not out.get("id"):  # nothing waits: only messages delivered at once (or a restore filed on its own)
+            print("Nothing of it waits in the Inbox as a batch: see each item above.", file=sys.stderr)
+            return
         print("Waiting in Deyao's Inbox as one batch (the Jarvis 2 app); nothing happens until he allows it. The outcome of "
               f"every item arrives in this session as a message once decided (or block: jarvis2-request wait {out.get('id')}).",
               file=sys.stderr)

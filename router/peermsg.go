@@ -142,17 +142,16 @@ func peerExplanation(from, to *Session) string {
 		clip(sessionTitle(*to), 80), to.ID, listOrNone(sortedStores(peerStores(to))), modeOf(to))
 }
 
-// SendPeer: the sending session's message → delivered at once (equal, downward) or filed in the Inbox (upward)
-func (r *Router) SendPeer(sender, to, text string, signed *SignedRequest, method, path string) (map[string]any, error) {
-	text = cleanPeerText(text)
-	if text == "" {
-		return nil, &badRequest{"an empty message"}
+// peerParties: the sending session, the receiving one (its id or exact title) and the cleaned text, checked as a
+// message is checked wherever it is filed (alone or as a batch item)
+func (r *Router) peerParties(sender, to, text string) (from, recv Session, clean string, err error) {
+	clean = cleanPeerText(text)
+	if clean == "" {
+		return from, recv, "", &badRequest{"an empty message"}
 	}
-	if n := len([]rune(text)); n > peerNoteMax {
-		return nil, &badRequest{fmt.Sprintf("a message longer than %d characters (%d)", peerNoteMax, n)}
+	if n := len([]rune(clean)); n > peerNoteMax {
+		return from, recv, "", &badRequest{fmt.Sprintf("a message longer than %d characters (%d)", peerNoteMax, n)}
 	}
-	var from, recv Session
-	var err error
 	r.st.Do(func(d *persisted) {
 		s := d.Sessions[sender]
 		if s == nil {
@@ -165,11 +164,19 @@ func (r *Router) SendPeer(sender, to, text string, signed *SignedRequest, method
 			recv = *t
 		}
 	})
+	if err == nil && recv.ID == from.ID {
+		err = &badRequest{"that is this session"}
+	}
+	return from, recv, clean, err
+}
+
+// SendPeer: the sending session's message → delivered at once (equal, downward) or filed in the Inbox (upward). A
+// batch takes the same message as an item (intent "peer", batches.go), so it goes in one Inbox entry with the
+// session's other asks.
+func (r *Router) SendPeer(sender, to, text string, signed *SignedRequest, method, path string) (map[string]any, error) {
+	from, recv, text, err := r.peerParties(sender, to, text)
 	if err != nil {
 		return nil, err
-	}
-	if recv.ID == from.ID {
-		return nil, &badRequest{"that is this session"}
 	}
 	o := Origin{Caller: Caller{Kind: "session", Session: sender}, Call: APICall{Method: method, Path: strings.TrimPrefix(path, "/m"),
 		Args: map[string]any{"to": recv.ID}}, Signed: signed}

@@ -48,10 +48,11 @@ function BatchCard({ b }: { b: InboxBatch }) {
           </Rows>
           {!!it.explanation && <Quote by="Reason (unverified)" color="amber" lines={3}>{it.explanation}</Quote>}
           {it.kind === "api-call" && <Flex pt={1}><Button id={"request-review-" + it.id} onPress={() => openPage("call", { item: it })}>Review call</Button></Flex>}
+          {it.kind === "peer-message" && <Flex pt={1}><PButton pkey={"q:" + it.id} onPress={() => pendUntil("q:" + it.id, "Delivering…", () => approvePeer(it), (s) => !(s.inbox || []).some((x) => x.id === it.id), 30000)} label="Deliver" id={"request-approve-" + it.id} /></Flex>}
         </Box>
       ))}
       <Flex gap={2} pt={3} align="center">
-        <Muted style={{ flex: 1 }}>Approve in the iPhone app: one Face ID for all{items.some((x) => x.kind === "api-call") ? " (an API call can also be approved here)" : ""}.</Muted>
+        <Muted style={{ flex: 1 }}>Approve in the iPhone app: one Face ID for all{items.some((x) => x.kind === "api-call" || x.kind === "peer-message") ? " (an API call or a peer message can also be approved here)" : ""}.</Muted>
         <PButton pkey={"b:" + b.id} variant="soft" color="gray" onPress={deny} label="Deny all" id={"batch-deny-" + b.id} />
       </Flex>
     </Card>

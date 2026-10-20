@@ -12,6 +12,8 @@ Jarvis names this session as the sender (from the machine's key) and checks the 
   upward (the receiver holds a store this session lacks, or bypasses while this session doesn't)
       → an Inbox item Deyao approves or denies with one tap; delivered once approved; a denial or lapse comes back
         to this session like any request's outcome (`jarvis2-request outcomes`).
+With other asks to file, send it as an item of the same batch instead, so Deyao gets one Inbox entry:
+  jarvis2-request batch --item-json '{"intent":"peer","to":"SESSION","text":"…"}' --item … --summary "…"
 """
 import json, os, subprocess, sys, urllib.request
 

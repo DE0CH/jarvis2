@@ -785,7 +785,9 @@ from its machine key) → the receiving machine's supervisor → its claude.
 - **The direction rule.** Equal or downward (the receiver's stores ⊆ the sender's, and the receiver no more
   permissive) is delivered at once; upward waits for Deyao's one tap in the Inbox (no Face ID, nothing signed). Stores
   are what the certs name (a repo is its store); grants don't count (they admit router features, not more for the
-  session's Claude). The receiving machine checks the direction against its own cert before delivering.
+  session's Claude). The receiving machine checks the direction against its own cert before delivering. A message
+  can be an item of a batch (intent `peer`): an upward one then waits in the same Inbox entry as the session's other
+  asks; an equal or downward one is delivered as the batch is filed.
 - **Provenance.** The delivery carries the verified sender (id, title), both sides' stores and modes and the
   direction (and Deyao's approval for upward); the core attests it; the machine wraps the text with all of it from
   texts in the image, so the receiver sees who really asked and that it isn't Deyao.

@@ -1968,7 +1968,10 @@ snapshot failed with "no space left on device", the machine was destroyed anyway
        `--dangerously-load-development-channels`, whose start-up warning the harness confirms.
      - **Not chosen:** `crossSessionInbound: "hold"` (it holds Jarvis's messages too) or mode parity with
        `isolatePeerMachines` (a sender-side gate a session with sudo can turn off; the receiver must decide).
-     - **Not done:** upward messages in a batch (`jarvis2-request batch`); grants in the direction (they admit router
-       features, not more for the session's Claude). Sessions on older images still accept direct SendMessage under
+     - **In a batch:** a message is a batch item too (intent `peer`, `{to, text}`), so a session's asks and its upward
+       messages reach Deyao as one Inbox entry: upward waits in the batch for the same one tap (or Allow all); equal
+       and downward are delivered at once when the batch is filed, as alone (holding them for the batch would make
+       Deyao answer something that needs no answer).
+     - **Not done:** grants in the direction (they admit router features, not more for the session's Claude). Sessions on older images still accept direct SendMessage under
        mode parity until they are replaced (changing Jarvis never touches sessions), and can't take a `peer`
        delivery (the sender is told it failed).

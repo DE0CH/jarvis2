@@ -241,9 +241,11 @@ type batchIn struct {
 // batchItemIn: one item: its intent and that intent's own body (as the single endpoint takes it); explanation is
 // optional here (the batch's summary is required)
 type batchItemIn struct {
-	Intent string `json:"intent"` // repo/add | repo/remove | grant | unlock | add-store | call | new-session | jarvis1-import
+	Intent string `json:"intent"` // repo/add | repo/remove | grant | unlock | add-store | call | new-session | jarvis1-import | peer
 	requestIn
-	ID string `json:"id"` // jarvis1-import: the Jarvis 1 session
+	ID   string `json:"id"`   // jarvis1-import: the Jarvis 1 session
+	To   string `json:"to"`   // peer: the receiving session (its id or exact title)
+	Text string `json:"text"` // peer: the message
 }
 
 // a checked item, ready to file
@@ -259,6 +261,8 @@ type batchItem struct {
 	// jarvis1-import
 	j1id string
 	j1   J1ImportIn
+	// peer: a message that isn't upward is delivered at once (as POST …/requests/peer does), not filed
+	note *PeerNote
 	expl string
 	args map[string]any
 	// outcomes.go: the batch as the session's machine signed it, and this item's index in it
@@ -276,6 +280,10 @@ type BatchResult struct {
 	Error     string `json:"error,omitempty"`
 	// Own: filed as a request of its own beside the batch (a restore is reviewed on its own page)
 	Own bool `json:"own,omitempty"`
+	// peer: equal | downward | upward; Delivering: not upward, so delivered at once instead of waiting in the batch
+	Direction  string `json:"direction,omitempty"`
+	Delivering bool   `json:"delivering,omitempty"`
+	To         string `json:"to,omitempty"`
 }
 
 // checkBatchItem: one item checked as its own endpoint would check it, before anything is filed
@@ -354,6 +362,27 @@ func (r *Router) checkBatchItem(c Caller, raw json.RawMessage) (*batchItem, erro
 		it.args = ns.Origin.Call.Args
 		it.args["intent"] = in.Intent
 		return it, nil
+	case "peer":
+		// a message to another session (peermsg.go), checked as POST …/requests/peer checks it: upward waits in the
+		// batch as a peer-message request (the router's explanation says why it is upward), equal or downward is
+		// delivered at once when the batch is filed
+		if c.Kind != "session" || c.Session == "" {
+			return nil, &forbidden{"only a session sends a peer message"}
+		}
+		from, recv, text, err := r.peerParties(c.Session, in.To, in.Text)
+		if err != nil {
+			if errors.Is(err, errNoSession) {
+				return nil, &forbidden{"peer: the sending session is gone"}
+			}
+			return nil, err
+		}
+		it.args = map[string]any{"intent": in.Intent, "to": recv.ID}
+		if note := peerNote(&from, &recv, text); note.Direction != "upward" {
+			it.note = &note
+			return it, nil
+		}
+		it.kind, it.p, it.expl = requestKindPeer, RequestParams{Session: recv.ID, Text: text}, peerExplanation(&from, &recv)
+		return it, nil
 	case "jarvis1-import":
 		if c.Kind != "setup" && c.Kind != "app" && c.Kind != "web" {
 			return nil, &forbidden{"a Jarvis 1 import is filed by the setup session or Deyao"}
@@ -411,6 +440,8 @@ func (r *Router) FileBatch(c Caller, method, path string, body []byte, signed *S
 			k = "new-session " + it.ns.RequestID
 		case it.intent == "jarvis1-import":
 			k = "jarvis1-import " + it.j1id
+		case it.note != nil:
+			k = "peer " + it.note.To + "\n" + it.note.Text
 		default:
 			k = it.intent + " " + string(mustJSON(it.args))
 		}
@@ -467,7 +498,7 @@ func (r *Router) FileBatch(c Caller, method, path string, body []byte, signed *S
 	})
 	if len(entries) == 0 {
 		for _, x := range results {
-			if x.Own && x.Error == "" { // only requests of their own were filed: no batch, but nothing failed
+			if (x.Own || x.Delivering) && x.Error == "" { // only requests of their own or messages delivered at once: no batch, but nothing failed
 				return 200, map[string]any{"items": results}
 			}
 		}
@@ -482,6 +513,11 @@ func (r *Router) fileBatchItem(c Caller, method, path string, b *Batch, it *batc
 	res := BatchResult{Intent: it.intent}
 	o := Origin{Caller: c, Call: APICall{Method: method, Path: path, Args: it.args}, Signed: it.signed, Item: it.index, Batch: b.ID}
 	switch {
+	case it.note != nil: // a peer message that isn't upward: delivered now, as POST …/requests/peer delivers it
+		o.Batch = ""
+		go r.deliverPeerNote(*it.note, o, "")
+		res.Direction, res.Delivering, res.To = it.note.Direction, true, it.note.To
+		return res, nil
 	case it.kind == requestKindRestore: // its own review page, so its own request beside the batch
 		o.Batch, o.Item = "", 0
 		q, dup, err := r.FileRequest(it.kind, it.p, it.expl, o)
@@ -510,6 +546,9 @@ func (r *Router) fileBatchItem(c Caller, method, path string, b *Batch, it *batc
 			d.Inbox[q.ID] = q
 		})
 		res.ID = q.ID
+		if it.kind == requestKindPeer {
+			res.Direction, res.To = "upward", it.p.Session
+		}
 		if res.Batch != "" {
 			return res, nil
 		}

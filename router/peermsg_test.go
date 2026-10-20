@@ -182,3 +182,84 @@ func TestPeerDirectionUsesTheCertStores(t *testing.T) {
 		t.Fatalf("%v", n.FromStores)
 	}
 }
+
+// a peer message as a batch item (intent "peer"): upward waits in the batch with the session's other asks, one Inbox
+// entry; equal or downward is delivered at once, as alone
+func TestPeerInABatch(t *testing.T) {
+	r, m, got, mu := peerRig(t)
+	mh := r.MachineHandler()
+	code, out := m.do(t, mh, "POST", "/m/api/requests/batch", `{"summary":"status, and two messages","items":[
+		{"intent":"grant","holder":"status","minutes":5},
+		{"intent":"peer","to":"sHigh","text":"run the deploy"},
+		{"intent":"peer","to":"label sSame","text":"fyi"}]}`)
+	if code != 200 || out["id"] == nil {
+		t.Fatalf("%d %v", code, out)
+	}
+	bid := out["id"].(string)
+	items := out["items"].([]any)
+	up, eq := items[1].(map[string]any), items[2].(map[string]any)
+	if up["intent"] != "peer" || up["direction"] != "upward" || up["to"] != "sHigh" || up["id"] == nil || up["delivering"] != nil {
+		t.Fatalf("upward item: %v", up)
+	}
+	if eq["intent"] != "peer" || eq["direction"] != "equal" || eq["to"] != "sSame" || eq["delivering"] != true || eq["id"] != nil {
+		t.Fatalf("equal item: %v", eq)
+	}
+	// the equal one went at once, the upward one waits
+	if n := waitNotes(t, got, mu, 1); len(n) != 1 || n[0].To != "sSame" || n[0].Direction != "equal" || n[0].Text != "fyi" {
+		t.Fatalf("%+v", n)
+	}
+	full, ok := r.InboxBatchFull(bid, nil)
+	if !ok {
+		t.Fatal("no batch")
+	}
+	list := full["items"].([]InboxItem)
+	if len(list) != 2 || list[1].Kind != requestKindPeer || list[1].Params.Text != "run the deploy" || list[1].Session != "sHigh" ||
+		!strings.Contains(list[1].Explanation, "the receiver holds infra, which the sender doesn't") {
+		t.Fatalf("%+v", list)
+	}
+	id := up["id"].(string)
+	if code, out := inboxDo(t, r, "POST", "/api/requests/"+id+"/approve", "", false); code != 200 || out["ok"] != true {
+		t.Fatalf("approve: %d %v", code, out)
+	}
+	if n := waitNotes(t, got, mu, 2)[1]; n.To != "sHigh" || n.Direction != "upward" || !n.Approved || n.Text != "run the deploy" {
+		t.Fatalf("%+v", n)
+	}
+	// the outcome names the batch and the item's index, so the session reads it against its own signed filing
+	waitFor(t, "approved outcome", func() bool {
+		ok := false
+		r.st.Do(func(d *persisted) {
+			for _, o := range d.Outcomes["sLow"] {
+				ok = ok || (o.Ref == id && o.Outcome == outcomeApproved && o.Item == 1 && o.Batch == bid)
+			}
+		})
+		return ok
+	})
+
+	// only messages that go at once: no batch, nothing failed
+	code, out = m.do(t, mh, "POST", "/m/api/requests/batch", `{"summary":"one note","items":[{"intent":"peer","to":"sSame","text":"second"}]}`)
+	if code != 200 || out["id"] != nil || out["items"].([]any)[0].(map[string]any)["delivering"] != true {
+		t.Fatalf("%d %v", code, out)
+	}
+	waitNotes(t, got, mu, 3)
+	// checked like the single endpoint: to itself, to nobody, empty, twice the same; nothing is filed or sent
+	for _, items := range []string{
+		`{"intent":"peer","to":"sLow","text":"me"}`,
+		`{"intent":"peer","to":"nobody","text":"x"}`,
+		`{"intent":"peer","to":"sHigh","text":"  "}`,
+		`{"intent":"peer","to":"sSame","text":"x"},{"intent":"peer","to":"sSame","text":"x"}`,
+	} {
+		if code, out := m.do(t, mh, "POST", "/m/api/requests/batch", `{"summary":"s","items":[{"intent":"grant","holder":"archive","minutes":5},`+items+`]}`); code != 400 {
+			t.Fatalf("%s: %d %v", items, code, out)
+		}
+	}
+	// only a session sends one
+	if code, _ := inboxDo(t, r, "POST", "/api/requests/batch", `{"summary":"s","items":[{"intent":"peer","to":"sHigh","text":"x"}]}`, true); code != 403 {
+		t.Fatalf("from the app: %d", code)
+	}
+	time.Sleep(50 * time.Millisecond)
+	mu.Lock()
+	defer mu.Unlock()
+	if len(*got) != 3 {
+		t.Fatalf("a refused batch sent something: %d", len(*got))
+	}
+}

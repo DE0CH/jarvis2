@@ -35,6 +35,7 @@ struct BatchPrepared {
 @MainActor
 enum BatchPrepare {
   static func load(_ it: InboxItem, model: AppModel) async throws -> BatchPrepared {
+    if it.kind == "peer-message" { return peerMessage(it) }
     guard let req = SecureRequest.fromInbox(it) else { throw TrustError.mismatch("an item this app can't open") }
     switch req {
     case .approval(let id, _): return try await approval(id, model: model)
@@ -213,6 +214,25 @@ enum BatchPrepare {
       let out = try await RouterClient.shared.inboxApproveCall(id)
       guard out["ok"].bool == true else { throw RouterError(message: out["error"].text ?? "The call didn't run.") }
       progress.calls[id] = out
+    }
+  }
+}
+
+@MainActor
+extension BatchPrepare {
+  /// an upward peer message a session filed in its batch (router peermsg.go): nothing signed; Allow delivers it, as
+  /// the Inbox row's Deliver does (POST api/requests/:id/approve)
+  static func peerMessage(_ it: InboxItem) -> BatchPrepared {
+    let o = it.openOptions
+    let facts: [SignedFact] = [
+      .init(id: "kind", label: "Kind", value: "Peer message, delivered as is (no signature)"),
+      .init(id: "from", label: "From", value: o["fromName"].text ?? o["from"].text ?? it.callerText),
+      .init(id: "to", label: "To", value: it.sessionName ?? it.session ?? "?"),
+      .init(id: "text", label: "Message", value: it.params["text"].string ?? ""),
+    ]
+    return BatchPrepared(facts: facts) { _, _ in
+      let out = try await RouterClient.shared.inboxApproveCall(it.id)
+      guard out["ok"].bool == true else { throw RouterError(message: out["error"].text ?? "The message wasn't delivered.") }
     }
   }
 }
