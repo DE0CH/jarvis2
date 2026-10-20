@@ -56,7 +56,7 @@ type outcomeRecordItem struct {
 
 var (
 	outcomeRefRE  = regexp.MustCompile(`^[a-z0-9-]{1,64}$`)
-	outcomePathRE = regexp.MustCompile(`^/m/api/(?:actions/)?(requests/(?:repo/add|repo/remove|grant|unlock|add-store|call|batch)|sessions)$`)
+	outcomePathRE = regexp.MustCompile(`^/m/api/(?:actions/)?(requests/(?:repo/add|repo/remove|grant|unlock|add-store|call|peer|batch)|sessions)$`)
 	outcomeSpace  = regexp.MustCompile(`\s+`)
 )
 
@@ -80,6 +80,7 @@ type outcomeAsked struct {
 	Summary   string `json:"summary"`
 	Sensitive bool   `json:"sensitive"`
 	NoStore   bool   `json:"noStore"` // repo/add: the store isn't to come into this session
+	To        string `json:"to"`      // peer: the session it was for
 }
 
 // short: the session's own words, on one line and capped
@@ -114,6 +115,8 @@ func (a outcomeAsked) describe() string {
 		return fmt.Sprintf("a new session %q", short(a.Label, 120))
 	case "call":
 		return fmt.Sprintf("the app API call %s %s", short(a.Method, 10), short(a.Path, 300))
+	case "peer":
+		return fmt.Sprintf("your message to session %q", short(a.To, 120))
 	}
 	return "a request"
 }
@@ -260,6 +263,8 @@ func outcomeResult(a outcomeAsked, it OutcomeItem, cert Cert) (string, error) {
 		return "Checked: the core's signed answer says the deploy key was removed.", nil
 	case "unlock":
 		return "Nothing signed comes with an unlock: this is Jarvis's report. The stores open by themselves once the unlock is through (the machine's secrets pull retries).", nil
+	case "peer":
+		return "Nothing signed comes with it: this is Jarvis's report. The message went to that session, wrapped with this session as its verified sender.", nil
 	case "call":
 		return fmt.Sprintf("Nothing signed comes with an API call's approval: this is Jarvis's report. The call ran as Deyao and answered HTTP %d; read its result within 10 minutes: GET $JARVIS_URL/api/actions/requests/call/%s.", it.Status, it.Ref), nil
 	}

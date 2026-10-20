@@ -34,6 +34,7 @@ func (r *Router) registerFeatures(app appRoute, m machineRoute, public publicRou
 	r.registerSessionOps(app, m)            // sessionops.go, uploads.go, repos.go
 	r.registerTasks(app, m)                 // tasks.go: task instances (one-shot session lines), runs, schedules
 	r.registerInbox(app, m, public)         // inbox.go: requests waiting for the phone (the app's Inbox)
+	r.registerPeerMessages(m)               // peermsg.go: one session telling another, through Jarvis
 	r.registerOutcomes(m)                   // outcomes.go: a session reads what became of its requests
 	r.registerVouch(app, m)                 // vouch.go: /m/config, /m/restore-cert, deliveries, the input log
 	r.registerMachines(app)                 // machines.go: every Fly machine of the app; Destroy for one with no session

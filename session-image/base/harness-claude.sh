@@ -151,7 +151,28 @@ PY
   # fixed 120x40 window: the dashboard's terminal panel mirrors this pane (tmux capture-pane)
   # through the API proxy when it is on (explicit, in case the tmux server predates the export)
   [ -n "${ANTHROPIC_BASE_URL:-}" ] && CMD="ANTHROPIC_BASE_URL=$ANTHROPIC_BASE_URL $CMD"
+  # The Jarvis channel (session-image/bin/jarvis-channel): how Jarvis's own messages reach claude, since Claude Code
+  # refuses every cross-session peer message here (/etc/claude-code/managed-settings.json). It is a local channel
+  # server, so it loads with --dangerously-load-development-channels, whose warning is confirmed below.
+  local chan=0
+  if [ -f /etc/claude-code/jarvis-channel.json ]; then
+    chan=1
+    CMD="$CMD --mcp-config /etc/claude-code/jarvis-channel.json --dangerously-load-development-channels server:jarvis"
+  fi
   tmux new-session -d -s "$SESSION" -x 120 -y 40 -c "$WD" "$CMD"
+  # confirm the development-channels warning ("1. I am using this for local development" is preselected) before
+  # anything else types into the pane (the first prompt waits for /rc active, which comes after it)
+  if [ "$chan" = 1 ]; then
+    local i pane
+    for i in $(seq 1 60); do
+      pane="$(tmux capture-pane -p -t "$SESSION" 2>/dev/null)"
+      if grep -q 'Loading development channels' <<< "$pane"; then
+        tmux send-keys -t "$SESSION" Enter; echo "[harness-claude] confirmed the Jarvis channel"; break
+      fi
+      grep -Eq 'remote-control is active|/rc active' <<< "$pane" && break
+      sleep 1
+    done
+  fi
   echo "[harness-claude] started remote-control host in $WD (name: ${SESSION_LABEL:-${SESSION_RC_TITLE:-auto}}, model: $SESSION_MODEL, perm: ${SESSION_PERMISSION_MODE:-auto}, resume: ${rid:-none})"
 }
 

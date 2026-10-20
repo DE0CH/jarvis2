@@ -455,6 +455,7 @@ extension InboxItem {
     case "resume-upgrade": return "Resume on the latest image"
     case "api-call": return "API call"
     case "restore": return "Restore store"
+    case "peer-message": return "Peer message"
     default: return j["options"]["restore"].text != nil ? "Restore" : "New session"
     }
   }

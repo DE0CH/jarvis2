@@ -5,7 +5,7 @@
 // which endpoint, and the caller's own reason (their words, unverified). Review opens the shell's secure page,
 // which renders what is signed from the signed content itself; Deny drops it. The web page lists them and can deny.
 import { ago, when, type InboxBatch, type InboxItem } from "../lib/api";
-import { denyBatch, denyRequest, inboxCall, inboxRows, inboxTitle } from "../lib/inbox";
+import { approvePeer, denyBatch, denyRequest, inboxCall, inboxRows, inboxTitle } from "../lib/inbox";
 import { useStore, refresh, settle, pendUntil, inboxLoose, useInboxCount } from "../lib/store";
 import { hasShell, requestSecure } from "../lib/shell";
 import { Box, Button, Card, Flex, Heading, Lbl, Muted, Pill, P, Quote, Row, Rows } from "../ui/kit";
@@ -13,7 +13,7 @@ import { PButton } from "../ui/bits";
 import { Cards } from "../ui/cards";
 import { openPage } from "../ui/page";
 
-const KIND: Record<string, string> = { "repo-key": "Repo key", grant: "Grant", unlock: "Unlock", "new-session": "New session", "resume-upgrade": "Resume", "add-store": "Add a store", "api-call": "API call", restore: "Restore store" };
+const KIND: Record<string, string> = { "repo-key": "Repo key", grant: "Grant", unlock: "Unlock", "new-session": "New session", "resume-upgrade": "Resume", "add-store": "Add a store", "api-call": "API call", restore: "Restore store", "peer-message": "Peer message" };
 
 /** open the entry's secure page; once it went through (or was denied there) the Inbox refreshes */
 export function reviewRequest(it: InboxItem) {
@@ -77,6 +77,7 @@ function RequestCard({ it }: { it: InboxItem }) {
       {!!it.explanation && <Quote by={"Reason (from " + it.callerText + ", unverified)"} color="amber" lines={4} id={"request-reason-" + it.id}>{it.explanation}</Quote>}
       <Flex gap={2} pt={3} align="center">
         {it.kind === "api-call" ? <Button id={"request-review-" + it.id} onPress={() => openPage("call", { item: it })}>Review</Button>
+          : it.kind === "peer-message" ? <PButton pkey={"q:" + it.id} onPress={() => pendUntil("q:" + it.id, "Delivering…", () => approvePeer(it), (s) => !(s.inbox || []).some((x) => x.id === it.id), 30000)} label="Deliver" id={"request-approve-" + it.id} />
           : hasShell ? <Button id={"request-review-" + it.id} onPress={() => reviewRequest(it)}>Review</Button>
           : <Muted style={{ flex: 1 }}>Approve in the iPhone app.</Muted>}
         <PButton pkey={"q:" + it.id} variant="soft" color="gray" onPress={deny} label="Deny" id={"request-deny-" + it.id} />

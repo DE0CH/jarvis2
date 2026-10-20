@@ -291,7 +291,9 @@ type Delivery struct {
 	Interrupted bool   `json:"interrupted,omitempty"`
 	// outcomes.go: request-outcome — the decided items of the session's own filing (Request)
 	Outcomes []OutcomeItem `json:"outcomes,omitempty"`
-	Attest   *Doc          `json:"attest"`
+	// peermsg.go: a peer message, with its verified sender and direction
+	Peer   *PeerNote `json:"peer,omitempty"`
+	Attest *Doc      `json:"attest"`
 }
 
 type DeliveryResult struct {
@@ -349,6 +351,8 @@ func attested(d Delivery) ([]byte, string, error) {
 			origin = "session-signed:" + d.Request.Machine
 		}
 		return []byte(leaseGrantedText(d.Device, int64(d.Minutes), d.Handover, d.Interrupted, signedPrompt(d.Request))), origin, nil
+	case "peer":
+		return peerAttested(d.Peer)
 	case "nudge":
 		return []byte(nudgeText(d.Jobs, time.Duration(d.Minutes)*time.Minute)), "image-text", nil
 	case "upgraded":

@@ -20,6 +20,7 @@ export function inboxTitle(it: InboxItem): string {
     case "grant": return it.params.days ? "Standing rule" : "Grant";
     case "unlock": return "Unlock stores";
     case "api-call": return "API call";
+    case "peer-message": return "Peer message";
     case "add-store": return "Add store";
     case "resume-upgrade": return "Resume on latest image";
     case "restore": return "Restore store";
@@ -53,6 +54,10 @@ export function inboxRows(it: InboxItem, approvals: Approval[] = [], policy: Pol
       add("store", "Store", p.store);
       add("version", "Version", p.seq);
       return rows;
+    case "peer-message": // router/peermsg.go: the sender is the caller (From); the explanation says why it is upward
+      add("to", "To", session);
+      add("text", "Message", p.text);
+      return rows;
     case "api-call":
       add("request", "Runs", `${p.method} ${p.path}`);
       if (p.body) add("body", "Body", p.contentType === "application/json" ? p.body : `${p.contentType}: ${p.body}`);
@@ -75,6 +80,12 @@ export function inboxCall(it: InboxItem): string {
 }
 
 export const denyRequest = (it: InboxItem) => api("DELETE", `api/requests/${it.id}`);
+/** an upward peer message (router/peermsg.go): one tap delivers it, no Face ID (nothing is signed) */
+export async function approvePeer(it: InboxItem) {
+  const r = await api<{ ok: boolean; state?: string; error?: string }>("POST", `api/requests/${it.id}/approve`);
+  toast(r.ok ? "Delivered to the session." : r.error || "Not delivered", r.ok ? "ok" : "error");
+  return r;
+}
 /** an API call a session's actions asked for (router/apicalls.go): the router runs it now, as Deyao. No Face ID here:
  * a step that needs the core's signature asks for its own afterwards. */
 export async function approveCall(it: InboxItem) {

@@ -79,6 +79,8 @@ type RequestParams struct {
 	// restore (storerestore.go): the store and the version to put back
 	Store string `json:"store,omitempty"`
 	Seq   int    `json:"seq,omitempty"`
+	// peer-message (peermsg.go): the words; Session is the receiving session, the caller the sending one
+	Text string `json:"text,omitempty"`
 }
 
 type InboxRequest struct {
@@ -100,6 +102,11 @@ func callerMay(c Caller, kind string, p RequestParams) error {
 	switch kind {
 	case requestKindRestore, requestKindRepo, requestKindGrant, requestKindUnlock, requestKindCall:
 		return nil
+	case requestKindPeer: // only a session's own message (peermsg.go)
+		if c.Kind == "session" && c.Session != "" {
+			return nil
+		}
+		return errors.New("only a session sends a peer message")
 	}
 	return fmt.Errorf("unknown request kind %s", kind)
 }
@@ -227,6 +234,20 @@ func (r *Router) normalizeRequest(kind string, p RequestParams) (RequestParams, 
 			return p, errors.New("seq: the version to put back (infra/setup.py versions STORE, or the Stores page)")
 		}
 		return RequestParams{Store: p.Store, Seq: p.Seq}, nil
+	case requestKindPeer: // peermsg.go
+		var ok bool
+		r.st.Do(func(d *persisted) {
+			s := d.Sessions[p.Session]
+			ok = s != nil && s.State != "destroyed" && s.State != "destroying"
+		})
+		if !ok {
+			return p, fmt.Errorf("no session %q", p.Session)
+		}
+		t := cleanPeerText(p.Text)
+		if t == "" || len([]rune(t)) > peerNoteMax {
+			return p, fmt.Errorf("a message of 1 to %d characters", peerNoteMax)
+		}
+		return RequestParams{Session: p.Session, Text: t}, nil
 	case requestKindCall: // checked by fileCall (apicalls.go)
 		return RequestParams{Method: p.Method, Path: p.Path, Body: p.Body, ContentType: p.ContentType}, nil
 	}
@@ -488,6 +509,10 @@ func requestItem(d *persisted, q *InboxRequest, now time.Time) InboxItem {
 		opts["sessionId"], opts["label"] = q.Params.Session, it.SessionName
 	case requestKindRestore:
 		opts["store"], opts["seq"] = q.Params.Store, q.Params.Seq
+	case requestKindPeer: // its own review (one tap, no Face ID): Approve = POST /api/requests/{id}/approve
+		it.SessionName = inboxSessionName(d, q.Params.Session)
+		opts["session"], opts["sessionName"], opts["from"], opts["fromName"] = q.Params.Session, it.SessionName,
+			q.Origin.Caller.Session, inboxSessionName(d, q.Origin.Caller.Session)
 	case requestKindCall: // its own review sheet (app APICallReviewView, web pages/APICall.tsx): Approve = POST /api/requests/{id}/approve
 		it.Session, it.SessionName = q.Origin.Caller.Session, inboxSessionName(d, q.Origin.Caller.Session)
 	}
@@ -733,6 +758,19 @@ func (r *Router) registerInbox(app appRoute, m machineRoute, public publicRoute)
 	})
 	// approve an API-call request (apicalls.go): the call runs now as Deyao (this request's Access login)
 	app("POST /api/requests/{id}/approve", func(w http.ResponseWriter, req *http.Request) {
+		if r.isPeerRequest(req.PathValue("id")) { // an upward peer message (peermsg.go): one tap delivers it
+			out, err := r.ApprovePeer(req.PathValue("id"))
+			if errors.Is(err, errNoRequest) {
+				writeJSON(w, 404, map[string]string{"error": err.Error()})
+				return
+			}
+			if err != nil {
+				writeErr(w, err)
+				return
+			}
+			writeJSON(w, 200, out)
+			return
+		}
 		res, err := r.ApproveCall(req.PathValue("id"), req)
 		if errors.Is(err, errNoRequest) {
 			writeJSON(w, 404, map[string]string{"error": err.Error()})

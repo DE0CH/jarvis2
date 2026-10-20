@@ -76,7 +76,7 @@ private struct InboxRow: View {
       Button("Deny", role: .destructive) { Task { await model.deny(it) } }
     }
     .contextMenu {
-      Button("Review", systemImage: it.kind == "api-call" ? "arrow.up.forward.app" : "faceid", action: review)
+      Button(it.kind == "peer-message" ? "Deliver" : "Review", systemImage: it.kind == "api-call" || it.kind == "peer-message" ? "arrow.up.forward.app" : "faceid", action: review)
       Button("Deny", systemImage: "xmark", role: .destructive) { Task { await model.deny(it) } }
     }
   }
@@ -84,12 +84,22 @@ private struct InboxRow: View {
   private var callTarget: String { "\(it.params["method"].string ?? "") \(it.params["path"].string ?? "")" }
 
   private func review() {
+    // an upward peer message (router/peermsg.go): one tap delivers it, no Face ID (nothing is signed)
+    if it.kind == "peer-message" {
+      Task {
+        let to = it.sessionName ?? it.session ?? "the session"
+        guard await model.confirm("Deliver to “\(to)”?", "From \(it.callerText):\n\n\(it.params["text"].string ?? "")", action: "Deliver") else { return }
+        await model.pendUntil("q:" + it.id, "Delivering…", 30, action: { _ = try await RouterClient.shared.inboxApproveCall(it.id) },
+                              until: { m in !m.inbox.contains { $0.id == it.id } })
+      }
+      return
+    }
     guard let r = SecureRequest.fromInbox(it) else { model.say("This request can't be opened here."); return }
     model.present(r) { [model] ok in if ok { model.settle(60) } }
   }
 
   private var kindName: String {
-    ["repo-key": "Repo key", "grant": "Grant", "unlock": "Unlock", "new-session": "New session", "resume-upgrade": "Resume", "add-store": "Add a store", "api-call": "API call", "restore": "Restore store"][it.kind] ?? it.kind
+    ["repo-key": "Repo key", "grant": "Grant", "unlock": "Unlock", "new-session": "New session", "resume-upgrade": "Resume", "add-store": "Add a store", "api-call": "API call", "restore": "Restore store", "peer-message": "Peer message"][it.kind] ?? it.kind
   }
   /// the list's title: the core action (or the phone grant) the entry leads to, a fixed name per kind
   private var action: String { it.actionTitle }
@@ -105,6 +115,7 @@ private struct InboxRow: View {
       return [Holder.title(p["holder"].string ?? ""), who, d > 0 ? "\(d) d" : "\(p["minutes"].int ?? 10) min"].compactMap { $0 }
     case "add-store": return [it.j["options"]["store"].string, who].compactMap { $0 }
     case "api-call": return [callTarget, p["body"].string].compactMap { $0 }
+    case "peer-message": return ["to " + (who ?? "?"), p["text"].string].compactMap { $0 }
     case "restore": return [p["store"].string, p["seq"].int.map { "Version \($0)" }].compactMap { $0 }
     default:
       if let r = it.j["options"]["restore"].text { return [r] }

@@ -768,6 +768,28 @@ app shows the operations in the session's Log, one stream with every supervisor 
 source tag), live while it runs; kept for the session's life and archived on Destroy.
 The core takes no part.
 
+## Peer messages (Deyao, 2026-10-20)
+
+A session with fewer secrets must not get one with more to act for it behind Deyao's back (a confused deputy). So
+there is one path between sessions, through Jarvis: sender → router (`POST /m/api/requests/peer`, the sender named
+from its machine key) → the receiving machine's supervisor → its claude.
+
+- **Claude Code's own channels are off.** The image's managed settings set `crossSessionInbound: "refuse"`: every
+  cross-session peer message (SendMessage over Remote Control, a local peer socket) is refused, whatever the modes.
+  The session's own subagents are not cross-session and are unaffected.
+- **Jarvis's messages use the Jarvis channel.** A local MCP channel server (`session-image/bin/jarvis-channel`, loaded
+  by harness-claude.sh with `--dangerously-load-development-channels server:jarvis`, whose warning the harness
+  confirms) pushes what the supervisor drops into its spool (`jarvis-channel-send`) as `<channel source="jarvis">`.
+  A channel isn't a peer message, so `crossSessionInbound` doesn't touch it, and nothing depends on the session's
+  permission mode.
+- **The direction rule.** Equal or downward (the receiver's stores ⊆ the sender's, and the receiver no more
+  permissive) is delivered at once; upward waits for Deyao's one tap in the Inbox (no Face ID, nothing signed). Stores
+  are what the certs name (a repo is its store); grants don't count (they admit router features, not more for the
+  session's Claude). The receiving machine checks the direction against its own cert before delivering.
+- **Provenance.** The delivery carries the verified sender (id, title), both sides' stores and modes and the
+  direction (and Deyao's approval for upward); the core attests it; the machine wraps the text with all of it from
+  texts in the image, so the receiver sees who really asked and that it isn't Deyao.
+
 ## Inputs to a machine (Deyao, 2026-10-11)
 
 Deyao's question: once a session is certified (new or an unattended resume), can the machine that receives its
@@ -1037,8 +1059,8 @@ separate warning screen for the root key.
 - Where the core's log lives. Plan: AWS CloudWatch Logs (append-only: no API deletes a single event; only a whole stream/group; the core's credential gets append rights only; free tier 5 GB/month covers it), added AFTER the core is running. Until then the log is local to the core.
 - The secure pages' exact design (New session one page, review stops: 2026-10-10).
 - Free text into high-privilege machines: the first prompt, a resume prompt and the session's own wakeups are vouched
-  for ("Inputs to a machine"); wakeups made from the app or web (not by the session) and peer messages from other
-  sessions are not delivered to a machine whose cert vouches, until the phone can sign them.
+  for ("Inputs to a machine"); wakeups made from the app or web (not by the session) are not delivered to a machine whose cert vouches, until the
+  phone can sign them. Peer messages from other sessions: "Peer messages".
 - Shell grants: a standing rule hands a feature (the router) a shell for its length; every exec under one bypasses
   the input log. Narrowing each holder to fixed commands is not done.
 - Layer 1 hardening (CI-only builds and deploys) — see `SECURITY.md` PENDING 5–6.

@@ -108,7 +108,11 @@ func peerCommand(harness, permissionMode, from, text, after string) string {
 			from = "jarvis"
 		}
 		delim := "__JARVIS2_PEER_" + randID() + "__"
-		cmd = fmt.Sprintf("cd \"$HOME\"; python3 - '%s' '' '%s' '%s' <<'%s'\n%s\n%s", b, peerFromMode(permissionMode), from, delim, peerPy, delim)
+		// an image with the Jarvis channel refuses peer sockets: the message goes in through the channel there
+		// (session-image/bin/jarvis-channel-send); an older image still takes the peer socket
+		cmd = fmt.Sprintf("cd \"$HOME\"; if [ -x /usr/local/bin/jarvis-channel-send ] && [ -f /etc/claude-code/jarvis-channel.json ]; then "+
+			"printf %%s '%s' | base64 -d | /usr/local/bin/jarvis-channel-send --from '%s'; else\npython3 - '%s' '' '%s' '%s' <<'%s'\n%s\n%s\nfi",
+			b, from, b, peerFromMode(permissionMode), from, delim, peerPy, delim)
 	}
 	if after != "" {
 		// run whatever follows (the cron's allow-list renewal) without changing the delivery's exit status

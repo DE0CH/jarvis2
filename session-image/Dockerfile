@@ -17,6 +17,10 @@ COPY --from=build /out/jarvis2-machine /usr/local/bin/jarvis2-machine
 COPY tasks/ /opt/jarvis2/tasks/
 # jarvis2-request: a session asks Deyao for something that needs his Face ID (an Inbox request, router/inbox.go)
 COPY --chmod=755 session-image/bin/jarvis2-request /usr/local/bin/jarvis2-request
+# peer messages (docs/DESIGN.md "Peer messages"): Claude Code refuses every direct cross-session message
+# (managed settings: crossSessionInbound refuse); sessions talk through Jarvis (jarvis2-message), and Jarvis's own
+# messages reach claude through the Jarvis channel (an MCP channel server harness-claude.sh loads)
+COPY --chmod=755 session-image/bin/jarvis2-message session-image/bin/jarvis-channel session-image/bin/jarvis-channel-send /usr/local/bin/
 USER root
 # Only vouched inputs shape a machine (docs/DESIGN.md "Inputs to a machine"):
 #  - the image's own ENV, recorded here, is the env jarvis2-machine keeps (everything the machine's config adds
@@ -25,6 +29,7 @@ USER root
 RUN mkdir -p /opt/jarvis2 && env | grep -Ev '^(HOSTNAME|HOME|PWD|OLDPWD|SHLVL|_|TERM|USER|LOGNAME|SHELL)=' | sort > /opt/jarvis2/image.env
 COPY session-image/openclaw-runtime.json /opt/jarvis2/openclaw-runtime.json
 COPY --chmod=755 session-image/bin/openclaw /usr/local/bin/openclaw
+COPY --chmod=644 session-image/claude-code/managed-settings.json session-image/claude-code/jarvis-channel.json /etc/claude-code/
 # the one command the core runs through Fly (core/fly.go initPath): no arguments; it prints this machine's
 # public keys and lets boot go on
 RUN printf '#!/bin/sh\nexec /usr/local/bin/jarvis2-machine init\n' > /usr/local/bin/jarvis2-init \

@@ -1954,3 +1954,21 @@ snapshot failed with "no space left on device", the machine was destroyed anyway
      crossSessionInbound to accept"). The machine now reads the mode exactly as harness-claude.sh launches claude:
      `~/.claude/.permission-mode` when present, else the cert. Not chosen: `crossSessionInbound: accept` in managed
      settings, which would also let other senders past the hold.
+199. **Sessions talk to each other only through Jarvis, by direction (Deyao, 2026-10-20: "Build it. No need to touch
+     current sessions.").** A session with fewer secrets could SendMessage one with more (infra, bypass) and get it to
+     act. Now every session's managed settings refuse Claude Code's cross-session messages (`crossSessionInbound:
+     "refuse"`, which refuses on every ingress: Remote Control and the peer socket alike), sessions use
+     `jarvis2-message` (`POST /m/api/requests/peer`), and the router delivers equal and downward messages at once and
+     puts upward ones in the Inbox for one tap. The receiving machine re-checks the direction against its cert and
+     wraps the text with the verified sender, both sides' stores and modes and the direction.
+     - **Jarvis's own messages move to an MCP channel** (`jarvis-channel`): "refuse" also refuses the peer socket
+       Jarvis used, and a channel event is not a peer message, so it is delivered in any permission mode (tested on
+       Claude Code 2.1.304: a channel event delivered and a uds peer message refused under "refuse"; the session's
+       own subagents' SendMessage still delivered). The channel is a development channel (no plugin), so it loads with
+       `--dangerously-load-development-channels`, whose start-up warning the harness confirms.
+     - **Not chosen:** `crossSessionInbound: "hold"` (it holds Jarvis's messages too) or mode parity with
+       `isolatePeerMachines` (a sender-side gate a session with sudo can turn off; the receiver must decide).
+     - **Not done:** upward messages in a batch (`jarvis2-request batch`); grants in the direction (they admit router
+       features, not more for the session's Claude). Sessions on older images still accept direct SendMessage under
+       mode parity until they are replaced (changing Jarvis never touches sessions), and can't take a `peer`
+       delivery (the sender is told it failed).

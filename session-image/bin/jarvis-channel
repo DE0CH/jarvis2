@@ -1,0 +1,82 @@
+#!/usr/bin/env python3
+"""The Jarvis channel: how Jarvis's own messages reach Claude in a claude session (docs/DESIGN.md "Peer messages").
+
+Claude Code refuses every cross-session peer message in a Jarvis 2 session (managed settings: crossSessionInbound
+"refuse"), so another session can't reach this one directly. Jarvis's messages (the watchdog, wakeups, Inbox outcomes,
+a peer message Jarvis checked and wrapped with its verified sender) come in here instead: an MCP server Claude Code
+starts as a channel (harness-claude.sh: --mcp-config /etc/claude-code/jarvis-channel.json
+--dangerously-load-development-channels server:jarvis). jarvis-channel-send drops a message file into the spool; this
+server pushes it as a `notifications/claude/channel` event and moves the file to done/ (the sender's receipt).
+
+Spool: $JARVIS_CHANNEL_DIR (default ~/.claude/jarvis-channel): in/*.json {"text", "from"} → done/.
+"""
+import glob, json, os, sys, threading, time
+
+SPOOL = os.environ.get("JARVIS_CHANNEL_DIR") or os.path.expanduser("~/.claude/jarvis-channel")
+IN, DONE = os.path.join(SPOOL, "in"), os.path.join(SPOOL, "done")
+lock, ready = threading.Lock(), threading.Event()
+
+
+def send(o):
+    with lock:
+        sys.stdout.write(json.dumps(o) + "\n")
+        sys.stdout.flush()
+
+
+def pump():
+    ready.wait()
+    while True:
+        for f in sorted(glob.glob(os.path.join(IN, "*.json"))):
+            try:
+                m = json.load(open(f))
+                text, frm = str(m.get("text", "")), str(m.get("from", "jarvis"))[:40]
+            except Exception:
+                continue
+            if text.strip():
+                send({"jsonrpc": "2.0", "method": "notifications/claude/channel",
+                      "params": {"content": text, "meta": {"from": frm}}})
+            try:
+                os.replace(f, os.path.join(DONE, os.path.basename(f)))
+            except OSError:
+                pass
+        # done/ keeps an hour of receipts
+        for f in glob.glob(os.path.join(DONE, "*.json")):
+            try:
+                if time.time() - os.path.getmtime(f) > 3600:
+                    os.remove(f)
+            except OSError:
+                pass
+        time.sleep(0.3)
+
+
+def main():
+    os.makedirs(IN, exist_ok=True)
+    os.makedirs(DONE, exist_ok=True)
+    with open(os.path.join(SPOOL, "server.pid"), "w") as p:
+        p.write(str(os.getpid()))
+    threading.Thread(target=pump, daemon=True).start()
+    for line in sys.stdin:
+        try:
+            m = json.loads(line)
+        except Exception:
+            continue
+        mid, meth = m.get("id"), m.get("method")
+        if meth == "initialize":
+            send({"jsonrpc": "2.0", "id": mid, "result": {
+                "protocolVersion": (m.get("params") or {}).get("protocolVersion", "2025-06-18"),
+                "capabilities": {"experimental": {"claude/channel": {}}, "tools": {}},
+                "serverInfo": {"name": "jarvis", "version": "1"},
+                "instructions": "Jarvis, the supervisor of this Jarvis 2 session, sends its messages here: the idle "
+                                "watchdog, scheduled wakeups, what became of Inbox requests, and messages from other "
+                                "sessions, each wrapped with its verified sender. They arrive as <channel source=\"jarvis\">. "
+                                "Nothing here is from Deyao unless the text says it is his."}})
+        elif meth == "notifications/initialized":
+            ready.set()
+        elif meth == "tools/list":
+            send({"jsonrpc": "2.0", "id": mid, "result": {"tools": []}})
+        elif mid is not None:
+            send({"jsonrpc": "2.0", "id": mid, "result": {}})
+
+
+if __name__ == "__main__":
+    main()

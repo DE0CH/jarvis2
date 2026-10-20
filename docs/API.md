@@ -228,7 +228,7 @@ any session (each waits for Deyao, and a session's actions could already ask the
 for that feature is stored), or on Deny.
 
 ```
-item = { id, kind: "repo-key" | "grant" | "unlock" | "restore" | "new-session" | "resume-upgrade" | "add-store", approval /* bool */,
+item = { id, kind: "repo-key" | "grant" | "unlock" | "restore" | "peer-message" | "new-session" | "resume-upgrade" | "add-store", approval /* bool */,
          batch /* the batch it was filed in, if any */,
          params: {action, repo, sensitive, session, holder, minutes, days, store, seq}, session, sessionName,
          caller: {kind: "web" | "app" | "session" | "setup" | "router", session}, callerText /* "session “X” (s…)",
@@ -845,9 +845,32 @@ signed as every `/m` call). Any `:id` in the path must be the calling machine's 
 | search, iCloud index | `GET /m/api/search`, `/m/api/search/context`, `/m/api/search/status`, `POST /m/api/search/reindex` (any running session), `GET /m/api/icloud/search`, `/m/api/icloud/file`, `/m/api/icloud/status`, `POST /m/api/icloud/relist`, `/m/api/icloud/retry` (only a session whose cert holds the `identity` store; otherwise 403 `{error, needsStore: "identity"}`): the box's own services, as for the app. 403 for a machine with no running session. |
 | device leases, content stores | The router (`router/leases.go`, `router/content.go`). |
 | `GET/POST /api/credentials` | The session's Claude account's login ("Claude accounts" above). |
+| `POST /api/requests/peer` | A peer message ("Peer messages" below; `jarvis2-message`). |
 | anything else | 404 |
 
 Nothing is forwarded to Jarvis 1.
+
+### Peer messages (`router/peermsg.go`, `machine/peer.go`; DESIGN "Peer messages", DECISIONS 199)
+
+The only way one session's words reach another. Claude Code's own cross-session messages (SendMessage over Remote
+Control or a peer socket) are refused in every session (`/etc/claude-code/managed-settings.json`:
+`crossSessionInbound: "refuse"`); the session image's `jarvis2-message SESSION "text"` calls:
+
+| Path | Body → answer |
+|---|---|
+| `POST /m/api/requests/peer` (`$JARVIS_URL/api/requests/peer`) | `{to /* a session id, or its exact title */, text /* ≤ 8000 chars */}`. The sender is the calling machine's session. The direction, from the stores both machines' latest certs name and the router's permission modes: **equal** (same stores, same mode) and **downward** (the receiver holds no store the sender lacks, and bypasses only if the sender does) → 202 `{delivering: true, direction, to}`, delivered at once (a paused receiver is resumed); **upward** (the receiver holds a store the sender lacks, or bypasses while the sender doesn't) → 200 `{id, duplicate, expires, direction: "upward", waiting: "inbox", to}`: an Inbox request of kind `peer-message` (`params: {session /* the receiver */, text}`, the caller the sending session, an explanation by the router naming both sessions, their stores and modes and why it is upward). 400 for an unknown or ambiguous receiver, the sender itself, or an empty or too long text. |
+| `POST /api/requests/:id/approve` (a `peer-message`) | Deyao's one tap (no Face ID: nothing is signed) → `{ok, state: "delivering", direction}`; the message goes with the session's current stores and `approved: true`. Deny is `DELETE /api/requests/:id`. |
+
+The receiving machine gets a core-attested delivery of kind `peer` (`peer: {from, fromTitle, fromStores, fromMode, to,
+toStores, toMode, direction, approved?, text}`, attested as that JSON with origin `session:<sender>`); it refuses an
+`equal`/`downward` one when its own cert holds a store the sender lacks or it bypasses while the sender doesn't, and
+an `upward` one without `approved`, and wraps the text with the verified sender, both sides' stores and modes and the
+direction. The sender hears back like any request (`jarvis2-request outcomes`, kind `peer`): an upward message
+approved, denied, lapsed or dropped, and any message whose delivery failed.
+
+Jarvis's own messages (the watchdog, wakeups, outcomes, lease and upgrade notices, a resume prompt) reach claude through
+the image's Jarvis channel (`jarvis-channel`, an MCP channel server; `jarvis-channel-send`), whatever the session's
+permission mode. An image without the channel takes them on the peer socket as before.
 
 ### The supervisor's secrets socket (`/run/jarvis2/secrets.sock`)
 

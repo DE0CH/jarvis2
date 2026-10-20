@@ -206,7 +206,9 @@ type Delivery struct {
 	Interrupted bool   `json:"interrupted,omitempty"`
 	// request-outcome (outcomes.go): the decided items of this session's own filing (Request)
 	Outcomes []OutcomeItem `json:"outcomes,omitempty"`
-	Attest   *SignedDoc    `json:"attest"`
+	// peer (peer.go): another session's message, with its verified sender and direction
+	Peer   *PeerNote  `json:"peer,omitempty"`
+	Attest *SignedDoc `json:"attest"`
 }
 
 // ownRequestBody: the body of a request one of this line's machines signed (a wakeup or cron it asked for)
@@ -264,6 +266,12 @@ func deliveryText(d Delivery, keys []string) (text string, attested []byte, err 
 		return "continue", []byte("continue"), nil
 	case "request-outcome":
 		return outcomeText(d, keys)
+	case "peer":
+		cert, err := currentCert()
+		if err != nil {
+			return "", nil, err
+		}
+		return peerText(d.Peer, sortedCopy(cert.Stores), liveMode(cert))
 	case "watch", "watch-fail":
 		w, body, err := ownWatch(d.Request, keys)
 		if err != nil {
@@ -383,13 +391,32 @@ func liveMode(cert Cert) string {
 	return "auto"
 }
 
+// the Jarvis channel's sender and config (session-image/Dockerfile); seams for tests
+var (
+	channelSend   = "/usr/local/bin/jarvis-channel-send"
+	channelConfig = "/etc/claude-code/jarvis-channel.json"
+)
+
+func sortedCopy(ss []string) []string {
+	out := append([]string{}, ss...)
+	sort.Strings(out)
+	return out
+}
+
+func fileExists(p string) bool { _, err := os.Stat(p); return err == nil }
+
 // sendToHarness: the text into the harness (the same as the router's old exec path, run here)
 func sendToHarness(harness, mode, from, text string) error {
 	var cmd *exec.Cmd
 	if harness == "opencode" || harness == "openclaw" {
 		cmd = unprotectedCommand(nil, "/usr/local/bin/harness-send", "--queue")
 		cmd.Stdin = strings.NewReader(text)
-	} else {
+	} else if channelSend != "" && fileExists(channelSend) && fileExists(channelConfig) {
+		// the Jarvis channel (session-image/bin/jarvis-channel): the image refuses every cross-session peer message, so
+		// Jarvis's own messages go in through its channel, whatever the session's permission mode
+		cmd = unprotectedCommand(nil, channelSend, "--from", from)
+		cmd.Stdin = strings.NewReader(text)
+	} else { // an image before the channel: the peer socket, in the mode class claude runs in
 		fm := "prompting"
 		if mode == "bypass" {
 			fm = "bypass"
