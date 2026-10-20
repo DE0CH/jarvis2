@@ -11,6 +11,8 @@ struct GrantReviewView: View {
   let ask: GrantAsk
   let inbox: String?
   let request: SecureRequest
+  /// opened inside another page (an approved API call's follow-up): it closes back to that page instead
+  var onFinish: ((Bool) -> Void)? = nil
   @State private var cert: SessionCert?
   /// the session as its core-signed cert names it (audit findings 3, 4: never the router's or the request's label)
   @State private var ident: LineIdentity?
@@ -83,7 +85,7 @@ struct GrantReviewView: View {
     Task {
       failure = nil
       busy = "Denying…"
-      do { try await RouterClient.shared.inboxDeny(inbox); model.secureCompleted(false) }
+      do { try await RouterClient.shared.inboxDeny(inbox); finish(false) }
       catch { busy = nil; failure = errText(error) }
     }
   }
@@ -123,7 +125,10 @@ struct GrantReviewView: View {
       busy = "Saving…"
       let g = try await RouterClient.shared.addGrant(ask.session, payload: text, sig: sig)
       guard g.holder == holder, g.kind == ask.kind else { throw TrustError.stale("the stored grant") }
-      model.secureCompleted(true)
+      finish(true)
     } catch { busy = nil; failure = errText(error) }
+  }
+  private func finish(_ ok: Bool) {
+    if let onFinish { onFinish(ok); dismiss() } else { model.secureCompleted(ok) }
   }
 }

@@ -85,8 +85,13 @@ struct APICallReviewView: View {
         Section {
           ForEach(openFollowups, id: \.id) { f in
             NavigationLink {
-              ApprovalView(approvalId: f.openOptions["approvalId"].text ?? f.id, inbox: f.id, request: .approval(id: f.openOptions["approvalId"].text ?? f.id, inbox: f.id),
-                           onFinish: { _ in Task { await load() } })
+              // a core approval (a resume, an add-store) or a phone grant (a switch to bypass waits on the terminal grant)
+              if f.openKind == "grant", let r = SecureRequest.fromInbox(f), case .grant(let g, let inbox) = r {
+                GrantReviewView(ask: g, inbox: inbox, request: r, onFinish: { _ in Task { await load() } })
+              } else {
+                ApprovalView(approvalId: f.openOptions["approvalId"].text ?? f.id, inbox: f.id, request: .approval(id: f.openOptions["approvalId"].text ?? f.id, inbox: f.id),
+                             onFinish: { _ in Task { await load() } })
+              }
             } label: {
               VStack(alignment: .leading, spacing: 2) {
                 Text(f.actionTitle).font(.headline)
