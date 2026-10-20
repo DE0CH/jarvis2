@@ -239,7 +239,7 @@ func TestRestartPatchesEnv(t *testing.T) {
 }
 
 func TestEnvPatchRefusesSecrets(t *testing.T) {
-	for _, k := range []string{"GITHUB_TOKEN", "OPENAI_API_KEY", "AWS_SECRET_ACCESS_KEY", "DB_PASSWORD", "EVOMI_API", "MY_KEY",
+	for _, k := range []string{"GITHUB_TOKEN", "OPENAI_API_KEY", "AWS_SECRET_ACCESS_KEY", "DB_PASSWORD", "IPROYAL_API", "MY_KEY",
 		"SESSION_PROMPT", "JARVIS2_ROLLBACK", "CLAUDE_CREDENTIALS", "PATH", "LD_PRELOAD", "CF_ACCESS_CLIENT_ID", "1BAD", "STRIPE_AUTH"} {
 		if envKeyAllowed(k) == nil {
 			t.Errorf("%s allowed", k)

@@ -15,10 +15,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       python3 python3-pip python3-venv build-essential sudo gnupg procps \
       openssh-client rsync wget age htop sqlite3 file dnsutils iputils-ping librsvg2-bin \
       psmisc lsof iproute2 sshpass pv zstd libzbar0 whois gawk \
-      libreoffice-impress libreoffice-writer poppler-utils \
+      libreoffice-impress libreoffice-writer libreoffice-calc poppler-utils \
       xdotool xclip imagemagick \
  && rm -rf /var/lib/apt/lists/*
-# libreoffice-writer/impress + poppler-utils: open and convert Office documents (soffice --convert-to pdf, pdftoppm);
+# libreoffice-writer/impress/calc + poppler-utils: open and convert Office documents (soffice --convert-to pdf, pdftoppm;
+# calc recalculates .xlsx formulas, e.g. YCC expenses/claim_docs.py);
 # python-pptx (below) extracts their text.
 # xdotool + xclip + imagemagick: drive a plain (non-CDP) Chromium on Xvfb with real X11 input, read text via the clipboard.
 # libzbar0 + pyzbar: decode QR codes.
