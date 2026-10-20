@@ -212,7 +212,7 @@ func (r *Router) registerAutopilot(app appRoute, m machineRoute) {
 			}
 			s.Booted = machine // its agent reports only once the machine has booted (machine/main.go)
 			if reg != nil {
-				s.Live.HostUp = machine
+				s.Live.HostUp, s.StuckImage = machine, ""
 			}
 			s.Status = ""
 			if reg != nil {
@@ -643,11 +643,13 @@ const harnessStuckPrefix = "the harness didn't come up"
 
 // harnessRetryUpgrade: a session the harness check failed resumes on the newest session image when its own is older
 // (the phone approves it, as any newer image): retrying the image whose Claude never came up would hang again
+// (also after a resume-upgrade nobody approved: the mark stays until a Claude host comes up)
 func harnessRetryUpgrade(s Session, newest string) bool {
-	if s.State != "failed" || !strings.HasPrefix(s.Error, harnessStuckPrefix) || s.Cert == nil || newest == "" {
+	if s.StuckImage == "" || s.Cert == nil || newest == "" {
 		return false
 	}
-	return imageDigest(certImage(s.Cert, s.Image)) != imageDigest(newest)
+	own := imageDigest(certImage(s.Cert, s.Image))
+	return own == imageDigest(s.StuckImage) && own != imageDigest(newest)
 }
 
 // harnessStuck: fail the session (the machine stays until a Resume finishes its pause, or a Destroy), log it in the
@@ -660,6 +662,7 @@ func (r *Router) harnessStuck(a pilotAction) {
 			return
 		}
 		s.State, s.Error, failed = "failed", a.Text, true
+		s.StuckImage = certImage(s.Cert, s.Image)
 	})
 	if !failed {
 		return

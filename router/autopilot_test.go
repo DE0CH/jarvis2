@@ -674,19 +674,36 @@ func TestStatusSetsHarnessClock(t *testing.T) {
 func TestHarnessRetryUpgrade(t *testing.T) {
 	cert := &Doc{Payload: `{"machine":{"id":"m1","image":"ghcr.io/de0ch/jarvis2-session@sha256:aaa"}}`}
 	newest := "ghcr.io/de0ch/jarvis2-session:sha-1@sha256:bbb"
-	s := Session{State: "failed", Error: harnessStuckText(4*time.Minute, "Settings Error"), Cert: cert}
+	s := Session{State: "failed", Cert: cert, StuckImage: "ghcr.io/de0ch/jarvis2-session@sha256:aaa"}
 	if !harnessRetryUpgrade(s, newest) {
 		t.Fatal("not upgraded")
+	}
+	s.State = "paused" // a resume-upgrade nobody approved: still the stuck image
+	if !harnessRetryUpgrade(s, newest) {
+		t.Fatal("not upgraded after a lapsed approval")
 	}
 	if harnessRetryUpgrade(s, "ghcr.io/de0ch/jarvis2-session:sha-0@sha256:aaa") {
 		t.Fatal("upgraded onto its own image")
 	}
-	s.Error = "start: Fly timed out"
+	s.StuckImage = ""
 	if harnessRetryUpgrade(s, newest) {
-		t.Fatal("upgraded after another failure")
+		t.Fatal("upgraded with no mark")
 	}
-	s.Error, s.State = harnessStuckText(time.Minute, ""), "paused"
-	if harnessRetryUpgrade(s, newest) {
-		t.Fatal("upgraded a paused session")
+	// the router marks it when it fails the session, and a host that comes up clears it
+	r := newTestRouter(t)
+	addSession(r, "s1", "started", "m1", false)
+	r.st.Do(func(p *persisted) { p.Sessions["s1"].Cert, p.Sessions["s1"].Booted = cert, "m1" })
+	r.harnessStuck(pilotAction{Kind: "harness-stuck", Session: "s1", Machine: "m1", Text: harnessStuckText(time.Minute, "")})
+	var got Session
+	r.st.Do(func(p *persisted) { got = *p.Sessions["s1"] })
+	if got.State != "failed" || got.StuckImage != "ghcr.io/de0ch/jarvis2-session@sha256:aaa" {
+		t.Fatalf("%+v", got)
+	}
+	r.st.Do(func(p *persisted) { p.Sessions["s1"].State = "started" })
+	m := newTestMachine(r, "m1")
+	m.do(t, r.MachineHandler(), "POST", "/m/status", jsonString(map[string]string{"raw": sampleRaw}))
+	r.st.Do(func(p *persisted) { got = *p.Sessions["s1"] })
+	if got.StuckImage != "" {
+		t.Fatal("a host that came up kept the mark")
 	}
 }

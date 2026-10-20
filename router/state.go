@@ -50,6 +50,7 @@ type Session struct {
 	ImportSha       string      `json:"importSha256,omitempty"` // jarvis1import.go: that import manifest's sha256 (in the cert's restore)
 	Ops             *SessionOps `json:"ops,omitempty"`          // sessionops.go: API proxy, env patch, rollback, attachments
 	Booted          string      `json:"booted,omitempty"`       // the machine that has reported status: it got past boot (lastSnapshot)
+	StuckImage      string      `json:"stuckImage,omitempty"`   // the image the harness check found its Claude never came up on (autopilot.go): a resume goes on the newest
 	Waiting         string      `json:"waiting,omitempty"`      // what a pause or destroy is waiting on, in plain words (the app shows it)
 	LockedStore     string      `json:"lockedStore,omitempty"`  // the store the machine waits on at boot (its secrets pull got 423 "store X is locked")
 	OldCore         bool        `json:"oldCore,omitempty"`      // corechange.go: its line is an earlier core's; destroyed once paused
