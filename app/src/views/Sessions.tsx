@@ -1,6 +1,6 @@
 import { useRef } from "react";
 import { Linking, View } from "react-native";
-import { api, ago, isTaskLine, challengeRequest, cronEvery, holderTitle, HOLDERS, HARNESS, REGION, sessionTitle, storesOf, when, type Approval, type Backup, type Lease, type Session, type State } from "../lib/api";
+import { api, ago, isTaskLine, challengeRequest, cronEvery, holderTitle, HOLDERS, HARNESS, REGION, sessionTitle, storesOf, when, type Approval, type Backup, type Lease, type MessageRule, type Session, type State } from "../lib/api";
 import { useStore, setTab, getStore, pend, refresh, refreshUntil, pendUntil, settle, ask, askText, toast, failed, exclusive, BUSY_LABEL } from "../lib/store";
 import { hasShell, requestSecure } from "../lib/shell";
 import { requestGrant } from "../lib/grants";
@@ -13,6 +13,7 @@ import { BusyButton, PButton, useCoolAfterShift } from "../ui/bits";
 import { Cards } from "../ui/cards";
 import { Aligned } from "../ui/align";
 import { InboxNote } from "./Inbox";
+import { removeMessageRule } from "../lib/inbox";
 import { openPage } from "../ui/page";
 import { openMenu, type MenuItem } from "../ui/overlays";
 
@@ -404,6 +405,40 @@ function NeedsGrant({ m }: { m: Session }) {
     </Callout>
   );
 }
+// messages Jarvis wants to deliver into it wait for Deyao in the Inbox (one entry per session, lib/messages.ts)
+function PendingMessages({ m }: { m: Session }) {
+  const n = m.pendingMessages || 0;
+  if (n <= 0) return null;
+  return (
+    <Callout color="blue" variant="surface" mt={2} data={{ pendingMessages: String(n) }} id={"pending-messages-" + m.id}>
+      <CalloutText color="blue">{n === 1 ? "1 message waits for your approval." : `${n} messages wait for your approval.`}</CalloutText>
+      <Flex gap={2} mt={2} wrap><Button size={1} variant="soft" id={"pending-messages-open-" + m.id} onPress={() => setTab("inbox")}>Open the Inbox</Button></Flex>
+    </Callout>
+  );
+}
+// its per-kind message rules (phone-signed: these messages go in without asking); Remove revokes one at once
+const removeRule = (m: Session, r: MessageRule) => exclusive("mr:" + r.id, async () => {
+  if (!(await ask({ title: "Remove rule?", rows: [{ label: "Session", value: sessionTitle(m) }, { label: "Rule", value: r.text }, { label: "Afterwards", value: `Each ${r.kindLabel.toLowerCase()} waits in the Inbox again` }], action: "Remove rule", danger: true }))) return;
+  pend("mr:" + r.id, "Removing…");
+  try { await removeMessageRule(r.id); await refreshUntil((s) => !(s.messageRules || []).some((x) => x.id === r.id), 20000); }
+  catch (e: any) { failed(e); await refresh(false); }
+  finally { pend("mr:" + r.id, null); }
+});
+function MessageRules({ m }: { m: Session }) {
+  const rules = (useStore((s) => s.state.messageRules) || []).filter((r) => r.session === m.id);
+  if (!rules.length) return null;
+  return (
+    <Box mt={2} id={"message-rules-" + m.id}>
+      <Lbl>{`Message rules (${rules.length})`}</Lbl>
+      {rules.map((r) => (
+        <Flex key={r.id} gap={2} align="center" mt={1} data={{ messageRule: r.id }}>
+          <P size={2} style={{ flex: 1 }} id={"message-rule-text-" + r.id}>{r.text}</P>
+          <PButton pkey={"mr:" + r.id} size={1} variant="soft" color="gray" onPress={() => removeRule(m, r)} label="Remove" id={"message-rule-remove-" + r.id} />
+        </Flex>
+      ))}
+    </Box>
+  );
+}
 // the machine is waiting at boot on a store that is locked: the unlock review page (Allow / Deny) one tap away
 export function LockedStore({ m, compact }: { m: Session; compact?: boolean }) {
   if (!m.lockedStore) return null;
@@ -478,11 +513,13 @@ export function Sessions() {
                 <MemAlert m={m} busy={busy || null} />
                 <DiskAlert m={m} busy={busy || null} />
                 <SnapshotTrouble m={m} busy={busy || null} />
+                <PendingMessages m={m} />
                 <NeedsGrant m={m} />
                 <ModeWaiting m={m} />
                 <LockedStore m={m} />
                 <Schedules m={m} />
                 {m.wake?.kind === "account" && m.wake.phase === "failed" && <P size={2} color="red" mt={1} id={"account-failed-" + m.id}>{"Account switch failed: " + (m.wake.error || "no reason given")}</P>}
+                <MessageRules m={m} />
                 {!!m.error && <P size={2} color="red" mt={1}>{m.error}</P>}
                 <Backups m={m} />
                 {!!m.discordChannel && <Flex mt={1}><Button size={1} variant="ghost" color="gray" id={"discord-" + m.id} onPress={() => openDiscord(m.discordChannel!)}>Discord channel ↗</Button></Flex>}

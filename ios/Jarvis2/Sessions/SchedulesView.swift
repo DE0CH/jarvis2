@@ -1,8 +1,9 @@
 // A session's wakeups and crons (router/schedule.go): at the due time the router delivers the prompt into the session
-// as a message, resuming it first when it is paused. Delivery runs as the `scheduler` feature, so the session must
-// allow it (arming from inside the session does that by itself) or the phone must (a standing rule). Only the session
-// arms them (scripts/schedule-wakeup.sh, schedule-cron.sh: its own signed request is what vouches for the delivery; the
-// router refuses arming from the app), so this page lists and cancels them (app DECISIONS 76).
+// as a message, resuming it first when it is paused. Into a session holding a sensitive store, each delivery waits in
+// the Inbox as a pending message until Deyao delivers it (Face ID) or denies it, unless a per-kind message rule says
+// to deliver it (MessageReviewView). Only the session arms them (scripts/schedule-wakeup.sh, schedule-cron.sh: its own
+// signed request is what vouches for the delivery; the router refuses arming from the app), so this page lists and
+// cancels them (app DECISIONS 76).
 import SwiftUI
 
 struct SchedulesView: View {
@@ -12,15 +13,12 @@ struct SchedulesView: View {
   @State private var crons: [Cron]?
   @State private var error: String?
 
-  private var title: String { model.session(sessionId)?.title ?? sessionId }
 
   var body: some View {
     Form {
       Section {
-        Button("Standing rule for the scheduler…", systemImage: "calendar.badge.clock") { model.requestGrant(sessionId, title, holder: "scheduler", rule: true) }
-          .accessibilityIdentifier("sch-rule")
-      } footer: {
         Text("The session arms its own wakeups and crons: ask it in its chat. The prompt arrives as a message; a paused session resumes first.")
+          .font(.footnote).foregroundStyle(.secondary)
       }
       Section("Armed") {
         if let error { ErrorRow(text: error) }

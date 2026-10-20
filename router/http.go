@@ -750,6 +750,7 @@ func sessionView(s *Session, d *persisted) map[string]any {
 	backupsView(s, v) // snapsafe.go
 	diskView(s, v)    // disk.go
 	scheduleView(d, s.ID, v)
+	messagesView(d, s.ID, v) // messages.go
 	opsView(s, v)
 	return v
 }

@@ -359,7 +359,7 @@ func (r *Router) deliverWatch(sid, name string, armedAt int64, key string) {
 	if errors.Is(err, errSkip) {
 		return
 	}
-	drop, _ := schedRun.failed(key, false, time.Now())
+	drop := schedRun.failed(key, time.Now())
 	log.Printf("[watch] %s %q delivery failed (drop=%v): %v", sid, name, drop, err)
 	r.st.Do(func(d *persisted) {
 		if s := d.Schedules[sid]; s != nil && s.Watches[name] != nil && s.Watches[name].ArmedAt == armedAt {

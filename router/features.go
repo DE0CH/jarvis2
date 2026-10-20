@@ -36,6 +36,7 @@ func (r *Router) registerFeatures(app appRoute, m machineRoute, public publicRou
 	r.registerInbox(app, m, public)         // inbox.go: requests waiting for the phone (the app's Inbox)
 	r.registerPeerMessages(m)               // peermsg.go: one session telling another, through Jarvis
 	r.registerOutcomes(m)                   // outcomes.go: a session reads what became of its requests
+	r.registerMessages(app)                 // messages.go: messages held for Deyao to deliver or deny, his per-kind rules
 	r.registerVouch(app, m)                 // vouch.go: /m/config, /m/restore-cert, deliveries, the input log
 	r.registerMachines(app)                 // machines.go: every Fly machine of the app; Destroy for one with no session
 	r.registerContent(app, m)               // content.go: content stores (Storage Box folders) for the app and the sessions
@@ -61,6 +62,7 @@ func (r *Router) startFeatures() {
 	go r.uploadsLoop()    // uploads.go: stale attachments
 	go r.inboxLoop()      // inbox.go: requests and approvals go after 10 min
 	go r.outcomeLoop()    // outcomes.go: tell a session what became of its Inbox requests
+	go r.messageLoop()    // messages.go: approved messages delivered, pending ones lapse
 	go r.tasksLoop()      // tasks.go: daily schedules, runs, pausing finished task lines
 	go r.inputLogLoop()   // vouch.go: the core's input log onto the volume
 	go r.coreChangeLoop() // corechange.go: a new core → the earlier core's paused sessions are destroyed

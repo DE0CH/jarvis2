@@ -24,7 +24,9 @@ import (
 )
 
 // the features that may hold grants
-var holderNames = []string{"terminal", "scheduler", "status", "archive", "remote"}
+// (messages into a session are no feature's: they are deliveries the machine checks, and into a session holding a
+// sensitive store Deyao delivers or denies each one, messages.go)
+var holderNames = []string{"terminal", "status", "archive", "remote"}
 
 type StoredGrant struct {
 	ID      string    `json:"id"`
@@ -229,9 +231,13 @@ func (r *Router) AddGrant(session string, doc *Doc) (*StoredGrant, error) {
 func (r *Router) Grants(session string) []*StoredGrant {
 	out := []*StoredGrant{}
 	now := time.Now()
+	known := map[string]bool{}
+	for _, h := range holderNames {
+		known[h] = true
+	}
 	r.st.Do(func(d *persisted) {
 		for id, g := range d.Grants {
-			if !now.Before(g.Ends) || d.Sessions[g.Session] == nil {
+			if !now.Before(g.Ends) || d.Sessions[g.Session] == nil || !known[g.Holder] { // a holder no longer listed goes too
 				delete(d.Grants, id)
 				continue
 			}

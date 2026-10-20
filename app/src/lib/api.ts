@@ -150,6 +150,8 @@ export type Session = {
   noSnapshot?: string | null;
   // the final snapshot failed and the machine (no volume) is kept: state failed with a machine
   snapshotFailed?: string | null;
+  // how many messages for it wait in the Inbox for Deyao (PendingMessage, state "pending"); absent = none
+  pendingMessages?: number;
 };
 export type Backup = { machine: string; volume: string; snapshot: string; at: string; retentionDays: number; expiresAt: string; sizeBytes?: number; signedSnapshot: boolean };
 export type RepoEntry = { name: string; url: string; repo: string; store: string; sensitive?: boolean; fingerprint?: string; keyAt?: string };
@@ -200,7 +202,7 @@ export type Approval = {
 // approvals. The list's title is rendered here from kind + params (lib/inbox.ts); the review page renders what is
 // signed from the signed content itself.
 export type InboxItem = {
-  id: string; kind: "repo-key" | "grant" | "unlock" | "api-call" | "restore" | "peer-message" | ApprovalKind; approval: boolean;
+  id: string; kind: "repo-key" | "grant" | "unlock" | "api-call" | "restore" | "peer-message" | "message" | ApprovalKind; approval: boolean;
   params: { action?: "add" | "remove"; repo?: string; sensitive?: boolean; session?: string; holder?: string; minutes?: number; days?: number;
     method?: string; path?: string; body?: string; contentType?: string; store?: string; seq?: number; text?: string }; // peer-message: the words (session = the receiver) // api-call: the call a session's actions ask to run as Deyao
   session?: string; sessionName?: string; caller: { kind: string; session?: string }; callerText: string;
@@ -217,10 +219,21 @@ export type InboxBatch = {
   call: { method: string; path: string; args?: Record<string, unknown> }; created: string; expires: string;
   items: string[]; preparing: number;
 };
+// a message Jarvis wants to deliver into a session that waits for Deyao (router: per-message delivery approval):
+// every message into a session holding a sensitive store, and every resume prompt. Deliver = the phone signs THAT
+// message (Face ID); Deny = nothing is signed. `from` is the specific requester; `text` the exact text delivered.
+export type PendingMessage = {
+  id: string; session: string; sessionName: string; kind: string; kindLabel: string; from: string; text: string; note?: string;
+  sha256: string; created: string; expires: string; state: "pending" | "approved" | "failed"; error?: string;
+  ruleable: boolean; ruleText: string;
+};
+// a phone-signed per-kind rule: messages of this kind go into this session without asking (revocable, Remove)
+export type MessageRule = { id: string; session: string; kind: string; kindLabel: string; text: string; until: string; created: string };
 export type CoreStatus = { up: boolean; signingKey?: string; agreementKey?: string };
 export type State = {
   sessions: Session[]; approvals: Approval[]; core: CoreStatus; inbox?: InboxItem[]; inboxBatches?: InboxBatch[];
   budget?: Budget | null; fly?: FlyView | null; flyApp?: string; repos?: RepoEntry[]; leases?: Lease[];
+  messages?: PendingMessage[]; messageRules?: MessageRule[];
   loadError?: string | null; // client-side: the last api/state fetch failed
   loaded?: boolean; // client-side: api/state has answered at least once
 };
@@ -311,10 +324,10 @@ export function when(at: number | string) {
 export function cronEvery(sec: number) {
   return sec === 86400 ? "daily" : sec === 604800 ? "weekly" : sec % 86400 === 0 ? `every ${sec / 86400} d` : sec % 3600 === 0 ? `every ${sec / 3600} h` : `every ${Math.round(sec / 60)} min`;
 }
-// the features that may hold a grant (router/grants.go), in words — the shell's grant page says the same
+// the features that may hold a grant (router/grants.go), in words — the shell's grant page says the same. Messages
+// Jarvis delivers into a sensitive session are not a grant: each one is approved in the Inbox (lib/messages.ts).
 export const HOLDERS: Record<string, { title: string; sub: string }> = {
   terminal: { title: "Terminal", sub: "read the screen and type into the session" },
-  scheduler: { title: "Scheduler", sub: "deliver wakeups and crons as messages" },
   status: { title: "Status", sub: "read the screen, press Escape on a prompt left waiting" },
   login: { title: "Login repair", sub: "write fresh Claude credentials and send “continue”" },
   archive: { title: "Archive check", sub: "list uncommitted work before a destroy" },

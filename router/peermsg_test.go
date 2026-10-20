@@ -42,7 +42,12 @@ func peerRig(t *testing.T) (*Router, testMachine, *[]PeerNote, *sync.Mutex) {
 	var mu sync.Mutex
 	got := &[]PeerNote{}
 	old := deliverPeerHook
-	deliverPeerHook = func(r *Router, n PeerNote) error { mu.Lock(); *got = append(*got, n); mu.Unlock(); return nil }
+	deliverPeerHook = func(r *Router, n PeerNote, _ Origin) error {
+		mu.Lock()
+		*got = append(*got, n)
+		mu.Unlock()
+		return nil
+	}
 	t.Cleanup(func() { deliverPeerHook = old })
 	return r, newTestMachine(r, "mLow"), got, &mu
 }

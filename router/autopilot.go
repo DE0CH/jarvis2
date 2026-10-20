@@ -758,7 +758,6 @@ func (r *Router) runAction(a pilotAction) {
 				}
 			})
 			if err != nil {
-				r.noteRefusal(a.Session, "scheduler", err)
 				log.Printf("[stall] nudge for %s failed (retried next interval): %v", a.Session, err)
 				return
 			}
@@ -767,7 +766,6 @@ func (r *Router) runAction(a pilotAction) {
 	case "continue":
 		go func() {
 			if err := r.DeliverCanned(a.Session, Delivery{Kind: "continue"}, "continue"); err != nil {
-				r.noteRefusal(a.Session, "scheduler", err)
 				log.Printf("[account] %s (%s): \"continue\" after the start on its new Claude account failed: %v", a.Session, a.Name, err)
 				return
 			}

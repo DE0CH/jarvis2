@@ -28,6 +28,9 @@ enum SecureRequest: Identifiable, Equatable, Hashable {
   /// an API call a session's actions asked for (router/apicalls.go): its own sheet, which then follows the core
   /// requests the call brings about (APICallReviewView)
   case apiCall(id: String)
+  /// a session's pending messages (router: per-message delivery approval): every one listed, delivered under one
+  /// Face ID (or one by one), or denied (MessageReviewView)
+  case messages(session: String)
 
   var id: String {
     switch self {
@@ -39,11 +42,12 @@ enum SecureRequest: Identifiable, Equatable, Hashable {
     case .batch(let b): "batch-\(b)"
     case .restore(let st, let q, _): "restore-\(st)-\(q)"
     case .apiCall(let c): "api-call-\(c)"
+    case .messages(let s): "messages-\(s)"
     }
   }
   var inboxId: String? {
     switch self {
-    case .newSession, .batch: nil
+    case .newSession, .batch, .messages: nil
     case .approval(_, let i), .grant(_, let i), .unlock(_, _, let i), .repoKey(_, _, _, let i, _), .restore(_, _, let i): i
     case .apiCall(let c): c
     }
@@ -51,7 +55,7 @@ enum SecureRequest: Identifiable, Equatable, Hashable {
   /// what this page acts on, in the Inbox's option names: compared with the request's own (SignedAction.mismatch)
   var options: [String: Any] {
     switch self {
-    case .newSession, .batch, .apiCall: return [:]
+    case .newSession, .batch, .apiCall, .messages: return [:]
     case .approval(let a, _): return ["approvalId": a]
     case .grant(let g, _):
       var o: [String: Any] = ["sessionId": g.session, "holder": g.holder, "grantKind": g.kind]
@@ -91,6 +95,9 @@ enum SecureRequest: Identifiable, Equatable, Hashable {
       return .restore(store: st, seq: q, inbox: it.id)
     case "api-call":
       return .apiCall(id: it.id)
+    case "message":
+      guard let s = o["sessionId"].text ?? it.session else { return nil }
+      return .messages(session: s)
     default:
       return nil
     }

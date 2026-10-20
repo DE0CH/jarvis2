@@ -29,7 +29,6 @@ func (r *Router) repairLogin(a pilotAction) {
 
 func (r *Router) deliverContinue(a pilotAction) {
 	if err := r.DeliverCanned(a.Session, Delivery{Kind: "continue"}, "continue"); err != nil {
-		r.noteRefusal(a.Session, "scheduler", err)
 		log.Printf("[login] %s: delivering \"continue\" failed: %v", a.Session, err)
 		return
 	}

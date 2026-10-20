@@ -429,6 +429,42 @@ final class RouterClient: NSObject, ASWebAuthenticationPresentationContextProvid
     try await json("POST", "api/sessions/\(session)/grants", ["payload": payload, "sig": sig.base64EncodedString()])
   }
 
+  // ---- messages into sessions, each delivered or denied by Deyao (router: per-message delivery approval) ----
+  /// every pending (and recently approved or failed) message, and the per-kind rules in force
+  func messages() async throws -> (messages: [PendingMessage], rules: [MessageRule]) {
+    let j = try await get("api/messages")
+    return (j["messages"].array.map(PendingMessage.init), j["rules"].array.map(MessageRule.init))
+  }
+  /// the exact text the phone signs to deliver these messages (all of one session, all pending); the caller checks it
+  /// (Checks.reviewMessages) before signing
+  func draftMessages(_ ids: [String]) async throws -> (text: String, session: String) {
+    struct T: Decodable { let text: String; let session: String? }
+    let t = try await json("POST", "api/messages/draft", ["ids": ids], as: T.self)
+    return (t.text, t.session ?? "")
+  }
+  /// the signed batch: the router delivers each message (the machine checks the phone's signature); → the ids delivering
+  @discardableResult
+  func approveMessages(payload: String, sig: Data) async throws -> [String] {
+    try await call("POST", "api/messages/approve", ["payload": payload, "sig": sig.base64EncodedString()])["delivering"].strings
+  }
+  /// no signature: the messages are dropped
+  func denyMessages(_ ids: [String]) async throws { try await call("POST", "api/messages/deny", ["ids": ids]) }
+  /// the text the phone signs for a per-kind rule (Checks.reviewMessageRule)
+  func draftMessageRule(_ session: String, kind: String) async throws -> String {
+    struct T: Decodable { let text: String }
+    return try await json("POST", "api/sessions/\(session)/message-rules/draft", ["kind": kind], as: T.self).text
+  }
+  /// the signed rule; adding it also delivers the session's pending messages of that kind
+  func addMessageRule(_ session: String, payload: String, sig: Data) async throws -> MessageRule {
+    let j = try await call("POST", "api/sessions/\(session)/message-rules", ["payload": payload, "sig": sig.base64EncodedString()])
+    return MessageRule(j: j)
+  }
+  func messageRules(_ session: String) async throws -> [MessageRule] {
+    try await get("api/sessions/\(session)/message-rules")["rules"].array.map(MessageRule.init)
+  }
+  /// revoke: the router stops using it at once
+  func removeMessageRule(_ id: String) async throws { try await call("DELETE", "api/message-rules/\(id)") }
+
   // ---- the Inbox (docs/API.md "Requests") ----
   /// one Inbox entry (GET api/requests/:id); nil when it is gone
   func inboxItem(_ id: String) async throws -> InboxItem? {

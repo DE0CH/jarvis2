@@ -146,8 +146,6 @@ func main() {
 		return
 	case "allow":
 		err = allowCmd(os.Args[2:])
-	case "allow-at-least":
-		err = allowAtLeastCmd(os.Args[2:]) // apiproxy.go
 	default:
 		err = fmt.Errorf("unknown command %s", os.Args[1])
 	}

@@ -9,8 +9,8 @@ this session as the caller, from the machine's key) and the reason given here, a
                                     the supervisor (RAM) and sets up its SSH key. --no-store: only make the key (e.g. for a
                                     proposed session's repos)
   jarvis2-request grant HOLDER [--minutes N | --days N] --why TEXT
-                                    let a router feature into THIS session (terminal, scheduler, status, login,
-                                    archive, remote): 1-10 minutes, or a standing rule for N days
+                                    let a router feature into THIS session (terminal, status, archive,
+                                    remote): 1-10 minutes, or a standing rule for N days
   jarvis2-request unlock --why TEXT the locked stores this session waits on
   jarvis2-request add-store STORE --why TEXT
                                     one more store for this running session (its machine keeps its keys); once

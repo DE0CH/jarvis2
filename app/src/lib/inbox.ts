@@ -21,6 +21,7 @@ export function inboxTitle(it: InboxItem): string {
     case "unlock": return "Unlock stores";
     case "api-call": return "API call";
     case "peer-message": return "Peer message";
+    case "message": return "Message"; // shown grouped by session in the Inbox (lib/messages.ts groupTitle)
     case "add-store": return "Add store";
     case "resume-upgrade": return "Resume on latest image";
     case "restore": return "Restore store";
@@ -58,6 +59,11 @@ export function inboxRows(it: InboxItem, approvals: Approval[] = [], policy: Pol
       add("to", "To", session);
       add("text", "Message", p.text);
       return rows;
+    case "message": // a pending message (lib/messages.ts): what it is, who wants it delivered, the exact words
+      add("to", "To", session);
+      add("kind", "Kind", it.explanation);
+      add("text", "Message", p.text);
+      return rows;
     case "api-call":
       add("does", "Does", it.does);
       add("request", "Runs", `${p.method} ${p.path}`);
@@ -81,6 +87,10 @@ export function inboxCall(it: InboxItem): string {
 }
 
 export const denyRequest = (it: InboxItem) => api("DELETE", `api/requests/${it.id}`);
+/** Deny pending messages (one, or a session's whole group): nothing is delivered. Deliver is signed on the iPhone. */
+export const denyMessages = (ids: string[]) => api<{ ok: boolean; denied: string[] }>("POST", "api/messages/deny", { ids });
+/** Remove a session's per-kind message rule: the router stops using it at once */
+export const removeMessageRule = (id: string) => api("DELETE", `api/message-rules/${id}`);
 /** an upward peer message (router/peermsg.go): one tap delivers it, no Face ID (nothing is signed) */
 export async function approvePeer(it: InboxItem) {
   const r = await api<{ ok: boolean; state?: string; error?: string }>("POST", `api/requests/${it.id}/approve`);

@@ -63,19 +63,17 @@ func TestProxyForwardsSigned(t *testing.T) {
 	}
 }
 
-func TestProxyArmingGivesTheSchedulerNoShell(t *testing.T) {
+func TestProxyArmingGivesNoShell(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("JARVIS2_SESSION_ID", "s1")
 	old := currentCert
-	currentCert = func() (Cert, error) { return Cert{Line: "m1"}, nil }
+	currentCert = func() (Cert, error) { return Cert{Line: "m1", Sensitive: true}, nil }
 	t.Cleanup(func() { currentCert = old })
-	key, sched := newKey(), newKey()
+	key := newKey()
 	at := time.Now().Add(2 * time.Hour).UnixMilli()
 	srv := fakeRouter(t, key, func(w http.ResponseWriter, req *http.Request, body []byte) {
 		switch req.URL.Path {
-		case "/m/holders":
-			json.NewEncoder(w).Encode(map[string]string{"scheduler": sched.pub()})
 		case "/m/api/sessions/s1/wakeup":
 			json.NewEncoder(w).Encode(map[string]any{"ok": true, "wakeup": map[string]any{"name": "default", "at": at}})
 		default:
@@ -91,23 +89,12 @@ func TestProxyArmingGivesTheSchedulerNoShell(t *testing.T) {
 		t.Fatal(err)
 	}
 	b, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode != 200 || !strings.Contains(string(b), `"ok":true`) || !strings.Contains(string(b), "no shell access granted") {
+	if resp.StatusCode != 200 || !strings.Contains(string(b), `"ok":true`) || !strings.Contains(string(b), "no shell access granted") ||
+		!strings.Contains(string(b), "approves or denies that message on the phone") {
 		t.Fatalf("%d %s", resp.StatusCode, b)
 	}
 	if l := readAllow(); len(l) != 0 {
-		t.Fatalf("the scheduler was put on the allow list: %+v", l)
-	}
-	_ = at
-	// an allow list entry (the CLI's allow command) is never shortened
-	if err := extendAllow(c, "scheduler", time.Now().Add(time.Hour)); err != nil {
-		t.Fatal(err)
-	}
-	list := readAllow()
-	if err := extendAllow(c, "scheduler", time.Now().Add(time.Minute)); err != nil {
-		t.Fatal(err)
-	}
-	if l := readAllow(); len(l) != 1 || l[0].Until != list[0].Until {
-		t.Fatalf("shortened: %+v", l)
+		t.Fatalf("something was put on the allow list: %+v", l)
 	}
 }
 
@@ -194,7 +181,7 @@ func TestProxyForwardsABatch(t *testing.T) {
 	c := &client{base: srv.URL, me: "m1", sig: key.k, http: srv.Client()}
 	p := httptest.NewServer(apiProxyHandler(c))
 	defer p.Close()
-	in := `{"summary":"two grants","items":[{"intent":"grant","holder":"scheduler","minutes":5},{"intent":"grant","holder":"remote"}]}`
+	in := `{"summary":"two grants","items":[{"intent":"grant","holder":"status","minutes":5},{"intent":"grant","holder":"remote"}]}`
 	resp, err := http.Post(p.URL+"/api/requests/batch", "application/json", strings.NewReader(in))
 	if err != nil || resp.StatusCode != 200 {
 		t.Fatalf("%v %v", err, resp)

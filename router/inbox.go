@@ -463,6 +463,7 @@ func (r *Router) Inbox() []InboxItem {
 		for _, a := range d.Approvals {
 			out = append(out, approvalItem(d, a))
 		}
+		out = append(out, messageInboxItems(d)...) // messages.go
 	})
 	sort.Slice(out, func(i, j int) bool { return out[i].Created.After(out[j].Created) })
 	return out
@@ -568,8 +569,15 @@ func (r *Router) inboxLoop() {
 	}
 }
 
-// Deny: drop a request; for an approval, reject it (a new session disappears, a resume stays paused)
+// Deny: drop a request; for an approval, reject it (a new session disappears, a resume stays paused); a held message
+// is denied (messages.go)
 func (r *Router) DenyRequest(id string) error {
+	if r.isMessage(id) {
+		if len(r.DenyMessages([]string{id})) == 0 {
+			return errAlreadyGone
+		}
+		return nil
+	}
 	var found bool
 	r.st.Do(func(d *persisted) {
 		if q, ok := d.Inbox[id]; ok {

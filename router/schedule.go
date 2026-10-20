@@ -8,10 +8,9 @@ package main
 // gone from the list, the tick drops them. A session with pending ones must not be destroyed by an automatic
 // path (PendingSchedule).
 //
-// Delivery runs as the "scheduler" holder (grants.go), so the machine decides: a session approves the scheduler
-// for itself when it arms one (the machine's local API proxy writes its allow list), or Deyao signs a grant or a
-// standing rule. A session holding a sensitive store accepts only a phone grant: its due wakeup DMs Deyao once
-// and stays pending until a grant lets it through.
+// Each is delivered as a core-attested delivery the machine checks (vouch.go): a wakeup or cron as the session's own
+// signed request; a resume prompt (Deyao's words from the app) only under the phone's signature of exactly it. Into a
+// session holding a sensitive store every message waits in the Inbox for Deyao to deliver or deny it (messages.go).
 
 import (
 	"encoding/json"
@@ -578,7 +577,6 @@ type scheduler struct {
 type attempt struct {
 	n      int
 	nextAt time.Time
-	dmSent bool // a grant refusal was reported to Deyao (once per arming)
 }
 
 func (s *scheduler) init() {
@@ -617,8 +615,8 @@ func (s *scheduler) release(key string) {
 	s.mu.Unlock()
 }
 
-// failed: record a failed attempt; refused = a grant refusal (never dropped, DM once). Returns (drop, dm).
-func (s *scheduler) failed(key string, refused bool, now time.Time) (drop, dm bool) {
+// failed: record a failed attempt; drop = it has failed scheduleMaxAttempt times
+func (s *scheduler) failed(key string, now time.Time) (drop bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	a := s.attempts[key]
@@ -626,19 +624,13 @@ func (s *scheduler) failed(key string, refused bool, now time.Time) (drop, dm bo
 		a = &attempt{}
 		s.attempts[key] = a
 	}
-	if refused {
-		a.nextAt = now.Add(2 * time.Minute)
-		dm = !a.dmSent
-		a.dmSent = true
-		return false, dm
-	}
 	a.n++
 	if a.n >= scheduleMaxAttempt {
 		delete(s.attempts, key)
-		return true, true
+		return true
 	}
 	a.nextAt = now.Add(time.Duration(min(a.n, 4)) * 2 * time.Minute)
-	return false, false
+	return false
 }
 
 // schedRun: the scheduler's in-memory run state (lost on a restart, which only makes due items due again)
@@ -762,12 +754,9 @@ func (r *Router) scheduleTick(now time.Time) {
 				log.Printf("[schedule] %s: %v — next tick", key, err)
 				return
 			}
-			refused := isGrantRefusal(err)
-			drop, dm := schedRun.failed(key, refused, time.Now())
-			log.Printf("[schedule] %s failed (refused=%v drop=%v): %v", key, refused, drop, err)
+			drop := schedRun.failed(key, time.Now())
+			log.Printf("[schedule] %s failed (drop=%v): %v", key, drop, err)
 			switch {
-			case refused && dm:
-				r.DM(fmt.Sprintf("%s is due but the session doesn't let the scheduler in (%s). It stays pending; a phone grant for the scheduler lets it through.", what, trimTo(err.Error(), 200)))
 			case drop:
 				r.dropFailed(it.sid, it.kind, it.name, it.armedAt)
 				r.DM(fmt.Sprintf("%s could not be delivered after %d attempts: %s", what, scheduleMaxAttempt, trimTo(err.Error(), 300)))
@@ -875,10 +864,11 @@ func (r *Router) fireResumePrompt(sid string) error {
 	if text == "" {
 		return nil
 	}
-	if err := r.deliverToSession(sid, "deyao", text, ""); err != nil {
+	// Deyao's own words: the machine takes them only as the phone signed them (messages.go), so they wait in the Inbox
+	if err := deliverVouchedHook(r, sid, Delivery{Kind: "resume-prompt", Text: text}); err != nil {
 		return err
 	}
-	log.Printf("[resume-prompt] %s delivered", sid)
+	log.Printf("[resume-prompt] %s handed over", sid)
 	r.st.Do(func(d *persisted) {
 		if s := d.Schedules[sid]; s != nil && s.ResumePrompt == text {
 			s.ResumePrompt = ""
@@ -895,50 +885,8 @@ var (
 	harnessRetryFast = 2 * time.Second // the first 20 s of a harness that isn't up yet
 )
 
-// deliverToSession: resume the session when it is paused, wait for it, then deliver (after: a shell step that
-// runs in the same exec after the delivery)
-func (r *Router) deliverToSession(sid, from, text, after string) error {
-	state, sensitive := r.sessionState(sid)
-	switch state {
-	case "":
-		return errNoSession
-	case "paused":
-		if sensitive && !r.hasPhoneGrant(sid, "scheduler") {
-			// it would only be refused: don't start a machine for nothing
-			return errors.New("the machine refused or failed: this session holds a sensitive store, so only a phone grant opens a shell: grant the scheduler from the phone (the session files it with `jarvis2-request grant scheduler`)")
-		}
-		if err := r.Resume(sid, false); err != nil {
-			if errors.Is(err, errBusy) {
-				return errSkip
-			}
-			return err
-		}
-	case "pausing", "destroying", "approval":
-		return fmt.Errorf("%w: the session is %s", errSkip, state)
-	case "failed":
-		return errors.New("the session has failed: Restart it (or Resume) and it gets this")
-	}
-	if err := r.waitStarted(sid); err != nil {
-		return err
-	}
-	// the harness may still be booting: retry while nobody is listening yet
-	deadline := time.Now().Add(harnessUpMax)
-	for {
-		err := deliverHookOrPeer(r, sid, from, text, after)
-		if err == nil || !errors.Is(err, errNotUp) || time.Now().After(deadline) {
-			return err
-		}
-		time.Sleep(scheduleWaitStep * 2)
-	}
-}
-
 // deliverVouchedHook: a seam for tests (vouch.go deliverVouched)
 var deliverVouchedHook = func(r *Router, sid string, d Delivery) error { return r.deliverVouched(sid, d) }
-
-// deliverHookOrPeer: a seam for tests
-var deliverHookOrPeer = func(r *Router, sid, from, text, after string) error {
-	return r.deliverPeer(sid, from, text, after)
-}
 
 func (r *Router) waitStarted(sid string) error {
 	deadline := time.Now().Add(scheduleWaitMax)
@@ -977,13 +925,4 @@ func (r *Router) sessionState(sid string) (state string, sensitive bool) {
 		}
 	})
 	return
-}
-
-func (r *Router) hasPhoneGrant(sid, holder string) bool {
-	for _, g := range r.Grants(sid) {
-		if g.Holder == holder && g.Kind == "grant" {
-			return true
-		}
-	}
-	return false
 }

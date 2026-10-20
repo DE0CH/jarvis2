@@ -25,7 +25,8 @@ package main
 //                        permission-mode switch); the harness's watchdog relaunches it. Nothing else on the machine
 //                        is stopped: background servers, tunnels and the supervisor keep running.
 //  4. delivering continue  with `continue`: once the new host is up and idle, "continue" goes into its chat as the
-//                        canned delivery the login repair uses (holder "scheduler").
+//                        canned delivery the login repair uses (a core-attested delivery; into a session holding a
+//                        sensitive store it waits in the Inbox for Deyao to deliver, messages.go).
 //
 // No core change and no Face ID of its own: the login travels over the router's machine-signed long poll as it always
 // has. With CLAUDE_STORE_IN_CERT=1 (certs name the account's store) a running session's switch also files the
@@ -306,8 +307,7 @@ func (r *Router) runAccountSwitch(j *wakeJob, id, machine string, oldPid int64, 
 	}
 	r.ops.phase(j, "delivering continue", nil)
 	if err := r.DeliverCanned(id, Delivery{Kind: "continue"}, "continue"); err != nil {
-		r.noteRefusal(id, "scheduler", err)
-		return fmt.Errorf("delivering \"continue\" (holder scheduler): %w", err)
+		return fmt.Errorf("delivering \"continue\": %w", err)
 	}
 	log.Printf("[account] %s: \"continue\" delivered", id)
 	return nil

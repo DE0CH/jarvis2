@@ -132,6 +132,9 @@ type persisted struct {
 	Leases      *LeaseState              `json:"leases,omitempty"`      // leases.go: shared-device leases (holder + queue per device)
 	Outcomes    map[string][]*Outcome    `json:"outcomes,omitempty"`    // outcomes.go: session id → decisions on its Inbox filings, until delivered
 	ActiveCore  string                   `json:"activeCore,omitempty"`  // nextcore.go: the core URL that serves after a flip
+	// messages.go: messages held for Deyao to deliver or deny, and his per-kind rules
+	Messages     map[string]*PendingMessage `json:"messages,omitempty"`
+	MessageRules map[string]*MessageRule    `json:"messageRules,omitempty"`
 }
 
 type State struct {
@@ -163,6 +166,12 @@ func LoadState(dir string) (*State, error) {
 	}
 	if d.Batches == nil {
 		d.Batches = map[string]*Batch{}
+	}
+	if d.Messages == nil {
+		d.Messages = map[string]*PendingMessage{}
+	}
+	if d.MessageRules == nil {
+		d.MessageRules = map[string]*MessageRule{}
 	}
 	if d.Started == nil {
 		d.Started = map[string]*Started{}

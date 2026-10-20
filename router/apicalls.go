@@ -402,154 +402,162 @@ func (r *Router) serveCallResult(w http.ResponseWriter, c Caller, id string) {
 
 // callRules: every app route (the 2026-10-13 sweep). A new app route needs its line here (TestEveryAppRouteClassified).
 var callRules = map[string]callRule{
-	"GET /api/approvals":                        callNo,     // the Inbox
-	"POST /api/approvals/{id}/reject":           callNo,     // the Inbox
-	"POST /api/approvals/{id}/respond":          callNo,     // the Inbox
-	"GET /api/auth/start":                       callNo,     // hands out Deyao's Access login (a jarvis2:// redirect carrying it)
-	"GET /api/backups":                          callStatus, // every store's sealed backup
-	"POST /api/backups/fallback":                callBody,   // an export the app saved, served only while the bucket fails
-	"DELETE /api/backups/fallback":              callBody,
-	"DELETE /api/claude-accounts/{store}":       callBody,
-	"GET /api/claude-accounts":                  callBody,
-	"GET /api/claude-accounts/{store}/usage":    callBody,
-	"POST /api/claude-accounts":                 callStatus, // the OAuth sign-in URL with its state and PKCE challenge
-	"POST /api/claude-accounts/{store}/code":    callBody,
-	"POST /api/claude-accounts/{store}/default": callBody,
-	"POST /api/claude-accounts/{store}/login":   callStatus, // the OAuth sign-in URL with its state and PKCE challenge
-	"POST /api/claude-accounts/{store}/refresh": callBody,
-	"GET /api/claude-login":                     callBody,
-	"POST /api/claude-login/code":               callBody,
-	"POST /api/claude-login/refresh":            callBody,
-	"POST /api/claude-login/start":              callStatus, // the OAuth sign-in URL with its state and PKCE challenge
-	"GET /api/content":                          callBody,
-	"POST /api/content":                         callBody,
-	"DELETE /api/content/{name}":                callBody,
-	"DELETE /api/content/{name}/file":           callBody,
-	"GET /api/content/{name}/file":              callBody,
-	"POST /api/content/{name}/file":             callBody,
-	"GET /api/content/{name}/files":             callBody,
-	"POST /api/core/claim":                      callNo, // the iPhone app's Recover, signed by the master key
-	"GET /api/core/identity":                    callBody,
-	"GET /api/core/line-state":                  callBody, // sealed by the core: nothing in it opens outside a core from the same kit
-	"POST /api/core/lock":                       callBody,
-	"POST /api/core/store-key":                  callBody,
-	"POST /api/core/stores":                     callBody,
-	"POST /api/core/stores/create":              callBody,
-	"POST /api/core/stores/mark-sensitive":      callBody,
-	"POST /api/core/stores/restore/begin":       callNo, // half of a restore the phone finishes with its signature and shares
-	"POST /api/core/stores/versions":            callBody,
-	"POST /api/core/unlock/begin":               callNo, // half of an unlock the phone finishes with its sealed share
-	"POST /api/core/unlock/finish":              callNo, // needs the phone's sealed share
-	"POST /api/core/unlocked":                   callBody,
-	"POST /api/core/wipe":                       callNo, // the iPhone app's Reset, signed by the master key
-	"GET /api/devices":                          callBody,
-	"GET /api/devices/pair":                     callNo, // mints a device service token: a login of its own
-	"DELETE /api/devices/{id}":                  callBody,
-	"GET /api/github/repos":                     callBody,
-	"DELETE /api/grants/{gid}":                  callBody,
-	"GET /api/holders":                          callBody,
-	"GET /api/icloud/file":                      callBody,
-	"POST /api/icloud/relist":                   callBody,
-	"POST /api/icloud/retry":                    callBody,
-	"GET /api/icloud/search":                    callBody,
-	"GET /api/icloud/status":                    callBody,
-	"GET /api/input-log":                        callBody,
-	"GET /api/jarvis1/paused":                   callBody,
-	"GET /api/jarvis1/paused/{id}":              callBody,
-	"POST /api/jarvis1/paused/{id}/import":      callBody,
-	"POST /api/jarvis1/paused/{id}/prepare":     callBody,
-	"GET /api/leases":                           callBody,
-	"GET /api/leases/{name}":                    callBody,
-	"POST /api/leases/{name}/force-return":      callBody,
-	"POST /api/leases/{name}/hand-back":         callBody,
-	"POST /api/leases/{name}/take-over":         callBody,
-	"GET /api/machines":                         callBody,
-	"POST /api/machines/{id}/destroy":           callBody,
-	"GET /api/models":                           callBody,
-	"GET /api/policy":                           callBody,
-	"GET /api/records":                          callBody,
-	"POST /api/records":                         callBody,
-	"DELETE /api/records/{id}":                  callBody,
-	"POST /api/records/{id}/restore":            callBody,
-	"GET /api/records/{id}/tail":                callBody,
-	"GET /api/remotes":                          callStatus, // every session's OpenClaw token / OpenCode pairing URL
-	"GET /api/repos":                            callBody,
-	"POST /api/repos/key/begin":                 callNo, // half of a deploy key the phone finishes with its signature
-	"POST /api/repos/key/finish":                callNo, // needs the phone's signature and sealed share
-	"GET /api/requests":                         callNo, // the Inbox
-	"POST /api/requests/batch":                  callNo, // the Inbox
-	"DELETE /api/requests/batches/{id}":         callNo, // the Inbox
-	"GET /api/requests/batches/{id}":            callNo, // the Inbox
-	"POST /api/requests/grant":                  callNo, // the Inbox
-	"POST /api/requests/repo/add":               callNo, // the Inbox
-	"POST /api/requests/repo/remove":            callNo, // the Inbox
-	"POST /api/requests/restore":                callNo, // the Inbox
-	"POST /api/requests/unlock":                 callNo, // the Inbox
-	"DELETE /api/requests/{id}":                 callNo, // the Inbox
-	"GET /api/requests/{id}":                    callNo, // the Inbox
-	"GET /api/requests/calls/{id}":              callNo, // the Inbox
-	"POST /api/requests/{id}/approve":           callNo, // the Inbox
-	"POST /api/requests/{id}/done":              callNo, // the Inbox
-	"GET /api/search":                           callBody,
-	"GET /api/search/context":                   callBody,
-	"POST /api/search/reindex":                  callBody,
-	"GET /api/search/status":                    callBody,
-	"POST /api/sessions":                        callBody,
-	"GET /api/sessions/{id}/attachments/{name}": callBody,
-	"POST /api/sessions/{id}/auto-pause":        callBody,
-	"GET /api/sessions/{id}/cert":               callStatus, // the line's core-signed cert
-	"GET /api/sessions/{id}/changes":            callBody,
-	"GET /api/sessions/{id}/crons":              callBody,
-	"POST /api/sessions/{id}/crons":             callBody,
-	"DELETE /api/sessions/{id}/crons/{name}":    callBody,
-	"POST /api/sessions/{id}/destroy":           callBody,
-	"POST /api/sessions/{id}/env":               callBody,
-	"POST /api/sessions/{id}/exec":              callStatus, // another session's command output (its env, its files)
-	"GET /api/sessions/{id}/grants":             callStatus, // phone-signed grant documents
-	"POST /api/sessions/{id}/grants":            callNo,     // takes a phone-signed grant
-	"POST /api/sessions/{id}/grants/draft":      callBody,
-	"POST /api/sessions/{id}/notify-idle":       callBody,
-	"POST /api/sessions/{id}/pause":             callBody,
-	"POST /api/sessions/{id}/permission-mode":   callBody,
-	"POST /api/sessions/{id}/account":           callBody,
-	"GET /api/sessions/{id}/remote":             callStatus, // the OpenClaw gateway token / OpenCode pairing URL
-	"POST /api/sessions/{id}/restart":           callBody,
-	"POST /api/sessions/{id}/resume":            callBody,
-	"POST /api/sessions/{id}/start":             callBody,
-	"GET /api/sessions/{id}/tail":               callBody,
-	"GET /api/sessions/{id}/terminal":           callStatus, // another session's screen
-	"GET /api/sessions/{id}/events":             callBody,   // the supervisor's lines (free of secrets) and the lifecycle log
-	"POST /api/sessions/{id}/harness":           callBody,   // pause/resume the Claude process
-	"POST /api/sessions/{id}/terminal":          callBody,
-	"POST /api/sessions/{id}/upgrade":           callBody,
-	"POST /api/sessions/{id}/disk":              callBody,
-	"DELETE /api/sessions/{id}/wakeup":          callBody,
-	"GET /api/sessions/{id}/wakeup":             callBody,
-	"POST /api/sessions/{id}/wakeup":            callBody,
-	"GET /api/sessions/{id}/wakeups":            callBody,
-	"POST /api/sessions/{id}/wakeups":           callBody,
-	"DELETE /api/sessions/{id}/wakeups/{name}":  callBody,
-	"GET /api/sessions/{id}/watches":            callBody,
-	"POST /api/sessions/{id}/watches":           callNo, // only a session's own signed request arms a watch (always 400 here)
-	"DELETE /api/sessions/{id}/watches/{name}":  callBody,
-	"GET /api/sizes":                            callBody,
-	"GET /api/state":                            callBody,
-	"GET /api/stores":                           callBody,
-	"PUT /api/stores/{store}/docs":              callBody, // explanations: no secret, no trust decision
-	"POST /api/stores/restore/finish":           callNo,   // needs the phone's signature and sealed shares
-	"GET /api/tasks":                            callBody,
-	"POST /api/tasks/instances":                 callBody,
-	"DELETE /api/tasks/instances/{id}":          callBody,
-	"PUT /api/tasks/instances/{id}":             callBody,
-	"POST /api/tasks/instances/{id}/approve":    callBody,
-	"POST /api/tasks/instances/{id}/run":        callBody,
-	"GET /api/tasks/instances/{id}/runs":        callBody,
-	"GET /api/tasks/runs/{id}":                  callBody,
-	"POST /api/tasks/runs/{id}/stop":            callBody,
-	"POST /api/tasks/schedules":                 callBody,
-	"DELETE /api/tasks/schedules/{id}":          callBody,
-	"PUT /api/tasks/schedules/{id}":             callBody,
-	"POST /api/uploads":                         callNo, // the app's attachment upload (raw file with its x-upload-* headers)
-	"GET /api/usage":                            callBody,
-	"GET /term/{id}":                            callNo, // a terminal page for a browser
+	"GET /api/messages":                           callNo, // the Inbox: messages held for Deyao (messages.go)
+	"POST /api/messages/draft":                    callNo, // the Inbox
+	"POST /api/messages/approve":                  callNo, // the Inbox: takes the phone's signature
+	"POST /api/messages/deny":                     callNo, // the Inbox
+	"GET /api/sessions/{id}/message-rules":        callNo, // Deyao's per-kind delivery rules
+	"POST /api/sessions/{id}/message-rules":       callNo, // takes a phone-signed rule
+	"POST /api/sessions/{id}/message-rules/draft": callNo,
+	"DELETE /api/message-rules/{rid}":             callNo,
+	"GET /api/approvals":                          callNo,     // the Inbox
+	"POST /api/approvals/{id}/reject":             callNo,     // the Inbox
+	"POST /api/approvals/{id}/respond":            callNo,     // the Inbox
+	"GET /api/auth/start":                         callNo,     // hands out Deyao's Access login (a jarvis2:// redirect carrying it)
+	"GET /api/backups":                            callStatus, // every store's sealed backup
+	"POST /api/backups/fallback":                  callBody,   // an export the app saved, served only while the bucket fails
+	"DELETE /api/backups/fallback":                callBody,
+	"DELETE /api/claude-accounts/{store}":         callBody,
+	"GET /api/claude-accounts":                    callBody,
+	"GET /api/claude-accounts/{store}/usage":      callBody,
+	"POST /api/claude-accounts":                   callStatus, // the OAuth sign-in URL with its state and PKCE challenge
+	"POST /api/claude-accounts/{store}/code":      callBody,
+	"POST /api/claude-accounts/{store}/default":   callBody,
+	"POST /api/claude-accounts/{store}/login":     callStatus, // the OAuth sign-in URL with its state and PKCE challenge
+	"POST /api/claude-accounts/{store}/refresh":   callBody,
+	"GET /api/claude-login":                       callBody,
+	"POST /api/claude-login/code":                 callBody,
+	"POST /api/claude-login/refresh":              callBody,
+	"POST /api/claude-login/start":                callStatus, // the OAuth sign-in URL with its state and PKCE challenge
+	"GET /api/content":                            callBody,
+	"POST /api/content":                           callBody,
+	"DELETE /api/content/{name}":                  callBody,
+	"DELETE /api/content/{name}/file":             callBody,
+	"GET /api/content/{name}/file":                callBody,
+	"POST /api/content/{name}/file":               callBody,
+	"GET /api/content/{name}/files":               callBody,
+	"POST /api/core/claim":                        callNo, // the iPhone app's Recover, signed by the master key
+	"GET /api/core/identity":                      callBody,
+	"GET /api/core/line-state":                    callBody, // sealed by the core: nothing in it opens outside a core from the same kit
+	"POST /api/core/lock":                         callBody,
+	"POST /api/core/store-key":                    callBody,
+	"POST /api/core/stores":                       callBody,
+	"POST /api/core/stores/create":                callBody,
+	"POST /api/core/stores/mark-sensitive":        callBody,
+	"POST /api/core/stores/restore/begin":         callNo, // half of a restore the phone finishes with its signature and shares
+	"POST /api/core/stores/versions":              callBody,
+	"POST /api/core/unlock/begin":                 callNo, // half of an unlock the phone finishes with its sealed share
+	"POST /api/core/unlock/finish":                callNo, // needs the phone's sealed share
+	"POST /api/core/unlocked":                     callBody,
+	"POST /api/core/wipe":                         callNo, // the iPhone app's Reset, signed by the master key
+	"GET /api/devices":                            callBody,
+	"GET /api/devices/pair":                       callNo, // mints a device service token: a login of its own
+	"DELETE /api/devices/{id}":                    callBody,
+	"GET /api/github/repos":                       callBody,
+	"DELETE /api/grants/{gid}":                    callBody,
+	"GET /api/holders":                            callBody,
+	"GET /api/icloud/file":                        callBody,
+	"POST /api/icloud/relist":                     callBody,
+	"POST /api/icloud/retry":                      callBody,
+	"GET /api/icloud/search":                      callBody,
+	"GET /api/icloud/status":                      callBody,
+	"GET /api/input-log":                          callBody,
+	"GET /api/jarvis1/paused":                     callBody,
+	"GET /api/jarvis1/paused/{id}":                callBody,
+	"POST /api/jarvis1/paused/{id}/import":        callBody,
+	"POST /api/jarvis1/paused/{id}/prepare":       callBody,
+	"GET /api/leases":                             callBody,
+	"GET /api/leases/{name}":                      callBody,
+	"POST /api/leases/{name}/force-return":        callBody,
+	"POST /api/leases/{name}/hand-back":           callBody,
+	"POST /api/leases/{name}/take-over":           callBody,
+	"GET /api/machines":                           callBody,
+	"POST /api/machines/{id}/destroy":             callBody,
+	"GET /api/models":                             callBody,
+	"GET /api/policy":                             callBody,
+	"GET /api/records":                            callBody,
+	"POST /api/records":                           callBody,
+	"DELETE /api/records/{id}":                    callBody,
+	"POST /api/records/{id}/restore":              callBody,
+	"GET /api/records/{id}/tail":                  callBody,
+	"GET /api/remotes":                            callStatus, // every session's OpenClaw token / OpenCode pairing URL
+	"GET /api/repos":                              callBody,
+	"POST /api/repos/key/begin":                   callNo, // half of a deploy key the phone finishes with its signature
+	"POST /api/repos/key/finish":                  callNo, // needs the phone's signature and sealed share
+	"GET /api/requests":                           callNo, // the Inbox
+	"POST /api/requests/batch":                    callNo, // the Inbox
+	"DELETE /api/requests/batches/{id}":           callNo, // the Inbox
+	"GET /api/requests/batches/{id}":              callNo, // the Inbox
+	"POST /api/requests/grant":                    callNo, // the Inbox
+	"POST /api/requests/repo/add":                 callNo, // the Inbox
+	"POST /api/requests/repo/remove":              callNo, // the Inbox
+	"POST /api/requests/restore":                  callNo, // the Inbox
+	"POST /api/requests/unlock":                   callNo, // the Inbox
+	"DELETE /api/requests/{id}":                   callNo, // the Inbox
+	"GET /api/requests/{id}":                      callNo, // the Inbox
+	"GET /api/requests/calls/{id}":                callNo, // the Inbox
+	"POST /api/requests/{id}/approve":             callNo, // the Inbox
+	"POST /api/requests/{id}/done":                callNo, // the Inbox
+	"GET /api/search":                             callBody,
+	"GET /api/search/context":                     callBody,
+	"POST /api/search/reindex":                    callBody,
+	"GET /api/search/status":                      callBody,
+	"POST /api/sessions":                          callBody,
+	"GET /api/sessions/{id}/attachments/{name}":   callBody,
+	"POST /api/sessions/{id}/auto-pause":          callBody,
+	"GET /api/sessions/{id}/cert":                 callStatus, // the line's core-signed cert
+	"GET /api/sessions/{id}/changes":              callBody,
+	"GET /api/sessions/{id}/crons":                callBody,
+	"POST /api/sessions/{id}/crons":               callBody,
+	"DELETE /api/sessions/{id}/crons/{name}":      callBody,
+	"POST /api/sessions/{id}/destroy":             callBody,
+	"POST /api/sessions/{id}/env":                 callBody,
+	"POST /api/sessions/{id}/exec":                callStatus, // another session's command output (its env, its files)
+	"GET /api/sessions/{id}/grants":               callStatus, // phone-signed grant documents
+	"POST /api/sessions/{id}/grants":              callNo,     // takes a phone-signed grant
+	"POST /api/sessions/{id}/grants/draft":        callBody,
+	"POST /api/sessions/{id}/notify-idle":         callBody,
+	"POST /api/sessions/{id}/pause":               callBody,
+	"POST /api/sessions/{id}/permission-mode":     callBody,
+	"POST /api/sessions/{id}/account":             callBody,
+	"GET /api/sessions/{id}/remote":               callStatus, // the OpenClaw gateway token / OpenCode pairing URL
+	"POST /api/sessions/{id}/restart":             callBody,
+	"POST /api/sessions/{id}/resume":              callBody,
+	"POST /api/sessions/{id}/start":               callBody,
+	"GET /api/sessions/{id}/tail":                 callBody,
+	"GET /api/sessions/{id}/terminal":             callStatus, // another session's screen
+	"GET /api/sessions/{id}/events":               callBody,   // the supervisor's lines (free of secrets) and the lifecycle log
+	"POST /api/sessions/{id}/harness":             callBody,   // pause/resume the Claude process
+	"POST /api/sessions/{id}/terminal":            callBody,
+	"POST /api/sessions/{id}/upgrade":             callBody,
+	"POST /api/sessions/{id}/disk":                callBody,
+	"DELETE /api/sessions/{id}/wakeup":            callBody,
+	"GET /api/sessions/{id}/wakeup":               callBody,
+	"POST /api/sessions/{id}/wakeup":              callBody,
+	"GET /api/sessions/{id}/wakeups":              callBody,
+	"POST /api/sessions/{id}/wakeups":             callBody,
+	"DELETE /api/sessions/{id}/wakeups/{name}":    callBody,
+	"GET /api/sessions/{id}/watches":              callBody,
+	"POST /api/sessions/{id}/watches":             callNo, // only a session's own signed request arms a watch (always 400 here)
+	"DELETE /api/sessions/{id}/watches/{name}":    callBody,
+	"GET /api/sizes":                              callBody,
+	"GET /api/state":                              callBody,
+	"GET /api/stores":                             callBody,
+	"PUT /api/stores/{store}/docs":                callBody, // explanations: no secret, no trust decision
+	"POST /api/stores/restore/finish":             callNo,   // needs the phone's signature and sealed shares
+	"GET /api/tasks":                              callBody,
+	"POST /api/tasks/instances":                   callBody,
+	"DELETE /api/tasks/instances/{id}":            callBody,
+	"PUT /api/tasks/instances/{id}":               callBody,
+	"POST /api/tasks/instances/{id}/approve":      callBody,
+	"POST /api/tasks/instances/{id}/run":          callBody,
+	"GET /api/tasks/instances/{id}/runs":          callBody,
+	"GET /api/tasks/runs/{id}":                    callBody,
+	"POST /api/tasks/runs/{id}/stop":              callBody,
+	"POST /api/tasks/schedules":                   callBody,
+	"DELETE /api/tasks/schedules/{id}":            callBody,
+	"PUT /api/tasks/schedules/{id}":               callBody,
+	"POST /api/uploads":                           callNo, // the app's attachment upload (raw file with its x-upload-* headers)
+	"GET /api/usage":                              callBody,
+	"GET /term/{id}":                              callNo, // a terminal page for a browser
 }

@@ -22,6 +22,15 @@ struct InboxView: View {
             Text("One Face ID allows every item of a batch.")
           }
         }
+        if !model.inboxMessageGroups.isEmpty {
+          Section {
+            ForEach(model.inboxMessageGroups) { g in MessageGroupRow(g: g) }
+          } header: {
+            Text("Messages")
+          } footer: {
+            Text("Nothing goes into the session until you deliver it with Face ID.")
+          }
+        }
         if !model.inboxLoose.isEmpty {
           Section {
             ForEach(model.inboxLoose) { it in InboxRow(it: it) }
@@ -121,6 +130,52 @@ private struct InboxRow: View {
       if let r = it.j["options"]["restore"].text { return [r] }
       return [who].compactMap { $0 }
     }
+  }
+}
+
+/// one session's pending messages: one entry listing each message's kind and sender; Review opens the page that lists
+/// them all in full (MessageReviewView), Deny all drops them (nothing signed)
+private struct MessageGroupRow: View {
+  @Environment(AppModel.self) private var model
+  let g: MessageGroup
+
+  var body: some View {
+    Button(action: review) {
+      VStack(alignment: .leading, spacing: 4) {
+        HStack(alignment: .firstTextBaseline) {
+          Text("\(Fmt.plural(g.items.count, "message")) for “\(g.name)”").font(.headline).foregroundStyle(Color.primary)
+            .accessibilityIdentifier("msg-group-title-\(g.session)")
+          Spacer()
+          if let p = model.pending["m:" + g.session] { StatusPill(text: p, color: .orange, spinning: true) } else { StatusPill(text: "Message", color: .blue) }
+        }
+        ForEach(g.items) { it in
+          VStack(alignment: .leading, spacing: 2) {
+            Text("\(it.explanation.isEmpty ? "Message" : it.explanation) · \(it.callerText)").font(.subheadline).foregroundStyle(Color.primary)
+            if let t = it.params["text"].text { Text(t).font(.footnote).foregroundStyle(Color.secondary).lineLimit(2) }
+          }
+        }
+        HStack(spacing: 12) {
+          if let c = g.items.compactMap(\.created).min() { Label(Fmt.ago(c), systemImage: "clock") }
+          if let e = g.items.compactMap(\.expires).min() { Label(Fmt.when(e), systemImage: "hourglass") }
+        }
+        .font(.footnote).foregroundStyle(Color.secondary).labelStyle(.titleAndIcon)
+      }
+    }
+    .accessibilityIdentifier("msg-group-\(g.session)")
+    .swipeActions {
+      Button("Deny all", role: .destructive) { Task { await denyAll() } }
+    }
+    .contextMenu {
+      Button("Review", systemImage: "faceid", action: review)
+      Button("Deny all", systemImage: "xmark", role: .destructive) { Task { await denyAll() } }
+    }
+  }
+
+  private func review() { model.present(.messages(session: g.session)) { [model] ok in if ok { model.settle(60) } } }
+  private func denyAll() async {
+    let ids = g.items.map(\.id)
+    await model.pendUntil("m:" + g.session, "Denying…", 30, action: { try await RouterClient.shared.denyMessages(ids) },
+                          until: { m in !m.inbox.contains { ids.contains($0.id) } })
   }
 }
 

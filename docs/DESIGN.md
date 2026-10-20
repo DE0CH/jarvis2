@@ -819,7 +819,7 @@ Deyao handing a feature a shell, and the session's own allow list is the session
 | The entry point | the image (Fly config has no init/cmd, no files, mounts or services; only the core's token can create or change machines) |
 | The env | none needed: the core sets only `JARVIS2_CORE_KEY` and `JARVIS2_URL` (from its own deployment); the machine also throws away anything else at boot (keeps the image's own ENV, recorded at build, and Fly's `FLY_*`) |
 | Title, first prompt, model, repos, one-shot, API proxy, attachments (by sha256), a restore (machine + snapshot sha256), task parameters | (a) `Options.Config`, fixed for the line; the first prompt and attachments only for its first machine; each attachment also carries the core's attestation (input log) and is taken only when its bytes match |
-| A resume's prompt, a rollback | (a) `Options.Once`: only the phone approves one; never carried over |
+| A resume's prompt, a rollback | (a) `Options.Once`: only the phone approves one; never carried over. A prompt left for a session already running goes in as a `resume-prompt` delivery, only under the phone's signature of exactly it ("Message approvals") |
 | The predecessor's state (transcripts, workspace, artifacts, `~/artifacts/on-start`, `.claude` settings and hooks, the allow list, the line keys) | (b) the one snapshot the cert names, signed by the predecessor |
 | An archived snapshot (restore) | (a) its sha256 in the config, plus the old cert (core-signed) and its machine's signature |
 | Repo contents (CLAUDE.md, hooks, skills) | (d) GitHub, for exactly the repos the cert names (a cert whose config names none: the repos of the deploy-key stores in the cert) |
@@ -827,7 +827,8 @@ Deyao handing a feature a shell, and the session's own allow list is the session
 | The Claude login | (d) Anthropic: the router hands the pair of the session's Claude account (DECISIONS 185: one Claude key store per account, `claude-<name>`, the router's own; picked when the session is made and kept until Deyao switches it, `POST /api/sessions/:id/account` (DECISIONS 202), the router's word) over `/m/claude-login` (machine-signed); taken at boot, kept in step by a long poll with the router's refresh protocol (`machine/claudelogin.go`, `router/claudelogin.go`, `router/claudeaccounts.go`); no router write, no grant, no machine-side account check (Deyao, 2026-10-15) |
 | Wakeups, crons | (c) the session's own signed request + the core's attestation; the line records what it delivered (in the snapshot): a wakeup once, a cron once per run and at most every half period |
 | The watchdog's nudge, "continue" after a re-login, "upgraded" after an Upgrade | the image: texts built into it; the router picks when, never what (numbers, or a size: small, medium, large or a doubling past it) |
-| An Inbox request's outcome | (c) the session's own signed filing + image texts; per item the router names an outcome word, an id, a status number, and a proof the machine checks for approvals (phone grant, core-signed cert or approval, core key answer); the core attests it; each item once |
+| An Inbox request's outcome | (c) the session's own signed filing (an Inbox request, or the wakeup/cron/watch whose message Deyao denied or let lapse) + image texts; per item the router names an outcome word, an id, a status number, and a proof the machine checks for approvals (phone grant, core-signed cert or approval, core key answer); the core attests it; each item once |
+| Any of these into a session holding a sensitive store | also the phone's signature over that very message, or a phone-signed rule for its kind ("Message approvals") |
 | An added store | (a) the new cert, phone-approved |
 | The OpenClaw runtime | (d) the GitHub release, pinned by sha256 in the image |
 | Jarvis 1's restore-snapshot (would fetch unsigned state from the Storage Box when a store holds its credentials) | removed from the image |
@@ -842,6 +843,37 @@ and every cert it issues, to a hash chain of core-signed entries; the router per
 (`input-log.jsonl`, `GET /api/input-log`) from the answers that carry them; a new core's chain starts again at seq 0
 (the router's file shows where one core's ends). The core keeps only the head and the length; it only
 hashes, signs and appends.
+
+## Message approvals (Deyao, 2026-10-20)
+
+Deyao: a message into a session holding a sensitive store is approved or denied **per message**, never by letting a
+router feature in for a while. So every delivery into such a session (a wakeup, a cron run, a met or given-up watch,
+the watchdog's check-in, a login "continue", an Inbox outcome, a peer message, a lease or upgrade note), and every
+resume prompt that goes into an already running session (any session: nothing else vouches for Deyao's words from the
+app), waits in the Inbox as a **pending message** (`router/messages.go`, `machine/messages.go`):
+
+- **What Deyao sees**: the kind, the specific requester ("Jarvis's watchdog (the session idled 20 min while 2
+  background jobs ran)", "this session's own wakeup “ci”", "session “X” (…), a peer message", "Deyao (the prompt given
+  with Resume in the app)"), and the exact text. A running machine renders the text itself (a preview delivery: nothing
+  attested, sent or recorded); for a paused session the router renders the kinds it has twins for and holds the
+  message without starting anything; a peer message first starts the receiver. Messages for one session are listed
+  together in one Inbox entry.
+- **Deliver** = the phone signs `{kind "messages", session <line>, items [{id, delivery, sha256, from, text}], issued,
+  expires}` (one Face ID for the whole batch, each message listed; good for an hour). `sha256` is of exactly the bytes
+  the core attests, `text` exactly what the machine renders. The machine takes the delivery only when an item names its
+  kind, those bytes and that text, the phone key from its core-signed cert signed it for its line, the hour hasn't run
+  out and the item id is unused (recorded in the snapshot's `.jarvis2-delivered.json`). A machine that renders another
+  text refuses with its own, and the router holds that one for Deyao instead.
+- **Deny** signs nothing: the message is dropped, and whoever asked is told as an Inbox outcome: a peer message's
+  sender, or the session for its own wakeup, cron or watch (the outcome of the request that armed it). The same for a
+  lapse (24 h without an answer) and for a failure after approval. A newer message of the same thing (the next
+  check-in, the cron's next run) replaces one still waiting.
+- **A rule** for one kind into one session ("Always deliver Jarvis's watchdog check-ins to this session"): the phone
+  signs `{kind "message-rule", session <line>, delivery <kind>, issued, until}` (a year); the router attaches it to every
+  delivery of that kind until Deyao removes it from the session's card (the router stops at once; the signature stays
+  valid on the machine until it ends, as with a grant). No rule covers a peer message or a resume prompt. There are no
+  time windows for message delivery: no router feature holds a grant for it (the `scheduler` holder is gone).
+- A session without a sensitive store takes its messages unapproved, as "Inputs to a machine" vouches for them.
 
 ## iPhone approval screen
 
@@ -917,7 +949,7 @@ store key P + K and the deploy-key stores stay valid: "Core continuity"); a long
 
 ## Grants (shell access for router features, checked by the machine)
 
-Features outside the core (terminal, scheduler, status, archive) need a shell in a session, as
+Features outside the core (terminal, status, archive, remote) need a shell in a session, as
 Jarvis 1 got through Fly exec. The core's Fly token can exec only `jarvis2-init`, so the machine itself decides
 (Deyao, 2026-10-09); the core only adds three fields to every succession cert: the phone's signing key, whether
 any of the line's stores is sensitive, and the **line id** (the line's first machine; a successor inherits it).
@@ -929,10 +961,11 @@ any of the line's stores is sensitive, and the **line id** (the line's first mac
   - a **phone grant**: the phone signs `{kind "grant", holder, session, scope "shell", issued, expires}`,
     at most 10 minutes long;
   - a **standing rule**: the phone signs `{kind "rule", …, until}` once, for things that happen while Deyao is
-    away (wakeups, crons, auto-pause);
+    away (auto-pause, the changes check);
   - the session's **own allow list** (`jarvis2-machine allow <holder> <duration>`, kept in the snapshot): the
     machine approving for itself.
 - A session holding a **sensitive** store accepts only a fresh phone grant.
+- Messages into a session are no holder's: they are deliveries, approved per message ("Message approvals").
 - **Viewing the terminal needs no grant** (Deyao, 2026-10-12): the machine pushes its own capture of the harness's
   pane to the router (`/m/screen`, every 2 s when it changed, 30 s heartbeat), as it pushes its status. Nothing goes
   into the machine for it. Typing, resizing and the Escape on a stale prompt stay behind the `terminal` / `status`

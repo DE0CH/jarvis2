@@ -97,7 +97,6 @@ struct Holder: Identifiable, Equatable {
   let id: String, title: String, sub: String, symbol: String
   static let all = [
     Holder(id: "terminal", title: "Terminal", sub: "Read the session's screen and type into it", symbol: "terminal"),
-    Holder(id: "scheduler", title: "Scheduler", sub: "Deliver your wakeups and crons as messages", symbol: "alarm"),
     Holder(id: "status", title: "Status", sub: "Read the screen, press Escape on a prompt left waiting, answer the model-switch dialog", symbol: "waveform.path.ecg"),
     Holder(id: "login", title: "Login repair", sub: "Write fresh Claude credentials into the session and send “continue”", symbol: "key"),
     Holder(id: "archive", title: "Archive check", sub: "List uncommitted and unpushed work before a destroy", symbol: "archivebox"),

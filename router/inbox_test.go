@@ -122,7 +122,7 @@ func TestInboxFromEachCaller(t *testing.T) {
 func TestInboxGrantRuleAndLimits(t *testing.T) {
 	r := newTestRouter(t)
 	addSession(r, "sA", "started", "mA", false)
-	q, _, err := r.FileRequest(requestKindGrant, RequestParams{Session: "sA", Holder: "scheduler", Days: 30}, "", Origin{Caller: Caller{Kind: "web"}})
+	q, _, err := r.FileRequest(requestKindGrant, RequestParams{Session: "sA", Holder: "archive", Days: 30}, "", Origin{Caller: Caller{Kind: "web"}})
 	if err != nil || q.Params.Days != 30 || q.Params.Minutes != 0 {
 		t.Fatalf("%+v %v", q, err)
 	}

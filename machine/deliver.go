@@ -11,9 +11,9 @@ package main
 //   - and logged: it carries the core's attestation over (this machine, the kind, the sha256 of the input), so
 //     every input is in the core's hash-chained input log (core/audit.go).
 //
-// A delivery missing either is refused. The machine sends the text into the harness itself (the Claude host's
-// inbox socket, or harness-send for OpenCode/OpenClaw); the router never runs a command for it. Older routers
-// keep the grant-checked exec path ("scheduler"), which a machine whose cert vouches (Vouch 2) refuses.
+// A delivery missing either is refused, and so is one into a session holding a sensitive store that the phone didn't
+// approve (messages.go). The machine sends the text into the harness itself (the Jarvis channel, the Claude host's
+// inbox socket, or harness-send for OpenCode/OpenClaw); the router never runs a command for it.
 
 import (
 	"bytes"
@@ -191,7 +191,7 @@ type SignedRequest struct {
 
 type Delivery struct {
 	ID      string         `json:"id"`
-	Kind    string         `json:"kind"` // wakeup | cron | nudge | continue | upgraded
+	Kind    string         `json:"kind"` // wakeup | cron | watch | watch-fail | nudge | continue | upgraded | lease-* | request-outcome | peer | resume-prompt
 	Request *SignedRequest `json:"request,omitempty"`
 	Run     int            `json:"run,omitempty"`     // a cron's run number (a number)
 	Minutes int            `json:"minutes,omitempty"` // nudge: idle minutes (a number)
@@ -207,8 +207,15 @@ type Delivery struct {
 	// request-outcome (outcomes.go): the decided items of this session's own filing (Request)
 	Outcomes []OutcomeItem `json:"outcomes,omitempty"`
 	// peer (peer.go): another session's message, with its verified sender and direction
-	Peer   *PeerNote  `json:"peer,omitempty"`
-	Attest *SignedDoc `json:"attest"`
+	Peer *PeerNote `json:"peer,omitempty"`
+	// resume-prompt: Deyao's words from the app, delivered only under the phone's approval of exactly them
+	Text string `json:"text,omitempty"`
+	// messages.go: the phone's approval of this message (a batch it is in, or a rule for its kind)
+	Approval *SignedDoc `json:"approval,omitempty"`
+	// Preview: render the text and answer it; nothing is checked against the core, sent or recorded (the router shows
+	// Deyao the exact text before he approves it)
+	Preview bool       `json:"preview,omitempty"`
+	Attest  *SignedDoc `json:"attest"`
 }
 
 // ownRequestBody: the body of a request one of this line's machines signed (a wakeup or cron it asked for)
@@ -264,6 +271,12 @@ func deliveryText(d Delivery, keys []string) (text string, attested []byte, err 
 		return fmt.Sprintf("[recurring wakeup %q — run %d] %s", name, max(1, d.Run), prompt), body, nil
 	case "continue":
 		return "continue", []byte("continue"), nil
+	case "resume-prompt":
+		t := resumePromptText(d.Text)
+		if t == "" {
+			return "", nil, errors.New("resume-prompt: empty or longer than 4000 characters")
+		}
+		return t, []byte(t), nil
 	case "request-outcome":
 		return outcomeText(d, keys)
 	case "peer":
@@ -332,11 +345,27 @@ type DeliveryResult struct {
 	ID    string `json:"id"`
 	OK    bool   `json:"ok"`
 	Error string `json:"error,omitempty"`
+	// Text: a preview's text; also a refused delivery's text, when the phone signed another (messages.go)
+	Text string `json:"text,omitempty"`
+	// NeedsApproval: refused only for want of the phone's approval of this message (the router files it for Deyao)
+	NeedsApproval bool `json:"needsApproval,omitempty"`
 }
 
 func runDelivery(c *client, d Delivery) {
 	res := DeliveryResult{ID: d.ID}
-	err := deliver(c, d)
+	if d.Preview {
+		res.Text, res.Error = previewDelivery(d)
+		res.OK = res.Error == ""
+		if err := c.json("POST", "/m/delivery-result", res, nil); err != nil {
+			log.Printf("delivery preview result not sent: %v", err)
+		}
+		return
+	}
+	text, err := deliver(c, d)
+	if errors.Is(err, errTextDiffers) {
+		res.Text = text
+	}
+	res.NeedsApproval = errors.Is(err, errNeedsApproval) || errors.Is(err, errTextDiffers)
 	if err != nil {
 		res.Error = err.Error()
 		log.Printf("delivery %s (%s) refused: %v", d.ID, d.Kind, err)
@@ -349,16 +378,29 @@ func runDelivery(c *client, d Delivery) {
 	}
 }
 
-func deliver(c *client, d Delivery) error {
-	text, d, cert, err := guardDelivery(c, d) // guard.go
+// previewDelivery: the text this delivery would put into the harness (before a watch's re-run check output), or why it
+// would be refused; nothing runs, is sent or recorded
+func previewDelivery(d Delivery) (string, string) {
+	d.Approval, d.Attest = nil, nil
+	text, _, _, _, err := renderDelivery(d) // guard.go
 	if err != nil {
-		return err
+		return "", err.Error()
+	}
+	return text, ""
+}
+
+// deliver: the delivery's text into the harness, once the guard let it through (the text also comes back when the
+// phone approved another text, so the router can show Deyao this one)
+func deliver(c *client, d Delivery) (string, error) {
+	text, d, cert, approved, err := guardDelivery(c, d) // guard.go
+	if err != nil {
+		return text, err
 	}
 	deliverOrderMu.Lock() // one delivery at a time between the check and the record
 	defer deliverOrderMu.Unlock()
 	now := time.Now()
 	if err := replayGuard(d, now, false); err != nil {
-		return err
+		return "", err
 	}
 	if d.Kind == "watch" || d.Kind == "watch-fail" {
 		// the check once more, here, with the session's own env: its output is the context (the runner's never is)
@@ -367,9 +409,22 @@ func deliver(c *client, d Delivery) error {
 		}
 	}
 	if err := sendToHarness(cert.Options.Harness, liveMode(cert), "jarvis", text); err != nil {
-		return err
+		return "", err
 	}
-	return replayGuard(d, now, true)
+	if err := recordApproved(approved, now); err != nil { // messages.go: the phone's approval is used up
+		return "", err
+	}
+	return "", replayGuard(d, now, true)
+}
+
+// resumePromptText: Deyao's resume prompt as the router keeps it (router/sessionapi.go cleanResumePrompt): CRLF → LF,
+// trimmed, at most 4000 characters; "" when empty or longer
+func resumePromptText(p string) string {
+	p = strings.TrimSpace(strings.ReplaceAll(strings.ReplaceAll(p, "\r\n", "\n"), "\r", "\n"))
+	if p == "" || len([]rune(p)) > 4000 {
+		return ""
+	}
+	return p
 }
 
 // modeFile: the in-place permission mode (session-image set-permission-mode writes it, harness-claude.sh launches

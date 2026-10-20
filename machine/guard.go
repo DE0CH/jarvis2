@@ -6,7 +6,9 @@ package main
 //   - execs (a router feature's shell command): the holder's signature, then a phone grant, a standing rule or the
 //     session's own allow list (authoriseExec; "Grants");
 //   - deliveries (prompts into the harness: wakeups, crons, watches, Inbox outcomes, leases, the image's own texts):
-//     the line's own signature or the image's text, the core's attestation, once each ("Inputs to a machine").
+//     the line's own signature or the image's text, the core's attestation, once each ("Inputs to a machine"); in a
+//     session holding a sensitive store also the phone's signature over that very message or a per-kind rule
+//     (messages.go, "Message approvals").
 // Everything else the supervisor takes (snapshot, free, refresh-secrets, pause-harness, resume-harness) can't carry
 // an instruction and runs unguarded (supervisor.go commands). Nothing guarded runs once the session is frozen for its
 // final snapshot.
@@ -27,36 +29,52 @@ func guardExec(e Exec, now time.Time) (ExecRequest, error) {
 	return r, err
 }
 
-// guardDelivery: the text a delivery puts into the harness, once its voucher and the core's attestation check out
-// (the replay check and record happen in deliver, in order with the send)
-func guardDelivery(c *client, d Delivery) (string, Delivery, Cert, error) {
-	cert, err := currentCert()
+// guardDelivery: the text a delivery puts into the harness, once its voucher and the core's attestation check out,
+// and (a sensitive session, or a resume prompt) the phone's approval of exactly that message (messages.go); approved:
+// the approval item to record once the harness took it. The replay check and record happen in deliver, in order with
+// the send.
+func guardDelivery(c *client, d Delivery) (text string, out Delivery, cert Cert, approved string, err error) {
+	text, out, cert, attested, err := renderDelivery(d)
 	if err != nil {
-		return "", d, cert, err
+		return "", d, cert, "", err
 	}
 	coreKey, err := readTrim(coreKeyPath)
 	if err != nil {
-		return "", d, cert, err
+		return "", d, cert, "", err
+	}
+	if err := checkAttest(coreKey, c.me, d.Kind, attested, d.Attest); err != nil {
+		return "", d, cert, "", err
+	}
+	if approved, err = checkMessageApproval(cert, d, attested, text, time.Now()); err != nil {
+		return text, d, cert, "", err
+	}
+	if err := notFrozen(); err != nil {
+		return "", d, cert, "", err
+	}
+	return text, out, cert, approved, nil
+}
+
+// renderDelivery: the text the harness would get (a request-outcome's items already told left out), the delivery as
+// it goes in, this machine's cert and the bytes the core attests. Nothing is recorded or sent: the router's preview of
+// a message for Deyao's approval is exactly this text (deliver.go previewDelivery).
+func renderDelivery(d Delivery) (string, Delivery, Cert, []byte, error) {
+	cert, err := currentCert()
+	if err != nil {
+		return "", d, cert, nil, err
 	}
 	text, attested, err := deliveryText(d, readLineKeys())
 	if err != nil {
-		return "", d, cert, err
-	}
-	if err := checkAttest(coreKey, c.me, d.Kind, attested, d.Attest); err != nil {
-		return "", d, cert, err
-	}
-	if err := notFrozen(); err != nil {
-		return "", d, cert, err
+		return "", d, cert, nil, err
 	}
 	if d.Kind == "request-outcome" && d.Request != nil {
 		if f := outcomeFresh(d); len(f.Outcomes) != len(d.Outcomes) {
 			if text, _, err = deliveryText(f, readLineKeys()); err != nil { // the same checks, on the items still untold
-				return "", d, cert, err
+				return "", d, cert, nil, err
 			}
 			d = f
 		}
 	}
-	return text, d, cert, nil
+	return text, d, cert, attested, nil
 }
 
 // authoriseExec: nil when the holder-signed request may run (a phone grant, a standing rule or the allow list)

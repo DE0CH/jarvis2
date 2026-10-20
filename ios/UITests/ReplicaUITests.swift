@@ -268,7 +268,7 @@ final class ReplicaUITests: JarvisUITestCase {
       }
     }
 
-    // ---- grants: a 5-minute scheduler grant, then forget it ----
+    // ---- grants: a 5-minute status grant, then forget it ----
     sessionsList()
     if wait(el("srow-\(sid)"), 30, "the session") { el("srow-\(sid)").tap() }
     if wait(el("grants-\(sid)"), 30, "Grants") {
@@ -276,18 +276,18 @@ final class ReplicaUITests: JarvisUITestCase {
       if wait(el("grant-review"), 30, "grants page") {
         shot("grants")
         XCTAssertTrue(el("grant-forget-terminal").exists, "the terminal's grant is listed in force")
-        pick("grant-holder", "Scheduler")
+        pick("grant-holder", "Status")
         pick("grant-len", "5 min")
         el("grant-review").tap()
-        if arrives(el("secure-grant-allow"), 30, "the grant review (scheduler)") {
+        if arrives(el("secure-grant-allow"), 30, "the grant review (status)") {
           faceIDMatches()
           el("secure-grant-allow").tap()
           XCTAssertTrue(gone(el("secure-grant-allow"), 90), "the review closes after Face ID")
-          if wait(el("grant-forget-scheduler"), 60, "the scheduler's grant listed") {
+          if wait(el("grant-forget-status"), 60, "the status grant listed") {
             shot("grants-two")
-            el("grant-forget-scheduler").tap()
+            el("grant-forget-status").tap()
             answer("Forget")
-            XCTAssertTrue(gone(el("grant-forget-scheduler"), 30), "forgotten")
+            XCTAssertTrue(gone(el("grant-forget-status"), 30), "forgotten")
           }
         }
         back()

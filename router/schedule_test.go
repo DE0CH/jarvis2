@@ -128,16 +128,19 @@ func (f *fakeDelivery) install(t *testing.T) {
 	t.Cleanup(func() { deliverVouchedHook = old })
 }
 
-// installPeer: the peer path (a resume prompt), recorded as "<session>: <text>"
+// installPeer: a resume prompt (its own delivery kind), recorded as "<session>: <text>"
 func (f *fakeDelivery) installPeer(t *testing.T) {
-	old := deliverHookOrPeer
-	deliverHookOrPeer = func(r *Router, sid, from, text, after string) error {
+	old := deliverVouchedHook
+	deliverVouchedHook = func(r *Router, sid string, d Delivery) error {
 		f.mu.Lock()
 		defer f.mu.Unlock()
-		f.texts = append(f.texts, sid+": "+text)
+		if d.Kind != "resume-prompt" {
+			t.Errorf("a %s delivery", d.Kind)
+		}
+		f.texts = append(f.texts, sid+": "+d.Text)
 		return nil
 	}
-	t.Cleanup(func() { deliverHookOrPeer = old })
+	t.Cleanup(func() { deliverVouchedHook = old })
 }
 
 // signed: a wakeup or cron as the session's own signed request (its payload is the test's label)
@@ -244,49 +247,6 @@ func TestWakeupFailuresBackOffThenDrop(t *testing.T) {
 	}
 	if len(*dms) != 1 || !strings.Contains((*dms)[0], "could not be delivered") {
 		t.Fatalf("dms %q", *dms)
-	}
-}
-
-func TestWakeupRefusedStaysPendingAndDMsOnce(t *testing.T) {
-	r := newTestRouter(t)
-	dms := captureDM(t)
-	f := &fakeDelivery{err: errors.New("the machine refused or failed: no grant, and the holder isn't on this session's allow list")}
-	f.install(t)
-	addSession(r, "s3", "started", "m3", false)
-	r.ArmWakeup("s3", &Wakeup{Name: "default", At: time.Now().Add(-time.Second).UnixMilli(), Prompt: "go", ArmedAt: 1, Signed: signed("go")})
-	at := time.Now()
-	for i := 0; i < 8; i++ {
-		r.scheduleTick(at)
-		waitIdle(t)
-		at = at.Add(3 * time.Minute)
-	}
-	if ws, _ := r.ListWakeups("s3"); len(ws) != 1 {
-		t.Fatal("a refused wakeup stays pending")
-	}
-	if len(*dms) != 1 || !strings.Contains((*dms)[0], "phone grant") {
-		t.Fatalf("dms %q", *dms)
-	}
-	// once delivery works it goes
-	f.mu.Lock()
-	f.err = nil
-	f.mu.Unlock()
-	r.scheduleTick(at)
-	waitIdle(t)
-	if ws, _ := r.ListWakeups("s3"); len(ws) != 0 {
-		t.Fatal("delivered: cleared")
-	}
-}
-
-func TestPausedSensitiveSessionIsNotResumedForNothing(t *testing.T) {
-	r := newTestRouter(t)
-	captureDM(t)
-	addSession(r, "s4", "paused", "", true)
-	err := r.deliverToSession("s4", "jarvis", "hi", "")
-	if !isGrantRefusal(err) {
-		t.Fatalf("got %v", err)
-	}
-	if st, _ := r.sessionState("s4"); st != "paused" {
-		t.Fatalf("state %s", st)
 	}
 }
 

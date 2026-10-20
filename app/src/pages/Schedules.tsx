@@ -1,14 +1,13 @@
 // A session's wakeups and crons (router/schedule.go, Jarvis 1's shapes): at the due time the router delivers
-// the prompt into the session as a message, resuming it first when it is paused. Delivery runs as the
-// `scheduler` feature, so the session must allow it (arming from inside the session does that by itself) or
-// the phone must (a standing rule; a session with a sensitive store takes only a phone grant). Only the session arms
+// the prompt into the session as a message, resuming it first when it is paused. Into a session holding a sensitive
+// store, each such message waits in the Inbox until Deyao delivers it (signed on the iPhone) or denies it; a per-kind
+// rule on the session lets one kind through (views/Sessions.tsx MessageRules). Only the session arms
 // them (scripts/schedule-wakeup.sh, schedule-cron.sh: its own signed request vouches for the delivery; the router
 // refuses arming from the app), so this page lists and cancels them (app DECISIONS 76).
 import { useEffect, useState } from "react";
 import { api, cronEvery, sessionTitle, when, type Cron, type Wakeup } from "../lib/api";
 import { useStore, ask, exclusive, failed, pend, refresh } from "../lib/store";
-import { requestGrant } from "../lib/grants";
-import { Button, Card, Flex, Heading, Lbl, Muted, P, Pill, Quote, Row, Rows, Spinner } from "../ui/kit";
+import { Card, Flex, Heading, Lbl, Muted, P, Pill, Quote, Row, Rows, Spinner } from "../ui/kit";
 import { PButton } from "../ui/bits";
 import { Cards } from "../ui/cards";
 import { Page } from "../ui/page";
@@ -39,8 +38,7 @@ export function SchedulesPage({ spec }: { spec: SchedulesSpec }) {
   return (
     <Page title="Schedules" id="schedules-page">
       <Rows mt={2}><Row label="Session" id="sch-session">{title}</Row></Rows>
-      <Muted mt={2}>The session arms its own wakeups and crons: ask it in its chat. Delivery needs the scheduler allowed: by the session, or a standing rule.</Muted>
-      {m && <Flex mt={2}><Button size={1} variant="soft" color="gray" id="sch-rule" onPress={() => requestGrant(sid, title, { holder: "scheduler", kind: "rule" })}>Standing rule for the scheduler…</Button></Flex>}
+      <Muted mt={2}>The session arms its own wakeups and crons: ask it in its chat. Into a session holding a sensitive store, each delivery waits in the Inbox for your approval.</Muted>
       <Lbl>Armed</Lbl>
       {err ? <P size={2} color="red">{err}</P>
         : !ws || !cs ? <Flex gap={2} align="center"><Spinner /><Muted>Loading…</Muted></Flex>

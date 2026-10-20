@@ -5,6 +5,7 @@ import { useSyncExternalStore } from "react";
 import { AppState, Platform } from "react-native";
 import { api, coreStores, loadPolicy, RUN_ACTIVE, type Choice, type CoreStore, type Policy, type Rec, type State, type TasksOverview, type Machine, type FlyOrgView, type MachinesOverview, type InboxItem, type InboxBatch } from "./api";
 import { stateFrom } from "./state";
+import { inboxEntries } from "./messages";
 
 export type Tab = "sessions" | "inbox" | "search" | "stores" | "content" | "records" | "tasks" | "schedules" | "machines" | "devices" | "settings";
 export const TABS: [Tab, string][] = [["sessions", "Sessions"], ["inbox", "Inbox"], ["search", "Search"], ["stores", "Stores"], ["content", "Content"], ["records", "Previous"], ["tasks", "Tasks"], ["schedules", "Schedules"], ["machines", "Machines"], ["devices", "Devices"], ["settings", "Settings"]];
@@ -44,8 +45,8 @@ export const getStore = () => snap;
 
 export function setTab(t: Tab) { S.tab = t; emit(); if (t === "records" || t === "search") loadRecords(); if (t === "stores" || t === "settings") loadStores(); if (t === "tasks" || t === "schedules") { loadTasks(); loadStores(); } if (t === "machines") loadMachines(); }
 /** the Inbox badge: what waits for the phone */
-/** the Inbox's entries: each batch counts once */
-export const useInboxCount = () => useStore((s) => inboxLoose(s.state.inbox || [], s.state.inboxBatches || []).length + (s.state.inboxBatches || []).length);
+/** the Inbox's entries: each batch counts once, and each session's pending messages */
+export const useInboxCount = () => useStore((s) => inboxEntries(inboxLoose(s.state.inbox || [], s.state.inboxBatches || []), s.state.messages || []) + (s.state.inboxBatches || []).length);
 /** the items in no listed batch */
 export function inboxLoose(items: InboxItem[], batches: InboxBatch[]): InboxItem[] {
   const ids = new Set(batches.map((b) => b.id));

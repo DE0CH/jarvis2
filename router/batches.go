@@ -377,8 +377,8 @@ func (r *Router) checkBatchItem(c Caller, raw json.RawMessage) (*batchItem, erro
 			return nil, err
 		}
 		it.args = map[string]any{"intent": in.Intent, "to": recv.ID}
-		if note := peerNote(&from, &recv, text); note.Direction != "upward" {
-			it.note = &note
+		if note, held := heldPeerNote(peerNote(&from, &recv, text), &recv); held || note.Direction != "upward" {
+			it.note = &note // held: the receiver holds a sensitive store, Deyao decides on the message itself (messages.go)
 			return it, nil
 		}
 		it.kind, it.p, it.expl = requestKindPeer, RequestParams{Session: recv.ID, Text: text}, peerExplanation(&from, &recv)

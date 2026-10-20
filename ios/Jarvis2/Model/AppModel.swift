@@ -35,6 +35,9 @@ final class AppModel {
   var inbox: [InboxItem] = []
   /// batches (router/batches.go): several Inbox items filed together, reviewed on one page under one Face ID
   var inboxBatches: [InboxBatch] = []
+  /// messages waiting to go into a session (delivered under Face ID, or denied) and the per-kind rules in force
+  var messages: [PendingMessage] = []
+  var messageRules: [MessageRule] = []
   var coreUp = false
   /// the next core (blue/green, router/nextcore.go): {up, serving: empty | standby | serving | handed-off, signingKey};
   /// .null while the router runs none
@@ -82,13 +85,26 @@ final class AppModel {
   var showNextSetup = false
   var signedOut = false
   var harnessHidden: Set<String> { Set(policy.values.flatMap { $0 }) }
-  /// the Inbox's entries: each batch counts once
-  var inboxCount: Int { inboxLoose.count + inboxBatches.count }
-  /// the items in no listed batch
+  /// the Inbox's entries: each batch counts once, and all of a session's pending messages count once
+  var inboxCount: Int { inboxLoose.count + inboxBatches.count + inboxMessageGroups.count }
+  /// the items in no listed batch (pending messages are listed per session instead: inboxMessageGroups)
   var inboxLoose: [InboxItem] {
     let ids = Set(inboxBatches.map(\.id))
-    return inbox.filter { $0.batch.map { !ids.contains($0) } ?? true }
+    return inbox.filter { $0.kind != "message" && ($0.batch.map { !ids.contains($0) } ?? true) }
   }
+  /// the pending messages of the Inbox, one entry per session (oldest first within it)
+  var inboxMessageGroups: [MessageGroup] {
+    var order: [String] = []
+    var by: [String: [InboxItem]] = [:]
+    for it in inbox where it.kind == "message" {
+      let s = it.openOptions["sessionId"].text ?? it.session ?? ""
+      if by[s] == nil { order.append(s) }
+      by[s, default: []].append(it)
+    }
+    return order.map { s in MessageGroup(session: s, name: by[s]?.first?.sessionName ?? self.session(s)?.title ?? s, items: by[s] ?? []) }
+  }
+  func messagesWaiting(for session: String) -> [PendingMessage] { messages.filter { $0.session == session && $0.isPending } }
+  func rules(for session: String) -> [MessageRule] { messageRules.filter { $0.session == session } }
   func batchItems(_ b: InboxBatch) -> [InboxItem] { b.items.compactMap { id in inbox.first { $0.id == id } } }
 
   @ObservationIgnored private var pollTask: Task<Void, Never>?
@@ -197,6 +213,8 @@ final class AppModel {
       approvals = j["approvals"].array.map(Approval.init)
       inbox = j["inbox"].array.map(InboxItem.init)
       inboxBatches = j["inboxBatches"].array.map(InboxBatch.init)
+      messages = j["messages"].array.map(PendingMessage.init)
+      messageRules = j["messageRules"].array.map(MessageRule.init)
       coreUp = j["core"]["up"].bool == true
       coreNext = j["core"]["next"]
       budget = j["budget"]
@@ -314,6 +332,14 @@ final class AppModel {
   @ObservationIgnored var secureInbox: String?
   /// the sheet was dismissed (Cancel, a swipe down): nothing was signed
   func secureDismissed() { secureCompleted(false) }
+}
+
+/// one session's pending messages in the Inbox: one entry, one review page (MessageReviewView)
+struct MessageGroup: Identifiable, Equatable {
+  let session: String
+  let name: String
+  let items: [InboxItem]
+  var id: String { session }
 }
 
 /// One request at a time; a call while one runs gets ONE follow-up that starts after it (never the running one,

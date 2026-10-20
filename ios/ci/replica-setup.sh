@@ -55,10 +55,10 @@ case "$msg" in
     IFS=: read -r _ sid holder <<<"$msg"; m=$(machine_of "$sid")
     if [ -n "$m" ] && fexec "$m" "/usr/local/bin/jarvis2-request grant $holder --minutes 5 --why replica-the-session-asks-for-$holder" >> "$L" 2>&1; then echo ok
     else echo "session request failed (machine ${m:-none}): $(tail -2 "$L" | tr '\n' ' ')"; fi ;;
-  inbox-batch:*) # not the scheduler: the grants step later forgets ITS scheduler grant by the row's identifier
+  inbox-batch:*) # not status: the grants step later forgets ITS status grant by the row's identifier
     sid=${msg#inbox-batch:}; m=$(machine_of "$sid"); o="$W/batch.out"
     # flyctl exec exits 0 whatever the command did: the router's batch id is the proof
-    if [ -n "$m" ] && fexec "$m" "/usr/local/bin/jarvis2-request batch --summary replica-the-session-asks-for-two-grants --item grant,holder=status,minutes=5 --item grant,holder=remote,minutes=5" > "$o" 2>&1 \
+    if [ -n "$m" ] && fexec "$m" "/usr/local/bin/jarvis2-request batch --summary replica-the-session-asks-for-two-grants --item grant,holder=archive,minutes=5 --item grant,holder=remote,minutes=5" > "$o" 2>&1 \
          && grep -q '"id": "b' "$o"; then cat "$o" >> "$L"; echo ok
     else cat "$o" >> "$L"; echo "session batch failed (machine ${m:-none}): $(tail -2 "$o" | tr '\n' ' ')"; fi ;;
   session-file:*)

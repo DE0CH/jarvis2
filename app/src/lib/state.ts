@@ -8,6 +8,7 @@ export function stateFrom(st: Partial<State>): State {
     ...st,
     sessions: st.sessions || [], approvals: st.approvals || [], core: st.core || { up: false }, budget: st.budget ?? null, fly: st.fly ?? null,
     repos: st.repos || [], inbox: st.inbox || [], inboxBatches: st.inboxBatches || [], leases: st.leases || [],
+    messages: st.messages || [], messageRules: st.messageRules || [],
     loaded: true, loadError: null,
   };
 }

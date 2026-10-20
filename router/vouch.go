@@ -278,7 +278,7 @@ func signedRequestOf(req *http.Request, machine string, body []byte) *SignedRequ
 
 type Delivery struct {
 	ID      string         `json:"id"`
-	Kind    string         `json:"kind"` // wakeup | cron | nudge | continue | upgraded
+	Kind    string         `json:"kind"` // wakeup | cron | watch | watch-fail | nudge | continue | upgraded | lease-* | request-outcome | peer | resume-prompt
 	Request *SignedRequest `json:"request,omitempty"`
 	Run     int            `json:"run,omitempty"`
 	Minutes int            `json:"minutes,omitempty"`
@@ -292,14 +292,24 @@ type Delivery struct {
 	// outcomes.go: request-outcome — the decided items of the session's own filing (Request)
 	Outcomes []OutcomeItem `json:"outcomes,omitempty"`
 	// peermsg.go: a peer message, with its verified sender and direction
-	Peer   *PeerNote `json:"peer,omitempty"`
-	Attest *Doc      `json:"attest"`
+	Peer *PeerNote `json:"peer,omitempty"`
+	// resume-prompt: Deyao's words from the app (machine/deliver.go takes them only under the phone's approval)
+	Text string `json:"text,omitempty"`
+	// messages.go: the phone's approval of this very message (a signed batch it is in, or a rule for its kind)
+	Approval *Doc `json:"approval,omitempty"`
+	// Preview: the machine only renders the text and answers it (messages.go previewText)
+	Preview bool `json:"preview,omitempty"`
+	Attest  *Doc `json:"attest"`
 }
 
 type DeliveryResult struct {
 	ID    string `json:"id"`
 	OK    bool   `json:"ok"`
 	Error string `json:"error,omitempty"`
+	// Text: a preview's text, or the machine's own text when the phone signed another (messages.go)
+	Text string `json:"text,omitempty"`
+	// NeedsApproval: refused only for want of the phone's approval of this message
+	NeedsApproval bool `json:"needsApproval,omitempty"`
 }
 
 var deliveries = struct {
@@ -330,6 +340,12 @@ func attested(d Delivery) ([]byte, string, error) {
 		return b, "session-signed:" + d.Request.Machine, err
 	case "continue":
 		return []byte("continue"), "image-text", nil
+	case "resume-prompt":
+		p, err := cleanResumePrompt(d.Text)
+		if err != nil || p == "" {
+			return nil, "", errors.New("resume-prompt: empty or too long")
+		}
+		return []byte(p), "deyao", nil
 	case "request-outcome":
 		b, err := outcomeAttested(d)
 		if err != nil {
@@ -367,23 +383,51 @@ func attested(d Delivery) ([]byte, string, error) {
 var errNotVouched = errors.New("this wasn't asked for by the session itself (no session-signed request), and nothing else vouches for it: not delivered")
 
 // deliverVouched: resume the session when it is paused, wait for it, then hand the machine the delivery with the
-// core's attestation and wait for its answer
+// core's attestation and wait for its answer. A message that waits for Deyao's approval (messages.go) counts as handed
+// over: the approval queue delivers it, or tells whoever asked.
 func (r *Router) deliverVouched(sid string, d Delivery) error {
-	return r.deliverVouchedOpts(sid, d, true)
+	return handedOver(r.deliverVouchedOpts(sid, d, true, nil))
 }
 
 // deliverVouchedRunning: only into a running session (errSkip otherwise): nothing is started for it (outcomes.go)
 func (r *Router) deliverVouchedRunning(sid string, d Delivery) error {
-	return r.deliverVouchedOpts(sid, d, false)
+	return handedOver(r.deliverVouchedOpts(sid, d, false, nil))
 }
 
-func (r *Router) deliverVouchedOpts(sid string, d Delivery, boot bool) error {
+func handedOver(err error) error {
+	if errors.Is(err, errAwaitingApproval) {
+		return nil
+	}
+	return err
+}
+
+// deliverVouchedOpts: o is who is told when a held message is denied, lapses or fails (messages.go messageOrigin
+// covers the session's own wakeups, crons and watches); errAwaitingApproval = held for Deyao
+func (r *Router) deliverVouchedOpts(sid string, d Delivery, boot bool, o *Origin) error {
 	done, err := r.beginDelivery() // movegate.go: none begins once a handover started; the next leader makes it
 	if err != nil {
 		return err
 	}
 	defer done()
+	// messages.go: into a session holding a sensitive store (and any resume prompt) only as the phone approved it
+	gated := d.Approval == nil && r.needsApproval(sid, d.Kind)
+	if gated {
+		if rule := r.ruleFor(sid, d.Kind); rule != nil {
+			d.Approval, gated = rule, false
+		}
+	}
 	state, _ := r.sessionState(sid)
+	if gated && state != "started" && !previewOnly(d.Kind) {
+		// held without starting anything: the router renders this kind itself
+		text, from, note, ok := messageText(d)
+		if !ok {
+			return fmt.Errorf("a %s delivery the router can't render: not delivered", d.Kind)
+		}
+		if _, err := r.holdMessage(sid, d, text, from, note, o); err != nil {
+			return err
+		}
+		return errAwaitingApproval
+	}
 	if !boot && state != "started" {
 		if state == "" {
 			return errNoSession
@@ -407,6 +451,16 @@ func (r *Router) deliverVouchedOpts(sid string, d Delivery, boot bool) error {
 	}
 	if err := r.waitStarted(sid); err != nil {
 		return err
+	}
+	if gated { // the running machine renders the exact text Deyao sees
+		text, err := r.previewText(sid, d)
+		if err != nil {
+			return err
+		}
+		if _, err := r.holdMessage(sid, d, text, messageFrom(d), messageNote(d), o); err != nil {
+			return err
+		}
+		return errAwaitingApproval
 	}
 	input, origin, err := attested(d)
 	if err != nil {
@@ -456,6 +510,13 @@ func (r *Router) deliverVouchedOpts(sid string, d Delivery, boot bool) error {
 			}
 			time.Sleep(step)
 			continue
+		}
+		if out.NeedsApproval && out.Text != "" { // the machine renders another text than the phone signed: Deyao sees it
+			d.Approval = nil
+			if _, err := r.holdMessage(sid, d, out.Text, messageFrom(d), messageNote(d), o); err != nil {
+				return err
+			}
+			return errAwaitingApproval
 		}
 		return errors.New("the machine refused or failed: " + out.Error)
 	}

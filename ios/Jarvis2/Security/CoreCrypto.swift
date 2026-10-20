@@ -494,6 +494,81 @@ extension Checks {
   }
 }
 
+// ---- messages into a session, delivered one by one on the phone's signature (router: per-message approval) -------
+/// one message of a signed delivery batch, exactly as the router drafted it
+struct MessageItemText: Codable, Equatable {
+  let id: String, delivery: String, sha256: String, from: String, text: String
+}
+/// the signed delivery batch: {"kind":"messages","session":<line>,"items":[…],"issued","expires"}
+struct MessagesText: Codable, Equatable {
+  let kind: String, session: String, items: [MessageItemText], issued: String, expires: String
+}
+/// the signed per-kind rule: {"kind":"message-rule","session":<line>,"delivery":<kind>,"issued","until"}
+struct MessageRuleText: Codable, Equatable {
+  let kind: String, session: String, delivery: String, issued: String, until: String
+}
+/// a message as the review page shows it: what the signed item must say
+struct ShownMessage: Equatable {
+  let id: String, kind: String, from: String, text: String
+}
+
+extension Checks {
+  static let messagesFields: Set<String> = ["kind", "session", "items", "issued", "expires"]
+  static let messageItemFields: Set<String> = ["id", "delivery", "sha256", "from", "text"]
+  static let messageRuleFields: Set<String> = ["kind", "session", "delivery", "issued", "until"]
+  /// the deliveries that never get a standing rule: someone's own words, approved one at a time
+  static let unruledDeliveries: Set<String> = ["peer", "resume-prompt"]
+  /// an RFC 3339 time, with or without fractional seconds
+  static func msgDate(_ s: String) -> Date? {
+    if let d = isoDate(s) { return d }
+    let f = ISO8601DateFormatter(); f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+    return f.date(from: s)
+  }
+
+  /// The router's draft for delivering messages must be exactly the messages the page shows: kind "messages", the
+  /// session's line from its core-signed cert (which names this phone), the shown ids and no others (each once), each
+  /// item's delivery kind, sender and text exactly as shown, issued now, expiring in the future and at most an hour
+  /// after it was issued. Nothing else may be in it.
+  static func reviewMessages(text: String, cert: SessionCert, phoneKey: String, shown: [ShownMessage], now: Date = Date()) throws -> MessagesText {
+    guard let obj = try? JSONSerialization.jsonObject(with: Data(text.utf8)) as? [String: Any],
+          Set(obj.keys).isSubset(of: messagesFields),
+          let items = obj["items"] as? [[String: Any]], items.allSatisfy({ Set($0.keys).isSubset(of: messageItemFields) }),
+          let m = try? JSONDecoder().decode(MessagesText.self, from: Data(text.utf8)) else { throw TrustError.mismatch("the messages text") }
+    guard cert.phone == phoneKey else { throw TrustError.mismatch("this session's cert names another phone") }
+    guard m.kind == "messages" else { throw TrustError.mismatch("kind") }
+    guard m.session == cert.line else { throw TrustError.mismatch("session") }
+    guard !shown.isEmpty, m.items.count == shown.count, Set(m.items.map(\.id)).count == m.items.count,
+          Set(m.items.map(\.id)) == Set(shown.map(\.id)) else { throw TrustError.mismatch("the messages (other ids than the ones shown)") }
+    for it in m.items {
+      guard let s = shown.first(where: { $0.id == it.id }) else { throw TrustError.mismatch("message \(it.id)") }
+      guard it.delivery == s.kind else { throw TrustError.mismatch("the kind of message \(it.id)") }
+      guard it.from == s.from else { throw TrustError.mismatch("the sender of message \(it.id)") }
+      guard it.text == s.text else { throw TrustError.mismatch("the text of message \(it.id)") }
+      guard it.sha256.count == 64, it.sha256.allSatisfy({ $0.isHexDigit }) else { throw TrustError.mismatch("the hash of message \(it.id)") }
+    }
+    guard let issued = msgDate(m.issued), abs(issued.timeIntervalSince(now)) < 300 else { throw TrustError.mismatch("issued time") }
+    guard let end = msgDate(m.expires), end > now, end > issued, end.timeIntervalSince(issued) <= 3600 + 120 else { throw TrustError.mismatch("expiry") }
+    return m
+  }
+
+  /// The router's draft for a per-kind rule must be exactly the rule the page offers: kind "message-rule", the
+  /// session's line from its core-signed cert (which names this phone), this delivery kind (never a peer's message or
+  /// a resume prompt), issued now, ending in the future and at most a year (366 days) away. A sensitive session may
+  /// have one: it is the explicit per-kind opt-in.
+  static func reviewMessageRule(text: String, cert: SessionCert, phoneKey: String, delivery: String, now: Date = Date()) throws -> MessageRuleText {
+    guard let obj = try? JSONSerialization.jsonObject(with: Data(text.utf8)) as? [String: Any],
+          Set(obj.keys).isSubset(of: messageRuleFields),
+          let r = try? JSONDecoder().decode(MessageRuleText.self, from: Data(text.utf8)) else { throw TrustError.mismatch("the rule text") }
+    guard cert.phone == phoneKey else { throw TrustError.mismatch("this session's cert names another phone") }
+    guard r.kind == "message-rule" else { throw TrustError.mismatch("kind") }
+    guard r.session == cert.line else { throw TrustError.mismatch("session") }
+    guard r.delivery == delivery, !unruledDeliveries.contains(r.delivery) else { throw TrustError.mismatch("the kind of message") }
+    guard let issued = msgDate(r.issued), abs(issued.timeIntervalSince(now)) < 300 else { throw TrustError.mismatch("issued time") }
+    guard let until = msgDate(r.until), until > now, until.timeIntervalSince(now) <= 366 * 86400 + 300 else { throw TrustError.mismatch("end date") }
+    return r
+  }
+}
+
 // ---- which session a signed document is about (audit 2026-10-11: never the router's word) ------------------------
 /// A session line as the core signed it: the identity a review page shows and binds to. From a cert (the session's
 /// own, or the predecessor a succession challenge carries); `label` and `prompt` are the settings Deyao gave it on New

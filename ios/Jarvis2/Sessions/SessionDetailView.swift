@@ -1,4 +1,5 @@
-// One session: its status, what waits on it (a grant, a locked store, a queued prompt, schedules), its details, and
+// One session: its status, what waits on it (a grant, messages to deliver, a locked store, a queued prompt, schedules),
+// its message rules (Remove), its details, and
 // every action Jarvis 1's card had (Terminal or Remote, Pause / Resume, Transcript, Grants, Schedules, the switches,
 // the Log (the supervisor's lines and the lifecycle operations in one stream, LogViews.swift),
 // the permission mode, Resume with the latest image, Destroy).
@@ -92,9 +93,44 @@ private struct SessionDetailList: View {
             .accessibilityIdentifier("rule-\(m.id)")
         } header: { Label("Needs your approval", systemImage: "hand.raised") }
       }
+      if m.pendingMessages > 0 {
+        Section {
+          LabeledContent("Waiting", value: Fmt.plural(m.pendingMessages, "message")).accessibilityIdentifier("msg-count-\(m.id)")
+          ForEach(model.messagesWaiting(for: m.id)) { pm in
+            VStack(alignment: .leading, spacing: 2) {
+              Text("\(pm.kindLabel) · \(pm.from)").font(.subheadline)
+              Text(Fmt.clip(pm.text, 140)).font(.footnote).foregroundStyle(.secondary)
+            }
+            .accessibilityElement(children: .combine)
+          }
+          Button("Review…", systemImage: "faceid") { model.present(.messages(session: m.id)) { [model] ok in if ok { model.settle(60) } } }
+            .accessibilityIdentifier("msg-review-\(m.id)")
+        } header: { Label("Messages waiting for you", systemImage: "envelope.badge") } footer: {
+          Text("Nothing goes into the session until you deliver it.")
+        }
+      }
+      let rules = model.rules(for: m.id)
+      if !rules.isEmpty {
+        Section {
+          ForEach(rules) { r in
+            HStack {
+              VStack(alignment: .leading, spacing: 2) {
+                Text(r.text).font(.subheadline)
+                if let u = r.until { Text("Until \(u.formatted(date: .abbreviated, time: .omitted))").font(.footnote).foregroundStyle(.secondary) }
+              }
+              .accessibilityElement(children: .combine)
+              .accessibilityIdentifier("rule-row-\(r.kind)")
+              Spacer()
+              PendingButton(key: "mr:" + r.id, title: "Remove", role: .destructive) { await removeRule(r) }
+                .buttonStyle(.borderless)
+                .accessibilityIdentifier("rule-remove-\(r.kind)")
+            }
+          }
+        } header: { Label("Message rules", systemImage: "checkmark.seal") }
+      }
       if let lock = m.lockedStore {
         Section {
-          LabeledContent("Store") { Text(lock).font(.body.monospaced()) }
+          LabeledContent("Store"){ Text(lock).font(.body.monospaced()) }
           Button("Unlock…", systemImage: "lock.open") { model.present(.unlock(session: m.id, label: m.title)) }
             .accessibilityIdentifier("unlock-\(m.id)")
         } header: { Label("Waiting on a locked store", systemImage: "lock") }
@@ -170,6 +206,13 @@ private struct SessionDetailList: View {
       }
     }
     .refreshable { await model.refresh() }
+  }
+
+  /// revoke a message rule: the router stops using it at once
+  private func removeRule(_ r: MessageRule) async {
+    guard await model.confirm("Remove the rule?", "\(r.text). Messages of this kind wait for you again.", action: "Remove", destructive: true) else { return }
+    await model.pendUntil("mr:" + r.id, "Removing…", 30, action: { try await RouterClient.shared.removeMessageRule(r.id) },
+                          until: { m in !m.messageRules.contains { $0.id == r.id } })
   }
 
   /// the auto-pause line: off / counting down / generic; a paused session explains Resume

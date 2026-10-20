@@ -56,7 +56,7 @@ type outcomeRecordItem struct {
 
 var (
 	outcomeRefRE  = regexp.MustCompile(`^[a-z0-9-]{1,64}$`)
-	outcomePathRE = regexp.MustCompile(`^/m/api/(?:actions/)?(requests/(?:repo/add|repo/remove|grant|unlock|add-store|call|peer|batch)|sessions)$`)
+	outcomePathRE = regexp.MustCompile(`^/m/api/(?:actions/)?(requests/(?:repo/add|repo/remove|grant|unlock|add-store|call|peer|batch)|sessions|sessions/[a-z0-9-]{1,64}/(?:wakeup|wakeups|crons|watches))$`)
 	outcomeSpace  = regexp.MustCompile(`\s+`)
 )
 
@@ -81,6 +81,16 @@ type outcomeAsked struct {
 	Sensitive bool   `json:"sensitive"`
 	NoStore   bool   `json:"noStore"` // repo/add: the store isn't to come into this session
 	To        string `json:"to"`      // peer: the session it was for
+	Name      any    `json:"name"`    // wakeup, cron, watch: its name (a wakeup's may be a number)
+}
+
+// armedName: a wakeup's, cron's or watch's name as its message shows it ("default" when it has none)
+func (a outcomeAsked) armedName() string {
+	n := strings.TrimSpace(fmt.Sprint(a.Name))
+	if a.Name == nil || n == "" {
+		return "default"
+	}
+	return short(n, 40)
 }
 
 // short: the session's own words, on one line and capped
@@ -117,6 +127,12 @@ func (a outcomeAsked) describe() string {
 		return fmt.Sprintf("the app API call %s %s", short(a.Method, 10), short(a.Path, 300))
 	case "peer":
 		return fmt.Sprintf("your message to session %q", short(a.To, 120))
+	case "wakeup":
+		return fmt.Sprintf("the message of this session's wakeup %q (Deyao approves each message into this session)", a.armedName())
+	case "cron":
+		return fmt.Sprintf("a run's message of this session's recurring wakeup %q (Deyao approves each message into this session)", a.armedName())
+	case "watch":
+		return fmt.Sprintf("the message of this session's watch %q (Deyao approves each message into this session)", a.armedName())
 	}
 	return "a request"
 }
@@ -152,9 +168,11 @@ func outcomeFiling(r *SignedRequest, keys []string) (map[int]outcomeAsked, strin
 	if json.Unmarshal(body, &a) != nil {
 		return nil, "", false, errors.New("the signed request isn't JSON")
 	}
-	switch what {
-	case "sessions":
+	switch {
+	case what == "sessions":
 		a.Intent = "new-session"
+	case strings.HasPrefix(what, "sessions/"): // a message of the session's own wakeup, cron or watch (messages.go)
+		a.Intent = map[string]string{"wakeup": "wakeup", "wakeups": "wakeup", "crons": "cron", "watches": "watch"}[what[strings.LastIndex(what, "/")+1:]]
 	default:
 		a.Intent = strings.TrimPrefix(what, "requests/")
 	}

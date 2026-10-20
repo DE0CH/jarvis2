@@ -408,9 +408,11 @@ fixes, 34–40 carried over from the old app and still true, 41–43 the web pag
 76. **No arming form on Schedules** (both apps). The router refuses a wakeup or cron armed from the app (docs/DECISIONS
     190, refusal audit: only the session's own signed request vouches for the delivery, so an app-armed one failed at
     every firing), so the "New" form and its Arm button were a form that could only fail; they are gone. Schedules
-    lists what the session armed (each with Cancel) and keeps "Standing rule for the scheduler…"; one fixed line says
-    the session arms its own (ask it in its chat). The walkthrough checks the page opens with "Nothing armed", the
-    standing rule and no form.
+    lists what the session armed (each with Cancel); one fixed line says the session arms its own (ask it in its chat).
+    There is no scheduler grant: into a session holding a sensitive store each delivery waits in the Inbox as a pending
+    message, grouped per session, delivered on the iPhone (Face ID) or denied; a per-kind message rule, shown on the
+    session's card with Remove, lets one kind through. The walkthrough checks the page opens with "Nothing armed" and
+    no form.
 
 ## Switch Claude account (2026-10-20)
 

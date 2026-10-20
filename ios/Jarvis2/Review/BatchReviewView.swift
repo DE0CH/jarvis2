@@ -43,7 +43,7 @@ enum BatchPrepare {
     case .unlock(let s, _, _): return try await unlock(s, model: model)
     case .repoKey(let a, let r, let sens, let inbox, let into): return try await repoKey(a, r, sens, inbox: inbox, into: into, model: model)
     case .apiCall(let id): return apiCall(it, id: id)
-    case .newSession, .batch, .restore: throw TrustError.mismatch("an item this app can't open")
+    case .newSession, .batch, .restore, .messages: throw TrustError.mismatch("an item this app can't open")
     }
   }
 
@@ -477,6 +477,7 @@ extension InboxItem {
     case "api-call": return "API call"
     case "restore": return "Restore store"
     case "peer-message": return "Peer message"
+    case "message": return "Deliver a message"
     default: return j["options"]["restore"].text != nil ? "Restore" : "New session"
     }
   }

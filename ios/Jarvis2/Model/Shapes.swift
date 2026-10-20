@@ -32,6 +32,8 @@ struct Session: Identifiable, Equatable, Hashable {
   var bgTasks: Int { j["bgTasks"].int ?? 0 }
   var pauseInMs: Double? { j["pauseInMs"].double }
   var needsGrant: String? { j["needsGrant"].text }
+  /// messages for it waiting in the Inbox to be delivered or denied (router: per-message delivery approval)
+  var pendingMessages: Int { j["pendingMessages"].int ?? 0 }
   var lockedStore: String? { j["lockedStore"].text }
   var waiting: String? { j["waiting"].text }
   var resumePrompt: String? { j["resumePrompt"].text }
@@ -248,6 +250,59 @@ struct Grant: Identifiable, Equatable, Hashable {
   var holder: String { j["holder"].string ?? "" }
   var isRule: Bool { j["kind"].string == "rule" }
   var ends: Date? { j["ends"].string?.isoDate }
+}
+
+/// a message Jarvis wants to put into a session (a wakeup, a watchdog check-in, a peer's message, a resume prompt…),
+/// waiting for Deyao to deliver it (signed by this phone, Face ID) or deny it. The router's record: what is signed is
+/// checked against the router's draft (Checks.reviewMessages), never taken from here alone.
+struct PendingMessage: Identifiable, Equatable, Hashable {
+  let j: JSON
+  var id: String { j["id"].string ?? "" }
+  var session: String { j["session"].string ?? "" }
+  var sessionName: String? { j["sessionName"].text }
+  /// the delivery kind (MessageKind)
+  var kind: String { j["kind"].string ?? "" }
+  var kindLabel: String { j["kindLabel"].text ?? MessageKind.label(kind) }
+  /// the specific requester ("Jarvis's watchdog (the stall check)")
+  var from: String { j["from"].text ?? "Jarvis 2" }
+  /// the exact text that goes into the session
+  var text: String { j["text"].string ?? "" }
+  var note: String? { j["note"].text }
+  var sha256: String { j["sha256"].string ?? "" }
+  var created: Date? { j["created"].string?.isoDate }
+  var expires: Date? { j["expires"].string?.isoDate }
+  /// pending (waits for Deyao) | approved (signed, being delivered) | failed (approved but not delivered)
+  var state: String { j["state"].string ?? "" }
+  var isPending: Bool { state == "pending" }
+  var error: String? { j["error"].text }
+  /// a per-kind rule may be made for it (never for a peer's message or a resume prompt)
+  var ruleable: Bool { j["ruleable"].bool == true && MessageKind.ruleable(kind) }
+  var ruleText: String { j["ruleText"].text ?? "Always deliver \(kindLabel.lowercased()) messages to this session" }
+}
+
+/// a phone-signed per-kind rule: messages of this kind go into this session without asking
+struct MessageRule: Identifiable, Equatable, Hashable {
+  let j: JSON
+  var id: String { j["id"].string ?? "" }
+  var session: String { j["session"].string ?? "" }
+  var kind: String { j["kind"].string ?? "" }
+  var kindLabel: String { j["kindLabel"].text ?? MessageKind.label(kind) }
+  var text: String { j["text"].text ?? "Always deliver \(kindLabel.lowercased()) messages to this session" }
+  var until: Date? { j["until"].string?.isoDate }
+  var created: Date? { j["created"].string?.isoDate }
+}
+
+/// the delivery kinds a pending message can have, in words, and which may get a standing per-kind rule
+enum MessageKind {
+  static let labels: [String: String] = [
+    "wakeup": "Wakeup", "cron": "Recurring wakeup", "watch": "Watch met", "watch-fail": "Watch gave up", "nudge": "Watchdog check-in",
+    "continue": "Login “continue”", "upgraded": "Upgrade note", "lease-granted": "Lease granted", "lease-taken": "Lease taken over",
+    "lease-back": "Lease handed back", "request-outcome": "Inbox outcome", "peer": "Peer message", "resume-prompt": "Resume prompt",
+  ]
+  /// never a rule: each of these is a message someone wrote, approved one by one
+  static let neverRuled: Set<String> = ["peer", "resume-prompt"]
+  static func label(_ k: String) -> String { labels[k] ?? k }
+  static func ruleable(_ k: String) -> Bool { labels[k] != nil && !neverRuled.contains(k) }
 }
 
 struct RepoEntry: Identifiable, Equatable, Hashable {

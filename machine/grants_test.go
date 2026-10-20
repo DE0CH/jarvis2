@@ -77,7 +77,7 @@ func TestGrants(t *testing.T) {
 	e.Grant = grant("rule", 30*24*time.Hour)
 	ok("standing rule", e, true)
 	home, _ := os.UserHomeDir()
-	b, _ := json.Marshal([]allowEntry{{Holder: holder.pub(), Name: "scheduler", Until: now.Add(time.Hour).UTC().Format(time.RFC3339)}})
+	b, _ := json.Marshal([]allowEntry{{Holder: holder.pub(), Name: "archive", Until: now.Add(time.Hour).UTC().Format(time.RFC3339)}})
 	os.WriteFile(filepath.Join(home, allowFile), b, 0o600)
 	ok("own allow list", req(holder, "m1"), true)
 

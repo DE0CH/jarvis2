@@ -2008,3 +2008,26 @@ snapshot failed with "no space left on device", the machine was destroyed anyway
      session (`ops.continueAfterStart`) until its next start's host is up and idle. With `CLAUDE_STORE_IN_CERT=1` the
      new account's store is added through the existing add-store flow (Face ID); a paused session is refused there,
      since its next cert comes from its line as it is.
+203. **Messages into a sensitive session are approved one by one (Deyao, 2026-10-20: "he should approve or deny the
+     specific message").** The watchdog's check-in into a sensitive session showed as "Needs your approval — Feature:
+     Scheduler — Does: deliver wakeups and crons as messages" with "Allow 10 min" / "Standing rule": the wrong question
+     (a feature for a while, not the message) with the wrong words (it was a check-in, not a wakeup). Now each delivery
+     into a session holding a sensitive store, and each resume prompt into a running session, waits in the Inbox with
+     its kind, its specific requester and its exact text; Deliver signs that message (DESIGN "Message approvals"), Deny
+     drops it and tells whoever asked. The `scheduler` holder is gone with its grants (messages were already core-attested
+     deliveries; its exec path was left only for a resume prompt, now a `resume-prompt` delivery).
+     - **Claude's choices (for review):** a pending message lapses after **24 h**, not the Inbox's 10 min (a wakeup
+       due at night would otherwise be lost before Deyao wakes); a signed batch is good for **1 h** (time to start a
+       paused session); a rule lasts **a year** and covers every kind except `peer` and `resume-prompt` (words from
+       elsewhere); a newer message of the same thing (the next check-in, a cron's next run, the same lease) replaces
+       one still waiting; one DM when a session's first message starts waiting, none for the ones after it.
+     - **The exact text:** the running machine renders it (a preview: nothing attested, sent or recorded), so Deyao
+       signs what the machine will put in, byte for byte; a paused session isn't started for it (the router renders
+       the wakeup, cron and watch texts itself, the canned ones are their own attested bytes), except for a peer
+       message, which only the receiving machine renders. A machine that renders another text refuses with its own and
+       the router holds that one instead. A watch's re-run check output, appended on the machine, isn't in the signed
+       text (the note says so).
+     - **Upward peer messages** into a sensitive session aren't filed as one-tap peer requests any more: the signed
+       message is Deyao's approval, so he answers once.
+     - **Not chosen:** time windows ("allow messages for 10 minutes") or a standing grant per feature; Deyao wants each
+       message, and a rule per kind and session is the one explicit opt-out.

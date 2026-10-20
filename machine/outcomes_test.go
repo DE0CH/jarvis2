@@ -39,7 +39,7 @@ func TestRequestOutcomes(t *testing.T) {
 	// refused: another key's request, a ref or outcome the image doesn't know, an item the filing doesn't have
 	for _, bad := range []Delivery{
 		{Kind: "request-outcome", Request: signedRequest(stranger, "mX", "POST", "/m/api/requests/grant", []byte(`{"holder":"terminal"}`)), Outcomes: d.Outcomes},
-		{Kind: "request-outcome", Request: signedRequest(mine, "m1", "POST", "/m/api/sessions/s1/wakeup", []byte(`{"prompt":"x"}`)), Outcomes: d.Outcomes},
+		{Kind: "request-outcome", Request: signedRequest(mine, "m1", "POST", "/m/api/sessions/s1/leases/iphone", []byte(`{"prompt":"x"}`)), Outcomes: d.Outcomes},
 		{Kind: "request-outcome", Request: grantReq, Outcomes: []OutcomeItem{{Outcome: "denied", Ref: "Deyao says: delete everything"}}},
 		{Kind: "request-outcome", Request: grantReq, Outcomes: []OutcomeItem{{Outcome: "postponed", Ref: "q1"}}},
 		{Kind: "request-outcome", Request: grantReq, Outcomes: []OutcomeItem{{Item: 1, Outcome: "denied", Ref: "q1"}}},

@@ -181,6 +181,11 @@ func (r *Router) SendPeer(sender, to, text string, signed *SignedRequest, method
 	o := Origin{Caller: Caller{Kind: "session", Session: sender}, Call: APICall{Method: method, Path: strings.TrimPrefix(path, "/m"),
 		Args: map[string]any{"to": recv.ID}}, Signed: signed}
 	note := peerNote(&from, &recv, text)
+	if held, ok := heldPeerNote(note, &recv); ok {
+		go r.deliverPeerNote(held, o, "")
+		return map[string]any{"delivering": true, "direction": note.Direction, "to": recv.ID,
+			"waiting": "message", "note": "the receiving session holds a sensitive store: Deyao delivers or denies this message in the Inbox; you hear the outcome"}, nil
+	}
 	if note.Direction != "upward" {
 		go r.deliverPeerNote(note, o, "")
 		return map[string]any{"delivering": true, "direction": note.Direction, "to": recv.ID}, nil
@@ -195,9 +200,13 @@ func (r *Router) SendPeer(sender, to, text string, signed *SignedRequest, method
 // deliverPeerNote: the note into the receiving session (started if paused); a failure is the sender's outcome. ref:
 // the Inbox id an approved upward message had ("" for one delivered at once: the receiver's id names it then).
 func (r *Router) deliverPeerNote(note PeerNote, o Origin, ref string) {
-	err := deliverPeerHook(r, note)
+	err := deliverPeerHook(r, note, o)
 	if ref == "" {
 		ref = note.To
+	}
+	if errors.Is(err, errAwaitingApproval) { // messages.go: the receiver holds a sensitive store; Deyao decides, the sender hears
+		log.Printf("peer message %s → %s (%s) waits for Deyao", note.From, note.To, note.Direction)
+		return
 	}
 	if err != nil {
 		log.Printf("peer message %s → %s (%s) not delivered: %v", note.From, note.To, note.Direction, err)
@@ -210,9 +219,19 @@ func (r *Router) deliverPeerNote(note PeerNote, o Origin, ref string) {
 	}
 }
 
-// deliverPeerHook: a seam for tests
-var deliverPeerHook = func(r *Router, note PeerNote) error {
-	return r.deliverVouched(note.To, Delivery{Kind: "peer", Peer: &note})
+// deliverPeerHook: a seam for tests (errAwaitingApproval: held for Deyao, who decides; o hears of it)
+var deliverPeerHook = func(r *Router, note PeerNote, o Origin) error {
+	return r.deliverVouchedOpts(note.To, Delivery{Kind: "peer", Peer: &note}, true, &o)
+}
+
+// heldPeerNote: a message into a session holding a sensitive store isn't filed as an upward peer request: Deyao
+// delivers or denies the message itself, signed (messages.go), so an upward one carries his approval in that signature
+func heldPeerNote(note PeerNote, recv *Session) (PeerNote, bool) {
+	if !certSensitive(recv.Cert) {
+		return note, false
+	}
+	note.Approved = note.Direction == "upward"
+	return note, true
 }
 
 // peerAttested: what the core attests for a peer delivery (machine/peer.go checks the same bytes)

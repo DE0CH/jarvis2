@@ -9,10 +9,9 @@ package main
 // Two calls never leave the machine: GET …/secrets (refused: the supervisor serves the secrets on its own socket,
 // secrets.go) and GET …/changes (the repos' uncommitted/unpushed work).
 //
-// Arming a wakeup or a cron is the session approving the scheduler for itself: after the router accepts it, the
-// proxy puts the scheduler holder on this session's allow list until the wakeup is due + 1 h (a cron: a month or
-// two periods, renewed at each firing by `jarvis2-machine allow-at-least`). A session holding a sensitive store
-// ignores its allow list; its wakeups then need a phone grant.
+// A wakeup, cron or watch the session arms comes back as a delivery of its own signed request (deliver.go): no router
+// feature gets a shell for it. In a session holding a sensitive store each such delivery waits for Deyao to approve
+// that message on the phone, or for a standing rule he signed for its kind (messages.go).
 
 import (
 	"bytes"
@@ -20,7 +19,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"log"
 	"net/http"
@@ -29,7 +27,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
 )
 
@@ -87,7 +84,7 @@ func apiProxyHandler(c *client) http.Handler {
 		copyResp(w, status, hdr, body)
 	})
 	for _, p := range []string{"POST /api/sessions/{id}/wakeup", "POST /api/sessions/{id}/wakeups", "POST /api/sessions/{id}/crons"} {
-		mux.HandleFunc(p, func(w http.ResponseWriter, req *http.Request) { armAndAllow(w, req, c) })
+		mux.HandleFunc(p, func(w http.ResponseWriter, req *http.Request) { armedNote(w, req, c) })
 	}
 	mux.HandleFunc("/api/", func(w http.ResponseWriter, req *http.Request) {
 		status, hdr, body, err := forwardToRouter(c, req)
@@ -205,9 +202,9 @@ func repoChanges(workspace string) []repoChange {
 	return out
 }
 
-// ---- arming = approving the scheduler ----------------------------------------------------------------------
+// ---- arming: the answer says how it will be delivered ------------------------------------------------------
 
-func armAndAllow(w http.ResponseWriter, req *http.Request, c *client) {
+func armedNote(w http.ResponseWriter, req *http.Request, c *client) {
 	status, hdr, body, err := forwardToRouter(c, req)
 	if err != nil {
 		writeJSONResp(w, 502, map[string]string{"error": "Jarvis 2 router unreachable: " + err.Error()})
@@ -220,67 +217,11 @@ func armAndAllow(w http.ResponseWriter, req *http.Request, c *client) {
 	}
 	// the wakeup comes back as a delivery of this very request (deliver.go), checked against this line's keys and
 	// attested by the core; nobody needs a shell for it
-	ans["scheduler"] = "delivered as this session's own signed request; no shell access granted"
+	ans["delivery"] = "delivered as this session's own signed request; no shell access granted"
 	if cert, err := currentCert(); err == nil && cert.Sensitive {
-		ans["note"] = "this session holds a sensitive store: the scheduler gets in only under a phone grant; when it is due and can't, Deyao gets a DM"
+		ans["note"] = "this session holds a sensitive store: when it is due, Deyao approves or denies that message on the phone (or a standing rule he signed for its kind delivers it); a denial comes back as an Inbox outcome"
 	}
 	writeJSONResp(w, 200, ans)
-}
-
-// extendAllow: the holder stays on the allow list at least until `until`; a later end already there is kept
-func extendAllow(c *client, name string, until time.Time) error {
-	var holders map[string]string
-	if err := c.json("GET", "/m/holders", nil, &holders); err != nil {
-		return err
-	}
-	key := holders[name]
-	if key == "" {
-		return fmt.Errorf("the router names no holder %q", name)
-	}
-	home, _ := os.UserHomeDir()
-	lock, err := os.OpenFile(filepath.Join(home, ".jarvis2-allow.lock"), os.O_CREATE|os.O_RDWR, 0o600)
-	if err != nil {
-		return err
-	}
-	defer lock.Close()
-	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX); err != nil {
-		return err
-	}
-	defer syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
-	out := []allowEntry{}
-	for _, a := range readAllow() {
-		if a.Name != name {
-			out = append(out, a)
-			continue
-		}
-		if u, err := time.Parse(time.RFC3339, a.Until); err == nil && u.After(until) && a.Holder == key {
-			until = u
-		}
-	}
-	out = append(out, allowEntry{Holder: key, Name: name, Until: until.UTC().Format(time.RFC3339)})
-	b, _ := json.MarshalIndent(out, "", " ")
-	tmp := filepath.Join(home, allowFile+".tmp")
-	if err := os.WriteFile(tmp, b, 0o600); err != nil {
-		return err
-	}
-	return os.Rename(tmp, filepath.Join(home, allowFile))
-}
-
-// allowAtLeastCmd: `jarvis2-machine allow-at-least <holder> <duration>` — like allow, but never shortens an
-// existing entry (what a cron's firing runs to renew the session's approval)
-func allowAtLeastCmd(args []string) error {
-	if len(args) != 2 {
-		return errors.New("usage: jarvis2-machine allow-at-least <holder> <duration>")
-	}
-	d, err := time.ParseDuration(args[1])
-	if err != nil {
-		return err
-	}
-	c, err := newClient()
-	if err != nil {
-		return err
-	}
-	return extendAllow(c, args[0], time.Now().Add(d))
 }
 
 // readCoreKey: the core's key as boot wrote it (a var so tests can give their own)

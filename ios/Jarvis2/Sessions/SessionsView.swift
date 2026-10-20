@@ -156,6 +156,9 @@ struct SessionRow: View {
       } else if let g = m.needsGrant {
         HStack(spacing: 6) { StatusPill(text: "Needs approval", color: .orange); Text(Holder.title(g)).font(.footnote) }
       }
+      if m.pendingMessages > 0 {
+        HStack(spacing: 6) { StatusPill(text: Fmt.plural(m.pendingMessages, "message"), color: .orange); Text("waiting for you").font(.footnote) }
+      }
     }
     .padding(.vertical, 2)
     .accessibilityElement(children: .combine)

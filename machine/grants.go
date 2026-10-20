@@ -1,6 +1,6 @@
 package main
 
-// Grants (docs/DESIGN.md "Grants"): a router feature (terminal, scheduler, archive, …) has its own key pair,
+// Grants (docs/DESIGN.md "Grants"): a router feature (terminal, status, archive, remote) has its own key pair,
 // the holder. It asks this machine to run a shell command. The machine runs it when one of these allows it:
 //   - a phone grant: the phone's signature over {kind "grant", holder, session, scope "shell", expires}, at most
 //     10 minutes long. The phone's key comes from this machine's core-signed cert.
@@ -144,7 +144,7 @@ func runExec(c *client, e Exec) {
 	}
 }
 
-// allowCmd: `jarvis2-machine allow <holder name> <duration>` (e.g. scheduler 720h) or `allow --remove <name>`;
+// allowCmd: `jarvis2-machine allow <holder name> <duration>` (e.g. archive 720h) or `allow --remove <name>`;
 // the holder's key comes from the router's list of feature keys
 func allowCmd(args []string) error {
 	home, _ := os.UserHomeDir()

@@ -4,8 +4,12 @@
 // page, pages/APICall.tsx: Approve runs it, and the page stays for the approvals the call brings about). Each card: the action as its title (what will be signed, in short), who called
 // which endpoint, and the caller's own reason (their words, unverified). Review opens the shell's secure page,
 // which renders what is signed from the signed content itself; Deny drops it. The web page lists them and can deny.
-import { ago, when, type InboxBatch, type InboxItem } from "../lib/api";
-import { approvePeer, denyBatch, denyRequest, inboxCall, inboxRows, inboxTitle } from "../lib/inbox";
+// Pending messages (lib/messages.ts) are listed per session: one entry with every message that waits to go into that
+// session, each with its kind, who asked, the exact text and its expiry. Deliver is signed on the iPhone (Face ID per
+// batch); the web page has no keys, so it can only deny them.
+import { ago, when, type InboxBatch, type InboxItem, type State } from "../lib/api";
+import { approvePeer, denyBatch, denyMessages, denyRequest, inboxCall, inboxRows, inboxTitle } from "../lib/inbox";
+import { groupMessages, groupTitle, type MessageGroup, type MessageView } from "../lib/messages";
 import { useStore, refresh, settle, pendUntil, inboxLoose, useInboxCount } from "../lib/store";
 import { hasShell, requestSecure } from "../lib/shell";
 import { Box, Button, Card, Flex, Heading, Lbl, Muted, Pill, P, Quote, Row, Rows } from "../ui/kit";
@@ -13,7 +17,7 @@ import { PButton } from "../ui/bits";
 import { Cards } from "../ui/cards";
 import { openPage } from "../ui/page";
 
-const KIND: Record<string, string> = { "repo-key": "Repo key", grant: "Grant", unlock: "Unlock", "new-session": "New session", "resume-upgrade": "Resume", "add-store": "Add a store", "api-call": "API call", restore: "Restore store", "peer-message": "Peer message" };
+const KIND: Record<string, string> = { "repo-key": "Repo key", grant: "Grant", unlock: "Unlock", "new-session": "New session", "resume-upgrade": "Resume", "add-store": "Add a store", "api-call": "API call", restore: "Restore store", "peer-message": "Peer message", message: "Message" };
 
 /** open the entry's secure page; once it went through (or was denied there) the Inbox refreshes */
 export function reviewRequest(it: InboxItem) {
@@ -87,15 +91,65 @@ function RequestCard({ it }: { it: InboxItem }) {
   );
 }
 
+// still waiting: in the Inbox, or pending in the state's messages
+const stillPending = (s: State, ids: string[]) =>
+  ids.some((id) => (s.inbox || []).some((x) => x.id === id) || (s.messages || []).some((x) => x.id === id && x.state === "pending"));
+
+function MessageEntry({ m, n, deny }: { m: MessageView; n: number; deny?: () => void }) {
+  return (
+    <Box mt={2} data={{ message: m.id, messageKind: m.kind }} id={"message-" + m.id}>
+      <P size={2} weight="medium" id={"message-label-" + m.id}>{n ? `${n}. ${m.kindLabel}` : m.kindLabel}</P>
+      <Rows>
+        <Row label="From" id={"message-from-" + m.id}>{m.from}</Row>
+        <Row label="Asked">{ago(m.created)}</Row>
+        {!!m.expires && <Row label="Expires" id={"message-expires-" + m.id}>{when(m.expires)}</Row>}
+      </Rows>
+      {/* the exact words that go into the session: in full, line breaks kept, selectable */}
+      <Quote by="Text (exactly what is delivered)" color="blue" id={"message-text-" + m.id}>{m.text}</Quote>
+      {!!m.note && <Muted mt={1} id={"message-note-" + m.id}>{m.note}</Muted>}
+      {!!deny && <Flex pt={1}><PButton pkey={"msg:" + m.id} variant="soft" color="gray" size={1} onPress={deny} label="Deny this one" id={"message-deny-" + m.id} /></Flex>}
+    </Box>
+  );
+}
+
+/** one session's pending messages: listed together, denied together (or one by one); delivered on the iPhone */
+function MessageGroupCard({ g }: { g: MessageGroup }) {
+  const ids = g.messages.map((m) => m.id);
+  const deny = (key: string, which: string[]) => pendUntil(key, "Denying…", () => denyMessages(which), (s) => !stillPending(s, which), 30000);
+  const rules = g.messages.filter((m) => m.ruleable && m.ruleText).map((m) => m.ruleText).filter((t, i, a) => a.indexOf(t) === i);
+  return (
+    <Card data={{ messageGroup: g.session }}>
+      <Flex justify="space-between" align="flex-start" gap={2} mb={1}>
+        <Heading size={3} style={{ flex: 1 }} id={"message-group-title-" + g.session}>{groupTitle(g)}</Heading>
+        <Pill kind="info">{g.messages.length === 1 ? "Message" : "Messages"}</Pill>
+      </Flex>
+      <Rows><Row label="Session" id={"message-group-session-" + g.session}>{g.sessionName}</Row></Rows>
+      {g.messages.map((m, i) => <MessageEntry key={m.id} m={m} n={g.messages.length > 1 ? i + 1 : 0} deny={g.messages.length > 1 ? () => deny("msg:" + m.id, [m.id]) : undefined} />)}
+      {!!rules.length && <Muted mt={2} id={"message-group-rules-" + g.session}>{`A rule can be made on the iPhone: ${rules.join("; ")}.`}</Muted>}
+      <Flex gap={2} pt={3} align="center">
+        <Muted style={{ flex: 1 }}>Deliver on the iPhone (Inbox): one Face ID for {g.messages.length === 1 ? "it" : "all of them"}.</Muted>
+        <PButton pkey={"mg:" + g.session} variant="soft" color="gray" onPress={() => deny("mg:" + g.session, ids)} label={g.messages.length === 1 ? "Deny" : "Deny all"} id={"message-group-deny-" + g.session} />
+      </Flex>
+    </Card>
+  );
+}
+
 export function Inbox() {
   const all = useStore((s) => s.state.inbox) || [], batches = useStore((s) => s.state.inboxBatches) || [];
-  const items = inboxLoose(all, batches);
-  if (!items.length && !batches.length) return <P size={3} color="gray" align="center" mt={8} mb={8} id="inbox-empty">Nothing waiting for you.</P>;
+  const pendingMessages = useStore((s) => s.state.messages) || [];
+  const loose = inboxLoose(all, batches);
+  const items = loose.filter((it) => it.kind !== "message");
+  const groups = groupMessages(loose, pendingMessages);
+  if (!items.length && !batches.length && !groups.length) return <P size={3} color="gray" align="center" mt={8} mb={8} id="inbox-empty">Nothing waiting for you.</P>;
   return (
     <Box data={{ group: "Inbox" }}>
       {!!batches.length && <>
         <Flex gap={2} align="center" mt={2}><Lbl mt={0}>Batches</Lbl><Pill kind="info">{String(batches.length)}</Pill></Flex>
         <Cards>{batches.map((b) => <BatchCard key={b.id} b={b} />)}</Cards>
+      </>}
+      {!!groups.length && <>
+        <Flex gap={2} align="center" mt={2}><Lbl mt={0}>Messages</Lbl><Pill kind="info">{String(groups.reduce((n, g) => n + g.messages.length, 0))}</Pill></Flex>
+        <Cards>{groups.map((g) => <MessageGroupCard key={g.session} g={g} />)}</Cards>
       </>}
       {!!items.length && <>
         <Flex gap={2} align="center" mt={2}><Lbl mt={0}>Requests</Lbl><Pill kind="info">{String(items.length)}</Pill></Flex>

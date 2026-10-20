@@ -355,16 +355,16 @@ final class Jarvis2UITests: JarvisUITestCase {
         arrives(el("grant-review"), 10, "the grants page after Deny")
         XCTAssertFalse(el("grant-forget-status").exists, "[\(tag)] Deny signed nothing")
       }
-      pick("grant-holder", "Scheduler")
+      pick("grant-holder", "Status")
       pick("grant-len", "Standing rule")
       pick("grant-days", "30 days")
       el("grant-review").tap()
       if arrives(el("signed-feature"), 15, "the grant review (rule)") {
         sleep(1)
-        XCTAssertTrue(said(el("signed-feature")).contains("Scheduler") && el("signed-until").exists && !el("signed-duration").exists, "[\(tag)] the rule's review: \(said(el("signed-feature"))) / \(said(el("signed-until")))")
+        XCTAssertTrue(said(el("signed-feature")).contains("Status") && el("signed-until").exists && !el("signed-duration").exists, "[\(tag)] the rule's review: \(said(el("signed-feature"))) / \(said(el("signed-until")))")
         shot("grant-review-rule")
         el("secure-grant-allow").tap()
-        wait(el("grant-forget-scheduler"), 60, "standing rule listed")
+        wait(el("grant-forget-status"), 60, "standing rule listed")
         shot("grants-two")
       }
       if el("grant-forget-terminal").exists {
@@ -384,11 +384,10 @@ final class Jarvis2UITests: JarvisUITestCase {
     }
 
     // ---- schedules: only the session arms its wakeups and crons (the router refuses the app), so the page lists them
-    // (none here) with the scheduler's standing rule, and has no arming form
+    // (none here) and has no arming form
     if wait(el("schedules-\(sid)"), 20, "Schedules") {
       el("schedules-\(sid)").tap()
       if arrives(el("sch-none"), 20, "the schedules page (nothing armed)") {
-        XCTAssertTrue(el("sch-rule").exists, "[\(tag)] the scheduler's standing rule")
         XCTAssertFalse(el("sch-prompt").exists || el("sch-save").exists, "[\(tag)] no arming form")
         shot("schedules")
       }
