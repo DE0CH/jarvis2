@@ -735,10 +735,12 @@ not running in time. The video, screenshots and logs (core, router, the setup an
 `replica`; failed assertions are also the job's annotations.
 
 - **Its secrets:** the GitHub environment `replica` (deployment branches: main only), used by that job alone:
-  `REPLICA_FLY_TOKEN` (an org token of `jarvis2-370`: the peer, the machines, `flyctl machine exec`; the job narrows
-  it for the core and the router) and `REPLICA_REPO_TOKEN` (a fine-grained token for the test repo
-  `DE0CH/jarvis2-replica-test` only, Administration read and write: its deploy keys). The job fails at its first step
-  naming a missing one.
+  `REPLICA_FLY_TOKEN` (`infra/fly-replica-token.sh`: the org token narrowed to app `jarvis2-sessions`, the org's
+  WireGuard peers and read on the rest: the peer, the machines and volumes, `flyctl machine exec`; the job narrows it
+  further for the core and the router) and `REPLICA_REPO_TOKEN` (a fine-grained token, no expiry, for the private test
+  repo `DE0CH/jarvis2-replica-test` only, Administration read and write: its deploy keys; Contents is refused). Both
+  set 2026-10-20 with `gh secret set NAME --env replica -R DE0CH/jarvis2`. The job fails at its first step naming a
+  missing one.
 - **One run at a time** (the job's concurrency group `replica`): the test repo's deploy keys are shared, and each run
   starts by sweeping earlier runs' leftovers (machines whose router address names a `jarvis2-replica-*` peer, those
   peers, the repo's deploy keys); its teardown (always) removes its own machines and their volumes, its peer, the keys
