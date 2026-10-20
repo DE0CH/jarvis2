@@ -320,15 +320,19 @@ extension JarvisUITestCase {
         let all = labels.map { NSPredicate(format: "label CONTAINS %@", $0) }
         return app.descendants(matching: .any).matching(NSCompoundPredicate(andPredicateWithSubpredicates: [p] + all)).firstMatch
       }
-      // the list is lazy and follows the end, so an older entry (the boot's Router and Fly steps) has no element once
-      // later lines fill the screen (replica 39349368807: a run of supervisor "exec refused" lines from the terminal
-      // step): not there within 10 s → Follow off, scroll back up to it. An entry seen once counts: while the list
-      // follows the end, a new line can push it off again between two queries (replica 39369735322: the Router entry
-      // was there, then gone for the whole 60 s re-check)
-      var followOff = false
+      let end = el("log-end"), latest = el("log-latest")
+      // it opens at the tail (app DECISIONS 78): once entries are in, the end marker is on screen without any scrolling
+      let any = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH 'ev-'")).firstMatch
+      if wait(any, 30, "an entry in the log (\(what))") {
+        sleep(1)
+        XCTAssertTrue(end.exists && end.isHittable, "[\(tag)] the log opens at its tail (\(what))")
+        shot("session-log-tail-\(what)")
+      }
+      // the list is lazy, so an older entry (the boot's Router and Fly steps) has no element once later lines fill the
+      // screen: not there within 10 s → scroll back up to it. Scrolled up, new lines must not pull the list back down.
+      // An entry seen once counts (a new line can push it off between two queries; replica 39369735322)
       func seen(_ e: XCUIElement, _ t: TimeInterval, _ name: String) {
         if e.waitForExistence(timeout: 10) { return }
-        if !followOff && el("log-follow").exists { el("log-follow").tap(); followOff = true }
         if scrolledUpTo(e, max: 40) { return }
         wait(e, t, "\(name) in the log (\(what))")
       }
@@ -336,6 +340,19 @@ extension JarvisUITestCase {
       XCTAssertFalse(el("log-empty").exists, "[\(tag)] the log isn't empty (\(what))")
       if supervisorLine { seen(entry("Supervisor"), 90, "a supervisor line") }
       if flyStep { seen(entry("Fly"), 60, "a Fly step") }
+      // scrolled up (a log longer than the screen): it stays put through a few polls and offers Latest, which goes back
+      // to the tail
+      if end.exists && end.isHittable { app.swipeDown(velocity: .fast); app.swipeDown(velocity: .fast) }
+      if !(end.exists && end.isHittable) {
+        sleep(5)
+        XCTAssertFalse(end.exists && end.isHittable, "[\(tag)] scrolled up, new lines leave the reader where they are (\(what))")
+        if wait(latest, 10, "Latest while scrolled up (\(what))") {
+          latest.tap()
+          sleep(2)
+          XCTAssertTrue(end.exists && end.isHittable, "[\(tag)] Latest goes back to the tail (\(what))")
+          XCTAssertTrue(gone(latest, 10), "[\(tag)] at the tail, no Latest (\(what))")
+        }
+      }
       shot("session-log-\(what)")
     }
     back()

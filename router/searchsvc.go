@@ -18,6 +18,7 @@ import (
 	"errors"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"slices"
 	"strings"
@@ -42,7 +43,14 @@ var searchRoutes = []svcRoute{
 	{"POST /api/icloud/retry", "icloud", "/retry"},
 }
 
-var searchClient = &http.Client{Timeout: 2 * time.Minute}
+// searchClient: a search may take its time, but the services box answers a connect at once over the private Network;
+// one that doesn't (the box down, or no services box at all, as in CI) is an error in seconds, not after two minutes
+var searchClient = &http.Client{Timeout: 2 * time.Minute, Transport: &http.Transport{
+	Proxy:               http.ProxyFromEnvironment,
+	DialContext:         (&net.Dialer{Timeout: 5 * time.Second}).DialContext,
+	TLSHandshakeTimeout: 10 * time.Second,
+	MaxIdleConnsPerHost: 4,
+}}
 
 func serviceBase(svc string) (base, name string) {
 	if svc == "icloud" {

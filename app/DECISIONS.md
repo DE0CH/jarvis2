@@ -427,3 +427,14 @@ fixes, 34–40 carried over from the old app and still true, 41–43 the web pag
     the account at its next start (a notice says so). Claude's choice: the continue switch is not offered for a paused
     session, since there is no conversation running to continue. An API-call Inbox item's router-rendered `does` is its
     first row ("Does") on the Inbox list, the API-call page and a batch's review.
+
+## The Log opens at its tail (2026-10-20)
+
+78. **A Log opens scrolled to its tail and follows it only while the reader is there** (Deyao, 2026-10-20; both apps).
+    The newest line is at the bottom and in view when the page opens (the iPhone app: `defaultScrollAnchor(.bottom)`
+    plus a scroll to the end marker once the first page has laid out; the web page: `scrollToEnd` on growth). While
+    the reader is within a line of the bottom, each poll's new lines keep the view at the tail; scrolled up, new lines
+    never move it (the old iPhone Follow toggle, which yanked the reader back unless switched off, is gone). Scrolled
+    up, the iPhone app offers Latest in the toolbar, which goes back to the tail and resumes following. The replica and
+    the walkthrough check it in their Log step: the end marker (`log-end`) is on screen when the log opens; after
+    scrolling up it stays off screen through a few polls; Latest brings it back and then hides.

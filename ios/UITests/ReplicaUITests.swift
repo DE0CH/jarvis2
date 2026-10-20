@@ -268,10 +268,30 @@ final class ReplicaUITests: JarvisUITestCase {
       }
     }
 
-    // ---- grants: a 5-minute status grant, then forget it ----
+    // ---- messages into the session (DECISIONS 203): the session holds a sensitive store, so the Inbox outcomes of what it
+    // filed above (the denied grant, the allowed one, the batch) wait on its page; Deliver all signs them with ONE Face ID ----
     sessionsList()
     if wait(el("srow-\(sid)"), 30, "the session") { el("srow-\(sid)").tap() }
-    if wait(el("grants-\(sid)"), 30, "Grants") {
+    if wait(el("msg-count-\(sid)"), 90, "the session's messages waiting for Deyao") {
+      XCTAssertTrue(said(el("msg-count-\(sid)")).contains("messages"), "the Inbox outcomes wait: \(said(el("msg-count-\(sid)")))")
+      shot("messages-waiting")
+      el("msg-review-\(sid)").tap()
+      if arrives(el("msg-deliver-all"), 30, "the messages' review") {
+        let until = Date().addingTimeInterval(60)
+        while !el("msg-deliver-all").isEnabled && Date() < until { sleep(1) }
+        let kind = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH 'msg-kind-'")).firstMatch
+        XCTAssertTrue(kind.exists && said(kind).contains("Inbox outcome"), "each message shows its kind: \(said(kind))")
+        shot("messages-review")
+        faceIDMatches()
+        el("msg-deliver-all").tap()
+        XCTAssertTrue(gone(el("msg-deliver-all"), 90), "all signed under one Face ID: the review closes")
+        XCTAssertTrue(gone(el("msg-count-\(sid)"), 60), "nothing waits on the session's page any more")
+        shot("messages-delivered")
+      }
+    }
+
+    // ---- grants: a 5-minute status grant, then forget it (the page is long: scroll to its Grants) ----
+    if scrolledTo(el("grants-\(sid)"), max: 6) || wait(el("grants-\(sid)"), 30, "Grants") {
       el("grants-\(sid)").tap()
       if wait(el("grant-review"), 30, "grants page") {
         shot("grants")

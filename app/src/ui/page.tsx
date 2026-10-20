@@ -52,8 +52,8 @@ export function TopBar({ children, max = 820 }: { children: ReactNode; max?: num
   );
 }
 
-type PageProps = { title?: string; right?: ReactNode; onSubmit?: () => void; children: ReactNode; scrollRef?: any; onContentSizeChange?: () => void; id?: string };
-export function Page({ title, right, onSubmit, children, scrollRef, onContentSizeChange, id }: PageProps) {
+type PageProps = { title?: string; right?: ReactNode; onSubmit?: () => void; children: ReactNode; scrollRef?: any; onContentSizeChange?: () => void; onScroll?: (e: any) => void; id?: string };
+export function Page({ title, right, onSubmit, children, scrollRef, onContentSizeChange, onScroll, id }: PageProps) {
   const t = useTheme(), ins = useSafeAreaInsets();
   const body = useRef<View>(null);
   // web: Esc closes (unless a dialog or menu is up); Enter in a one-line field / ⌘Enter in a text box submits
@@ -86,6 +86,7 @@ export function Page({ title, right, onSubmit, children, scrollRef, onContentSiz
         {right}
       </TopBar>
       <Scroll ref={scrollRef} bottomOffset={24} keyboardShouldPersistTaps="handled" onContentSizeChange={onContentSizeChange}
+        onScroll={onScroll} scrollEventThrottle={onScroll ? 100 : undefined}
         contentContainerStyle={{ paddingBottom: 48 + ins.bottom }}>
         <View {...{ nativeID: "page-body" }} ref={body} testID={id} style={{ width: "100%", maxWidth: 720, alignSelf: "center", paddingHorizontal: 16, paddingTop: 8 }}>{children}</View>
       </Scroll>

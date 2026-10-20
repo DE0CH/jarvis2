@@ -98,7 +98,11 @@ jobs:
           mkdir -p out
           nohup xcrun simctl spawn "$SIM_UDID" log stream --style compact --level debug --predicate 'process == "Jarvis2"' > out/sim.log 2>&1 &
       - name: A test photo in the simulator's library (the walkthrough attaches it on New session)
-        run: python3 ios/ci/test-photo.py "$RUNNER_TEMP/ci-photo.png" && xcrun simctl addmedia "$SIM_UDID" "$RUNNER_TEMP/ci-photo.png"
+        run: |
+          python3 ios/ci/test-photo.py "$RUNNER_TEMP/ci-photo.png" && xcrun simctl addmedia "$SIM_UDID" "$RUNNER_TEMP/ci-photo.png"
+          # open Photos once so the library is indexed before the test: the first picker of a fresh simulator's life
+          # (the light walkthrough) twice hung the whole simulator ("Failed to get screenshot: Timed out") right after Add
+          xcrun simctl launch "$SIM_UDID" com.apple.mobileslideshow && sleep 25 && xcrun simctl terminate "$SIM_UDID" com.apple.mobileslideshow || true
       - name: Build for testing (the app talks to the router, the key server and the S3 stand-in on the runner)
         working-directory: ios
         run: |
@@ -125,7 +129,7 @@ jobs:
               (nohup "$W/core-loop.sh" "$PWD/out/core-$a.log" > /dev/null 2>&1 & echo $! > "$W/core.pid")
               for i in $(seq 30); do curl -sf http://127.0.0.1:8090/key > /dev/null && break; sleep 1; done
               (set -a; . "$W/router-backup.env"; set +a
-               NO_ACCESS=1 SETUP_KEY="$(cat "$W/keys/setup.pub")" CORE_URL=http://127.0.0.1:8090 DATA_DIR=$PWD/data-$a WEB_DIR=$PWD/web TASKS_DIR=$PWD/tasks SNAPSHOT_WAIT_SECONDS=2 POLICY_FILE="$W/policy.json" \
+               NO_ACCESS=1 SEARCH_URL=http://127.0.0.1:9 ICLOUD_INDEX_URL=http://127.0.0.1:9 WATCH_URL=http://127.0.0.1:9 SETUP_KEY="$(cat "$W/keys/setup.pub")" CORE_URL=http://127.0.0.1:8090 DATA_DIR=$PWD/data-$a WEB_DIR=$PWD/web TASKS_DIR=$PWD/tasks SNAPSHOT_WAIT_SECONDS=2 POLICY_FILE="$W/policy.json" \
                 SESSION_IMAGE=ghcr.io/de0ch/jarvis2-session:ci@sha256:0000000000000000000000000000000000000000000000000000000000000000 ADDR=127.0.0.1:18080 MACHINE_ADDR=127.0.0.1:18081 nohup "$W/router" > out/router-$a.log 2>&1 & echo $! > "$W/router.pid")
               sleep 2 && curl -sf http://127.0.0.1:18080/api/state > /dev/null && echo "router up ($a)"
               xcrun simctl keychain "$SIM_UDID" reset
@@ -143,9 +147,9 @@ jobs:
                 -resultBundlePath ../result-$a.xcresult 2>&1 | tee ../test-$a.log | grep -E "error:|Test Case|\*\* " || true)
               kill -INT $rec; wait $rec || true
               grep -q "TEST EXECUTE SUCCEEDED\|\*\* TEST SUCCEEDED" test-$a.log && break
-              # retried once, from scratch, only for the simulator's own faults: a launch timeout, XCTest timing out reading the app, or it
-              # crashed inside Apple's accessibility code alone (ios/ci/apple-crash.py)
-              if grep -q "Failed to launch\|Timed out while evaluating UI query" test-$a.log; then echo "simulator timed out ($a): once more"
+              # retried once, from scratch, only for the simulator's own faults: a launch timeout, XCTest timing out reading the app or
+              # the screen, or it crashed inside Apple's accessibility code alone (ios/ci/apple-crash.py)
+              if grep -q "Failed to launch\|Timed out while evaluating UI query\|Failed to get screenshot: Timed out" test-$a.log; then echo "simulator timed out ($a): once more"
               elif python3 ios/ci/apple-crash.py "$RUNNER_TEMP/try-start"; then echo "the simulator crashed the app in Apple's code ($a): once more"
               else break; fi
               cp test-$a.log out/test-$a-try$try.log
@@ -240,7 +244,11 @@ jobs:
           nohup xcrun simctl spawn "$SIM_UDID" log stream --style compact --level debug \
             --predicate 'process == "Jarvis2"' > out/sim.log 2>&1 &
       - name: A test photo in the simulator's library (the replica attaches it on New session)
-        run: python3 ios/ci/test-photo.py "$RUNNER_TEMP/ci-photo.png" && xcrun simctl addmedia "$SIM_UDID" "$RUNNER_TEMP/ci-photo.png"
+        run: |
+          python3 ios/ci/test-photo.py "$RUNNER_TEMP/ci-photo.png" && xcrun simctl addmedia "$SIM_UDID" "$RUNNER_TEMP/ci-photo.png"
+          # open Photos once so the library is indexed before the test: the first picker of a fresh simulator's life
+          # (the light walkthrough) twice hung the whole simulator ("Failed to get screenshot: Timed out") right after Add
+          xcrun simctl launch "$SIM_UDID" com.apple.mobileslideshow && sleep 25 && xcrun simctl terminate "$SIM_UDID" com.apple.mobileslideshow || true
       - name: Build for testing (Release; only the router address and the keys ref differ)
         working-directory: ios
         run: |

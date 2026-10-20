@@ -3,8 +3,9 @@
 // ran, prompts it delivered, the snapshot, with no secrets in it) and each boot, pause, resume, upgrade and destroy
 // from its start to its end, with the router's steps and what Fly did. Each entry has its time and a source tag
 // (Supervisor, Router, Fly) and, inside an operation, the operation's kind. Kept for the session's life, so it opens for
-// running, paused and failed sessions alike; while open it polls every 2 s with the cursor and follows the end (newest
-// at the bottom, like the terminal). A plain native list, wrapped text (no sideways scrolling on a phone), semantic
+// running, paused and failed sessions alike; while open it polls every 2 s with the cursor. It opens at the tail (newest
+// at the bottom, like the terminal) and stays there as lines arrive while the reader is at the bottom; scrolled up, it
+// leaves them where they are and offers Latest (app/DECISIONS.md 78). A plain native list, wrapped text (no sideways scrolling on a phone), semantic
 // colours only (readable in light and dark).
 import SwiftUI
 
@@ -37,7 +38,10 @@ struct SessionLogView: View {
   @State private var running: String?
   @State private var loaded = false
   @State private var error: String?
-  @State private var follow = true
+  /// the reader is at the tail (within a line of the bottom): new lines keep it there; scrolled up, nothing moves it
+  @State private var atEnd = true
+  @State private var jump = false
+  private let endID = "log-end"
 
   var body: some View {
     ScrollViewReader { proxy in
@@ -57,14 +61,42 @@ struct SessionLogView: View {
             .listRowSeparator(.hidden, edges: .bottom)
             .id(e.key)
         }
+        // the tail's marker: the scroll target, and the replica's proof that the log opened (and stays) at its end
+        Color.clear.frame(height: 4)
+          .listRowSeparator(.hidden)
+          .listRowInsets(EdgeInsets())
+          .id(endID)
+          .accessibilityElement()
+          .accessibilityLabel("End of the log")
+          .accessibilityIdentifier("log-end")
       }
       .listStyle(.plain)
+      .defaultScrollAnchor(.bottom)
+      .onScrollGeometryChange(for: Bool.self) { g in
+        g.contentOffset.y + g.containerSize.height - g.contentInsets.bottom >= g.contentSize.height - 40
+      } action: { _, now in atEnd = now }
+      .onChange(of: jump) { _, go in
+        guard go else { return }
+        withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo(endID, anchor: .bottom) }
+        atEnd = true; jump = false
+      }
       .overlay { if !loaded && error == nil { ProgressView("Reading the log…") } }
       .task(id: sessionId) {
-        events = []; next = ""; loaded = false
+        events = []; next = ""; loaded = false; atEnd = true
+        var first = true
         while !Task.isCancelled {
+          let stick = atEnd  // decided before the new lines grow the list (which reads as "not at the end" for a moment)
+          let before = events.last?.key
           let more = await poll()
-          if follow, let last = events.last { withAnimation(nil) { proxy.scrollTo(last.key, anchor: .bottom) } }
+          if stick && (first || events.last?.key != before) {
+            withAnimation(nil) { proxy.scrollTo(endID, anchor: .bottom) }
+            if first {  // the first page lays out over a few frames: once more after it has
+              try? await Task.sleep(for: .milliseconds(150))
+              withAnimation(nil) { proxy.scrollTo(endID, anchor: .bottom) }
+            }
+            atEnd = true
+          }
+          first = false
           if !more { try? await Task.sleep(for: pollEvery) }
         }
       }
@@ -73,7 +105,7 @@ struct SessionLogView: View {
     .navigationBarTitleDisplayMode(.inline)
     .toolbar {
       ToolbarItem(placement: .primaryAction) {
-        Toggle(isOn: $follow) { Label("Follow", systemImage: "arrow.down.to.line") }.toggleStyle(.button).accessibilityIdentifier("log-follow")
+        if !atEnd { Button("Latest", systemImage: "arrow.down.to.line") { jump = true }.accessibilityIdentifier("log-latest") }
       }
     }
     .accessibilityIdentifier("session-log")

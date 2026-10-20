@@ -4,7 +4,8 @@
 // boot, pause, resume, upgrade and destroy from its start to its end, with the router's steps and what Fly did. Each
 // entry has its time and a source tag (Supervisor, Router, Fly) and, inside an operation, the operation's kind.
 // Kept for the session's life, so it opens for running, paused and failed sessions; while open it polls every 2 s
-// with the cursor and follows the end (newest at the bottom, like the terminal). Long lines wrap: no sideways scrolling
+// with the cursor; it opens at the tail and follows it while the reader is at the bottom (scrolled up, new lines leave
+// them where they are; app DECISIONS 78). Long lines wrap: no sideways scrolling
 // on a phone. Every text colour comes from the theme (a bare Text is black in dark mode).
 import { useEffect, useRef, useState } from "react";
 import { Text as RNText, View, useWindowDimensions } from "react-native";
@@ -72,10 +73,16 @@ export function SessionLogPage({ spec }: { spec: LogSpec }) {
   const [events, setEvents] = useState<SessionEvent[]>([]), [running, setRunning] = useState<EventsAnswer["running"]>(null);
   const [loaded, setLoaded] = useState(false), [err, setErr] = useState("");
   const next = useRef(""), scroll = useRef<any>(null);
+  // at the tail (within 40 px of the bottom): new lines keep the reader there; scrolled up, nothing moves them (app DECISIONS 78)
+  const atEnd = useRef(true);
+  const onScroll = (e: any) => {
+    const { contentOffset: o, layoutMeasurement: l, contentSize: c } = e.nativeEvent;
+    atEnd.current = o.y + l.height >= c.height - 40;
+  };
   const wide = useWindowDimensions().width >= 760;
   useEffect(() => {
     let alive = true, t: any = null;
-    next.current = "";
+    next.current = ""; atEnd.current = true;
     setEvents([]); setLoaded(false);
     const tick = async (): Promise<boolean> => {
       const q = next.current ? `after=${encodeURIComponent(next.current)}&limit=1000` : "limit=2000";
@@ -96,7 +103,7 @@ export function SessionLogPage({ spec }: { spec: LogSpec }) {
     return () => { alive = false; clearTimeout(t); };
   }, [spec.id]);
   return (
-    <Page title="Log" scrollRef={scroll} onContentSizeChange={() => scroll.current?.scrollToEnd?.({ animated: false })} id="session-log">
+    <Page title="Log" scrollRef={scroll} onScroll={onScroll} onContentSizeChange={() => { if (atEnd.current) scroll.current?.scrollToEnd?.({ animated: false }); }} id="session-log">
       <Rows mt={2}>
         <Row label="Session">{spec.title}</Row>
         <Row label="Shows">The supervisor's lines and each boot, pause, resume, upgrade and destroy, in time order</Row>

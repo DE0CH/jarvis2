@@ -481,12 +481,13 @@ final class Jarvis2UITests: JarvisUITestCase {
       back()
     }
 
-    // ---- search: the router forwards to Jarvis 1, which the CI router can't reach, so the answer is an error in words
+    // ---- search: the router forwards to the services box's transcript search, which CI doesn't run (ios.yml points
+    // SEARCH_URL at a closed port), so the answer is an error in words
     tab("Search")
     let field = app.searchFields.firstMatch
     if wait(field, 15, "the search field") {
       field.tap(); field.typeText("hello\n")
-      wait(el("search-error"), 30, "search answer (no Jarvis 1 in CI)")
+      wait(el("search-error"), 30, "search answer (no search service in CI)")
       shot("search")
       if app.buttons["iCloud files"].waitForExistence(timeout: 5) { app.buttons["iCloud files"].tap(); sleep(2); shot("search-icloud") }
     }
