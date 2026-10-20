@@ -262,6 +262,13 @@ func applySample(prev *BudgetState, now time.Time, ratePerHour, capUSD, warnUSD 
 	t := now.UTC()
 	s.SpentUSD += ratePerHour * deltaH
 	s.LastSampleAt, s.RatePerHour = &t, ratePerHour
+	// a line raised above this month's spend re-arms its DM (Deyao moved 25/30 to 35/40 on 2026-10-20 at USD 28 spent)
+	if s.Capped && !(capUSD > 0 && s.SpentUSD >= capUSD) {
+		s.Capped, s.CappedAt = false, nil
+	}
+	if s.Warned && !s.Capped && !(warnUSD > 0 && s.SpentUSD >= warnUSD) {
+		s.Warned = false
+	}
 	var a budgetActions
 	switch {
 	case capUSD > 0 && s.SpentUSD >= capUSD:

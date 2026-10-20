@@ -91,6 +91,28 @@ func TestApplySample(t *testing.T) {
 	}
 }
 
+// raising the lines mid-month re-arms them: warned at 25, the warn line moved to 35 → one DM at 35, one at 40
+func TestRaisedLinesRearm(t *testing.T) {
+	t0 := time.Date(2026, 10, 20, 12, 0, 0, 0, time.UTC)
+	s, a, _ := applySample(&BudgetState{Month: "2026-10", SpentUSD: 28, Warned: true, LastSampleAt: &t0}, t0.Add(time.Hour), 1, 40, 35)
+	if s.Warned || a != (budgetActions{}) {
+		t.Fatalf("not re-armed %+v %+v", s, a)
+	}
+	s, a, _ = applySample(&s, t0.Add(8*time.Hour), 1, 40, 35)
+	if !a.WarnDM || !s.Warned {
+		t.Fatalf("no DM at 35 %+v %+v", s, a)
+	}
+	s, a, _ = applySample(&s, t0.Add(9*time.Hour), 1, 40, 35)
+	if a.WarnDM || a.CapDM {
+		t.Fatalf("DM twice %+v", a)
+	}
+	// capped at 30, the cap raised to 40: no longer capped until 40
+	s, a, _ = applySample(&BudgetState{Month: "2026-10", SpentUSD: 31, Warned: true, Capped: true, CappedAt: &t0, LastSampleAt: &t0}, t0.Add(time.Hour), 1, 40, 35)
+	if s.Capped || a.Enforce || s.Warned {
+		t.Fatalf("still capped %+v %+v", s, a)
+	}
+}
+
 func TestThresholds(t *testing.T) {
 	env := func(m map[string]string) func(string) string { return func(k string) string { return m[k] } }
 	if c, w := budgetThresholds(env(nil)); c != 40 || w != 35 {
