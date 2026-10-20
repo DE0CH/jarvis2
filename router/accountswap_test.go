@@ -44,14 +44,17 @@ func setReg(r *Router, id string, fn func(g *Registry)) {
 }
 
 func shortSwapWaits(t *testing.T) {
-	saved := []time.Duration{swapLoginWait, swapRestartWait, swapUpWait, swapPoll}
-	swapLoginWait, swapRestartWait, swapUpWait, swapPoll = 3*time.Second, 300*time.Millisecond, 3*time.Second, 10*time.Millisecond
-	t.Cleanup(func() { swapLoginWait, swapRestartWait, swapUpWait, swapPoll = saved[0], saved[1], saved[2], saved[3] })
+	saved := []time.Duration{swapLoginWait, swapRestartWait, swapUpWait, swapPoll, swapCheckWait, swapRCWait}
+	swapLoginWait, swapRestartWait, swapUpWait, swapPoll, swapCheckWait, swapRCWait = 3*time.Second, 300*time.Millisecond, 3*time.Second, 10*time.Millisecond, 3*time.Second, 3*time.Second
+	t.Cleanup(func() {
+		swapLoginWait, swapRestartWait, swapUpWait, swapPoll, swapCheckWait, swapRCWait = saved[0], saved[1], saved[2], saved[3], saved[4], saved[5]
+	})
 }
 
-// a running session: the account changes, the machine takes the new pair, and a host the machine doesn't restart by
-// itself (an older image, a host that isn't idle) is restarted through the terminal holder; the conversation goes on
-func TestAccountSwitchRunning(t *testing.T) {
+// a running session on an image from before the switch under a running claude (no __ACCOUNT__ in its status): the
+// account changes, the machine takes the new pair, and a host the machine doesn't restart by itself (not idle) is
+// restarted through the terminal holder; the conversation goes on
+func TestAccountSwitchOlderImage(t *testing.T) {
 	r, _, _, expA, expB := twoAccounts(t)
 	shortSwapWaits(t)
 	addSession(r, "sA", "started", "mA", false)
@@ -104,14 +107,16 @@ func TestAccountSwitchRunning(t *testing.T) {
 	}
 }
 
-// a running session whose machine restarts the host by itself (images with the "claude-account" command): no exec
-func TestAccountSwitchMachineRestarts(t *testing.T) {
+// an older image whose machine restarts the idle host by itself: no exec
+func TestAccountSwitchOlderImageRestartsItself(t *testing.T) {
 	r, _, _, expA, expB := twoAccounts(t)
 	shortSwapWaits(t)
 	swapRestartWait = 3 * time.Second
 	addSession(r, "sA", "started", "mA", false)
 	r.st.Do(func(d *persisted) { d.Sessions["sA"].ClaudeAccount = "claude-a" })
-	setReg(r, "sA", func(g *Registry) { g.HostPid, g.CredsExpiresAt, g.BridgeSessionID, g.Status = 100, expA, "cse_1", "idle" })
+	setReg(r, "sA", func(g *Registry) {
+		g.HostPid, g.CredsExpiresAt, g.BridgeSessionID, g.Status = 100, expA, "cse_1", "idle"
+	})
 	stop := make(chan struct{})
 	defer close(stop)
 	cmds := answerExecs(r, "mA", 0, stop)
@@ -216,5 +221,82 @@ func TestAccountSwitchCallDoes(t *testing.T) {
 	})
 	if _, rule, err := r.callRoute("POST", "/api/sessions/sA/account"); err != nil || rule != callBody {
 		t.Fatal("not requestable as an API call", rule, err)
+	}
+}
+
+// the switch under the running claude (images from 2026-10-20): the pair on disk, Anthropic's word on its account,
+// Remote Control back; no restart, no exec
+func TestAccountSwitchTransparent(t *testing.T) {
+	r, _, _, expA, expB := twoAccounts(t)
+	shortSwapWaits(t)
+	addSession(r, "sA", "started", "mA", false)
+	r.st.Do(func(d *persisted) { d.Sessions["sA"].ClaudeAccount = "claude-a" })
+	setReg(r, "sA", func(g *Registry) {
+		g.HostPid, g.CredsExpiresAt, g.BridgeSessionID, g.Status, g.AccountSection, g.AccountProof = 100, expA, "cse_1", "idle", true, "acct-1"
+	})
+	stop := make(chan struct{})
+	defer close(stop)
+	cmds := answerExecs(r, "mA", 0, stop)
+	if code, out := appDo(t, r, "POST", "/api/sessions/sA/account", `{"account":"b"}`); code != 202 {
+		t.Fatal(code, out)
+	}
+	setReg(r, "sA", func(g *Registry) { g.CredsExpiresAt = expB })
+	waitFor(t, "checking the account", func() bool { j := r.ops.jobView("sA"); return j != nil && j["phase"] == "checking the account" })
+	setReg(r, "sA", func(g *Registry) { g.AccountProof = "acct-2" })
+	waitFor(t, "Remote Control", func() bool { j := r.ops.jobView("sA"); return j != nil && j["phase"] == "Remote Control" })
+	setReg(r, "sA", func(g *Registry) { g.BridgeSessionID = "cse_2" })
+	waitFor(t, "the switch done", func() bool { j := r.ops.jobView("sA"); return j != nil && j["phase"] == "done" })
+	if j := r.ops.jobView("sA"); j["error"] != nil && j["error"] != "" {
+		t.Fatal(j)
+	}
+	if len(*cmds) != 0 {
+		t.Fatal("an exec in a transparent switch", *cmds)
+	}
+	var g Registry
+	r.st.Do(func(d *persisted) { g = *d.Sessions["sA"].Live.Reg })
+	if g.HostPid != 100 {
+		t.Fatal("the host was restarted")
+	}
+}
+
+// Remote Control not coming back is said on the job, which still ends done; a token Anthropic names for another
+// account fails it
+func TestAccountSwitchTransparentRemoteControlAndProof(t *testing.T) {
+	r, _, _, expA, expB := twoAccounts(t)
+	shortSwapWaits(t)
+	swapRCWait, swapCheckWait = 200*time.Millisecond, 200*time.Millisecond
+	addSession(r, "sA", "started", "mA", false)
+	r.st.Do(func(d *persisted) { d.Sessions["sA"].ClaudeAccount = "claude-a" })
+	setReg(r, "sA", func(g *Registry) {
+		g.HostPid, g.CredsExpiresAt, g.BridgeSessionID, g.Status, g.AccountSection = 100, expA, "cse_1", "idle", true
+	})
+	appDo(t, r, "POST", "/api/sessions/sA/account", `{"account":"b"}`)
+	setReg(r, "sA", func(g *Registry) { g.CredsExpiresAt, g.AccountProof = expB, "acct-2" })
+	waitFor(t, "done", func() bool { j := r.ops.jobView("sA"); return j != nil && j["phase"] == "done" })
+	if j := r.ops.jobView("sA"); !strings.Contains(j["error"].(string), "/remote-control") {
+		t.Fatal(j)
+	}
+	// back to a, but the machine's proof stays b's: failed
+	appDo(t, r, "POST", "/api/sessions/sA/account", `{"account":"a"}`)
+	setReg(r, "sA", func(g *Registry) { g.CredsExpiresAt = expA })
+	waitFor(t, "failed", func() bool { j := r.ops.jobView("sA"); return j != nil && j["phase"] == "failed" })
+	if j := r.ops.jobView("sA"); !strings.Contains(j["error"].(string), "didn't confirm") {
+		t.Fatal(j)
+	}
+}
+
+func TestRegistryAccountSection(t *testing.T) {
+	base := `{"pid":7,"sessionId":"s1","bridgeSessionId":"cse_1","status":"idle","startedAt":1}` + "\n__TITLES__\n__BG__\n__ONESHOT__\n__AUTH__\n__CREDS__\n5\n__REFUSAL__\n"
+	g := parseRegistry(base + "__WORKERS__\n")
+	if g.AccountSection || g.AccountProof != "" || g.HostPid != 7 {
+		t.Fatalf("%+v", g)
+	}
+	g = parseRegistry(base + "__ACCOUNT__\n" + `{"accountUuid":"acct-2","email":"x@example.com","at":1}` + "\n__WORKERS__\n")
+	if !g.AccountSection || g.AccountProof != "acct-2" || g.CredsExpiresAt != 5 {
+		t.Fatalf("%+v", g)
+	}
+	g = parseRegistry(base + "__ACCOUNT__\n\n__WORKERS__\n")
+	if !g.AccountSection || g.AccountProof != "" {
+		t.Fatalf("%+v", g)
 	}
 }

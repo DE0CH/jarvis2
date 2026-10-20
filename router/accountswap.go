@@ -8,25 +8,33 @@ package main
 //
 // Paused or failed: the account is changed on the session and its next start takes the new account's pair (boot's
 // /m/claude-login); with `continue`, "continue" is typed into its chat once that start's Claude host is up and idle
-// (SessionOps.ContinueAfterStart, autopilot.go). A resume onto the newest image (resume-upgrade) keeps both. Running (the claude harness), a background job shown as the session's `wake` ({kind: "account",
-// phase}), holding the session's lock so nothing else acts on it meanwhile:
+// (SessionOps.ContinueAfterStart, autopilot.go). A resume onto the newest image (resume-upgrade) keeps both.
+//
+// Running (the claude harness): a background job shown as the session's `wake` ({kind: "account", phase}), holding
+// the session's lock so nothing else acts on it meanwhile. The switch is transparent (Deyao, 2026-10-20: the harness
+// is just a process, so the files it reads change under it): no restart, no --resume, background shells, agents and
+// monitors keep running.
 //
 //  1. switching          the session's account changes; every /m/claude-login long poll of the machine is woken, so
-//                        its Claude login sync (machine/claudelogin.go, in every image since 2026-10-14) asks the new
-//                        account's hub at once; the machine is sent the command "claude-account" (images from
-//                        2026-10-20: restart the host as soon as the new pair is on disk, see machine/claudelogin.go;
-//                        older images ignore it and restart the host only once it is idle)
-//  2. taking the login   until the machine's status reports the new account's pair on disk (credsExpiresAt)
-//  3. restarting Claude  until the host's pid changes (the harness relaunches it with --resume, the same
-//                        conversation, and merges the new account record into ~/.claude.json first, so Remote Control
-//                        comes up under the new account). When the machine hasn't restarted it within swapRestartWait
-//                        (an older image whose host isn't idle), the router kills the host's tmux session through the
-//                        "terminal" holder (a grant, standing rule or the allow list: the same path as the in-place
-//                        permission-mode switch); the harness's watchdog relaunches it. Nothing else on the machine
-//                        is stopped: background servers, tunnels and the supervisor keep running.
-//  4. delivering continue  with `continue`: once the new host is up and idle, "continue" goes into its chat as the
-//                        canned delivery the login repair uses (a core-attested delivery; into a session holding a
-//                        sensitive store it waits in the Inbox for Deyao to deliver, messages.go).
+//                        its Claude login sync asks the new account's hub at once (the machine also gets the command
+//                        "claude-account"); from now on the sync follows the new account and the machine is one of
+//                        its participants for refreshes
+//  2. taking the login   until the machine's status reports the new account's pair on disk (credsExpiresAt): the
+//                        supervisor installed it and the account record under the running claude, under the CLI's
+//                        refresh lock (machine/claudelogin.go switchInPlace); claude's next request uses it
+//  3. checking the account  until the status's __ACCOUNT__ names the new account: Anthropic's profile endpoint, asked
+//                        by the machine with the installed token
+//  4. Remote Control     Claude Code stops Remote Control when the account under it changes; the supervisor types
+//                        /remote-control and chooses Enable: until the host reports a new Remote Control session.
+//                        Not coming back is reported on the job (Claude itself works), not a failure.
+//  5. delivering continue  with `continue`: "continue" into its chat as the canned delivery the login repair uses
+//                        (a core-attested delivery; into a session holding a sensitive store it waits in the Inbox for
+//                        Deyao to deliver, messages.go).
+//
+// A session image from before 2026-10-20 (no __ACCOUNT__ in its status) restarts its host on the new account instead
+// (its harness merges the record at start, --resume): the machine does it once the host is idle; after
+// swapRestartWait the router kills the host's tmux session through the "terminal" holder (as the in-place
+// permission-mode switch does) and waits for it to come back.
 //
 // No core change and no Face ID of its own: the login travels over the router's machine-signed long poll as it always
 // has. With CLAUDE_STORE_IN_CERT=1 (certs name the account's store) a running session's switch also files the
@@ -48,8 +56,10 @@ import (
 
 var (
 	swapLoginWait   = 2 * time.Minute // for the machine to report the new account's pair on disk
-	swapRestartWait = 2 * time.Minute // for the machine to restart the host by itself, before the router does
+	swapRestartWait = 2 * time.Minute // older images: for the machine to restart the host by itself, before the router does
 	swapUpWait      = 3 * time.Minute // for the relaunched host to come up (and settle idle, for "continue")
+	swapCheckWait   = 2 * time.Minute // for the machine's word that Anthropic names the new account for the token
+	swapRCWait      = 5 * time.Minute // for Remote Control to come back (a host in a turn shows the menu after it)
 	swapPoll        = 2 * time.Second
 	swapKillCmd     = "tmux kill-session -t claude"
 )
@@ -205,15 +215,15 @@ func (r *Router) SwitchAccount(req *http.Request, id string, in accountSwitchIn)
 			out["addStore"] = aid
 		}
 	}
-	oldPid := int64(0) // the host now: a new pid = restarted
+	var before Registry // what runs now: its host and Remote Control
 	if g, _ := r.liveReg(id, s.MachineID); g != nil {
-		oldPid = g.HostPid
+		before = *g
 	}
 	setAccount()
 	r.send(s.MachineID, "claude-account") // machine/supervisor.go (images from 2026-10-20; older ones log it as unknown)
 	go func() {
 		defer unlock()
-		err := r.runAccountSwitch(j, id, s.MachineID, oldPid, to, in.Continue)
+		err := r.runAccountSwitch(j, id, s.MachineID, before, to, in.Continue)
 		if err != nil {
 			log.Printf("[account] %s: %v", id, err)
 			r.ops.phase(j, "failed", err)
@@ -268,22 +278,63 @@ func (r *Router) waitReg(id, machine string, d time.Duration, cond func(*Registr
 
 var errSwapTimeout = errors.New("timed out")
 
-func (r *Router) runAccountSwitch(j *wakeJob, id, machine string, oldPid int64, to *loginHub, cont bool) error {
+func (r *Router) runAccountSwitch(j *wakeJob, id, machine string, before Registry, to *loginHub, cont bool) error {
 	r.ops.phase(j, "switching", nil)
+	if before.HostPid == 0 { // no status since this router started: the next report says what runs now
+		if g, err := r.waitReg(id, machine, swapLoginWait, func(g *Registry) bool { return g.HostPid != 0 }); err == nil {
+			before = *g
+		}
+	}
+	want := accountUUID(to.current().Account)
 
 	r.ops.phase(j, "taking the login", nil)
-	if _, err := r.waitReg(id, machine, swapLoginWait, func(g *Registry) bool {
+	g, err := r.waitReg(id, machine, swapLoginWait, func(g *Registry) bool {
 		exp := to.current().ExpiresAt
 		return exp > 0 && g.CredsExpiresAt == exp
-	}); err != nil {
+	})
+	if err != nil {
 		return fmt.Errorf("the machine didn't take %s's login: %w", to.store, err)
 	}
 	log.Printf("[account] %s: the machine took %s's login", id, to.store)
 
+	if g.AccountSection {
+		r.ops.phase(j, "checking the account", nil)
+		if _, err := r.waitReg(id, machine, swapCheckWait, func(g *Registry) bool { return want != "" && g.AccountProof == want }); err != nil {
+			return fmt.Errorf("the machine didn't confirm %s's token with Anthropic: %w", to.store, err)
+		}
+		log.Printf("[account] %s: the installed token is %s's (Anthropic's profile, asked by the machine)", id, to.store)
+		if before.BridgeSessionID != "" {
+			r.ops.phase(j, "Remote Control", nil)
+			if _, err := r.waitReg(id, machine, swapRCWait, func(g *Registry) bool {
+				return g.BridgeSessionID != "" && g.BridgeSessionID != before.BridgeSessionID
+			}); err != nil {
+				r.ops.note(j, fmt.Sprintf("Remote Control didn't come back within %s: type /remote-control in the session's terminal", swapRCWait))
+				log.Printf("[account] %s: Remote Control didn't come back within %s", id, swapRCWait)
+			} else {
+				log.Printf("[account] %s: Remote Control is up again under %s", id, to.store)
+			}
+		}
+	} else if err := r.restartOldImageHost(j, id, machine, before.HostPid, to, cont); err != nil {
+		return err
+	}
+	if !cont {
+		return nil
+	}
+	r.ops.phase(j, "delivering continue", nil)
+	if err := r.DeliverCanned(id, Delivery{Kind: "continue"}, "continue"); err != nil {
+		return fmt.Errorf("delivering \"continue\": %w", err)
+	}
+	log.Printf("[account] %s: \"continue\" delivered", id)
+	return nil
+}
+
+// restartOldImageHost: a session image from before the switch under a running claude restarts its host on the new
+// account (its harness merges the record at start): by itself once idle, else through the terminal holder
+func (r *Router) restartOldImageHost(j *wakeJob, id, machine string, oldPid int64, to *loginHub, cont bool) error {
 	r.ops.phase(j, "restarting Claude", nil)
 	restarted := func(g *Registry) bool { return g.HostPid != 0 && g.HostPid != oldPid }
 	if _, err := r.waitReg(id, machine, swapRestartWait, restarted); errors.Is(err, errSwapTimeout) {
-		log.Printf("[account] %s: the host wasn't restarted by the machine within %s: restarting it through the terminal holder", id, swapRestartWait)
+		log.Printf("[account] %s: an older image's host wasn't restarted within %s: restarting it through the terminal holder", id, swapRestartWait)
 		res, err := r.execAs(id, "terminal", swapKillCmd, 30*time.Second)
 		if err == nil && res.Code != 0 && !strings.Contains(res.Stderr, "can't find session") {
 			err = fmt.Errorf("exited %d: %s", res.Code, clip(res.Stderr+res.Stdout, 200))
@@ -294,22 +345,13 @@ func (r *Router) runAccountSwitch(j *wakeJob, id, machine string, oldPid int64, 
 	} else if err != nil {
 		return fmt.Errorf("restarting Claude: %w", err)
 	}
-	up := func(g *Registry) bool { return restarted(g) && g.BridgeSessionID != "" }
-	if cont {
-		up = func(g *Registry) bool { return restarted(g) && g.BridgeSessionID != "" && g.Status == "idle" }
+	up := func(g *Registry) bool {
+		return restarted(g) && g.BridgeSessionID != "" && (!cont || g.Status == "idle")
 	}
 	if _, err := r.waitReg(id, machine, swapUpWait, up); err != nil {
 		return fmt.Errorf("Claude didn't come back up under %s: %w", to.store, err)
 	}
 	log.Printf("[account] %s: Claude is back up under %s", id, to.store)
-	if !cont {
-		return nil
-	}
-	r.ops.phase(j, "delivering continue", nil)
-	if err := r.DeliverCanned(id, Delivery{Kind: "continue"}, "continue"); err != nil {
-		return fmt.Errorf("delivering \"continue\": %w", err)
-	}
-	log.Printf("[account] %s: \"continue\" delivered", id)
 	return nil
 }
 

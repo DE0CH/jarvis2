@@ -705,7 +705,7 @@ machine's first second to the kill; then boot goes on and finally execs the harn
 | status, memory, disk | `status.go`, `memory.go`, `disk.go` | no | the reports the router's card and watches read (output only) |
 | API proxy | `apiproxy.go` | — | `$JARVIS_URL` for the session's scripts, each call signed as this machine |
 | live transcript sync | `livesync.go` | no | the transcripts to the Storage Box (through the router) for search (output only) |
-| Claude login sync | `claudelogin.go` | no | the session's Claude pair kept in step with the router's (long poll); on an account switch (command `claude-account`) the new pair is taken and the host restarted on the same conversation once idle, at most 60 s later |
+| Claude login sync | `claudelogin.go` | no | the session's Claude pair kept in step with the router's (long poll); on an account switch the new pair and account record are installed under the running claude (no restart), the token's account checked with Anthropic, Remote Control started again |
 | log | `supervisorlog.go` | no | the supervisor log (below) |
 | secrets | `secrets.go`, `deploykeys.go` | no | the session's secrets, in RAM only (below) |
 

@@ -16,6 +16,7 @@ export function accountOutcome(j: AccountAnswer | null | undefined): "next" | "s
 // the steps of a switch job (wake.kind "account"), as the busy label
 export const ACCOUNT_PHASE: Record<string, string> = {
   starting: "Switching account…", switching: "Switching account…", "taking the login": "Taking the login…",
+  "checking the account": "Checking the account…", "Remote Control": "Bringing Remote Control back…",
   "restarting Claude": "Restarting Claude…", "delivering continue": "Typing “continue”…",
 };
 

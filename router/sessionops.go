@@ -122,6 +122,13 @@ func (o *opsState) startJob(id, kind string) (*wakeJob, error) {
 	return j, nil
 }
 
+// note: something the job's outcome should say although it goes on (shown as its error)
+func (o *opsState) note(j *wakeJob, text string) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	j.Error = text
+}
+
 func (o *opsState) phase(j *wakeJob, phase string, err error) {
 	o.mu.Lock()
 	defer o.mu.Unlock()

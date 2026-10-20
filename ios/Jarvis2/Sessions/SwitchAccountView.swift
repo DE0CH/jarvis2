@@ -1,7 +1,7 @@
 // Switch a session's Claude account (router/accountswap.go, POST api/sessions/{id}/account): a sheet from the session's
-// More menu. It lists the other accounts (one not signed in or with an expired login can't be picked) and, for a
-// running session, whether to type "continue" into its chat once Claude is back. A running session switches now (the
-// router takes the new account's login and restarts Claude in the same conversation: its `wake` job, kind "account",
+// More menu. It lists the other accounts (one not signed in or with an expired login can't be picked) and
+// whether to type "continue" into its chat once Claude is back. A running session switches now (the
+// router installs the new account's login under the running Claude, in the same conversation: its `wake` job, kind "account",
 // shown as the busy label); a paused or failed one takes the account at its next start.
 import SwiftUI
 
@@ -29,7 +29,7 @@ struct SwitchAccountView: View {
         Section {
           LabeledContent("Session", value: m?.title ?? sessionId)
           LabeledContent("Now", value: m?.claudeAccount ?? "—").accessibilityIdentifier("account-current")
-          LabeledContent("Applies", value: running ? "Now (Claude restarts in the same conversation)" : "At its next start")
+          LabeledContent("Applies", value: running ? "Now, under the running Claude (Remote Control gets a new entry in that account’s app)" : "At its next start")
         }
         Section {
           if let accounts {
@@ -48,11 +48,9 @@ struct SwitchAccountView: View {
             }
           } else if let loadError { ErrorRow(text: loadError) } else { ProgressView() }
         } header: { Text("Switch to") }
-        if running {
-          Section {
-            Toggle("Type “continue” after the switch", isOn: $cont).accessibilityIdentifier("account-continue")
-          } footer: { Text(cont ? "Claude picks up where it stopped." : "Claude waits for your next message.") }
-        }
+        Section {
+          Toggle("Type “continue” after the switch", isOn: $cont).accessibilityIdentifier("account-continue")
+        } footer: { Text(cont ? (running ? "Claude picks up where it stopped." : "Claude picks up where it stopped once it starts.") : "Claude waits for your next message.") }
         if let error { Section { ErrorRow(text: error, id: "account-error") } }
       }
       .navigationTitle("Claude account")
@@ -82,9 +80,8 @@ struct SwitchAccountView: View {
   }
 
   private func run() async {
-    let running = model.session(sessionId).map { $0.state == "started" || $0.state == "initialising" } ?? false
     busy = true; error = nil
     // nil: the router took it (the sheet closes; the model follows the job); otherwise its error, shown here
-    if let e = await model.switchAccount(sessionId, to: account, continue: running && cont) { error = e; busy = false }
+    if let e = await model.switchAccount(sessionId, to: account, continue: cont) { error = e; busy = false }
   }
 }

@@ -496,10 +496,11 @@ per account its email, expiry, last refresh, the participants of its refresh pro
   that account's sessions stop on "Please run /login" once their token runs out, and get "continue" after its Re-login.
 - **Sessions:** a machine asks the router for its session's account's pair at boot (404 `noAccount`: no login, e.g.
   OpenCode) and keeps a long poll open (`jarvis2-machine creds-sync`, its log in the machine's output), writing every
-  newer pair. A pair for another account than the machine's (only a session from before accounts, whose shared login
-  was re-logged) replaces the one there; creds-sync then leaves the account record in `~/.claude/.account-switch.json`
-  and restarts the claude host once it is idle, so its Remote Control comes up under the new account. The router never
-  writes a login into a session (no login repair).
+  newer pair. A pair for another account than the machine's (the session's account was switched, `POST
+  /api/sessions/:id/account`, DECISIONS 202) is installed under the running claude: credentials and `oauthAccount`
+  replaced under the CLI's refresh lock, the token's account checked with Anthropic (`~/.claude/.jarvis-account`, the
+  status's `__ACCOUNT__`), Remote Control enabled again through `/remote-control` (its log says each step). No restart.
+  The router never writes a login into a session (no login repair).
 - **The account in the cert:** set the router's env `CLAUDE_STORE_IN_CERT=1` only once Deyao's iPhone runs an app build
   that accepts the router as a key's writer (the TestFlight after DECISIONS 190): new sessions' certs then name their
   account's store and the phone unlocks it at Start; an older build refuses that unlock.

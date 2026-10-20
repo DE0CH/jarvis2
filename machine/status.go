@@ -5,7 +5,7 @@ package main
 // supervisor runs the same shell locally every 10 s and POSTs the raw output to /m/status when it changed, and at
 // least once a minute as a heartbeat; the router parses it (router/registry.go). It prints claude's registry
 // files, ai-title lines, background-job counts, the one-shot marker, transcript ids ending on "Please run
-// /login", the credentials file's expiry, refusal entries, then the subagent/background-job counts the supervisor holds (workers.go) — never a token.
+// /login", the credentials file's expiry, refusal entries, the checked account of an account switch, then the subagent/background-job counts the supervisor holds (workers.go) — never a token.
 
 import (
 	"context"
@@ -26,6 +26,8 @@ const regCmd = `for f in /home/claude/.claude/sessions/*.json; do cat "$f" 2>/de
 	`echo __CREDS__; grep -o '"expiresAt":[0-9]*' /home/claude/.claude/.credentials.json 2>/dev/null | head -1 | cut -d: -f2; ` +
 	// __REFUSAL__ (lib/downgrade.js REG_SECTION)
 	`echo __REFUSAL__; for f in /home/claude/.claude/projects/*/*.jsonl; do grep -h -E '"stop_reason":"refusal"|"subtype":"model_refusal_fallback"' "$f" 2>/dev/null | tail -4; done; ` +
+	// __ACCOUNT__: the installed token's account as Anthropic named it after a switch (claudelogin.go afterSwitch)
+	`echo __ACCOUNT__; cat /home/claude/.claude/.jarvis-account 2>/dev/null; echo; ` +
 	`true`
 
 const (

@@ -40,15 +40,7 @@ for path in {wd, os.path.expanduser("~/workspace"), os.path.expanduser("~")}:
     e["hasTrustDialogAccepted"]=True
     e["hasCompletedProjectOnboarding"]=True
     e.setdefault("allowedTools",[])
-# A Re-login to another Claude account reached this running machine (jarvis2-machine creds-sync wrote the new
-# pair and restarted this host): its account record goes in before claude starts, so Remote Control comes up there.
-sw=os.path.expanduser("~/.claude/.account-switch.json")
-try:
-    d.update(json.load(open(sw)))
-except Exception: pass
 json.dump(d,open(p,"w"))
-try: os.remove(sw)
-except FileNotFoundError: pass
 # Pre-accept the bypass-permissions warning via the settings key the CLI actually checks, and
 # make every launch a Remote Control one (remoteControlAtStartup: "Start Remote Control bridge
 # automatically each session"), so a host started by any path — fresh, resume, watchdog
@@ -123,7 +115,7 @@ start() {
   # Resuming WITHOUT a label: name the Remote Control entry after the title the Claude app showed
   # at pause (SESSION_RESUME_TITLE, from Jarvis's record), else the transcript's last title.
   # When the old entry can't be reattached — expired after a long pause, or owned by the account
-  # used before a switch — the CLI mints a fresh one, and unnamed the app titles it after the first
+  # used before an account switch — the CLI mints a fresh one, and unnamed the app titles it after the first
   # new message (the Start prompt): the conversation "lost" its title. Only --remote-control is
   # named, not --name, so the local title stays auto (and the app can still refine it).
   export SESSION_RC_TITLE=""

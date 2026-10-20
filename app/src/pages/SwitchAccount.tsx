@@ -1,6 +1,6 @@
 // Switch a session's Claude account (router/accountswap.go): the other accounts to pick from (one not signed in or
 // with an expired login can't be picked), whether to type "continue" into its chat once Claude is back, and Switch.
-// A running session switches now (the router takes the new account's login and restarts Claude in the same
+// A running session switches now (the router installs the new account's login under the running Claude, in the same
 // conversation: the session's `wake` job, kind "account", shown as its busy label); a paused or failed one takes the
 // account at its next start.
 import { useEffect, useState } from "react";
@@ -35,7 +35,7 @@ export function SwitchAccountPage({ spec }: { spec: SwitchAccountSpec }) {
     exclusive("s:" + id, async () => {
       setBusy("Switching…"); setErr("");
       let j: AccountAnswer;
-      try { j = await api<AccountAnswer>("POST", `api/sessions/${id}/account`, { account: to, continue: running && cont }); }
+      try { j = await api<AccountAnswer>("POST", `api/sessions/${id}/account`, { account: to, continue: cont }); }
       catch (e: any) { setErr(e.message); setBusy(""); return; }
       const o = accountOutcome(j);
       done();
@@ -59,15 +59,15 @@ export function SwitchAccountPage({ spec }: { spec: SwitchAccountSpec }) {
       <Rows mt={2}>
         <Row label="Session" id="account-session">{title}</Row>
         <Row label="Now" id="account-current">{m?.claudeAccount || "—"}</Row>
-        <Row label="Applies" id="account-applies">{running ? "Now (Claude restarts in the same conversation)" : "At its next start"}</Row>
+        <Row label="Applies" id="account-applies">{running ? "Now, under the running Claude (Remote Control gets a new entry in that account’s app)" : "At its next start"}</Row>
       </Rows>
       <Lbl>Switch to</Lbl>
       {!accounts ? (err ? <P size={2} color="red">{err}</P> : <Flex gap={2} align="center"><Spinner /><Muted>Loading Claude accounts…</Muted></Flex>)
         : others.length ? <RadioCards id="account-pick" value={account} onChange={setAccount} options={others.map((a) => ({ value: a.store,
             title: a.store + (a.default ? " (default)" : ""), sub: accountUnusable(a) || a.email || a.name, disabled: !!accountUnusable(a) }))} />
         : <Muted id="account-none">No other Claude account (Settings → Claude accounts).</Muted>}
-      {running && <Flex mt={4}><Switch id="account-continue" on={cont} onChange={setCont} label="Type “continue” after the switch" /></Flex>}
-      {running && <Muted mt={2}>{cont ? "Claude picks up where it stopped." : "Claude waits for your next message."}</Muted>}
+      {<Flex mt={4}><Switch id="account-continue" on={cont} onChange={setCont} label="Type “continue” after the switch" /></Flex>}
+      {<Muted mt={2}>{cont ? (running ? "Claude picks up where it stopped." : "Claude picks up where it stopped once it starts.") : "Claude waits for your next message."}</Muted>}
       {!!accounts && !!err && <P size={2} color="red" mt={2} id="account-error">{err}</P>}
     </Page>
   );

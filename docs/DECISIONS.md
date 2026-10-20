@@ -1993,21 +1993,30 @@ snapshot failed with "no space left on device", the machine was destroyed anyway
      MB/s, 55 s left", also "upgrading: …" in the app) and a lifecycle line every 20 s; the supervisor logs every 10 s.
      The rate is the phase's average (the bytes read over the time since it began), the ETA the rest at that rate; the
      percentage is of the measured size, so files that grow during the walk end at 100 %, not past it.
-
-202. **A session's Claude account can be switched (Deyao, 2026-10-20: "I ran out of usage on the chendeyao.uk account;
-     swap its session to chendeyao000@gmail.com, and then type continue into the chat").** `POST
-     /api/sessions/:id/account {account, continue}` (`router/accountswap.go`), in the session's More menu and requestable
-     as an Inbox API call whose item says from → to. Choices: the switch is the router's word, like the account at New
-     session (the login travels over the machine-signed long poll, not the cert), so it needs no core change and no Face
-     ID of its own; a running session's host is restarted on the SAME conversation (`--resume`), and only the host: the
-     machine, its background servers and tunnels stay. The machine restarts it once idle, at most 60 s after the
-     switch (a host out of usage never goes idle by itself); for images from before the `claude-account` command the
-     router does it after 2 minutes through the `terminal` holder, as the in-place permission-mode switch does. Success
-     is checked from the machine's own status (the new pair's expiry on disk, then a new host pid with Remote Control
-     up), never assumed. "continue" uses the canned delivery the login repair uses; for a paused session it waits on the
-     session (`ops.continueAfterStart`) until its next start's host is up and idle. With `CLAUDE_STORE_IN_CERT=1` the
-     new account's store is added through the existing add-store flow (Face ID); a paused session is refused there,
-     since its next cert comes from its line as it is.
+202. **A session's Claude account can be switched, under the running claude (Deyao, 2026-10-20: "I ran out of usage
+     on the chendeyao.uk account; swap its session to chendeyao000@gmail.com, and then type continue into the chat";
+     then: the harness is just a process, swap the files it reads under it).** `POST /api/sessions/:id/account
+     {account, continue}` (`router/accountswap.go`), one button in the session's More menu ("Switch", or with
+     continue), requestable as an Inbox API call whose item says from → to. Choices:
+     - The switch is the router's word, like the account at New session (the login travels over the machine-signed
+       long poll, not the cert): no core change, no Face ID of its own. The router's record changes first, so the
+       machine's sync follows the new account from then on and never reverts (a hand-made /login on the machine is
+       reverted to the router's account, as it always was).
+     - No restart (Deyao): Claude Code stats `~/.claude/.credentials.json` before every API request and re-reads it
+       when it changed, watches `~/.claude.json`, and caches no limit state that blocks sending (read from claude
+       2.1.304's code); so the supervisor swaps both files under the CLI's refresh lock and claude's next request goes
+       out on the new account, with background shells, agents and monitors untouched. Remote Control can't survive:
+       Claude Code stops it when the account under it changes (the server ties the session to the old account), so
+       the supervisor types `/remote-control` and picks "Enable Remote Control", a new entry in the new account's app
+       with the same conversation. Not coming back is said on the job, not a failure (Claude works).
+     - Success is checked, never assumed: the new pair's expiry on disk, then the machine's word that Anthropic's
+       profile endpoint names the new account for the installed token, then a new Remote Control session.
+     - Session images from before this run the earlier path (host restart on `--resume`, by the router through the
+       `terminal` holder when the host isn't idle), so running sessions can be switched without moving them.
+     - "continue" is the canned delivery the login repair uses; for a paused session it waits on the session
+       (`ops.continueAfterStart`) until its next start's host is up and idle.
+     - With `CLAUDE_STORE_IN_CERT=1` the new account's store is added through the existing add-store flow (Face ID); a
+       paused session is refused there, since its next cert comes from its line as it is.
 203. **Messages into a sensitive session are approved one by one (Deyao, 2026-10-20: "he should approve or deny the
      specific message").** The watchdog's check-in into a sensitive session showed as "Needs your approval — Feature:
      Scheduler — Does: deliver wakeups and crons as messages" with "Allow 10 min" / "Standing rule": the wrong question

@@ -8,28 +8,30 @@ package main
 // (~/.claude/.oauth_refresh.lock, lessons/74) until the new pair is written, so a claude process that gets a 401 in
 // between waits and adopts it instead of burning its refresh token.
 //
-// The router's pair is taken whatever its account (DECISIONS 116, 185: trust the router). When the pair on disk
-// belongs to another account than the router's (a session from before accounts whose shared login was re-logged),
-// the router's wins even if it expires sooner, the account record (~/.claude.json oauthAccount) is handed to the
-// supervisor (~/.claude/.account-switch.json, merged at the host's next start), and the claude host is restarted as
-// soon as it is idle, so its Remote Control comes up under the new account (a running host keeps the account it
-// connected with).
-//
-// A switch Deyao asks for (router/accountswap.go, POST /api/sessions/{id}/account) changes the session's account on
-// the router and sends this machine the command "claude-account" (claudeAccountCmd): the long poll answers with the
-// new account's pair at once, the host is restarted as soon as it is idle, and at most hostSwapGrace after the command
-// whatever it is doing (a host whose account ran out of usage never goes idle by itself). Only the host restarts:
-// the supervisor, background servers and tunnels keep running.
+// The router's pair is taken whatever its account (DECISIONS 116, 185, 202: trust the router). When it belongs to
+// another account than the one on this machine (Deyao switched the session's account, POST /api/sessions/{id}/account,
+// or re-logged its account as another Claude account), the switch happens UNDER the running claude, which is just a
+// process reading files (switchInPlace): under the CLI's refresh lock the new pair replaces ~/.claude/.credentials.json
+// and the account record replaces ~/.claude.json's oauthAccount, both atomically. Claude Code stats the credentials
+// file before every API request and re-reads it when it changed, and watches ~/.claude.json, so its next request goes
+// out on the new account: no restart, no --resume; background shells, agents and monitors keep running. Then
+// (afterSwitch): the installed token's account is checked with Anthropic's profile endpoint and reported in the status
+// (__ACCOUNT__, the router's proof the switch took), and Remote Control, which Claude Code stops when the account under
+// it changes ("signed-in claude.ai account or organization changed"), is started again by typing /remote-control into
+// the host and choosing "Enable Remote Control".
 
 import (
 	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -84,31 +86,25 @@ func recordAccount(account string) string {
 	return d.O.UUID
 }
 
-// localAccount: the account of the login on this machine: a switch the host hasn't started under yet, else
-// ~/.claude.json's; "" = not known
+// localAccount: the account of the login on this machine (~/.claude.json's); "" = not known
 func localAccount() string {
-	if b, err := os.ReadFile(switchPath()); err == nil {
-		return recordAccount(string(b))
-	}
 	home, _ := os.UserHomeDir()
 	b, _ := os.ReadFile(filepath.Join(home, ".claude.json"))
 	return recordAccount(string(b))
 }
 
-func switchPath() string { return filepath.Join(filepath.Dir(credsPath()), ".account-switch.json") }
-
-// takeRouterPair: write the router's pair; one for another account than this machine's always wins, and returns
-// switched (its account record is then left for the supervisor: ~/.claude/.account-switch.json)
+// takeRouterPair: write the router's pair; one for another account than this machine's always wins, and is switched
+// to under the running claude (switchInPlace)
 func takeRouterPair(l routerLogin) (took, switched bool, err error) {
 	ra, la := recordAccount(l.Account), localAccount()
 	if ra == "" || la == "" || ra == la {
 		took, err = takeIfLater([]byte(l.Credentials))
 		return took, false, err
 	}
-	if err = writeAtomic(switchPath(), []byte(l.Account)); err != nil {
+	if err = switchInPlace(l); err != nil {
 		return false, false, err
 	}
-	return true, true, writeAtomic(credsPath(), []byte(l.Credentials))
+	return true, true, nil
 }
 
 // errNoAccount: the router says this session has no Claude account (404; 403 from a router before accounts)
@@ -292,9 +288,6 @@ func credsSync() {
 		return
 	}
 	s := &syncer{c: c}
-	if _, err := os.Stat(switchPath()); err == nil {
-		go restartHostWhenIdle() // a switch left by an earlier credsSync whose host never got restarted
-	}
 	for {
 		if err := s.step(); err != nil {
 			log.Printf("claude login: %v", err)
@@ -307,7 +300,6 @@ type syncer struct {
 	c         *client
 	pushed    []byte    // the content last pushed or taken
 	routerAcc string    // the account of the router's login, from its last answer
-	restarter bool      // restartHostWhenIdle is running
 	lockGen   int64     // the router's refresh this machine holds the CLI lock for (0: none)
 	lockedAt  time.Time // when it took it
 }
@@ -354,11 +346,7 @@ func (s *syncer) step() error {
 			log.Printf("claude login: took the router's newer pair")
 		}
 		if switched {
-			log.Printf("claude login: the router's login is another Claude account: the host restarts under it once idle")
-			if !s.restarter {
-				s.restarter = true
-				go func() { restartHostWhenIdle(); s.restarter = false }()
-			}
+			go afterSwitch(l, s.c) // the account check and Remote Control, while the poll goes on
 		}
 	case l.Preparing && l.Gen != s.lockGen:
 		s.release()
@@ -375,116 +363,213 @@ func (s *syncer) step() error {
 	return nil
 }
 
-// ---- an account switch: restart the host -------------------------------------------------------------------------
+// ---- an account switch, under the running claude ----------------------------------------------------------------
 
 var (
-	credsSyncOn   atomic.Bool  // credsSync runs
-	swapAskedAt   atomic.Int64 // unix ns of the router's "claude-account" command; 0 = none pending
-	hostSwapGrace = 60 * time.Second
+	credsSyncOn    atomic.Bool // credsSync runs (once per machine)
+	switchLockWait = 15 * time.Second
+	switchPoll     = time.Second
+	recheckAfter   = 15 * time.Second // a profile fetch claude began with the old token may write the old record back
+	rcDropWait     = 90 * time.Second // for Claude Code to stop Remote Control once the account under it changed
+	rcMenuWait     = 3 * time.Minute  // for the /remote-control menu (a host in a turn shows it after the turn)
+	rcUpWait       = 90 * time.Second
+	profileTries   = 5
+
+	oauthProfileURL = "https://api.anthropic.com/api/oauth/profile"
+	profileHTTP     = &http.Client{Timeout: 20 * time.Second}
+	paneText        = func() string {
+		out, _ := exec.Command("tmux", "capture-pane", "-p", "-t", "claude").Output()
+		return string(out)
+	}
+	sendKeys = func(args ...string) error {
+		return exec.Command("tmux", append([]string{"send-keys", "-t", "claude"}, args...)...).Run()
+	}
 )
 
-// claudeAccountCmd: the router switched the session's Claude account (supervisor command "claude-account")
-func claudeAccountCmd() {
-	swapAskedAt.Store(time.Now().UnixNano())
-	log.Printf("claude login: the router switched this session's Claude account: taking the new account's login, then restarting Claude on the same conversation (once idle, at most %s from now)", hostSwapGrace)
-	if !credsSyncOn.Load() {
-		startCredsSync() // a session that had no account: the sync starts now
-		go credsSync()
+const (
+	rcChangedText = "account or organization changed" // Claude Code's notice when it stops Remote Control for it
+	rcEnableText  = "Enable Remote Control"           // the /remote-control menu's first choice (claude 2.1.304)
+)
+
+// accountProof: the account of the installed token as Anthropic's profile endpoint names it, written once checked;
+// the status reports it (__ACCOUNT__), which is how the router knows the switch took
+func accountProof() string { return filepath.Join(filepath.Dir(credsPath()), ".jarvis-account") }
+
+// switchInPlace: the new account's pair and record, under the CLI's refresh lock so no refresh of the old account is
+// cut in half
+func switchInPlace(l routerLogin) error {
+	locked := false
+	for end := time.Now().Add(switchLockWait); ; time.Sleep(200 * time.Millisecond) {
+		if takeLock() == "locked" {
+			locked = true
+			break
+		}
+		if time.Now().After(end) {
+			break
+		}
+	}
+	if locked {
+		defer releaseLock()
+	} else {
+		log.Printf("claude login: the CLI's refresh lock stayed taken for %s: switching anyway", switchLockWait)
+	}
+	os.Remove(accountProof()) // the old account's
+	if err := writeAtomic(credsPath(), []byte(l.Credentials)); err != nil {
+		return err
+	}
+	if err := mergeAccount(l.Account); err != nil {
+		return fmt.Errorf("~/.claude.json: %w", err)
+	}
+	log.Printf("claude login: switched to the Claude account %s under the running claude (credentials and oauthAccount; its next request goes out on it)", recordEmail(l.Account))
+	return nil
+}
+
+func recordEmail(account string) string {
+	var d struct {
+		O struct {
+			Email string `json:"emailAddress"`
+		} `json:"oauthAccount"`
+	}
+	json.Unmarshal([]byte(account), &d)
+	if d.O.Email == "" {
+		return recordAccount(account)
+	}
+	return d.O.Email
+}
+
+// afterSwitch: the installed token's account checked with Anthropic, the record kept, Remote Control back
+func afterSwitch(l routerLogin, c *client) {
+	want := recordAccount(l.Account)
+	oldBridge := liveBridge()
+	checked := false
+	for i := 0; i < profileTries && !checked; i++ {
+		uuid, email, err := profileOf(accessToken([]byte(l.Credentials)))
+		switch {
+		case err != nil:
+			log.Printf("claude login: checking the installed token's account: %v", err)
+			time.Sleep(5 * time.Second)
+		case uuid != want:
+			log.Printf("claude login: the installed token belongs to %s, not the account the router named", email)
+			return
+		default:
+			b, _ := json.Marshal(map[string]any{"accountUuid": uuid, "email": email, "at": time.Now().Unix()})
+			if err := writeAtomic(accountProof(), b); err != nil {
+				log.Printf("claude login: %v", err)
+			}
+			log.Printf("claude login: the installed token is %s's (Anthropic's profile)", email)
+			checked = true
+		}
+	}
+	time.Sleep(recheckAfter)
+	if localAccount() != want {
+		if err := mergeAccount(l.Account); err != nil {
+			log.Printf("claude login: ~/.claude.json: %v", err)
+		} else {
+			log.Printf("claude login: ~/.claude.json had the old account again (claude's own profile fetch): set again")
+		}
+	}
+	enableRemoteControl(oldBridge)
+}
+
+// profileOf: the account Anthropic's profile endpoint names for a token
+var profileOf = func(token string) (uuid, email string, err error) {
+	req, _ := http.NewRequest("GET", oauthProfileURL, nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("anthropic-beta", "oauth-2025-04-20")
+	req.Header.Set("User-Agent", "jarvis2-machine/1")
+	resp, err := profileHTTP.Do(req)
+	if err != nil {
+		return "", "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		return "", "", fmt.Errorf("profile: HTTP %d", resp.StatusCode)
+	}
+	var p struct {
+		Account struct {
+			UUID  string `json:"uuid"`
+			Email string `json:"email"`
+		} `json:"account"`
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&p); err != nil || p.Account.UUID == "" {
+		return "", "", errors.New("profile: no account in the answer")
+	}
+	return p.Account.UUID, p.Account.Email, nil
+}
+
+// enableRemoteControl: Claude Code stops Remote Control when the account under it changes; typing /remote-control and
+// choosing "Enable Remote Control" starts it again for the new account (a new entry in that account's Claude app, the
+// same conversation). Nothing to do when there was none before the switch.
+func enableRemoteControl(oldBridge string) {
+	if oldBridge == "" {
+		log.Printf("claude login: no Remote Control before the switch: nothing to bring back")
+		return
+	}
+	if !waitUntil(rcDropWait, func() bool {
+		return strings.Contains(paneText(), rcChangedText) || liveBridge() != oldBridge
+	}) {
+		log.Printf("claude login: Remote Control is still up %s after the switch: left as it is", rcDropWait)
+		return
+	}
+	if b := liveBridge(); b != "" && b != oldBridge {
+		log.Printf("claude login: Remote Control came back by itself")
+		return
+	}
+	log.Printf("claude login: Claude Code stopped Remote Control for the account change: typing /remote-control")
+	if err := sendKeys("-l", "/remote-control"); err == nil {
+		time.Sleep(300 * time.Millisecond)
+		err = sendKeys("Enter")
+	}
+	if !waitUntil(rcMenuWait, func() bool { return strings.Contains(paneText(), rcEnableText) }) {
+		log.Printf("claude login: the /remote-control menu didn't show within %s", rcMenuWait)
+		return
+	}
+	sendKeys("Enter") // its first choice, selected: Enable Remote Control
+	if waitUntil(rcUpWait, func() bool { b := liveBridge(); return b != "" && b != oldBridge }) {
+		log.Printf("claude login: Remote Control is up again under the new account")
+	} else {
+		log.Printf("claude login: Remote Control didn't come up within %s of choosing Enable", rcUpWait)
 	}
 }
 
-// swapForced: a switch the router asked for has waited hostSwapGrace for an idle host
-func swapForced() bool {
-	at := swapAskedAt.Load()
-	return at != 0 && time.Since(time.Unix(0, at)) >= hostSwapGrace
+func waitUntil(d time.Duration, ok func() bool) bool {
+	for end := time.Now().Add(d); ; time.Sleep(switchPoll) {
+		if ok() {
+			return true
+		}
+		if time.Now().After(end) {
+			return false
+		}
+	}
 }
 
-var (
-	hostIdlePoll = 5 * time.Second
-	killHost     = func() error { return exec.Command("tmux", "kill-session", "-t", "claude").Run() }
-)
-
-// hostState: the Remote Control host's status and pid from claude's own session registry (~/.claude/sessions/*.json,
-// what the supervisor and the dashboard read); "" = no host; pid -1 = an entry caught mid-rewrite (claude truncates
-// then writes it), so whether there is a host isn't known on this poll
-func hostState() (status string, pid int) {
+// liveBridge: the Remote Control session id of the live claude host, from claude's own session registry
+// (~/.claude/sessions/*.json, what the status reports); "" = none
+func liveBridge() string {
 	home, _ := os.UserHomeDir()
 	files, _ := filepath.Glob(filepath.Join(home, ".claude", "sessions", "*.json"))
-	torn := false
 	for _, f := range files {
 		var e struct {
-			Status          string `json:"status"`
 			Pid             int    `json:"pid"`
 			BridgeSessionID string `json:"bridgeSessionId"`
 		}
 		b, err := os.ReadFile(f)
-		if err == nil && json.Unmarshal(b, &e) != nil {
-			torn = true
+		if err != nil || json.Unmarshal(b, &e) != nil || e.BridgeSessionID == "" || e.Pid == 0 {
 			continue
 		}
-		if err != nil || e.BridgeSessionID == "" || e.Pid == 0 {
-			continue
+		if syscall.Kill(e.Pid, 0) == nil {
+			return e.BridgeSessionID
 		}
-		if syscall.Kill(e.Pid, 0) != nil {
-			continue // a dead host's leftover entry
-		}
-		return e.Status, e.Pid
 	}
-	if torn {
-		return "", -1
-	}
-	return "", 0
+	return ""
 }
 
-// restartHostWhenIdle: once the host is idle (no turn, no background shell: "shell" means some are running) on two
-// polls in a row, kill its tmux session; the supervisor's watchdog relaunches it (--resume, the same conversation)
-// and its start() merges the switch file into ~/.claude.json. Returns when the switch is merged or there is no host
-// to restart (the next start merges it).
-func restartHostWhenIdle() {
-	idle := 0
-	killed := 0
-	for {
-		if _, err := os.Stat(switchPath()); err != nil {
-			if killed != 0 {
-				log.Printf("claude login: Claude restarted under the new Claude account (the account record is merged)")
-			}
-			swapAskedAt.Store(0)
-			return // merged by the supervisor's start()
-		}
-		status, pid := hostState()
-		switch {
-		case pid == -1:
-			idle = 0 // read mid-rewrite: look again
-		case pid == 0:
-			if killed == 0 {
-				return
-			}
-		case pid == killed:
-			// still exiting
-		case swapForced():
-			log.Printf("claude login: restarting the host (pid %d, %s) under the new Claude account: the switch was asked for %s ago", pid, orDash(status), hostSwapGrace)
-			if err := killHost(); err != nil {
-				log.Printf("claude login: restarting the host: %v", err)
-			}
-			killed, idle = pid, 0
-		case status == "idle":
-			if idle++; idle >= 2 {
-				log.Printf("claude login: restarting the idle host (pid %d) under the new Claude account", pid)
-				if err := killHost(); err != nil {
-					log.Printf("claude login: restarting the host: %v", err)
-				}
-				killed, idle = pid, 0
-			}
-		default:
-			idle = 0
-		}
-		time.Sleep(hostIdlePoll)
+// claudeAccountCmd: the router switched the session's Claude account (supervisor command "claude-account"; the long
+// poll brings the pair, credsSync switches): a session that had no account starts its sync now
+func claudeAccountCmd() {
+	log.Printf("claude login: the router switched this session's Claude account")
+	if !credsSyncOn.Load() {
+		startCredsSync()
+		go credsSync()
 	}
-}
-
-func orDash(s string) string {
-	if s == "" {
-		return "-"
-	}
-	return s
 }

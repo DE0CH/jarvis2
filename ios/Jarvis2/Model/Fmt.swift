@@ -11,6 +11,7 @@ enum Fmt {
   static let diskPhase: [String: String] = ["extending": "Adding disk…", "snapshotting": "Snapshotting…", "resuming": "Resuming…"]
   /// a Claude account switch's steps (router/accountswap.go), as the busy label
   static let accountPhase: [String: String] = ["starting": "Switching account…", "switching": "Switching account…", "taking the login": "Taking the login…",
+                                               "checking the account": "Checking the account…", "Remote Control": "Bringing Remote Control back…",
                                                "restarting Claude": "Restarting Claude…", "delivering continue": "Typing “continue”…"]
   /// "Upgrade to Large (8 GB)"; past the named sizes, which are named by their memory ("16gb"), "Upgrade to 16 GB"
   /// (router/sizes.go: every next size doubles the memory)

@@ -123,18 +123,15 @@ func TestSessionClaudeLoginAtBoot(t *testing.T) {
 	}
 }
 
-// a Re-login to another account reaches a running machine: the router's pair wins even though the pair here (the old
-// account's, refreshed by its own claude) expires later, and the switch is left for the supervisor
+// a switch to another account reaches a running machine: the router's pair wins even though the pair here (the old
+// account's, refreshed by its own claude) expires later, and both files change under the running claude
 func TestCredsSyncAccountSwitch(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	f, c := newFakeLoginRouter(t)
 	os.MkdirAll(home(t)+"/.claude", 0o700)
 	os.WriteFile(home(t)+"/.claude.json", []byte(acctRecord), 0o600)
 	os.WriteFile(credsPath(), []byte(pairJSON(9000)), 0o600)
-	oldKill, oldPoll := killHost, hostIdlePoll
-	defer func() { killHost, hostIdlePoll = oldKill, oldPoll }()
-	hostIdlePoll = 10 * time.Millisecond
-	killHost = func() error { return nil } // no host registry here: nothing is killed
+	quietAfterSwitch(t)
 	s := &syncer{c: c, pushed: []byte(pairJSON(9000))}
 
 	// the first answer only tells the router's account (its pair expires sooner than ours)
@@ -151,74 +148,17 @@ func TestCredsSyncAccountSwitch(t *testing.T) {
 	if b, _ := os.ReadFile(credsPath()); expiresAt(b) != 4000 {
 		t.Fatalf("the other account's pair wasn't taken: %s", b)
 	}
-	if b, err := os.ReadFile(switchPath()); err != nil || recordAccount(string(b)) != "acct-2" {
-		t.Fatalf("switch file: %v %s", err, b)
-	}
 	if localAccount() != "acct-2" {
-		t.Fatal("the pending switch is this machine's account now")
+		t.Fatal("~/.claude.json's oauthAccount wasn't switched")
+	}
+	if _, err := os.Stat(lockDir()); err == nil {
+		t.Fatal("the CLI's refresh lock was left taken")
 	}
 	// in step again: the usual expiry rule
 	f.answers = []routerLogin{{Account: acct2Record, ExpiresAt: 4000}}
 	s.step()
 	if !strings.Contains(f.polls[2], "have=4000") {
 		t.Fatalf("polls %v", f.polls)
-	}
-}
-
-// the host is restarted only once idle, then the supervisor's start merges the switch
-func TestRestartHostWhenIdle(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-	os.MkdirAll(home(t)+"/.claude/sessions", 0o700)
-	reg := func(status string) {
-		b, _ := json.Marshal(map[string]any{"status": status, "pid": os.Getpid(), "bridgeSessionId": "b1"})
-		os.WriteFile(home(t)+"/.claude/sessions/1.json", b, 0o600)
-	}
-	oldKill, oldPoll := killHost, hostIdlePoll
-	defer func() { killHost, hostIdlePoll = oldKill, oldPoll }()
-	hostIdlePoll = 10 * time.Millisecond
-	var mu sync.Mutex
-	kills := 0
-	killHost = func() error {
-		mu.Lock()
-		kills++
-		mu.Unlock()
-		os.Remove(home(t) + "/.claude/sessions/1.json")
-		os.Remove(switchPath()) // the relaunched host's start() merges it
-		return nil
-	}
-	if err := os.WriteFile(switchPath(), []byte(acct2Record), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	reg("busy")
-	done := make(chan struct{})
-	go func() { restartHostWhenIdle(); close(done) }()
-	time.Sleep(100 * time.Millisecond)
-	mu.Lock()
-	if kills != 0 {
-		t.Fatal("a busy host was restarted")
-	}
-	mu.Unlock()
-	reg("shell")
-	time.Sleep(100 * time.Millisecond)
-	mu.Lock()
-	if kills != 0 {
-		t.Fatal("a host with background shells was restarted")
-	}
-	mu.Unlock()
-	reg("idle")
-	select {
-	case <-done:
-	case <-time.After(3 * time.Second):
-		t.Fatal("never restarted")
-	}
-	if kills != 1 {
-		t.Fatal("kills", kills)
-	}
-	// no host at all: nothing to do, the next start merges it
-	os.WriteFile(switchPath(), []byte(acct2Record), 0o600)
-	restartHostWhenIdle()
-	if kills != 1 {
-		t.Fatal("killed with no host")
 	}
 }
 
@@ -322,67 +262,86 @@ func TestTakeIfLater(t *testing.T) {
 	}
 }
 
-// claude rewrites its registry entry by truncating then writing: a poll in between must not read as "no host"
-// (restartHostWhenIdle would give up and leave the account switch unmerged)
-func TestHostStateTornEntry(t *testing.T) {
+// quietAfterSwitch: afterSwitch's waits made short and its outside world faked (no Anthropic, no tmux)
+func quietAfterSwitch(t *testing.T) {
+	saved := []time.Duration{recheckAfter, rcDropWait, rcMenuWait, rcUpWait, switchPoll}
+	oldProfile, oldPane, oldKeys := profileOf, paneText, sendKeys
+	recheckAfter, rcDropWait, rcMenuWait, rcUpWait, switchPoll = 10*time.Millisecond, 50*time.Millisecond, 50*time.Millisecond, 50*time.Millisecond, 5*time.Millisecond
+	profileOf = func(string) (string, string, error) { return "acct-2", "acct-2@example.com", nil }
+	paneText = func() string { return "" }
+	sendKeys = func(...string) error { return nil }
+	t.Cleanup(func() {
+		recheckAfter, rcDropWait, rcMenuWait, rcUpWait, switchPoll = saved[0], saved[1], saved[2], saved[3], saved[4]
+		profileOf, paneText, sendKeys = oldProfile, oldPane, oldKeys
+	})
+}
+
+// after the files changed: the token's account is checked and its proof written for the status; an old record
+// written back by claude is set again; Remote Control, stopped by Claude Code, is enabled again through its menu
+func TestAfterSwitchProofAndRemoteControl(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	os.MkdirAll(home(t)+"/.claude/sessions", 0o700)
-	if _, pid := hostState(); pid != 0 {
-		t.Fatal("no entry: pid", pid)
+	quietAfterSwitch(t)
+	rcDropWait, rcMenuWait, rcUpWait = 3*time.Second, 3*time.Second, 3*time.Second
+	reg := func(bridge string) {
+		b, _ := json.Marshal(map[string]any{"status": "idle", "pid": os.Getpid(), "bridgeSessionId": bridge})
+		os.WriteFile(home(t)+"/.claude/sessions/1.json", b, 0o600)
 	}
-	os.WriteFile(home(t)+"/.claude/sessions/1.json", nil, 0o600)
-	if _, pid := hostState(); pid != -1 {
-		t.Fatal("an empty (mid-rewrite) entry: pid", pid)
+	reg("cse_old")
+	os.WriteFile(home(t)+"/.claude.json", []byte(acctRecord), 0o600) // claude's profile fetch put the old record back
+	var mu sync.Mutex
+	pane, keys := "", []string{}
+	paneText = func() string { mu.Lock(); defer mu.Unlock(); return pane }
+	sendKeys = func(a ...string) error {
+		mu.Lock()
+		defer mu.Unlock()
+		keys = append(keys, strings.Join(a, " "))
+		switch strings.Join(a, " ") {
+		case "Enter":
+			if strings.Contains(pane, rcEnableText) {
+				pane = ""
+				reg("cse_new")
+			} else if len(keys) == 2 {
+				pane = "Remote Control\n ❯ 1. " + rcEnableText + "  Opens a secure connection"
+			}
+		}
+		return nil
 	}
-	b, _ := json.Marshal(map[string]any{"status": "idle", "pid": os.Getpid(), "bridgeSessionId": "b1"})
-	os.WriteFile(home(t)+"/.claude/sessions/1.json", b, 0o600)
-	if s, pid := hostState(); pid != os.Getpid() || s != "idle" {
-		t.Fatal("a whole entry:", s, pid)
+	go func() {
+		time.Sleep(100 * time.Millisecond)
+		mu.Lock()
+		pane = "signed-in claude.ai account or " + rcChangedText + " on this machine — run /remote-control"
+		mu.Unlock()
+	}()
+	l := routerLogin{Credentials: pairJSON(4000), Account: acct2Record}
+	done := make(chan struct{})
+	go func() { afterSwitch(l, nil); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("afterSwitch hung")
+	}
+	if b, err := os.ReadFile(accountProof()); err != nil || !strings.Contains(string(b), `"acct-2"`) {
+		t.Fatalf("proof: %v %s", err, b)
+	}
+	if localAccount() != "acct-2" {
+		t.Fatal("the old record written back by claude stayed")
+	}
+	if strings.Join(keys, "|") != "-l /remote-control|Enter|Enter" || liveBridge() != "cse_new" {
+		t.Fatalf("keys %q, bridge %s", keys, liveBridge())
 	}
 }
 
-// a switch the router asked for (command "claude-account", router/accountswap.go): a host that never goes idle (its
-// account ran out of usage) is restarted once hostSwapGrace has passed since the command
-func TestRestartHostForcedAfterSwitchCommand(t *testing.T) {
+// the installed token turns out to be another account's: no proof, nothing typed
+func TestAfterSwitchWrongAccount(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
-	os.MkdirAll(home(t)+"/.claude/sessions", 0o700)
-	b, _ := json.Marshal(map[string]any{"status": "busy", "pid": os.Getpid(), "bridgeSessionId": "b1"})
-	os.WriteFile(home(t)+"/.claude/sessions/1.json", b, 0o600)
-	oldKill, oldPoll, oldGrace := killHost, hostIdlePoll, hostSwapGrace
-	defer func() { killHost, hostIdlePoll, hostSwapGrace = oldKill, oldPoll, oldGrace; swapAskedAt.Store(0) }()
-	hostIdlePoll, hostSwapGrace = 10*time.Millisecond, 150*time.Millisecond
-	var mu sync.Mutex
-	kills := 0
-	killHost = func() error {
-		mu.Lock()
-		kills++
-		mu.Unlock()
-		os.Remove(home(t) + "/.claude/sessions/1.json")
-		os.Remove(switchPath())
-		return nil
-	}
-	os.WriteFile(switchPath(), []byte(acct2Record), 0o600)
-	credsSyncOn.Store(true) // the sync runs: the command doesn't start another
-	defer credsSyncOn.Store(false)
-	claudeAccountCmd()
-	done := make(chan struct{})
-	go func() { restartHostWhenIdle(); close(done) }()
-	time.Sleep(60 * time.Millisecond)
-	mu.Lock()
-	if kills != 0 {
-		t.Fatal("a busy host was restarted before the grace")
-	}
-	mu.Unlock()
-	select {
-	case <-done:
-	case <-time.After(3 * time.Second):
-		t.Fatal("a busy host was never restarted after the switch command")
-	}
-	if kills != 1 || swapAskedAt.Load() != 0 {
-		t.Fatal("kills", kills, "pending", swapAskedAt.Load())
-	}
-	// without the command, a busy host is left alone (TestRestartHostWhenIdle)
-	if swapForced() {
-		t.Fatal("forced with no command pending")
+	os.MkdirAll(home(t)+"/.claude", 0o700)
+	quietAfterSwitch(t)
+	profileOf = func(string) (string, string, error) { return "acct-9", "other@example.com", nil }
+	typed := false
+	sendKeys = func(...string) error { typed = true; return nil }
+	afterSwitch(routerLogin{Credentials: pairJSON(4000), Account: acct2Record}, nil)
+	if _, err := os.Stat(accountProof()); err == nil || typed {
+		t.Fatal("a proof for the wrong account, or keys typed")
 	}
 }

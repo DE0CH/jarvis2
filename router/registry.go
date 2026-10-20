@@ -44,6 +44,10 @@ type Registry struct {
 	OneShotDone     bool      `json:"oneShotDone"`
 	Refusals        []Refusal `json:"refusals"`
 	Workers         *Workers  `json:"workers"` // nil: the machine doesn't count them (an image from before)
+	// accountswap.go: the account Anthropic named for the token installed by an account switch
+	// (machine/claudelogin.go afterSwitch); AccountSection: the image reports it at all
+	AccountProof   string `json:"accountProof,omitempty"`
+	AccountSection bool   `json:"accountSection,omitempty"`
 }
 
 // Workers: what the host conversation's harness has running besides itself (machine/workers.go, from Claude
@@ -197,6 +201,11 @@ func parseRegistry(raw string) *Registry {
 	oneShotPart, rest4 := cut(rest3, "__AUTH__")
 	authPart, rest5 := cut(rest4, "__REFUSAL__")
 	refusalPart, workersPart := cut(rest5, "__WORKERS__")
+	refusalPart, accountPart, hasAccount := strings.Cut(refusalPart, "__ACCOUNT__") // images from 2026-10-20 on
+	proof := ""
+	for _, e := range jsonLines(accountPart) {
+		proof = str(e, "accountUuid")
+	}
 	failed, credsExp := parseLogin(authPart)
 	refusals := parseRefusals(refusalPart)
 	oneShotDone := regexp.MustCompile(`(?m)^done\b`).MatchString(strings.TrimSpace(oneShotPart))
@@ -242,5 +251,6 @@ func parseRegistry(raw string) *Registry {
 		BridgeSessionID: str(host, "bridgeSessionId"), HostPid: num(host, "pid"), SessionID: sid,
 		AuthFailed: failed[sid], CredsExpiresAt: credsExp, SessionsInside: len(entries),
 		OneShotDone: oneShotDone, Refusals: refusals, Workers: parseWorkers(workersPart, sid),
+		AccountSection: hasAccount, AccountProof: proof,
 	}
 }
