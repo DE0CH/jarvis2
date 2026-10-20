@@ -1,4 +1,4 @@
-"""Watch check runner (k8s/apps/watch.yaml): runs a session's watch check script (bash) and answers its exit code and
+"""Watch check runner (k8s/services/apps/watch/watch.yaml): runs a session's watch check script (bash) and answers its exit code and
 output. The router (router/watches.go) is its only caller and decides everything else: when a check is due, what an
 exit means, the delivery into the session.
 
@@ -12,7 +12,7 @@ outlives it for long.
   GET  /healthz   the process answers (liveness)
   GET  /readyz    takes checks; 503 once SIGTERM arrived
 
-Two replicas, rolled one at a time (k8s/apps/watch.yaml). On SIGTERM a replica answers not-ready, keeps serving
+Two replicas, rolled one at a time (k8s/services/apps/watch/watch.yaml). On SIGTERM a replica answers not-ready, keeps serving
 DRAIN_S while the Service drops it, waits for the checks it is running (at most MAX_TIMEOUT), then exits.
 """
 import json

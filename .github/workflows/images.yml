@@ -160,26 +160,23 @@ jobs:
           git merge-base --is-ancestor "$GITHUB_SHA" origin/main || { echo "$GITHUB_SHA isn't on main: nothing pinned"; exit 1; }
           git reset -q --hard origin/main
           [ -d k8s ] || exit 0
-          cur="$(grep -ho 'jarvis2-router:sha-[0-9a-f]*' k8s/apps/router.yaml | head -1 | cut -d- -f3)"
-          [ -n "$cur" ] || { echo "k8s/apps/router.yaml pins no router image"; exit 1; }
+          RF=k8s/control/apps/router/router.yaml
+          cur="$(grep -ho 'jarvis2-router:sha-[0-9a-f]*' "$RF" | head -1 | cut -d- -f3)"
+          [ -n "$cur" ] || { echo "$RF pins no router image"; exit 1; }
           if [ -n "$cur" ] && full="$(git rev-parse -q --verify "$cur^{commit}")" && [ "$full" != "$GITHUB_SHA" ] \
              && git merge-base --is-ancestor "$GITHUB_SHA" "$full"; then echo "main already pins a newer build ($cur)"; exit 0; fi
           # every image by digest (its linux/amd64 manifest): a tag pushed again from elsewhere changes nothing that runs
           R="$(infra/image-digest.sh "ghcr.io/de0ch/jarvis2-router:$T")"
-          # the old box (k8s/apps) and the control box (k8s/control/apps/router; docs/DESIGN.md "The boxes")
-          RFILES="$(ls k8s/apps/*.yaml k8s/control/apps/router/router.yaml 2>/dev/null)"
-          sed -i -E "s#ghcr.io/de0ch/jarvis2-router:sha-[0-9a-f]{12}(@sha256:[0-9a-f]{64})?#$R#g" $RFILES
+          # the router runs on the control box (k8s/control/apps/router; docs/DESIGN.md "The boxes")
+          sed -i -E "s#ghcr.io/de0ch/jarvis2-router:sha-[0-9a-f]{12}(@sha256:[0-9a-f]{64})?#$R#g" "$RF"
           # the session image: the core starts only that digest, and the phone shows it as a CI build only with this
           # signature (the CI key, environment release; keys/ci.pub)
           S="$(infra/image-digest.sh "ghcr.io/de0ch/jarvis2-session:$T")"
-          sed -i -E "s#ghcr.io/de0ch/jarvis2-session:sha-[0-9a-f]{12}(@sha256:[0-9a-f]{64})?#$S#g" $RFILES
+          sed -i -E "s#ghcr.io/de0ch/jarvis2-session:sha-[0-9a-f]{12}(@sha256:[0-9a-f]{64})?#$S#g" "$RF"
           k="$(mktemp)"; printf '%s\n' "$CI_IMAGE_KEY" > "$k"
           SIG="$(printf '%s' "jarvis2-session-image $S" | openssl dgst -sha256 -sign "$k" | base64 -w0)"; rm -f "$k"
-          for f in k8s/apps/router.yaml k8s/control/apps/router/router.yaml; do
-            [ -f "$f" ] || continue
-            sed -i -E "s#(name: SESSION_IMAGE_SIG, value: \")[^\"]*#\1$SIG#" "$f"
-            grep -q "SESSION_IMAGE_SIG, value: \"$SIG\"" "$f" || { echo "$f has no SESSION_IMAGE_SIG line"; exit 1; }
-          done
+          sed -i -E "s#(name: SESSION_IMAGE_SIG, value: \")[^\"]*#\1$SIG#" "$RF"
+          grep -q "SESSION_IMAGE_SIG, value: \"$SIG\"" "$RF" || { echo "$RF has no SESSION_IMAGE_SIG line"; exit 1; }
           # the base this run built: the session image above stands on it, so session-image/Dockerfile's BASE moves to it
           B="${{ needs.base.outputs.ref }}"
           if [ -n "$B" ]; then
@@ -187,23 +184,12 @@ jobs:
             grep -qxF "ARG BASE=$B" session-image/Dockerfile || { echo "session-image/Dockerfile has no ARG BASE line"; exit 1; }
           fi
           # and keep it in the list of every pinned image, so a resume on a session's own older image still shows as a CI build
-          for f in k8s/apps/session-image-sigs.txt k8s/control/apps/router/session-image-sigs.txt; do
-            [ -f "$f" ] || continue
-            grep -q "^$S " "$f" || echo "$S $SIG" >> "$f"
-          done
-          # the core moves ONLY when core/ changed (the CI-only fake and the tests don't count): a core restart is a new, empty
-          # core (Deyao sets it up again: Reset or Recover), so a router or app push must never restart it
-          corecur="$(grep -ho 'jarvis2-core:sha-[0-9a-f]*' k8s/apps/core.yaml | cut -d- -f3)"
-          # and never while k8s/apps/core.yaml carries the annotation jarvis2/core-pin = hold (a core change waiting for Deyao's go)
-          if grep -q 'jarvis2/core-pin: hold' k8s/apps/core.yaml; then
-            echo "the core is held (jarvis2/core-pin: hold): its new image is built, not pinned"
-          elif ! corefull="$(git rev-parse -q --verify "$corecur^{commit}")" || ! git diff --quiet "$corefull" "$GITHUB_SHA" -- core/ ':!core/fakefly.go' ':!core/*_test.go'; then
-            C="$(infra/image-digest.sh "ghcr.io/de0ch/jarvis2-core:$T")"
-            sed -i -E "s#ghcr.io/de0ch/jarvis2-core:sha-[0-9a-f]{12}(@sha256:[0-9a-f]{64})?#$C#g" k8s/apps/core.yaml
-          fi
-          # the control box's cores (blue/green, k8s/control/apps/core): a core release goes ONLY into the core that doesn't
-          # serve (active.txt names the serving one), never while that core is held (jarvis2/core-pin: hold on its
-          # Deployment); the serving core is never restarted by CI. Deyao then Recovers the new one alongside and the router
+          f=k8s/control/apps/router/session-image-sigs.txt
+          grep -q "^$S " "$f" || echo "$S $SIG" >> "$f"
+          # the cores (blue/green, k8s/control/apps/core): the core moves ONLY when core/ changed (the CI-only fake and the
+          # tests don't count), and a core release goes ONLY into the core that doesn't serve (active.txt names the serving
+          # one), never while that core is held (jarvis2/core-pin: hold on its Deployment): a core restart is a new, empty
+          # core, so the serving core is never restarted by CI. Deyao then Recovers the new one alongside and the router
           # flips (docs/DESIGN.md "Core continuity"); after a flip, active.txt is changed to the new serving colour.
           CF=k8s/control/apps/core/core.yaml
           if [ -f "$CF" ]; then
@@ -218,7 +204,7 @@ jobs:
             if python3 -c "import re,sys; s=open('$CF').read(); sys.exit(0 if re.search(r'name: core-$other, namespace: jarvis2-core, annotations: \{[^}]*core-pin: hold', s) else 1)"; then
               echo "core-$other is held: its new image is built, not pinned"
             elif ! cfull="$(git rev-parse -q --verify "$ccur^{commit}")" || ! git diff --quiet "$cfull" "$GITHUB_SHA" -- core/ ':!core/fakefly.go' ':!core/*_test.go'; then
-              C="${C:-$(infra/image-digest.sh "ghcr.io/de0ch/jarvis2-core:$T")}"
+              C="$(infra/image-digest.sh "ghcr.io/de0ch/jarvis2-core:$T")"
               python3 - "$CF" "$other" "$C" <<'PY'
           import re,sys
           f,col,img=sys.argv[1:4]; s=open(f).read()

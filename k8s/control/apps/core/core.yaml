@@ -5,8 +5,7 @@
 # core that doesn't serve (active.txt here names the serving one; images.yml reads it), so a release never empties
 # the core the sessions use: Deyao Recovers the new one alongside, the router flips, nothing waits on him.
 # No service-account token, no volume, read-only root. Only the router may reach them; they may reach the internet
-# (Fly's API) but nothing inside the cluster. During the move the old box's router reaches core-blue too (NodePort
-# 30190 on the private address, NetworkPolicy below), to Recover it alongside before the move.
+# (Fly's API) but nothing inside the cluster.
 apiVersion: apps/v1
 kind: Deployment
 metadata: { name: core-blue, namespace: jarvis2-core }
@@ -81,17 +80,6 @@ spec:
   selector: { app: core, color: green }
   ports: [{ port: 8090, targetPort: 8090 }]
 ---
-# the move only (docs/RUNBOOK.md "Moving to the two boxes"): the old box's router Recovers core-blue alongside through
-# this, as its NEXT_CORE_URL (http://10.77.0.2:30190)
-apiVersion: v1
-kind: Service
-metadata: { name: core-blue-private, namespace: jarvis2-core }
-spec:
-  type: NodePort
-  externalTrafficPolicy: Local
-  selector: { app: core, color: blue }
-  ports: [{ port: 8090, targetPort: 8090, nodePort: 30190 }]
----
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata: { name: core, namespace: jarvis2-core }
@@ -100,9 +88,6 @@ spec:
   policyTypes: [Ingress, Egress]
   ingress:
     - from: [{ namespaceSelector: { matchLabels: { jarvis2/ns: router } }, podSelector: { matchLabels: { app: router } } }]
-      ports: [{ port: 8090 }]
-    # the old box's router, during the move only
-    - from: [{ ipBlock: { cidr: 10.77.0.9/32 } }]
       ports: [{ port: 8090 }]
   egress:
     - to: [{ namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: kube-system } }, podSelector: { matchLabels: { k8s-app: kube-dns } } }]

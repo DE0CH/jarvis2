@@ -1,4 +1,4 @@
-// Transcript search service (Jarvis 2: k8s/apps/search.yaml, namespace jarvis2-edge). The router forwards
+// Transcript search service (Jarvis 2: k8s/services/apps/search, namespace jarvis2-services). The router forwards
 // /api/search* (the app) and /m/api/search* (sessions) here; it is never exposed on its own. Hybrid keyword +
 // semantic search over every session transcript of both Jarvises on the Storage Box (archives, Jarvis 1's
 // .paused/ snapshots, .live/ copies of running sessions) and the task records. API: docs/API.md "Transcript search".
@@ -7,7 +7,7 @@
 //      INDEX_INTERVAL_S (crawl period, default 600), PORT (8090), LOCAL_ROOT (dev: a local mirror),
 //      BACKUP_INTERVAL_H (copy to the Storage Box, default 24; 0 = off), MEMORY_LIMIT (bytes, from the pod's limit)
 //
-// Replicas (k8s/apps/search.yaml): every replica serves; one holds the writer lease (lease.js) and runs the crawl,
+// Replicas (k8s/services/apps/search/search.yaml): every replica serves; one holds the writer lease (lease.js) and runs the crawl,
 // the embeddings and the backup. GET /readyz is 200 once the vectors are loaded and until SIGTERM; on SIGTERM a
 // replica stops answering ready, keeps serving for DRAIN_MS while the Service drops it, stops its index run, hands
 // the lease back, finishes in-flight requests and exits. /status says when this copy started and why the previous

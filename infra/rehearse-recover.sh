@@ -1,6 +1,7 @@
 #!/bin/bash
 # rehearse-recover.sh — the Recover path end to end on a REAL throwaway box, built the way production is built
-# (infra/cloudflare.py, infra/create.sh, infra/cloud-init.sh, Flux applying ./k8s/apps with the production images),
+# as production's control box (infra/cloudflare.py, infra/create.sh BOX_KIND=control, infra/cloud-init.sh, Flux applying
+# ./k8s/control/apps with the production images),
 # in the Hetzner project "runners", never the jarvis2 project. It never touches the production box, core, router,
 # tunnel, Access apps, WireGuard peer or bucket.
 #

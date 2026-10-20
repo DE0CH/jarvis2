@@ -96,8 +96,8 @@ spec:
   podSelector: { matchLabels: { app: search } }
   policyTypes: [Ingress, Egress]
   ingress:
-    # the routers: the control box, and the old box until the move is done (k8s/services/README in DESIGN "The boxes")
-    - from: [{ ipBlock: { cidr: 10.77.0.2/32 } }, { ipBlock: { cidr: 10.77.0.9/32 } }]
+    # the router (the control box)
+    - from: [{ ipBlock: { cidr: 10.77.0.2/32 } }]
       ports: [{ port: 8090 }]
   egress:
     - to: [{ namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: kube-system } }, podSelector: { matchLabels: { k8s-app: kube-dns } } }]

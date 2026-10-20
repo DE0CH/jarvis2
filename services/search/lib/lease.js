@@ -1,4 +1,4 @@
-// Several search replicas share ONE SQLite file on the volume (k8s/apps/search.yaml: replicas, RollingUpdate). They
+// Several search replicas share ONE SQLite file on the volume (k8s/services/apps/search/search.yaml: replicas, RollingUpdate). They
 // all serve queries; exactly one, the WRITER, crawls, embeds and backs up. Who writes is a lease row in the database
 // itself (kv 'writer' = {holder, until}), taken and renewed inside BEGIN IMMEDIATE, so the handover needs nothing
 // but the file every replica already opens:

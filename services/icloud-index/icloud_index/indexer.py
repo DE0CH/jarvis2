@@ -134,7 +134,7 @@ class Indexer:
         if self.status["auth"] != "expired":
             log(f"iCloud session no longer works: {str(e)[:200]}")
         self.status["auth"] = "expired"
-        self.notice(conn, "auth", "iCloud index: the saved iCloud login has expired, so indexing has paused. Ask a session to run the icloud-drive skill's login (you approve one Apple 2FA code) and write the new session into k8s/secrets/icloud-session.enc.yaml (infra/router-secrets.py --part icloud-session); the index picks it up by itself.")
+        self.notice(conn, "auth", "iCloud index: the saved iCloud login has expired, so indexing has paused. Ask a session to run the icloud-drive skill's login (you approve one Apple 2FA code) and write the new session into k8s/services/secrets/icloud-session.enc.yaml (infra/router-secrets.py --part icloud-session); the index picks it up by itself.")
 
     def wait_auth(self, conn):
         """Blocks until the iCloud session works again (a new login lands in the Secret)."""
@@ -312,7 +312,7 @@ class Indexer:
                 conn.execute("UPDATE files SET state='wait-ai', tries=max(tries-1, 0) WHERE id=?", (f["id"],))
                 if AI_BUDGET_USD > 0 and not D.kv_get(conn, "notice:billing"):  # 0 = AI reading not switched on yet: nothing to report
                     spent = float(D.kv_get(conn, "ai_spent", 0) or 0)
-                    self.notice(conn, "budget", f"iCloud index: the AI budget (USD {AI_BUDGET_USD:.2f}) is used up (USD {spent:.2f} spent). Images, scans, video frames and speech are waiting; names and text documents keep being indexed. Raising AI_BUDGET_USD in k8s/apps/icloud-index.yaml (DE0CH/jarvis2) resumes them.")
+                    self.notice(conn, "budget", f"iCloud index: the AI budget (USD {AI_BUDGET_USD:.2f}) is used up (USD {spent:.2f} spent). Images, scans, video frames and speech are waiting; names and text documents keep being indexed. Raising AI_BUDGET_USD in k8s/services/apps/icloud-index/icloud-index.yaml (DE0CH/jarvis2) resumes them.")
             except Exception as e:
                 if conn.in_transaction: conn.execute("ROLLBACK")
                 auth = isinstance(e, remote.AuthError)

@@ -2,7 +2,7 @@
 """Cloudflare side of Jarvis 2 (idempotent): the tunnel, its DNS name, the two Access apps, the setup
 session's service token. Writes TUNNEL_TOKEN (for the box) and SETUP_ACCESS_ID/SECRET (for the setup
 session, Jarvis 1's default store as JARVIS2_SETUP_ACCESS_ID/SECRET) to OUT (mode 600); prints nothing secret.
-The apps' audiences are not secret: they are in k8s/apps/router.yaml (the script prints them to check).
+The apps' audiences are not secret: they are in k8s/control/apps/router/router.yaml (the script prints them to check).
 
   CF_JARVIS2_INFRA_TOKEN  tunnel + Access apps + DNS (scoped token "jarvis2-infra")
   CLOUDFLARE_API          only to mint the setup service token (the scoped token can't)
@@ -12,15 +12,8 @@ The apps' audiences are not secret: they are in k8s/apps/router.yaml (the script
                                Jarvis 1's way to the Claude login (router/claudelogin.go /peer/*): the service token
                                jarvis1-claude-login (kept unless ROTATE=1; a new one's JARVIS2_LOGIN_ID/SECRET go to
                                OUT, mode 600) and the Access app jarvis2.deyaochen.com/peer admitting only it; prints
-                               the app's audience and the token's client id (k8s/apps/router.yaml ACCESS_PEER_AUD,
+                               the app's audience and the token's client id (k8s/control/apps/router/router.yaml ACCESS_PEER_AUD,
                                JARVIS1_LOGIN_CLIENT_ID; neither is secret)
-  infra/cloudflare.py --move OUT | --move-off
-                               the router move (docs/RUNBOOK.md "Moving to the two boxes"): the old box's NodePorts
-                               listen only on its node IP, so the control box's router reaches the old one's move port
-                               through the old box's tunnel: ingress jarvis2.deyaochen.com/move/* → router-private:8082,
-                               behind the Access app jarvis2.deyaochen.com/move admitting only the service token
-                               jarvis2-move (MOVE_ACCESS_ID/SECRET to OUT, mode 600). --move-off removes the ingress rule,
-                               the app and the token after the move
   infra/cloudflare.py --devices  only the paired apps' Access app (CF_JARVIS2_INFRA_TOKEN); prints its audience
   infra/cloudflare.py --health OUT
                                the external uptime probe's way in (router/healthz.go GET /healthz): the service token
@@ -35,7 +28,7 @@ Access apps (created Access first, then DNS, so the hostname is never reachable 
   "Jarvis 2 health" jarvis2.deyaochen.com/healthz service token jarvis2-health-probe only (Grafana's uptime probe)
   "Jarvis 2 devices" jarvis2.deyaochen.com/api/remotes and /api/sessions/*/start: Deyao's email, or ANY service token
                     of the account (Deyao's paired OpenClaw/Paseo apps); the router admits a token only when it is a
-                    paired device's (router/devices.go). Audience: ACCESS_DEVICES_AUD in k8s/apps/router.yaml
+                    paired device's (router/devices.go). Audience: ACCESS_DEVICES_AUD in k8s/control/apps/router/router.yaml
 Session machines don't come through Cloudflare at all (Fly's private network, docs/API.md).
 
 A rehearsal box (infra/rehearse-recover.sh) gets its own of each, never production's:
@@ -116,7 +109,7 @@ def peer(out):
         write_out(out, {"JARVIS2_LOGIN_ID": tok["client_id"], "JARVIS2_LOGIN_SECRET": tok["client_secret"]})
     aud = access_app("Jarvis 2 peer", HOST + "/peer", {
         "name": "Jarvis 1", "decision": "non_identity", "include": [{"service_token": {"token_id": tok["id"]}}]})
-    print(f"ok (k8s/apps/router.yaml): ACCESS_PEER_AUD={aud} JARVIS1_LOGIN_CLIENT_ID={tok['client_id']}")
+    print(f"ok (k8s/control/apps/router/router.yaml): ACCESS_PEER_AUD={aud} JARVIS1_LOGIN_CLIENT_ID={tok['client_id']}")
 def health(out):
     """the uptime probe's service token for /healthz (minted with CLOUDFLARE_API), then its app"""
     big = os.environ["CLOUDFLARE_API"]
@@ -131,44 +124,6 @@ def health(out):
     aud = access_app("Jarvis 2 health", HOST + "/healthz", {
         "name": "uptime probe", "decision": "non_identity", "include": [{"service_token": {"token_id": tok["id"]}}]})
     print(f"ok (k8s/control/apps/router/router.yaml): ACCESS_HEALTH_AUD={aud} HEALTH_CLIENT_ID={tok['client_id']}")
-
-
-MOVE_ORIGIN = "http://router-private.jarvis2-router.svc.cluster.local:8082"
-
-
-def tunnel_rules(edit):
-    """the jarvis2 tunnel's ingress, changed by edit(rules) -> rules (the rest of the config kept)"""
-    tun = call("GET", f"/accounts/{ACCOUNT}/cfd_tunnel?name=jarvis2&is_deleted=false")[0]
-    cfg = call("GET", f"/accounts/{ACCOUNT}/cfd_tunnel/{tun['id']}/configurations")["config"]
-    cfg["ingress"] = edit(cfg["ingress"])
-    call("PUT", f"/accounts/{ACCOUNT}/cfd_tunnel/{tun['id']}/configurations", {"config": cfg})
-    return [r.get("hostname", "") + r.get("path", "") + " -> " + r["service"] for r in cfg["ingress"]]
-
-
-def move(out):
-    big = os.environ["CLOUDFLARE_API"]
-    toks = call("GET", f"/accounts/{ACCOUNT}/access/service_tokens", token=big)
-    tok = next((t for t in toks if t["name"] == "jarvis2-move"), None)
-    if not tok:
-        tok = call("POST", f"/accounts/{ACCOUNT}/access/service_tokens", {"name": "jarvis2-move", "duration": "720h"}, token=big)
-        write_out(out, {"MOVE_ACCESS_ID": tok["client_id"], "MOVE_ACCESS_SECRET": tok["client_secret"]})
-    # the Access app first, so the path is never reachable ungated
-    access_app("Jarvis 2 move", HOST + "/move", {
-        "name": "the control box's router", "decision": "non_identity", "include": [{"service_token": {"token_id": tok["id"]}}]})
-    rule = {"hostname": HOST, "path": "^/move/", "service": MOVE_ORIGIN}
-    print("ingress:", tunnel_rules(lambda rs: [rule] + [r for r in rs if r.get("path") != "^/move/"]))
-
-
-def move_off():
-    print("ingress:", tunnel_rules(lambda rs: [r for r in rs if r.get("path") != "^/move/"]))
-    for a in call("GET", f"/accounts/{ACCOUNT}/access/apps"):
-        if a.get("domain") == HOST + "/move":
-            call("DELETE", f"/accounts/{ACCOUNT}/access/apps/{a['id']}")
-    big = os.environ["CLOUDFLARE_API"]
-    for t in call("GET", f"/accounts/{ACCOUNT}/access/service_tokens", token=big):
-        if t["name"] == "jarvis2-move":
-            call("DELETE", f"/accounts/{ACCOUNT}/access/service_tokens/{t['id']}", token=big)
-    print("ok: the move's path, app and token are gone")
 
 
 DEVICE_PATHS = ["/api/remotes", "/api/sessions/*/start"]
@@ -236,10 +191,6 @@ def rehearsal(name, out):
 def main():
     if sys.argv[1:2] == ["--peer"]:
         return peer(sys.argv[2])
-    if sys.argv[1:2] == ["--move"]:
-        return move(sys.argv[2])
-    if sys.argv[1:] == ["--move-off"]:
-        return move_off()
     if sys.argv[1:2] == ["--health"]:
         return health(sys.argv[2])
     if sys.argv[1:] == ["--devices"]:
@@ -269,7 +220,7 @@ def main():
     aud = access_app("Jarvis 2", HOST, {"name": "Deyao", "decision": "allow", "include": [{"email": {"email": EMAIL}}]})
     setup_aud = access_app("Jarvis 2 setup", HOST + "/setup", {
         "name": "setup session", "decision": "non_identity", "include": [{"service_token": {"token_id": tok_id}}]})
-    print(f"audiences (k8s/apps/router.yaml): ACCESS_APP_AUD={aud} ACCESS_SETUP_AUD={setup_aud}")
+    print(f"audiences (k8s/control/apps/router/router.yaml): ACCESS_APP_AUD={aud} ACCESS_SETUP_AUD={setup_aud}")
 
     # 3. the tunnel (remotely managed) and its ingress, then DNS last
     tid, vals["TUNNEL_TOKEN"] = tunnel_and_dns(HOST, "jarvis2")

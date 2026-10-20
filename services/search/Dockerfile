@@ -1,4 +1,4 @@
-# Transcript search (k8s/apps/search.yaml). Build context = this directory (.github/workflows/services.yml).
+# Transcript search (k8s/services/apps/search/search.yaml). Build context = this directory (.github/workflows/services.yml).
 # The tests run in the build, so a broken index never ships.
 FROM node:22-bookworm-slim AS deps
 RUN apt-get update && apt-get install -y --no-install-recommends python3 make g++ && rm -rf /var/lib/apt/lists/*

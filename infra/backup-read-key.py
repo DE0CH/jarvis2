@@ -11,10 +11,7 @@ The admin key HETZNER_S3_* does the bucket policies and the cleanup. The new key
 
   backup-read-key.py login       log the Console in (project "Cloud Code", 2827255)
   backup-read-key.py generate    a new credential "jarvis2-backup-read" → FILE (refuses if FILE exists)
-  backup-read-key.py policies [--both]
-                                 the new access key replaces the old one as the principal in both bucket policies
-                                 (--both: names it beside the old one, while the old box's router still uses the old
-                                 key; a plain run later drops the old one)
+  backup-read-key.py policies    the new access key replaces the old one as the principal in both bucket policies
                                  (jarvis2-backup-de0ch: Deny of 27 changing actions; de0ch-claude-6fdff6: Deny s3:*);
                                  the old access key is kept in ~/.jarvis2/backup-read.old for delete-old
   backup-read-key.py allow-put   the key may add object versions to the backup bucket (s3:PutObject leaves its Deny):
@@ -23,10 +20,10 @@ The admin key HETZNER_S3_* does the bucket policies and the cleanup. The new key
   backup-read-key.py test        what the new key may do (wait ~1 min after `policies`: a multi-delete went through
                                  once seconds after a policy write); throwaway names only, cleaned up by the admin key
   backup-read-key.py delete-old  delete the old credential in the Console (its row's ⋯ → Delete → OK)
-  backup-read-key.py install [--box control]
-                                 the router's secrets: infra/router-secrets.py --part backup (SOPS to the box's
-                                 age key, k8s/secrets/router-backup.enc.yaml), then shred FILE; commit and push
-                                 that file and k8s/apps/router.yaml (the router restarts with it)
+  backup-read-key.py install     the router's secrets: infra/router-secrets.py --box control --part backup (SOPS to
+                                 the control box's age key, k8s/control/secrets/router-backup.enc.yaml), then shred
+                                 FILE; commit and push that file and k8s/control/apps/router/router.yaml (the router
+                                 restarts with it)
 """
 import json, os, re, secrets, subprocess, sys, time
 
@@ -126,10 +123,9 @@ def generate():
         print(f"ok: {NAME} generated (access key {ak[:4]}…) → {FILE}")
 
 
-def policies(both=False):
-    """the new key becomes the policies' principal. With both=True (a router moving to another box: the old box's
-    router still serves backups to Recover with the old key) the old key stays named beside it, so neither key is ever
-    unrestricted; a later plain run removes the old one."""
+def policies():
+    """the new key becomes the policies' principal; the old one is kept in OLD for delete-old. Run delete-old right
+    after: a key the Deny no longer names is unrestricted until it is deleted."""
     s3, (new, _) = admin(), newkey()
     olds = set()
     docs = {}
@@ -141,8 +137,6 @@ def policies(both=False):
     others = olds - {new}
     if not others and new in olds:
         print("ok: both policies name only the new key"); return
-    if both and new in olds:
-        print("ok: both policies already name the new key beside the old one"); return
     assert len(others) == 1, "the policies name more than one other key"
     old = others.pop()
     with os.fdopen(os.open(OLD, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w") as f:
@@ -153,12 +147,12 @@ def policies(both=False):
         st = j["Statement"][0]
         acts = lambda x: sorted(x if isinstance(x, list) else [x])
         want_actions, want_resource = acts(st["Action"]), st["Resource"]
-        st["Principal"] = {"AWS": [arn(old), arn(new)] if both else arn(new)}
+        st["Principal"] = {"AWS": arn(new)}
         s3.put_bucket_policy(Bucket=b, Policy=json.dumps(j))
         back = json.loads(s3.get_bucket_policy(Bucket=b)["Policy"])["Statement"][0]
         text = json.dumps(back["Principal"])
-        assert new in text and (old in text) == both and acts(back["Action"]) == want_actions and back["Resource"] == want_resource, b
-        print(f"ok: {b} {sid}: the principal is the new key" + (" and the old one" if both else ", the old one is gone"))
+        assert new in text and old not in text and acts(back["Action"]) == want_actions and back["Resource"] == want_resource, b
+        print(f"ok: {b} {sid}: the principal is the new key, the old one is gone")
 
 
 def allow_put():
@@ -248,13 +242,13 @@ def delete_old():
     print("ok: the old credential is deleted")
 
 
-def install(box=""):
+def install():
     ak, sk = newkey()
     env = dict(os.environ, BACKUP_READ_ACCESS_KEY=ak, BACKUP_READ_SECRET_KEY=sk)
-    subprocess.run([sys.executable, os.path.join(ROOT, "infra/router-secrets.py")] + (["--box", box] if box else []) +
-                   ["--part", "backup", "BACKUP_READ_ACCESS_KEY", "BACKUP_READ_SECRET_KEY"], check=True, env=env)
+    subprocess.run([sys.executable, os.path.join(ROOT, "infra/router-secrets.py"), "--box", "control",
+                    "--part", "backup", "BACKUP_READ_ACCESS_KEY", "BACKUP_READ_SECRET_KEY"], check=True, env=env)
     subprocess.run(["shred", "-u", FILE], check=True)
-    print(f"ok: in k8s/secrets/router-backup.enc.yaml (commit and push it with k8s/apps/router.yaml); {FILE} shredded")
+    print(f"ok: in k8s/control/secrets/router-backup.enc.yaml (commit and push it with k8s/control/apps/router/router.yaml); {FILE} shredded")
 
 
 if __name__ == "__main__":
@@ -262,9 +256,4 @@ if __name__ == "__main__":
     a = sys.argv[1:]
     if not a or a[0] not in cmds:
         raise SystemExit(__doc__)
-    if a[0] == "policies":
-        policies(both="--both" in a)
-    elif a[0] == "install" and a[1:2] == ["--box"]:
-        install(a[2])
-    else:
-        cmds[a[0]]()
+    cmds[a[0]]()

@@ -1,4 +1,4 @@
-# iCloud Drive index (k8s/apps/icloud-index.yaml, icloud_index/server.py). Build context = this
+# iCloud Drive index (k8s/services/apps/icloud-index/icloud-index.yaml, icloud_index/server.py). Build context = this
 # directory (.github/workflows/services.yml). trixie: its SQLite (>= 3.43) has FTS5
 # contentless_delete. The unit tests run in the build, so a broken index never ships.
 FROM python:3.13-slim-trixie

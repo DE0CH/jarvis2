@@ -1,80 +1,76 @@
 #!/usr/bin/env python3
-"""router-secrets.py — write the router's non-sensitive secrets into git, SOPS-encrypted to the box's age key
-(keys/box-age.pub); Flux decrypts them on the box (k8s/flux/sync.yaml, Kustomization jarvis2-secrets).
+"""router-secrets.py — write a box's non-sensitive secrets into git, SOPS-encrypted to that box's age key; the box's
+Flux decrypts them (k8s/flux/<box>.yaml, Kustomization <box>-secrets).
 
-    infra/router-secrets.py [--box control|services] [--part backup|github|flyorgs|flypersonal|flyvolumes|browserbase|devices|search|icloud-index|icloud-session|alloy|move] KEY[=SRC] …
+    infra/router-secrets.py --box control|services [--part PART] KEY[=SRC] …
 
 --box picks the box (docs/DESIGN.md "The boxes"): its age key (keys/<box>-age.pub), its secrets directory
-(k8s/<box>/secrets/) and its manifests (k8s/<box>/apps/<app>/). Without --box: the old single box (keys/box-age.pub,
-k8s/secrets/, k8s/apps/), until it is retired. Each box gets only its own parts:
-  control   (default), backup, github, flyorgs, flypersonal, flyvolumes, browserbase, devices, alloy, move
+(k8s/<box>/secrets/) and its manifests (k8s/<box>/apps/<app>/, whose annotation the run bumps so the pod restarts with
+the new Secret). Each box gets only its own parts:
+  control   (default), backup, github, flyorgs, flypersonal, flyvolumes, browserbase, devices, alloy
   services  search, icloud-index, icloud-session, alloy
-  --part alloy   Secret alloy in jarvis2-obs — GRAFANA_LOGS_URL/USER, GRAFANA_METRICS_URL/USER, GRAFANA_WRITE_TOKEN: the
-                 host's Grafana Alloy reads it (infra/alloy/; no pod uses it, so no manifest annotation)
-  --part move    Secret router-move in jarvis2-router — MOVE_KEY: the shared key of the cross-box router move
-                 (router/move.go); the old box's router gets the same value (without --box)
 
 SRC is `env:VAR` (default `env:KEY`) or `file:PATH`. A part is one Secret, rewritten whole each run, so name
 every key of that part (nobody can read the old values back: only the box holds the age key):
-  (default)      k8s/secrets/router.enc.yaml, Secret router-secrets — LOBSTER_TOKEN, Storage Box, tokens…
-  --part backup  k8s/secrets/router-backup.enc.yaml, Secret router-secrets-backup — the backup bucket's read
-                 credential (BACKUP_READ_ACCESS_KEY, BACKUP_READ_SECRET_KEY), set once per box / credential
-  --part github  k8s/secrets/router-github.enc.yaml, Secret router-secrets-github — GITHUB_READ_TOKEN only (the
+  (default)      router.enc.yaml, Secret router-secrets — LOBSTER_TOKEN, Storage Box, tokens…
+  --part backup  router-backup.enc.yaml, Secret router-secrets-backup — the backup bucket's read
+                 credential (BACKUP_READ_ACCESS_KEY, BACKUP_READ_SECRET_KEY; infra/backup-read-key.py install)
+  --part github  router-github.enc.yaml, Secret router-secrets-github — GITHUB_READ_TOKEN only (the
                  repo picker's list token), so it can be replaced without rewriting the default part. It is the
                  LAST envFrom in router.yaml, so it wins over the stale GITHUB_READ_TOKEN still in the default part
-  --part flyorgs k8s/secrets/router-flyorgs.enc.yaml, Secret router-secrets-flyorgs — FLY_ORG_READ_TOKENS only:
+  --part flyorgs router-flyorgs.enc.yaml, Secret router-secrets-flyorgs — FLY_ORG_READ_TOKENS only:
                  {"<org slug>": "<read-only org token>"} for the Machines view's other orgs (router/flyorgs.go)
-  --part flypersonal  k8s/secrets/router-flypersonal.enc.yaml — FLY_PERSONAL_READ_TOKEN only: org personal's read-only
+  --part flypersonal  router-flypersonal.enc.yaml — FLY_PERSONAL_READ_TOKEN only: org personal's read-only
                  token for the Machines view (infra/fly-personal-read-token.sh; router/flyorgs.go)
-  --part flyvolumes  k8s/secrets/router-flyvolumes.enc.yaml — FLY_VOLUME_TOKEN only: the token that can do nothing but
+  --part flyvolumes  router-flyvolumes.enc.yaml — FLY_VOLUME_TOKEN only: the token that can do nothing but
                  delete volumes in jarvis2-sessions (infra/fly-volume-token.sh), for the leftover-volume sweep
                  (router/volsweep.go, DECISIONS 195)
-  --part browserbase  k8s/secrets/router-browserbase.enc.yaml — BROWSERBASE_API_KEY only (router/bbbudget.go: the
+  --part browserbase  router-browserbase.enc.yaml — BROWSERBASE_API_KEY only (router/bbbudget.go: the
                  spend DM reads the session list)
-  --part devices k8s/secrets/router-devices.enc.yaml — CF_DEVICE_TOKENS_API only: the Cloudflare token "jarvis2-device-tokens"
+  --part devices router-devices.enc.yaml — CF_DEVICE_TOKENS_API only: the Cloudflare token "jarvis2-device-tokens"
                  (Access: Service Tokens read/write, nothing else) that mints and deletes the paired apps' tokens (router/devices.go)
-  --part search  k8s/secrets/search.enc.yaml, Secret search-secrets in jarvis2-edge — STORAGEBOX_HOST/USER/PASSWORD
-                 and OPENROUTER_API for transcript search (k8s/apps/search.yaml)
-  --part icloud-index    k8s/secrets/icloud-index.enc.yaml, Secret icloud-index-secrets in jarvis2-edge — OPENROUTER_API,
-                 LOBSTER_TOKEN, STORAGEBOX_HOST/USER/PASSWORD for the iCloud index (k8s/apps/icloud-index.yaml)
-  --part icloud-session  k8s/secrets/icloud-session.enc.yaml, Secret icloud-index-session — ICLOUD_RCLONE_CONF only (the
+  --part alloy   alloy.enc.yaml, Secret alloy in jarvis2-obs — GRAFANA_LOGS_URL/USER, GRAFANA_METRICS_URL/USER,
+                 GRAFANA_WRITE_TOKEN: the host's Grafana Alloy reads it (infra/alloy/; no pod uses it, so no annotation)
+  --part search  (services) search.enc.yaml, Secret search-secrets — STORAGEBOX_HOST/USER/PASSWORD and OPENROUTER_API
+                 for transcript search (k8s/services/apps/search/)
+  --part icloud-index    (services) icloud-index.enc.yaml, Secret icloud-index-secrets — OPENROUTER_API, LOBSTER_TOKEN,
+                 STORAGEBOX_HOST/USER/PASSWORD for the iCloud index (k8s/services/apps/icloud-index/)
+  --part icloud-session  (services) icloud-session.enc.yaml, Secret icloud-index-session — ICLOUD_RCLONE_CONF only (the
                  saved iCloud login, mounted as a file; write it again after a re-login, e.g.
                  ICLOUD_RCLONE_CONF=file:~/.config/rclone/rclone.conf)
-Only for secrets that can't reach a code push (Deyao, 2026-10-09); the router's pod gets them as env
-(k8s/apps/router.yaml envFrom). Prints names only, never a value."""
+Only for secrets that can't reach a code push (Deyao, 2026-10-09); the pods get them as env (envFrom). Prints names
+only, never a value."""
 import hashlib, json, os, re, subprocess, sys, tempfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 BOXES = {  # box → (age recipient file, secrets dir, {part: manifest path under k8s/<box>/apps/})
-    "": ("keys/box-age.pub", "k8s/secrets", None),
     "control": ("keys/control-age.pub", "k8s/control/secrets", {
         "": "router/router.yaml", "backup": "router/router.yaml", "github": "router/router.yaml",
         "flyorgs": "router/router.yaml", "flypersonal": "router/router.yaml", "flyvolumes": "router/router.yaml", "browserbase": "router/router.yaml",
-        "devices": "router/router.yaml", "move": "router/router.yaml", "alloy": None}),
+        "devices": "router/router.yaml", "alloy": None}),
     "services": ("keys/services-age.pub", "k8s/services/secrets", {
         "search": "search/search.yaml", "icloud-index": "icloud-index/icloud-index.yaml",
         "icloud-session": "icloud-index/icloud-index.yaml", "alloy": None}),
 }
-PARTS = {  # part → (file, Secret name, annotation, namespace, manifest carrying the annotation)
-    "": ("router.enc.yaml", "router-secrets", "jarvis2/secrets-rev", "jarvis2-router", "router.yaml"),
-    "backup": ("router-backup.enc.yaml", "router-secrets-backup", "jarvis2/secrets-rev-backup", "jarvis2-router", "router.yaml"),
-    "github": ("router-github.enc.yaml", "router-secrets-github", "jarvis2/secrets-rev-github", "jarvis2-router", "router.yaml"),
-    "flyorgs": ("router-flyorgs.enc.yaml", "router-secrets-flyorgs", "jarvis2/secrets-rev-flyorgs", "jarvis2-router", "router.yaml"),
-    "flypersonal": ("router-flypersonal.enc.yaml", "router-secrets-flypersonal", "jarvis2/secrets-rev-flypersonal", "jarvis2-router", "router.yaml"),
-    "flyvolumes": ("router-flyvolumes.enc.yaml", "router-secrets-flyvolumes", "jarvis2/secrets-rev-flyvolumes", "jarvis2-router", "router.yaml"),
-    "browserbase": ("router-browserbase.enc.yaml", "router-secrets-browserbase", "jarvis2/secrets-rev-browserbase", "jarvis2-router", "router.yaml"),
-    "devices": ("router-devices.enc.yaml", "router-secrets-devices", "jarvis2/secrets-rev-devices", "jarvis2-router", "router.yaml"),
-    "search": ("search.enc.yaml", "search-secrets", "jarvis2/secrets-rev-search", "jarvis2-edge", "search.yaml"),
-    "icloud-index": ("icloud-index.enc.yaml", "icloud-index-secrets", "jarvis2/secrets-rev-icloud-index", "jarvis2-edge", "icloud-index.yaml"),
-    "icloud-session": ("icloud-session.enc.yaml", "icloud-index-session", "jarvis2/secrets-rev-icloud-session", "jarvis2-edge", "icloud-index.yaml"),
-    "alloy": ("alloy.enc.yaml", "alloy", None, "jarvis2-obs", None),
-    "move": ("router-move.enc.yaml", "router-move", "jarvis2/secrets-rev-move", "jarvis2-router", "router.yaml"),
+PARTS = {  # part → (file, Secret name, annotation, namespace)
+    "": ("router.enc.yaml", "router-secrets", "jarvis2/secrets-rev", "jarvis2-router"),
+    "backup": ("router-backup.enc.yaml", "router-secrets-backup", "jarvis2/secrets-rev-backup", "jarvis2-router"),
+    "github": ("router-github.enc.yaml", "router-secrets-github", "jarvis2/secrets-rev-github", "jarvis2-router"),
+    "flyorgs": ("router-flyorgs.enc.yaml", "router-secrets-flyorgs", "jarvis2/secrets-rev-flyorgs", "jarvis2-router"),
+    "flypersonal": ("router-flypersonal.enc.yaml", "router-secrets-flypersonal", "jarvis2/secrets-rev-flypersonal", "jarvis2-router"),
+    "flyvolumes": ("router-flyvolumes.enc.yaml", "router-secrets-flyvolumes", "jarvis2/secrets-rev-flyvolumes", "jarvis2-router"),
+    "browserbase": ("router-browserbase.enc.yaml", "router-secrets-browserbase", "jarvis2/secrets-rev-browserbase", "jarvis2-router"),
+    "devices": ("router-devices.enc.yaml", "router-secrets-devices", "jarvis2/secrets-rev-devices", "jarvis2-router"),
+    "search": ("search.enc.yaml", "search-secrets", "jarvis2/secrets-rev-search", "jarvis2-services"),
+    "icloud-index": ("icloud-index.enc.yaml", "icloud-index-secrets", "jarvis2/secrets-rev-icloud-index", "jarvis2-services"),
+    "icloud-session": ("icloud-session.enc.yaml", "icloud-index-session", "jarvis2/secrets-rev-icloud-session", "jarvis2-services"),
+    "alloy": ("alloy.enc.yaml", "alloy", None, "jarvis2-obs"),
 }
 
 
 def main():
     args = sys.argv[1:]
-    box, part = "", ""
+    box, part = None, ""
     if args[:1] == ["--box"]:
         box, args = args[1], args[2:]
     if args[:1] == ["--part"]:
@@ -82,15 +78,10 @@ def main():
     if not args or part not in PARTS or box not in BOXES:
         sys.exit(__doc__)
     keyfile, secdir, manifests = BOXES[box]
-    fname, secret, annotation, namespace, manifest = PARTS[part]
-    if manifests is not None:
-        if part not in manifests:
-            sys.exit(f"part {part or '(default)'} doesn't belong on the {box} box")
-        manifest = manifests[part] and os.path.join("k8s", box, "apps", manifests[part])
-        if box == "services":
-            namespace = {"jarvis2-edge": "jarvis2-services"}.get(namespace, namespace)
-    else:
-        manifest = manifest and os.path.join("k8s/apps", manifest)
+    fname, secret, annotation, namespace = PARTS[part]
+    if part not in manifests:
+        sys.exit(f"part {part or '(default)'} doesn't belong on the {box} box")
+    manifest = manifests[part] and os.path.join("k8s", box, "apps", manifests[part])
     out = os.path.join(ROOT, secdir, fname)
     data = {}
     for arg in args:

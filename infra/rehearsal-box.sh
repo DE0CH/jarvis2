@@ -1,11 +1,12 @@
-# rehearsal-box.sh — sourced by infra/rehearse-recover.sh: a throwaway Jarvis 2 box built the way production is
-# (infra/cloudflare.py, infra/create.sh, infra/cloud-init.sh, Flux applying ./k8s/apps at a pinned commit with the
-# production images), in the Hetzner project "runners", never touching production. See that script's header for what
+# rehearsal-box.sh — sourced by infra/rehearse-recover.sh: a throwaway Jarvis 2 control box built the way production's
+# is (infra/cloudflare.py, infra/create.sh BOX_KIND=control, infra/cloud-init.sh, Flux applying ./k8s/control/apps at a
+# pinned commit with the production images), in the Hetzner project "runners", never touching production. No services
+# box and no Hetzner Network (PRIVATE_IP=none): search, the iCloud index and watches don't answer on it. See that script's header for what
 # it tests, and docs/RUNBOOK.md "Rehearsing Recover".
 #
 # One Access app on the hostname whose only policy is the service token NAME; the router runs NO_ACCESS=1 (the test
 # client can't hold Deyao's email login), so the edge is the only gate. MACHINE_URL → the peer NAME, BACKUP_BUCKET → a bucket of its own, RECORDS_OFF=1 and Discord off (no Storage
-# Box or Discord keys on a test box), no k8s/secrets Kustomization (encrypted to production's age key); the router's
+# Box or Discord keys on a test box), no secrets Kustomization (encrypted to production's age key); the router's
 # backup read key is the admin S3 key, in user-data only (a narrowed one is Console-only), and its FLY_READ_TOKEN a
 # fresh read-only narrowing of JARVIS2_FLY_TOKEN (infra/fly-read-token.sh), as production's. All of it rides in the box's
 # user-data (cloud-init's SYNC_YAML/EXTRA_MANIFEST), none in git.
@@ -158,8 +159,40 @@ PY
   step "the core's Fly token (narrowed as production's, expiring in 6 h)"
   FLY_TOKEN_HOURS=6 bash "$ROOT/infra/fly-token.sh" "$W/fly.tok"
 
-  # the box's Flux sync: production's ./k8s/apps at commit REF, with the test's router env (no k8s/secrets)
-  cat > "$W/sync.yaml" <<EOF
+  # the box's Flux sync: production's ./k8s/control/apps at commit REF, one Kustomization per app as production's
+  # (k8s/flux/control.yaml), with the test's router and core env (no secrets Kustomization)
+  core_patch() { cat <<P
+    - target: { kind: Deployment, name: core-$1, namespace: jarvis2-core }
+      patch: |
+        apiVersion: apps/v1
+        kind: Deployment
+        metadata: { name: core-$1, namespace: jarvis2-core }
+        spec:
+          template:
+            spec:
+              containers:
+                - name: core
+                  env:
+                    - { name: MACHINE_URL, value: "http://$NAME._peer.internal:8081" }
+P
+  }
+  ks() { cat <<K
+---
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata: { name: control-$1, namespace: flux-system }
+spec:
+  interval: 1m
+  retryInterval: 30s
+  timeout: 5m
+  sourceRef: { kind: GitRepository, name: jarvis2 }
+  path: ./k8s/control/apps/$1
+  prune: true
+  wait: false
+  serviceAccountName: flux-applier
+K
+  }
+  { cat <<EOF
 apiVersion: source.toolkit.fluxcd.io/v1
 kind: GitRepository
 metadata: { name: jarvis2, namespace: flux-system }
@@ -167,19 +200,10 @@ spec:
   interval: 1m
   url: https://github.com/DE0CH/jarvis2
   ref: { commit: $REF }
----
-apiVersion: kustomize.toolkit.fluxcd.io/v1
-kind: Kustomization
-metadata: { name: jarvis2, namespace: flux-system }
-spec:
-  interval: 1m
-  retryInterval: 30s
-  timeout: 5m
-  sourceRef: { kind: GitRepository, name: jarvis2 }
-  path: ./k8s/apps
-  prune: true
-  wait: false
-  serviceAccountName: flux-applier
+EOF
+    ks edge
+    ks core; echo "  patches:"; core_patch green; core_patch blue
+    ks router; cat <<EOF
   patches:
     - target: { kind: Deployment, name: router, namespace: jarvis2-router }
       patch: |
@@ -197,28 +221,8 @@ spec:
                     - { name: RECORDS_OFF, value: "1" }
                     - { name: DISCORD_SESSION_CHANNELS, value: "off" }
                     - { name: NO_ACCESS, value: "1" }
-    - target: { kind: Deployment, name: core, namespace: jarvis2-core }
-      patch: |
-        apiVersion: apps/v1
-        kind: Deployment
-        metadata: { name: core, namespace: jarvis2-core }
-        spec:
-          template:
-            spec:
-              containers:
-                - name: core
-                  env:
-                    - { name: MACHINE_URL, value: "http://$NAME._peer.internal:8081" }
-    # the old box's tunnel connectors went to 0 when the control box took the tunnel over (the move, 2026-10-16); the
-    # test box is built from ./k8s/apps and its own tunnel needs them
-    - target: { kind: Deployment, name: cloudflared, namespace: jarvis2-edge }
-      patch: |
-        apiVersion: apps/v1
-        kind: Deployment
-        metadata: { name: cloudflared, namespace: jarvis2-edge }
-        spec:
-          replicas: 2
 EOF
+  } > "$W/sync.yaml"
   # the router's read-only Fly token (budget cap, Also on Fly, the Machines tab), as production's router has it
   "$ROOT/infra/fly-read-token.sh" "$W/fly-read" >/dev/null
   (umask 077; FLY_READ_FILE="$W/fly-read" python3 - > "$W/extra.yaml" <<'PY'
@@ -249,10 +253,12 @@ make_box() {
   return 1
 }
 make_box_once() {
-  HCLOUD_PROJECT_TOKEN="$HCLOUD_TOKEN" WG_PEER="$NAME" CF_ENV="$W/cloudflare.env" KEYS_OUT="$W/keys" FIREWALL="$NAME" \
+  BOX_KIND=control PRIVATE_IP=none HCLOUD_PROJECT_TOKEN="$HCLOUD_TOKEN" WG_PEER="$NAME" CF_ENV="$W/cloudflare.env" KEYS_OUT="$W/keys" FIREWALL="$NAME" \
     LABELS="{\"role\":\"$NAME\",\"rehearsal\":\"$NAME\",\"rehearsal-base\":\"$BASE\",\"session\":\"${SESSION_ID:-none}\"}" \
     SYNC_YAML_FILE="$W/sync.yaml" EXTRA_MANIFEST_FILE="$W/extra.yaml" SERVER_TYPE="${SERVER_TYPE:-cx23}" \
     bash "$ROOT/infra/create.sh" "$NAME" 2>&1 | tee -a "$LOGS/create.log"
-  [ "${PIPESTATUS[0]}" = 0 ]
+  [ "${PIPESTATUS[0]}" = 0 ] || return 1
+  # the app checks the core against box.pub (production: keys/box-next.pub becomes keys/box.pub in git)
+  mv "$W/keys/box-next.pub" "$W/keys/box.pub"
 }
 server_id() { hz GET "/servers?label_selector=rehearsal=$NAME" | python3 -c "import json,sys;print(json.load(sys.stdin)['servers'][0]['id'])"; }

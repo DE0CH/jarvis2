@@ -1,8 +1,7 @@
 name: services
-# The box's own services (services/search, services/icloud-index, services/watch) to GHCR as ghcr.io/de0ch/jarvis2-<name>, tagged
+# The services box's services (services/search, services/icloud-index, services/watch) to GHCR as ghcr.io/de0ch/jarvis2-<name>, tagged
 # sha-<12> and latest (their unit tests run inside the image build), then pinned by the linux/amd64 digest in every
-# manifest that names the image (k8s/services/apps/<name>/ on the services box; k8s/apps/ on the old box until it goes;
-# a commit by this workflow; Flux rolls them out). Only the service whose files changed is
+# manifest that names the image (k8s/services/apps/<name>/; a commit by this workflow; Flux rolls them out). Only the service whose files changed is
 # built and pinned, so a search change never restarts the iCloud index.
 on:
   push:
@@ -27,7 +26,7 @@ jobs:
           names=()
           for n in search icloud-index watch; do
             # a dispatch, a change in the service, or no pin yet (sha-000000000000) builds it
-            if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ] || grep -rqs "jarvis2-$n:sha-000000000000" k8s/apps k8s/services \
+            if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ] || grep -rqs "jarvis2-$n:sha-000000000000" k8s/services \
                || ! git diff --quiet "${{ github.event.before }}" "$GITHUB_SHA" -- "services/$n" .github/workflows/services.yml 2>/dev/null; then names+=("\"$n\""); fi
           done
           echo "names=[$(IFS=,; echo "${names[*]}")]" >> "$GITHUB_OUTPUT"
@@ -78,7 +77,7 @@ jobs:
             git merge-base --is-ancestor "$GITHUB_SHA" origin/main || { echo "$GITHUB_SHA isn't on main: nothing pinned"; exit 1; }
             git reset -q --hard origin/main
             for n in $NAMES; do
-              files="$(grep -rlE "ghcr.io/de0ch/jarvis2-$n:sha-" k8s/apps k8s/services 2>/dev/null)"
+              files="$(grep -rlE "ghcr.io/de0ch/jarvis2-$n:sha-" k8s/services 2>/dev/null)"
               [ -n "$files" ] || { echo "$n: no manifest names it"; continue; }
               cur="$(grep -ho "jarvis2-$n:sha-[0-9a-f]*" $files | head -1 | cut -d: -f2 | cut -d- -f2)"
               if [ "$cur" != 000000000000 ] && full="$(git rev-parse -q --verify "$cur^{commit}")" && [ "$full" != "$GITHUB_SHA" ] \

@@ -1,31 +1,31 @@
 #!/bin/bash
-# create.sh — make the Jarvis 2 box (once; rebuild = destroy the server + run this again).
+# create.sh — make one of the two Jarvis 2 boxes: BOX_KIND=control|services (docs/DESIGN.md "The boxes"; docs/RUNBOOK.md
+# "Rebuilding a box").
 #   HETZNER_JARVIS2_MOCK_API  the jarvis2 Hetzner project's token
 #   JARVIS2_FLY_TOKEN         to (re)make the box's WireGuard peer in Fly org jarvis2-370
-#   JARVIS2_SETUP_KEY, JARVIS2_SETUP_ACCESS_ID/SECRET  only to wait for the box to come up (setup.py identity)
 #   ~/.jarvis2/cloudflare.env from infra/cloudflare.py (run it first; ROTATE=1 on a rebuild if the file is gone)
 # The box is IPv6-only (no primary IPv4: the Hetzner account is at its limit of 10 primary IPs; Deyao, 2026-10-13);
 # cloud-init.sh sends its outgoing IPv4 through Cloudflare WARP. The box has no SSH and no reachable k8s API: its firewall has no inbound rules, and everything after
 # this script comes from git (Flux). Prints no secret.
-# BOX_KIND=control|services makes one of the two boxes (docs/DESIGN.md "The boxes"; unset = the old single box until
-# it is retired): control cx23, services cx33, attached to the Hetzner Network `jarvis2` (10.77.0.0/24, made here if missing) at PRIVATE_IP
-# (control 10.77.0.2, services 10.77.0.3 by default), its own age key (keys/<kind>-age.pub) and Flux path
-# (k8s/flux/<kind>.yaml). The services box gets no tunnel, no peer and no box key. The control box gets the box key
-# (keys/box-next.pub, renamed keys/box.pub when its core takes over) and, with WG_PEER=none, NO WireGuard peer: the
-# router move brings the live peer's config along (router/move.go) — never remove the peer a live router holds.
-#   PRIVATE_ALLOW  control box: private addresses allowed in (default 10.77.0.9, the old box during the move)
+# Control cx23, services cx33, attached to the Hetzner Network `jarvis2` (10.77.0.0/24, made here if missing) at PRIVATE_IP
+# (control 10.77.0.2, services 10.77.0.3 by default; PRIVATE_IP=none: no Network, a rehearsal box), its own age key
+# (keys/<kind>-age.pub) and Flux path (k8s/flux/<kind>.yaml). The services box gets no tunnel, no peer and no box key.
+# The control box gets the box key in keys/box-next.pub (it becomes keys/box.pub when its core is the one Deyao sets up:
+# the app checks the core against keys/box.pub on GitHub's main) and, by default, NO WireGuard peer (WG_PEER=none):
+# making a peer of the live peer's name first REMOVES the one the live router holds, cutting every session off.
+#   PRIVATE_ALLOW  control box: private addresses allowed in besides answers (default none)
 # The defaults are production's. infra/rehearse-recover.sh makes a throwaway box with this same script and these
 # overrides (each named, so nothing of production is touched):
 #   HCLOUD_PROJECT_TOKEN  the Hetzner project's token (default HETZNER_JARVIS2_MOCK_API)
-#   WG_PEER               the box's WireGuard peer name (default jarvis2-box; for BOX_KIND=control: none)
+#   WG_PEER               the box's WireGuard peer name (control: default none, see above)
 #   CF_ENV                the cloudflare.env file (default ~/.jarvis2/cloudflare.env)
-#   KEYS_OUT              where box.pub / box-age.pub go (default keys/ of this checkout)
+#   KEYS_OUT              where box-next.pub / <kind>-age.pub go (default keys/ of this checkout)
 #   FIREWALL, LABELS      the Hetzner firewall's name (default jarvis2) and the server's labels (JSON, default role=jarvis2)
 #   DEBUG_SSH_PUB         a THROWAWAY box only (a rehearsal; refused for production's names): this public key gets root SSH,
 #                         the box keeps sshd and its firewall lets port 22 in, to look at a box that doesn't come up
-#                         (cloud-init's log: /var/log/jarvis2-bootstrap.log). Never for jarvis2 / jarvis2-control /
+#                         (cloud-init's log: /var/log/jarvis2-bootstrap.log). Never for jarvis2-control /
 #                         jarvis2-services.
-#   SYNC_YAML_FILE, EXTRA_MANIFEST_FILE  a Flux sync in place of k8s/flux/sync.yaml, and Secrets applied before it
+#   SYNC_YAML_FILE, EXTRA_MANIFEST_FILE  a Flux sync in place of k8s/flux/<kind>.yaml, and Secrets applied before it
 #                         (infra/cloud-init.sh)
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -34,20 +34,16 @@ BOX_KIND="${BOX_KIND:-}"
 case "$BOX_KIND" in
   control)  NAME="${1:-jarvis2-control}"; TYPE="${SERVER_TYPE:-cx23}"; PRIVATE_IP="${PRIVATE_IP:-10.77.0.2}" ;;
   services) NAME="${1:-jarvis2-services}"; TYPE="${SERVER_TYPE:-cx33}"; PRIVATE_IP="${PRIVATE_IP:-10.77.0.3}" ;;
-  "")       NAME="${1:-jarvis2}"; TYPE="${SERVER_TYPE:-cx23}"; PRIVATE_IP="" ;;
   *) echo "BOX_KIND is control or services"; exit 1 ;;
 esac
-LOC="${LOCATION:-fsn1}"; PRIVATE_ALLOW="${PRIVATE_ALLOW:-10.77.0.9}"
+[ "$PRIVATE_IP" = none ] && PRIVATE_IP=""
+LOC="${LOCATION:-fsn1}"; PRIVATE_ALLOW="${PRIVATE_ALLOW:-}"
 export BOX_KIND PRIVATE_IP NETWORK="${NETWORK:-jarvis2}"
 export HCLOUD_PROJECT_TOKEN="${HCLOUD_PROJECT_TOKEN:-${HETZNER_JARVIS2_MOCK_API:-}}"
 : "${HCLOUD_PROJECT_TOKEN:?}" "${JARVIS2_FLY_TOKEN:?}"
-# the control box defaults to NO peer: the move brings the live one's config along (router/move.go), and making a
-# peer of the same name first REMOVES the one the live router holds, cutting every session off. A control box rebuilt
-# with no live router to move from: WG_PEER=jarvis2-box.
-DEFPEER=jarvis2-box; [ "$BOX_KIND" = control ] && DEFPEER=none
-PEER="${WG_PEER:-$DEFPEER}"; CFENV="${CF_ENV:-$D/cloudflare.env}"; KOUT="${KEYS_OUT:-$HERE/../keys}"
-DEFAULT_LABELS='{"role":"jarvis2"}'
-[ -n "$BOX_KIND" ] && DEFAULT_LABELS="{\"role\":\"jarvis2-$BOX_KIND\"}"
+# the control box defaults to NO peer (above); a control box rebuilt after the old one is gone: WG_PEER=jarvis2-box
+PEER="${WG_PEER:-none}"; CFENV="${CF_ENV:-$D/cloudflare.env}"; KOUT="${KEYS_OUT:-$HERE/../keys}"
+DEFAULT_LABELS="{\"role\":\"jarvis2-$BOX_KIND\"}"
 export FIREWALL="${FIREWALL:-jarvis2}" LABELS="${LABELS:-$DEFAULT_LABELS}"
 if [ "$BOX_KIND" != services ]; then
   [ -s "$CFENV" ] || { echo "run infra/cloudflare.py $CFENV first"; exit 1; }
@@ -57,12 +53,12 @@ TUNNEL_TOKEN="${TUNNEL_TOKEN:-}"
 
 DEBUG_SSH_PUB="${DEBUG_SSH_PUB:-}"
 if [ -n "$DEBUG_SSH_PUB" ]; then
-  case "$NAME" in jarvis2|jarvis2-control|jarvis2-services) echo "DEBUG_SSH_PUB is for throwaway boxes only"; exit 1 ;; esac
+  case "$NAME" in jarvis2-control|jarvis2-services) echo "DEBUG_SSH_PUB is for throwaway boxes only"; exit 1 ;; esac
 fi
 export DEBUG_SSH="${DEBUG_SSH_PUB:+1}"
 UD="$(mktemp)"; KEY="$(mktemp -d)"; trap 'rm -rf "$UD" "$KEY"' EXIT; chmod 600 "$UD"
 # a fresh WireGuard peer for the box (router/wg.go); machines reach it as $PEER._peer.internal (production:
-# jarvis2-box, MACHINE_URL in k8s/apps/router.yaml). Its config goes only into the box (user-data).
+# jarvis2-box, MACHINE_URL in k8s/control/apps/router/router.yaml). Its config goes only into the box (user-data).
 : > "$KEY/wg.conf"
 if [ "$BOX_KIND" != services ] && [ "$PEER" != none ]; then
   FLY_API_TOKEN="$JARVIS2_FLY_TOKEN" flyctl wireguard remove jarvis2-370 "$PEER" >/dev/null 2>&1 || true
@@ -70,10 +66,10 @@ if [ "$BOX_KIND" != services ] && [ "$PEER" != none ]; then
   (umask 077; FLY_API_TOKEN="$JARVIS2_FLY_TOKEN" flyctl wireguard create jarvis2-370 lhr "$PEER" "$KEY/wg.conf" >/dev/null)
 fi
 # the box key: it vouches for every core this box starts. Its private half goes only into the box (user-data);
-# its public half into git (keys/box.pub), where the app's recovery page checks the core's identity against it.
+# its public half into git (keys/box-next.pub, then keys/box.pub), where the app checks the core's identity against it.
 mkdir -p "$KOUT"
-BOXPUB="$KOUT/box.pub"; AGEPUB="$KOUT/box-age.pub"
-case "$BOX_KIND" in control) BOXPUB="$KOUT/box-next.pub"; AGEPUB="$KOUT/control-age.pub" ;; services) BOXPUB=/dev/null; AGEPUB="$KOUT/services-age.pub" ;; esac
+BOXPUB="$KOUT/box-next.pub"; AGEPUB="$KOUT/$BOX_KIND-age.pub"
+[ "$BOX_KIND" = services ] && BOXPUB=/dev/null
 python3 - "$KEY" "$BOXPUB" <<'PY'
 import base64, sys
 from cryptography.hazmat.primitives.asymmetric import ec
@@ -82,8 +78,8 @@ k = ec.generate_private_key(ec.SECP256R1())
 open(sys.argv[1] + "/box-key.pem", "wb").write(k.private_bytes(s.Encoding.PEM, s.PrivateFormat.PKCS8, s.NoEncryption()))
 open(sys.argv[2], "w").write(base64.b64encode(k.public_key().public_bytes(s.Encoding.X962, s.PublicFormat.UncompressedPoint)).decode() + "\n")
 PY
-# the box's age key: Flux decrypts the SOPS-encrypted secrets in k8s/secrets with it (infra/router-secrets.sh
-# encrypts to keys/box-age.pub). Its private half goes only into the box (user-data).
+# the box's age key: Flux decrypts the SOPS-encrypted secrets in k8s/<kind>/secrets with it (infra/router-secrets.py
+# encrypts to keys/<kind>-age.pub). Its private half goes only into the box (user-data).
 age-keygen -o "$KEY/age.key" 2>/dev/null
 age-keygen -y "$KEY/age.key" > "$AGEPUB"
 { echo '#!/bin/bash'
@@ -137,12 +133,7 @@ finally:
     call("DELETE",f"/ssh_keys/{key}")
 print("server",s["id"],s["public_net"]["ipv6"]["ip"],os.environ.get("PRIVATE_IP",""))
 PY
-echo "$BOXPUB and $AGEPUB are the new box's keys (re-run infra/router-secrets.py${BOX_KIND:+ --box $BOX_KIND} for every part of this box, then commit and push)"
+echo "$BOXPUB and $AGEPUB are the new box's keys (re-run infra/router-secrets.py --box $BOX_KIND for every part of this box, then commit and push)"
 if [ "$BOX_KIND" = services ]; then echo "the services box has no tunnel: check it with its Alloy logs in Grafana and the router's /api/search/status"; exit 0; fi
-if [ "$BOX_KIND" = control ]; then echo "the control box's core is the NEXT core until the move (docs/RUNBOOK.md \"Moving to the two boxes\")"; exit 0; fi
-echo "waiting for the bootstrap (k3s + Flux + the core behind the tunnel)…"
-for i in $(seq 1 90); do
-  python3 "$HERE/setup.py" identity >/dev/null 2>&1 && { echo "up: the core answers through the tunnel and its identity checks"; exit 0; }
-  sleep 10
-done
-echo "not up after 15 min; there is no way in to look — fix in git or destroy and run again"; exit 1
+echo "the control box comes up on its own (k3s, Flux, the cores behind the tunnel; about 10 min). Its box key is in $BOXPUB:"
+echo "it becomes keys/box.pub (commit) before Deyao sets its core up (docs/RUNBOOK.md \"Rebuilding a box\")"
