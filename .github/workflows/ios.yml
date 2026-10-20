@@ -109,7 +109,7 @@ jobs:
             JARVIS_BASE=http://127.0.0.1:18080/ JARVIS_CI_FLAG=JARVIS_CI JARVIS_CI_KEYS_BASE=http://127.0.0.1:18099/ \
             2>&1 | tee ../xcodebuild.log | grep -E "error:|\*\* " || true
           grep -q "TEST BUILD SUCCEEDED" ../xcodebuild.log
-      - name: UI test, light then dark (fresh core, router and keychain each time), recorded
+      - name: UI test, light then dark (fresh core, router, bucket and keychain each time), recorded
         run: |
           W="$RUNNER_TEMP/w"
           # the kit the walkthrough recovers with: the public TEST master key (the stand-in backups are sealed to it)
@@ -117,8 +117,9 @@ jobs:
           ok=0
           for a in light dark; do
             for try in 1 2; do
-              # a fresh core, router, keychain and app for each attempt
+              # a fresh core, router, backup bucket (as seeded), keychain and app for each attempt
               kill $(cat "$W/core.pid" "$W/router.pid" 2>/dev/null) 2>/dev/null || true; pkill -x core || true; sleep 1
+              "$W/s3-fresh.sh"
               rm -rf data-$a && mkdir -p data-$a
               # the core runs again whenever it ends, as under Kubernetes: the walkthrough's Reset wipes it
               (nohup "$W/core-loop.sh" "$PWD/out/core-$a.log" > /dev/null 2>&1 & echo $! > "$W/core.pid")

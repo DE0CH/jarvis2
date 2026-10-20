@@ -322,13 +322,14 @@ extension JarvisUITestCase {
       }
       // the list is lazy and follows the end, so an older entry (the boot's Router and Fly steps) has no element once
       // later lines fill the screen (replica 39349368807: a run of supervisor "exec refused" lines from the terminal
-      // step): not there within 10 s → Follow off, scroll back up to it
+      // step): not there within 10 s → Follow off, scroll back up to it. An entry seen once counts: while the list
+      // follows the end, a new line can push it off again between two queries (replica 39369735322: the Router entry
+      // was there, then gone for the whole 60 s re-check)
       var followOff = false
       func seen(_ e: XCUIElement, _ t: TimeInterval, _ name: String) {
-        if !e.waitForExistence(timeout: 10) {
-          if !followOff && el("log-follow").exists { el("log-follow").tap(); followOff = true }
-          scrolledUpTo(e, max: 40)
-        }
+        if e.waitForExistence(timeout: 10) { return }
+        if !followOff && el("log-follow").exists { el("log-follow").tap(); followOff = true }
+        if scrolledUpTo(e, max: 40) { return }
         wait(e, t, "\(name) in the log (\(what))")
       }
       seen(entry("Router"), 60, "a router entry")
