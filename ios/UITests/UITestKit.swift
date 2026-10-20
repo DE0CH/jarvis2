@@ -320,10 +320,21 @@ extension JarvisUITestCase {
         let all = labels.map { NSPredicate(format: "label CONTAINS %@", $0) }
         return app.descendants(matching: .any).matching(NSCompoundPredicate(andPredicateWithSubpredicates: [p] + all)).firstMatch
       }
-      wait(entry("Router"), 60, "a router entry in the log (\(what))")
+      // the list is lazy and follows the end, so an older entry (the boot's Router and Fly steps) has no element once
+      // later lines fill the screen (replica 39349368807: a run of supervisor "exec refused" lines from the terminal
+      // step): not there within 10 s → Follow off, scroll back up to it
+      var followOff = false
+      func seen(_ e: XCUIElement, _ t: TimeInterval, _ name: String) {
+        if !e.waitForExistence(timeout: 10) {
+          if !followOff && el("log-follow").exists { el("log-follow").tap(); followOff = true }
+          scrolledUpTo(e, max: 40)
+        }
+        wait(e, t, "\(name) in the log (\(what))")
+      }
+      seen(entry("Router"), 60, "a router entry")
       XCTAssertFalse(el("log-empty").exists, "[\(tag)] the log isn't empty (\(what))")
-      if supervisorLine { wait(entry("Supervisor"), 90, "a supervisor line in the log (\(what))") }
-      if flyStep { wait(entry("Fly"), 60, "a Fly step in the log (\(what))") }
+      if supervisorLine { seen(entry("Supervisor"), 90, "a supervisor line") }
+      if flyStep { seen(entry("Fly"), 60, "a Fly step") }
       shot("session-log-\(what)")
     }
     back()
