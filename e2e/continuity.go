@@ -99,7 +99,6 @@ func seededClaim(master *ecdsa.PrivateKey, p *phone, phoneAgreement string, reco
 	must2(call(router, "POST", "/api/core/claim", map[string]any{"statement": string(stmt), "masterSig": b64.EncodeToString(msig),
 		"bundle": sealTo(id0.AgreementKey, bundle, "jarvis2/claim")}, &rec))
 	coreKey = dsk // from the claim's answer on, the core signs with the derived key
-	keysCore = true
 	var claimed struct {
 		Kind    string
 		Derived bool

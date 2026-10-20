@@ -57,7 +57,6 @@ final class AppModel {
   var records = Loaded<Rec>()
   /// the core's signed store list (verified against the pinned core key)
   var stores = Loaded<StoreView>()
-  var scopedUnlocks = false
   var openUnlocks: [UnlockRow] = []
   var machines = Loaded<Machine>()
   /// the whole answer of api/machines: every Fly org and app (router/flyorgs.go)
@@ -252,7 +251,6 @@ final class AppModel {
     do {
       let d = try await RouterClient.shared.storesDoc()
       stores = Loaded(items: d.stores.filter { !$0.isCore }, loaded: true, error: nil)
-      scopedUnlocks = d.scopedUnlocks == true
       openUnlocks = (try? await RouterClient.shared.unlocked()) ?? openUnlocks
     } catch { stores.error = errText(error) }
   }

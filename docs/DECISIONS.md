@@ -2123,10 +2123,15 @@ snapshot failed with "no space left on device", the machine was destroyed anyway
      on the data volume, unread), the repo stores' derived names, and the deploy-key `blob` relay. Store key names come
      only from the core's signed list (`keysFrom` is always `core`); the machine's `jarvis2 stores` checks every store's
      names against it and the web page no longer shows a "recorded" or "key names not known" state.
-     - **Left as they are:** `core/` (any change there is a core release); the iOS app's branches for a core from before
-       keys.go (CoreCrypto, RouterClient, SetupView, CoreSetup, interop: they ship through the phone replica, a
-       separate change); e2e's held-core and legacy modes; whole-store backups (`stores/<name>.json`) in the bucket,
-       which a Recover and `tools/decrypt-backup.py` still read as the base under the key backups.
+     - **The iOS app, e2e and the web page follow (2026-10-20):** their branches for a core from before keys are cut
+       the same way (CoreCrypto, RouterClient, SetupView, CoreSetup, the stores pages, interop; e2e's plaintext and blobs
+       claim bundles, its held-core, legacy and legacy-move modes; the web page's bare-key-names fallback): every core in
+       use takes a keys bundle with a seed, answers `store-key`, and unlocks per key; e2e fails unless the core says
+       `bundle: "keys"`.
+     - **Left as they are:** `core/` (any change there is a core release, incl. `core/legacy.go`); the router's
+       `legacy.go` (taking over sessions from a random-key core; its only end-to-end test was e2e's legacy mode, gone);
+       whole-store backups (`stores/<name>.json`) in the bucket, which a Recover and `tools/decrypt-backup.py` still read
+       as the base under the key backups.
 
 207. **A message held for Deyao into a session whose machine predates message approvals is held with Jarvis's own
      rendering (Claude, 2026-10-20).** Such a machine knows no preview: it took the router's preview as a delivery and

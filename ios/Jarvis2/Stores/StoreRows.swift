@@ -28,14 +28,8 @@ struct StoreRowDTO: Decodable, Identifiable, Equatable {
   var unlocked: Bool? = nil
   var about: String? = nil
   var version: String? = nil
-  /// the key names (nil: not known — a core from before keys.go with no recorded names, until the held core is live)
-  var keys: [String]? = nil
-  /// each key with its explanation and writer (a router from before keyInfo: nil, then only names show)
-  var keyInfo: [Key]? = nil
-  /// every key, with what is known of it
-  var keyRows: [Key]? { keyInfo ?? keys?.map { Key(name: $0) } }
-  /// "core" (from the core's signed list), "recorded" (the router's record for an older core) or "" (not known)
-  var keysFrom: String? = nil
+  /// each key (from the core's signed list) with its explanation and writer
+  let keyInfo: [Key]
   var id: String { name }
 }
 
@@ -51,7 +45,7 @@ enum SessionWrites {
   /// the keys sessions wrote into `stores`, from the router's rows (what a page shows before it unlocks them)
   static func from(_ rows: [StoreRowDTO], stores: [String]) -> [SessionWrite] {
     rows.filter { stores.contains($0.name) }.flatMap { r in
-      (r.keyInfo ?? []).filter(\.bySession).map { SessionWrite(store: r.name, key: $0.name, line: $0.writer?.line ?? "", label: $0.writer?.sessionName ?? "") }
+      r.keyInfo.filter(\.bySession).map { SessionWrite(store: r.name, key: $0.name, line: $0.writer?.line ?? "", label: $0.writer?.sessionName ?? "") }
     }
   }
   /// the same, read now (an unreadable list shows none: then an unlock that opens a session-written key is refused)

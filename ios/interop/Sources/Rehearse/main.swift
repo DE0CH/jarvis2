@@ -96,12 +96,9 @@ func waitEmpty(notKey old: String?, minutes: Int = 15) -> (keys: PublicKeys, sta
   fail("no new, empty core within \(minutes) minutes")
 }
 func claim(_ c: PublicKeys, _ stores: [RecoveredStore]) -> Int {
-  // the app's bundle: every store wrapped to the core's signed store key for this phone (Reset: none)
+  // the app's bundle: every key wrapped on its own to the core's signed store key for this phone (Reset: none)
   let sk = try! CoreCrypto.storeKey(json("POST", "api/core/store-key", ["phone": phone.agreementKey], as: SignedDoc.self), coreKey: c.signingKey, phone: phone.agreementKey)
-  // a core whose identity says bundle "keys": every key on its own; a core from before keys.go (until the held core is
-  // live): one blob per store
-  let id = try! JSONDecoder().decode(CoreSetup.Identity.self, from: call("GET", "api/core/identity").1)
-  let bundle = id.takesKeys ? try! CoreSetup.keysBundle(stores, storeKey: sk) : try! CoreSetup.blobsBundle(stores, storeKey: sk)
+  let bundle = try! CoreSetup.keysBundle(stores, storeKey: sk)
   let body = try! CoreSetup.claim(core: c, phone: phone, master: master, bundle: bundle)
   let d = try! CoreCrypto.decode(json("POST", "api/core/claim", body, as: SignedDoc.self), by: c.signingKey, as: KindDoc.self, what: "the core's answer")
   guard d.kind == "claimed" else { fail("the claim's answer is \(d.kind)") }
@@ -132,11 +129,8 @@ func unlock(_ store: String, core: String) {
     let x = try! phoneAgreement.sharedSecretFromKeyAgreement(with: P256.KeyAgreement.PublicKey(x963Representation: Data(base64Encoded: e)!)).withUnsafeBytes { Data($0) }
     return try! CoreCrypto.sealShare(x, to: b.t)
   }
-  var body: [String: Any] = ["pending": b.pending]
-  if let keys = b.keys {
-    do { try Checks.unlockKeys(b, setupKey: setupKey) } catch { fail("unlock \(store): \(error)") }
-    body["shares"] = Dictionary(uniqueKeysWithValues: keys.map { ($0.key, share($0.e)) })
-  } else { body["share"] = share(b.e ?? "") } // a core from before keys.go (until the held core is live)
+  do { try Checks.unlockKeys(b, setupKey: setupKey) } catch { fail("unlock \(store): \(error)") }
+  let body: [String: Any] = ["pending": b.pending, "shares": Dictionary(uniqueKeysWithValues: b.keys.map { ($0.key, share($0.e)) })]
   let u = try! CoreCrypto.decode(json("POST", "api/core/unlock/finish", body, as: SignedDoc.self), by: core, as: KindDoc.self, what: "the unlocked answer")
   guard u.kind == "unlocked", u.store == store else { fail("unlock \(store): \(u.kind)") }
   ok("unlocked \(store) with the phone's share")

@@ -143,8 +143,8 @@ enum SignedAction {
   }
 
   /// unlocks: the stores the session's core-signed cert names that the core's signed list shows locked. scoped =
-  /// the core takes unlocks for one session (then only this session's cert reads them and its pull locks them
-  /// again); a core that predates that keeps them open until locked.
+  /// the unlock is for this session's cert (then only it reads them and its pull locks them again); a standing unlock
+  /// (no cert nonce to name) stays open to every session until locked.
   static func unlock(stores: [String], session id: LineIdentity?, scoped: Bool) -> [SignedFact] {
     var f: [SignedFact] = [
       .init(id: "kind", label: "Kind", value: "Core request"),

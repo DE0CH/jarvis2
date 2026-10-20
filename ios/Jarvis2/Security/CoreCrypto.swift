@@ -173,19 +173,12 @@ struct StoreView: Codable, Identifiable, Equatable {
   static let coreStore = "core"
   var isCore: Bool { name == StoreView.coreStore }
 }
-/// scopedUnlocks: the core takes unlocks for one session (unlock_begin's "for"; then `unlocked` = open to every
-/// session); nil from a core that predates them
-struct StoresDoc: Codable {
-  let kind: String; let nonce: String; let stores: [StoreView]; let scopedUnlocks: Bool?
-  /// the core vouches for who wrote each store's blob (unlock-begin's `writer`); then an unlock without one is refused
-  var writers: Bool? = nil
-}
+struct StoresDoc: Codable { let kind: String; let nonce: String; let stores: [StoreView] }
 /// who wrote a store's key (core/keys.go EntryWriter): "setup" (its key's signature over Checks.writerText, checked here),
-/// "machine" (a session's machine and line: the core checked its signature; the page names the session) or "core".
-/// A core from before keys.go (until the held core is live) names the writer of a whole-store blob: core or setup, with
-/// dataSha256.
+/// "machine" (a session's machine and line: the core checked its signature; the page names the session), "router" (a
+/// Claude account store's pair) or "core".
 struct StoreWriter: Codable, Equatable {
-  let by: String; var sig: String? = nil; var dataSha256: String? = nil
+  let by: String; var sig: String? = nil
   var machine: String? = nil; var line: String? = nil
 }
 /// forNonce: the one challenge or cert the unlock is for ("" or nil = standing, open to every session)
@@ -198,18 +191,14 @@ struct UnlockedDoc: Codable { let kind: String; let nonce: String; let unlocked:
 struct KeyBegin: Codable, Equatable {
   let key: String; let e: String; let writer: StoreWriter; let dataSha256: String; var backupSha256: String = ""; var at: String? = nil
 }
-/// unlock_begin: every key of the store (`keys`), each opened with its own share. A core from before keys.go (until the
-/// held core is live) answers one whole-store blob instead: a top-level `e` with its `writer` and `dataSha256`.
+/// unlock_begin: every key of the store (`keys`), each opened with its own share
 struct UnlockBegin: Codable {
   let kind: String; let pending: String; let store: String; let t: String; let forNonce: String?
-  var keys: [KeyBegin]? = nil
+  let keys: [KeyBegin]
   var version: String? = nil
-  var e: String? = nil
-  var writer: StoreWriter? = nil
-  var dataSha256: String? = nil
-  enum CodingKeys: String, CodingKey { case kind, pending, store, e, t, forNonce = "for", writer, dataSha256, keys, version }
-  /// the E of every share this unlock needs, in order (one per key; one for an old core's blob)
-  var es: [String] { keys?.map(\.e) ?? [e].compactMap { $0 } }
+  enum CodingKeys: String, CodingKey { case kind, pending, store, t, forNonce = "for", keys, version }
+  /// the E of every share this unlock needs, in order (one per key)
+  var es: [String] { keys.map(\.e) }
 }
 struct KindDoc: Codable { let kind: String; let id: String?; let store: String?; let name: String?; let stores: Int?; let core: String? }
 
@@ -354,22 +343,18 @@ enum Checks {
 struct DeployKeyBegin: Codable, Equatable {
   let kind: String, pending: String, action: String, repo: String, store: String
   let sensitive: Bool, replaces: Bool, title: String, tokenStore: String, e: String, t: String
-  /// a core that takes the app's key (R2): the public key, and each key of the store the app sent (name, E, sha256 of
-  /// its data). A core from before keys.go (until the held core is live): the one blob's E and data hash instead.
+  /// add: the app's public key, and each key of the store the app sent (name, E, sha256 of its data); a remove has none
   var publicKey: String? = nil
   var keys: [DeployKeyItem]? = nil
-  var blobE: String? = nil
-  var blobSha256: String? = nil
   /// who wrote the token key (as unlock-begin's writer), its name, data and backup hashes
   var tokenWriter: StoreWriter? = nil
-  var tokenDataSha256: String? = nil
-  var tokenKey: String? = nil
-  var tokenBackupSha256: String? = nil
+  let tokenDataSha256: String
+  let tokenKey: String
+  let tokenBackupSha256: String
 }
 struct DeployKeyItem: Codable, Equatable { let key: String; let e: String; let dataSha256: String }
-/// what the app sent with a deploy-key add: the public key, and the store as keys (a new core) or one blob (a core from
-/// before keys.go, until the held core is live)
-struct DeployKeySent { let publicKey: String; var keys: [KeyEntry]? = nil; var blob: StoreBlob? = nil }
+/// what the app sent with a deploy-key add: the public key, and the store's keys
+struct DeployKeySent { let publicKey: String; let keys: [KeyEntry] }
 /// the core's answer once it is done: "deploy-key-added" (with the key's fingerprint) or "deploy-key-removed"
 struct DeployKeyAnswer: Codable {
   let kind: String, pending: String, repo: String, store: String
@@ -395,19 +380,15 @@ extension Checks {
 
   /// the begin document is the core's, for exactly this action on this repo: its store, its title on GitHub,
   /// the one token store it opens; asked-for sensitivity is kept (the core may only add it)
-  /// `sent`: the key and blob the app sent (a core that takes them must echo exactly these)
+  /// `sent`: the key and the store's keys the app sent (the core must echo exactly these)
   static func deployKeyBegin(_ doc: SignedDoc, coreKey: String, action: String, repo: String, sensitive: Bool,
                              sent: DeployKeySent? = nil) throws -> DeployKeyBegin {
     let b = try CoreCrypto.decode(doc, by: coreKey, as: DeployKeyBegin.self, what: "the deploy-key request")
     if let sent {
       let made = TrustError.mismatch("the key the core holds isn't the one this iPhone made")
       guard b.publicKey == sent.publicKey else { throw made }
-      if let keys = sent.keys {
-        let want = keys.sorted { $0.key < $1.key }.map { DeployKeyItem(key: $0.key, e: $0.wrapped.e, dataSha256: CoreCrypto.sha256hex(Data($0.data.utf8))) }
-        guard b.keys == want else { throw made }
-      } else if let blob = sent.blob { // a core from before keys.go (until the held core is live)
-        guard b.blobE == blob.wrapped.e, b.blobSha256 == CoreCrypto.sha256hex(Data(blob.data.utf8)) else { throw made }
-      }
+      let want = sent.keys.sorted { $0.key < $1.key }.map { DeployKeyItem(key: $0.key, e: $0.wrapped.e, dataSha256: CoreCrypto.sha256hex(Data($0.data.utf8))) }
+      guard b.keys == want else { throw made }
     }
     if action == "remove", b.keys?.isEmpty == false { throw TrustError.mismatch("a remove that brings a key") }
     guard b.kind == "deploy-key-begin", b.action == action else { throw TrustError.mismatch("action") }
@@ -687,7 +668,7 @@ extension Checks {
 
   /// every key of an unlock: its writer checked (an unlock of an empty store is refused: there is nothing to open)
   static func unlockKeys(_ b: UnlockBegin, setupKey: String?) throws {
-    guard let keys = b.keys else { return }
+    let keys = b.keys
     guard !keys.isEmpty else { throw TrustError.mismatch("store \(b.store) has no keys to unlock") }
     guard Set(keys.map(\.key)).count == keys.count else { throw TrustError.mismatch("a key of \(b.store) named twice") }
     for k in keys {
@@ -697,32 +678,13 @@ extension Checks {
 
   /// the keys a session's machine wrote, as the core names them in these unlocks
   static func sessionWrites(_ begins: [UnlockBegin]) -> [SessionWrite] {
-    begins.flatMap { b in (b.keys ?? []).filter { $0.writer.by == "machine" }.map { SessionWrite(store: b.store, key: $0.key, line: $0.writer.line ?? "") } }
+    begins.flatMap { b in b.keys.filter { $0.writer.by == "machine" }.map { SessionWrite(store: b.store, key: $0.key, line: $0.writer.line ?? "") } }
   }
   /// the session-written keys these unlocks would open that the page didn't show (a value a session wrote is never
   /// released unseen: Deyao, 2026-10-13)
   static func unseen(_ begins: [UnlockBegin], shown: [SessionWrite]) -> [SessionWrite] {
     let s = Set(shown)
     return sessionWrites(begins).filter { !s.contains($0) }
-  }
-
-  /// The blob the phone's share opens must be one the core wrapped itself, or one the setup session wrote (its key's
-  /// signature over "jarvis2-store-blob\n<store>\n<E>\n<sha256 of the blob>"). A core whose signed store list says
-  /// it vouches for writers (`required`) must name one; an earlier core names none and is let through. A core from
-  /// before keys.go (until the held core is live).
-  static func writer(_ w: StoreWriter?, store: String, e: String, dataSha256: String?, setupKey: String?, required: Bool) throws {
-    guard let w else {
-      if required { throw TrustError.mismatch("the core names no writer for store \(store)") }
-      return
-    }
-    switch w.by {
-    case "core": return
-    case "setup":
-      guard let sig = w.sig, let sum = w.dataSha256 ?? dataSha256, !sum.isEmpty, let key = setupKey else { throw TrustError.mismatch("store \(store)'s writer can't be checked") }
-      let text = "jarvis2-store-blob\n\(store)\n\(e)\n\(sum)"
-      guard CoreCrypto.valid(Data(text.utf8), sig: sig, by: key) else { throw TrustError.badSignature("store \(store)'s writer (not the setup key)") }
-    default: throw TrustError.mismatch("store \(store) was written by \(w.by)")
-    }
   }
 
   /// CI's signature over the session image (keys/ci.pub): "jarvis2-session-image <ref>"
@@ -733,22 +695,14 @@ extension Checks {
 }
 
 // ---- the app wraps stores itself (R2, 2026-10-11): to the core's signed store key, and a repo's deploy key ----------
-/// A store's sealed blob, as setup.py's blob() and the core's WrapToPoint make it: the values under a data key (the
-/// store's name as associated data), the data key wrapped to the store key C = P + K (the phone's and the core's
-/// agreement keys), which only the phone's share and the core together open.
-struct StoreBlob: Codable, Equatable {
-  struct Wrapped: Codable, Equatable { let e: String; let wrapped: String }
-  let name: String
-  let wrapped: Wrapped
-  let data: String
-  var json: [String: Any] { ["name": name, "wrapped": ["e": wrapped.e, "wrapped": wrapped.wrapped], "data": data] }
-}
 /// one key of a store as the app writes it (core/keys.go KeyEntry): the value under its own data key (the store's and the
-/// key's names as associated data), the data key wrapped to the store key
+/// key's names as associated data), the data key wrapped to the store key C = P + K (the phone's and the core's
+/// agreement keys), which only the phone's share and the core together open
 struct KeyEntry: Codable, Equatable {
+  struct Wrapped: Codable, Equatable { let e: String; let wrapped: String }
   let store: String
   let key: String
-  let wrapped: StoreBlob.Wrapped
+  let wrapped: Wrapped
   let data: String
   var json: [String: Any] { ["store": store, "key": key, "wrapped": ["e": wrapped.e, "wrapped": wrapped.wrapped], "data": data] }
 }
@@ -795,20 +749,6 @@ extension CoreCrypto {
   /// every value of a store as its keys, sorted by name
   static func wrapKeys(store: String, values: [String: String], storeKey: String) throws -> [KeyEntry] {
     try values.keys.sorted().map { try wrapKey(store: store, key: $0, value: Data(values[$0]!.utf8), storeKey: storeKey) }
-  }
-
-  /// the store's values sealed to the store key (a core from before keys.go, until the held core is live)
-  static func wrapStore(name: String, values: [String: String], storeKey: String) throws -> StoreBlob {
-    guard let cb = Data(base64Encoded: storeKey) else { throw TrustError.badSignature("the store key") }
-    let c = try P256.KeyAgreement.PublicKey(x963Representation: cb)
-    let dk = SymmetricKey(size: .bits256)
-    let e = P256.KeyAgreement.PrivateKey()
-    let kek = try e.sharedSecretFromKeyAgreement(with: c)
-      .hkdfDerivedSymmetricKey(using: SHA256.self, salt: Data(), sharedInfo: Data(storeDataKeyInfo.utf8), outputByteCount: 32)
-    guard let wrapped = try AES.GCM.seal(dk.withUnsafeBytes { Data($0) }, using: kek).combined else { throw TrustError.badSignature("wrapping") }
-    let enc = JSONEncoder(); enc.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
-    guard let data = try AES.GCM.seal(try enc.encode(values), using: dk, authenticating: Data(name.utf8)).combined else { throw TrustError.badSignature("sealing") }
-    return StoreBlob(name: name, wrapped: .init(e: e.publicKey.x963Representation.base64EncodedString(), wrapped: wrapped.base64EncodedString()), data: data.base64EncodedString())
   }
 }
 

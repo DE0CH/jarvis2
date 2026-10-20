@@ -38,8 +38,6 @@ struct SetupView: View {
   @State private var wipeTimer: Task<Void, Never>?
   /// the core says it is set up for this iPhone, but it isn't the one this iPhone pinned
   @State private var unpinned = false
-  /// the core takes a seed (core/continuity.go): its keys come from the kit, so a Recover keeps the sessions
-  @State private var takesSeed = false
   /// the Recover asked for is alongside the serving core (standby until it hands over)
   @State private var alongside = false
   /// this page sets up the NEXT core (blue/green, router/nextcore.go): every core call carries X-Jarvis2-Core: next, and
@@ -154,10 +152,9 @@ struct SetupView: View {
         .accessibilityElement(children: .combine).accessibilityIdentifier("setup-next-state-\(nextServing)")
     }
     Section {
-      if takesSeed && (nextServing == "empty" || nextServing == "standby") { alongsideButton }
+      if nextServing == "empty" || nextServing == "standby" { alongsideButton }
     } footer: {
       if nextServing == "standby" { Text("Waiting for the running core to hand over.") }
-      else if !takesSeed { Text("This core can't be Recovered alongside.") }
     }
   }
   /// what the next core's signed state says it does
@@ -256,7 +253,6 @@ struct SetupView: View {
     let box = try await KeySource.key("box.pub")
     let (k, st) = try CoreSetup.check(id, boxKey: box)
     if k == CoreTrust.pinned { LineWitness.saw(k.signingKey, st.lineSeq) }
-    takesSeed = id.takesSeed
     return (k, st)
   }
   private func load() async {
@@ -320,44 +316,25 @@ struct SetupView: View {
       if !next { PhoneKeys.shared.keepOrRenew() }
       let phone = try PhoneKeys.shared.publicKeys()
       let device = try PhoneKeys.shared.devicePublic()
-      // a core that takes a seed (core/continuity.go) becomes the core the kit derives, with the record of the
-      // sessions the router kept from the earlier one: the sessions carry on
-      var seed: Data?, derived: PublicKeys?, line: CoreSetup.LineStateDoc?
-      if next && !takesSeed { throw Plain(message: "This core can't be Recovered alongside.", detail: "the next core's identity has no continuity") }
-      if takesSeed {
-        let sd = CoreContinuity.seed(m)
-        let dk = try CoreContinuity.keys(seed: sd)
-        seed = sd; derived = dk
-        if let l = try await RouterClient.shared.lineState() {
-          // a record another core signed (another kit's, e.g. after a Reset) isn't this core's: as if there were none
-          if CoreSetup.lineStateSigned(l, coreKey: dk.signingKey) {
-            do { _ = try CoreSetup.checkLineState(l, coreKey: dk.signingKey, atLeast: LineWitness.seen(dk.signingKey)); line = l }
-            catch { throw Plain(message: "The router served an older or altered record of the sessions.", detail: errText(error)) }
-          }
+      // the core becomes the core the kit derives (core/continuity.go), with the record of the sessions the router kept
+      // from the earlier one: the sessions carry on
+      let seed = CoreContinuity.seed(m)
+      let derived = try CoreContinuity.keys(seed: seed)
+      var line: CoreSetup.LineStateDoc?
+      if let l = try await RouterClient.shared.lineState() {
+        // a record another core signed (another kit's, e.g. after a Reset) isn't this core's: as if there were none
+        if CoreSetup.lineStateSigned(l, coreKey: derived.signingKey) {
+          do { _ = try CoreSetup.checkLineState(l, coreKey: derived.signingKey, atLeast: LineWitness.seen(derived.signingKey)); line = l }
+          catch { throw Plain(message: "The router served an older or altered record of the sessions.", detail: errText(error)) }
         }
       }
-      // a core whose identity says bundle "keys" gets every key wrapped here on its own (it never sees them in the
-      // clear); a core from before keys.go (until the held core is live) takes blobs, and an earlier core (no store key,
-      // or 400 "bad bundle") the stores sealed to it as before
-      var claimed = false
-      let keys = try await RouterClient.shared.coreTakesKeys(next: next)
-      let standby = (alongside || next) && derived != nil
-      if keys {
-        guard let sk = try await RouterClient.shared.storeKey(coreKey: c.signingKey, core: derived?.agreementKey, next: next) else { throw TrustError.stale("store key") }
-        let bundle = try CoreSetup.keysBundle(stores, storeKey: sk, coreSeed: seed, lineState: line)
-        _ = try await RouterClient.shared.claim(try await withDevice(try CoreSetup.claim(core: c, phone: phone, master: m, bundle: bundle, device: device, identity: derived, standby: standby)),
-                                                core: c, answeredBy: derived?.signingKey, next: next)
-        claimed = true
-      } else if let sk = try await RouterClient.shared.storeKey(coreKey: c.signingKey, next: next) {
-        do {
-          _ = try await RouterClient.shared.claim(try await withDevice(try CoreSetup.claim(core: c, phone: phone, master: m, bundle: try CoreSetup.blobsBundle(stores, storeKey: sk), device: device)), core: c, next: next)
-          claimed = true
-        } catch let e as RouterError where e.status == 400 && e.message.contains("bad bundle") {}
-      }
-      if !claimed {
-        _ = try await RouterClient.shared.claim(try await withDevice(try CoreSetup.claim(core: c, phone: phone, master: m, bundle: try CoreSetup.bundle(stores), device: device)), core: c, next: next)
-      }
-      let keysNow = try await settled(c, derived: derived, master: m)
+      // every key wrapped here on its own to the core's store key (the core never sees them in the clear)
+      let standby = alongside || next
+      let sk = try await RouterClient.shared.storeKey(coreKey: c.signingKey, core: derived.agreementKey, next: next)
+      let bundle = try CoreSetup.keysBundle(stores, storeKey: sk, coreSeed: seed, lineState: line)
+      _ = try await RouterClient.shared.claim(try await withDevice(try CoreSetup.claim(core: c, phone: phone, master: m, bundle: bundle, device: device, identity: derived, standby: standby)),
+                                              core: c, answeredBy: derived.signingKey, next: next)
+      let keysNow = try await settled(derived: derived, master: m)
       if next { busy = "Waiting for the next core…"; try await waitForStandby() }
       finish(keysNow, master: m.publicKey, text: standby ? "Recovered alongside" : "Recovered")
     } catch {
@@ -385,18 +362,13 @@ struct SetupView: View {
       busy = "Setting up…"
       PhoneKeys.shared.renew()
       let phone = try PhoneKeys.shared.publicKeys()
-      // a core with a store key takes only the app's blobs form (R2); an earlier core, the older empty bundle
-      // a core whose identity says bundle "keys" takes the keys form; a core from before keys.go (until the held core is
-      // live) the app's blobs form (R2); an earlier core, the older empty bundle
-      // a core that takes a seed becomes the core the new kit derives (its sessions then outlive a restart)
-      let seed: Data? = takesSeed ? CoreContinuity.seed(m) : nil
-      let derived = try seed.map { try CoreContinuity.keys(seed: $0) }
-      let sk = try await RouterClient.shared.storeKey(coreKey: c.signingKey, core: derived?.agreementKey)
-      let bundle: Data
-      if try await RouterClient.shared.coreTakesKeys(), let sk { bundle = try CoreSetup.keysBundle([], storeKey: sk, coreSeed: seed) }
-      else { bundle = try sk.map { try CoreSetup.blobsBundle([], storeKey: $0) } ?? CoreSetup.bundle([]) }
-      _ = try await RouterClient.shared.claim(try await withDevice(try CoreSetup.claim(core: c, phone: phone, master: m, bundle: bundle, device: try PhoneKeys.shared.devicePublic(), identity: derived)), core: c, answeredBy: derived?.signingKey)
-      finish(try await settled(c, derived: derived, master: m), master: m.publicKey, text: "Reset")
+      // the core becomes the core the new kit derives (its sessions then outlive a restart), with no stores
+      let seed = CoreContinuity.seed(m)
+      let derived = try CoreContinuity.keys(seed: seed)
+      let sk = try await RouterClient.shared.storeKey(coreKey: c.signingKey, core: derived.agreementKey)
+      let bundle = try CoreSetup.keysBundle([], storeKey: sk, coreSeed: seed)
+      _ = try await RouterClient.shared.claim(try await withDevice(try CoreSetup.claim(core: c, phone: phone, master: m, bundle: bundle, device: try PhoneKeys.shared.devicePublic(), identity: derived)), core: c, answeredBy: derived.signingKey)
+      finish(try await settled(derived: derived, master: m), master: m.publicKey, text: "Reset")
     } catch { busy = nil; failure = plain(error, "Setting up didn't work. Your kit is still the one shown; try again.") }
   }
   /// this install's device key countersigns the statement (claim or wipe): the setup session trusts a new master only
@@ -410,11 +382,10 @@ struct SetupView: View {
     return b
   }
 
-  /// the keys to pin after a claim: the boot keys, or for a seeded claim the derived ones — the core now answers with
+  /// the keys to pin after a claim: the ones the kit derives — the core now answers with
   /// them (checked against the box key and its own signed state, as before). The derived keys come from the kit itself,
   /// so they are pinned even if that check can't be made right now; a core that answers other keys is refused.
-  private func settled(_ boot: PublicKeys, derived: PublicKeys?, master m: MasterKey) async throws -> PublicKeys {
-    guard let derived else { return boot }
+  private func settled(derived: PublicKeys, master m: MasterKey) async throws -> PublicKeys {
     for i in 0..<5 {
       if i > 0 { try await Task.sleep(for: .seconds(1)) }
       guard let r = try? await look() else { continue }

@@ -147,7 +147,7 @@ private struct StoreRow: View {
             if harness { StatusPill(text: "Harness", color: .blue) }
           }
         }
-        if let n = row?.keyRows?.count, n > 0 {
+        if let n = row?.keyInfo.count, n > 0 {
           Text(n == 1 ? "1 key" : "\(n) keys").font(.footnote).foregroundStyle(.secondary)
         }
         ForEach(writes, id: \.self) { w in
@@ -193,12 +193,8 @@ struct StoreDetailView: View {
           }
         } header: { Text("About") }
         Section {
-          if let keys = row.keyRows {
-            if keys.isEmpty { Text("No keys").foregroundStyle(.secondary) }
-            ForEach(keys) { k in KeyDocRow(store: store, k: k, saved: load) }
-          } else {
-            Text("Key names not known").foregroundStyle(.secondary)
-          }
+          if row.keyInfo.isEmpty { Text("No keys").foregroundStyle(.secondary) }
+          ForEach(row.keyInfo) { k in KeyDocRow(store: store, k: k, saved: load) }
         } header: { Text("Keys") } footer: {
           Text("Names and who wrote each key; never values.")
         }

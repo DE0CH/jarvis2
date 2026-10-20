@@ -31,15 +31,8 @@ struct RecoveredStore { let name: String; let values: [String: String]; let sens
 
 enum CoreSetup {
   // ---- the core: its keys (vouched for by the box key) and its own signed state ----
-  /// bundle: the claim bundle format the core takes ("keys": stores of keys, core/keys.go; nil from a core from before
-  /// keys.go, until the held core is live). Not signed: a wrong word only makes the core refuse the bundle or request.
   struct Identity: Decodable {
     let signingKey: String; let agreementKey: String; let boxSig: String; let state: SignedDoc
-    var bundle: String? = nil
-    /// continuity: 1 = the core takes a seed and a line state in the claim bundle (core/continuity.go)
-    var continuity: Int? = nil
-    var takesKeys: Bool { bundle == "keys" }
-    var takesSeed: Bool { takesKeys && continuity == 1 }
   }
   /// lineSeq: the newest record of the sessions the core keeps (this iPhone remembers the highest it saw: LineWitness);
   /// derived: the core's keys come from the master key, so a Recover with the same kit brings this core back
@@ -218,14 +211,6 @@ enum CoreSetup {
     return (b, v)
   }
 
-  /// the bundle's exact bytes (Reset: no stores). An even older core's format (until the held core is live).
-  static func bundle(_ stores: [RecoveredStore]) throws -> Data {
-    struct S: Encodable { let name: String; let values: [String: String] }
-    struct B: Encodable { let stores: [S]; let notSensitive: [String] }
-    let e = JSONEncoder(); e.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
-    return try e.encode(B(stores: stores.map { S(name: $0.name, values: $0.values) }, notSensitive: stores.filter { !$0.sensitive }.map(\.name)))
-  }
-
   /// the claim statement: this master key sets up this core for this iPhone, with this bundle
   /// `device`: this install's long-lived device key (PhoneKeys.devicePublic), inside the master-signed text so the setup
   /// session takes it only from there (a router can't attach its own); the core ignores the field
@@ -261,10 +246,10 @@ enum CoreSetup {
 
 // ---- Recover with keys (core/keys.go): every key wrapped on its own to the core's store key ----------------------
 extension CoreSetup {
-  /// the bundle a core whose identity says bundle "keys" reads: every store's name but `core`, every key of them
+  /// the claim bundle (core/keys.go): every store's name but `core`, every key of them
   /// wrapped to the store key (its value's raw bytes, "<store>\n<key>" as associated data), the core store's Fly token
   /// on its own, which stores are not sensitive, which repo owns each deploy-key store
-  /// coreSeed / lineState: a core that takes them (Identity.takesSeed): the seed the core's keys come from, and the record
+  /// coreSeed / lineState: the seed the core's keys come from (core/continuity.go), and the record
   /// of the sessions an earlier core from the same kit left (checked first: checkLineState)
   static func keysBundle(_ stores: [RecoveredStore], storeKey: String, coreSeed: Data? = nil, lineState: LineStateDoc? = nil) throws -> Data {
     struct B: Encodable {
@@ -285,22 +270,6 @@ extension CoreSetup {
       if let repo = s.values.first(where: { $0.key.hasPrefix("GITHUB_DEPLOY_REPO_") })?.value { owners[s.name] = repo }
     }
     return owners
-  }
-}
-
-// ---- Recover with blobs (R2): a core from before keys.go (until the held core is live) ---------------------------
-extension CoreSetup {
-  /// the bundle a core that takes blobs reads: every store but `core` wrapped to the store key, the core store's Fly
-  /// token on its own, which stores are not sensitive, and which repo owns each deploy-key store
-  static func blobsBundle(_ stores: [RecoveredStore], storeKey: String) throws -> Data {
-    struct B: Encodable {
-      let blobs: [StoreBlob]; let flyToken: String?; let format = "blobs"; let notSensitive: [String]; let owners: [String: String]; let stores = "blobs"
-    }
-    let rest = stores.filter { $0.name != StoreView.coreStore }
-    let blobs = try rest.map { try CoreCrypto.wrapStore(name: $0.name, values: $0.values, storeKey: storeKey) }
-    let fly = stores.first { $0.name == StoreView.coreStore }?.values["FLY_API_TOKEN"]
-    let e = JSONEncoder(); e.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
-    return try e.encode(B(blobs: blobs, flyToken: fly, notSensitive: rest.filter { !$0.sensitive }.map(\.name), owners: owners(rest)))
   }
 }
 

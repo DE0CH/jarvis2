@@ -23,7 +23,6 @@ struct ApprovalView: View {
   @State private var toUnlock: [String] = []
   /// keys sessions wrote into the stores it unlocks (shown before Face ID; the unlock refuses one not shown)
   @State private var writes: [SessionWrite] = []
-  @State private var scoped = false
   /// sensitive stores: the core's signed store list's marks joined with the challenge's (a newer core drops the latter)
   @State private var sens: [String] = []
   @State private var signed: [SignedFact]?
@@ -180,12 +179,11 @@ struct ApprovalView: View {
       // a resume on a new image or mode already asks for Face ID: it brings the line's stores as they are now too
       let want: [String] = rv.kind == .addStore ? [rv.addedStore ?? ""] : (rv.kind == .newSession || rv.kind == .resumeUpgrade) ? rv.stores : []
       sens = Array(Set(rv.sensitive + doc.stores.filter(\.sensitive).map(\.name)))
-      scoped = true  // every core takes unlocks for one session (the flag is going away)
-      // only with a core that unlocks for one session (an older core's unlocks would stay open to every session)
-      toUnlock = scoped ? want.filter { n in doc.stores.contains { $0.name == n && !$0.unlocked && !$0.empty } } : []
+      // unlocked for this session only (its pull locks them again)
+      toUnlock = want.filter { n in doc.stores.contains { $0.name == n && !$0.unlocked && !$0.empty } }
       writes = await SessionWrites.load(toUnlock)
       r = rv; a = x
-      signed = SignedAction.approval(rv, of: id) + SignedAction.alsoUnlocks(toUnlock, scoped: scoped) + SessionWrites.fact(writes)
+      signed = SignedAction.approval(rv, of: id) + SignedAction.alsoUnlocks(toUnlock, scoped: true) + SessionWrites.fact(writes)
     } catch { loadError = errText(error) }
   }
   private func approve() async {

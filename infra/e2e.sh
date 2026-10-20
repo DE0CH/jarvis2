@@ -7,18 +7,12 @@
 # peer is removed, the processes stopped. Never touches the production core.
 #   JARVIS2_FLY_TOKEN   the jarvis2-370 org token
 #   E2E_CORE_FLY_TOKEN  optional: the token the test core gets instead (infra/fly-token.sh: narrowed as production's)
-#   E2E_CORE_REF + E2E_HELD_CORE=1: run against the core of that ref (the held one) and check only that a session gets
-#     its settings from the router as before
+#   E2E_CORE_REF: run against the core of that git ref instead of this tree's
 #   E2E_ONLY=jarvis1-import: after the core's setup, only the Jarvis 1 import step (a fake paused session on 127.0.0.1:${PP}070)
 #   E2E_ONLY=drain: after the first session is up, only the drain: SIGTERM to the router with a pause in flight
 #   E2E_ONLY=restore: after the core's setup, only the restore of a store to an earlier version (no machines)
 #   E2E_ONLY=continuity: the core set up from the master key's seed, a running and a paused session, then the core
 #     restarted and Recovered with the same kit and the router's line state: the sessions go on (e2e/continuity.go)
-#   E2E_ONLY=legacy + E2E_CORE_REF=<production's core commit>: sessions on that core (random keys), then the restart to
-#     this tree's core, Recovered with the seed: a running and a paused session are taken over and resume (e2e/legacy.go)
-#   E2E_ONLY=legacy-move + E2E_CORE_REF=<production's core commit>: the real box move rehearsed — router A on that core,
-#     router B on its own core (this tree's, empty, ${PP}190), the move, B's seeded Recover, the legacy takeover
-#     (e2e/legacymove.go)
 #   E2E_ONLY=move: a second router (its own /data, ports ${PP}180/${PP}181) moves the router over from the first while
 #     a session machine runs, the WireGuard peer moving along (router/move.go; e2e/move.go): the gaps are measured
 # Always with Jarvis 1 unreachable (e2e/nojarvis1.go): the router runs in its own mount namespace (sudo unshare) whose
@@ -67,7 +61,7 @@ cleanup() {
   # this run's volumes whose machine is already gone (a kill whose delete failed, a core restarted mid-run): only ids
   # this run's routers and cores recorded, never another run's or production's (infra/run-volumes.py)
   FLY_TOKEN="$JARVIS2_FLY_TOKEN" python3 -I "$ROOT/infra/run-volumes.py" "$W/data/state.json" "$W/data-b/state.json" \
-    "$W/core.log" "$W/core-b.log" || true
+    "$W/core.log" || true
   FLY_API_TOKEN="$JARVIS2_FLY_TOKEN" flyctl wireguard remove jarvis2-370 "$PEER" >/dev/null 2>&1 || true
   rm -rf "$W"
 }
@@ -75,7 +69,7 @@ trap cleanup EXIT
 trap 'exit 130' INT TERM HUP
 sweep
 
-# E2E_CORE_REF: build the core from that git ref instead (e.g. the held production core's commit, with E2E_HELD_CORE=1)
+# E2E_CORE_REF: build the core from that git ref instead
 if [ -n "${E2E_CORE_REF:-}" ]; then
   git -C "$ROOT" worktree add -q --detach "$W/core-src" "$E2E_CORE_REF"
   (cd "$W/core-src/core" && go build -o "$W/core" .)
@@ -84,8 +78,6 @@ else
   (cd "$ROOT/core" && go build -o "$W/core" .)
 fi
 (cd "$ROOT/router" && go build -o "$W/router" .)
-# E2E_ONLY=legacy: the core the run starts on is E2E_CORE_REF's (production's, random keys); the restart brings this tree's
-case "${E2E_ONLY:-}" in legacy|legacy-move) (cd "$ROOT/core" && go build -o "$W/core-next" .) ;; esac
 python3 - "$W" <<'PY'
 import base64, sys
 from cryptography.hazmat.primitives.asymmetric import ec
@@ -110,8 +102,7 @@ echo $! > "$W/core.pid"
 cat > "$W/core-restart" <<SH
 #!/bin/sh
 kill \$(cat "$W/core.pid") 2>/dev/null; sleep 1
-BIN="$W/core"; [ -x "$W/core-next" ] && BIN="$W/core-next"
-BOX_KEY_FILE="$W/box-key.pem" ADDR=127.0.0.1:${PP}090 MACHINE_URL="http://$PEER._peer.internal:8081" nohup "\$BIN" >> "$W/core.log" 2>&1 &
+BOX_KEY_FILE="$W/box-key.pem" ADDR=127.0.0.1:${PP}090 MACHINE_URL="http://$PEER._peer.internal:8081" nohup "$W/core" >> "$W/core.log" 2>&1 &
 echo \$! > "$W/core.pid"
 for i in \$(seq 1 30); do curl -sf http://127.0.0.1:${PP}090/identity > /dev/null && exit 0; sleep 0.5; done
 exit 1
@@ -131,13 +122,7 @@ S3_SECRET="$(openssl rand -hex 16)"
 rclone serve s3 --addr 127.0.0.1:${PP}074 --auth-key "e2e,$S3_SECRET" "$W/s3" > "$W/s3.log" 2>&1 & PIDS+=($!)
 # E2E_ONLY=move: the first router is the sender (its move listener on ${PP}082), the second (router-b) the joiner
 MOVE_ENV=""
-CORE_B_URL=http://127.0.0.1:${PP}090
-if [ "${E2E_ONLY:-}" = legacy-move ]; then
-  # the control box's own core: this tree's, empty, from the start (no standby)
-  BOX_KEY_FILE="$W/box-key.pem" ADDR=127.0.0.1:${PP}190 MACHINE_URL="http://$PEER._peer.internal:8081" "$W/core-next" > "$W/core-b.log" 2>&1 & PIDS+=($!)
-  CORE_B_URL=http://127.0.0.1:${PP}190
-fi
-if [ "${E2E_ONLY:-}" = move ] || [ "${E2E_ONLY:-}" = legacy-move ]; then
+if [ "${E2E_ONLY:-}" = move ]; then
   MOVE_KEY="$(openssl rand -hex 16)"
   MOVE_ENV="MOVE_KEY=$MOVE_KEY MOVE_ADDR=127.0.0.1:${PP}082"
 fi
@@ -186,13 +171,13 @@ for h in $J1_HOSTS; do
   grep -qx "127.0.0.2 $h" "/proc/$ROUTER_PID/root/etc/hosts" || { echo "the router's /etc/hosts doesn't blackhole $h"; exit 1; }
 done
 grep -q 'jarvis.deyaochen.com' /etc/hosts && { echo "the blackhole leaked into this session's own /etc/hosts"; exit 1; }
-if [ "${E2E_ONLY:-}" = move ] || [ "${E2E_ONLY:-}" = legacy-move ]; then
+if [ "${E2E_ONLY:-}" = move ]; then
   cp "$W/router" "$W/router-b"; mkdir -p "$W/data-b"
   # router-b-start MOVE_AT: the joiner, in the same blackholed namespace; its peer comes with the move (no WG_CONFIG)
   cat > "$W/router-b-env" <<ENV
 #!/bin/sh
 exec env -i PATH="$PATH" HOME="$HOME" \\
-  CORE_URL=$CORE_B_URL NO_ACCESS=1 RECORDS_OFF=1 LIVE_SYNC_SECONDS=20 ADDR=127.0.0.1:${PP}180 MACHINE_ADDR=127.0.0.1:${PP}181 \\
+  CORE_URL=http://127.0.0.1:${PP}090 NO_ACCESS=1 RECORDS_OFF=1 LIVE_SYNC_SECONDS=20 ADDR=127.0.0.1:${PP}180 MACHINE_ADDR=127.0.0.1:${PP}181 \\
   DATA_DIR="$W/data-b" WEB_DIR="$W/web" MACHINE_URL="http://$PEER._peer.internal:8081" POLICY_FILE="$W/policy.json" TASKS_DIR="$ROOT/tasks" \\
   SESSION_IMAGE="$E2E_SESSION_IMAGE" JARVIS1_PAUSED_URL="http://127.0.0.1:${PP}070/" \\
   STORAGEBOX_HOST=127.0.0.1:${PP}073 STORAGEBOX_USER=e2e STORAGEBOX_PASSWORD=e2e SSL_CERT_FILE="$W/roots.pem" \\
@@ -212,7 +197,7 @@ SH
   : > "$W/router-b.log"
 fi
 sleep 3
-(cd "$ROOT/e2e" && E2E_ROUTER_B_START="$W/router-b-start" E2E_ROUTER_B=http://127.0.0.1:${PP}180 E2E_ROUTER_B_LOG="$W/router-b.log" E2E_CORE_B="$CORE_B_URL" E2E_CORE_RESTART="$W/core-restart" E2E_ROUTER_PID="$ROUTER_PID" E2E_ROUTER_LOG="$W/router.log" E2E_DATA_DIR="$W/data" E2E_ROUTER=http://127.0.0.1:${PP}080 E2E_CORE=http://127.0.0.1:${PP}090 E2E_MASTER_KEY_FILE="$ROOT/e2e/testdata/master-test.pem" E2E_BOX_PUB="$(cat "$W/box.pub")" \
+(cd "$ROOT/e2e" && E2E_ROUTER_B_START="$W/router-b-start" E2E_ROUTER_B=http://127.0.0.1:${PP}180 E2E_ROUTER_B_LOG="$W/router-b.log" E2E_CORE_RESTART="$W/core-restart" E2E_ROUTER_PID="$ROUTER_PID" E2E_ROUTER_LOG="$W/router.log" E2E_DATA_DIR="$W/data" E2E_ROUTER=http://127.0.0.1:${PP}080 E2E_CORE=http://127.0.0.1:${PP}090 E2E_MASTER_KEY_FILE="$ROOT/e2e/testdata/master-test.pem" E2E_BOX_PUB="$(cat "$W/box.pub")" \
   E2E_JARVIS1_ADDR=127.0.0.1:${PP}070 E2E_FLY_TOKEN="$JARVIS2_FLY_TOKEN" E2E_CORE_FLY_TOKEN="${E2E_CORE_FLY_TOKEN:-$JARVIS2_FLY_TOKEN}" \
   E2E_PEER="$PEER" E2E_J1_HITS="$W/j1-hits.log" E2E_SEARCH_ADDR=127.0.0.1:${PP}071 E2E_WATCH_ADDR=127.0.0.1:${PP}072 \
   E2E_DAV_ADDR=127.0.0.1:${PP}073 E2E_DAV_CERT="$W/dav.crt" E2E_DAV_KEY="$W/dav.key" E2E_S3_DIR="$W/s3/jarvis2-backup-de0ch" go run .) || { echo "--- router log"; tail -40 "$W/router.log"; exit 1; }

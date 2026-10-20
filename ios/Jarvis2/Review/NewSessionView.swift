@@ -25,7 +25,6 @@ struct NewSessionView: View {
   @State private var repoDefaulted = false
   @State private var autoPause = true
   @State private var apiProxy = false
-  @State private var scoped = false
   @State private var loaded = false
   @State private var loadError: String?
   @State private var busy: String?
@@ -243,7 +242,7 @@ struct NewSessionView: View {
         }
         .accessibilityElement(children: .combine)
         .accessibilityIdentifier("ns-unlocks")
-        LabeledContent("Open to", value: scoped ? "This session only" : "Every session")
+        LabeledContent("Open to", value: "This session only")
       }
       if let failure { ErrorRow(text: failure, id: "secure-error") }
       SigningFooter()
@@ -278,7 +277,6 @@ struct NewSessionView: View {
     if model.repos.isEmpty { await model.refresh() }
     do {
       let d = try await RouterClient.shared.storesDoc()
-      scoped = true  // every core takes unlocks for one session
       apply(d.stores)
       loaded = true
     } catch { if !loaded { loadError = errText(error) } }
