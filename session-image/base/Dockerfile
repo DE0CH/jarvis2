@@ -77,6 +77,9 @@ RUN curl -fsSL https://fly.io/install.sh | FLYCTL_INSTALL=/usr/local sh \
 # hcloud: Hetzner Cloud CLI
 RUN curl -fsSL https://github.com/hetznercloud/cli/releases/download/v1.70.1/hcloud-linux-amd64.tar.gz \
   | tar -xz -C /usr/local/bin hcloud && hcloud version
+# AWS CLI v2 (the official bundle; installer removed in the same layer)
+RUN curl -fsSL -o /tmp/awscli.zip https://awscli.amazonaws.com/awscli-exe-linux-x86_64-2.38.2.zip \
+ && unzip -q /tmp/awscli.zip -d /tmp && /tmp/aws/install && rm -rf /tmp/awscli.zip /tmp/aws && aws --version
 # Tailscale CLI + daemon (run tailscaled with --tun=userspace-networking inside the microVM)
 RUN curl -fsSL https://tailscale.com/install.sh | sh
 # Every `npm install -g` ends with `npm cache clean --force` in the SAME RUN: npm keeps a copy of each
