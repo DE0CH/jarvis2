@@ -40,6 +40,9 @@ type SessionOps struct {
 	Attach   []AttachFile      `json:"attachments,omitempty"`
 	// a switch to bypass that waits on a terminal grant in the Inbox (askModeGrant): it runs once the phone signs it
 	ModeAfterGrant *ModeAfterGrant `json:"modeAfterGrant,omitempty"`
+	// accountswap.go: a switch of a paused session's Claude account asked for "continue": typed into its chat once its
+	// next start's Claude host is up and idle (autopilot.go)
+	ContinueAfterStart bool `json:"continueAfterStart,omitempty"`
 }
 
 // ModeAfterGrant: raising a running session to bypass needs a fresh phone grant for the terminal. Asked for where no
@@ -746,6 +749,7 @@ func (r *Router) registerSessionOps(app appRoute, m machineRoute) {
 		}
 		writeJSON(w, 202, out)
 	})
-	r.registerUploads(app, m) // uploads.go
-	r.registerRepos(app)      // repos.go: repo list, GitHub picker, usage
+	r.registerAccountSwitch(app) // accountswap.go
+	r.registerUploads(app, m)    // uploads.go
+	r.registerRepos(app)         // repos.go: repo list, GitHub picker, usage
 }

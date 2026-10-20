@@ -210,6 +210,10 @@ func runCommand(c *client, cmd string) {
 		if booted() {
 			go refreshFromRouter(c)
 		}
+	case "claude-account": // claudelogin.go: the router switched the session's Claude account
+		if booted() && !frozen.Load() {
+			claudeAccountCmd()
+		}
 	case "pause-harness":
 		if err := pauseHarness(); err != nil {
 			log.Printf("pause-harness: %v", err)

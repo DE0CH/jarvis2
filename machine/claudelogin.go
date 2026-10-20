@@ -14,6 +14,12 @@ package main
 // supervisor (~/.claude/.account-switch.json, merged at the host's next start), and the claude host is restarted as
 // soon as it is idle, so its Remote Control comes up under the new account (a running host keeps the account it
 // connected with).
+//
+// A switch Deyao asks for (router/accountswap.go, POST /api/sessions/{id}/account) changes the session's account on
+// the router and sends this machine the command "claude-account" (claudeAccountCmd): the long poll answers with the
+// new account's pair at once, the host is restarted as soon as it is idle, and at most hostSwapGrace after the command
+// whatever it is doing (a host whose account ran out of usage never goes idle by itself). Only the host restarts:
+// the supervisor, background servers and tunnels keep running.
 
 import (
 	"bytes"
@@ -24,6 +30,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sync/atomic"
 	"syscall"
 	"time"
 )
@@ -276,6 +283,9 @@ func takeLock() string {
 
 // credsSync: the machine's side of the router's login protocol, for the machine's life
 func credsSync() {
+	if !credsSyncOn.CompareAndSwap(false, true) {
+		return
+	}
 	c, err := newClient()
 	if err != nil {
 		log.Printf("claude login: credsSync can't run: %v", err)
@@ -368,6 +378,28 @@ func (s *syncer) step() error {
 // ---- an account switch: restart the host -------------------------------------------------------------------------
 
 var (
+	credsSyncOn   atomic.Bool  // credsSync runs
+	swapAskedAt   atomic.Int64 // unix ns of the router's "claude-account" command; 0 = none pending
+	hostSwapGrace = 60 * time.Second
+)
+
+// claudeAccountCmd: the router switched the session's Claude account (supervisor command "claude-account")
+func claudeAccountCmd() {
+	swapAskedAt.Store(time.Now().UnixNano())
+	log.Printf("claude login: the router switched this session's Claude account: taking the new account's login, then restarting Claude on the same conversation (once idle, at most %s from now)", hostSwapGrace)
+	if !credsSyncOn.Load() {
+		startCredsSync() // a session that had no account: the sync starts now
+		go credsSync()
+	}
+}
+
+// swapForced: a switch the router asked for has waited hostSwapGrace for an idle host
+func swapForced() bool {
+	at := swapAskedAt.Load()
+	return at != 0 && time.Since(time.Unix(0, at)) >= hostSwapGrace
+}
+
+var (
 	hostIdlePoll = 5 * time.Second
 	killHost     = func() error { return exec.Command("tmux", "kill-session", "-t", "claude").Run() }
 )
@@ -413,6 +445,10 @@ func restartHostWhenIdle() {
 	killed := 0
 	for {
 		if _, err := os.Stat(switchPath()); err != nil {
+			if killed != 0 {
+				log.Printf("claude login: Claude restarted under the new Claude account (the account record is merged)")
+			}
+			swapAskedAt.Store(0)
 			return // merged by the supervisor's start()
 		}
 		status, pid := hostState()
@@ -425,6 +461,12 @@ func restartHostWhenIdle() {
 			}
 		case pid == killed:
 			// still exiting
+		case swapForced():
+			log.Printf("claude login: restarting the host (pid %d, %s) under the new Claude account: the switch was asked for %s ago", pid, orDash(status), hostSwapGrace)
+			if err := killHost(); err != nil {
+				log.Printf("claude login: restarting the host: %v", err)
+			}
+			killed, idle = pid, 0
 		case status == "idle":
 			if idle++; idle >= 2 {
 				log.Printf("claude login: restarting the idle host (pid %d) under the new Claude account", pid)
@@ -438,4 +480,11 @@ func restartHostWhenIdle() {
 		}
 		time.Sleep(hostIdlePoll)
 	}
+}
+
+func orDash(s string) string {
+	if s == "" {
+		return "-"
+	}
+	return s
 }

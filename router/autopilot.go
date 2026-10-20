@@ -289,7 +289,7 @@ func (r *Router) registerAutopilot(app appRoute, m machineRoute) {
 // ---- the loop ---------------------------------------------------------------------------------------------
 
 type pilotAction struct {
-	Kind    string // dm | escape | dialog | nudge | login | pause | destroy | harness-stuck
+	Kind    string // dm | escape | dialog | nudge | login | continue | pause | destroy | harness-stuck
 	Session string
 	Machine string // harness-stuck: the machine whose harness never came up
 	Text    string // dm, nudge
@@ -431,6 +431,13 @@ func planTick(d *persisted, now time.Time, storedExp map[string]int64, c pilotCo
 			}
 			add(pilotAction{Kind: "harness-stuck", Session: id, Machine: s.MachineID, Name: name, Text: harnessStuckText(c.HarnessUp, screen)})
 			continue
+		}
+
+		// "continue" after a start that took a new Claude account (accountswap.go), once its host is up and idle
+		if s.Ops != nil && s.Ops.ContinueAfterStart && !operating && g != nil && l.HostUp == s.MachineID &&
+			g.BridgeSessionID != "" && g.Status == "idle" {
+			s.Ops.ContinueAfterStart = false
+			add(pilotAction{Kind: "continue", Session: id, Name: name})
 		}
 
 		// one-shot: the prompt is done → destroy
@@ -756,6 +763,15 @@ func (r *Router) runAction(a pilotAction) {
 				return
 			}
 			log.Printf("[stall] %s nudged", a.Session)
+		}()
+	case "continue":
+		go func() {
+			if err := r.DeliverCanned(a.Session, Delivery{Kind: "continue"}, "continue"); err != nil {
+				r.noteRefusal(a.Session, "scheduler", err)
+				log.Printf("[account] %s (%s): \"continue\" after the start on its new Claude account failed: %v", a.Session, a.Name, err)
+				return
+			}
+			log.Printf("[account] %s (%s): \"continue\" delivered after the start on its new Claude account", a.Session, a.Name)
 		}()
 	case "login":
 		go func() {

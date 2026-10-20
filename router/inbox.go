@@ -447,6 +447,7 @@ type InboxItem struct {
 	Open        map[string]any    `json:"open"`              // the shell page to open: {kind, options}
 	Batch       string            `json:"batch,omitempty"`   // batches.go: reviewed together with the batch's other items
 	ViaCall     string            `json:"viaCall,omitempty"` // apicalls.go: the API-call request whose approved call brought it about
+	Does        string            `json:"does,omitempty"`    // an API call's effect in words, rendered by the router (callDoes)
 }
 
 func (r *Router) Inbox() []InboxItem {
@@ -515,6 +516,7 @@ func requestItem(d *persisted, q *InboxRequest, now time.Time) InboxItem {
 			q.Origin.Caller.Session, inboxSessionName(d, q.Origin.Caller.Session)
 	case requestKindCall: // its own review sheet (app APICallReviewView, web pages/APICall.tsx): Approve = POST /api/requests/{id}/approve
 		it.Session, it.SessionName = q.Origin.Caller.Session, inboxSessionName(d, q.Origin.Caller.Session)
+		it.Does = callDoes(d, q.Params)
 	}
 	it.Open = map[string]any{"kind": q.Kind, "options": opts}
 	return it

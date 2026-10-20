@@ -36,8 +36,9 @@ type Registry struct {
 	BgTasks         int       `json:"bgTasks"`
 	StatusUpdatedAt int64     `json:"statusUpdatedAt"` // ms; changes on every turn
 	BridgeSessionID string    `json:"bridgeSessionId"`
-	SessionID       string    `json:"sessionId"`  // claude's conversation id
-	AuthFailed      string    `json:"authFailed"` // uuid of a "Please run /login" reply ending the host's transcript
+	HostPid         int64     `json:"hostPid,omitempty"` // the host's pid: a new one = the harness restarted it (accountswap.go)
+	SessionID       string    `json:"sessionId"`         // claude's conversation id
+	AuthFailed      string    `json:"authFailed"`        // uuid of a "Please run /login" reply ending the host's transcript
 	CredsExpiresAt  int64     `json:"credsExpiresAt"`
 	SessionsInside  int       `json:"sessionsInside"`
 	OneShotDone     bool      `json:"oneShotDone"`
@@ -238,7 +239,7 @@ func parseRegistry(raw string) *Registry {
 	return &Registry{
 		LiveName: str(host, "name"), NameSource: str(host, "nameSource"), AiTitle: titles[sid],
 		Status: status, BgTasks: n, StatusUpdatedAt: num(host, "statusUpdatedAt"),
-		BridgeSessionID: str(host, "bridgeSessionId"), SessionID: sid,
+		BridgeSessionID: str(host, "bridgeSessionId"), HostPid: num(host, "pid"), SessionID: sid,
 		AuthFailed: failed[sid], CredsExpiresAt: credsExp, SessionsInside: len(entries),
 		OneShotDone: oneShotDone, Refusals: refusals, Workers: parseWorkers(workersPart, sid),
 	}

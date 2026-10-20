@@ -954,8 +954,13 @@ func (r *Router) registerClaudeLogin(app appRoute, m machineRoute, public public
 			return
 		}
 		have, ack, wait := pollArgs(req)
+		a, ok := r.pollWithSwitch(req.Context(), machine, h, have, ack, wait) // accountswap.go: a switch cuts it short
+		if !ok {
+			noAccount(w)
+			return
+		}
 		w.Header().Set("Cache-Control", "no-store")
-		writeJSON(w, 200, h.poll(req.Context(), "m:"+machine, have, ack, wait))
+		writeJSON(w, 200, a)
 	}
 	machinePush := func(w http.ResponseWriter, req *http.Request, machine string, body []byte) {
 		sid, h := r.machineAccount(machine)

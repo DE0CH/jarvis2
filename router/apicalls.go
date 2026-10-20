@@ -511,6 +511,7 @@ var callRules = map[string]callRule{
 	"POST /api/sessions/{id}/notify-idle":       callBody,
 	"POST /api/sessions/{id}/pause":             callBody,
 	"POST /api/sessions/{id}/permission-mode":   callBody,
+	"POST /api/sessions/{id}/account":           callBody,
 	"GET /api/sessions/{id}/remote":             callStatus, // the OpenClaw gateway token / OpenCode pairing URL
 	"POST /api/sessions/{id}/restart":           callBody,
 	"POST /api/sessions/{id}/resume":            callBody,

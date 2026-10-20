@@ -340,3 +340,49 @@ func TestHostStateTornEntry(t *testing.T) {
 		t.Fatal("a whole entry:", s, pid)
 	}
 }
+
+// a switch the router asked for (command "claude-account", router/accountswap.go): a host that never goes idle (its
+// account ran out of usage) is restarted once hostSwapGrace has passed since the command
+func TestRestartHostForcedAfterSwitchCommand(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	os.MkdirAll(home(t)+"/.claude/sessions", 0o700)
+	b, _ := json.Marshal(map[string]any{"status": "busy", "pid": os.Getpid(), "bridgeSessionId": "b1"})
+	os.WriteFile(home(t)+"/.claude/sessions/1.json", b, 0o600)
+	oldKill, oldPoll, oldGrace := killHost, hostIdlePoll, hostSwapGrace
+	defer func() { killHost, hostIdlePoll, hostSwapGrace = oldKill, oldPoll, oldGrace; swapAskedAt.Store(0) }()
+	hostIdlePoll, hostSwapGrace = 10*time.Millisecond, 150*time.Millisecond
+	var mu sync.Mutex
+	kills := 0
+	killHost = func() error {
+		mu.Lock()
+		kills++
+		mu.Unlock()
+		os.Remove(home(t) + "/.claude/sessions/1.json")
+		os.Remove(switchPath())
+		return nil
+	}
+	os.WriteFile(switchPath(), []byte(acct2Record), 0o600)
+	credsSyncOn.Store(true) // the sync runs: the command doesn't start another
+	defer credsSyncOn.Store(false)
+	claudeAccountCmd()
+	done := make(chan struct{})
+	go func() { restartHostWhenIdle(); close(done) }()
+	time.Sleep(60 * time.Millisecond)
+	mu.Lock()
+	if kills != 0 {
+		t.Fatal("a busy host was restarted before the grace")
+	}
+	mu.Unlock()
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("a busy host was never restarted after the switch command")
+	}
+	if kills != 1 || swapAskedAt.Load() != 0 {
+		t.Fatal("kills", kills, "pending", swapAskedAt.Load())
+	}
+	// without the command, a busy host is left alone (TestRestartHostWhenIdle)
+	if swapForced() {
+		t.Fatal("forced with no command pending")
+	}
+}
