@@ -3,7 +3,6 @@ package main
 import (
 	"strings"
 	"testing"
-	"time"
 )
 
 // Claude Code · Paseo: a running session switches accounts with no restart. Once the machine reports the new pair on
@@ -13,8 +12,12 @@ func TestAccountSwitchProxyHarnessNoRestart(t *testing.T) {
 	r, _, _, expA, expB := twoAccounts(t)
 	shortSwapWaits(t)
 	addSession(r, "sP", "started", "mP", false)
-	r.st.Do(func(d *persisted) { d.Sessions["sP"].ClaudeAccount, d.Sessions["sP"].Harness = "claude-a", "paseo-claude" })
-	setReg(r, "sP", func(g *Registry) { g.HostPid, g.CredsExpiresAt, g.BridgeSessionID, g.Status = 100, expA, "paseo:sP", "busy" })
+	r.st.Do(func(d *persisted) {
+		d.Sessions["sP"].ClaudeAccount, d.Sessions["sP"].Harness = "claude-a", "paseo-claude"
+	})
+	setReg(r, "sP", func(g *Registry) {
+		g.HostPid, g.CredsExpiresAt, g.BridgeSessionID, g.Status = 100, expA, "paseo:sP", "busy"
+	})
 	stop := make(chan struct{})
 	defer close(stop)
 	cmds := answerExecs(r, "mP", 0, stop)
@@ -26,10 +29,7 @@ func TestAccountSwitchProxyHarnessNoRestart(t *testing.T) {
 	if q := r.queue("mP"); len(q) == 0 || <-q != "claude-account" {
 		t.Fatal("the machine wasn't told")
 	}
-	time.Sleep(50 * time.Millisecond)
-	if j := r.ops.jobView("sP"); j == nil || j["phase"] != "taking the login" {
-		t.Fatal("phase", j)
-	}
+	waitFor(t, "taking the login", func() bool { j := r.ops.jobView("sP"); return j != nil && j["phase"] == "taking the login" })
 	setReg(r, "sP", func(g *Registry) { g.CredsExpiresAt, g.AccountSection = expB, true }) // same host pid: nothing restarted
 	waitFor(t, "checking the account", func() bool { j := r.ops.jobView("sP"); return j != nil && j["phase"] == "checking the account" })
 	setReg(r, "sP", func(g *Registry) { g.AccountProof = "acct-2" }) // the bridge stays "paseo:sP": no Remote Control phase

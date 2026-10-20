@@ -40,9 +40,9 @@ var modelCatalog = []ModelChoice{
 
 // the first model of each harness is its default
 var harnessInfo = map[string]map[string]string{
-	"claude":   {"label": "Claude Code", "detail": "Claude subscription · Claude app"},
-	"opencode": {"label": "OpenCode · OpenRouter", "detail": "Paseo app + web UI"},
-	"openclaw": {"label": "claw-code · OpenClaw", "detail": "Claude subscription · OpenClaw app + Control UI"},
+	"claude":       {"label": "Claude Code", "detail": "Claude subscription · Claude app"},
+	"opencode":     {"label": "OpenCode · OpenRouter", "detail": "Paseo app + web UI"},
+	"openclaw":     {"label": "claw-code · OpenClaw", "detail": "Claude subscription · OpenClaw app + Control UI"},
 	"paseo-claude": {"label": "Claude Code · Paseo", "detail": "Claude subscription · Paseo app + web UI"},
 }
 
