@@ -200,6 +200,25 @@ var startCredsSync = func() {
 
 var claudeLoginOn = dir + "/claude-login"
 
+var (
+	markerPoll   = 2 * time.Second
+	runCredsSync = func() { credsSync() } // tests: a stand-in
+)
+
+// startCredsSyncOnMarker: credsSync as soon as boot leaves claudeLoginOn. Boot writes it after bootedPath (its login
+// fetch takes seconds), so it is watched for the machine's life, not looked at once when booted: a supervisor that
+// looked once, before the marker, never kept the pair in step, and the session lost its login at the account's next
+// refresh (YYC AI on Jarvis 3, 2026-10-20). A session with no account never gets the marker: a stat every 2 s.
+func startCredsSyncOnMarker() {
+	for !credsSyncOn.Load() {
+		if _, err := os.Stat(claudeLoginOn); err == nil {
+			go runCredsSync()
+			return
+		}
+		time.Sleep(markerPoll)
+	}
+}
+
 // writeAtomic: 0600, through a rename
 func writeAtomic(path string, b []byte) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {

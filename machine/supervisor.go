@@ -165,15 +165,13 @@ func supervise() error {
 		for !booted() {
 			time.Sleep(time.Second)
 		}
-		go statusReporter(c) // status.go
-		go memoryReporter(c) // memory.go: RAM for the router's starvation watch
-		go diskReporter(c)   // disk.go: the root disk and the volume, for the router's low-disk warning
-		go screenReporter(c) // screen.go: the pane for the read-only terminal
-		go serveAPIProxy(c)  // apiproxy.go: $JARVIS_URL for the session scripts
-		go liveSync(c)       // livesync.go: the transcripts to the Storage Box (through the router) for search
-		if _, err := os.Stat(claudeLoginOn); err == nil {
-			go credsSync() // claudelogin.go: the Claude login sync (boot left the marker)
-		}
+		go statusReporter(c)        // status.go
+		go memoryReporter(c)        // memory.go: RAM for the router's starvation watch
+		go diskReporter(c)          // disk.go: the root disk and the volume, for the router's low-disk warning
+		go screenReporter(c)        // screen.go: the pane for the read-only terminal
+		go serveAPIProxy(c)         // apiproxy.go: $JARVIS_URL for the session scripts
+		go liveSync(c)              // livesync.go: the transcripts to the Storage Box (through the router) for search
+		go startCredsSyncOnMarker() // claudelogin.go: the Claude login sync, once boot leaves its marker
 	}()
 	log.Printf("supervisor up (pid %d)", os.Getpid())
 	for {

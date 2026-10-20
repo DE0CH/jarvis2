@@ -345,3 +345,35 @@ func TestAfterSwitchWrongAccount(t *testing.T) {
 		t.Fatal("a proof for the wrong account, or keys typed")
 	}
 }
+
+// boot writes the Claude login marker seconds after "booted": the supervisor starts the sync whenever it appears
+func TestCredsSyncStartsWhenTheMarkerComesLate(t *testing.T) {
+	d := t.TempDir()
+	oldOn, oldPoll, oldRun := claudeLoginOn, markerPoll, runCredsSync
+	defer func() { claudeLoginOn, markerPoll, runCredsSync = oldOn, oldPoll, oldRun; credsSyncOn.Store(false) }()
+	claudeLoginOn, markerPoll = d+"/claude-login", 10*time.Millisecond
+	started := make(chan struct{}, 2)
+	runCredsSync = func() { credsSyncOn.Store(true); started <- struct{}{} }
+	done := make(chan struct{})
+	go func() { startCredsSyncOnMarker(); close(done) }()
+	time.Sleep(100 * time.Millisecond) // booted, no marker yet
+	select {
+	case <-started:
+		t.Fatal("started with no marker")
+	default:
+	}
+	os.WriteFile(claudeLoginOn, []byte("1"), 0o644)
+	select {
+	case <-started:
+	case <-time.After(3 * time.Second):
+		t.Fatal("the sync never started once the marker came")
+	}
+	<-done
+	// already running (the "claude-account" command started it): nothing more
+	startCredsSyncOnMarker()
+	select {
+	case <-started:
+		t.Fatal("started twice")
+	case <-time.After(50 * time.Millisecond):
+	}
+}
