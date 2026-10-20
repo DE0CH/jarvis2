@@ -23,7 +23,6 @@ package main
 //	POST /m/stores/{store}/keys/{key}      a session writes or deletes one key (machine-signed: core.WriterText)
 //	POST /setup/stores/{store}/keys/{key}  the same as the setup session (setup-key signed)
 //	POST /setup/store-docs, PUT /api/stores/{store}/docs {about?, keys: {KEY: text}} → {ok}
-//	POST /setup/store-keys {name, keys} → {ok}: key names for a core from before keys.go (until the held core is live)
 
 import (
 	"crypto/sha256"
@@ -69,11 +68,11 @@ type StoreRow struct {
 	Unlocked  bool   `json:"unlocked"`
 	About     string `json:"about"`
 	Version   string `json:"version,omitempty"`
-	// Keys: the key names (null: not known — a core from before keys.go with no recorded names), the shape every
-	// session image reads; KeyInfo: the same keys with what each is for and who wrote it
+	// Keys: the key names, the shape every session image reads; KeyInfo: the same keys with what each is for and who
+	// wrote it
 	Keys     []string `json:"keys"`
 	KeyInfo  []KeyRow `json:"keyInfo"`
-	KeysFrom string   `json:"keysFrom"` // core | recorded | "" (not known)
+	KeysFrom string   `json:"keysFrom"` // core: the names are the core's own signed list
 }
 
 // StoreDoc: what a store and its keys are for
@@ -183,14 +182,14 @@ func envSlug(repo string) string {
 	return string(b)
 }
 
-// coreStoreRow: one row of the core's signed list. Keys is nil from a core before keys.go.
+// coreStoreRow: one row of the core's signed list
 type coreStoreRow struct {
 	Name      string `json:"name"`
 	Sensitive bool   `json:"sensitive"`
 	Empty     bool   `json:"empty"`
 	Unlocked  bool   `json:"unlocked"`
 	Version   string `json:"version"`
-	Keys      *[]struct {
+	Keys      []struct {
 		Name   string     `json:"name"`
 		At     string     `json:"at"`
 		Writer *KeyWriter `json:"writer"`
@@ -213,7 +212,6 @@ func (r *Router) StoreList() ([]StoreRow, *Doc, error) {
 	storeDocsMu.Lock()
 	docs := r.readStoreDocs()
 	storeDocsMu.Unlock()
-	recorded := r.readRecordedKeys()
 	lines := map[string][2]string{} // line → session id, label
 	r.st.Do(func(d *persisted) {
 		for _, s := range d.Sessions {
@@ -229,35 +227,17 @@ func (r *Router) StoreList() ([]StoreRow, *Doc, error) {
 			}
 		}
 	})
-	repoKeys := map[string][]string{}
-	for _, e := range r.Repos() {
-		s := envSlug(e.Repo)
-		repoKeys[e.Store] = []string{"GITHUB_DEPLOY_KEY_" + s, "GITHUB_DEPLOY_REPO_" + s}
-	}
 	rows := make([]StoreRow, 0, len(list.Stores))
 	for _, s := range list.Stores {
 		doc := docs[s.Name]
 		row := StoreRow{Name: s.Name, Sensitive: s.Sensitive, Empty: s.Empty, Unlocked: s.Unlocked, About: doc.About, Version: s.Version}
-		var names []string
-		switch {
-		case s.Keys != nil:
-			row.KeysFrom, row.Keys, row.KeyInfo = "core", []string{}, []KeyRow{}
-			for _, k := range *s.Keys {
-				kr := KeyRow{Name: k.Name, Explanation: doc.Keys[k.Name], At: k.At, Writer: k.Writer}
-				if w := kr.Writer; w != nil && w.Line != "" {
-					w.Session, w.SessionLabel = lines[w.Line][0], lines[w.Line][1]
-				}
-				row.Keys, row.KeyInfo = append(row.Keys, k.Name), append(row.KeyInfo, kr)
+		row.KeysFrom, row.Keys, row.KeyInfo = "core", []string{}, []KeyRow{}
+		for _, k := range s.Keys {
+			kr := KeyRow{Name: k.Name, Explanation: doc.Keys[k.Name], At: k.At, Writer: k.Writer}
+			if w := kr.Writer; w != nil && w.Line != "" {
+				w.Session, w.SessionLabel = lines[w.Line][0], lines[w.Line][1]
 			}
-		case s.Empty:
-			row.KeysFrom, row.Keys, row.KeyInfo = "core", []string{}, []KeyRow{}
-		case repoKeys[s.Name] != nil:
-			names, row.KeysFrom = repoKeys[s.Name], "recorded"
-		case recorded[s.Name] != nil:
-			names, row.KeysFrom = recorded[s.Name], "recorded"
-		}
-		for _, k := range names {
-			row.Keys, row.KeyInfo = append(row.Keys, k), append(row.KeyInfo, KeyRow{Name: k, Explanation: doc.Keys[k]})
+			row.Keys, row.KeyInfo = append(row.Keys, k.Name), append(row.KeyInfo, kr)
 		}
 		rows = append(rows, row)
 	}
@@ -541,53 +521,6 @@ func certNonce(c *Doc) string {
 	return x.Nonce
 }
 
-// ---- key names for a core from before keys.go (until the held core is live; delete then) -------------------------
-
-func (r *Router) recordedKeysPath() string { return filepath.Join(r.cfg.DataDir, "store-keys.json") }
-
-func (r *Router) readRecordedKeys() map[string][]string {
-	var m map[string]struct {
-		Keys []string `json:"keys"`
-	}
-	out := map[string][]string{}
-	if b, err := os.ReadFile(r.recordedKeysPath()); err == nil && json.Unmarshal(b, &m) == nil {
-		for k, v := range m {
-			out[k] = v.Keys
-		}
-	}
-	return out
-}
-
-// RecordStoreKeys: the names a store holds (nil forgets them), for a core that doesn't list them
-func (r *Router) RecordStoreKeys(name string, keys []string) error {
-	if !storeNameOK(name) {
-		return fmt.Errorf("bad store name %q", name)
-	}
-	for _, k := range keys {
-		if !keyNameRE.MatchString(k) {
-			return fmt.Errorf("bad key name %q", k)
-		}
-	}
-	storeDocsMu.Lock()
-	defer storeDocsMu.Unlock()
-	m := map[string]any{}
-	if b, err := os.ReadFile(r.recordedKeysPath()); err == nil {
-		json.Unmarshal(b, &m)
-	}
-	if keys == nil {
-		delete(m, name)
-	} else {
-		sort.Strings(keys)
-		m[name] = map[string]any{"keys": keys, "at": time.Now().UTC().Format(time.RFC3339)}
-	}
-	b, _ := json.MarshalIndent(m, "", " ")
-	tmp := r.recordedKeysPath() + ".tmp"
-	if err := os.WriteFile(tmp, b, 0o600); err != nil {
-		return err
-	}
-	return os.Rename(tmp, r.recordedKeysPath())
-}
-
 // ---- routes -------------------------------------------------------------------------------------------------
 
 func writeWriteErr(w http.ResponseWriter, err error) {
@@ -683,21 +616,6 @@ func (r *Router) registerStoreDocs(app appRoute, m machineRoute, mux *http.Serve
 		}
 		if err := r.SetStoreDocs(in.Store, in.About, in.Keys); err != nil {
 			writeJSON(w, 400, map[string]string{"error": err.Error()})
-			return
-		}
-		writeJSON(w, 200, map[string]bool{"ok": true})
-	})
-	setup("POST /setup/store-keys", func(w http.ResponseWriter, req *http.Request, b []byte) {
-		var in struct {
-			Name string   `json:"name"`
-			Keys []string `json:"keys"`
-		}
-		if err := json.Unmarshal(b, &in); err != nil {
-			writeErr(w, fmt.Errorf("bad JSON: %v", err))
-			return
-		}
-		if err := r.RecordStoreKeys(in.Name, in.Keys); err != nil {
-			writeErr(w, err)
 			return
 		}
 		writeJSON(w, 200, map[string]bool{"ok": true})

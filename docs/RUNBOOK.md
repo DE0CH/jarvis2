@@ -62,8 +62,7 @@ core (`NEXT_CORE_URL`): empty, or Recovered alongside as a standby. A core resta
 4. Then one commit: `active.txt` = the new serving colour, and the router's `CORE_URL` / `NEXT_CORE_URL` swapped to
    match, so the next release goes into the core that now doesn't serve.
 
-`infra/setup.py identity` and `jarvis2 stores --json` (its `keysFrom`) say which core is live and what it serves; the
-pin annotations and PLAN.md don't.
+`infra/setup.py identity` says which core is live and what it serves; the pin annotations and PLAN.md don't.
 
 A router rollout drains (`router/drain.go`): the rollout's surge pod starts next to the leader as its standby and
 proxies to it; the old pod refuses new lifecycle actions with 503 "router updating, try again shortly", lets the
@@ -168,10 +167,8 @@ pinned yet (a new bucket, a rehearsal box).
 ### Store key names
 
 The app, sessions (`jarvis2 stores`) and `infra/setup.py stores` list every store's key names (API.md `GET
-/api/stores`). The router keeps them in its data volume; `infra/setup.py write` records them with each write. When
-they are missing (a new box, or after a Recover onto a new box) run `infra/store-keys.sh` (names only, from the
-layout file; needs only `JARVIS2_SETUP_*`). A new key in a store: add it to the layout file, then write the store
-(or `infra/setup.py keys <store> <KEY>…` to record the names alone).
+/api/stores`), from the core's own signed list (`keysFrom: core`): a key is listed once it is written, and nothing at
+the router records names. A new key in a store: add it to the layout file, then write it (`infra/setup.py write`).
 
 ### After a Reset (the setup session)
 
@@ -303,14 +300,13 @@ change the `jarvis2/restart` annotation of the serving core's Deployment (`activ
 - `infra/setup.py stores` — the core's signed list.
 - `infra/setup.py create NAME` — once per name, an empty store that is NOT sensitive. Without it, a store is
   sensitive.
-- `infra/setup.py write NAME KEY[=SRC]…` — new contents (values from this session's env, never printed),
-  written to the core wrapped to the phone + core key, and backed up to S3 (bucket `jarvis2-backup-de0ch`,
-  versioned, encrypted to the master key the core was set up with, signed by the setup key).
-- With the live core from before stores were made of keys, `write` REPLACES the whole store with exactly the keys
-  given: it refuses (and so does the router, 409) a write that leaves out a key name recorded for the store; name every
-  key, or add `--replace` only to drop keys on purpose. A core made of keys writes one key at a time (`delete` removes
-  one) and refuses `--replace`.
-- `infra/setup.py versions NAME` — the store's earlier versions the core keeps (core made of keys: last 50 each).
+- `infra/setup.py write NAME KEY[=SRC]… [--explain KEY=TEXT]…` — these keys, one at a time (values from this
+  session's env or `file:PATH`, never printed); the store's other keys are never read or touched. Each is wrapped to
+  the phone + core key and backed up first to S3 (bucket `jarvis2-backup-de0ch`, versioned, `keys/<store>/<key>.json`,
+  encrypted to the master key the core was set up with, signed by the setup key). Sessions write the same way with
+  `jarvis2 put-key` (`scripts/store-put.py` in claude-env).
+- `infra/setup.py delete NAME KEY…` — removes keys (their backups keep the earlier versions).
+- `infra/setup.py versions NAME` — the store's earlier versions the core keeps (the last 50 each).
 - `infra/setup.py request restore NAME VERSION --why TEXT` — asks Deyao (Inbox) to put that version back (below).
 - `infra/setup.py mark-sensitive NAME` — the one-way upgrade, in the core and in the backup.
 - The Fly token: `infra/fly-token.sh ~/.jarvis2/fly.tok` (narrowed to the app and to `jarvis2-init`), then

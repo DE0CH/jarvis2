@@ -81,9 +81,4 @@ try:
 except SystemExit:
     pass
 
-# the writer's signature over the blob, as core.WriterText
-b = S.blob("default", {"A": "1"}, pub(phone_k), pub(core_k))
-import hashlib
-text = f"jarvis2-store-blob\ndefault\n{b['wrapped']['e']}\n{hashlib.sha256(b['data'].encode()).hexdigest()}"
-assert S._verify(pub(setup_k), text.encode(), b["writerSig"]), "the blob's writer signature doesn't verify"
-print("ok: setup.py trusts only the pinned master or a claim countersigned by the pinned device; blobs carry the writer's signature")
+print("ok: setup.py trusts only the pinned master or a claim countersigned by the pinned device")

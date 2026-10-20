@@ -4,7 +4,7 @@ package main
 // Everything the router keeps lives in /data, on the box's own disk; before this, a rebuilt box started with none of it.
 //
 //   - Every 15 min (and when a drain or a move begins) a tar.gz of /data — state.json, line-state.json, the input
-//     log, the store docs and recorded keys, repos, the Claude login, the carry blobs, task runs, everything but the
+//     log, the store docs, repos, the Claude login, the carry blobs, task runs, everything but the
 //     snapshots, tmp/, uploads over 200 MB and the lock — encrypted with age to ROUTER_BACKUP_AGE_PUB (the private half
 //     is ROUTER_BACKUP_AGE_KEY in the `infra` store, never on the box), as
 //     claude-records/.jarvis2-router/state-<UTC>.tar.gz.age; the newest 48 are kept. Nothing changed (every file's

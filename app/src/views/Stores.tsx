@@ -29,7 +29,7 @@ export function Stores() {
             <Card key={s.name} data={{ store: s.name }}>
               <Flex justify="space-between" align="flex-start" gap={2} mb={1}>
                 <Heading size={3} style={{ flex: 1 }}>{s.name}</Heading>
-                <Flex gap={1} wrap justify="flex-end" style={{ flexShrink: 1 }}>{s.sensitive && <Pill kind="bad">sensitive</Pill>}{s.unlocked ? <Pill kind="ok">unlocked</Pill> : <Pill kind="dim">locked</Pill>}{s.empty && <Pill kind="dim">empty</Pill>}{harness.has(s.name) && <Pill kind="info">harness</Pill>}{s.keysFrom === "recorded" && <Pill kind="dim">recorded</Pill>}</Flex>
+                <Flex gap={1} wrap justify="flex-end" style={{ flexShrink: 1 }}>{s.sensitive && <Pill kind="bad">sensitive</Pill>}{s.unlocked ? <Pill kind="ok">unlocked</Pill> : <Pill kind="dim">locked</Pill>}{s.empty && <Pill kind="dim">empty</Pill>}{harness.has(s.name) && <Pill kind="info">harness</Pill>}</Flex>
               </Flex>
               <StoreDocs store={s} edit />
               {!s.name.startsWith("github-") || s.name === "github-deploy-keys" ? <StoreVersions store={s.name} /> : null}

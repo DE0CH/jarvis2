@@ -11,11 +11,10 @@ import (
 	"time"
 )
 
-// storeCore: a core with stores made of keys (core/keys.go), or one from before (old: rows without keys)
+// storeCore: a core with stores made of keys (core/keys.go)
 type storeCore struct {
 	mu     sync.Mutex
 	key    key
-	old    bool
 	writes []map[string]any
 	fail   int // answer write-key with this status
 }
@@ -35,12 +34,10 @@ func (c *storeCore) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 			{"name": "fresh", "sensitive": false, "empty": true, "unlocked": false},
 			{"name": "github-claude-env", "sensitive": false, "empty": false, "unlocked": false},
 		}
-		if !c.old {
-			rows[0]["keys"] = []map[string]any{{"name": "EXA_API", "at": "t1", "writer": map[string]string{"by": "machine", "machine": "mA", "line": "LsA"}},
-				{"name": "OPENROUTER_API", "at": "t0", "writer": map[string]string{"by": "setup"}}}
-			rows[1]["keys"] = []map[string]any{}
-			rows[2]["keys"] = []map[string]any{{"name": "GITHUB_DEPLOY_KEY_DE0CH_CLAUDE_ENV", "writer": map[string]string{"by": "core"}}}
-		}
+		rows[0]["keys"] = []map[string]any{{"name": "EXA_API", "at": "t1", "writer": map[string]string{"by": "machine", "machine": "mA", "line": "LsA"}},
+			{"name": "OPENROUTER_API", "at": "t0", "writer": map[string]string{"by": "setup"}}}
+		rows[1]["keys"] = []map[string]any{}
+		rows[2]["keys"] = []map[string]any{{"name": "GITHUB_DEPLOY_KEY_DE0CH_CLAUDE_ENV", "writer": map[string]string{"by": "core"}}}
 		writeJSON(w, 200, c.key.doc(map[string]any{"kind": "stores", "nonce": "n", "stores": rows}))
 	case "/stores/write-key":
 		if c.fail != 0 {
@@ -82,10 +79,10 @@ func (b *fakeBucket) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	}
 }
 
-func storeRouter(t *testing.T, old bool) (*Router, *storeCore, *fakeBucket) {
+func storeRouter(t *testing.T) (*Router, *storeCore, *fakeBucket) {
 	t.Helper()
 	r := newTestRouter(t)
-	c := &storeCore{key: newTestKey(), old: old}
+	c := &storeCore{key: newTestKey()}
 	cs := httptest.NewServer(c)
 	t.Cleanup(cs.Close)
 	r.core = &CoreClient{base: cs.URL, http: http.DefaultClient}
@@ -118,7 +115,7 @@ func keyNames(row map[string]any) []string {
 
 // the core's keys with their writers (a machine's line as the session that wrote it) and the explanations
 func TestStoresListKeysWritersAndExplanations(t *testing.T) {
-	r, _, _ := storeRouter(t, false)
+	r, _, _ := storeRouter(t)
 	addSession(r, "sA", "started", "mA", false)
 	if code, out := appDo(t, r, "POST", "/setup/store-docs", `{"store":"default","about":"everyday keys","keys":{"EXA_API":"Exa search","OPENROUTER_API":"OpenRouter, every model"}}`); code != 200 {
 		t.Fatalf("%d %v", code, out)
@@ -166,23 +163,6 @@ func TestStoresListKeysWritersAndExplanations(t *testing.T) {
 	check(m.do(t, r.MachineHandler(), "GET", "/m/stores", "")) // every session sees every store
 }
 
-// a core from before keys.go: the names the setup session recorded, and a repo store's two derived names
-func TestStoresFromAnOlderCoreUseRecordedNames(t *testing.T) {
-	r, _, _ := storeRouter(t, true)
-	r.applyKeyAnswer(keyAnswer{Kind: "deploy-key-added", Repo: "DE0CH/claude-env"}, nil)
-	if code, out := appDo(t, r, "POST", "/setup/store-keys", `{"name":"default","keys":["OPENROUTER_API","EXA_API"]}`); code != 200 {
-		t.Fatalf("%d %v", code, out)
-	}
-	_, out := appDo(t, r, "GET", "/api/stores", "")
-	s := byName(out["stores"].([]any))
-	if strings.Join(keyNames(s["default"]), ",") != "EXA_API,OPENROUTER_API" || s["default"]["keysFrom"] != "recorded" {
-		t.Fatalf("default: %v", s["default"])
-	}
-	if strings.Join(keyNames(s["github-claude-env"]), ",") != "GITHUB_DEPLOY_KEY_DE0CH_CLAUDE_ENV,GITHUB_DEPLOY_REPO_DE0CH_CLAUDE_ENV" {
-		t.Fatalf("repo store: %v", s["github-claude-env"])
-	}
-}
-
 func writeBody(expl string) string {
 	b, _ := json.Marshal(map[string]any{"wrapped": map[string]string{"e": "E", "wrapped": "W"}, "data": "D",
 		"backup": map[string]string{"e": "BE", "data": "BD"}, "backupSha256": backupSha("BE", "BD"), "sig": "S", "explanation": expl})
@@ -192,7 +172,7 @@ func writeBody(expl string) string {
 // a running session writes one key: the backup first, then the core (with the machine's newest cert), the explanation
 // kept, and every running session holding the store asked to refresh (one batch)
 func TestASessionWritesAKey(t *testing.T) {
-	r, c, fb := storeRouter(t, false)
+	r, c, fb := storeRouter(t)
 	addSession(r, "sA", "started", "mA", false)
 	addSession(r, "sB", "started", "mB", false)
 	addSession(r, "sC", "started", "mC", false)
@@ -260,7 +240,7 @@ func TestASessionWritesAKey(t *testing.T) {
 
 // no backup, no write: the bucket down leaves the core untouched; the core's refusal comes back as it is
 func TestNoKeyWithoutItsBackup(t *testing.T) {
-	r, c, fb := storeRouter(t, false)
+	r, c, fb := storeRouter(t)
 	addSession(r, "sA", "started", "mA", false)
 	m := newTestMachine(r, "mA")
 	fb.down = true
@@ -276,7 +256,7 @@ func TestNoKeyWithoutItsBackup(t *testing.T) {
 
 // the setup session writes the same way, its own signature passed on
 func TestTheSetupSessionWritesAKey(t *testing.T) {
-	r, c, _ := storeRouter(t, false)
+	r, c, _ := storeRouter(t)
 	if code, out := appDo(t, r, "POST", "/setup/stores/infra/keys/K", writeBody("a key")); code != 200 {
 		t.Fatalf("%d %v", code, out)
 	}
@@ -302,7 +282,7 @@ func TestTheSetupSessionWritesAKey(t *testing.T) {
 // a pull whose stores are behind files a refresh for that session; the phone's unlock for a running, booted machine's
 // cert makes that machine pull again
 func TestARefreshFollowsAStalePullAndAnUnlockPullsAgain(t *testing.T) {
-	r, c, _ := storeRouter(t, false)
+	r, c, _ := storeRouter(t)
 	addSession(r, "sA", "started", "mA", false)
 	r.refreshAfterPull("mA", c.key.doc(map[string]any{"kind": "secrets", "stale": []string{"yyc"}}))
 	items := r.Inbox()

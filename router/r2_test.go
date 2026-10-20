@@ -92,13 +92,9 @@ func TestDeployKeyRelayForTheAppsKeyPair(t *testing.T) {
 	r := newTestRouter(t)
 	r.cfg.NoAccess = true
 	r.core = &CoreClient{base: core.URL, http: http.DefaultClient}
-	appDo(t, r, "POST", "/api/repos/key/begin", `{"action":"add","repo":"DE0CH/x","store":"github-x","title":"jarvis2 github-x","publicKey":"ssh-ed25519 AAAA","blob":{"name":"github-x","data":"d"}}`)
-	if got["store"] != "github-x" || got["publicKey"] != "ssh-ed25519 AAAA" || got["blob"].(map[string]any)["data"] != "d" {
-		t.Fatalf("relayed %v", got)
-	}
-	// stores made of keys (core/keys.go): the app's per-key entries reach the core unchanged
+	// the app's per-key entries (core/keys.go) reach the core unchanged
 	appDo(t, r, "POST", "/api/repos/key/begin", `{"action":"add","repo":"DE0CH/x","store":"github-x","title":"jarvis2 github-x","publicKey":"ssh-ed25519 AAAA","keys":[{"store":"github-x","key":"K","data":"d"}]}`)
-	if ks, _ := got["keys"].([]any); len(ks) != 1 || ks[0].(map[string]any)["key"] != "K" {
+	if ks, _ := got["keys"].([]any); got["store"] != "github-x" || got["publicKey"] != "ssh-ed25519 AAAA" || len(ks) != 1 || ks[0].(map[string]any)["key"] != "K" {
 		t.Fatalf("relayed %v", got)
 	}
 	code, out := appDo(t, r, "POST", "/api/repos/key/finish", `{}`)

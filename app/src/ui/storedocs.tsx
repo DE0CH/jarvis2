@@ -69,16 +69,14 @@ function KeyName({ name }: { name: string }) {
 export function StoreDocs({ store, edit }: { store: CoreStore; edit?: boolean }) {
   const t = useTheme();
   const save = async (docs: { about?: string; keys?: Record<string, string> }) => { await putStoreDocs(store.name, docs); loadStores(); };
-  const keys = store.keys == null ? null : store.keyInfo ?? store.keys.map((name): StoreKey => ({ name, explanation: "" }));
+  const keys = store.keyInfo ?? store.keys.map((name): StoreKey => ({ name, explanation: "" }));
   const sid = "store-" + store.name;
   return (
     <View style={{ gap: 8 }}>
       {edit
         ? <EditableText id={sid + "-about"} label="what this store is for" value={store.about || ""} empty="No description yet" save={(v) => save({ about: v })} />
         : store.about ? <P size={2}>{store.about}</P> : null}
-      {keys == null
-        ? <P size={1} color="gray">Key names not known</P>
-        : !keys.length ? <P size={1} color="gray">No keys</P>
+      {!keys.length ? <P size={1} color="gray">No keys</P>
         : <View style={{ borderTopWidth: 1, borderTopColor: t.gray.a[4] }}>
           {keys.map((k) => (
             <View key={k.name} {...{ dataSet: { key: k.name } }} style={{ paddingVertical: edit ? 6 : 3, borderBottomWidth: 1, borderBottomColor: t.gray.a[4], gap: 2 }}>

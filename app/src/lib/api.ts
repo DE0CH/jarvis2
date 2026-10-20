@@ -245,9 +245,9 @@ export type KeyWriter = { by: "setup" | "machine" | "core"; machine?: string; li
 export type StoreKey = { name: string; explanation: string; at?: string; writer?: KeyWriter };
 export type CoreStore = {
   name: string; sensitive: boolean; empty: boolean; unlocked: boolean; about?: string; version?: string;
-  keys?: string[] | null; // the key names; null: not known (a core from before key lists, with no recorded names)
-  keyInfo?: StoreKey[] | null; // the same keys with what each is for and who wrote it
-  keysFrom?: "core" | "recorded" | "";
+  keys: string[]; // the key names, as the core lists them
+  keyInfo?: StoreKey[]; // the same keys with what each is for and who wrote it
+  keysFrom?: "core";
 };
 // which stores each harness brings (GET api/policy): the router adds them to a session, so the app
 // doesn't offer them in pickers or list them in summaries

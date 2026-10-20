@@ -2114,3 +2114,16 @@ snapshot failed with "no space left on device", the machine was destroyed anyway
        ports met the first's exiting apiserver, which had failed every k8s run since 2026-10-15.
      - **A comment in `core/` is a core release** (CI pins on any change there), so `core/vouch.go`'s comment naming
        `k8s/apps/core.yaml` waits for the next real core change.
+206. **The pre-keys store write is gone: every write is one key (Deyao, 2026-10-20).** The live core is the per-key
+     core (every store lists `keysFrom: core`), so the path for a core from before stores were made of keys is dead
+     code, and a clean cut removes it: `infra/setup.py write` writes each key on its own (`--replace` and the `keys NAME`
+     command are gone, and so is `infra/store-keys.sh`); the router drops `POST /setup/stores/write` and its
+     whole-store guard (the 2026-10-13 footgun: a whole-store write of 2 keys wiped 24 — impossible now that no write
+     touches another key), `POST /setup/store-keys` and the key names it recorded (`store-keys.json`, which may linger
+     on the data volume, unread), the repo stores' derived names, and the deploy-key `blob` relay. Store key names come
+     only from the core's signed list (`keysFrom` is always `core`); the machine's `jarvis2 stores` checks every store's
+     names against it and the web page no longer shows a "recorded" or "key names not known" state.
+     - **Left as they are:** `core/` (any change there is a core release); the iOS app's branches for a core from before
+       keys.go (CoreCrypto, RouterClient, SetupView, CoreSetup, interop: they ship through the phone replica, a
+       separate change); e2e's held-core and legacy modes; whole-store backups (`stores/<name>.json`) in the bucket,
+       which a Recover and `tools/decrypt-backup.py` still read as the base under the key backups.

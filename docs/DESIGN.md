@@ -211,10 +211,8 @@ The master-key-sealed bucket backups stay the disaster path (Recover), untouched
   never a session, never in a batch. Only the phone approves.
 
 The plaintext a restore touches exists only inside the core, for the length of the finish call (like a deploy key's
-token). A write that silently drops keys can't happen on a core made of keys (every write is one key); the live core
-from before keys replaces a whole store, so `infra/setup.py write` and the router's `/setup/stores/write` refuse a
-write that leaves out a key name recorded for the store unless it says `--replace` (2026-10-13: two writes of 2 keys
-wiped 24).
+token). A write never silently drops keys: every write is one key (`jarvis2 put-key`, `infra/setup.py write`), and the
+store's other keys are never read or touched.
 
 ## Setting a core up: Reset and Recover (on the iPhone)
 

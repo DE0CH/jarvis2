@@ -20,17 +20,12 @@ both). Values never print.
                                        backup, to the master key the core was set up with; the router backs it up first
                                        (keys/<store>/<key>.json) and asks the phone to refresh the running sessions that
                                        hold the store. A key name that has no explanation yet needs --explain
-                                       With the live core from before stores were made of keys (it replaces the whole
-                                       store with exactly the keys given), a write that leaves out any key name recorded
-                                       for the store is REFUSED (here and by the router) unless --replace
   infra/setup.py delete NAME KEY…      delete these keys of a store (the backup keeps their earlier versions)
   infra/setup.py versions NAME         the store's earlier versions the core keeps (number, time, what made it, key
                                        names), from the core's signed list; put one back with `request restore`
   infra/setup.py docs NAME [--about TEXT] [KEY=TEXT…]
                                        what a store and its keys are for (shown in the app, the web page, `jarvis2 stores
                                        --keys`); KEY= with no text removes one
-  infra/setup.py keys NAME KEY[=SRC]…  a core from before stores were made of keys (until the held core is live): record
-                                       a store's key names at the router only. `keys NAME --forget` drops them
   infra/setup.py mark-sensitive NAME   the one-way upgrade, in the core and in the backup
   infra/setup.py backup NAME KEY[=SRC]… [--not-sensitive]
                                        a store's backup only, for the next Recover; sensitive unless
@@ -184,8 +179,7 @@ def identity():
     st = json.loads(d["payload"])
     if st.get("kind") != "core-state":
         raise SystemExit("not the core's state")
-    return {"signingKey": k["signingKey"], "agreementKey": k["agreementKey"], "master": st.get("master") or "", "phone": st.get("phone"),
-            "keys": k.get("bundle") == "keys"}
+    return {"signingKey": k["signingKey"], "agreementKey": k["agreementKey"], "master": st.get("master") or "", "phone": st.get("phone")}
 
 
 def set_up():
@@ -266,9 +260,6 @@ def trust(me):
                      "is written, backed up or sent. Restart the core from git (RUNBOOK \"Emptying the core\") and set it up in the app.")
 
 
-# the stores this writer means to be NOT sensitive (created first); every other store it writes is sensitive. The
-# core's open create_store lets anyone (the router) create a name first, so the writer checks the core's word against
-# this list and marks a store sensitive before it writes into it (R1 audit). A change here is a visible commit.
 # ---- stores ---------------------------------------------------------------------------------------------
 
 def store_key(phone_agreement, core_agreement):
@@ -300,21 +291,6 @@ def key_write(store, key, value, me, explanation=""):
                     "data": data, "backup": b, "backupSha256": bsha})
     req["sig"] = base64.b64encode(setup_key().sign(writer_text(store, key, e, data, bsha).encode(), ec.ECDSA(hashes.SHA256()))).decode()
     return req
-
-
-def blob(name, values, phone_agreement, core_agreement):
-    """core.StoreBlob: the values under a data key (the name as associated data), the key wrapped to P + K, and the
-    writer's signature, which the phone checks (keys/setup.pub) before it unlocks the blob (core.WriterText)"""
-    dk = os.urandom(32)
-    combined = _pub(*_add(_pt(phone_agreement), _pt(core_agreement)))
-    e = ec.generate_private_key(ec.SECP256R1())
-    shared_x = e.exchange(ec.ECDH(), combined)
-    wrapped = _gcm(_kdf(shared_x, "jarvis2/store-data-key"), dk)
-    E = base64.b64encode(_x963(e.public_key())).decode()
-    data = base64.b64encode(_gcm(dk, json.dumps(values).encode(), name.encode())).decode()
-    text = f"jarvis2-store-blob\n{name}\n{E}\n{hashlib.sha256(data.encode()).hexdigest()}".encode()
-    sig = base64.b64encode(setup_key().sign(text, ec.ECDSA(hashes.SHA256()))).decode()
-    return {"name": name, "wrapped": {"e": E, "wrapped": base64.b64encode(wrapped).decode()}, "data": data, "writerSig": sig}
 
 
 # the stores this writer means to be NOT sensitive (created first); every other store it writes is sensitive. The
@@ -363,15 +339,6 @@ def store_list():
     return {s["name"]: s for s in json.loads(d["payload"])["stores"]}
 
 
-def recorded_keys(name):
-    """the key names the router lists for a store (the core's own list, or the names recorded for a core before
-    stores were made of keys); None when none are known"""
-    for st in call("GET", "/setup/stores/keys")["stores"]:
-        if st["name"] == name:
-            return st["keys"]
-    return None
-
-
 def value(spec):
     key, _, src = spec.partition("=")
     src = src or key
@@ -394,8 +361,7 @@ def main():
     elif cmd == "stores":
         for s in call("GET", "/setup/stores/keys")["stores"]:
             flags = ["sensitive" if s["sensitive"] else "not-sensitive"] + (["empty"] if s["empty"] else []) + (["unlocked"] if s["unlocked"] else [])
-            keys = " ".join(s["keys"]) if s["keys"] is not None else "(key names not recorded)"
-            print(f"{s['name']} [{', '.join(flags)}]: {keys}")
+            print(f"{s['name']} [{', '.join(flags)}]: {' '.join(s['keys'])}")
             if "--keys" in args:
                 if s.get("about"):
                     print("  " + s["about"])
@@ -415,16 +381,9 @@ def main():
         print(f"ok: {args[0]}: {len(body['keys'])} explanation(s)" + (" and its about text" if about is not None else "") + " kept")
     elif cmd == "delete":
         me = identity()  # a delete seals nothing (only the setup key signs it), so no master pin is needed
-        if not me["keys"]:
-            raise SystemExit("this core predates stores made of keys, so one key can't be deleted alone: "
-                             f"`infra/setup.py write {args[0]} <every key it keeps> --replace` writes the store without them")
         for k in args[1:]:
             out = call("POST", f"/setup/stores/{args[0]}/keys/{k}", key_write(args[0], k, None, me))
             print(f"ok: {args[0]}: {k} deleted; refresh asked of {len(out.get('refreshAsked') or [])} running session(s)")
-    elif cmd == "keys":
-        names = None if args[1:] == ["--forget"] else [a.partition("=")[0] for a in args[1:]]
-        call("POST", "/setup/store-keys", {"name": args[0], "keys": names})
-        print(f"ok: {args[0]}: key names forgotten" if names is None else f"ok: {args[0]}: {len(names)} key names recorded")
     elif cmd == "pin-master":
         me = identity()
         if not me["master"]:
@@ -449,8 +408,6 @@ def main():
             k, _, t = args[i + 1].partition("=")
             explain[k] = t
             del args[i:i + 2]
-        replace = "--replace" in args
-        args = [a for a in args if a != "--replace"]
         name, vals = args[0], dict(value(a) for a in args[1:])
         me = set_up()
         want_sensitive = name not in NOT_SENSITIVE
@@ -460,41 +417,16 @@ def main():
             call("POST", "/setup/stores/mark-sensitive", {"name": name})
             mark_sensitive_backup(name)
             print(f"note: {name} existed as not sensitive; marked sensitive before writing", file=sys.stderr)
-        if me["keys"]:
-            if replace:
-                print("note: --replace means nothing here (this core writes keys one by one and never drops one): "
-                      f"the keys are written; remove one with `infra/setup.py delete {name} KEY`", file=sys.stderr)
-            for k in sorted(vals):
-                out = call("POST", f"/setup/stores/{name}/keys/{k}", key_write(name, k, vals[k], me, explain.get(k, "")))
-                print(f"ok: {name}: {k} written (backed up first); refresh asked of {len(out.get('refreshAsked') or [])} running session(s)")
-            if want_sensitive and not store_list()[name]["sensitive"]:
-                # the one-way upgrade, at once (it only adds protection), rather than stopping with it undone
-                call("POST", "/setup/stores/mark-sensitive", {"name": name})
-                mark_sensitive_backup(name)
-                print(f"note: the core called {name} not sensitive after the write: marked sensitive now", file=sys.stderr)
-            if explain:
-                call("POST", "/setup/store-docs", {"store": name, "keys": explain})
-            return
-        # a core from before stores were made of keys (until the held core is live): the whole store at once, which
-        # REPLACES it — so never with fewer keys than it is recorded to hold, unless --replace (2026-10-13: a write
-        # of 2 keys wiped 24)
-        recorded = recorded_keys(name)
-        missing = sorted(set(recorded or ()) - set(vals))
-        if missing and not replace:
-            raise SystemExit(f"REFUSED: this core replaces the whole store {name}, and these {len(missing)} recorded key(s) "
-                             f"aren't in this write: {', '.join(missing)}. Write every key (or, to drop them on purpose, add --replace).")
-        b = blob(name, vals, me["phone"]["agreementKey"], me["agreementKey"])
-        d = call("POST", "/setup/stores/write", {"store": b, "keys": sorted(vals), "replace": replace})
-        sens = json.loads(d["payload"])["sensitive"]
-        if want_sensitive and not sens:
-            # the one-way upgrade, then the backup as sensitive: skipping the backup would protect nothing
+        for k in sorted(vals):
+            out = call("POST", f"/setup/stores/{name}/keys/{k}", key_write(name, k, vals[k], me, explain.get(k, "")))
+            print(f"ok: {name}: {k} written (backed up first); refresh asked of {len(out.get('refreshAsked') or [])} running session(s)")
+        if want_sensitive and not store_list()[name]["sensitive"]:
+            # the one-way upgrade, at once (it only adds protection), rather than stopping with it undone
             call("POST", "/setup/stores/mark-sensitive", {"name": name})
             mark_sensitive_backup(name)
             print(f"note: the core called {name} not sensitive after the write: marked sensitive now", file=sys.stderr)
-            sens = True
-        backup(name, vals, sens, me["master"])
-        call("POST", "/setup/store-keys", {"name": name, "keys": sorted(vals)})
-        print(f"ok: store {name} written with {len(vals)} keys (sensitive={sens}), backed up, key names recorded")
+        if explain:
+            call("POST", "/setup/store-docs", {"store": name, "keys": explain})
     elif cmd == "versions":
         me = identity()
         d = call("POST", "/setup/stores/versions", {"store": args[0], "nonce": "setup-" + str(int(time.time()))})

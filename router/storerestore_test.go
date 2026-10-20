@@ -50,8 +50,6 @@ func (c *restoreCore) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		c.putsAtCommit = len(c.bucket.puts)
 		c.bucket.mu.Unlock()
 		writeJSON(w, 200, c.key.doc(map[string]any{"kind": "store-restored", "store": "default", "from": 2, "seq": 5}))
-	case "/stores/write":
-		writeJSON(w, 200, c.key.doc(map[string]any{"kind": "store-written", "sensitive": true}))
 	case "/stores/versions":
 		writeJSON(w, 200, c.key.doc(map[string]any{"kind": "store-versions", "store": "default"}))
 	default:
@@ -61,7 +59,7 @@ func (c *restoreCore) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 
 func restoreRouter(t *testing.T) (*Router, *restoreCore, *fakeBucket) {
 	t.Helper()
-	r, _, fb := storeRouter(t, false)
+	r, _, fb := storeRouter(t)
 	c := &restoreCore{key: newTestKey(), bucket: fb}
 	cs := httptest.NewServer(c)
 	t.Cleanup(cs.Close)
@@ -167,42 +165,5 @@ func TestWhoMayAskForARestore(t *testing.T) {
 	}
 	if code, _ := appDo(t, r, "POST", "/api/core/stores/versions", `{"store":"default","nonce":"n"}`); code != 200 {
 		t.Fatal("app versions")
-	}
-}
-
-// the 2026-10-13 incident's footgun: a core from before stores were made of keys replaces the whole store, so a
-// write that leaves out recorded key names is refused unless it says replace
-func TestAWholeStoreWriteNeverSilentlyDropsKeys(t *testing.T) {
-	r, c, _ := restoreRouter(t)
-	if code, _ := appDo(t, r, "POST", "/setup/store-keys", `{"name":"identity","keys":["A","B","C"]}`); code != 200 {
-		t.Fatal(code)
-	}
-	committed := func() int {
-		n := 0
-		for _, p := range c.calls {
-			if p == "/stores/write" {
-				n++
-			}
-		}
-		return n
-	}
-	for body, want := range map[string]int{
-		`{"store":{"name":"identity"},"keys":["A","Z"]}`:            409, // the incident: two keys for a store of many
-		`{"store":{"name":"identity"}}`:                             400, // keys not named
-		`{"store":{"name":"identity"},"keys":["A","B","C","D"]}`:    200,
-		`{"store":{"name":"identity"},"keys":["A"],"replace":true}`: 200,
-		`{"store":{"name":"never-recorded"},"keys":["A"]}`:          200,
-	} {
-		before := committed()
-		code, out := appDo(t, r, "POST", "/setup/stores/write", body)
-		if code != want {
-			t.Fatalf("%s: %d %v", body, code, out)
-		}
-		if (code == 200) != (committed() == before+1) {
-			t.Fatalf("%s: reached the core %v", body, code == 200)
-		}
-		if code == 409 && !strings.Contains(out["error"].(string), "B, C") {
-			t.Fatalf("the refusal doesn't name the keys: %v", out)
-		}
 	}
 }

@@ -14,10 +14,6 @@ package main
 //	POST /setup/stores/versions                       the same list for the setup session
 //	…/requests/restore {store, seq, explanation}      an Inbox request (web page, app, setup session; never a
 //	                                                  session): it opens the app's restore review
-//
-// And the footgun this was built after (2026-10-13: a whole-store write with 2 keys wiped 24): a core from before stores
-// were made of keys replaces a store with exactly the keys written, so /setup/stores/write refuses a write whose key
-// names leave out names recorded for the store, unless it says replace.
 
 import (
 	"encoding/json"
@@ -26,8 +22,6 @@ import (
 	"io"
 	"log"
 	"net/http"
-	"sort"
-	"strings"
 	"time"
 )
 
@@ -123,51 +117,6 @@ func (r *Router) FinishRestore(body []byte) (map[string]any, error) {
 	return map[string]any{"ok": true, "restored": done, "refreshAsked": asked}, nil
 }
 
-// guardWholeStoreWrite: a whole-store write (a core from before stores were made of keys) that names its keys; refused
-// when it would drop names recorded for the store, unless replace
-func (r *Router) guardWholeStoreWrite(body []byte) error {
-	var in struct {
-		Store *struct {
-			Name string `json:"name"`
-		} `json:"store"`
-		Keys    *[]string `json:"keys"`
-		Replace bool      `json:"replace"`
-	}
-	if err := json.Unmarshal(body, &in); err != nil || in.Store == nil {
-		return &badRequest{"store: the sealed store"}
-	}
-	if in.Replace {
-		return nil
-	}
-	recorded := r.readRecordedKeys()[in.Store.Name]
-	if recorded == nil {
-		return nil // nothing known to lose
-	}
-	if in.Keys == nil {
-		return &badRequest{fmt.Sprintf("this write replaces the whole store %s: name the keys it holds (keys), or say replace", in.Store.Name)}
-	}
-	have := map[string]bool{}
-	for _, k := range *in.Keys {
-		have[k] = true
-	}
-	missing := []string{}
-	for _, k := range recorded {
-		if !have[k] {
-			missing = append(missing, k)
-		}
-	}
-	sort.Strings(missing)
-	if len(missing) != 0 {
-		return &conflictErr{fmt.Sprintf("this write would remove %d key(s) of %s: %s. The core replaces the whole store: write every key, or say replace (infra/setup.py --replace)",
-			len(missing), in.Store.Name, strings.Join(missing, ", "))}
-	}
-	return nil
-}
-
-type conflictErr struct{ msg string }
-
-func (e *conflictErr) Error() string { return e.msg }
-
 func (r *Router) registerRestore(app appRoute, mux *http.ServeMux) {
 	for _, p := range []string{"stores/versions", "stores/restore/begin"} {
 		path := "/" + p
@@ -196,17 +145,4 @@ func (r *Router) registerRestore(app appRoute, mux *http.ServeMux) {
 		}))
 	}
 	setup("POST /setup/stores/versions", func(w http.ResponseWriter, req *http.Request, b []byte) { r.relay(w, "POST", "/stores/versions", b) })
-	// a core from before keys.go (until the held core is live): the whole store, never silently fewer keys
-	setup("POST /setup/stores/write", func(w http.ResponseWriter, req *http.Request, b []byte) {
-		if err := r.guardWholeStoreWrite(b); err != nil {
-			var c *conflictErr
-			if errors.As(err, &c) {
-				writeJSON(w, 409, map[string]string{"error": c.msg})
-				return
-			}
-			writeRequestErr(w, err)
-			return
-		}
-		r.relay(w, "POST", "/stores/write", b)
-	})
 }

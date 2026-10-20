@@ -33,7 +33,7 @@ every store back from the backups). docs/DESIGN.md "Setting a core up".
 ## Status
 
 - Core: `core/`, tests pass; the per-key core (stores made of keys, store versions, the phone-signed restore: DECISIONS
-  163, 165) serves on the control box (which colour: `/setup/status` → `core`, `jarvis2 stores --json` → `keysFrom`).
+  163, 165) serves on the control box (which colour: `/setup/status` → `core`).
 - Infra: the control box and the services box (DESIGN "The boxes"); tunnel `jarvis2` + Access apps on
   `jarvis2.deyaochen.com`; Fly app `jarvis2-sessions` in org `jarvis2-370`; logs, metrics and alerts in Grafana Cloud.
 - Router: `router/` (docs/API.md), deployed.

@@ -29,19 +29,19 @@ type storeRow struct {
 	Empty     bool     `json:"empty"`
 	Unlocked  bool     `json:"unlocked"`
 	About     string   `json:"about,omitempty"`
-	Keys      []string `json:"keys"`    // names (null: not known)
+	Keys      []string `json:"keys"`    // names, as the core lists them
 	KeyInfo   []keyRow `json:"keyInfo"` // the same keys with what each is for
 	KeysFrom  string   `json:"keysFrom"`
 }
 
 func (s storeRow) keyNames() string { return strings.Join(s.Keys, " ") }
 
-// coreRow: a row of the core's signed list (its keys name who wrote them; a core from before keys.go has none)
+// coreRow: a row of the core's signed list
 type coreRow struct {
 	Name      string `json:"name"`
 	Sensitive bool   `json:"sensitive"`
 	Empty     bool   `json:"empty"`
-	Keys      *[]struct {
+	Keys      []struct {
 		Name string `json:"name"`
 	} `json:"keys"`
 }
@@ -84,14 +84,12 @@ func storesCmd(args []string) error {
 			if !ok || c.Sensitive != s.Sensitive || c.Empty != s.Empty {
 				return fmt.Errorf("store %s differs from the core's list", s.Name)
 			}
-			if c.Keys != nil && s.KeysFrom == "core" { // the core names the keys
-				names := []string{}
-				for _, k := range *c.Keys {
-					names = append(names, k.Name)
-				}
-				if strings.Join(names, " ") != s.keyNames() {
-					return fmt.Errorf("store %s's keys differ from the core's list", s.Name)
-				}
+			names := []string{}
+			for _, k := range c.Keys {
+				names = append(names, k.Name)
+			}
+			if strings.Join(names, " ") != s.keyNames() {
+				return fmt.Errorf("store %s's keys differ from the core's list", s.Name)
 			}
 		}
 	}
@@ -127,9 +125,6 @@ func storesCmd(args []string) error {
 			flags = append(flags, "locked")
 		}
 		keys := s.keyNames()
-		if s.Keys == nil {
-			keys = "(key names not recorded)"
-		}
 		fmt.Printf("%s", s.Name)
 		if len(flags) > 0 {
 			fmt.Printf(" [%s]", strings.Join(flags, ", "))

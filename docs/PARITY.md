@@ -56,10 +56,9 @@ snapshots, live transcripts, task results).
 ## Stores, repos, content
 - Store editor in the app: partial — the shell's Stores page creates, unlocks, locks and marks stores sensitive; values are written only by the setup session (`infra/setup.py`). Copy keys between stores: missing (design question 12).
 - Restoring a store to an earlier version (no Jarvis 1 counterpart: its stores were plain SOPS files in git): present
-  with the held core (`core/history.go`, `router/storerestore.go`, DECISIONS 165): the core keeps each store's last 50
+  (`core/history.go`, `router/storerestore.go`, DECISIONS 165): the core keeps each store's last 50
   versions; a phone-signed restore (the app's Stores → a store → Versions → Restore…, or an Inbox request from the web
-  page / the setup session) puts one back with no kit. A whole-store write on the live core never silently drops recorded
-  keys (setup.py and the router refuse it without `--replace`).
+  page / the setup session) puts one back with no kit. Every write is one key, so none silently drops the store's others.
 - Multi-store merge conflict file: unverified. Repo picker: present (`router/repos.go`, the app's Settings → Repos). Repo delivery: replaced by per-repo deploy keys (SSH).
 - Content stores: present (`router/content.go`; DECISIONS 132-133): Jarvis 1's `claude-records/.content/<name>/` folders, used in place with the router's Storage Box creds; the app's Content tab (web) manages them; New session (web and iPhone) and task fields pick them, signed in the line's config (`content`); `content-sync` on the machine goes through the local proxy to `/m/api/sessions/:id/content…`, only for the cert's stores, each downloaded file with the core's attestation. Drop tokens: missing.
 

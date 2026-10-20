@@ -181,12 +181,11 @@ func (r *Router) registerDeployKeys(app appRoute) {
 			Repo      string `json:"repo"`
 			Sensitive bool   `json:"sensitive"`
 			// the app's key pair (R2): its store name and key title, the public key, and the store's keys holding the
-			// private half (keys: core/keys.go; blob: a core from before keys.go, until the held core is live)
+			// private half (core/keys.go)
 			Store     string          `json:"store,omitempty"`
 			Title     string          `json:"title,omitempty"`
 			PublicKey string          `json:"publicKey,omitempty"`
 			Keys      json.RawMessage `json:"keys,omitempty"`
-			Blob      json.RawMessage `json:"blob,omitempty"`
 		}
 		json.NewDecoder(io.LimitReader(req.Body, 1<<20)).Decode(&in)
 		repo := parseGitHubRepo(in.Repo)
@@ -199,9 +198,6 @@ func (r *Router) registerDeployKeys(app appRoute) {
 			body["store"], body["title"], body["publicKey"] = in.Store, in.Title, in.PublicKey
 			if len(in.Keys) > 0 {
 				body["keys"] = in.Keys
-			}
-			if len(in.Blob) > 0 {
-				body["blob"] = in.Blob
 			}
 		}
 		b, _ := json.Marshal(body)

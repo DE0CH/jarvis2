@@ -87,7 +87,7 @@ session a router crash left mid-action comes back `failed` with `error` "the …
 | `GET /api/state` | `{sessions, approvals, core: {up, signingKey, agreementKey}}` |
 | `GET /api/sizes` | `{sizes: [{id, label}]}` (small / medium / large, the sizes a new session picks from; Upgrade goes on past them while the running core reports `sizeLadder` in its `/identity`, `router/sizes.go`) |
 | `GET /api/models` | `?harness=` optional → `{models: [{id, label, harness}], default, defaults: {<harness>: id}, harnesses: {<harness>: {label, detail}}}` — Jarvis 1's list (Claude, OpenRouter via OpenCode, Claude via OpenClaw) plus Claude Code driven by Paseo (`paseo/<Claude model id>`, harness `paseo-claude`), only harnesses the policy has. In `POST /api/sessions` an empty model or one of another harness becomes the harness's default; an unknown one is refused (400). |
-| `GET /api/stores` | Every store, its keys and what each is for (never a value): `{stores: [{name, sensitive, empty, unlocked, about, version, keys: [names] /* null: not known; the shape every session image reads */, keyInfo: [{name, explanation, at, writer: {by /* setup \| machine \| core */, machine, line, session, sessionLabel}}], keysFrom /* "core" \| "recorded" \| "" */}], signed /* the core's signed list it was built from */}`. The list, sensitivity, empty, unlocked, the key names, who wrote each key and when are the core's (`POST /stores`; a machine writer's line is named with its session here); `about` and each `explanation` are the router's own record (`store-docs.json`). A core from before stores were made of keys lists no keys: then the names the setup session recorded (`POST /setup/store-keys`) or a repo store's two (`keysFrom: "recorded"`, until the held core is live). Same answer at `GET /m/stores` and `GET /setup/stores/keys`. |
+| `GET /api/stores` | Every store, its keys and what each is for (never a value): `{stores: [{name, sensitive, empty, unlocked, about, version, keys: [names] /* the shape every session image reads */, keyInfo: [{name, explanation, at, writer: {by /* setup \| machine \| core */, machine, line, session, sessionLabel}}], keysFrom /* "core" */}], signed /* the core's signed list it was built from */}`. The list, sensitivity, empty, unlocked, the key names, who wrote each key and when are the core's (`POST /stores`; a machine writer's line is named with its session here); `about` and each `explanation` are the router's own record (`store-docs.json`). Same answer at `GET /m/stores` and `GET /setup/stores/keys`. |
 | `PUT /api/stores/{store}/docs` | `{about?, keys?: {KEY: text}}` → `{ok}`: what the store and its keys are for (plain text, ≤ 2000 characters each; `""` removes a key's explanation). Shown on the web page, in the app and by `jarvis2 stores --keys`. |
 | `GET /api/policy` | `{harnesses: {<harness>: {stores: […]}}}` — the stores each harness brings (the router adds them; the app hides them) |
 | `POST /api/sessions` | Body `{requestId, label, prompt, model, permissionMode, size, harness, stores: [], account, oneShot, autoPause, apiProxy, attachments: {uploadId, files: [{name}]}}` (`account`: its Claude account, `claude-<name>` or `<name>`, kept for its life; "" = the default; "Claude accounts" below) (`apiProxy`: `SESSION_API_PROXY=1`, claude through Jarvis 1's api-proxy.js; `attachments`: files staged by `POST /api/uploads`, bound to this session) (`oneShot`: the machine gets `SESSION_ONE_SHOT=1` and the session is destroyed when its prompt is done; `autoPause` defaults to true, false for one-shot; both show in the approval's `options`). The router adds the harness's stores and asks the core for a challenge (`succession(null, …)`, before any machine); the approval (kind `new-session`) appears at once. Answers `{id, requestId}`; a repeat with a `requestId` already on a session answers that session and makes nothing. |
@@ -132,7 +132,7 @@ session a router crash left mid-action comes back `failed` with `error` "the …
 | `POST /api/uploads` | First-prompt attachments: one raw file per request, headers `x-upload-id` (`[A-Za-z0-9_-]{1,64}`, groups a form's files) and `x-upload-name` (URI-encoded; made a safe basename as in Jarvis 1) → `{name, size, isImage}`. ≤ 20 files, 25 MB each (413). Staged on the router's volume; unbound uploads go after 24 h, bound ones with their session. The app binds only its own uploads (not a session's, `PUT /m/api/sessions/:id/uploads/…`). Each bound file's sha256 and size go into the new line's signed config (`attachments: [{name, sha256, size}]`). |
 | `GET /api/sessions/:id/attachments/:name` | The bytes of a file staged for that session (until its first machine has fetched them; 404 after): the app's approval page shows it and hashes it against the signed config. |
 | `GET /api/repos` | Deyao's repo list, for Settings → Repos and New session's `repos`: `{repos: [{name, url /* https://github.com/<repo>.git */, repo /* owner/name */, store /* github-<repo> */, sensitive, fingerprint?, keyAt?}]}`. GitHub repos only; an entry is added or removed only by the core's answer to `POST /api/repos/key/finish` (below). |
-| `POST /api/repos/key/begin {action: add \| remove, repo: owner/name \| GitHub URL, sensitive?, store, title, publicKey?, blob?}` | Relayed to the core's `deploy-keys/begin` (the repo normalised to `owner/name`; the app's store, title and key pair as sent): its signed begin document, which the shell's secure page checks and the phone answers. 400 for a non-GitHub repo or another action; 501 `{error}` from a core older than deploy keys. |
+| `POST /api/repos/key/begin {action: add \| remove, repo: owner/name \| GitHub URL, sensitive?, store, title, publicKey?, keys?}` | Relayed to the core's `deploy-keys/begin` (the repo normalised to `owner/name`; the app's store, title and key pair as sent): its signed begin document, which the shell's secure page checks and the phone answers. 400 for a non-GitHub repo or another action; 501 `{error}` from a core older than deploy keys. |
 | `POST /api/repos/key/finish {pending, signature, share}` | Relayed to `deploy-keys/finish`; on the core's signed `deploy-key-added` the repo goes on the list (with `sensitive`, and `fingerprint` = SHA256 of the answer's `publicKey`, or the answer's own `fingerprint` from a core before R2), on `deploy-key-removed` it comes off. The answer is the core's, unchanged; `?inbox=ID` (the request the page answers): when sessions asked for this repo (`repo/add` from a session), each running one that doesn't hold `github-<repo>` gets an add-store approval at once, and the one for that request comes back beside the core's document as `{payload, sig, followups: [approvalId]}`, for the phone to check and sign under the same Face ID (DECISIONS 182). |
 | `GET /api/github/repos` | `{repos: [{fullName, url, htmlUrl, private, fork, archived, description, language, pushedAt, owner}], cachedAt, configured}` (5 min cache, `?refresh=1`), listed with `GITHUB_READ_TOKEN` (router env; Metadata read picked explicitly, else GitHub lists public repos only — sessions push with their repos' deploy keys). 503 without it. |
 | `GET /api/usage` | The default Claude account's quota (each account's: `GET /api/claude-accounts/{store}/usage`), read by the router with its stored access token (Jarvis 1's shape, `router/claudelogin.go`): `{fetchedAt, limits: [{kind, group, percent, severity, resetsAt, model, surface, active}], extraUsage: {enabled, monthlyLimit, usedCredits, utilization, currency, decimalPlaces, disabledReason, spendLimitReached} \| null, cached, stale?, error?}`; cached a minute (`?refresh=1` skips it); a failed fetch answers the last good reading with `stale`; 409 `{error, needLogin}` when Claude refuses the token. |
@@ -328,14 +328,15 @@ Setting the core up (Reset and Recover, the app's Reset or recover page):
   core-signed doc `{"kind":"core-state","master": <the master public key it was set up with, "" while empty>,
   "phone": {signingKey, agreementKey} | null}`.
 - `claim`: `statement` = the JSON text `{"kind":"claim","master","core":{signingKey,agreementKey},"phone":{…},
-  "bundleSha256"}`, `masterSig` = that master key's base64 DER ECDSA over it, `bundle` = `{"format":"blobs",
-  "stores":"blobs", blobs: [StoreBlob], notSensitive: [names], owners: {store: "owner/name"}, flyToken}` sealed to the
+  "bundleSha256"}`, `masterSig` = that master key's base64 DER ECDSA over it, `bundle` = `{"format":"keys",
+  stores: [names], keys: [{store, key, wrapped: {e, wrapped}, data}], notSensitive: [names], owners: {store:
+  "owner/name"}, flyToken}` sealed to the
   core's agreement key (ephemeral P-256, HKDF-SHA256 info `"jarvis2/claim"`, AES-256-GCM combined) → the core's
   signed `{"kind":"claimed","stores": n}`; 409 when the core is set up already, 400 "bad bundle" for any other bundle
-  (the older plaintext form `{stores:[{name, values}]}` among them). Each blob is a store the app wrapped itself to the
-  store key (`store-key`, below), so the core never sees a store's plaintext; `owners` names each deploy-key store's
+  (any other `format` among them). Each key is wrapped by the app itself to the store key (`store-key`, below; the
+  data under its own data key, `"<store>\n<key>"` as associated data), so the core never sees a store's plaintext; `owners` names each deploy-key store's
   repo (the app reads it from the store's `GITHUB_DEPLOY_REPO_*`); `flyToken` is the `core` store's `FLY_API_TOKEN`,
-  which never becomes a store. Reset sends no blobs; Recover every store from the backups.
+  which never becomes a store. Reset sends no stores; Recover every store from the backups.
 - `wipe`: `statement` = `{"kind":"wipe","core": <the core's signing key>}`, signed by the master key the core was
   set up with → the core's signed `{"kind":"wiping","core"}`, then it exits; a new, empty core follows.
 
@@ -435,22 +436,22 @@ which session wrote the key; `core`); one Face ID → for every key, Enclave key
 with its `e` → the 32-byte x-coordinate, sealed to `t`: ephemeral P-256 key `r`, `x' = x(r·t)`, key =
 HKDF-SHA256(ikm `x'`, salt empty, info `"jarvis2/unlock-share"`, 32 bytes), AES-256-GCM combined
 (`nonce‖ciphertext‖tag`) → `{e: base64(r.pub x963), data: base64(combined)}` → `unlock/finish {pending, shares: {KEY:
-share}}` (one share for each key the begin named). A core from before stores were made of keys (until the held core is
-live): one `e` and `writer` per store, `unlock/finish {pending, share}`.
+share}}` (one share for each key the begin named).
 
 ## Deploy keys (the core: `deploy-keys/*`, `core/deploykeys.go`)
 
-- `POST deploy-keys/begin {action: add | remove, repo: owner/name, sensitive, store, title, publicKey, blob}`: the
+- `POST deploy-keys/begin {action: add | remove, repo: owner/name, sensitive, store, title, publicKey, keys}`: the
   app names the store (`github-<name>` for DE0CH, else `github-<owner>-<name>`) and the key's title on GitHub
-  (`jarvis2 <store>`), and for an add makes the key pair: `publicKey` ("ssh-ed25519 <base64 wire>") and `blob`, the
-  store `{GITHUB_DEPLOY_REPO_<SLUG>: "owner/name", GITHUB_DEPLOY_KEY_<SLUG>: base64(OpenSSH private key file)}`
-  (`<SLUG>` = `OWNER_NAME`, upper case, other characters `_`) wrapped to the store key from `POST store-key` → the
+  (`jarvis2 <store>`), and for an add makes the key pair: `publicKey` ("ssh-ed25519 <base64 wire>") and `keys`, the store's
+  two keys `GITHUB_DEPLOY_REPO_<SLUG>` ("owner/name") and `GITHUB_DEPLOY_KEY_<SLUG>` (base64 of the OpenSSH private key
+  file) (`<SLUG>` = `OWNER_NAME`, upper case, other characters `_`), each `{store, key, wrapped, data}` wrapped to the
+  store key from `POST store-key` → the
   core's signed `{"kind":"deploy-key-begin", pending, action, repo, store, sensitive /* add: asked for, OR the store
-  is sensitive already; remove: the store's */, replaces /* add: the store exists */, title, publicKey, blobE,
-  blobSha256 /* add: the blob's E and the sha256 hex of its data */, tokenStore: "github-deploy-keys", tokenWriter,
-  tokenDataSha256, e /* that store's E */, t /* a one-off key */}`, so the phone's signature covers the key and the
-  blob. The app keeps `DE0CH/jarvis2`'s store sensitive itself (it asks for it, and refuses a begin that isn't).
-  400 for an add without the key pair or with a blob for another store, or a title that isn't one short line; 404
+  is sensitive already; remove: the store's */, replaces /* add: the store exists */, title, publicKey, keys: [{key,
+  e, dataSha256}] /* add: each key's E and the sha256 hex of its data */, tokenStore: "github-deploy-keys", tokenKey,
+  tokenWriter, tokenDataSha256, tokenBackupSha256, e /* the token key's E */, t /* a one-off key */}`, so the phone's
+  signature covers the public key and the store's keys. The app keeps `DE0CH/jarvis2`'s store sensitive itself (it asks for it, and refuses a begin that isn't).
+  400 for an add without the key pair, a key for another store or a repeated key, or a title that isn't one short line; 404
   while `github-deploy-keys` has no contents; 409 on an empty core; 409 `store github-x belongs to <owner/name>` when
   another repo owns that store name (names collide: `DE0CH/foo-bar` and `foo/bar`, `my.repo` and `My-Repo`; the owner
   is the repo whose add wrote the store, or after a Recover the bundle's `owners`; finish checks it again); 400 for a
@@ -461,7 +462,7 @@ live): one `e` and `writer` per store, `unlock/finish {pending, share}`.
   pending. The core opens `github-deploy-keys` for this call only (it never joins the unlocked set) and reads
   `GITHUB_DEPLOY_KEYS_TOKEN`; it deletes the repo's keys titled `jarvis2 <store>` on GitHub (`GET/DELETE
   /repos/{repo}/keys`), then — add — adds the app's public key (`POST /repos/{repo}/keys`, `read_only: false`) and
-  stores exactly the app's blob (writer `core`) →
+  stores exactly the app's keys (writer `core`) →
   `{"kind":"deploy-key-added", pending, repo, store, sensitive, title, publicKey, keyId}`; or —
   remove — deletes the store → `{"kind":"deploy-key-removed", pending, repo, store, deleted}`. 403 for a wrong
   signature or share; 502 `github: HTTP <status>: <GitHub's words>` when GitHub refuses (the router's
@@ -512,7 +513,6 @@ against `SETUP_KEY` (`k8s/control/apps/router/router.yaml`), within ±2 min, eac
 | `GET /setup/identity` | `/identity` |
 | `POST /setup/stores` | `/stores` |
 | `POST /setup/stores/create` | `/stores/create` |
-| `POST /setup/stores/write` | `/stores/write {store, keys, replace}`: a core from before stores were made of keys only (until the held core is live), which REPLACES the store. `keys` = the key names the write holds; the router refuses it (409, nothing reaches the core) when it leaves out a name recorded for the store, and (400) when it names none for a store with recorded names, unless `replace: true` (`infra/setup.py write … --replace`) |
 | `POST /setup/stores/versions` | `/stores/versions {store, nonce}` (below, "Store versions and restore"). `infra/setup.py versions STORE` |
 | `POST /setup/stores/{store}/keys/{key}` | (the router's own, then `/stores/write-key`) one key written or deleted by the setup session, as `POST /m/stores/{store}/keys/{key}` with the setup key's signature over `WriterText`; its first key of a name the core doesn't have makes that store, sensitive. `infra/setup.py write\|delete` |
 | `GET /setup/store-key` | (the router's own) as `GET /m/store-key` |
@@ -524,7 +524,6 @@ against `SETUP_KEY` (`k8s/control/apps/router/router.yaml`), within ±2 min, eac
 | `GET /setup/jarvis1/paused[/{id}]`, `POST /setup/jarvis1/paused/{id}/prepare\|import` | (the router's own) as `/api/jarvis1/…` (Jarvis 1 import, above); the import's caller is `setup`. `infra/setup.py jarvis1 …` |
 | `POST /setup/sessions/{id}/pause` | (the router's own) cancels the session's wakeups and crons, then pauses it (202; the snapshot if its machine answers within the wait, else none). `infra/setup.py pause` |
 | `POST /setup/sessions/{id}/resume`, `POST /setup/sessions/{id}/restart` | (the router's own) the actions' resume (same image, no prompt) and the app's Restart (pause + that resume); wakeups and crons stay armed. A Claude line on an image from before the router's login gets a `resume-upgrade` approval instead (DECISIONS 154). 202. `infra/setup.py resume|restart` |
-| `POST /setup/store-keys` | (the router's own) `{name, keys: [names] \| null}` → `{ok}`: a core from before stores were made of keys (until the held core is live): records a store's key names; `null` forgets them. No values. `infra/setup.py keys NAME KEY…` and `infra/store-keys.sh`. |
 
 `GET /setup/status` — the router's health: the names of its secrets that are set (values never), the session
 image, whether the core answers, and `githubRepos` — `{total, private}` repos the picker's `GITHUB_READ_TOKEN`
