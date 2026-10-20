@@ -373,10 +373,12 @@ var (
 )
 
 // hostState: the Remote Control host's status and pid from claude's own session registry (~/.claude/sessions/*.json,
-// what the supervisor and the dashboard read); "" = no host
+// what the supervisor and the dashboard read); "" = no host; pid -1 = an entry caught mid-rewrite (claude truncates
+// then writes it), so whether there is a host isn't known on this poll
 func hostState() (status string, pid int) {
 	home, _ := os.UserHomeDir()
 	files, _ := filepath.Glob(filepath.Join(home, ".claude", "sessions", "*.json"))
+	torn := false
 	for _, f := range files {
 		var e struct {
 			Status          string `json:"status"`
@@ -384,13 +386,20 @@ func hostState() (status string, pid int) {
 			BridgeSessionID string `json:"bridgeSessionId"`
 		}
 		b, err := os.ReadFile(f)
-		if err != nil || json.Unmarshal(b, &e) != nil || e.BridgeSessionID == "" || e.Pid == 0 {
+		if err == nil && json.Unmarshal(b, &e) != nil {
+			torn = true
+			continue
+		}
+		if err != nil || e.BridgeSessionID == "" || e.Pid == 0 {
 			continue
 		}
 		if syscall.Kill(e.Pid, 0) != nil {
 			continue // a dead host's leftover entry
 		}
 		return e.Status, e.Pid
+	}
+	if torn {
+		return "", -1
 	}
 	return "", 0
 }
@@ -408,6 +417,8 @@ func restartHostWhenIdle() {
 		}
 		status, pid := hostState()
 		switch {
+		case pid == -1:
+			idle = 0 // read mid-rewrite: look again
 		case pid == 0:
 			if killed == 0 {
 				return

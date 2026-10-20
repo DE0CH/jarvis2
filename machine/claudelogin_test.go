@@ -321,3 +321,22 @@ func TestTakeIfLater(t *testing.T) {
 		t.Fatal("later: taken")
 	}
 }
+
+// claude rewrites its registry entry by truncating then writing: a poll in between must not read as "no host"
+// (restartHostWhenIdle would give up and leave the account switch unmerged)
+func TestHostStateTornEntry(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	os.MkdirAll(home(t)+"/.claude/sessions", 0o700)
+	if _, pid := hostState(); pid != 0 {
+		t.Fatal("no entry: pid", pid)
+	}
+	os.WriteFile(home(t)+"/.claude/sessions/1.json", nil, 0o600)
+	if _, pid := hostState(); pid != -1 {
+		t.Fatal("an empty (mid-rewrite) entry: pid", pid)
+	}
+	b, _ := json.Marshal(map[string]any{"status": "idle", "pid": os.Getpid(), "bridgeSessionId": "b1"})
+	os.WriteFile(home(t)+"/.claude/sessions/1.json", b, 0o600)
+	if s, pid := hostState(); pid != os.Getpid() || s != "idle" {
+		t.Fatal("a whole entry:", s, pid)
+	}
+}
