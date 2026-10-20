@@ -616,7 +616,7 @@ func promptOnScreen(screen string) bool {
 // harnessStuckText: the failed session's error — the wait and the last lines of the pane (what blocks it, usually a
 // prompt Claude Code put up before its Remote Control host)
 func harnessStuckText(wait time.Duration, screen string) string {
-	msg := "the harness didn't come up within " + waitText(wait) + " of boot (Claude Code never reported a live Remote Control host)"
+	msg := harnessStuckPrefix + " within " + waitText(wait) + " of boot (Claude Code never reported a live Remote Control host)"
 	var lines []string
 	for _, l := range strings.Split(stripANSI(screen), "\n") {
 		if l = strings.Join(strings.Fields(l), " "); l != "" && strings.Trim(l, "─━-—╌ ") != "" {
@@ -636,6 +636,18 @@ func harnessStuckText(wait time.Duration, screen string) string {
 		msg += "; no screen from it"
 	}
 	return msg + ". Resume starts it again on a new machine."
+}
+
+// harnessStuckPrefix: how the harness check's error begins (Resume reads it: harnessRetryUpgrade)
+const harnessStuckPrefix = "the harness didn't come up"
+
+// harnessRetryUpgrade: a session the harness check failed resumes on the newest session image when its own is older
+// (the phone approves it, as any newer image): retrying the image whose Claude never came up would hang again
+func harnessRetryUpgrade(s Session, newest string) bool {
+	if s.State != "failed" || !strings.HasPrefix(s.Error, harnessStuckPrefix) || s.Cert == nil || newest == "" {
+		return false
+	}
+	return imageDigest(certImage(s.Cert, s.Image)) != imageDigest(newest)
 }
 
 // harnessStuck: fail the session (the machine stays until a Resume finishes its pause, or a Destroy), log it in the

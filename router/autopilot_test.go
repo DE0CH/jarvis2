@@ -668,3 +668,25 @@ func TestStatusSetsHarnessClock(t *testing.T) {
 		t.Fatalf("after a host: %+v", l)
 	}
 }
+
+// a session the harness check failed resumes on the newest image when its own is older; any other failure, or the
+// newest image itself, resumes as it is
+func TestHarnessRetryUpgrade(t *testing.T) {
+	cert := &Doc{Payload: `{"machine":{"id":"m1","image":"ghcr.io/de0ch/jarvis2-session@sha256:aaa"}}`}
+	newest := "ghcr.io/de0ch/jarvis2-session:sha-1@sha256:bbb"
+	s := Session{State: "failed", Error: harnessStuckText(4*time.Minute, "Settings Error"), Cert: cert}
+	if !harnessRetryUpgrade(s, newest) {
+		t.Fatal("not upgraded")
+	}
+	if harnessRetryUpgrade(s, "ghcr.io/de0ch/jarvis2-session:sha-0@sha256:aaa") {
+		t.Fatal("upgraded onto its own image")
+	}
+	s.Error = "start: Fly timed out"
+	if harnessRetryUpgrade(s, newest) {
+		t.Fatal("upgraded after another failure")
+	}
+	s.Error, s.State = harnessStuckText(time.Minute, ""), "paused"
+	if harnessRetryUpgrade(s, newest) {
+		t.Fatal("upgraded a paused session")
+	}
+}

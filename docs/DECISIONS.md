@@ -1982,7 +1982,8 @@ snapshot failed with "no space left on device", the machine was destroyed anyway
      Dockerfile makes the directory 755 first and checks, as user claude, that everything under /etc/claude-code is
      readable and valid JSON (the build fails otherwise, so nothing is pinned). And the router's autopilot fails a
      `claude` session whose booted machine has shown no live Remote Control host for 4 min, with the last lines of its
-     pane as the error (`harness-check` in the lifecycle, one DM); Resume retries on a new machine. **Not chosen:** the
+     pane as the error (`harness-check` in the lifecycle, one DM); Resume retries on a new machine, on the newest session
+     image when its own is older (the phone approves the newer image, as always). **Not chosen:** the
      supervisor answering the prompt by itself (a prompt it doesn't know must reach Deyao as a failure, not be clicked
      through), or failing at boot from the router's lifecycle wait only (a router restart would lose it: the clock is in
      the persisted liveness).

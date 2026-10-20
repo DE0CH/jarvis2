@@ -965,6 +965,12 @@ func (r *Router) Resume(id string, upgrade bool) error {
 		return err
 	}
 	op := r.lcBegin(id, "resume") // lifecycle.go
+	if !upgrade && harnessRetryUpgrade(s, r.cfg.SessionImage) {
+		// autopilot.go: its Claude never came up on that image (2026-10-20: an image whose Claude Code stopped at a
+		// prompt): the same image would only hang again, so the retry goes on the newest one, which the phone approves
+		upgrade = true
+		op.note("", "its harness never came up on image "+certImage(s.Cert, s.Image)+": resuming on the newest session image (Deyao approves it in the Inbox)")
+	}
 	if upgrade {
 		op.note("", "on the newest session image")
 	}
