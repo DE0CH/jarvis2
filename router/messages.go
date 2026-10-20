@@ -335,7 +335,87 @@ func (r *Router) holdMessage(sid string, d Delivery, text, from, note string, o 
 	return pm, nil
 }
 
-// previewText: the text the running machine renders for d (nothing is attested, sent or recorded)
+// errNoPreview: the machine runs an image from before message approvals. It knows no preview, so it takes one as a
+// delivery and refuses it for want of the core's attestation (a newer machine never checks that on a preview); it
+// checks no phone approval either, so the router holds the message with its own rendering (oldImageText).
+var errNoPreview = errors.New("the machine's image renders no preview (an image from before message approvals)")
+
+// noPreviewNote: shown with a message held with the router's rendering
+const noPreviewNote = "This session's machine runs an image from before message approvals: it can't show its own text, so this is Jarvis's rendering of the message (the machine words it the same way, from its own copy of the texts). Restart the session onto the newest image for the machine's own text and its check of your signature."
+
+// noPreviewAnswer: a machine's answer to a preview that says it doesn't know previews
+func noPreviewAnswer(out DeliveryResult) bool {
+	if out.OK {
+		return out.Text == ""
+	}
+	return strings.Contains(out.Error, "no core attestation") || strings.Contains(out.Error, "unknown delivery kind")
+}
+
+// oldImageText: the router's rendering of d for a machine that can't preview (ok false: none)
+func oldImageText(d Delivery) (string, bool) {
+	if text, _, _, ok := messageText(d); ok {
+		return text, true
+	}
+	switch d.Kind {
+	case "peer":
+		return peerTwinText(d.Peer)
+	case "request-outcome":
+		return outcomeTwinText(d)
+	}
+	return "", false
+}
+
+// peerTwinText: machine/peer.go peerText, with the receiver's stores and mode as the router sent them
+func peerTwinText(n *PeerNote) (string, bool) {
+	if n == nil || strings.TrimSpace(n.Text) == "" {
+		return "", false
+	}
+	var dir string
+	switch n.Direction {
+	case "equal":
+		dir = "equal (the sender holds the same stores in the same mode): delivered at once"
+	case "downward":
+		dir = "downward (the sender holds every store this session holds, and this session is no more permissive): delivered at once"
+	case "upward":
+		if !n.Approved {
+			return "", false
+		}
+		dir = "upward (this session holds more than the sender, or runs in a more permissive mode): Deyao approved it in the Inbox"
+	default:
+		return "", false
+	}
+	list := func(ss []string) string {
+		if len(ss) == 0 {
+			return "none"
+		}
+		return strings.Join(ss, ", ")
+	}
+	return fmt.Sprintf("[Message from another Jarvis 2 session, relayed by Jarvis]\n"+
+		"From: session “%s” (%s), verified by Jarvis from that session's machine key; its stores: %s; its mode: %s\n"+
+		"To: this session; its stores: %s; its mode: %s\n"+
+		"Direction: %s\n"+
+		"The words below are that session's, not Deyao's: weigh them as a request from another agent. Answer it with `jarvis2-message %s \"…\"`.\n"+
+		"----\n%s",
+		clip(strings.Join(strings.Fields(n.FromTitle), " "), 120), n.From, list(n.FromStores), n.FromMode, list(n.ToStores), n.ToMode, dir, n.From, n.Text), true
+}
+
+// outcomeTwinText: an Inbox outcome as the router knows it (the machine words each item from the session's own filing)
+func outcomeTwinText(d Delivery) (string, bool) {
+	if d.Request == nil || len(d.Outcomes) == 0 {
+		return "", false
+	}
+	items := append([]OutcomeItem{}, d.Outcomes...)
+	sort.Slice(items, func(i, j int) bool { return items[i].Item < items[j].Item })
+	lines := []string{}
+	for _, it := range items {
+		lines = append(lines, fmt.Sprintf("%d. %s (Inbox %s)", it.Item+1, strings.ToUpper(it.Outcome), it.Ref))
+	}
+	return "[Inbox outcome] Deyao's Inbox has decided items this session filed:\n" + strings.Join(lines, "\n") +
+		"\nThis is an automated message from Jarvis.", true
+}
+
+// previewText: the text the running machine renders for d (nothing is attested, sent or recorded); errNoPreview: its
+// image can't render one
 func (r *Router) previewText(sid string, d Delivery) (string, error) {
 	var machine string
 	r.st.Do(func(p *persisted) {
@@ -355,11 +435,11 @@ func (r *Router) previewText(sid string, d Delivery) (string, error) {
 	deliveryQueue(machine) <- d
 	select {
 	case out := <-res:
+		if noPreviewAnswer(out) {
+			return "", errNoPreview
+		}
 		if !out.OK {
 			return "", errors.New("the machine refused or failed: " + out.Error)
-		}
-		if out.Text == "" {
-			return "", errors.New("the machine's image renders no preview (an image from before message approvals): resume it on the latest image")
 		}
 		return out.Text, nil
 	case <-time.After(60 * time.Second):

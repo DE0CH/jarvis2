@@ -454,10 +454,18 @@ func (r *Router) deliverVouchedOpts(sid string, d Delivery, boot bool, o *Origin
 	}
 	if gated { // the running machine renders the exact text Deyao sees
 		text, err := r.previewText(sid, d)
+		note := messageNote(d)
+		if errors.Is(err, errNoPreview) { // an image from before message approvals: Jarvis's rendering (messages.go)
+			t, ok := oldImageText(d)
+			if !ok {
+				return fmt.Errorf("a %s delivery into a machine that can't preview it, and the router can't render it: not delivered (restart the session onto the newest image)", d.Kind)
+			}
+			text, note, err = t, strings.TrimSpace(note+" "+noPreviewNote), nil
+		}
 		if err != nil {
 			return err
 		}
-		if _, err := r.holdMessage(sid, d, text, messageFrom(d), messageNote(d), o); err != nil {
+		if _, err := r.holdMessage(sid, d, text, messageFrom(d), note, o); err != nil {
 			return err
 		}
 		return errAwaitingApproval

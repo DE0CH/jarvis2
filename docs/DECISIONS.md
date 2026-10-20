@@ -2127,3 +2127,13 @@ snapshot failed with "no space left on device", the machine was destroyed anyway
        keys.go (CoreCrypto, RouterClient, SetupView, CoreSetup, interop: they ship through the phone replica, a
        separate change); e2e's held-core and legacy modes; whole-store backups (`stores/<name>.json`) in the bucket,
        which a Recover and `tools/decrypt-backup.py` still read as the base under the key backups.
+
+207. **A message held for Deyao into a session whose machine predates message approvals is held with Jarvis's own
+     rendering (Claude, 2026-10-20).** Such a machine knows no preview: it took the router's preview as a delivery and
+     refused it for want of the core's attestation, and the router reported the message FAILED to its sender within a
+     second, before Deyao ever saw it (the Claude Code · Paseo test session's replies to "Jarvis 2 works", whose outcome
+     read "approved but carrying it out failed"). The router now recognises that answer and holds the message with its
+     twin of the text (the canned kinds, the peer wrapper, an Inbox outcome summary), noted as Jarvis's rendering. Once
+     delivered, the attested delivery goes in as before. Such a machine checks no phone signature, so in those sessions
+     the router alone gates it, as before 203, until the session restarts onto the newest image. Every harness's own
+     delivery path (claude's channel, harness-send's queue for paseo-claude, OpenCode and OpenClaw) was fine.

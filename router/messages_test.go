@@ -401,3 +401,65 @@ func TestMessageTextTwins(t *testing.T) {
 		}
 	}
 }
+
+// oldImageMachine: a machine on an image from before message approvals (2026-10-20, s6056456f64d9d2df): it knows no
+// preview, so it takes the router's preview as a delivery and refuses it for want of the core's attestation; an
+// attested delivery it takes (it checks no phone approval)
+func oldImageMachine(d Delivery) DeliveryResult {
+	if d.Attest == nil {
+		return DeliveryResult{Error: "no core attestation (the input isn't in the core's log)"}
+	}
+	return DeliveryResult{OK: true}
+}
+
+// An upward peer message into a sensitive session whose machine can't preview was reported FAILED to its sender
+// within 0.2 s, before Deyao ever saw it ("It was approved but carrying it out failed", the Paseo test session's two
+// replies to "Jarvis 2 works", 2026-10-20). It is held with Jarvis's own rendering instead, and delivered once Deyao
+// delivers it; the same for Jarvis's other messages into such a session.
+func TestAMessageIntoAnOldImageMachineIsHeldWithJarvisText(t *testing.T) {
+	m := newMsgRig(t, "mmsg9", true, oldImageMachine)
+	addSession(m.r, "sfrom", "started", "mfrom", false)
+	out, err := m.r.SendPeer("sfrom", "s1", "test step 2 could not run", &SignedRequest{Machine: "mfrom", Method: "POST", Path: "/m/api/requests/peer", Sig: "p"}, "POST", "/m/api/requests/peer")
+	if err != nil || out["waiting"] != "message" {
+		t.Fatal(out, err)
+	}
+	var ps []*PendingMessage
+	for i := 0; i < 200 && len(ps) == 0; i++ {
+		time.Sleep(10 * time.Millisecond)
+		ps = m.pending()
+	}
+	var oc []*Outcome
+	m.r.st.Do(func(d *persisted) { oc = d.Outcomes["sfrom"] })
+	if len(oc) != 0 {
+		t.Fatalf("the sender was told %s before Deyao saw the message", oc[0].Outcome)
+	}
+	if len(ps) != 1 || ps[0].Kind != "peer" || ps[0].State != "pending" || !strings.Contains(ps[0].Text, "test step 2 could not run") ||
+		!strings.Contains(ps[0].Text, "relayed by Jarvis") || !strings.Contains(ps[0].Note, "before message approvals") {
+		t.Fatalf("not held with Jarvis's text: %+v", ps)
+	}
+	text, _, _, err := m.r.DraftMessages([]string{ps[0].ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.r.ApproveMessages(m.sign(t, text)); err != nil {
+		t.Fatal(err)
+	}
+	messageWG.Wait()
+	ds := m.deliveries()
+	last := ds[len(ds)-1]
+	if last.Preview || last.Kind != "peer" || last.Attest == nil || last.Peer == nil || !last.Peer.Approved {
+		t.Fatalf("delivered %+v", last)
+	}
+	m.r.st.Do(func(d *persisted) { oc = d.Outcomes["sfrom"] })
+	if len(oc) != 1 || oc[0].Outcome != outcomeApproved || len(m.pending()) != 0 {
+		t.Fatalf("outcomes %+v, pending %+v", oc, m.pending())
+	}
+
+	// Jarvis's own kinds too: the watchdog's check-in is held with the router's twin of the text
+	if err := m.r.DeliverCanned("s1", Delivery{Kind: "nudge", Minutes: 20, Jobs: 2}, ""); err != nil {
+		t.Fatal(err)
+	}
+	if ps := m.pending(); len(ps) != 1 || ps[0].Kind != "nudge" || ps[0].Text != nudgeText(2, 20*time.Minute) {
+		t.Fatalf("nudge %+v", ps)
+	}
+}
