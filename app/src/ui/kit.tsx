@@ -143,9 +143,10 @@ export function Spinner({ color, size = 1 }: { color?: string; size?: 1 | 2 }) {
 export function Badge({ children, color = "gray", upper, spin }: { children: ReactNode; color?: ColorName; upper?: boolean; spin?: boolean }) {
   const t = useTheme(), c = t.c[color];
   return (
-    <View {...ids(undefined, { pill: color })} style={{ flexDirection: "row", alignItems: "center", gap: 4, height: 20, paddingHorizontal: 6, borderRadius: radius[1], backgroundColor: c.a[3], alignSelf: "flex-start", flexShrink: 0 }}>
+    <View {...ids(undefined, { pill: color })} style={{ flexDirection: "row", alignItems: "center", gap: 4, height: 20, paddingHorizontal: 6, borderRadius: radius[1], backgroundColor: c.a[3], alignSelf: "flex-start", flexShrink: 1, minWidth: 0, maxWidth: "100%" }}>
       {spin && <Spinner color={c.a[11]} />}
-      <RNText numberOfLines={1} style={{ color: c.a[11], fontSize: 12, lineHeight: 16, fontWeight: "500", textTransform: upper ? "uppercase" : undefined, letterSpacing: upper ? 0.36 : 0.03 }}>{children}</RNText>
+      {/* a badge never grows past its container: a long text ends in … inside it, never over a neighbour (2026-10-20) */}
+      <RNText numberOfLines={1} style={{ flexShrink: 1, minWidth: 0, color: c.a[11], fontSize: 12, lineHeight: 16, fontWeight: "500", textTransform: upper ? "uppercase" : undefined, letterSpacing: upper ? 0.36 : 0.03 }}>{children}</RNText>
     </View>
   );
 }

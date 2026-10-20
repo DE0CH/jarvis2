@@ -46,7 +46,8 @@ function SessionPill({ m }: { m: Session }) {
   if (m.state === "failed") return <Pill kind="bad">failed</Pill>;
   if (m.state === "paused") return hasSchedule(m) ? <Pill kind="info">scheduled</Pill> : <Pill kind="dim">paused</Pill>;
   if (m.state === "approval") return <Pill kind="info">approve on your iPhone</Pill>;
-  if (MOVING[m.state]) return <Pill kind={m.state === "destroying" ? "bad" : "wait"} spin>{m.waiting ? `${m.state}: ${m.waiting}` : MOVING[m.state]}</Pill>;
+  // the pill stays short; what a pause or destroy waits on is its own wrapping line under the title (MovingDetail)
+  if (MOVING[m.state]) return <Pill kind={m.state === "destroying" ? "bad" : "wait"} spin>{MOVING[m.state]}</Pill>;
   if (m.state === "started") {
     if (m.oneShotDone) return <Pill kind="wait" spin>done · archiving…</Pill>;
     if (!m.status) return <Pill kind="wait" spin>booting…</Pill>;
@@ -56,6 +57,12 @@ function SessionPill({ m }: { m: Session }) {
     return <Pill kind="ok">{m.status}</Pill>;
   }
   return <Pill kind="dim">{m.state}</Pill>;
+}
+// what a moving session waits on, in plain words (router: "stopping the machine and taking its volume's backup snapshot
+// (up to 45 min)"): a line that wraps inside its card
+function MovingDetail({ m }: { m: Session }) {
+  if (!MOVING[m.state] || !m.waiting) return null;
+  return <P size={1} color={m.state === "destroying" ? "red" : "amber"} mb={1} id={"session-waiting-" + m.id}>{`${m.waiting[0].toUpperCase()}${m.waiting.slice(1)}`}</P>;
 }
 // the headed sections: a paused session that will wake on its own is not "just paused"
 const GROUPS = ["Running", "Scheduled", "Paused", "Failed"] as const;
@@ -443,7 +450,7 @@ export function Sessions() {
                 <Aligned part="head"><Flex justify="space-between" align="flex-start" gap={2} mb={1}>
                   <Heading size={3} style={{ flex: 1 }}>{sessionTitle(m)}</Heading>
                   <Flex gap={1} wrap justify="flex-end" style={{ flexShrink: 0, maxWidth: "55%" }}><SessionPill m={m} />{!paused && hasSchedule(m) && <Pill kind="info">scheduled</Pill>}</Flex>
-                </Flex></Aligned>
+                </Flex><MovingDetail m={m} /></Aligned>
                 <Aligned part="badges">{(m.permissionMode === "bypass" || m.oneShot || m.authFailed || leasePills(leases, m.id).length > 0) && <Flex gap={1} wrap align="center" mb={1}>
                   {leasePills(leases, m.id).map((l) => <Pill key={l.key} kind={l.held ? "info" : "dim"}>{l.text}</Pill>)}
                   {m.permissionMode === "bypass" ? <Pill kind="bad">skip perms</Pill> : null}
