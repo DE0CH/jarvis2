@@ -7,15 +7,15 @@
 
 Stack jumboshortbread1389 (EU Germany, prod-eu-west-2). GRAFANA_ADMIN_TOKEN is the stack's service account token
 `jarvis2-admin`; GRAFANA_DISCORD_WEBHOOK is the webhook "Grafana" of the Discord channel #jarvis2-alerts (both in the
-`infra` store). `apply` makes or updates, idempotently: the contact point (Discord), the notification policy (every
-alert to it), the folder "Jarvis 2" and the rule group "boxes" below, for the boxes named (a box that doesn't exist
-yet would fire "silent"). The rules read what Alloy ships from each box (infra/alloy/box.alloy) and what the external
+`jarvis2-ops` store). `apply` makes or updates, idempotently: the message template `jarvis2` (what is wrong, what it
+means, what to do), the contact point (Discord), the notification policy (every alert to it), the folder "Jarvis 2"
+and the rule group "boxes" below, for the boxes named (a box that doesn't exist yet would fire "silent"). The rules read what Alloy ships from each box (infra/alloy/box.alloy) and what the external
 probe reports (Synthetic Monitoring, `probe` below). Prints names, never a token.
 
 `probe` makes or updates the Synthetic Monitoring HTTP check `jarvis2-healthz`: GET https://jarvis2.deyaochen.com/healthz
 once a minute from London and Frankfurt (2 × 43,200 = 86,400 runs a month, inside the free 100k), with the Access
 service token jarvis2-health-probe (infra/cloudflare.py --health), 200 required. GRAFANA_SM_TOKEN is the Synthetic
-Monitoring access token of the stack (`infra` store).
+Monitoring access token of the stack (`jarvis2-ops` store).
 """
 SM = "https://synthetic-monitoring-api-eu-west-2.grafana.net/api/v1"
 import json, os, sys, urllib.request, urllib.error
@@ -38,12 +38,24 @@ def call(method, path, body=None):
         return e.code, e.read().decode()[:400]
 
 
-def rule(uid, title, summary, ds, expr, threshold, for_="2m", kind="prom", severity="warning"):
-    """one alert rule: query A, reduce B (last), threshold C (> threshold)"""
+def rule(uid, title, summary, ds, expr, threshold, for_="2m", kind="prom", severity="warning", meaning="", action="",
+         exec_err="KeepLast"):
+    """one alert rule: query A, reduce B (last), threshold C (> threshold).
+
+    summary / meaning / action are the three lines of the Discord message (what is wrong, what it means, what to do;
+    template `jarvis2` below). execErrState KeepLast: when Grafana Cloud can't run the query (its own Prometheus or
+    Loki times out, 2026-10-21) the rule keeps its last state instead of paging a "DatasourceError" with this rule's
+    severity; the `j2-grafana-*` canaries below report a query error that lasts. noDataState OK: every query here is
+    written so that the bad case PRODUCES a series (absent_over_time, rate > x, count > x), so no data = healthy."""
     model = {"refId": "A", "expr": expr, "instant": True} if kind == "prom" else {"refId": "A", "expr": expr, "queryType": "instant"}
+    ann = {"summary": summary}
+    if meaning:
+        ann["meaning"] = meaning
+    if action:
+        ann["action"] = action
     return {
-        "uid": uid, "title": title, "condition": "C", "for": for_, "noDataState": "OK", "execErrState": "Error",
-        "annotations": {"summary": summary}, "labels": {"severity": severity, "system": "jarvis2"},
+        "uid": uid, "title": title, "condition": "C", "for": for_, "noDataState": "OK", "execErrState": exec_err,
+        "annotations": ann, "labels": {"severity": severity, "system": "jarvis2"},
         "data": [
             {"refId": "A", "datasourceUid": ds, "relativeTimeRange": {"from": 600, "to": 0}, "model": model},
             {"refId": "B", "datasourceUid": "__expr__", "relativeTimeRange": {"from": 0, "to": 0},
@@ -59,44 +71,86 @@ def rules(boxes):
     r = [
         # memory pressure: the share of time every task stalled on memory (PSI "full"), the warning before a thrash
         rule("j2-mem-pressure", "Memory pressure on {{ $labels.box }}",
-             "PSI memory full above 2 % for 2 min on the {{ $labels.box }} box: something is starving it (2026-10-15 started like this)",
-             PROM, 'sum by (box) (rate(node_pressure_memory_stalled_seconds_total{box=~"control|services"}[2m]))', 0.02),
+             "The {{ $labels.box }} box is short of memory: its tasks stalled on memory over 2 % of the time for 2 min.",
+             PROM, 'sum by (box) (rate(node_pressure_memory_stalled_seconds_total{box=~"control|services"}[2m]))', 0.02,
+             meaning="Something on it is using too much memory; left alone it can slow to a crawl (2026-10-15 started like this).",
+             action="Look at container_memory_working_set_bytes for that box in Grafana to see which pod grew."),
         rule("j2-oom", "OOM kill on {{ $labels.box }}",
-             "The kernel killed a process for memory on the {{ $labels.box }} box in the last 5 min (journal: unit kernel)",
-             PROM, 'sum by (box) (increase(node_vmstat_oom_kill{box=~"control|services"}[5m]))', 0, for_="0s"),
+             "The kernel killed a process for memory on the {{ $labels.box }} box in the last 5 min.",
+             PROM, 'sum by (box) (increase(node_vmstat_oom_kill{box=~"control|services"}[5m]))', 0, for_="0s",
+             meaning="A program on it ran out of memory and was stopped; k3s usually restarts it.",
+             action="Check the journal (unit kernel) for which process, and whether it keeps happening."),
         rule("j2-disk", "Disk above 80 % on {{ $labels.box }}",
-             "The root filesystem of the {{ $labels.box }} box is over 80 % full",
-             PROM, 'max by (box) (1 - node_filesystem_avail_bytes{box=~"control|services",mountpoint="/"} / node_filesystem_size_bytes{box=~"control|services",mountpoint="/"})', 0.8, for_="10m"),
+             "The root filesystem of the {{ $labels.box }} box is over 80 % full.",
+             PROM, 'max by (box) (1 - node_filesystem_avail_bytes{box=~"control|services",mountpoint="/"} / node_filesystem_size_bytes{box=~"control|services",mountpoint="/"})', 0.8, for_="10m",
+             meaning="Nothing breaks yet; at 100 % pods fail to write and images can't be pulled.",
+             action="Find what grew (images, logs, volumes) and prune it through git."),
         rule("j2-flux", "Flux failing on {{ $labels.box }}",
-             "Flux on the {{ $labels.box }} box has failed to reconcile for 10 min: a commit isn't reaching it (its logs: container manager)",
-             LOKI, 'sum by (box) (count_over_time({box=~"control|services", container="manager"} |~ "(?i)reconciliation failed" [10m]))', 5, for_="10m", kind="loki"),
+             "Flux on the {{ $labels.box }} box has failed to reconcile for 10 min.",
+             LOKI, 'sum by (box) (count_over_time({box=~"control|services", container="manager"} |~ "(?i)reconciliation failed" [10m]))', 5, for_="10m", kind="loki",
+             meaning="New commits to main aren't reaching that box; what runs keeps running.",
+             action="Read Flux's logs (container manager) in Grafana and fix the commit it rejects."),
         rule("j2-restarts", "Control plane restarting on {{ $labels.box }}",
-             "A control-plane container (core, router, cloudflared) was restarted by the kubelet in the last 10 min",
-             LOKI, 'sum by (box) (count_over_time({box="control", source="journal", unit="k3s.service"} |~ "(?i)(back-off restarting|liveness probe failed|readiness probe failed).*(core|router|cloudflared)" [10m]))', 3, for_="0s", kind="loki"),
+             "A control-plane container (core, router, cloudflared) was restarted by the kubelet in the last 10 min.",
+             LOKI, 'sum by (box) (count_over_time({box="control", source="journal", unit="k3s.service"} |~ "(?i)(back-off restarting|liveness probe failed|readiness probe failed).*(core|router|cloudflared)" [10m]))', 3, for_="0s", kind="loki",
+             meaning="Jarvis 2 may have dropped out briefly; if it keeps restarting, it is down.",
+             action="Read that container's logs in Grafana for why it failed its probe."),
         rule("j2-core-change", "A new core on the control box",
-             "The router saw a new core (a restart, a release or a reboot): if it is empty, Deyao Recovers it in the app",
-             LOKI, 'sum(count_over_time({box="control", container="router"} |= "a new core (" [10m]))', 0, for_="0s", kind="loki", severity="critical"),
+             "The router saw a new core (a restart, a release or a reboot).",
+             LOKI, 'sum(count_over_time({box="control", container="router"} |= "a new core (" [10m]))', 0, for_="0s", kind="loki", severity="critical",
+             meaning="If the new core is empty, sessions can't get their secrets until it is Recovered.",
+             action="Open the Jarvis 2 app: if it asks for Recover, do it."),
         rule("j2-probe", "jarvis2.deyaochen.com /healthz failing",
-             "The external probe (Synthetic Monitoring) gets no 200 from /healthz: the router, the tunnel or the core isn't serving",
-             PROM, 'min(probe_success{job="jarvis2-healthz"})', -1, for_="3m", severity="critical"),
+             "The external probe gets no 200 from https://jarvis2.deyaochen.com/healthz for 3 min.",
+             PROM, '1 - min(probe_success{job="jarvis2-healthz"})', 0, for_="3m", severity="critical",
+             meaning="Jarvis 2 isn't serving: the router, the tunnel or the core is down, so the app and sessions can't reach it.",
+             action="Open the app to confirm, then check the control box's logs in Grafana."),
+        # canaries: the only rules that page on a query error, after it has lasted 15 min, as a notice. A real
+        # series keeps them Normal (gt a value never reached); an empty result is No data = OK.
+        rule("j2-grafana-metrics", "Grafana can't query its own metrics",
+             "Grafana Cloud couldn't query its own metrics store for 15 min.",
+             PROM, 'count(node_time_seconds)', 1e9, for_="15m", severity="notice", exec_err="Error",
+             meaning="This is Grafana's problem, not Jarvis's: the boxes are fine as far as anyone knows, but the metric alerts (gone quiet, memory, disk, the probe) can't fire meanwhile.",
+             action="Nothing to fix on our side; it clears by itself. https://status.grafana.com says whether Grafana knows."),
+        rule("j2-grafana-logs", "Grafana can't query its own logs",
+             "Grafana Cloud couldn't query its own logs store for 15 min.",
+             LOKI, 'sum(count_over_time({box="control"} [5m]))', 1e12, for_="15m", kind="loki", severity="notice", exec_err="Error",
+             meaning="This is Grafana's problem, not Jarvis's: the log alerts (Flux, restarts, a new core) can't fire meanwhile.",
+             action="Nothing to fix on our side; it clears by itself. https://status.grafana.com says whether Grafana knows."),
     ]
-    # the probe rule fires below 1: express it as 1 - success > 0
-    r[-1]["data"][0]["model"]["expr"] = '1 - min(probe_success{job="jarvis2-healthz"})'
-    r[-1]["data"][2]["model"]["conditions"][0]["evaluator"]["params"] = [0]
-    r[-1]["noDataState"] = "OK"
     for b in boxes:
-        x = rule(f"j2-silent-{b}", f"The {b} box has gone quiet",
-                 f"No metrics from the {b} box for 5 min: the box, its Alloy or WARP is down",
-                 PROM, f'absent_over_time(node_time_seconds{{box="{b}"}}[5m])', 0, for_="0s", severity="critical")
-        x["noDataState"] = "OK"
-        r.append(x)
+        # absent_over_time gives a series only when the box has sent nothing for 5 min: no data = the box is sending
+        r.append(rule(f"j2-silent-{b}", f"The {b} box has gone quiet",
+                      f"No metrics have arrived from the {b} box for 5 min.",
+                      PROM, f'absent_over_time(node_time_seconds{{box="{b}"}}[5m])', 0, for_="0s", severity="critical",
+                      meaning=f"The {b} box, its Alloy (the shipper) or its WARP link is down"
+                              + (": Jarvis 2 itself may be down." if b == "control" else ": transcript search, the iCloud index and watches may be down."),
+                      action="Check whether Jarvis 2 answers in the app; if the box is gone, it is rebuilt from git (RUNBOOK)."))
     return r
+
+
+TEMPLATE = """{{ define "jarvis2.name" }}{{ if .Labels.rulename }}{{ .Labels.rulename }}{{ else }}{{ .Labels.alertname }}{{ end }}{{ end }}
+{{ define "jarvis2.title" }}{{ if eq .Status "firing" }}{{ if eq .CommonLabels.severity "critical" }}Critical{{ else }}Alert{{ end }}{{ else }}Resolved{{ end }}: {{ with index .Alerts 0 }}{{ template "jarvis2.name" . }}{{ end }}{{ if gt (len .Alerts) 1 }} ({{ len .Alerts }} alerts){{ end }}{{ end }}
+{{ define "jarvis2.message" }}{{ range .Alerts.Firing }}**{{ template "jarvis2.name" . }}**
+{{ .Annotations.summary }}
+{{ with .Annotations.meaning }}What it means: {{ . }}
+{{ end }}{{ with .Annotations.action }}What to do: {{ . }}
+{{ end }}{{ if eq .Labels.alertname "DatasourceError" }}(Grafana's query error: {{ .Annotations.Error }})
+{{ end }}Since {{ .StartsAt.UTC.Format "15:04 UTC, 2 Jan" }} · {{ .Labels.severity }}
+
+{{ end }}{{ range .Alerts.Resolved }}Resolved: **{{ template "jarvis2.name" . }}** ({{ .StartsAt.UTC.Format "15:04" }} to {{ .EndsAt.UTC.Format "15:04 UTC" }})
+{{ end }}{{ end }}"""
 
 
 def apply(boxes):
     hook = os.environ["GRAFANA_DISCORD_WEBHOOK"]
     st, cps = call("GET", "/api/v1/provisioning/contact-points?name=jarvis2-discord")
-    cp = {"name": "jarvis2-discord", "type": "discord", "settings": {"url": hook, "use_discord_username": False},
+    st, tpl = call("GET", "/api/v1/provisioning/templates/jarvis2")
+    print("template", call("PUT", "/api/v1/provisioning/templates/jarvis2",
+                           {"template": TEMPLATE, "version": tpl.get("version", "") if isinstance(tpl, dict) else ""})[0])
+    cp = {"name": "jarvis2-discord", "type": "discord",
+          "settings": {"url": hook, "use_discord_username": False,
+                       "title": '{{ template "jarvis2.title" . }}', "message": '{{ template "jarvis2.message" . }}'},
           "disableResolveMessage": False}
     if isinstance(cps, list) and cps:
         cp["uid"] = cps[0]["uid"]
@@ -148,9 +202,13 @@ def probe(enabled=True):
 def show():
     st, g = call("GET", f"/api/v1/provisioning/folder/{FOLDER}/rule-groups/boxes")
     for r in (g.get("rules", []) if isinstance(g, dict) else []):
-        print(r["uid"], "|", r["title"])
+        print(r["uid"], "|", r["title"], "| for", r["for"], "| noData", r["noDataState"], "| execErr", r["execErrState"],
+              "|", r["labels"].get("severity"))
     st, cps = call("GET", "/api/v1/provisioning/contact-points")
-    print("contact points:", [c["name"] for c in cps] if isinstance(cps, list) else cps)
+    for c in cps if isinstance(cps, list) else []:
+        print("contact point", c["name"], "| title", c["settings"].get("title"), "| message", c["settings"].get("message"))
+    st, t = call("GET", "/api/v1/provisioning/templates/jarvis2")
+    print("template jarvis2", st, "matches" if isinstance(t, dict) and t.get("template") == TEMPLATE else "DIFFERS")
 
 
 if __name__ == "__main__":

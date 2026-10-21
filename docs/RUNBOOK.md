@@ -793,6 +793,18 @@ metric series, 14 days). The account logs in **with GitHub as DE0CH** (no Grafan
 - **Alerts:** `GRAFANA_ADMIN_TOKEN=… GRAFANA_DISCORD_WEBHOOK=… infra/grafana.py apply --boxes control,services` (name only
   the boxes that exist; `show` lists the rules), to Discord #jarvis2-alerts (channel 1560217907072344104 in DE0CH's
   server). The probe: `GRAFANA_SM_TOKEN=… HEALTH_PROBE_ID=… HEALTH_PROBE_SECRET=… infra/grafana.py probe`.
+  Each rule carries three annotations, `summary` (what is wrong), `meaning` and `action`, and the contact point renders
+  them through the template `jarvis2` (a new rule gets all three). In a session the old image's
+  `pull-secrets --exec CMD` (or `session-secret --keys … --exec CMD`) runs it with `jarvis2-ops`; `show` prints each
+  rule's pending period, no-data and error states, and whether the live template matches the code.
+- **"DatasourceError" / "Grafana can't query its own metrics (or logs)":** Grafana Cloud's rule evaluator couldn't
+  reach its own Prometheus or Loki (e.g. `Post "https://prometheus-prod-65-prod-eu-west-2.grafana.net/…": dial tcp …:
+  i/o timeout`). Not a Jarvis problem: nothing to fix on our side, the boxes keep shipping. Every box rule has
+  execErrState KeepLast, so such errors don't page; only the two `notice` canaries do, after 15 min. Confirm the boxes
+  were fine with `count by (box) (node_time_seconds)` over the window (one point a minute, no gaps) and the rule
+  history `GET /api/v1/rules/history?from=…&to=…` (admin token; `current` "Error" entries carry the query error);
+  https://status.grafana.com for Grafana's side. While it lasts, the metric alerts (gone quiet, probe, memory, disk)
+  are blind; the app is the check.
 - **Re-minting** (each credential, when lost or leaked; then write it into `jarvis2-ops` with `infra/setup.py write`,
   and into the boxes' parts where named):
   - `GRAFANA_WRITE_TOKEN`, `GRAFANA_READ_TOKEN`: grafana.com → the org's Access Policies (log in with GitHub):

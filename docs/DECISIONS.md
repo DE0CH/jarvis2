@@ -2182,3 +2182,29 @@ snapshot failed with "no space left on device", the machine was destroyed anyway
      files is named by both apps, and an unknown one shows as "Unknown request (kind)" instead of "New session":
      `router/inbox_kinds_test.go` fails when the router has a kind an app doesn't name. Claude's choice: message rules
      stay (an existing one is harmless) though no kind that waits can be ruled any more; removing them is a later cut.
+
+## Grafana's own query errors don't page as a Jarvis outage, 2026-10-21
+
+211. **Every box rule keeps its last state when Grafana can't run its query (execErrState KeepLast); two `notice`
+     canaries say when that has lasted 15 min; each Discord alert reads what is wrong, what it means and what to do
+     (Deyao, 2026-10-21; `infra/grafana.py`).** At 00:49 UTC Deyao got a critical "DatasourceError" for "The services
+     box has gone quiet". The box was fine: `count by (box) (node_time_seconds)` had a point every minute from both
+     boxes from 20:30 to 01:05 UTC, and transcript search answered at 00:55. The rule history showed 170 "Error"
+     entries from 20:43 to 01:00 UTC, every one Grafana Cloud's evaluator timing out on its own Prometheus
+     (`Post "https://prometheus-prod-65-prod-eu-west-2.grafana.net/api/prom/api/v1/query": dial tcp 63.179.170.201:443:
+     i/o timeout`), on all seven Prometheus rules (OOM 34, disk 33, services quiet 29, memory 27, control quiet 24,
+     probe 23); the Loki rules had none. Most errors lasted a minute and cleared; with execErrState Error and a 0 s
+     pending period each one was a DatasourceError alert carrying the rule's labels, so a "gone quiet" rule paged as
+     critical. Grafana's docs ("No Data and Error states") describe exactly this choice: Keep Last State "helps
+     mitigate temporary data source issues", with "additional alert rules" for a prolonged disruption. So: KeepLast on
+     every rule (an outage that starts during a Grafana error still fires once the query runs again); noDataState
+     stays OK on purpose, since every query yields a series only in the bad case (`absent_over_time` for gone quiet,
+     a rate or count over a threshold for the rest), so no data means healthy and a silent box still alerts. The
+     canaries `j2-grafana-metrics` (`count(node_time_seconds)`) and `j2-grafana-logs` (`count_over_time({box="control"}
+     [5m])`) never meet their threshold and keep execErrState Error with a 15 min pending period (Error honours the
+     pending period), severity `notice`: "Grafana can't query its own metrics/logs … This is Grafana's problem, not
+     Jarvis's … the metric alerts can't fire meanwhile". The message: a Discord title (Critical / Alert / Resolved: the
+     rule's name) and, per alert, the `summary`, "What it means: …", "What to do: …", the start time in UTC and the
+     severity, instead of Grafana's default label dump (template `jarvis2`, checked with Grafana's template preview
+     API). *Not chosen*: execErrState OK (an error would resolve a real firing alert, then re-fire it); a longer
+     pending period on the gone-quiet rules (it would delay a real outage page as well).
