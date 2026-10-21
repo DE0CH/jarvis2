@@ -148,9 +148,9 @@ func TestAFailedFinalSnapshotKeepsTheMachine(t *testing.T) {
 	})
 }
 
-// a machine with a volume goes on to the core's backup; a line whose last machine left no snapshot won't resume
-// (it would start empty): the session and a DM say so and name the backup
-func TestNoSnapshotStopsTheResumeAndNamesTheBackup(t *testing.T) {
+// a machine with a volume whose snapshot fails is kept too (2026-10-21: the YYC session's was killed, and Fly couldn't
+// restore its volume backup): no kill, a "needs you" DM
+func TestAFailedFinalSnapshotKeepsAMachineWithAVolume(t *testing.T) {
 	rg, vc := volRig(t)
 	dms := captureDM(t)
 	rg.r.cfg.SnapshotStall = 200 * time.Millisecond
@@ -158,16 +158,29 @@ func TestNoSnapshotStopsTheResumeAndNamesTheBackup(t *testing.T) {
 	if err := rg.r.Pause("s1"); err != nil {
 		t.Fatal(err)
 	}
-	if err := rg.r.waitState("s1", "paused", 5*time.Second); err != nil {
+	if err := rg.r.waitState("s1", "failed", 5*time.Second); err != nil {
 		t.Fatal(err)
 	}
-	waitFor(t, "the pause's end", func() bool { // paused a moment before the pause lets go of the session
-		u, err := rg.r.lock("s1", "test")
-		if err == nil {
-			u()
-		}
-		return err == nil
-	})
+	if s := sessionS1(rg); vc.kills != 0 || s.MachineID != "m2" || !strings.Contains(s.Error, "is kept") || s.SnapshotFailed == "" {
+		t.Fatalf("kills %d, session %+v", vc.kills, s)
+	}
+	waitFor(t, "DM", func() bool { return len(dms()) == 1 })
+	if !strings.Contains(dms()[0], "kept instead of destroyed") {
+		t.Fatalf("%q", dms())
+	}
+}
+
+// a kill that goes on past a failed snapshot (force) of a machine with a volume: the core's backup; a line whose last
+// machine left no snapshot won't resume (it would start empty): the session and a DM say so and name the backup
+func TestNoSnapshotStopsTheResumeAndNamesTheBackup(t *testing.T) {
+	rg, vc := volRig(t)
+	dms := captureDM(t)
+	rg.r.cfg.SnapshotStall = 200 * time.Millisecond
+	runningM2(rg, true)
+	if rg.r.finalSnapshotAndKill("s1", "m2", true) != true {
+		t.Fatal("the forced kill didn't finish")
+	}
+	rg.r.st.Do(func(d *persisted) { d.Sessions["s1"].State, d.Sessions["s1"].MachineID = "paused", "" }) // as a pause leaves it
 	s := sessionS1(rg)
 	if vc.kills != 1 || len(s.Backups) != 1 || s.Backups[0].Snapshot != "vs_m2" || s.Backups[0].RetentionDays != 60 || s.Backups[0].Signed {
 		t.Fatalf("kills %d, backups %+v", vc.kills, s.Backups)

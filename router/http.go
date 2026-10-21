@@ -807,18 +807,23 @@ func (r *Router) requireSetup(fn http.HandlerFunc) http.Handler {
 }
 
 // requireMachine: no Access here — this listener is reachable only over Fly's private network; every
+// machineTimeSkew: how far a machine's X-Time may be from the router's clock, as the request arrives (a var: tests)
+var machineTimeSkew = 120 * time.Second
+
 // request must be signed by a machine the core started
 func (r *Router) requireMachine(fn func(w http.ResponseWriter, req *http.Request, machine string, body []byte)) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		// the time is checked as the request arrives, before its body is read: a large body over a slow link (a
+		// 20 MB live transcript) took over 2 min to arrive and was refused as too old (2026-10-21)
+		machine, t, sig := req.Header.Get("X-Machine"), req.Header.Get("X-Time"), req.Header.Get("X-Sig")
+		ts, _ := strconv.ParseInt(t, 10, 64)
+		if d := time.Since(time.Unix(ts, 0)); d > machineTimeSkew || d < -machineTimeSkew {
+			writeJSON(w, 401, map[string]string{"error": "X-Time too far off"})
+			return
+		}
 		body, err := io.ReadAll(io.LimitReader(req.Body, 4<<30))
 		if err != nil {
 			writeErr(w, err)
-			return
-		}
-		machine, t, sig := req.Header.Get("X-Machine"), req.Header.Get("X-Time"), req.Header.Get("X-Sig")
-		ts, _ := strconv.ParseInt(t, 10, 64)
-		if d := time.Since(time.Unix(ts, 0)); d > 120*time.Second || d < -120*time.Second {
-			writeJSON(w, 401, map[string]string{"error": "X-Time too far off"})
 			return
 		}
 		var key string
@@ -849,7 +854,7 @@ func (r *Router) requireMachineStream(fn func(w http.ResponseWriter, req *http.R
 	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		machine, t, sig := req.Header.Get("X-Machine"), req.Header.Get("X-Time"), req.Header.Get("X-Sig")
 		ts, _ := strconv.ParseInt(t, 10, 64)
-		if d := time.Since(time.Unix(ts, 0)); d > 120*time.Second || d < -120*time.Second {
+		if d := time.Since(time.Unix(ts, 0)); d > machineTimeSkew || d < -machineTimeSkew {
 			writeJSON(w, 401, map[string]string{"error": "X-Time too far off"})
 			return
 		}

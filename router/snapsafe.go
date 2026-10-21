@@ -4,10 +4,12 @@ package main
 // left on device", the machine was destroyed anyway and the resume started with an empty conversation).
 //
 //   - The machine's final snapshot streams to the router (snapstream.go): it needs no free disk on the machine.
-//   - A machine whose final snapshot fails (an error, the wait running out, a machine that went silent) and that has
-//     no volume is KEPT, never destroyed: the session goes "failed" with snapshotFailed set, and Deyao gets a "needs
-//     you" DM. Pause again retries; Destroy anyway (force) goes on without it.
-//   - A machine with a volume (a core with volumes, core/volumes.go) goes on to the kill: the core stops it, takes the
+//   - A machine whose final snapshot fails (an error the machine reports, no progress for the stall time, a machine
+//     that went silent) is KEPT, never destroyed, with or without a volume (Deyao, 2026-10-21: session
+//     sad35945f04b2124d's machine was killed after its snapshot failed, and Fly couldn't restore its volume backup):
+//     the session goes "failed" with snapshotFailed set, and Deyao gets a "needs you" DM. Pause again retries;
+//     Destroy anyway (force) goes on without it.
+//   - A machine with a volume (a core with volumes, core/volumes.go) whose kill goes on: the core stops it, takes the
 //     volume's backup snapshot and destroys it only once that exists. The kill's signed record names the backup; the
 //     session lists it (backups) for recovery by hand. No resume or restore reads a backup (Deyao, 2026-10-15).
 //   - A line whose last machine left no signed snapshot (while an earlier machine of it did, or it had booted) is
@@ -98,13 +100,13 @@ func (r *Router) finalSnapshotAndKillWith(id, machine string, destroying, force 
 	}()
 	serr := r.lastSnapshotThen(id, machine, stopSent)
 	vol := r.machineVolume(machine)
-	if serr != nil && vol == nil && !force {
+	if serr != nil && !force {
 		r.keepMachine(id, machine, serr)
 		return false
 	}
 	stopSent() // the kill below is the stop when no snapshot was asked for (one already here, or a machine never booted)
 	if serr != nil {
-		log.Printf("session %s: %s's final snapshot: %v; going on (%s)", id, machine, serr, map[bool]string{true: "its volume is backed up first", false: "destroy anyway"}[vol != nil])
+		log.Printf("session %s: %s's final snapshot: %v; going on (destroy anyway)", id, machine, serr)
 	}
 	if vol != nil {
 		r.setWaiting(id, "stopping the machine and taking its volume's backup snapshot (up to "+waitText(killMax)+")")
@@ -148,7 +150,7 @@ func (r *Router) dmName(id string) string {
 	return name
 }
 
-// keepMachine: the final snapshot failed and the machine has no volume: it stays, so nothing is lost
+// keepMachine: the final snapshot failed: the machine stays (with its volume, if it has one), so nothing is lost
 func (r *Router) keepMachine(id, machine string, serr error) {
 	msg := fmt.Sprintf("the final snapshot failed (%v): its machine %s is kept, nothing is lost. Pause again once it can snapshot, or Destroy anyway (that drops what changed since its last snapshot)", serr, machine)
 	r.st.Do(func(d *persisted) {

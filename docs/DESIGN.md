@@ -545,8 +545,8 @@ by the core, approved by the phone; the box alone can never make one, and no AI 
   router's hash of what arrived (`router/snapstream.go`). A machine paused while still booting signs its predecessor's
   snapshot (the one its cert names: it has no state of its own yet) and stops booting, so the line keeps it.
   **A pause never loses state (2026-10-15, `router/snapsafe.go`):** a machine whose snapshot fails (an error, the snapshot
-  making no progress for 10 min, or a machine gone silent) and that has no volume is kept, never destroyed (session `failed`,
-  `snapshotFailed`, a "needs you" DM); with a volume the kill goes on and the core's backup holds its last state. A line
+  making no progress for 10 min, or a machine gone silent) is kept, never destroyed, with or without a volume (session
+  `failed`, `snapshotFailed`, a "needs you" DM; DECISIONS 215); only Destroy anyway goes on without it. A line
   whose last kill named no snapshot doesn't resume (it would start empty): the session says why (`noSnapshot`) and
   Deyao gets a DM naming the backup; recovery from a backup is by hand. No secret moves.
 - **Resume, nothing changed (also unattended, e.g. scheduled):** `succession(old, …)` ← approve_by_dead_machine

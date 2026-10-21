@@ -50,12 +50,12 @@ func TestDestroyArchivesEveryLiveTranscriptFirst(t *testing.T) {
 	rg, _ := volRig(t)
 	dms := captureDM(t)
 	rg.r.cfg.SnapshotStall = 200 * time.Millisecond
-	runningM2(rg, true) // its final snapshot never comes; its volume is backed up, so the kill goes on
+	runningM2(rg, true) // its final snapshot never comes; Destroy anyway goes on (its volume is backed up)
 	orig := strings.Repeat(`{"type":"user","message":{"content":"the original conversation"}}`+"\n", 2000)
 	putLive(t, rg, "cccc.jsonl", orig)                           // only here: the original conversation
 	putLive(t, rg, "bbbb.jsonl", snapshotBody(rg, "bbbb.jsonl")) // the snapshot holds it byte-identical
 	putLive(t, rg, "aaaa.jsonl", "an older version\n")           // the snapshot holds another version of it
-	if err := rg.r.Destroy("s1"); err != nil {
+	if err := rg.r.DestroyWith("s1", true); err != nil {
 		t.Fatal(err)
 	}
 	waitFor(t, "the record", func() bool { return s1Destroyed(rg) })

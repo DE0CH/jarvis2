@@ -75,7 +75,7 @@ func (r *Router) registerSnapStream(mmux *http.ServeMux, m machineRoute) {
 	mmux.Handle("POST /m/snapshot-stream", http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		machine, t, sig := req.Header.Get("X-Machine"), req.Header.Get("X-Time"), req.Header.Get("X-Sig")
 		ts, _ := strconv.ParseInt(t, 10, 64)
-		if d := time.Since(time.Unix(ts, 0)); d > 120*time.Second || d < -120*time.Second {
+		if d := time.Since(time.Unix(ts, 0)); d > machineTimeSkew || d < -machineTimeSkew {
 			writeJSON(w, 401, map[string]string{"error": "X-Time too far off"})
 			return
 		}

@@ -12,6 +12,7 @@ package main
 //   - a snapshot from a line that held a sensitive store doesn't land in a line that holds none.
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -21,6 +22,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"syscall"
+	"time"
 )
 
 // restoreTmp: where a restore's bytes land while they are checked (a var: tests move it)
@@ -35,12 +38,35 @@ const repoChangesSH = `cd ~/workspace 2>/dev/null || exit 0; for d in */; do d=$
 	`if git -C "$d" rev-parse --abbrev-ref @{u} >/dev/null 2>&1; then p=$(git -C "$d" rev-list @{u}..HEAD --count 2>/dev/null || echo 0); else p=-1; fi; ` +
 	`echo "$d $u $p"; done`
 
-// writeChanges: before every snapshot; a failure only leaves the router without the check
+// changesTimeout: the repo check runs with the session frozen (2026-10-21: session sad35945f04b2124d's final snapshot
+// went silent right after the freeze, with this check the only step before the snapshot's first progress line); a
+// git that waits on a stopped process or a slow disk can't hold the snapshot up past it
+var (
+	changesTimeout = 60 * time.Second
+	changesScript  = repoChangesSH // a var: tests make it hang
+)
+
+// writeChanges: before every snapshot; a failure (or the time limit) only leaves the router without the check. No
+// optional locks and no fsmonitor: the session's processes are stopped, so nothing may be waited on.
 func writeChanges() {
 	home, _ := os.UserHomeDir()
-	out, err := exec.Command("bash", "-c", repoChangesSH).Output()
-	if err != nil {
+	ctx, cancel := context.WithTimeout(context.Background(), changesTimeout)
+	defer cancel()
+	t0 := time.Now()
+	cmd := exec.CommandContext(ctx, "bash", "-c", changesScript)
+	cmd.Env = append(os.Environ(), "GIT_OPTIONAL_LOCKS=0", "GIT_CONFIG_COUNT=1", "GIT_CONFIG_KEY_0=core.fsmonitor", "GIT_CONFIG_VALUE_0=false")
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) } // bash and every git it started
+	cmd.WaitDelay = 5 * time.Second
+	out, err := cmd.Output()
+	switch {
+	case ctx.Err() != nil:
+		log.Printf("repo changes: not done within %s; the snapshot goes on without them", changesTimeout)
+		out = nil
+	case err != nil:
 		log.Printf("repo changes: %v", err)
+	default:
+		log.Printf("repo changes: checked in %.1f s", time.Since(t0).Seconds())
 	}
 	os.WriteFile(filepath.Join(home, changesFile), out, 0o600)
 }

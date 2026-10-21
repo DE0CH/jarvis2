@@ -1437,8 +1437,8 @@ snapshot failed with "no space left on device", the machine was destroyed anyway
      without streaming gets the old whole-file upload. *Not chosen*: HTTP trailers for the signature (proxies drop them);
      compressing to a tmpfs (RAM is the next thing to run out).
 
-176. **A machine whose final snapshot fails and that has no volume is kept, never destroyed; Deyao gets a "needs you"
-     DM** (`router/snapsafe.go`). Failure = an error the machine reports, a snapshot that stalls (DECISIONS 214), or a booted
+176. **A machine whose final snapshot fails is kept, never destroyed; Deyao gets a "needs you" DM**
+     (`router/snapsafe.go`; with a volume too since DECISIONS 215). Failure = an error the machine reports, a snapshot that stalls (DECISIONS 214), or a booted
      machine silent for 3 min (it can't send one). The session goes `failed` with its machine and `snapshotFailed`; Pause
      again retries, Destroy anyway (`force`) goes on without it. A kill that can't finish (the core's backup or destroy,
      45 min) also keeps the machine and DMs. A machine paused while still booting signs its predecessor's snapshot (its
@@ -2256,9 +2256,28 @@ snapshot failed with "no space left on device", the machine was destroyed anyway
      unchanged (it already reported progress every 3 s), and so is the core. The session's status line says "waiting
      for the machine's last snapshot" (no limit to show), then the progress. The jobs that pause and go on (restart,
      upgrade, the disk resize) wait for the pause to end however long it takes (`waitActionEnd`), no deadline of
-     their own. A stall or silence is a snapshot failure as before (DECISIONS 176: no volume, the machine is kept; with
-     one, the core's backup). *Not chosen*: a bigger fixed limit (still crude, and a stuck stream would hold the pause
+     their own. A stall or silence is a snapshot failure as before (DECISIONS 176, 215: the machine is kept). *Not chosen*: a bigger fixed limit (still crude, and a stuck stream would hold the pause
      for it); measuring the TCP connection (the bytes read are the same signal, and also cover an older image).
      *Not done*: a router rollout still drains for at most `DRAIN_SECONDS` (1740); a snapshot still uploading then is
      cut off with the old pod (session failed, machine kept; Pause again). A rollout during a multi-hour upload is
      rare, and holding every rollout for hours would be worse.
+
+215. **A failed final snapshot keeps the machine even when it has a volume; the repo check before a snapshot has a
+     time limit; a machine's X-Time is checked before its request body is read (Deyao, 2026-10-21: "have the supervisor
+     refuse to destroy the session (plus alert) on a failed destroy").** "YYC AI on Jarvis 3" (machine 811114df974358,
+     an Upgrade) went silent right after "session stopped for the final snapshot": no progress line for 10 min, so the
+     snapshot never began (DECISIONS 214's "mid-snapshot" was wrong). Because the machine had a volume, the kill went on,
+     and the core's volume backup was its only copy; Fly then refused to restore it ("didn't reach a mountable state",
+     every encrypted volume snapshot of app jarvis2-sessions). Now:
+     - `router/snapsafe.go`: any failed final snapshot keeps the machine (and its volume), the session `failed`,
+       Deyao DMed, exactly as DECISIONS 176 did for machines without a volume; Destroy anyway still goes on.
+     - `machine/restore.go` `writeChanges` (the only step between the freeze and the snapshot's first progress line: a
+       `git status` per repo, which had no limit) runs at most 60 s, with no optional locks and no fsmonitor (the
+       session's processes are stopped), its whole process group killed at the limit; the snapshot goes on without the
+       changes file. It logs how long it took.
+     - `router/http.go` `requireMachine` checks X-Time as the request arrives, before reading the body. That machine's
+       live transcript sync (20 MB) had failed all morning with "X-Time too far off": the upload took over 2 min, so
+       the time was stale by the time the body was read. The streaming endpoints already checked first.
+     The core's volume backup at the kill stays (dropping it changes the core and needs a Recover: Deyao, 2026-10-21,
+     not now). *Not proven*: that the git check is what hung (the machine logged nothing after the freeze); it is the
+     only unbounded step there, and either way the machine would now be kept.
