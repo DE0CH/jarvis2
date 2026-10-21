@@ -593,8 +593,9 @@ Built and tested; not yet on the box. Each step in order:
    a move ("Rebuilding a box"). Deyao's call when.
 2. **Pin the kernel image** in k8s/control/apps/kernel/kernel.yaml (it names `:latest` until the pin job moves it) and set
    the router's `KERNEL_URL=http://%s.jarvis2-kernel.svc.cluster.local:8080` (router.yaml).
-3. **The spawner's Fly token**: `infra/setup.py kernel-fly-token <file from infra/fly-token.sh>` (again after every
-   spawner restart).
+3. **The spawner's Fly token** comes with Deyao's Recover of the kernel (step 4: the core store's backup, sealed to the
+   spawner), or from the setup session: `infra/setup.py kernel-fly-token <file from infra/fly-token.sh>`. A spawner
+   restart loses it; the router DMs when a spawn is refused for want of it.
 4. **Deyao, in the app**: Settings → Kernel → Recover the kernel's secrets (the recovery kit), then Sign the root grant
    (the root key, its own warning). From then on new sessions start on the kernel; the old core's sessions go on there
    until destroyed, then the old core and `core/` go (DECISIONS 216).
