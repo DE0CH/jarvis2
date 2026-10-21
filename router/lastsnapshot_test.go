@@ -79,6 +79,57 @@ func TestLastSnapshotNeverWaitsOnABootingMachine(t *testing.T) {
 	}
 }
 
+// waitState returns once the action that reached the state has ended, not the moment it sets the state: a pause marks
+// the session paused before its lifecycle record and unlock run, and a caller that acted at once (the next pause, a
+// handover's resume) met errBusy (the flake in TestLastSnapshotNeverWaitsOnABootingMachine)
+func TestWaitStateWaitsForTheActionToEnd(t *testing.T) {
+	rg := newRig(t)
+	r := rg.r
+	unlock, err := r.lock("s1", "pausing")
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.setState("s1", "paused", "")
+	got := make(chan error, 1)
+	go func() { got <- r.waitState("s1", "paused", 10*time.Second) }()
+	select {
+	case err := <-got:
+		t.Fatalf("waitState returned while the pause still held the session: %v", err)
+	case <-time.After(3 * opsPoll):
+	}
+	if !r.busy("s1") {
+		t.Fatal("busy() doesn't see the held lock")
+	}
+	unlock()
+	if err := <-got; err != nil {
+		t.Fatal(err)
+	}
+	if r.busy("s1") {
+		t.Fatal("still busy after the unlock")
+	}
+	// the next action takes the session at once; asking busy() never makes it fail
+	stop := make(chan struct{})
+	defer close(stop)
+	go func() {
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+				r.busy("s1") // the app's state and the task runner ask this all the time
+			}
+		}
+	}()
+	for i := 0; i < 2000; i++ {
+		u, err := r.lock("s1", "pausing")
+		if err != nil {
+			t.Fatalf("lock %d: %v", i, err)
+		}
+		u()
+		u() // a second call is a no-op, never another action's release
+	}
+}
+
 // a crash cut actions off (no goroutine runs them any more): at start each such session becomes a plain one with
 // the reason, nothing is run again by itself, and Deyao's retry works from there (Deyao, 2026-10-13)
 func TestCutOffActionsEndWithAReason(t *testing.T) {

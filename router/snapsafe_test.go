@@ -4,7 +4,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -148,13 +147,7 @@ func TestAFailedFinalSnapshotKeepsTheMachine(t *testing.T) {
 	}
 	// Destroy anyway goes on past it
 	rg.r.cfg.SnapshotWait = 200 * time.Millisecond
-	err := errBusy
-	for i := 0; i < 100 && errors.Is(err, errBusy); i++ { // the pause's lock goes a moment after its state
-		if err = rg.r.DestroyWith("s1", true); errors.Is(err, errBusy) {
-			time.Sleep(20 * time.Millisecond)
-		}
-	}
-	if err != nil {
+	if err := rg.r.DestroyWith("s1", true); err != nil { // waitState saw the pause end, its lock gone too
 		t.Fatal(err)
 	}
 	waitFor(t, "destroyed", func() bool {

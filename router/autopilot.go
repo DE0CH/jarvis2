@@ -24,7 +24,6 @@ import (
 	"net/http"
 	"regexp"
 	"strings"
-	"sync"
 	"time"
 )
 
@@ -330,20 +329,6 @@ func (r *Router) autopilotTick() {
 	for _, a := range acts {
 		r.runAction(a)
 	}
-}
-
-// busy: a lifecycle action holds the session (TryLock + Unlock: never waits)
-func (r *Router) busy(id string) bool {
-	m, ok := r.locks.Load(id)
-	if !ok {
-		return false
-	}
-	mu := m.(*sync.Mutex)
-	if mu.TryLock() {
-		mu.Unlock()
-		return false
-	}
-	return true
 }
 
 func idleEligible(g *Registry) bool { return g != nil && g.Status == "idle" && g.BgTasks == 0 }

@@ -6,6 +6,7 @@ package main
 import (
 	"strings"
 	"testing"
+	"time"
 )
 
 const refusedSame = "store set, image or options differ from the predecessor's (or a one-time input is asked for)"
@@ -235,11 +236,10 @@ func TestAFailedNewLineStartsAgain(t *testing.T) {
 	if err := rg.r.Reject(a.ID); err != nil {
 		t.Fatal(err)
 	}
-	rg.r.st.Do(func(d *persisted) {
-		if s := d.Sessions["s1"]; s == nil || s.State != "failed" {
-			t.Fatalf("after Deny: %+v", s)
-		}
-	})
+	// failed, and the start's goroutine ended (else it still writes into the test's dir as it is removed)
+	if err := rg.r.waitState("s1", "failed", 5*time.Second); err != nil {
+		t.Fatalf("after Deny: %v", err)
+	}
 }
 
 // Restart {upgrade: true}: the resume after the pause goes on the newest image, through its resume-upgrade approval

@@ -678,7 +678,10 @@ func certMachine(c *Doc) string {
 	return x.Machine.ID
 }
 
-// waitState: polls until the session reaches state (or fails / disappears)
+// waitState: polls until the session reaches state (or fails / disappears) AND the action that got it there has
+// ended. An action sets its end state a moment before it releases the session's lock (its lifecycle record and
+// unlock run after), so returning on the state alone let the caller's next action (the resume after a pause) meet
+// errBusy, and work of the ended action still run after the caller moved on.
 func (r *Router) waitState(id, want string, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 	for {
@@ -688,14 +691,18 @@ func (r *Router) waitState(id, want string, timeout time.Duration) error {
 				st, msg = x.State, x.Error
 			}
 		})
+		busy := r.busy(id)
 		switch {
-		case st == want:
+		case st == want && !busy:
 			return nil
 		case st == "":
 			return errNoSession
-		case st == "failed":
+		case st == "failed" && !busy:
 			return fmt.Errorf("the session failed: %s", msg)
 		case time.Now().After(deadline):
+			if busy {
+				return fmt.Errorf("the session is %s and its action hasn't ended", st)
+			}
 			return fmt.Errorf("the session is still %s", st)
 		}
 		time.Sleep(opsPoll)

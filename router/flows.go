@@ -31,10 +31,11 @@ type Router struct {
 	results  map[string]chan ExecResult // exec request id → its waiting caller
 	hk       holders
 	snapped  map[string]chan struct{}
-	locks    sync.Map   // session id → *sync.Mutex: one lifecycle action at a time
-	drain    drainState // drain.go: the lifecycle goroutines running, refused once SIGTERM came
-	gate     moveGate   // movegate.go: deliveries and requests in flight at a handover
-	ops      opsState   // sessionops.go: busy marks, permission-mode/restart jobs, uploads, repos
+	locksMu  sync.Mutex
+	locks    map[string]bool // session id → a lifecycle action holds it (lock): one at a time
+	drain    drainState      // drain.go: the lifecycle goroutines running, refused once SIGTERM came
+	gate     moveGate        // movegate.go: deliveries and requests in flight at a handover
+	ops      opsState        // sessionops.go: busy marks, permission-mode/restart jobs, uploads, repos
 
 	policy Policy
 
@@ -79,17 +80,39 @@ func (r *Router) lock(id, kind string) (func(), error) {
 	if err != nil {
 		return nil, err
 	}
-	m, _ := r.locks.LoadOrStore(id, &sync.Mutex{})
-	mu := m.(*sync.Mutex)
-	if !mu.TryLock() {
+	r.locksMu.Lock()
+	if r.locks[id] {
+		r.locksMu.Unlock()
 		done()
 		if b := r.ops.busyOf(id); b != nil && b.Kind != "" {
 			return nil, fmt.Errorf("%w: %s, running since %s; try again once it ends (/api/state shows it as busy)", errBusy, b.Kind, b.Since.Format("15:04:05 UTC"))
 		}
 		return nil, errBusy
 	}
+	if r.locks == nil {
+		r.locks = map[string]bool{}
+	}
+	r.locks[id] = true
+	r.locksMu.Unlock()
 	r.ops.setBusy(id, kind)
-	return func() { r.ops.setBusy(id, ""); mu.Unlock(); done() }, nil
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			r.ops.setBusy(id, "")
+			r.locksMu.Lock()
+			delete(r.locks, id)
+			r.locksMu.Unlock()
+			done()
+		})
+	}, nil
+}
+
+// busy: a lifecycle action holds the session. Only reads: asking never makes a concurrent lock fail (a TryLock probe
+// did, for the moment it held the lock).
+func (r *Router) busy(id string) bool {
+	r.locksMu.Lock()
+	defer r.locksMu.Unlock()
+	return r.locks[id]
 }
 
 func (r *Router) setState(id, state, errMsg string) {
