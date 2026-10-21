@@ -325,6 +325,9 @@ func deliveryText(d Delivery, keys []string) (text string, attested []byte, err 
 
 // checkAttest: the core's input-log entry for exactly this input on this machine
 func checkAttest(coreKey, me, kind string, attested []byte, d *SignedDoc) error {
+	if t, ok := readKernelTrust(); ok { // kernelboot.go: the log notary's challenge over the same facts
+		return checkKernelAttest(t, me, kind, attested, d)
+	}
 	var e struct {
 		Kind    string `json:"kind"`
 		Machine string `json:"machine"`

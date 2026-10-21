@@ -135,5 +135,17 @@ func (k *Kernel) Line(t testing.TB, sid, image string, settings json.RawMessage,
 	for _, r := range []string{"notary", "notarizer", "mover", "merger", "spawner", "secrets"} {
 		out[r] = k.Identity(r)
 	}
+	out["keys"], _ = k.post("secrets", "/keys", map[string]any{})
+	out["stores"], _ = k.post("secrets", "/stores", map[string]string{"nonce": "n"})
 	return out, k.Fly.Machine(cr.ID)
+}
+
+// Challenge: a log-notary challenge (what the router asks for before an input reaches a kernel machine)
+func (k *Kernel) Challenge(t testing.TB, subject, about string) sig.Doc {
+	t.Helper()
+	d, err := k.post("notary", "/challenge", map[string]string{"subject": subject, "about": about})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return d
 }

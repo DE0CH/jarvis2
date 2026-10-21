@@ -42,6 +42,9 @@ func TestAKernelMachineReadsItsDocuments(t *testing.T) {
 	if v, err := vouch(cert); err != nil || v.Config.Label != "x" || v.Config.Model != "claude-opus-5-5" {
 		t.Fatal(err, v.Config)
 	}
+	if cert.Phone != k.Phone.PublicKey() || !cert.Sensitive { // no store secrets lists: counted sensitive
+		t.Fatalf("phone %q sensitive %v", cert.Phone, cert.Sensitive)
+	}
 	if trust.Machine != "fly-"+fm.ID || trust.Box != k.Box.PublicKey() {
 		t.Fatalf("%+v", trust)
 	}
@@ -94,5 +97,41 @@ func TestCleanEnvKeepsTheKernelsKeys(t *testing.T) {
 	}
 	if _, err := cleanEnv([]string{"JARVIS2_KERNEL_BOX=" + key, "JARVIS2_SOURCE=nope"}, nil); err == nil {
 		t.Fatal("a bad source accepted")
+	}
+}
+
+// a delivered input is the log notary's challenge over (this machine, its kind, its hash); ✱ another machine's,
+// another kind, other bytes, not about an input, another notary
+func TestAKernelMachineChecksTheNotarysLog(t *testing.T) {
+	k := kerneltest.Start(t, map[string]string{"JARVIS2_URL": "http://router"})
+	b, fm := bootDocs(t, k)
+	_, trust, err := checkKernelBoot(b, k.Box.PublicKey(), fm.Env["JARVIS2_SOURCE"], fm.ID, fmKeys(fm))
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := []byte("wake up")
+	sum := hexSum256(body)
+	ok := k.Challenge(t, KernelInputSubject("fly-"+fm.ID, "wakeup", sum), "input")
+	d := &SignedDoc{Payload: ok.Payload, Sig: ok.Sig}
+	if err := checkKernelAttest(trust, fm.ID, "wakeup", body, d); err != nil {
+		t.Fatal(err)
+	}
+	for name, x := range map[string]func() error{
+		"another machine": func() error { return checkKernelAttest(trust, "00000000000001", "wakeup", body, d) },
+		"another kind":    func() error { return checkKernelAttest(trust, fm.ID, "cron", body, d) },
+		"other bytes":     func() error { return checkKernelAttest(trust, fm.ID, "wakeup", []byte("rm -rf"), d) },
+		"not an input": func() error {
+			c := k.Challenge(t, KernelInputSubject("fly-"+fm.ID, "wakeup", sum), "cert")
+			return checkKernelAttest(trust, fm.ID, "wakeup", body, &SignedDoc{Payload: c.Payload, Sig: c.Sig})
+		},
+		"another notary": func() error {
+			t2 := trust
+			t2.Notary = trust.Secrets
+			return checkKernelAttest(t2, fm.ID, "wakeup", body, d)
+		},
+	} {
+		if x() == nil {
+			t.Fatalf("%s: accepted", name)
+		}
 	}
 }

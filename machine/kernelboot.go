@@ -16,11 +16,14 @@ package main
 // signature over it before it named it.
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
 	"os"
+	"slices"
 	"strings"
 	"time"
 
@@ -40,6 +43,7 @@ var kernelTrustPath = dir + "/kernel.json"
 type kernelTrust struct {
 	Box     string `json:"box"`
 	Secrets string `json:"secrets"` // secrets' signing key (its pull answers)
+	Notary  string `json:"notary"`  // the log notary's signing key (every delivered input's challenge)
 	Machine string `json:"machine"` // "fly-<id>": the object its grant and pulls name
 }
 
@@ -61,6 +65,8 @@ type kernelBootDocs struct {
 	Merger           sig.Identity `json:"merger"`
 	Spawner          sig.Identity `json:"spawner"`
 	Secrets          sig.Identity `json:"secrets"`
+	Keys             sig.Doc      `json:"keys"`   // secrets' {kind: keys, phone, root}
+	Stores           sig.Doc      `json:"stores"` // secrets' signed store list (each store's sensitivity)
 }
 
 // kernelSettings: a source's settings (router/kernelline.go kernelSettings)
@@ -146,7 +152,38 @@ func checkKernelBoot(b kernelBootDocs, box, source, me string, keys map[string]s
 		cert.PredID = sc.Pred.FlyID()
 	}
 	cert.Snapshot = sc.Source.Snapshot
-	return cert, kernelTrust{Box: box, Secrets: b.Secrets.SigningKey, Machine: string(self)}, nil
+	// the phone's key and the stores' sensitivity, from secrets (what a core cert's phone and sensitive say): the
+	// phone grants and message approvals guard.go and messages.go check
+	var ks struct {
+		Kind, Phone, Root string
+	}
+	if err := b.Keys.Open(b.Secrets.SigningKey, &ks); err != nil || ks.Kind != "keys" || ks.Phone == "" {
+		return cert, kernelTrust{}, fmt.Errorf("secrets' keys: %v", err)
+	}
+	cert.Phone = ks.Phone
+	var sl struct {
+		Kind   string `json:"kind"`
+		Stores []struct {
+			Name      string `json:"name"`
+			Sensitive bool   `json:"sensitive"`
+		} `json:"stores"`
+	}
+	if err := json.Unmarshal([]byte(b.Stores.Payload), &sl); err != nil || !sig.Verify(b.Secrets.SigningKey, []byte(b.Stores.Payload), b.Stores.Sig) || sl.Kind != "stores" {
+		return cert, kernelTrust{}, errors.New("secrets' store list isn't signed by secrets")
+	}
+	known := map[string]bool{}
+	for _, s := range sl.Stores {
+		known[s.Name] = true
+		if s.Sensitive && slices.Contains(cert.Stores, s.Name) {
+			cert.Sensitive = true
+		}
+	}
+	for _, s := range cert.Stores {
+		if !known[s] {
+			cert.Sensitive = true // a store secrets doesn't list: counted sensitive, as every store secrets didn't make otherwise
+		}
+	}
+	return cert, kernelTrust{Box: box, Secrets: b.Secrets.SigningKey, Notary: b.Notary.SigningKey, Machine: string(self)}, nil
 }
 
 func reportedDigestOf(ref string) string {
@@ -199,5 +236,37 @@ func kernelRestore(c *client, want string) error {
 		return err
 	}
 	log.Printf("restored the predecessor's snapshot (%d files)", n)
+	return nil
+}
+
+// attestKey: what an input's attestation is checked with — the old core's key, or (a kernel machine, which has none)
+// "", checkAttest then reading the notary's key from the kernel trust
+func attestKey() (string, error) {
+	if _, ok := readKernelTrust(); ok {
+		return "", nil
+	}
+	return readTrim(coreKeyPath)
+}
+
+// KernelInputSubject: what the log notary's challenge for an input delivered to a kernel machine is over (the
+// router's kernelAttest makes the same): the machine's object, the input's kind and the sha256 of its bytes
+func KernelInputSubject(machine, kind, sum string) string {
+	h := sha256.Sum256([]byte("jarvis2-input\n" + machine + "\n" + kind + "\n" + sum))
+	return hex.EncodeToString(h[:])
+}
+
+// checkKernelAttest: the notary logged this input for this machine (a challenge about "input" over its subject)
+func checkKernelAttest(t kernelTrust, me, kind string, attested []byte, d *SignedDoc) error {
+	if d == nil {
+		return errors.New("no notary challenge (the input isn't in the kernel's log)")
+	}
+	var ch doc.Challenge
+	if err := (sig.Doc{Payload: d.Payload, Sig: d.Sig}).Open(t.Notary, &ch); err != nil || ch.Kind != "challenge" || ch.About != "input" {
+		return errors.New("no notary challenge (the input isn't in the kernel's log)")
+	}
+	sum := sha256.Sum256(attested)
+	if ch.Subject != KernelInputSubject("fly-"+me, kind, hex.EncodeToString(sum[:])) {
+		return errors.New("the notary's challenge is for another input or machine")
+	}
 	return nil
 }

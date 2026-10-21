@@ -486,11 +486,10 @@ func (r *Router) deliverVouchedOpts(sid string, d Delivery, boot bool, o *Origin
 		if machine == "" {
 			return errors.New("the session has no running machine")
 		}
-		a, err := r.core.Call("/attest", map[string]string{"machine": machine, "input": d.Kind, "origin": origin, "sha256": hex.EncodeToString(sum[:])})
+		a, err := r.attestInput(machine, d.Kind, origin, hex.EncodeToString(sum[:])) // kernelline.go: the core's or the notary's log
 		if err != nil {
 			return err
 		}
-		r.logInputs(a) // the attestation is itself the log entry
 		d.ID, d.Attest = randID(), a
 		res := make(chan DeliveryResult, 1)
 		deliveries.Lock()

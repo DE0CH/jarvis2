@@ -530,12 +530,7 @@ func (r *Router) machineContentStore(machine, name string) (string, error) {
 // attestContent: the core's input-log entry for a content file a machine is about to take
 func (r *Router) attestContent(machine string, data []byte) (*Doc, error) {
 	sum := sha256Hex(data)
-	a, err := r.core.Call("/attest", map[string]string{"machine": machine, "input": "content", "origin": "router", "sha256": sum})
-	if err != nil {
-		return nil, err
-	}
-	r.logInputs(a)
-	return a, nil
+	return r.attestInput(machine, "content", "router", sum)
 }
 
 func sha256Hex(b []byte) string {

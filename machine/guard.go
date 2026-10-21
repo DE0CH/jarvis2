@@ -38,7 +38,7 @@ func guardDelivery(c *client, d Delivery) (text string, out Delivery, cert Cert,
 	if err != nil {
 		return "", d, cert, "", err
 	}
-	coreKey, err := readTrim(coreKeyPath)
+	coreKey, err := attestKey()
 	if err != nil {
 		return "", d, cert, "", err
 	}

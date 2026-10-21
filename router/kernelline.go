@@ -17,6 +17,8 @@ package main
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -349,6 +351,17 @@ func (r *Router) kernelBoot(machine string) (map[string]any, error) {
 	}
 	out := map[string]any{"grant": l.Grant, "machineCert": l.MachineCert, "machineNotarized": l.MachineNz,
 		"sourceCert": l.SourceCert, "sourceNotarized": l.SourceNz}
+	// secrets' signed statements the machine reads the phone's key and the stores' sensitivity from (its phone
+	// grants and message approvals, as a core cert's phone and sensitive fields)
+	ks, _, err := r.kernel.Keys()
+	if err != nil {
+		return nil, err
+	}
+	sl, err := r.kernel.Doc("secrets", "/stores", map[string]string{"nonce": randID()})
+	if err != nil {
+		return nil, err
+	}
+	out["keys"], out["stores"] = ks, sl
 	for _, role := range []string{"notary", "notarizer", "mover", "merger", "spawner", "secrets"} {
 		id, err := r.kernel.Identity(role)
 		if err != nil {
@@ -553,4 +566,32 @@ func (r *Router) registerKernel(app func(string, http.HandlerFunc)) {
 // hasLine: the session has a certified line: a core cert, or a kernel source the phone signed
 func (s *Session) hasLine() bool {
 	return s.Cert != nil || s.Kernel != nil && s.Kernel.SourceCert != nil
+}
+
+// attestInput: an input's entry in the log before it reaches a machine: the old core's input log, or, for a kernel
+// machine, the log notary's challenge over (its object, the kind, the input's sha256) (machine/kernelboot.go
+// KernelInputSubject)
+func (r *Router) attestInput(machine, kind, origin, sum string) (*Doc, error) {
+	if !r.isKernelMachine(machine) {
+		a, err := r.core.Call("/attest", map[string]string{"machine": machine, "input": kind, "origin": origin, "sha256": sum})
+		if err == nil {
+			r.logInputs(a)
+		}
+		return a, err
+	}
+	h := sha256.Sum256([]byte("jarvis2-input\n" + "fly-" + machine + "\n" + kind + "\n" + sum))
+	d, err := r.kernel.Doc("notary", "/challenge", map[string]string{"subject": hex.EncodeToString(h[:]), "about": "input"})
+	if err != nil {
+		return nil, err
+	}
+	return &Doc{Payload: d.Payload, Sig: d.Sig}, nil
+}
+
+// sessionLine: the line id a phone grant names: a core line's first machine (its cert's line), a kernel line's session
+// id (its grant's session: condition, which the machine reads as its line)
+func sessionLine(s *Session) string {
+	if s.Kernel != nil {
+		return s.ID
+	}
+	return certField(s.Cert, "line")
 }

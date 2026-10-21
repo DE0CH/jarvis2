@@ -225,7 +225,7 @@ func armedNote(w http.ResponseWriter, req *http.Request, c *client) {
 }
 
 // readCoreKey: the core's key as boot wrote it (a var so tests can give their own)
-var readCoreKey = func() (string, error) { return readTrim(coreKeyPath) }
+var readCoreKey = attestKey
 
 // checkContentAttest: the core's input-log entry (machine, "content", sha256 of the bytes) the router sent with a
 // content file (router/content.go)

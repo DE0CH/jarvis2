@@ -288,11 +288,10 @@ func (r *Router) attestAttachments(machine string, u *Upload) (map[string]*Doc, 
 		if err != nil {
 			return nil, fmt.Errorf("attachment %s: %v", f.Name, err)
 		}
-		a, err := r.core.Call("/attest", map[string]string{"machine": machine, "input": "attachment", "origin": "cert", "sha256": sum})
+		a, err := r.attestInput(machine, "attachment", "cert", sum)
 		if err != nil {
 			return nil, err
 		}
-		r.logInputs(a)
 		out[f.Name] = a
 	}
 	return out, nil

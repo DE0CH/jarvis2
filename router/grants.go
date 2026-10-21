@@ -141,7 +141,7 @@ func (r *Router) DraftGrant(session, holder, kind string, minutes int, until tim
 	var line string
 	r.st.Do(func(d *persisted) {
 		if s := d.Sessions[session]; s != nil {
-			line = certField(s.Cert, "line")
+			line = sessionLine(s)
 		}
 	})
 	if line == "" {
@@ -191,7 +191,7 @@ func (r *Router) AddGrant(session string, doc *Doc) (*StoredGrant, error) {
 	then := "" // the permission mode to switch to now (askModeGrant)
 	r.st.Do(func(d *persisted) {
 		s := d.Sessions[session]
-		if s == nil || certField(s.Cert, "line") != g.Session {
+		if s == nil || sessionLine(s) != g.Session {
 			err = errors.New("the grant is for another session")
 			return
 		}
@@ -301,7 +301,7 @@ func (r *Router) execWith(session, holder, cmd string, timeout time.Duration, ph
 	var machine, line string
 	r.st.Do(func(d *persisted) {
 		if s := d.Sessions[session]; s != nil {
-			machine, line = s.MachineID, certField(s.Cert, "line")
+			machine, line = s.MachineID, sessionLine(s)
 		}
 	})
 	if machine == "" || line == "" {
