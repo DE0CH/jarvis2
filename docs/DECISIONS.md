@@ -2281,3 +2281,12 @@ snapshot failed with "no space left on device", the machine was destroyed anyway
      The core's volume backup at the kill stays (dropping it changes the core and needs a Recover: Deyao, 2026-10-21,
      not now). *Not proven*: that the git check is what hung (the machine logged nothing after the freeze); it is the
      only unbounded step there, and either way the machine would now be kept.
+
+216. **The kernel (DECISIONS 166) is built to run beside the old core; image changes stay with the phone; a shell grant
+     lasts at most 60 minutes** (Deyao, 2026-10-21: "phone signs and also two cores running together"). Two cores with
+     the same keys may never both serve (a fork, DECISIONS of 2026-10-15), but the kernel has its own keys and every line
+     belongs to exactly one of them, so both serve at once: new sessions on the kernel, the old core's sessions there
+     until destroyed, then `core/` goes. This replaces the first plan's single held release that archived every session.
+     A resume on another image is a new source the phone signs (the router could otherwise move a session back onto an
+     old CI-signed image). docs/PLAN-grants.md is rewritten for it, with the defaults taken for the first draft's other
+     questions.
