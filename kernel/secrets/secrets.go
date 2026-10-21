@@ -51,10 +51,10 @@ type Secrets struct {
 	signer    *Signer
 	agreement *ecdh.PrivateKey // secrets' share K of every store's key
 	nonceKey  []byte
-	MasterKey string  // the master public key it was claimed with ("" = empty)
-	BoxSig    string  // the box key's signature over this identity
-	box       Boxer   // the box key, to vouch for the derived keys a claim brings
-	boxPub    string  // the box public key: the other components' identities are checked with it
+	MasterKey string // the master public key it was claimed with ("" = empty)
+	BoxSig    string // the box key's signature over this identity
+	box       Boxer  // the box key, to vouch for the derived keys a claim brings
+	boxPub    string // the box public key: the other components' identities are checked with it
 	exit      func()
 
 	phoneSigning, phoneAgreement string
