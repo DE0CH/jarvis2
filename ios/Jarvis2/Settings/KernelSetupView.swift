@@ -112,6 +112,11 @@ struct KernelSetupView: View {
                                        identity: derived, standby: next)
       try await RouterClient.shared.kernelClaim(body, derived: derived, next: next)
       KernelTrust.pin(derived) // the same kit derives the same keys: the serving and the next secrets are one identity
+      // the spawner's Fly token comes with the Recover, as the old core's did (the core store's backup)
+      if let tok = stores.first(where: { $0.name == StoreView.coreStore })?.values["FLY_API_TOKEN"] {
+        busy = "Giving the spawner its Fly token…"
+        try await RouterClient.shared.kernelSpawnerToken(tok, boxKey: boxKey)
+      }
       LineWitness.saw(derived.signingKey, try? await RouterClient.shared.kernelIdentity(boxKey: boxKey).state.lineSeq)
       kitText = ""; busy = nil
       await load()

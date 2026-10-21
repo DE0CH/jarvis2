@@ -100,5 +100,25 @@ check(a?.machine == "0123456789abcd", "an add-store's two certs read as the stor
 check(throwsErr { _ = try KernelChecks.add(first: vectors["addFirst"]!, second: vectors["addSecond"]!, session: "s1", store: "other") }, "…not for another store")
 check(throwsErr { _ = try KernelChecks.add(first: vectors["source"]!, second: vectors["addSecond"]!, session: "s1", store: "extra") }, "…not when the second cert leaves another source")
 
+// ---- the spawner's Fly token (KERNEL_SPAWNER: a running kernel/cmd/spawner with the same box key) ----
+if let sp = env["KERNEL_SPAWNER"], !sp.isEmpty {
+  func spCall(_ path: String, _ body: Any? = nil) -> (Int, Data) {
+    var r = URLRequest(url: URL(string: sp + path)!)
+    if let body { r.httpBody = try! JSONSerialization.data(withJSONObject: body); r.httpMethod = "POST"; r.setValue("application/json", forHTTPHeaderField: "Content-Type") }
+    let sem = DispatchSemaphore(value: 0)
+    nonisolated(unsafe) var out: (Int, Data) = (0, Data())
+    URLSession.shared.dataTask(with: r) { d, resp, _ in out = ((resp as? HTTPURLResponse)?.statusCode ?? 0, d ?? Data()); sem.signal() }.resume()
+    sem.wait()
+    return out
+  }
+  let idDoc = doc(spCall("/identity").1)
+  let spk = try? KernelSetup.component(idDoc, role: "spawner", boxKey: boxKey)
+  check(spk != nil, "the spawner's identity is the box key's")
+  check(throwsErr { _ = try KernelSetup.component(idDoc, role: "secrets", boxKey: boxKey) }, "…not as another role")
+  check(throwsErr { _ = try KernelSetup.component(idDoc, role: "spawner", boxKey: other) }, "…not with another box key")
+  let (code, body) = spCall("/fly-token", try! KernelSetup.flyToken("fly-test-token", to: spk!))
+  check(code == 200 && String(decoding: body, as: UTF8.self).contains("fly-token-set"), "the spawner opens the Fly token the app sealed to it")
+}
+
 print(failures == 0 ? "all kernel checks passed" : "\(failures) kernel check(s) FAILED")
 exit(failures == 0 ? 0 : 1)

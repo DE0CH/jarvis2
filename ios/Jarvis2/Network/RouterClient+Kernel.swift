@@ -37,6 +37,12 @@ extension RouterClient {
     guard (try CoreCrypto.decode(d, by: derived.signingKey, as: C.self, what: "secrets' claim answer")).kind == "claimed" else { throw TrustError.stale("claim") }
   }
 
+  /// the spawner's Fly token (from the recovered core store), sealed to its box-vouched key
+  func kernelSpawnerToken(_ token: String, boxKey: String) async throws {
+    let doc = try await json("GET", "api/kernel/spawner/identity", as: SignedDoc.self)
+    let k = try KernelSetup.component(doc, role: "spawner", boxKey: boxKey)
+    try await call("POST", "api/kernel/spawner/fly-token", try KernelSetup.flyToken(token, to: k))
+  }
   /// what the root key signs once: ⊤ on the sink (the router fills in the sink's keys, hashed from its name)
   func rootGrantDraft() async throws -> String {
     struct D: Decodable { let payload: String }

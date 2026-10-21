@@ -55,10 +55,12 @@ jobs:
           K="$RUNNER_TEMP/kernel"; mkdir -p "$K"
           openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256 -out "$K/box.pem"
           openssl pkey -in "$K/box.pem" -pubout -outform DER | tail -c 65 | base64 | tr -d '\n' > "$K/box.pub"
-          (cd "$GITHUB_WORKSPACE/kernel" && go build -o "$K/secrets" ./cmd/secrets && go run ./cmd/vectors > "$K/vectors.json")
+          (cd "$GITHUB_WORKSPACE/kernel" && go build -o "$K/secrets" ./cmd/secrets && go build -o "$K/spawner" ./cmd/spawner && go run ./cmd/vectors > "$K/vectors.json")
           KERNEL_BOX_KEY="$K/box.pem" KERNEL_ADDR=127.0.0.1:18300 "$K/secrets" > "$K/secrets.log" 2>&1 &
+          mkdir -p "$K/spawner-data"
+          KERNEL_BOX_KEY="$K/box.pem" KERNEL_ADDR=127.0.0.1:18301 KERNEL_DATA="$K/spawner-data" "$K/spawner" > "$K/spawner.log" 2>&1 &
           sleep 2
-          KERNEL_SECRETS=http://127.0.0.1:18300 KERNEL_BOX_PUB="$K/box.pub" KERNEL_VECTORS="$K/vectors.json" swift run -c release Kernel
+          KERNEL_SECRETS=http://127.0.0.1:18300 KERNEL_SPAWNER=http://127.0.0.1:18301 KERNEL_BOX_PUB="$K/box.pub" KERNEL_VECTORS="$K/vectors.json" swift run -c release Kernel
       - name: swift run Interop
         working-directory: ios/interop
         run: |

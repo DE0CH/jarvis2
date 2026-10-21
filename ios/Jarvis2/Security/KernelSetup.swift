@@ -82,6 +82,21 @@ enum KernelSetup {
     let st = try statement(master: master.publicKey, secrets: secrets, phone: phone, root: root, bundle: bundle, identity: identity, standby: standby)
     return ["statement": st, "masterSig": try master.sign(st), "bundle": try CoreCrypto.seal(bundle, to: secrets.agreementKey, info: claimInfo)]
   }
+  /// a component's identity document (kernel/internal/serve: GET /identity, signed by the component), checked: signed by
+  /// the keys it names, which the box key vouched for in this role
+  static func component(_ doc: SignedDoc, role: String, boxKey: String) throws -> PublicKeys {
+    struct I: Decodable { let role: String; let signingKey: String; let agreementKey: String; let boxSig: String }
+    guard let i = try? JSONDecoder().decode(I.self, from: Data(doc.payload.utf8)) else { throw TrustError.mismatch("not a component's identity") }
+    let k = PublicKeys(signingKey: i.signingKey, agreementKey: i.agreementKey)
+    guard i.role == role, vouched(role: role, k, boxSig: i.boxSig, boxKey: boxKey),
+          CoreCrypto.valid(Data(doc.payload.utf8), sig: doc.sig, by: i.signingKey) else { throw TrustError.badSignature("the kernel's \(role) (not the box key's)") }
+    return k
+  }
+  /// the body of POST /api/kernel/spawner/fly-token: the Fly token sealed to the spawner
+  static func flyToken(_ token: String, to spawner: PublicKeys) throws -> [String: Any] {
+    let e = JSONEncoder(); e.outputFormatting = [.sortedKeys]
+    return ["sealed": try CoreCrypto.seal(try e.encode(["FLY_API_TOKEN": token]), to: spawner.agreementKey, info: "jarvis2/fly-token")]
+  }
   /// the body of POST /api/kernel/secrets/wipe
   static func wipe(secrets: PublicKeys, master: MasterKey) throws -> [String: Any] {
     struct W: Encodable { let kind = "kernel-wipe"; let secrets: String }

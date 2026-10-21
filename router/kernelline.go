@@ -200,6 +200,10 @@ func (r *Router) kernelSpawn(sid string) {
 	op.note("", "asked the kernel's spawner to start a machine from "+string(l.Source)+" ("+size+")")
 	d, err := r.kernel.Doc("spawner", "/spawn", in)
 	if err != nil {
+		if strings.Contains(err.Error(), "no Fly token") && r.kernelTokenDMed.CompareAndSwap(false, true) {
+			// a restarted spawner: its token comes again with the app's Recover of the kernel, or from the setup session
+			r.DM("🔴 Jarvis 2 needs you — the kernel's spawner has no Fly token (it restarted), so no kernel session starts. Settings → Kernel → Recover gives it the token again (or the setup session: infra/setup.py kernel-fly-token).")
+		}
 		fail("start: " + err.Error())
 		return
 	}
@@ -573,6 +577,41 @@ func (r *Router) registerKernel(app func(string, http.HandlerFunc)) {
 		w.Header().Set("Content-Type", "application/json")
 		w.Write(b)
 	}
+	// the spawner's Fly token from the app's Recover (the kit opens the core store's backup): sealed to the spawner's
+	// box-vouched key, which the app checks; relayed as is
+	app("GET /api/kernel/spawner/identity", func(w http.ResponseWriter, req *http.Request) {
+		if r.kernel == nil {
+			writeJSON(w, 503, map[string]string{"error": "this box runs no kernel yet"})
+			return
+		}
+		b, err := r.kernel.call("spawner", "GET", "/identity", nil)
+		if err != nil {
+			writeErr(w, err)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Write(b)
+	})
+	app("POST /api/kernel/spawner/fly-token", func(w http.ResponseWriter, req *http.Request) {
+		var in json.RawMessage
+		if r.kernel == nil || json.NewDecoder(io.LimitReader(req.Body, 1<<16)).Decode(&in) != nil {
+			writeJSON(w, 400, map[string]string{"error": "{sealed}, on a box with a kernel"})
+			return
+		}
+		b, err := r.kernel.call("spawner", "POST", "/fly-token", in)
+		if err != nil {
+			var ke *KernelError
+			if errors.As(err, &ke) {
+				writeJSON(w, ke.Status, map[string]string{"error": ke.Msg})
+				return
+			}
+			writeErr(w, err)
+			return
+		}
+		r.kernelTokenDMed.Store(false)
+		w.Header().Set("Content-Type", "application/json")
+		w.Write(b)
+	})
 	app("GET /api/kernel/secrets/{path...}", relay)
 	app("POST /api/kernel/secrets/{path...}", relay)
 }
