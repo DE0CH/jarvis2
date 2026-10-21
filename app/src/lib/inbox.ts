@@ -23,6 +23,8 @@ export function inboxTitle(it: InboxItem): string {
     case "peer-message": return "Peer message";
     case "message": return "Message"; // shown grouped by session in the Inbox (lib/messages.ts groupTitle)
     case "add-store": return "Add store";
+    case "kernel-source": return it.options?.restore ? "Restore session (kernel)" : "New source (kernel)";
+    case "kernel-add-store": return "Add store (kernel)";
     case "resume-upgrade": return "Resume on latest image";
     case "restore": return "Restore store";
     case "new-session": return it.options?.restore ? "Restore session" : "New session";

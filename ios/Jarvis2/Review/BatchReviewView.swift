@@ -51,6 +51,7 @@ enum BatchPrepare {
   /// expectAddStore: the approval must be exactly this add-store (a repo's follow-up, shown before the Face ID)
   static func approval(_ approvalId: String, model: AppModel, expectAddStore: RepoInto? = nil) async throws -> BatchPrepared {
     guard let x = try await RouterClient.shared.approval(approvalId) else { throw TrustError.stale("the approval (answered or rejected elsewhere)") }
+    if x.kind.hasPrefix("kernel-") { return try await kernelApproval(x, expectAddStore: expectAddStore) }
     let rv = try Checks.review(challenge: x.challenge, coreKey: try CoreTrust.key())
     if let e = expectAddStore, rv.kind != .addStore || rv.addedStore != e.store || x.session != e.session {
       throw TrustError.mismatch("the follow-up isn't the add-store of \(e.store) to \(e.session)")
@@ -102,6 +103,45 @@ enum BatchPrepare {
         try await answer(r, text)
       }
       if let a = rv.addedStore { progress.addedStores.insert(a) }
+    }
+  }
+
+  /// as KernelApprovalView.load / approve: the certs read strictly (KernelChecks), signed under the batch's Face ID,
+  /// the session's locked stores unlocked in the kernel's secrets
+  static func kernelApproval(_ x: RouterClient.ApprovalDTO, expectAddStore: RepoInto?) async throws -> BatchPrepared {
+    guard let sid = x.session else { throw TrustError.mismatch("an approval for no session") }
+    var facts: [SignedFact] = []
+    var payloads = [x.challenge.payload]
+    let want: [String]
+    if x.kind == "kernel-add-store" {
+      guard let second = x.earlier?.first, let store = x.options?["store"] else { throw TrustError.mismatch("an add-store without its second cert") }
+      let r = try KernelChecks.add(first: x.challenge.payload, second: second.payload, session: sid, store: store)
+      if let e = expectAddStore, e.store != r.store || e.session != sid { throw TrustError.mismatch("the follow-up isn't the add-store of \(e.store) to \(e.session)") }
+      facts += [.init(id: "action", label: "Action", value: "Add a store (kernel)", style: .plain), .init(id: "store", label: "Store", value: r.store, style: .plain),
+                .init(id: "machine", label: "Onto machine", value: r.machine, style: .code)]
+      payloads.append(second.payload)
+      want = [r.store]
+    } else {
+      if expectAddStore != nil { throw TrustError.mismatch("not the add-store asked for") }
+      let r = try KernelChecks.source(payload: x.challenge.payload, session: sid)
+      let attest = try await ImageAttestation.check(image: r.image, sig: x.imageSig)
+      facts += [.init(id: "action", label: "Action", value: r.snapshot != nil ? "Restore (kernel)" : "New source (kernel)", style: .plain),
+                .init(id: "title", label: "Title", value: r.config["label"]?.string ?? "Untitled", style: .plain),
+                .init(id: "stores", label: "Stores", value: r.stores.joined(separator: ", "), style: .plain),
+                .init(id: "mode", label: "Permission mode", value: r.permissionMode, style: r.permissionMode == "bypass" ? .warning : .plain),
+                .init(id: "image-build", label: "Image build", value: attest.badge, style: attest == .attested ? .plain : .warning)]
+      if let s = r.snapshot { facts.append(.init(id: "snapshot", label: "Snapshot sha256", value: String(s.prefix(12)) + "…", style: .code)) }
+      want = r.stores
+    }
+    let doc = try await RouterClient.shared.kernelStores()
+    let toUnlock = want.filter { n in doc.stores.contains { $0.name == n && !$0.unlocked && !$0.empty } }
+    if !toUnlock.isEmpty { facts.append(.init(id: "unlocks", label: "Also unlocks (until locked)", value: toUnlock.joined(separator: ", "), style: .warning)) }
+    let ps = payloads
+    return BatchPrepared(facts: facts) { auth, _ in
+      var sigs: [Data] = []
+      for p in ps { sigs.append(try await offMain { try PhoneKeys.shared.sign(p, reason: "Approve", auth: auth) }) }
+      for s in toUnlock { try await RouterClient.shared.kernelUnlock(s, reason: "Approve", auth: auth) }
+      _ = try await RouterClient.shared.respond(x.id, signatures: sigs)
     }
   }
 
@@ -473,6 +513,8 @@ extension InboxItem {
     case "grant": return (p["days"].int ?? 0) > 0 ? "Standing rule" : "Grant"
     case "unlock": return "Unlock stores"
     case "add-store": return "Add a store"
+    case "kernel-source": return j["options"]["restore"].text != nil ? "Restore (kernel)" : "New source (kernel)"
+    case "kernel-add-store": return "Add a store (kernel)"
     case "resume-upgrade": return "Resume on the latest image"
     case "api-call": return "API call"
     case "restore": return "Restore store"

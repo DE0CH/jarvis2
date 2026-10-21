@@ -11,7 +11,7 @@ import (
 // restore.go). A new one goes here, and the test below fails until both apps name it.
 var inboxKinds = []string{
 	requestKindRepo, requestKindGrant, requestKindUnlock, requestKindRestore, requestKindPeer, requestKindCall, requestKindMsg,
-	"new-session", "resume-upgrade", "add-store",
+	"new-session", "resume-upgrade", "add-store", kernelApprovalKind, kernelAddApprovalKind,
 }
 
 // The iPhone app and the web page each name every Inbox kind the router files (Deyao, 2026-10-21: an Inbox outcome
