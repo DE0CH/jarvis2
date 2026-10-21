@@ -80,7 +80,7 @@ func TestSizeBlocksMatch(t *testing.T) {
 		return s[i:j]
 	}
 	ours := block("sizes.go")
-	for _, p := range []string{filepath.Join("..", "core", "fly.go"), filepath.Join("..", "machine", "deliver.go")} {
+	for _, p := range []string{filepath.Join("..", "core", "fly.go"), filepath.Join("..", "kernel", "spawner", "fly.go"), filepath.Join("..", "machine", "deliver.go")} {
 		if block(p) != ours {
 			t.Fatalf("%s's sizes block differs from router/sizes.go's", p)
 		}
