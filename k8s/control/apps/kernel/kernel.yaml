@@ -33,7 +33,7 @@ spec:
       enableServiceLinks: false
       containers:
         - name: notary
-          image: ghcr.io/de0ch/jarvis2-kernel:sha-b9f205103266@sha256:97cd3e4c9c7e1ada86e8b818475e7f16c29c73608dfc3a8386ab8d6cc89c8cb9
+          image: ghcr.io/de0ch/jarvis2-kernel:sha-c78cd99e0816@sha256:ebc38a50d920252fd70b1b7beb08ad058c95845d53d66a5c9de111a05750636d
           command: ["/kernel/notary"]
           ports: [{ containerPort: 8080 }]
           env: [{ name: KERNEL_BOX_KEY, value: /box/box-key.pem }, { name: KERNEL_DATA, value: /data }]
@@ -72,7 +72,7 @@ spec:
       enableServiceLinks: false
       containers:
         - name: notarizer
-          image: ghcr.io/de0ch/jarvis2-kernel:sha-b9f205103266@sha256:97cd3e4c9c7e1ada86e8b818475e7f16c29c73608dfc3a8386ab8d6cc89c8cb9
+          image: ghcr.io/de0ch/jarvis2-kernel:sha-c78cd99e0816@sha256:ebc38a50d920252fd70b1b7beb08ad058c95845d53d66a5c9de111a05750636d
           command: ["/kernel/notarizer"]
           ports: [{ containerPort: 8080 }]
           env: [{ name: KERNEL_BOX_KEY, value: /box/box-key.pem }, { name: KERNEL_DATA, value: /data }]
@@ -104,7 +104,7 @@ spec:
       enableServiceLinks: false
       containers:
         - name: mover
-          image: ghcr.io/de0ch/jarvis2-kernel:sha-b9f205103266@sha256:97cd3e4c9c7e1ada86e8b818475e7f16c29c73608dfc3a8386ab8d6cc89c8cb9
+          image: ghcr.io/de0ch/jarvis2-kernel:sha-c78cd99e0816@sha256:ebc38a50d920252fd70b1b7beb08ad058c95845d53d66a5c9de111a05750636d
           command: ["/kernel/mover"]
           ports: [{ containerPort: 8080 }]
           env: [{ name: KERNEL_BOX_KEY, value: /box/box-key.pem }, { name: KERNEL_DATA, value: /data }]
@@ -136,7 +136,7 @@ spec:
       enableServiceLinks: false
       containers:
         - name: merger
-          image: ghcr.io/de0ch/jarvis2-kernel:sha-b9f205103266@sha256:97cd3e4c9c7e1ada86e8b818475e7f16c29c73608dfc3a8386ab8d6cc89c8cb9
+          image: ghcr.io/de0ch/jarvis2-kernel:sha-c78cd99e0816@sha256:ebc38a50d920252fd70b1b7beb08ad058c95845d53d66a5c9de111a05750636d
           command: ["/kernel/merger"]
           ports: [{ containerPort: 8080 }]
           env: [{ name: KERNEL_BOX_KEY, value: /box/box-key.pem }, { name: KERNEL_DATA, value: /data }]
@@ -175,7 +175,7 @@ spec:
       enableServiceLinks: false
       containers:
         - name: spawner
-          image: ghcr.io/de0ch/jarvis2-kernel:sha-b9f205103266@sha256:97cd3e4c9c7e1ada86e8b818475e7f16c29c73608dfc3a8386ab8d6cc89c8cb9
+          image: ghcr.io/de0ch/jarvis2-kernel:sha-c78cd99e0816@sha256:ebc38a50d920252fd70b1b7beb08ad058c95845d53d66a5c9de111a05750636d
           command: ["/kernel/spawner"]
           ports: [{ containerPort: 8080 }]
           env: [{ name: KERNEL_BOX_KEY, value: /box/box-key.pem }, { name: KERNEL_DATA, value: /data }, { name: KERNEL_MACHINE_URL, value: "http://jarvis2-box._peer.internal:8081" }]
@@ -207,7 +207,7 @@ spec:
       enableServiceLinks: false
       containers:
         - name: identity
-          image: ghcr.io/de0ch/jarvis2-kernel:sha-b9f205103266@sha256:97cd3e4c9c7e1ada86e8b818475e7f16c29c73608dfc3a8386ab8d6cc89c8cb9
+          image: ghcr.io/de0ch/jarvis2-kernel:sha-c78cd99e0816@sha256:ebc38a50d920252fd70b1b7beb08ad058c95845d53d66a5c9de111a05750636d
           command: ["/kernel/identity"]
           ports: [{ containerPort: 8080 }]
           env: [{ name: KERNEL_BOX_KEY, value: /box/box-key.pem }, { name: KERNEL_DATA, value: /data }]
@@ -239,7 +239,7 @@ spec:
       enableServiceLinks: false
       containers:
         - name: gullible
-          image: ghcr.io/de0ch/jarvis2-kernel:sha-b9f205103266@sha256:97cd3e4c9c7e1ada86e8b818475e7f16c29c73608dfc3a8386ab8d6cc89c8cb9
+          image: ghcr.io/de0ch/jarvis2-kernel:sha-c78cd99e0816@sha256:ebc38a50d920252fd70b1b7beb08ad058c95845d53d66a5c9de111a05750636d
           command: ["/kernel/gullible"]
           ports: [{ containerPort: 8080 }]
           env: [{ name: KERNEL_BOX_KEY, value: /box/box-key.pem }, { name: KERNEL_DATA, value: /data }]
@@ -296,7 +296,7 @@ spec:
       enableServiceLinks: false
       containers:
         - name: secrets
-          image: ghcr.io/de0ch/jarvis2-kernel:sha-b9f205103266@sha256:97cd3e4c9c7e1ada86e8b818475e7f16c29c73608dfc3a8386ab8d6cc89c8cb9
+          image: ghcr.io/de0ch/jarvis2-kernel:sha-c78cd99e0816@sha256:ebc38a50d920252fd70b1b7beb08ad058c95845d53d66a5c9de111a05750636d
           command: ["/kernel/secrets"]
           ports: [{ containerPort: 8080 }]
           env: [{ name: KERNEL_BOX_KEY, value: /box/box-key.pem }, { name: KERNEL_DATA, value: /data }]

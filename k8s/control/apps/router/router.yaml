@@ -38,7 +38,7 @@ spec:
       securityContext: { fsGroup: 65532 }
       containers:
         - name: router
-          image: ghcr.io/de0ch/jarvis2-router:sha-b9f205103266@sha256:f8e81cb5b6681e1a5a3ba464452e066ff1c34caafe4013d2c64b48e58e2698ef
+          image: ghcr.io/de0ch/jarvis2-router:sha-c78cd99e0816@sha256:37e45f47b458abb4f05c94fbdbf027b264827f03167544f859d805a315bbbb5f
           env:
             - { name: POD_IP, valueFrom: { fieldRef: { fieldPath: status.podIP } } }  # the standby proxies to the leader's
             # the cores (k8s/control/apps/core): CORE_URL serves until a flip, NEXT_CORE_URL is the other one
@@ -52,9 +52,9 @@ spec:
             # its /data, age-encrypted to this key, to the Storage Box (router/backup.go); the private half is
             # ROUTER_BACKUP_AGE_KEY in the infra store
             - { name: ROUTER_BACKUP_AGE_PUB, value: "age1zkvnmh6wu5hyvxppvxf9c83l6q5af7xqqlxtmahkz0l5hhwqq90s8edvu0" }
-            - { name: SESSION_IMAGE, value: "ghcr.io/de0ch/jarvis2-session:sha-b9f205103266@sha256:58e4858b45e87982a94fa246bd57da9e813b59d31a0845c29c6fa459ba2a1548" }
+            - { name: SESSION_IMAGE, value: "ghcr.io/de0ch/jarvis2-session:sha-c78cd99e0816@sha256:05f6b5773779b08a4a70eb95f3c83d139799268b9c4536b77309f6923fab8b1f" }
             # the CI key's signature over "jarvis2-session-image <SESSION_IMAGE>" (images.yml, keys/ci.pub): the phone checks it
-            - { name: SESSION_IMAGE_SIG, value: "MEUCIQD47YEAAx3YXc6s8SGH18syGyZFuXKgMKMuzgqHwAyKpQIgUa9Yq9z571Y6I3aiWmgvcCqWeTWLWjYmdLL9TWH7gtM=" }
+            - { name: SESSION_IMAGE_SIG, value: "MEQCIBMSGxu6+9gKy38kpx8VK6r2uEN6900S7fj9PnyIeoMjAiAjYAbZINQlXCnFnJGTunf29mzc79XF9tiDFbI409zHjQ==" }
             # every earlier CI-pinned session image with its signature (session-image-sigs.txt here, images.yml)
             - { name: SESSION_IMAGE_SIGS_FILE, value: /sigs/session-image-sigs.txt }
             - { name: FLY_REGION, value: lhr }
