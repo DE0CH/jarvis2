@@ -307,7 +307,7 @@ func TestScheduleGoesWithItsSession(t *testing.T) {
 	if !r.ScheduleDueWithin("s8", 2*time.Hour) || r.ScheduleDueWithin("s8", time.Minute) {
 		t.Fatal("due within")
 	}
-	r.finish("s8")
+	r.finish("s8", nil)
 	r.scheduleTick(time.Now())
 	r.st.Do(func(d *persisted) {
 		if d.Schedules["s8"] != nil {

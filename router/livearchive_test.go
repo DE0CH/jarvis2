@@ -120,16 +120,14 @@ func TestALiveCopyFailureKeepsEveryLiveFile(t *testing.T) {
 		s := sessionS1(rg)
 		return s.State == "paused" && strings.Contains(s.Error, "cccc.jsonl")
 	})
+	// the destroy sets that state a moment before it releases the session: its end is waitState's (not the state's)
+	if err := rg.r.waitState("s1", "paused", 5*time.Second); err != nil {
+		t.Fatal(err)
+	}
 	if n := len(rg.dav.under(liveS1)); n != 2 {
 		t.Fatalf("live copies after a failed archive: %v", rg.dav.under(liveS1))
 	}
-	err := errBusy
-	for i := 0; i < 100 && err == errBusy; i++ {
-		if err = rg.r.DestroyWith("s1", true); err == errBusy {
-			time.Sleep(20 * time.Millisecond)
-		}
-	}
-	if err != nil {
+	if err := rg.r.DestroyWith("s1", true); err != nil {
 		t.Fatal(err)
 	}
 	waitFor(t, "the record", func() bool { return s1Destroyed(rg) })

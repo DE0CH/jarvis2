@@ -100,7 +100,7 @@ func TestTheRouterKeepsAndForwardsTheCarriedSecrets(t *testing.T) {
 	// destroy: finish drops the blobs with the snapshots
 	addSession(r, "s1", "paused", "", false)
 	r.st.Do(func(d *persisted) { d.Machines["m2"] = "s1" })
-	r.finish("s1")
+	r.finish("s1", nil)
 	if r.readCarry("m2") != "" {
 		t.Fatal("the blob outlived the session")
 	}

@@ -1270,19 +1270,15 @@ func (r *Router) destroy(id string, o destroyOpts) error {
 			h(r, s)
 		}
 		liveKept := r.clearArchivedLive(id, archived, aerr) // livearchive.go: only what the archive holds
-		r.finish(id)
+		r.finish(id, func(rec *Record) {
+			rec.Archive, rec.LiveKept = archived, liveKept
+			if aerr != nil {
+				rec.ArchiveError = aerr.Error()
+			}
+		})
 		gone = true
 		r.lcDrop(id)     // lifecycle.go: archived by its destroy hook
 		r.dropSupLog(id) // supervisorlog.go: likewise
-		r.st.Do(func(d *persisted) {
-			if len(d.Records) > 0 && d.Records[0].ID == id {
-				d.Records[0].Archive = archived
-				d.Records[0].LiveKept = liveKept
-				if aerr != nil {
-					d.Records[0].ArchiveError = aerr.Error()
-				}
-			}
-		})
 		if o.report != nil {
 			o.report(s, changes, archived, aerr)
 		}
@@ -1290,8 +1286,9 @@ func (r *Router) destroy(id string, o destroyOpts) error {
 	return nil
 }
 
-// finish: the session leaves the list for the records; its snapshots go
-func (r *Router) finish(id string) {
+// finish: the session leaves the list for the records; its snapshots go. fill completes the record in the same state
+// change (its archive, what was kept), so no reader or saved state.json ever has the record without them.
+func (r *Router) finish(id string, fill func(*Record)) {
 	r.st.Do(func(d *persisted) {
 		s := d.Sessions[id]
 		if s == nil {
@@ -1313,7 +1310,11 @@ func (r *Router) finish(id string) {
 			}
 		}
 		s.State, s.MachineID = "destroyed", ""
-		d.Records = append([]*Record{{Session: *s, DestroyedAt: time.Now().UTC()}}, d.Records...)
+		rec := &Record{Session: *s, DestroyedAt: time.Now().UTC()}
+		if fill != nil {
+			fill(rec)
+		}
+		d.Records = append([]*Record{rec}, d.Records...)
 	})
 }
 
