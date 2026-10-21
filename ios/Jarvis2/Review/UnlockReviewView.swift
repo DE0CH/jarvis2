@@ -18,6 +18,8 @@ struct UnlockReviewView: View {
   /// keys sessions wrote into the locked stores (shown before Face ID; the unlock refuses one not shown)
   @State private var writes: [SessionWrite] = []
   @State private var scoped = false
+  /// a kernel line (router/kernelline.go): its stores unlock in the kernel's secrets, open until locked
+  @State private var kernel = false
   @State private var signed: [SignedFact]?
   @State private var loadError: String?
   @State private var busy: String?
@@ -70,6 +72,7 @@ struct UnlockReviewView: View {
   }
 
   private func load() async {
+    if model.session(sessionId)?.j["kernel"].bool == true { return await loadKernel() }
     do {
       let c = try await RouterClient.shared.sessionCert(sessionId)
       try LinePins.check(session: sessionId, line: c.line)
@@ -86,9 +89,34 @@ struct UnlockReviewView: View {
       signed = SignedAction.unlock(stores: l, session: id, scoped: scoped) + SessionWrites.fact(writes)
     } catch { loadError = errText(error) }
   }
+  /// a kernel line: the stores the router says it holds (the grant decides what secrets serves it), locked in the
+  /// kernel's secrets' signed list
+  private func loadKernel() async {
+    do {
+      kernel = true
+      let stores = model.session(sessionId)?.j["stores"].strings ?? []
+      let doc = try await RouterClient.shared.kernelStores()
+      certStores = stores
+      let l = stores.filter { n in doc.stores.contains { $0.name == n && !$0.unlocked && !$0.empty } }
+      locked = l
+      signed = [.init(id: "kind", label: "Kind", value: "Kernel request"), .init(id: "action", label: "Action", value: l.isEmpty ? "Nothing to unlock" : "Unlock stores"),
+                .init(id: "stores", label: "Stores (open until you lock them)", value: SignedAction.list(l), style: .warning)]
+    } catch { loadError = errText(error) }
+  }
   private func allow() async {
     guard let locked, !locked.isEmpty else { return }
     failure = nil
+    if kernel {
+      do {
+        busy = "Unlocking…"
+        let reason = "Unlock \(locked.joined(separator: ", "))"
+        let auth = try await offMain { try PhoneKeys.shared.authorize(reason: reason) }
+        defer { auth.invalidate() }
+        for s in locked { try await RouterClient.shared.kernelUnlock(s, reason: reason, auth: auth) }
+        model.secureCompleted(true)
+      } catch { busy = nil; failure = errText(error) }
+      return
+    }
     do {
       busy = "Unlocking…"
       try await StoreUnlock.signAndUnlock(payload: nil, stores: locked, reason: "Unlock \(locked.joined(separator: ", "))", for: certNonce, shown: writes)

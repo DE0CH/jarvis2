@@ -830,6 +830,7 @@ func sessionView(s *Session, d *persisted) map[string]any {
 		"model": s.Model, "permissionMode": s.PermissionMode, "guest": guest, "size": s.Size, "pausedAt": s.PausedAt,
 		"image": s.Image, "createRequestId": s.RequestID, "repos": s.Repos, "discordChannel": s.DiscordChannel,
 		"waiting": s.Waiting, "lockedStore": s.LockedStore, "carryLost": s.CarryLost, "oldCore": s.OldCore, "claudeAccount": nullIfEmpty(s.ClaudeAccount),
+		"kernel": s.Kernel != nil, // kernelline.go: its stores unlock in the kernel's secrets
 	}
 	liveView(s, v)
 	backupsView(s, v) // snapsafe.go
