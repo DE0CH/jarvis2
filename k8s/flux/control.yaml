@@ -38,6 +38,18 @@ spec:
   path: ./k8s/control/apps/core
   prune: true
   wait: false
+  serviceAccountName: flux-applier---
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata: { name: control-kernel, namespace: flux-system }
+spec:
+  interval: 1m
+  retryInterval: 30s
+  timeout: 3m
+  sourceRef: { kind: GitRepository, name: jarvis2 }
+  path: ./k8s/control/apps/kernel
+  prune: true
+  wait: false
   serviceAccountName: flux-applier
 ---
 apiVersion: kustomize.toolkit.fluxcd.io/v1

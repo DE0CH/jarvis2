@@ -116,6 +116,7 @@ if [ "$BOX_KIND" != services ]; then
   fi
   printf '%s\n' "$BOX_KEY" > /root/box-key.pem
   kubectl -n jarvis2-core create secret generic core-box-key --from-file=box-key.pem=/root/box-key.pem
+  kubectl -n jarvis2-kernel create secret generic kernel-box-key --from-file=box-key.pem=/root/box-key.pem
   shred -u /root/box-key.pem
 fi
 printf '%s\n' "$AGE_KEY" > /root/age.agekey

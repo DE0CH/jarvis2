@@ -80,6 +80,7 @@ jobs:
       matrix:
         include:
           - { name: core, context: core, file: core/Dockerfile }
+          - { name: kernel, context: kernel, file: kernel/Dockerfile }  # built, not pinned yet: no box runs it (PLAN-grants §5)
           - { name: router, context: ., file: router/Dockerfile }
           - { name: session, context: ., file: session-image/Dockerfile }
     steps:

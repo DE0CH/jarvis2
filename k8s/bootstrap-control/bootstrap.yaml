@@ -13,6 +13,12 @@ metadata:
 apiVersion: v1
 kind: Namespace
 metadata:
+  name: jarvis2-kernel
+  labels: { pod-security.kubernetes.io/enforce: restricted, jarvis2/ns: kernel }
+---
+apiVersion: v1
+kind: Namespace
+metadata:
   name: jarvis2-router
   labels: { pod-security.kubernetes.io/enforce: restricted, jarvis2/ns: router }
 ---
@@ -50,6 +56,12 @@ subjects: [{ kind: ServiceAccount, name: flux-applier, namespace: flux-system }]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
+metadata: { name: flux-applier, namespace: jarvis2-kernel }
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: admin }
+subjects: [{ kind: ServiceAccount, name: flux-applier, namespace: flux-system }]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
 metadata: { name: flux-applier, namespace: jarvis2-router }
 roleRef: { apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: admin }
 subjects: [{ kind: ServiceAccount, name: flux-applier, namespace: flux-system }]
@@ -72,6 +84,13 @@ kind: ResourceQuota
 metadata: { name: core, namespace: jarvis2-core }
 spec:
   hard: { pods: "2", limits.memory: 512Mi, requests.memory: 384Mi, persistentvolumeclaims: "0" }
+---
+# the kernel (k8s/control/apps/kernel): eight one-replica components, three with a 1 Gi state volume
+apiVersion: v1
+kind: ResourceQuota
+metadata: { name: kernel, namespace: jarvis2-kernel }
+spec:
+  hard: { pods: "8", limits.memory: 640Mi, requests.memory: 256Mi, persistentvolumeclaims: "3", requests.storage: 3Gi }
 ---
 # the router: one, plus a rollout's surge pod (the standby that takes over), 512 Mi requested, 1 Gi at most each
 apiVersion: v1

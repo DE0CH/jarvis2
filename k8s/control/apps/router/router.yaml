@@ -120,6 +120,8 @@ spec:
       ports: [{ port: 53, protocol: UDP }, { port: 53, protocol: TCP }]
     - to: [{ namespaceSelector: { matchLabels: { jarvis2/ns: core } } }]
       ports: [{ port: 8090 }]
+    - to: [{ namespaceSelector: { matchLabels: { jarvis2/ns: kernel } } }]
+      ports: [{ port: 8080 }]
     # transcript search, the iCloud index and the watch runner on the services box (router/searchsvc.go, watches.go)
     - to: [{ ipBlock: { cidr: 10.77.0.3/32 } }]
       ports: [{ port: 30090 }, { port: 30091 }, { port: 30095 }]
