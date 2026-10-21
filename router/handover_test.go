@@ -221,6 +221,9 @@ func TestASpareIsDestroyedWhenTheResumeGoesToThePhone(t *testing.T) {
 	if s := sessionOf(rg); s.State != "approval" {
 		t.Fatalf("the resume waits for the phone: %s %q", s.State, s.Error)
 	}
+	// the resume sets "approval" a moment before it ends (its lifecycle record, then the unlock; DECISIONS 212): wait
+	// for it, or its last write lands in t.TempDir while it is being removed (CI run 39533784239)
+	waitFor(t, "the resume's action ended", func() bool { return !rg.r.busy("s1") })
 }
 
 // the old machine is still answering: the spare starts once the snapshot command (the stop) was sent, never before;
