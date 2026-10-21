@@ -32,6 +32,7 @@ both). Values never print.
                                        --not-sensitive
   infra/setup.py kernel-fly-token FILE the kernel's spawner's Fly token (FILE: infra/fly-token.sh's), sealed to the
                                        spawner's box-vouched key; again after every spawner restart
+  infra/setup.py kernel-secrets-flip   the next kernel secrets (Recovered alongside in the app) serves from now on
   infra/setup.py backup-core FILE      the core's Fly token, FLY_API_TOKEN from FILE (infra/fly-token.sh):
                                        sent to the core sealed to its key, and backed up as the `core` store
   infra/setup.py claude-accounts       the router's Claude accounts (no secrets): per account its email, expiry,
@@ -469,6 +470,9 @@ def main():
         tok = {"FLY_API_TOKEN": open(os.path.expanduser(args[0])).read().strip()}
         call("POST", "/setup/kernel/spawner/fly-token", {"sealed": seal_to(ident["agreementKey"], json.dumps(tok).encode(), "jarvis2/fly-token")})
         print("ok: the kernel's spawner has its Fly token (send it again after the spawner restarts)")
+    elif cmd == "kernel-secrets-flip":
+        # blue/green (router/kernel.go): the next secrets, Recovered alongside, serves from now on
+        print(json.dumps(call("POST", "/setup/kernel/secrets/flip", {})))
     elif cmd == "claude-login":
         print(json.dumps(call("GET", "/setup/claude-login"), indent=1))
     elif cmd == "claude-accounts":

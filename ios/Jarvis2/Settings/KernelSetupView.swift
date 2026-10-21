@@ -16,6 +16,9 @@ struct KernelSetupView: View {
   @State private var busy: String?
   @State private var failure: String?
   @State private var warnRoot = false
+  /// the next secrets (blue/green): its state, when it answers
+  @State private var nextState: KernelSetup.State?
+  @State private var nextKeys: PublicKeys?
 
   private var mine: Bool { state.map { !$0.master.isEmpty } ?? false && KernelTrust.pinned == keys }
 
@@ -42,6 +45,16 @@ struct KernelSetupView: View {
           Text("Every store comes back from the backups, opened here with your kit. The kit never leaves this iPhone.")
         }
       }
+      if mine, let ns = nextState, ns.master.isEmpty {
+        Section {
+          SecureField("Recovery kit", text: $kitText).textInputAutocapitalization(.never).autocorrectionDisabled().accessibilityIdentifier("kernel-next-kit")
+          Button(busy ?? "Recover alongside") { Task { await recover(next: true) } }.disabled(kitText.isEmpty || busy != nil).accessibilityIdentifier("kernel-recover-next")
+        } header: { Text("Next secrets") } footer: {
+          Text("A release of the kernel's secrets runs next to the serving one. Recovered alongside with the same kit, it takes over when the router flips, with the stores' unlocks as they are.")
+        }
+      } else if mine, let ns = nextState, ns.serving == "standby" {
+        Section("Next secrets") { LabeledContent("State") { StatusPill(text: "Standby", color: .green) } }
+      }
       if mine, status?.root == false {
         Section {
           Button(busy ?? "Sign the root grant…", systemImage: "exclamationmark.octagon") { warnRoot = true }.disabled(busy != nil).accessibilityIdentifier("kernel-root-sign")
@@ -66,16 +79,18 @@ struct KernelSetupView: View {
     do {
       status = try await RouterClient.shared.kernelStatus()
       if status?.configured == true {
-        let r = try await RouterClient.shared.kernelIdentity(boxKey: try await KeySource.key("box.pub"))
+        let box = try await KeySource.key("box.pub")
+        let r = try await RouterClient.shared.kernelIdentity(boxKey: box)
         keys = r.keys; state = r.state
+        if let n = try? await RouterClient.shared.kernelIdentity(boxKey: box, next: true) { nextKeys = n.keys; nextState = n.state } else { nextKeys = nil; nextState = nil }
       }
     } catch { failure = errText(error) }
   }
 
-  private func recover() async {
+  private func recover(next: Bool = false) async {
     failure = nil
     do {
-      guard let k = keys else { return }
+      guard let k = next ? nextKeys : keys else { return }
       busy = "Checking the kit…"
       let m = try RecoveryKit.parse(kitText).master
       guard let cm = CoreTrust.master, m.matches(cm) else { throw TrustError.badKit("This isn't the recovery kit Jarvis 2 is set up with.") }
@@ -91,11 +106,12 @@ struct KernelSetupView: View {
         _ = try CoreSetup.checkLineState(l, coreKey: derived.signingKey, atLeast: LineWitness.seen(derived.signingKey))
         line = l
       }
-      let sk = try await RouterClient.shared.kernelStoreKey(signedBy: k.signingKey, secrets: derived.agreementKey)
+      let sk = try await RouterClient.shared.kernelStoreKey(signedBy: k.signingKey, secrets: derived.agreementKey, next: next)
       let bundle = try KernelSetup.bundle(stores, storeKey: sk, seed: seed, lineState: line)
-      let body = try KernelSetup.claim(secrets: k, phone: try PhoneKeys.shared.publicKeys(), root: try RootKey.shared.publicKey(), master: m, bundle: bundle, identity: derived)
-      try await RouterClient.shared.kernelClaim(body, derived: derived)
-      KernelTrust.pin(derived)
+      let body = try KernelSetup.claim(secrets: k, phone: try PhoneKeys.shared.publicKeys(), root: try RootKey.shared.publicKey(), master: m, bundle: bundle,
+                                       identity: derived, standby: next)
+      try await RouterClient.shared.kernelClaim(body, derived: derived, next: next)
+      KernelTrust.pin(derived) // the same kit derives the same keys: the serving and the next secrets are one identity
       LineWitness.saw(derived.signingKey, try? await RouterClient.shared.kernelIdentity(boxKey: boxKey).state.lineSeq)
       kitText = ""; busy = nil
       await load()

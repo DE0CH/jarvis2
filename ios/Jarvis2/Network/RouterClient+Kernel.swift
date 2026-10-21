@@ -7,15 +7,17 @@ extension RouterClient {
   struct KernelStatus: Decodable { let configured: Bool; let serves: Bool; let root: Bool }
   func kernelStatus() async throws -> KernelStatus { try await json("GET", "api/kernel") }
 
+  /// `next`: the next secrets (blue/green, router/kernel.go): Recover alongside
+  private static func q(_ next: Bool) -> String { next ? "?secrets=next" : "" }
   /// secrets' identity, checked against the box key (keys/box.pub)
-  func kernelIdentity(boxKey: String) async throws -> (keys: PublicKeys, state: KernelSetup.State) {
-    try KernelSetup.check(try await json("GET", "api/kernel/secrets/identity", as: KernelSetup.Identity.self), boxKey: boxKey)
+  func kernelIdentity(boxKey: String, next: Bool = false) async throws -> (keys: PublicKeys, state: KernelSetup.State) {
+    try KernelSetup.check(try await json("GET", "api/kernel/secrets/identity" + Self.q(next), as: KernelSetup.Identity.self), boxKey: boxKey)
   }
   /// secrets' store key C = P + K for this phone, with `secrets` (a Recover's derived K), checked against `signedBy`
-  func kernelStoreKey(signedBy: String, secrets: String) async throws -> String {
+  func kernelStoreKey(signedBy: String, secrets: String, next: Bool = false) async throws -> String {
     struct SK: Decodable { let kind: String; let phone: String; let storeKey: String; let secrets: String? }
     let phone = try PhoneKeys.shared.publicKeys().agreementKey
-    let d = try await json("POST", "api/kernel/secrets/store-key", ["phone": phone, "secrets": secrets], as: SignedDoc.self)
+    let d = try await json("POST", "api/kernel/secrets/store-key" + Self.q(next), ["phone": phone, "secrets": secrets], as: SignedDoc.self)
     let sk = try CoreCrypto.decode(d, by: signedBy, as: SK.self, what: "secrets' store key")
     guard sk.kind == "store-key", sk.phone == phone, sk.secrets == secrets else { throw TrustError.stale("store key") }
     return sk.storeKey
@@ -29,9 +31,9 @@ extension RouterClient {
     return try? JSONDecoder().decode(CoreSetup.LineStateDoc.self, from: data)
   }
   /// the claim (KernelSetup.claim's body); its answer is checked against the keys the kit derives
-  func kernelClaim(_ body: [String: Any], derived: PublicKeys) async throws {
+  func kernelClaim(_ body: [String: Any], derived: PublicKeys, next: Bool = false) async throws {
     struct C: Decodable { let kind: String }
-    let d = try await json("POST", "api/kernel/secrets/claim", body, as: SignedDoc.self)
+    let d = try await json("POST", "api/kernel/secrets/claim" + Self.q(next), body, as: SignedDoc.self)
     guard (try CoreCrypto.decode(d, by: derived.signingKey, as: C.self, what: "secrets' claim answer")).kind == "claimed" else { throw TrustError.stale("claim") }
   }
 

@@ -201,6 +201,7 @@ New sessions start on the kernel once it is configured and the root's grant is i
 | `GET /api/kernel/root-grant/draft` | `{payload}`: ⊤ on the sink with the sink's (hash-to-curve) keys: what the root key signs once |
 | `POST /api/kernel/root-grant` | `{grant: {payload, sig}}`: checked against the root key secrets names (`/keys`), then kept (`kernelRoot`) |
 | `GET\|POST /api/kernel/secrets/{path}` | secrets' own API relayed as is (`identity`, `claim`, `store-key`, `stores`, `unlock/begin`, `unlock/finish`, `lock`, `unlocked`, `keys`, `wipe`, versions, restore, deploy keys): every answer is signed by secrets |
+| `POST /setup/kernel/secrets/flip` | blue/green: the serving secrets hands off, the next (Recovered alongside with `?secrets=next`) takes over → `{serving}` |
 | `GET /setup/kernel/spawner/identity`, `POST /setup/kernel/spawner/fly-token` | the setup session: the spawner's box-vouched identity, and the Fly token sealed to it (`infra/setup.py kernel-fly-token`) |
 | `GET /m/kernel/boot` | a kernel machine's documents: `{grant, machineCert, machineNotarized, sourceCert, sourceNotarized, notary, notarizer, mover, merger, spawner, secrets (identities), keys (secrets' keys statement), stores (secrets' signed store list)}` (machine/kernelboot.go checks them) |
 | `POST /m/kernel/downgrade` | `{keep: [stores]}`: the identity signer narrows the machine's grant (`jarvis2 downgrade` on a kernel machine) |

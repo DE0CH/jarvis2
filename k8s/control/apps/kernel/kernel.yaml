@@ -5,7 +5,9 @@
 # k8s/flux/control.yaml), i.e. the next rebuilt or moved control box.
 # State: the notary's log, the notarizer's sources and the spawner's machines live on their own volumes (Recreate:
 # one writer; the router retries a kernel call through the seconds a restart takes). Mover, merger and the two signers
-# hold nothing. Secrets holds the stores in memory only (a restart = Recover, or blue/green like the old core's: later).
+# hold nothing. Secrets holds the stores in memory only, so it runs blue and green like the old cores: one serves (the
+# router's state, kernelSecrets), the other is next; a release goes only into the next (active-secrets.txt names the
+# serving one for the pin job), Deyao Recovers it alongside and the router flips (router/kernel.go).
 # Only the router reaches them; only the spawner (Fly) and secrets (GitHub deploy keys) reach the internet. The image is
 # pinned by digest by the images workflow's pin job whenever kernel/ changed.
 ---
@@ -256,13 +258,38 @@ spec:
 ---
 apiVersion: apps/v1
 kind: Deployment
-metadata: { name: secrets, namespace: jarvis2-kernel }
+metadata: { name: secrets-blue, namespace: jarvis2-kernel }
 spec:
   replicas: 1
   strategy: { type: Recreate }
-  selector: { matchLabels: { app: kernel, role: secrets } }
+  selector: { matchLabels: { app: kernel, role: secrets, color: blue } }
   template:
-    metadata: { labels: { app: kernel, role: secrets, egress: "internet" } }
+    metadata: { labels: { app: kernel, role: secrets, color: blue, egress: "internet" } }
+    spec:
+      priorityClassName: jarvis2-control
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      containers:
+        - name: secrets
+          image: ghcr.io/de0ch/jarvis2-kernel:latest
+          command: ["/kernel/secrets"]
+          ports: [{ containerPort: 8080 }]
+          env: [{ name: KERNEL_BOX_KEY, value: /box/box-key.pem }, { name: KERNEL_DATA, value: /data }]
+          volumeMounts: [{ name: box-key, mountPath: /box, readOnly: true }]
+          resources: { requests: { cpu: 10m, memory: 32Mi }, limits: { memory: 192Mi } }
+          securityContext: { runAsNonRoot: true, runAsUser: 65532, runAsGroup: 65532, allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: { drop: [ALL] }, seccompProfile: { type: RuntimeDefault } }
+      securityContext: { fsGroup: 65532 }
+      volumes: [{ name: box-key, secret: { secretName: kernel-box-key, defaultMode: 0440 } }]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: secrets-green, namespace: jarvis2-kernel }
+spec:
+  replicas: 1
+  strategy: { type: Recreate }
+  selector: { matchLabels: { app: kernel, role: secrets, color: green } }
+  template:
+    metadata: { labels: { app: kernel, role: secrets, color: green, egress: "internet" } }
     spec:
       priorityClassName: jarvis2-control
       automountServiceAccountToken: false
@@ -281,9 +308,16 @@ spec:
 ---
 apiVersion: v1
 kind: Service
-metadata: { name: secrets, namespace: jarvis2-kernel }
+metadata: { name: secrets-blue, namespace: jarvis2-kernel }
 spec:
-  selector: { app: kernel, role: secrets }
+  selector: { app: kernel, role: secrets, color: blue }
+  ports: [{ port: 8080, targetPort: 8080 }]
+---
+apiVersion: v1
+kind: Service
+metadata: { name: secrets-green, namespace: jarvis2-kernel }
+spec:
+  selector: { app: kernel, role: secrets, color: green }
   ports: [{ port: 8080, targetPort: 8080 }]
 ---
 apiVersion: networking.k8s.io/v1

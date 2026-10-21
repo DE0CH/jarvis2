@@ -599,6 +599,12 @@ Built and tested; not yet on the box. Each step in order:
    (the root key, its own warning). From then on new sessions start on the kernel; the old core's sessions go on there
    until destroyed, then the old core and `core/` go (DECISIONS 216).
 
+**A secrets release** (blue/green, as the cores): CI pins a new kernel image into every component but the serving
+secrets (k8s/control/apps/kernel/active-secrets.txt); Deyao Recovers the next one alongside (Settings → Kernel →
+Recover alongside); then `infra/setup.py kernel-secrets-flip` (the open unlocks go with it); after the flip,
+active-secrets.txt is changed to the new serving colour. The other components restart with their releases (the router
+retries their calls; the spawner needs `kernel-fly-token` again).
+
 Testing it on real Fly from a session: `session-secret --keys JARVIS2_FLY_TOKEN --exec infra/e2e-kernel.sh` (a new
 session on the kernel, its boot from its documents, pause into a source with its snapshot, resume, destroy).
 

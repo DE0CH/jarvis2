@@ -85,12 +85,12 @@ metadata: { name: core, namespace: jarvis2-core }
 spec:
   hard: { pods: "2", limits.memory: 512Mi, requests.memory: 384Mi, persistentvolumeclaims: "0" }
 ---
-# the kernel (k8s/control/apps/kernel): eight one-replica components, three with a 1 Gi state volume
+# the kernel (k8s/control/apps/kernel): eight one-replica components (secrets twice, blue and green), three with a 1 Gi state volume
 apiVersion: v1
 kind: ResourceQuota
 metadata: { name: kernel, namespace: jarvis2-kernel }
 spec:
-  hard: { pods: "8", limits.memory: 640Mi, requests.memory: 256Mi, persistentvolumeclaims: "3", requests.storage: 3Gi }
+  hard: { pods: "9", limits.memory: 896Mi, requests.memory: 320Mi, persistentvolumeclaims: "3", requests.storage: 3Gi }
 ---
 # the router: one, plus a rollout's surge pod (the standby that takes over), 512 Mi requested, 1 Gi at most each
 apiVersion: v1

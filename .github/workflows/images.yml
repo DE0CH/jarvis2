@@ -178,7 +178,17 @@ jobs:
             kcur="$(grep -ho 'jarvis2-kernel:sha-[0-9a-f]*' "$KF" | head -1 | cut -d- -f3)"
             if [ -z "$kcur" ] || ! kfull="$(git rev-parse -q --verify "$kcur^{commit}")" || ! git diff --quiet "$kfull" "$GITHUB_SHA" -- kernel/; then
               K="$(infra/image-digest.sh "ghcr.io/de0ch/jarvis2-kernel:$T")"
-              sed -i -E "s#ghcr.io/de0ch/jarvis2-kernel:(latest|sha-[0-9a-f]{12}(@sha256:[0-9a-f]{64})?)#$K#g" "$KF"
+              # every component but the secrets that serves (active-secrets.txt): a secrets restart empties it, so a
+              # release goes only into the next colour (blue/green, as the cores)
+              python3 - "$KF" "$(tr -d '[:space:]' < k8s/control/apps/kernel/active-secrets.txt)" "$K" <<'PY'
+          import re,sys
+          f,active,img=sys.argv[1:4]; s=open(f).read()
+          parts=s.split("\n---\n")
+          for i,p in enumerate(parts):
+              if "kind: Deployment" in p and "name: secrets-"+active+"," not in p:
+                  parts[i]=re.sub(r"ghcr.io/de0ch/jarvis2-kernel:(latest|sha-[0-9a-f]{12}(@sha256:[0-9a-f]{64})?)", img, p)
+          open(f,"w").write("\n---\n".join(parts))
+          PY
             fi
           fi
           # the session image: the core starts only that digest, and the phone shows it as a CI build only with this
