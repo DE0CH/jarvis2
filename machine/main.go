@@ -236,7 +236,8 @@ func prepare() error {
 	// the core's Fly token (besides the setup session's org token) can create or change machines in this app —
 	// the router's is read-only — so the key comes from the core through Fly, never from the router.
 	coreKey := strings.TrimSpace(os.Getenv(coreKeyEnv))
-	if coreKey == "" {
+	kernel := strings.TrimSpace(os.Getenv(kernelBoxEnv)) != "" // kernelboot.go: the kernel's spawner started it
+	if coreKey == "" && !kernel {
 		return errors.New("no core key in the machine's config (" + coreKeyEnv + ")")
 	}
 	keys, err := ownKeys()
@@ -259,33 +260,40 @@ func prepare() error {
 		return fmt.Errorf("supervisor: %w", err)
 	}
 
-	// 1. this machine's succession cert: core-signed, naming this machine and its own keys
+	// 1. this machine's succession cert: core-signed, naming this machine and its own keys (a kernel machine: its
+	// kernel documents, kernelboot.go)
+	var cert Cert
 	var certs struct {
 		Cert            *SignedDoc `json:"cert"`
 		PredecessorCert *SignedDoc `json:"predecessorCert"`
 	}
-	for i := 0; ; i++ {
-		err = c.json("GET", "/m/cert", nil, &certs)
-		if err == nil && certs.Cert != nil {
-			break
+	if kernel {
+		if cert, err = kernelBootCert(c, me, keys); err != nil {
+			return err
 		}
-		if i > 300 {
-			return fmt.Errorf("no cert: %v", err)
+	} else {
+		for i := 0; ; i++ {
+			err = c.json("GET", "/m/cert", nil, &certs)
+			if err == nil && certs.Cert != nil {
+				break
+			}
+			if i > 300 {
+				return fmt.Errorf("no cert: %v", err)
+			}
+			time.Sleep(2 * time.Second)
 		}
-		time.Sleep(2 * time.Second)
+		if err := os.WriteFile(coreKeyPath, []byte(coreKey), 0o644); err != nil {
+			return err
+		}
+		if err := verifyDoc(coreKey, certs.Cert, &cert); err != nil || cert.Kind != "succession-cert" || cert.Machine == nil {
+			return fmt.Errorf("the cert isn't a succession cert signed by the core (%v)", err)
+		}
+		if cert.Machine.ID != me || cert.Machine.EncryptionKey != keys["encryptionKey"] || cert.Machine.SigningKey != keys["signingKey"] {
+			return errors.New("the cert names another machine or other keys")
+		}
+		raw, _ := json.Marshal(certs.Cert)
+		os.WriteFile(certPath, raw, 0o644)
 	}
-	if err := os.WriteFile(coreKeyPath, []byte(coreKey), 0o644); err != nil {
-		return err
-	}
-	var cert Cert
-	if err := verifyDoc(coreKey, certs.Cert, &cert); err != nil || cert.Kind != "succession-cert" || cert.Machine == nil {
-		return fmt.Errorf("the cert isn't a succession cert signed by the core (%v)", err)
-	}
-	if cert.Machine.ID != me || cert.Machine.EncryptionKey != keys["encryptionKey"] || cert.Machine.SigningKey != keys["signingKey"] {
-		return errors.New("the cert names another machine or other keys")
-	}
-	raw, _ := json.Marshal(certs.Cert)
-	os.WriteFile(certPath, raw, 0o644)
 	log.Printf("cert ok: stores %v, harness %s, predecessor %q", cert.Stores, cert.Options.Harness, cert.PredID)
 
 	v, err := vouch(cert) // vouch.go: what the cert vouches for
@@ -300,7 +308,15 @@ func prepare() error {
 	setupVolume()
 
 	// 2. the predecessor's snapshot: the one whose hash the cert names, signed by the predecessor
-	if !firstMachine && cert.PredID != me {
+	if kernel && cert.Snapshot != "" {
+		if err := kernelRestore(c, cert.Snapshot); err != nil {
+			return fmt.Errorf("snapshot: %w", err)
+		}
+	} else if kernel {
+		if !firstMachine {
+			log.Printf("the source names no snapshot of %s: starting with no predecessor state", cert.PredID)
+		}
+	} else if !firstMachine && cert.PredID != me {
 		var pc Cert
 		if err := verifyDoc(coreKey, certs.PredecessorCert, &pc); err != nil || pc.Kind != "succession-cert" || pc.Machine == nil || pc.Machine.ID != cert.PredID {
 			return fmt.Errorf("the predecessor's cert isn't core-signed for %s (%v)", cert.PredID, err)
@@ -466,8 +482,12 @@ func pullSecrets(c *client, coreKey, me string) (map[string]string, error) {
 			Data string `json:"data"`
 		} `json:"sealed"`
 	}
-	if err := verifyDoc(coreKey, &doc, &out); err != nil || out.Kind != "secrets" || out.Machine != me {
-		return nil, fmt.Errorf("the secrets answer isn't core-signed for this machine (%v)", err)
+	key, want := coreKey, me
+	if t, ok := readKernelTrust(); ok { // kernelboot.go: signed by the kernel's secrets, for this machine's object
+		key, want = t.Secrets, t.Machine
+	}
+	if err := verifyDoc(key, &doc, &out); err != nil || out.Kind != "secrets" || out.Machine != want {
+		return nil, fmt.Errorf("the secrets answer isn't signed for this machine (%v)", err)
 	}
 	priv, err := loadPrivate()
 	if err != nil {

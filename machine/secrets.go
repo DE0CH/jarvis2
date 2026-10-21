@@ -134,7 +134,7 @@ func (h *heldSecrets) pull(c *client) (int, error) {
 	h.pullMu.Lock()
 	defer h.pullMu.Unlock()
 	coreKey, err := readTrim(coreKeyPath)
-	if err != nil {
+	if _, kernel := readKernelTrust(); err != nil && !kernel {
 		return 0, err
 	}
 	m, err := pullSecrets(c, coreKey, c.me)

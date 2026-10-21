@@ -6,7 +6,8 @@
 # new base in the same run through --build-arg BASE).
 ARG BASE=ghcr.io/de0ch/jarvis2-session:base-sha-395e52012bf4@sha256:be5fa35bdfdbc5df6ea140e0357cdc6c99401be3c710c42f62cecd66f08410fd
 FROM golang:1.25-bookworm AS build
-WORKDIR /src
+WORKDIR /src/machine
+COPY kernel/ /src/kernel/
 COPY machine/ ./
 RUN CGO_ENABLED=0 go build -trimpath -o /out/jarvis2-machine .
 

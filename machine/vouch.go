@@ -44,6 +44,7 @@ var (
 	b64KeyRE   = regexp.MustCompile(`^[A-Za-z0-9+/]{60,120}={0,2}$`)
 	routerRE   = regexp.MustCompile(`^http://[A-Za-z0-9][A-Za-z0-9._-]{0,200}(:[0-9]{1,5})?/?$`)
 	// a GitHub owner/name: an owner never starts with a dot, a name is never . or ..
+	sourceRE = regexp.MustCompile(`^source-[0-9a-f]{32}$`)
 	ghRepoRE = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z0-9_.-]{1,100}$`)
 )
 
@@ -74,11 +75,16 @@ func cleanEnv(started []string, imageEnv []string) ([]string, error) {
 			m[k] = v
 		}
 	}
-	key := strings.TrimSpace(got[coreKeyEnv])
-	if !b64KeyRE.MatchString(key) {
-		return nil, errors.New("no core key in the machine's config (" + coreKeyEnv + ")")
+	key, box := strings.TrimSpace(got[coreKeyEnv]), strings.TrimSpace(got[kernelBoxEnv])
+	switch {
+	case b64KeyRE.MatchString(key):
+		m[coreKeyEnv] = key
+	case b64KeyRE.MatchString(box) && sourceRE.MatchString(strings.TrimSpace(got[kernelSourceEnv])):
+		// kernelboot.go: the kernel's spawner started it: the box key and its source, from its Fly config
+		m[kernelBoxEnv], m[kernelSourceEnv] = box, strings.TrimSpace(got[kernelSourceEnv])
+	default:
+		return nil, errors.New("no core key (" + coreKeyEnv + ") or kernel box key and source (" + kernelBoxEnv + ", " + kernelSourceEnv + ") in the machine's config")
 	}
-	m[coreKeyEnv] = key
 	if u := strings.TrimSpace(got["JARVIS2_URL"]); routerRE.MatchString(u) {
 		m["JARVIS2_URL"] = u
 	}
