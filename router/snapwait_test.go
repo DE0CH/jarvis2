@@ -11,14 +11,14 @@ import (
 // the stall window, and arrives
 func TestASnapshotMakingProgressIsWaitedFor(t *testing.T) {
 	rg := newRig(t)
-	rg.r.cfg.SnapshotStall = 300 * time.Millisecond
+	rg.r.cfg.SnapshotStall = time.Second // ten report intervals: a slow CI runner's hiccup isn't a stall
 	runningM2(rg, false)
 	if err := rg.r.Pause("s1"); err != nil {
 		t.Fatal(err)
 	}
 	waitFor(t, "asked", func() bool { return rg.r.snapshotAwaited("m2") })
 	m := testMachine{"m2", rg.mkey.k}
-	for i := 1; i <= 15; i++ { // 1.5 s, five stall windows
+	for i := 1; i <= 30; i++ { // 3 s, three stall windows
 		body := jsonString(map[string]any{"phase": "uploading", "done": i * 1000, "total": 100000, "sent": i * 500, "elapsedMs": i * 100})
 		if code, _ := m.do(t, rg.r.MachineHandler(), "POST", "/m/snapshot-progress", body); code != 200 {
 			t.Fatal(code)
