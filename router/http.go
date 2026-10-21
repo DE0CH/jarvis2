@@ -156,6 +156,34 @@ func (r *Router) buildHandlers() {
 	setup("POST /setup/stores/mark-sensitive", "POST", "/stores/mark-sensitive")
 	// the core's Fly token, sealed to the core (after a Reset; a Recover brings it from the backups)
 	setup("POST /setup/fly-token", "POST", "/fly-token")
+	// the kernel's spawner (kernelline.go): its identity, and the Fly token sealed to it (infra/setup.py kernel-fly-token)
+	mux.Handle("GET /setup/kernel/spawner/identity", r.requireSetup(func(w http.ResponseWriter, req *http.Request) {
+		if r.kernel == nil {
+			writeJSON(w, 503, map[string]string{"error": "this box runs no kernel"})
+			return
+		}
+		b, err := r.kernel.call("spawner", "GET", "/identity", nil)
+		if err != nil {
+			writeErr(w, err)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Write(b)
+	}))
+	mux.Handle("POST /setup/kernel/spawner/fly-token", r.requireSetup(func(w http.ResponseWriter, req *http.Request) {
+		var in json.RawMessage
+		if r.kernel == nil || json.NewDecoder(io.LimitReader(req.Body, 1<<16)).Decode(&in) != nil {
+			writeJSON(w, 400, map[string]string{"error": "{sealed}, on a box with a kernel"})
+			return
+		}
+		b, err := r.kernel.call("spawner", "POST", "/fly-token", in)
+		if err != nil {
+			writeErr(w, err)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Write(b)
+	}))
 
 	// ---- setting the core up: Reset and Recover (the app, with the master key) -----------------------------
 	app("GET /api/core/identity", func(w http.ResponseWriter, req *http.Request) { r.relayFor(w, req, "GET", "/identity", nil) })

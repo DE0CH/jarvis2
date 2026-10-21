@@ -187,6 +187,33 @@ line's own signed requests: a passed wakeup 5 minutes after boot; a cron with it
 now, plus a one-off wakeup `missed-<name>` 5 minutes after boot when a run fell while paused. What was armed:
 `~/artifacts/jarvis1-import/rearmed.txt` (beside Jarvis 1's `session.json`).
 
+## The kernel (`kernel/`, `router/kernel.go`, `router/kernelline.go`; DESIGN "Target design", docs/PLAN-grants.md)
+
+The kernel runs beside the old core with keys of its own (DECISIONS 216): eight components at `KERNEL_URL`
+(`%s` = the role: notary, notarizer, mover, merger, spawner, identity, gullible, secrets; unset = no kernel on this
+box). A session is a kernel line when its record has `kernel` (its source, the cert into it and its notarization, the
+main grant, and while a machine runs the spawner's cert naming it); every lifecycle of it goes through the kernel.
+New sessions start on the kernel once it is configured and the root's grant is in (`kernelServes`).
+
+| Route | |
+|---|---|
+| `GET /api/kernel` | `{configured, serves, root}` |
+| `GET /api/kernel/root-grant/draft` | `{payload}`: ⊤ on the sink with the sink's (hash-to-curve) keys: what the root key signs once |
+| `POST /api/kernel/root-grant` | `{grant: {payload, sig}}`: checked against the root key secrets names (`/keys`), then kept (`kernelRoot`) |
+| `GET\|POST /api/kernel/secrets/{path}` | secrets' own API relayed as is (`identity`, `claim`, `store-key`, `stores`, `unlock/begin`, `unlock/finish`, `lock`, `unlocked`, `keys`, `wipe`, versions, restore, deploy keys): every answer is signed by secrets |
+| `GET /setup/kernel/spawner/identity`, `POST /setup/kernel/spawner/fly-token` | the setup session: the spawner's box-vouched identity, and the Fly token sealed to it (`infra/setup.py kernel-fly-token`) |
+| `GET /m/kernel/boot` | a kernel machine's documents: `{grant, machineCert, machineNotarized, sourceCert, sourceNotarized, notary, notarizer, mover, merger, spawner, secrets (identities), keys (secrets' keys statement), stores (secrets' signed store list)}` (machine/kernelboot.go checks them) |
+| `POST /m/kernel/downgrade` | `{keep: [stores]}`: the identity signer narrows the machine's grant (`jarvis2 downgrade` on a kernel machine) |
+| `POST /m/pull-secrets` (kernel machine) | secrets' `/pull` with the line's grant: `{kind: secrets, machine: fly-<id>, grant, stores, versions, stale, sealed}`, signed by secrets |
+| `GET /m/snapshot` (kernel machine) | the snapshot of the machine its source came from, or (a restoring line's first machine) the archived snapshot |
+
+Approvals: `kernel-source` (a new source: a new session, a restore, a resume on another image): `challenge.payload` is
+the cert (sink → source-x) the phone signs, the answer `{signature}`; `kernel-add-store`: two certs, `challenge` (sink
+→ source-a, the one store) and `earlier[0]` (source-a → fly-M, ⊤), the answer `{signature}` = both signatures, one per
+line. A delivered input (wakeup, cron, watch, outcome, content, attachment) to a kernel machine carries the log
+notary's challenge (`about: input`) over sha256("jarvis2-input\n" + fly-M + "\n" + kind + "\n" + the input's sha256)
+instead of the core's attestation.
+
 ## Approvals (the shell's secure pages)
 
 ```

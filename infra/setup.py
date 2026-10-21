@@ -30,6 +30,8 @@ both). Values never print.
   infra/setup.py backup NAME KEY[=SRC]… [--not-sensitive]
                                        a store's backup only, for the next Recover; sensitive unless
                                        --not-sensitive
+  infra/setup.py kernel-fly-token FILE the kernel's spawner's Fly token (FILE: infra/fly-token.sh's), sealed to the
+                                       spawner's box-vouched key; again after every spawner restart
   infra/setup.py backup-core FILE      the core's Fly token, FLY_API_TOKEN from FILE (infra/fly-token.sh):
                                        sent to the core sealed to its key, and backed up as the `core` store
   infra/setup.py claude-accounts       the router's Claude accounts (no secrets): per account its email, expiry,
@@ -455,6 +457,18 @@ def main():
         call("POST", "/setup/fly-token", {"sealed": seal_to(me["agreementKey"], json.dumps(tok).encode(), "jarvis2/fly-token")})
         backup("core", tok, True, me["master"])
         print("ok: the core has its Fly token, and the core store's backup is written")
+    elif cmd == "kernel-fly-token":
+        # the kernel's spawner (kernel/spawner): its identity checked against the box key, the token sealed to it
+        d = call("GET", "/setup/kernel/spawner/identity")
+        ident = json.loads(d["payload"])
+        if not _verify(ident["signingKey"], d["payload"].encode(), d["sig"]):
+            raise SystemExit("the spawner's identity document isn't signed by the spawner")
+        text = f"jarvis2-kernel-spawner-identity {ident['signingKey']} {ident['agreementKey']}".encode()
+        if ident.get("role") != "spawner" or not _verify(keyfile("box.pub"), text, ident.get("boxSig", "")):
+            raise SystemExit("the spawner's identity isn't signed by this box's key (keys/box.pub)")
+        tok = {"FLY_API_TOKEN": open(os.path.expanduser(args[0])).read().strip()}
+        call("POST", "/setup/kernel/spawner/fly-token", {"sealed": seal_to(ident["agreementKey"], json.dumps(tok).encode(), "jarvis2/fly-token")})
+        print("ok: the kernel's spawner has its Fly token (send it again after the spawner restarts)")
     elif cmd == "claude-login":
         print(json.dumps(call("GET", "/setup/claude-login"), indent=1))
     elif cmd == "claude-accounts":

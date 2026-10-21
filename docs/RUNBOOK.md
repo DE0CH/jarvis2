@@ -583,6 +583,25 @@ is down: jarvis2.deyaochen.com unreachable (tunnel down), Flux "failed to checko
 peer. There is no way in to look; WARP reconnects by itself (warp-svc, always on), and a box git can't fix is
 rebuilt. The same WARP steps for every other Hetzner server Claude makes: claude-env `scripts/hetzner-warp.sh`.
 
+## Bringing the kernel up (docs/PLAN-grants.md §5; DECISIONS 216)
+
+Built and tested; not yet on the box. Each step in order:
+
+1. **A control box with the kernel's bootstrap.** Flux makes no namespace, quota or box-key Secret, so the kernel
+   (k8s/control/apps/kernel) runs only on a control box created after the bootstrap gained `jarvis2-kernel`
+   (k8s/bootstrap-control, infra/cloud-init.sh's `kernel-box-key`, k8s/flux/control.yaml's `control-kernel`): a rebuild or
+   a move ("Rebuilding a box"). Deyao's call when.
+2. **Pin the kernel image** in k8s/control/apps/kernel/kernel.yaml (it names `:latest` until the pin job moves it) and set
+   the router's `KERNEL_URL=http://%s.jarvis2-kernel.svc.cluster.local:8080` (router.yaml).
+3. **The spawner's Fly token**: `infra/setup.py kernel-fly-token <file from infra/fly-token.sh>` (again after every
+   spawner restart).
+4. **Deyao, in the app**: Settings → Kernel → Recover the kernel's secrets (the recovery kit), then Sign the root grant
+   (the root key, its own warning). From then on new sessions start on the kernel; the old core's sessions go on there
+   until destroyed, then the old core and `core/` go (DECISIONS 216).
+
+Testing it on real Fly from a session: `session-secret --keys JARVIS2_FLY_TOKEN --exec infra/e2e-kernel.sh` (a new
+session on the kernel, its boot from its documents, pause into a source with its snapshot, resume, destroy).
+
 ## Rebuilding a box
 
 **The services box** (`jarvis2-services`): delete the server, `BOX_KIND=services infra/create.sh` (a new age key,

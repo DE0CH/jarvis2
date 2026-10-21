@@ -1,6 +1,7 @@
 # PLAN: the kernel (sources, the sink, succession certs, grants)
 
-Status: being built (Claude, from 2026-10-21). The design is DESIGN "Target design" and DECISIONS 166; this file is how
+Status: stages 1-9 built and tested (2026-10-21); stage 10 (the box, Deyao's Recover) is next: docs/RUNBOOK.md "Bringing
+the kernel up". The design is DESIGN "Target design" and DECISIONS 166; this file is how
 it is built and what was decided on the way. It replaces the first draft (2026-10-14, git history), which was written
 for a single held core release.
 

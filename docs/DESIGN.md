@@ -1008,7 +1008,8 @@ any of the line's stores is sensitive, and the **line id** (the line's first mac
 
 ## Target design: succession certs, grants and the kernel (Deyao, 2026-10-14)
 
-Not built yet; DECISIONS 166 has the why, docs/PLAN-grants.md the build. It replaces the core's succession-cert options,
+Built beside the old core (DECISIONS 216; kernel/, router/kernelline.go, machine/kernelboot.go, the app's Security/KernelSetup.swift),
+not yet on the box: docs/RUNBOOK.md "Bringing the kernel up". DECISIONS 166 has the why, docs/PLAN-grants.md the build. It replaces the core's succession-cert options,
 the holders' shell grants ("Grants" above), the core's automatic locks and the Claude login's own channel.
 
 **Layers**

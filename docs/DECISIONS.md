@@ -2290,3 +2290,22 @@ snapshot failed with "no space left on device", the machine was destroyed anyway
      A resume on another image is a new source the phone signs (the router could otherwise move a session back onto an
      old CI-signed image). docs/PLAN-grants.md is rewritten for it, with the defaults taken for the first draft's other
      questions.
+
+217. **How the kernel was built (Claude, 2026-10-21, Deyao away: each is reversible, docs/PLAN-grants.md).**
+     - *Packaging*: one Go module `kernel/`, one binary per component in one image, one Deployment each in namespace
+       `jarvis2-kernel` (state on its own small volume for the notary, the notarizer and the spawner). Flux can't make
+       that namespace, so the kernel runs from the next control box (RUNBOOK "Bringing the kernel up").
+     - *Secrets* is the old core's store half carried over (same formats, so the app's store code serves both): its
+       keys derived from the kit under its own labels; a handoff (blue/green) carries the open unlocks, which never
+       end by themselves (D2).
+     - *Inputs*: a delivered input to a kernel machine is logged by the log notary (a challenge about "input" over the
+       machine, the kind and the input's hash) instead of the old core's input log.
+     - *Shell and message approvals* on kernel lines use the existing phone-signed grants, the machine reading the
+       phone key and the stores' sensitivity from secrets' signed statements; the design's merged shell grant can
+       replace them later.
+     - *Add-store*: the phone signs two certs under one Face ID (the store into a new source; that source onto the
+       machine) and the merger joins the grants. *Downgrade*: the identity signer narrows the grant; no key rotation.
+     - *Restore*: the phone signs the archived snapshot's hash into the new source (the old core couldn't sign the
+       restore choice). A machine that signed no snapshot passes on its source's (the spawner vouched for it).
+     - *The spawner takes no Fly volume backups* (Deyao's first ask, 2026-10-21, which the old core keeps until it
+       goes).
