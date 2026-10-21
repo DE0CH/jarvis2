@@ -38,6 +38,7 @@ type Kernel struct {
 	Fly         *FakeFly
 	Secrets     *secrets.Secrets
 	servers     []*httptest.Server
+	master      *sig.Signer
 }
 
 // URLFor: the base URL of a role (what the router's KERNEL_URL template gives)
@@ -243,3 +244,45 @@ func (f *FakeFly) DeleteVolume(v string) error {
 }
 
 func (f *FakeFly) ExtendVolume(string, int) (bool, error) { return false, nil }
+
+// Secrets: one more secrets on its own server (the next colour, blue/green), and its URL
+func (k *Kernel) Secrets2(t testing.TB) (*secrets.Secrets, string) {
+	sc, err := secrets.New(k.Box, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(secrets.Handler(sc))
+	k.servers = append(k.servers, srv)
+	return sc, srv.URL
+}
+
+// ClaimSeeded: a claim of sc with keys derived from seed (the same kit derives the same secrets), standby or not, by
+// the test's master key (one per Kernel)
+func (k *Kernel) ClaimSeeded(sc *secrets.Secrets, seed []byte, standby bool) error {
+	if k.master == nil {
+		k.master, _ = sig.NewSigner()
+	}
+	id, err := sc.Identity()
+	if err != nil {
+		return err
+	}
+	ds, da, err := secrets.SeedIdentity(seed)
+	if err != nil {
+		return err
+	}
+	b, _ := json.Marshal(map[string]any{"format": "keys", "secretsSeed": sig.B64.EncodeToString(seed)})
+	sum := sha256.Sum256(b)
+	st := map[string]any{"kind": "kernel-claim", "master": k.master.PublicKey(),
+		"secrets": map[string]string{"signingKey": id["signingKey"].(string), "agreementKey": id["agreementKey"].(string)},
+		"phone":   map[string]string{"signingKey": k.Phone.PublicKey(), "agreementKey": sig.B64.EncodeToString(k.PhoneAgree.PublicKey().Bytes())},
+		"root":    k.Root.PublicKey(), "bundleSha256": hex.EncodeToString(sum[:]),
+		"identity": map[string]string{"signingKey": ds, "agreementKey": da}, "standby": standby}
+	sb, _ := json.Marshal(st)
+	ms, _ := k.master.Sign(sb)
+	sealed, err := secrets.SealTo(id["agreementKey"].(string), b, "jarvis2/kernel-claim")
+	if err != nil {
+		return err
+	}
+	_, err = sc.Claim(string(sb), ms, sealed)
+	return err
+}

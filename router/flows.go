@@ -12,7 +12,6 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"path/filepath"
 	"slices"
 	"sort"
 	"strings"
@@ -61,11 +60,7 @@ type Router struct {
 
 func NewRouter(cfg Config, st *State, core *CoreClient, policy Policy) *Router {
 	r := &Router{cfg: cfg, st: st, core: core, policy: policy, setupSeen: map[string]time.Time{}, commands: map[string]chan string{}, execs: map[string]chan execItem{}, results: map[string]chan ExecResult{}, snapped: map[string]*snapWait{}, sup: &supLogs{next: map[string]int64{}}, lc: newLifecycle()}
-	r.kernel = newKernelClient(cfg.KernelURL)
-	if r.kernel != nil {
-		r.kernelLines = newKernelLineKeeper(filepath.Join(cfg.DataDir, "kernel-line-state.json"), r.kernel)
-		r.kernel.onSecretsSeq = r.kernelLines.seen
-	}
+	r.wireKernel(newKernelClient(cfg.KernelURL))
 	if core != nil { // linestate.go: the core's line state, kept as its answers name a new one
 		r.lines = newLineKeeper(r.lineStatePath(), core)
 		core.onLineSeq = r.lines.seen

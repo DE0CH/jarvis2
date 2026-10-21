@@ -138,6 +138,8 @@ type persisted struct {
 	Outcomes    map[string][]*Outcome    `json:"outcomes,omitempty"`    // outcomes.go: session id → decisions on its Inbox filings, until delivered
 	ActiveCore  string                   `json:"activeCore,omitempty"`  // nextcore.go: the core URL that serves after a flip
 	KernelRoot  *gv.Signed               `json:"kernelRoot,omitempty"`  // kernelline.go: the root key's ⊤ on the sink
+	// kernel.go: the colour of the kernel's secrets that serves ("" = blue)
+	KernelSecrets string `json:"kernelSecrets,omitempty"`
 	// messages.go: messages held for Deyao to deliver or deny, and his per-kind rules
 	Messages     map[string]*PendingMessage `json:"messages,omitempty"`
 	MessageRules map[string]*MessageRule    `json:"messageRules,omitempty"`

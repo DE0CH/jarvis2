@@ -451,3 +451,12 @@ func (c *Secrets) Mode() string {
 	defer c.mu.Unlock()
 	return c.mode
 }
+
+// SeedIdentity: the public keys a seed derives (what a claim with that seed names as its identity)
+func SeedIdentity(seed []byte) (signing, agreement string, err error) {
+	k, err := DeriveCoreKeys(seed)
+	if err != nil {
+		return "", "", err
+	}
+	return k.signer.PublicKey(), b64.EncodeToString(k.agreement.PublicKey().Bytes()), nil
+}

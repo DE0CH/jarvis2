@@ -548,6 +548,10 @@ func (r *Router) registerKernel(app func(string, http.HandlerFunc)) {
 			return
 		}
 		path := "/" + req.PathValue("path")
+		role := "secrets"
+		if req.URL.Query().Get("secrets") == "next" { // the next secrets (blue/green, kernel.go): Recover alongside
+			role = "secrets-next"
+		}
 		var body any
 		if req.Method == "POST" {
 			var raw json.RawMessage
@@ -556,7 +560,7 @@ func (r *Router) registerKernel(app func(string, http.HandlerFunc)) {
 			}
 			body = raw
 		}
-		b, err := r.kernel.call("secrets", req.Method, path, body)
+		b, err := r.kernel.call(role, req.Method, path, body)
 		if err != nil {
 			var ke *KernelError
 			if errors.As(err, &ke) {

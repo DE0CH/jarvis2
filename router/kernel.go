@@ -7,9 +7,12 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -28,6 +31,8 @@ type KernelClient struct {
 	// onSecretsSeq: every secrets answer's X-Line-Seq (linestate.go keeps secrets' newest line state), before the
 	// answer goes back
 	onSecretsSeq func(int)
+	// activeSecrets: the colour of the secrets that serves (blue or green)
+	activeSecrets func() string
 }
 
 // newKernelClient: nil when KERNEL_URL isn't set (no kernel on this box yet)
@@ -74,7 +79,7 @@ func (k *KernelClient) callSeq(role, method, path string, body any) ([]byte, int
 		}
 		rd = bytes.NewReader(b)
 	}
-	req, err := http.NewRequest(method, k.url(role)+path, rd)
+	req, err := http.NewRequest(method, k.url(k.secretsRole(role))+path, rd)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -123,11 +128,11 @@ func (k *KernelClient) Identity(role string) (sig.Identity, error) {
 	if ok {
 		return id, nil
 	}
-	b, err := k.call(role, "GET", "/identity", nil)
+	b, err := k.callNoHook(role, "GET", "/identity", nil) // no line-state hook: the keeper itself reads identities
 	if err != nil {
 		return sig.Identity{}, err
 	}
-	if role == "secrets" {
+	if role == "secrets" || role == "secrets-next" {
 		var m struct {
 			SigningKey, AgreementKey, BoxSig string
 		}
@@ -226,4 +231,75 @@ func (k *KernelClient) Move(g gv.Signed, cert, notarized sig.Doc) (gv.Signed, er
 		return gv.Signed{}, err
 	}
 	return gv.Signed{Grant: d, By: "mover", Signer: &mid}, nil
+}
+
+// ---- secrets, blue and green (as the cores: nextcore.go) ----------------------------------------------------------
+// Two secrets Deployments, secrets-blue and secrets-green: one serves (persisted.KernelSecrets names it, default blue),
+// the other is the next: empty, or Recovered alongside with the same kit as a standby. A secrets release goes only into
+// the next (images.yml), so a release never locks every kernel session's stores; Deyao Recovers the next alongside,
+// then the router flips: POST /handoff to the serving one (its final state, the open unlocks included), POST /takeover
+// with it to the standby, and every later secrets call goes there. Secrets itself guarantees that at most one serves.
+
+// secretsRole: the Deployment a role name means ("secrets" = the serving colour, "secrets-next" = the other)
+func (k *KernelClient) secretsRole(role string) string {
+	if role != "secrets" && role != "secrets-next" {
+		return role
+	}
+	active := "blue"
+	if k.activeSecrets != nil {
+		active = k.activeSecrets()
+	}
+	if role == "secrets-next" {
+		if active == "blue" {
+			return "secrets-green"
+		}
+		return "secrets-blue"
+	}
+	return "secrets-" + active
+}
+
+// FlipSecrets: the standby secrets serves from now on; the colour that serves now
+func (r *Router) FlipSecrets() (string, error) {
+	if r.kernel == nil {
+		return "", errors.New("this box runs no kernel")
+	}
+	final, err := r.kernel.callNoHook("secrets", "POST", "/handoff", map[string]any{})
+	if err != nil {
+		return "", fmt.Errorf("the serving secrets' handoff: %w", err)
+	}
+	if _, err := r.kernel.callNoHook("secrets-next", "POST", "/takeover", map[string]json.RawMessage{"lineState": final}); err != nil {
+		return "", fmt.Errorf("THE NEXT SECRETS REFUSED THE TAKEOVER (the serving one handed off: no secrets serves until a retry): %w", err)
+	}
+	var now string
+	r.st.Do(func(d *persisted) {
+		if d.KernelSecrets == "green" {
+			d.KernelSecrets = "blue"
+		} else {
+			d.KernelSecrets = "green"
+		}
+		now = d.KernelSecrets
+	})
+	r.kernel.forget("secrets")
+	r.kernel.forget("secrets-next")
+	log.Printf("kernel: secrets-%s serves from now on", now)
+	return now, nil
+}
+
+// wireKernel: the router's kernel client, the colour of secrets that serves, and the keeper of secrets' line state
+func (r *Router) wireKernel(k *KernelClient) {
+	r.kernel = k
+	if k == nil {
+		return
+	}
+	k.activeSecrets = func() string {
+		c := "blue"
+		r.st.Do(func(d *persisted) {
+			if d.KernelSecrets == "green" {
+				c = "green"
+			}
+		})
+		return c
+	}
+	r.kernelLines = newKernelLineKeeper(filepath.Join(r.cfg.DataDir, "kernel-line-state.json"), k)
+	k.onSecretsSeq = r.kernelLines.seen
 }

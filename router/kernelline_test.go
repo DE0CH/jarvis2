@@ -1,6 +1,7 @@
 package main
 
 import (
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -24,7 +25,12 @@ const kernelImage = "ghcr.io/de0ch/jarvis2-session:sha-aaaaaaaaaaaa@sha256:11111
 func kernelRig(t *testing.T) (*rig, *kerneltest.Kernel) {
 	rg := newRig(t)
 	k := kerneltest.Start(t, map[string]string{"JARVIS2_URL": "http://router"})
-	rg.r.kernel = &KernelClient{url: k.URLFor, http: http.DefaultClient, ids: map[string]sig.Identity{}}
+	rg.r.wireKernel(&KernelClient{url: func(role string) string {
+		if role == "secrets-blue" {
+			return k.URLFor("secrets")
+		}
+		return k.URLFor(role)
+	}, http: http.DefaultClient, ids: map[string]sig.Identity{}})
 	rg.r.cfg.SessionImage, rg.r.cfg.Region = kernelImage, "lhr"
 	rg.r.policy.Harnesses["claude"] = HarnessPolicy{}
 	rg.r.st.Do(func(d *persisted) { d.KernelRoot = &gv.Signed{Grant: k.RootTop(), By: "root"} })
@@ -218,7 +224,10 @@ func TestAKernelLinesLife(t *testing.T) {
 	if _, _, err := rg.r.Respond(ra.ID, rsig); err != nil {
 		t.Fatal(err)
 	}
-	waitFor(t, "the restored machine", func() bool { s := kernelSession(rg, nsid); return s.MachineID != "" && s.Kernel != nil && s.Kernel.MachineCert != nil })
+	waitFor(t, "the restored machine", func() bool {
+		s := kernelSession(rg, nsid)
+		return s.MachineID != "" && s.Kernel != nil && s.Kernel.MachineCert != nil
+	})
 	m3 := k.Fly.Machine(kernelSession(rg, nsid).MachineID)
 	if code, body := kdo(t, h, m3, "GET", "/m/snapshot", ""); code != 200 || string(body) != string(tarball) {
 		t.Fatalf("the archived snapshot: %d", code)
@@ -235,5 +244,49 @@ func TestNoKernelRootNoKernelSessions(t *testing.T) {
 	}
 	if kernelSession(rg, sid).Kernel != nil {
 		t.Fatal("a kernel line without the root's grant")
+	}
+}
+
+// blue/green for the kernel's secrets: the standby (Recovered alongside with the same kit) takes the serving one's final
+// state and serves; the old one answers nothing more; the router's secrets calls go to the new colour
+func TestKernelSecretsFlip(t *testing.T) {
+	rg, k := kernelRig(t)
+	blue, ub := k.Secrets2(t)
+	green, ug := k.Secrets2(t)
+	seed := make([]byte, 32)
+	rand.Read(seed)
+	if err := k.ClaimSeeded(blue, seed, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := k.ClaimSeeded(green, seed, true); err != nil {
+		t.Fatal(err)
+	}
+	rg.r.kernel.url = func(role string) string {
+		switch role {
+		case "secrets-blue":
+			return ub
+		case "secrets-green":
+			return ug
+		}
+		return k.URLFor(role)
+	}
+	if _, err := rg.r.kernel.Doc("secrets", "/keys", map[string]any{}); err != nil {
+		t.Fatal("blue doesn't serve:", err)
+	}
+	if _, err := rg.r.kernel.Doc("secrets-next", "/keys", map[string]any{}); err == nil {
+		t.Fatal("the standby served before the flip")
+	}
+	c, err := rg.r.FlipSecrets()
+	if err != nil || c != "green" {
+		t.Fatal(c, err)
+	}
+	if _, err := rg.r.kernel.Doc("secrets", "/keys", map[string]any{}); err != nil {
+		t.Fatal("green doesn't serve after the flip:", err)
+	}
+	if _, err := rg.r.kernel.Doc("secrets-next", "/keys", map[string]any{}); err == nil {
+		t.Fatal("blue still serves after its handoff")
+	}
+	if blue.Mode() != "handed-off" || green.Mode() != "" {
+		t.Fatal(blue.Mode(), green.Mode())
 	}
 }
