@@ -82,7 +82,7 @@ func readSession(id string) (*session, bool) {
 	}
 	var st struct {
 		Sessions map[string]*session `json:"sessions"`
-		Records  []struct { // a record carries the session's own fields (router/state.go Record)
+		Records  []struct {          // a record carries the session's own fields (router/state.go Record)
 			ID     string `json:"id"`
 			Kernel *struct {
 				Burned bool `json:"burned"`
