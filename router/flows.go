@@ -421,10 +421,16 @@ func (r *Router) addApproval(a *Approval) {
 		Request struct {
 			Image string `json:"image"`
 		} `json:"request"`
+		Source struct { // kernelline.go: a cert into a new source names its image there
+			Image string `json:"image"`
+		} `json:"source"`
 	}
 	img := ""
 	if a.Challenge != nil && a.Challenge.Decode(&ch) == nil {
 		img = ch.Request.Image
+		if img == "" && a.Kind == kernelApprovalKind {
+			img = ch.Source.Image
+		}
 	}
 	// a resume on the session's own image names an older CI build than the current one: its signature is in the list
 	if img != "" && img == r.cfg.SessionImage {

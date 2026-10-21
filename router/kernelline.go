@@ -494,6 +494,7 @@ func (r *Router) kernelResume(s Session, upgrade bool, unlock func(), op *lcHand
 //
 //	GET  /api/kernel                    {configured, serves, root}: whether this box has a kernel, whether new
 //	                                    sessions start on it, whether the root's grant is here
+//	GET  /api/kernel/root-grant/draft   {payload}: what the root key signs
 //	POST /api/kernel/root-grant         {grant}: the root key's ⊤ on the sink (the app signs it once, after
 //	                                    secrets' claim, behind the root key's own warning screen); kept, passed on
 //	GET|POST /api/kernel/secrets/{path} secrets' own API, relayed as is (claim, identity, store-key, unlock, lock, …):
@@ -503,6 +504,13 @@ func (r *Router) registerKernel(app func(string, http.HandlerFunc)) {
 		root := false
 		r.st.Do(func(d *persisted) { root = d.KernelRoot != nil })
 		writeJSON(w, 200, map[string]any{"configured": r.kernel != nil, "serves": r.kernelServes(), "root": root})
+	})
+	// the grant the root key signs once: ⊤ on the sink with the sink's keys (hashed from its name: the app can't
+	// compute them; a draft naming other keys is refused by every component that takes the grant)
+	app("GET /api/kernel/root-grant/draft", func(w http.ResponseWriter, req *http.Request) {
+		ik, _ := doc.IdealKeys(doc.Sink)
+		b, _ := json.Marshal(doc.Grant{Kind: "grant", Machine: doc.Sink, Keys: ik, Pair: perm.Top(), From: []string{}, At: doc.Now()})
+		writeJSON(w, 200, map[string]string{"payload": string(b)})
 	})
 	app("POST /api/kernel/root-grant", func(w http.ResponseWriter, req *http.Request) {
 		var in struct {

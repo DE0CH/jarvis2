@@ -6,7 +6,7 @@ name: ios
 # only when the walkthrough, the interop test and the replica of this very commit pass.
 on:
   push:
-    paths: [ios/**, core/**, router/**, tasks/**, infra/setup.py, infra/fly-token.sh, infra/fly-read-token.sh, infra/run-volumes.py, infra/run_volumes_test.py, e2e/testdata/**, policy/**, tools/**, .github/workflows/ios.yml, .github/actions/ios-simulator/**]
+    paths: [ios/**, core/**, kernel/**, router/**, tasks/**, infra/setup.py, infra/fly-token.sh, infra/fly-read-token.sh, infra/run-volumes.py, infra/run_volumes_test.py, e2e/testdata/**, policy/**, tools/**, .github/workflows/ios.yml, .github/actions/ios-simulator/**]
   workflow_dispatch:
 concurrency:
   group: ios-${{ github.ref }}-${{ github.event_name }}
@@ -49,6 +49,16 @@ jobs:
       - name: swift run Units (app code that needs no simulator, e.g. ResumeOnce)
         working-directory: ios/interop
         run: swift run Units
+      - name: swift run Kernel (the app's kernel code against the real kernel secrets and Go-made certs)
+        working-directory: ios/interop
+        run: |
+          K="$RUNNER_TEMP/kernel"; mkdir -p "$K"
+          openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256 -out "$K/box.pem"
+          openssl pkey -in "$K/box.pem" -pubout -outform DER | tail -c 65 | base64 | tr -d '\n' > "$K/box.pub"
+          (cd "$GITHUB_WORKSPACE/kernel" && go build -o "$K/secrets" ./cmd/secrets && go run ./cmd/vectors > "$K/vectors.json")
+          KERNEL_BOX_KEY="$K/box.pem" KERNEL_ADDR=127.0.0.1:18300 "$K/secrets" > "$K/secrets.log" 2>&1 &
+          sleep 2
+          KERNEL_SECRETS=http://127.0.0.1:18300 KERNEL_BOX_PUB="$K/box.pub" KERNEL_VECTORS="$K/vectors.json" swift run -c release Kernel
       - name: swift run Interop
         working-directory: ios/interop
         run: |
