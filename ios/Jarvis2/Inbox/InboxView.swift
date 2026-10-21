@@ -108,7 +108,7 @@ private struct InboxRow: View {
   }
 
   private var kindName: String {
-    ["repo-key": "Repo key", "grant": "Grant", "unlock": "Unlock", "new-session": "New session", "resume-upgrade": "Resume", "add-store": "Add a store", "api-call": "API call", "restore": "Restore store", "peer-message": "Peer message", "message": "Message"][it.kind] ?? it.kind
+    ["repo-key": "Repo key", "grant": "Grant", "unlock": "Unlock", "new-session": "New session", "resume-upgrade": "Resume", "add-store": "Add a store", "kernel-source": "Kernel source", "kernel-add-store": "Add a store", "api-call": "API call", "restore": "Restore store", "peer-message": "Peer message", "message": "Message"][it.kind] ?? it.kind
   }
   /// the list's title: the core action (or the phone grant) the entry leads to, a fixed name per kind
   private var action: String { it.actionTitle }
