@@ -366,11 +366,7 @@ final class RouterClient: NSObject, ASWebAuthenticationPresentationContextProvid
   // ---- approvals ----
   /// an approval with its signed challenge (checked by Checks.review against the pinned core key)
   /// imageSig: CI's signature over the image the challenge names (keys/ci.pub; Attestation)
-  struct ApprovalDTO: Decodable {
-    let id: String; let kind: String; let session: String?; let label: String?; let challenge: SignedDoc; let options: [String: String]?; let imageSig: String?
-    /// an add-store on a kernel line: its second cert (router/kernelline.go)
-    var earlier: [SignedDoc]? = nil
-  }
+  struct ApprovalDTO: Decodable { let id: String; let kind: String; let session: String?; let label: String?; let challenge: SignedDoc; let options: [String: String]?; let imageSig: String? }
   struct SessionDTO: Decodable { let id: String; let state: String; let createRequestId: String? }
   struct StateDTO: Decodable { let sessions: [SessionDTO]; let approvals: [ApprovalDTO] }
   struct RespondDTO: Decodable { let answer: SignedDoc; let session: String }

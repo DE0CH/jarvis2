@@ -2,7 +2,7 @@
 // cap, and Jarvis 2 itself with Reset or recover and the encrypted backup (an offline copy of the stores).
 import SwiftUI
 
-enum SettingsRoute: Hashable { case stores, repos, addRepo, machines, backup, content, pairedApps, kernel }
+enum SettingsRoute: Hashable { case stores, repos, addRepo, machines, backup, content, pairedApps }
 
 struct SettingsView: View {
   @Environment(AppModel.self) private var model
@@ -34,8 +34,6 @@ struct SettingsView: View {
           Button("Reset or recover…", systemImage: "key.horizontal") { model.showSetup = true }.accessibilityIdentifier("open-setup")
           NavigationLink(value: SettingsRoute.backup) { Label("Encrypted backup", systemImage: "arrow.down.doc") }
             .accessibilityIdentifier("open-backup")
-          NavigationLink(value: SettingsRoute.kernel) { Label("Kernel", systemImage: "cpu") }
-            .accessibilityIdentifier("open-kernel")
         } header: { Text("Jarvis 2") } footer: {
           Text("Either pairs this iPhone again.")
         }
@@ -52,7 +50,6 @@ struct SettingsView: View {
         case .backup: BackupView()
         case .content: ContentStoresView()
         case .pairedApps: PairedAppsView()
-        case .kernel: KernelSetupView()
         }
       }
     }
