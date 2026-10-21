@@ -116,7 +116,7 @@ func TestRaisedLinesRearm(t *testing.T) {
 
 func TestThresholds(t *testing.T) {
 	env := func(m map[string]string) func(string) string { return func(k string) string { return m[k] } }
-	if c, w := budgetThresholds(env(nil)); c != 40 || w != 35 {
+	if c, w := budgetThresholds(env(nil)); c != 50 || w != 45 {
 		t.Fatal(c, w)
 	}
 	if c, w := budgetThresholds(env(map[string]string{"FLY_BUDGET_USD": "50"})); c != 50 || w != 40 {

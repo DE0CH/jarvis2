@@ -55,7 +55,7 @@ made around it; the app's own list is `app/DECISIONS.md`.
 16. **Box**: Hetzner cx23 (2 vCPU, 4 GB, 40 GB) in fsn1, EUR 6.588/month gross, IPv6-only (DECISIONS 156), in the
     `jarvis2-mock` project (renaming a Hetzner project needs the console).
 17. **Fly**: app `jarvis2-sessions` in org `jarvis2-370`, region `lhr`, sizes small/medium/large = 2/4/8 shared
-    CPUs with 2/4/8 GB, then every doubling past large, named by its memory (16gb, 32gb, …; DECISIONS 167). The router's budget cap (DM at USD 35, pause all at USD 40 a month; Deyao raised it from Jarvis 1's 25/30 on 2026-10-20) reads the app with a
+    CPUs with 2/4/8 GB, then every doubling past large, named by its memory (16gb, 32gb, …; DECISIONS 167). The router's budget cap (DM at USD 45, pause all at USD 50 a month; Deyao raised it from Jarvis 1's 25/30 to 35/40 on 2026-10-20, then to 45/50 on 2026-10-21) reads the app with a
     read-only Fly token (`infra/fly-read-token.sh`).
 18. **Images** on GHCR (public, like the repo), with GitHub build attestations (the phone doesn't check them
     yet).

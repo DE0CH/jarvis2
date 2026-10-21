@@ -5,8 +5,8 @@ package main
 // Fly has no spend cap and no billing alerts, so the router ESTIMATES this month's spend: every tick it sums
 // the $/hour of everything accruing in the sessions' app (started machines by their guest size, provisioned
 // volumes) and adds rate × elapsed to a month-to-date total kept in the router's state (a Riemann sum,
-// blind while the router is down, bounded by maxDeltaH per gap). FLY_BUDGET_WARN_USD (default 35) → one DM;
-// FLY_BUDGET_USD (default 40, Deyao 2026-10-20; 0 = off) → pause every running session (r.Pause: snapshot, then the core's
+// blind while the router is down, bounded by maxDeltaH per gap). FLY_BUDGET_WARN_USD (default 45) → one DM;
+// FLY_BUDGET_USD (default 50, Deyao 2026-10-21; 0 = off) → pause every running session (r.Pause: snapshot, then the core's
 // kill) and DM, and keep pausing anything started while the month stays over the cap.
 // Raising a line above the month's spend so far re-arms it: its DM fires again when the spend reaches the new line.
 //
@@ -291,14 +291,14 @@ func applySample(prev *BudgetState, now time.Time, ratePerHour, capUSD, warnUSD 
 	return s, a, deltaH
 }
 
-// budgetThresholds: FLY_BUDGET_USD (default 40, 0 = off) and FLY_BUDGET_WARN_USD (default 35, or 80% of a
+// budgetThresholds: FLY_BUDGET_USD (default 50, 0 = off) and FLY_BUDGET_WARN_USD (default 45, or 80% of a
 // cap set without one)
 func budgetThresholds(getenv func(string) string) (capUSD, warnUSD float64) {
-	capUSD = 40
+	capUSD = 50
 	if v, err := strconv.ParseFloat(getenv("FLY_BUDGET_USD"), 64); err == nil {
 		capUSD = v
 	}
-	warnUSD = 35
+	warnUSD = 45
 	if v, err := strconv.ParseFloat(getenv("FLY_BUDGET_WARN_USD"), 64); err == nil {
 		warnUSD = v
 	} else if getenv("FLY_BUDGET_USD") != "" {
