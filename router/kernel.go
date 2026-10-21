@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -24,6 +25,9 @@ type KernelClient struct {
 	http *http.Client
 	mu   sync.Mutex
 	ids  map[string]sig.Identity
+	// onSecretsSeq: every secrets answer's X-Line-Seq (linestate.go keeps secrets' newest line state), before the
+	// answer goes back
+	onSecretsSeq func(int)
 }
 
 // newKernelClient: nil when KERNEL_URL isn't set (no kernel on this box yet)
@@ -48,25 +52,40 @@ func (e *KernelError) Error() string {
 
 // call: POST (body != nil) or GET → the raw answer
 func (k *KernelClient) call(role, method, path string, body any) ([]byte, error) {
+	b, seq, err := k.callSeq(role, method, path, body)
+	if role == "secrets" && seq > 0 && k.onSecretsSeq != nil {
+		k.onSecretsSeq(seq)
+	}
+	return b, err
+}
+
+// callNoHook: call without the line-state hook (the keeper's own fetches)
+func (k *KernelClient) callNoHook(role, method, path string, body any) ([]byte, error) {
+	b, _, err := k.callSeq(role, method, path, body)
+	return b, err
+}
+
+func (k *KernelClient) callSeq(role, method, path string, body any) ([]byte, int, error) {
 	var rd io.Reader
 	if body != nil {
 		b, err := json.Marshal(body)
 		if err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 		rd = bytes.NewReader(b)
 	}
 	req, err := http.NewRequest(method, k.url(role)+path, rd)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := k.http.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("kernel %s: %w", role, err)
+		return nil, 0, fmt.Errorf("kernel %s: %w", role, err)
 	}
 	defer resp.Body.Close()
 	b, _ := io.ReadAll(io.LimitReader(resp.Body, 16<<20))
+	seq, _ := strconv.Atoi(resp.Header.Get(lineSeqHeader))
 	if resp.StatusCode != 200 {
 		msg := strings.TrimSpace(string(b))
 		var d sig.Doc
@@ -78,9 +97,9 @@ func (k *KernelClient) call(role, method, path string, body any) ([]byte, error)
 				msg = e.Error
 			}
 		}
-		return nil, &KernelError{role, resp.StatusCode, msg}
+		return nil, seq, &KernelError{role, resp.StatusCode, msg}
 	}
-	return b, nil
+	return b, seq, nil
 }
 
 // Doc: a POST answered with a signed document

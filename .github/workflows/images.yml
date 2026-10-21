@@ -171,6 +171,16 @@ jobs:
           R="$(infra/image-digest.sh "ghcr.io/de0ch/jarvis2-router:$T")"
           # the router runs on the control box (k8s/control/apps/router; docs/DESIGN.md "The boxes")
           sed -i -E "s#ghcr.io/de0ch/jarvis2-router:sha-[0-9a-f]{12}(@sha256:[0-9a-f]{64})?#$R#g" "$RF"
+          # the kernel (k8s/control/apps/kernel): its components move when kernel/ changed since the image it pins (not applied
+          # on a box yet: RUNBOOK "Bringing the kernel up"; before it serves, secrets gets the cores' blue/green)
+          KF=k8s/control/apps/kernel/kernel.yaml
+          if [ -f "$KF" ]; then
+            kcur="$(grep -ho 'jarvis2-kernel:sha-[0-9a-f]*' "$KF" | head -1 | cut -d- -f3)"
+            if [ -z "$kcur" ] || ! kfull="$(git rev-parse -q --verify "$kcur^{commit}")" || ! git diff --quiet "$kfull" "$GITHUB_SHA" -- kernel/; then
+              K="$(infra/image-digest.sh "ghcr.io/de0ch/jarvis2-kernel:$T")"
+              sed -i -E "s#ghcr.io/de0ch/jarvis2-kernel:(latest|sha-[0-9a-f]{12}(@sha256:[0-9a-f]{64})?)#$K#g" "$KF"
+            fi
+          fi
           # the session image: the core starts only that digest, and the phone shows it as a CI build only with this
           # signature (the CI key, environment release; keys/ci.pub)
           S="$(infra/image-digest.sh "ghcr.io/de0ch/jarvis2-session:$T")"

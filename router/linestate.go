@@ -12,6 +12,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"log"
 	"net/http"
 	"os"
@@ -45,6 +46,7 @@ type keptLineState struct {
 type lineKeeper struct {
 	mu         sync.Mutex
 	path       string
+	object     string // its copy in the bucket
 	kept       *keptLineState
 	bucketSeq  int
 	bucketAt   time.Time
@@ -56,9 +58,41 @@ type lineKeeper struct {
 
 func (r *Router) lineStatePath() string { return filepath.Join(r.cfg.DataDir, "line-state.json") }
 
+// newKernelLineKeeper: the same for the kernel's secrets (kernel/secrets/continuity.go: its stores and the deploy-key
+// stores, which have no backup), kept beside the core's (kernel-line-state.json; keys/_jarvis2/kernel-line-state.json)
+func newKernelLineKeeper(path string, k *KernelClient) *lineKeeper {
+	lk := &lineKeeper{path: path, object: "keys/_jarvis2/kernel-line-state.json", bucket: backupBucketFromEnv}
+	lk.fetch = func() (int, []byte, error) {
+		b, err := k.callNoHook("secrets", "GET", "/line-state", nil)
+		if err != nil {
+			var ke *KernelError
+			if errors.As(err, &ke) {
+				return ke.Status, nil, nil
+			}
+			return 0, nil, err
+		}
+		return 200, b, nil
+	}
+	lk.coreKey = func() string {
+		k.forget("secrets") // a restarted secrets has other keys
+		id, err := k.Identity("secrets")
+		if err != nil {
+			return ""
+		}
+		return id.SigningKey
+	}
+	if b, err := os.ReadFile(path); err == nil {
+		var x keptLineState
+		if json.Unmarshal(b, &x) == nil && x.Core != "" {
+			lk.kept = &x
+		}
+	}
+	return lk
+}
+
 // lineKeeperFor: the router's keeper, wired to its core client
 func newLineKeeper(path string, c *CoreClient) *lineKeeper {
-	k := &lineKeeper{path: path, bucket: backupBucketFromEnv}
+	k := &lineKeeper{path: path, object: lineStateObject, bucket: backupBucketFromEnv}
 	k.fetch = func() (int, []byte, error) { return c.rawNoHook("GET", "/line-state", nil) }
 	k.coreKey = func() string {
 		st, b, err := c.rawNoHook("GET", "/identity", nil)
@@ -141,7 +175,7 @@ func (k *lineKeeper) toBucket() {
 		return
 	}
 	raw, _ := json.Marshal(x)
-	if err := b.put(lineStateObject, raw); err != nil {
+	if err := b.put(k.object, raw); err != nil {
 		log.Printf("line state %d: bucket: %v", x.Seq, err)
 		return
 	}
@@ -173,7 +207,7 @@ func (k *lineKeeper) current() *keptLineState {
 	if b == nil {
 		return nil
 	}
-	raw, err := b.get(lineStateObject, nil)
+	raw, err := b.get(k.object, nil)
 	if err != nil {
 		return nil
 	}
@@ -185,6 +219,19 @@ func (k *lineKeeper) current() *keptLineState {
 }
 
 func (r *Router) registerLineState(app func(string, http.HandlerFunc)) {
+	// the kernel's secrets, the same way (KernelSetupView's Recover)
+	app("GET /api/kernel/line-state", func(w http.ResponseWriter, req *http.Request) {
+		var x *keptLineState
+		if r.kernelLines != nil {
+			x = r.kernelLines.current()
+		}
+		if x == nil {
+			writeJSON(w, 404, map[string]string{"error": "the router keeps no line state of the kernel's secrets"})
+			return
+		}
+		w.Header().Set(lineSeqHeader, strconv.Itoa(x.Seq))
+		writeJSON(w, 200, x.Doc)
+	})
 	// the app's Recover: the newest line state the router holds (the app checks the head against the derived key and
 	// against the newest number it has seen; the router's word decides nothing)
 	app("GET /api/core/line-state", func(w http.ResponseWriter, req *http.Request) {

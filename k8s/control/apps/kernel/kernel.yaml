@@ -6,7 +6,8 @@
 # State: the notary's log, the notarizer's sources and the spawner's machines live on their own volumes (Recreate:
 # one writer; the router retries a kernel call through the seconds a restart takes). Mover, merger and the two signers
 # hold nothing. Secrets holds the stores in memory only (a restart = Recover, or blue/green like the old core's: later).
-# Only the router reaches them; only the spawner (Fly) and secrets (GitHub deploy keys) reach the internet.
+# Only the router reaches them; only the spawner (Fly) and secrets (GitHub deploy keys) reach the internet. The image is
+# pinned by digest by the images workflow's pin job whenever kernel/ changed.
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim

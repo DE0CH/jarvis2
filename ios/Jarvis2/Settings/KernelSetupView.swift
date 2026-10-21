@@ -85,11 +85,18 @@ struct KernelSetupView: View {
       busy = "Setting up the kernel…"
       let seed = KernelContinuity.seed(m)
       let derived = try KernelContinuity.keys(seed: seed)
+      // the deploy-key stores an earlier secrets from the same kit kept (no backup): its line state, checked as the core's
+      var line: CoreSetup.LineStateDoc?
+      if let l = try await RouterClient.shared.kernelLineState(), CoreSetup.lineStateSigned(l, coreKey: derived.signingKey) {
+        _ = try CoreSetup.checkLineState(l, coreKey: derived.signingKey, atLeast: LineWitness.seen(derived.signingKey))
+        line = l
+      }
       let sk = try await RouterClient.shared.kernelStoreKey(signedBy: k.signingKey, secrets: derived.agreementKey)
-      let bundle = try KernelSetup.bundle(stores, storeKey: sk, seed: seed)
+      let bundle = try KernelSetup.bundle(stores, storeKey: sk, seed: seed, lineState: line)
       let body = try KernelSetup.claim(secrets: k, phone: try PhoneKeys.shared.publicKeys(), root: try RootKey.shared.publicKey(), master: m, bundle: bundle, identity: derived)
       try await RouterClient.shared.kernelClaim(body, derived: derived)
       KernelTrust.pin(derived)
+      LineWitness.saw(derived.signingKey, try? await RouterClient.shared.kernelIdentity(boxKey: boxKey).state.lineSeq)
       kitText = ""; busy = nil
       await load()
     } catch { busy = nil; failure = errText(error) }

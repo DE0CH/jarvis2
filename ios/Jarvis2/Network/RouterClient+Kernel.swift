@@ -20,6 +20,14 @@ extension RouterClient {
     guard sk.kind == "store-key", sk.phone == phone, sk.secrets == secrets else { throw TrustError.stale("store key") }
     return sk.storeKey
   }
+  /// the kernel secrets' line state the router kept (its deploy-key stores, which have no backup); nil when it has none
+  /// (the caller checks it: CoreSetup.checkLineState against the derived key)
+  func kernelLineState() async throws -> CoreSetup.LineStateDoc? {
+    let (status, data) = try await raw("GET", "api/kernel/line-state", nil)
+    if status == 404 { return nil }
+    guard status == 200 else { throw Self.failure("GET", "api/kernel/line-state", status, data) }
+    return try? JSONDecoder().decode(CoreSetup.LineStateDoc.self, from: data)
+  }
   /// the claim (KernelSetup.claim's body); its answer is checked against the keys the kit derives
   func kernelClaim(_ body: [String: Any], derived: PublicKeys) async throws {
     struct C: Decodable { let kind: String }
