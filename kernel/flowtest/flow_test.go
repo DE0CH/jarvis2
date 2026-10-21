@@ -10,11 +10,11 @@ import (
 	"github.com/DE0CH/jarvis2/kernel/doc"
 	"github.com/DE0CH/jarvis2/kernel/gv"
 	"github.com/DE0CH/jarvis2/kernel/internal/kt"
-	"github.com/DE0CH/jarvis2/kernel/perm"
-	"github.com/DE0CH/jarvis2/kernel/sig"
 	"github.com/DE0CH/jarvis2/kernel/merger"
 	"github.com/DE0CH/jarvis2/kernel/mover"
 	"github.com/DE0CH/jarvis2/kernel/notarizer"
+	"github.com/DE0CH/jarvis2/kernel/perm"
+	"github.com/DE0CH/jarvis2/kernel/sig"
 	"github.com/DE0CH/jarvis2/kernel/signers"
 )
 

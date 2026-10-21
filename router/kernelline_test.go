@@ -140,7 +140,10 @@ func TestAKernelLinesLife(t *testing.T) {
 	if err := rg.r.Resume(sid, false); err != nil {
 		t.Fatal(err)
 	}
-	waitFor(t, "the second machine", func() bool { s := kernelSession(rg, sid); return s.MachineID != "" && s.MachineID != m1.ID && s.Kernel.MachineCert != nil })
+	waitFor(t, "the second machine", func() bool {
+		s := kernelSession(rg, sid)
+		return s.MachineID != "" && s.MachineID != m1.ID && s.Kernel.MachineCert != nil
+	})
 	m2 := k.Fly.Machine(kernelSession(rg, sid).MachineID)
 	code, body = kdo(t, h, m2, "GET", "/m/snapshot", "")
 	if code != 200 || string(body) != string(tarball) {

@@ -24,8 +24,8 @@ import (
 	"sync"
 
 	"github.com/DE0CH/jarvis2/kernel/doc"
-	"github.com/DE0CH/jarvis2/kernel/perm"
 	"github.com/DE0CH/jarvis2/kernel/internal/serve"
+	"github.com/DE0CH/jarvis2/kernel/perm"
 	"github.com/DE0CH/jarvis2/kernel/sig"
 )
 

@@ -10,9 +10,9 @@ import (
 
 	"github.com/DE0CH/jarvis2/kernel/doc"
 	"github.com/DE0CH/jarvis2/kernel/internal/kt"
+	"github.com/DE0CH/jarvis2/kernel/notarizer"
 	"github.com/DE0CH/jarvis2/kernel/perm"
 	"github.com/DE0CH/jarvis2/kernel/sig"
-	"github.com/DE0CH/jarvis2/kernel/notarizer"
 )
 
 const img = "ghcr.io/de0ch/jarvis2-session@sha256:" + "2222222222222222222222222222222222222222222222222222222222222222"
