@@ -7,7 +7,7 @@ name: images
 on:
   push:
     branches: [main]
-    paths: [core/**, router/**, machine/**, session-image/**, policy/**, tasks/**, app/**, infra/setup.py, infra/setup_trust_test.py, infra/setup_write_test.py, infra/image-unpacked-size.py, .github/workflows/images.yml]
+    paths: [core/**, kernel/**, router/**, machine/**, session-image/**, policy/**, tasks/**, app/**, infra/setup.py, infra/setup_trust_test.py, infra/setup_write_test.py, infra/image-unpacked-size.py, .github/workflows/images.yml]
   workflow_dispatch:
     inputs:
       base:
@@ -28,6 +28,7 @@ jobs:
       - uses: actions/setup-go@v5
         with: { go-version: "1.25" }
       - run: cd core && go vet ./... && go test ./... && go build -tags fakefly ./...
+      - run: cd kernel && go vet ./... && go test ./... && test -z "$(gofmt -l .)"
       - run: cd router && go vet ./... && go test ./...
       - run: cd machine && go vet ./... && go test ./...
       - run: pip install -q cryptography && python3 infra/setup_trust_test.py && python3 infra/setup_write_test.py

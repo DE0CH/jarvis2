@@ -1,0 +1,86 @@
+// Package gv: checking a grant as everyone who takes one does (the mover, the merger, secrets, the guard). A grant is
+// signed by the mover or the merger (their box-vouched identities), or is the root key's ⊤ on the sink.
+package gv
+
+import (
+	"fmt"
+	"time"
+
+	"github.com/DE0CH/jarvis2/kernel/internal/doc"
+	"github.com/DE0CH/jarvis2/kernel/internal/perm"
+	"github.com/DE0CH/jarvis2/kernel/internal/sig"
+)
+
+// Signed: a grant and what vouches for its signer
+type Signed struct {
+	Grant   sig.Doc       `json:"grant"`
+	By      string        `json:"by"`                // "mover", "merger" or "root"
+	Signer  *sig.Identity `json:"signer,omitempty"`  // the mover's or merger's identity
+	Keys    *sig.Doc      `json:"keys,omitempty"`    // root: secrets' signed keys statement
+	Secrets *sig.Identity `json:"secrets,omitempty"` // … and secrets' identity
+}
+
+// RootKey: the root key from secrets' signed keys statement
+func RootKey(keys *sig.Doc, secrets *sig.Identity, boxPub string) (string, error) {
+	if keys == nil || secrets == nil {
+		return "", fmt.Errorf("the root key needs secrets' signed keys")
+	}
+	if err := sig.CheckIdentity(*secrets, "secrets", boxPub); err != nil {
+		return "", err
+	}
+	var k struct {
+		Kind  string `json:"kind"`
+		Phone string `json:"phone"`
+		Root  string `json:"root"`
+	}
+	if err := keys.Open(secrets.SigningKey, &k); err != nil || k.Kind != "keys" {
+		return "", fmt.Errorf("secrets' keys: %v", err)
+	}
+	return k.Root, nil
+}
+
+// Open: the grant, checked
+func Open(s Signed, boxPub string) (doc.Grant, error) {
+	var key string
+	switch s.By {
+	case "mover", "merger":
+		if s.Signer == nil {
+			return doc.Grant{}, fmt.Errorf("a %s grant needs the %s's identity", s.By, s.By)
+		}
+		if err := sig.CheckIdentity(*s.Signer, s.By, boxPub); err != nil {
+			return doc.Grant{}, err
+		}
+		key = s.Signer.SigningKey
+	case "root":
+		k, err := RootKey(s.Keys, s.Secrets, boxPub)
+		if err != nil {
+			return doc.Grant{}, err
+		}
+		key = k
+	default:
+		return doc.Grant{}, fmt.Errorf("a grant signed by %q", s.By)
+	}
+	g, err := doc.OpenGrant(s.Grant, key)
+	if err != nil {
+		return doc.Grant{}, fmt.Errorf("grant: %v", err)
+	}
+	if s.By == "root" && (g.Machine != doc.Sink || !perm.Top().Leq(g.Pair)) {
+		return doc.Grant{}, fmt.Errorf("the root key's grant is ⊤ on the sink only")
+	}
+	if k := g.Machine.Kind(); k == "sink" || k == "source" {
+		if ik, _ := doc.IdealKeys(g.Machine); ik != g.Keys {
+			return doc.Grant{}, fmt.Errorf("a grant on %s names keys that aren't its own", g.Machine)
+		}
+	}
+	return g, nil
+}
+
+// Later: the later of two RFC 3339 times
+func Later(a, b string) string {
+	ta, ea := time.Parse(time.RFC3339Nano, a)
+	tb, eb := time.Parse(time.RFC3339Nano, b)
+	if ea != nil || eb == nil && tb.After(ta) {
+		return b
+	}
+	return a
+}
