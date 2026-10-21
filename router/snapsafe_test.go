@@ -69,15 +69,6 @@ func volRig(t *testing.T) (*rig, *volCore) {
 	return rg, vc
 }
 
-func captureDMs(t *testing.T) *[]string {
-	var mu sync.Mutex
-	dms := []string{}
-	old := dmHook
-	dmHook = func(s string) { mu.Lock(); dms = append(dms, s); mu.Unlock() }
-	t.Cleanup(func() { dmHook = old })
-	return &dms
-}
-
 // m2: a running, booted, reporting machine of s1 (whose m1 left the rig's snapshot); withVolume: its cert names one
 func runningM2(rg *rig, withVolume bool) {
 	machine := map[string]any{"id": "m2", "signingKey": rg.mkey.pub()}
@@ -103,7 +94,7 @@ func sessionS1(rg *rig) (s Session) {
 // volume whose snapshot fails is kept, the session says why, and Deyao gets a "needs you" DM; nothing is killed
 func TestAFailedFinalSnapshotKeepsTheMachine(t *testing.T) {
 	rg := newRig(t)
-	dms := captureDMs(t)
+	dms := captureDM(t)
 	rg.r.cfg.SnapshotWait = 200 * time.Millisecond
 	runningM2(rg, false)
 	if err := rg.r.Pause("s1"); err != nil {
@@ -123,9 +114,9 @@ func TestAFailedFinalSnapshotKeepsTheMachine(t *testing.T) {
 		}
 	}
 	rg.core.mu.Unlock()
-	waitFor(t, "DM", func() bool { return len(*dms) == 1 })
-	if !strings.Contains((*dms)[0], "needs you") || !strings.Contains((*dms)[0], "kept instead of destroyed") {
-		t.Fatalf("%q", *dms)
+	waitFor(t, "DM", func() bool { return len(dms()) == 1 })
+	if !strings.Contains(dms()[0], "needs you") || !strings.Contains(dms()[0], "kept instead of destroyed") {
+		t.Fatalf("%q", dms())
 	}
 	// the machine reports its failure: the next pause stops waiting at once (no SnapshotWait)
 	rg.r.cfg.SnapshotWait = time.Minute
@@ -161,7 +152,7 @@ func TestAFailedFinalSnapshotKeepsTheMachine(t *testing.T) {
 // (it would start empty): the session and a DM say so and name the backup
 func TestNoSnapshotStopsTheResumeAndNamesTheBackup(t *testing.T) {
 	rg, vc := volRig(t)
-	dms := captureDMs(t)
+	dms := captureDM(t)
 	rg.r.cfg.SnapshotWait = 200 * time.Millisecond
 	runningM2(rg, true)
 	if err := rg.r.Pause("s1"); err != nil {
@@ -184,17 +175,17 @@ func TestNoSnapshotStopsTheResumeAndNamesTheBackup(t *testing.T) {
 	if !strings.Contains(s.NoSnapshot, "machine m2 left no snapshot") {
 		t.Fatalf("noSnapshot %q", s.NoSnapshot)
 	}
-	waitFor(t, "DM", func() bool { return len(*dms) == 1 })
-	if !strings.Contains((*dms)[0], "won't resume") || !strings.Contains((*dms)[0], "vs_m2") || !strings.Contains((*dms)[0], "2026-12-14") {
-		t.Fatalf("%q", *dms)
+	waitFor(t, "DM", func() bool { return len(dms()) == 1 })
+	if !strings.Contains(dms()[0], "won't resume") || !strings.Contains(dms()[0], "vs_m2") || !strings.Contains(dms()[0], "2026-12-14") {
+		t.Fatalf("%q", dms())
 	}
 	err := rg.r.Resume("s1", false)
 	if err == nil || !strings.Contains(err.Error(), "would start empty") || !strings.Contains(err.Error(), "vs_m2") || !strings.Contains(err.Error(), "machine m1's") {
 		t.Fatalf("resume: %v", err)
 	}
 	rg.r.Resume("s1", false)
-	if len(*dms) != 1 {
-		t.Fatalf("the refusal DMed again: %q", *dms)
+	if len(dms()) != 1 {
+		t.Fatalf("the refusal DMed again: %q", dms())
 	}
 	rg.r.st.Do(func(d *persisted) {
 		v := sessionView(d.Sessions["s1"], d)
@@ -307,7 +298,7 @@ func TestABootingMachineCarriesThePredecessorsSnapshot(t *testing.T) {
 // volume through the core (and needs a volume)
 func TestDiskReportsWarnAndMoreDiskExtends(t *testing.T) {
 	rg, vc := volRig(t)
-	dms := captureDMs(t)
+	dms := captureDM(t)
 	runningM2(rg, false)
 	h := rg.r.MachineHandler()
 	m := testMachine{"m2", rg.mkey.k}
@@ -324,8 +315,8 @@ func TestDiskReportsWarnAndMoreDiskExtends(t *testing.T) {
 	rg.r.st.Do(func(d *persisted) { d.Sessions["s1"].DiskGB = 0 })
 	m.do(t, h, "POST", "/m/disk", `{"root":{"totalKb":8000000,"availKb":200000}}`)
 	m.do(t, h, "POST", "/m/disk", `{"root":{"totalKb":8000000,"availKb":100000}}`) // the same episode: no second DM
-	if len(*dms) != 1 || !strings.Contains((*dms)[0], "running out of disk: 0.2 GB free of 7.6 GB on its machine's disk") || !strings.Contains((*dms)[0], "no volume") {
-		t.Fatalf("%q", *dms)
+	if len(dms()) != 1 || !strings.Contains(dms()[0], "running out of disk: 0.2 GB free of 7.6 GB on its machine's disk") || !strings.Contains(dms()[0], "no volume") {
+		t.Fatalf("%q", dms())
 	}
 	rg.r.st.Do(func(d *persisted) {
 		v := sessionView(d.Sessions["s1"], d)
@@ -337,8 +328,8 @@ func TestDiskReportsWarnAndMoreDiskExtends(t *testing.T) {
 	// with a volume: the volume is the disk that counts, and More disk doubles it
 	runningM2(rg, true)
 	m.do(t, h, "POST", "/m/disk", `{"root":{"totalKb":8000000,"availKb":4000000},"data":{"totalKb":10485760,"availKb":300000}}`)
-	if len(*dms) != 2 || !strings.Contains((*dms)[1], "on its volume") || !strings.Contains((*dms)[1], "gives it 20 GB") {
-		t.Fatalf("%q", *dms)
+	if len(dms()) != 2 || !strings.Contains(dms()[1], "on its volume") || !strings.Contains(dms()[1], "gives it 20 GB") {
+		t.Fatalf("%q", dms())
 	}
 	out, err := rg.r.MoreDisk("s1")
 	if err != nil || out["toGb"] != 20 {

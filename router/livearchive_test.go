@@ -48,7 +48,7 @@ func s1Destroyed(rg *rig) bool {
 // the destroy sends no resume DM: the missing snapshot is noted in the record.
 func TestDestroyArchivesEveryLiveTranscriptFirst(t *testing.T) {
 	rg, _ := volRig(t)
-	dms := captureDMs(t)
+	dms := captureDM(t)
 	rg.r.cfg.SnapshotWait = 200 * time.Millisecond
 	runningM2(rg, true) // its final snapshot never comes; its volume is backed up, so the kill goes on
 	orig := strings.Repeat(`{"type":"user","message":{"content":"the original conversation"}}`+"\n", 2000)
@@ -93,7 +93,7 @@ func TestDestroyArchivesEveryLiveTranscriptFirst(t *testing.T) {
 		t.Fatalf("the live copies stayed after a full archive: %v", rg.dav.under(liveS1))
 	}
 	// no resume-refusal DM from a destroy; the record says the last machine left no snapshot
-	for _, dm := range *dms {
+	for _, dm := range dms() {
 		if strings.Contains(dm, "won't resume") || strings.Contains(dm, "left no snapshot") {
 			t.Fatalf("a destroy DMed: %q", dm)
 		}

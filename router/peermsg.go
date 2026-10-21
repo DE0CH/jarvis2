@@ -182,12 +182,12 @@ func (r *Router) SendPeer(sender, to, text string, signed *SignedRequest, method
 		Args: map[string]any{"to": recv.ID}}, Signed: signed}
 	note := peerNote(&from, &recv, text)
 	if held, ok := heldPeerNote(note, &recv); ok {
-		go r.deliverPeerNote(held, o, "")
+		r.goPeerNote(held, o, "")
 		return map[string]any{"delivering": true, "direction": note.Direction, "to": recv.ID,
 			"waiting": "message", "note": "the receiving session holds a sensitive store: Deyao delivers or denies this message in the Inbox; you hear the outcome"}, nil
 	}
 	if note.Direction != "upward" {
-		go r.deliverPeerNote(note, o, "")
+		r.goPeerNote(note, o, "")
 		return map[string]any{"delivering": true, "direction": note.Direction, "to": recv.ID}, nil
 	}
 	q, dup, err := r.FileRequest(requestKindPeer, RequestParams{Session: recv.ID, Text: text}, peerExplanation(&from, &recv), o)
@@ -195,6 +195,16 @@ func (r *Router) SendPeer(sender, to, text string, signed *SignedRequest, method
 		return nil, err
 	}
 	return map[string]any{"id": q.ID, "duplicate": dup, "expires": q.Expires, "direction": "upward", "waiting": "inbox", "to": recv.ID}, nil
+}
+
+// goPeerNote: deliverPeerNote in the background, counted in messageWG with the other message goroutines (a test
+// waits for them before its DM hook and its directory go: a held message DMs after it is in the Inbox)
+func (r *Router) goPeerNote(note PeerNote, o Origin, ref string) {
+	messageWG.Add(1)
+	go func() {
+		defer messageWG.Done()
+		r.deliverPeerNote(note, o, ref)
+	}()
 }
 
 // deliverPeerNote: the note into the receiving session (started if paused); a failure is the sender's outcome. ref:
@@ -266,7 +276,7 @@ func (r *Router) ApprovePeer(id string) (map[string]any, error) {
 	}
 	note := peerNote(&from, &to, q.Params.Text)
 	note.Approved = note.Direction == "upward"
-	go r.deliverPeerNote(note, q.Origin, q.ID)
+	r.goPeerNote(note, q.Origin, q.ID)
 	return map[string]any{"ok": true, "state": "delivering", "direction": note.Direction}, nil
 }
 

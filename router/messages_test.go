@@ -21,7 +21,7 @@ type msgRig struct {
 	phone *ecdh.PrivateKey
 	mu    sync.Mutex
 	got   []Delivery
-	dms   *[]string
+	dms   func() []string
 }
 
 func newMsgRig(t *testing.T, machine string, sensitive bool, answer func(d Delivery) DeliveryResult) *msgRig {
@@ -154,8 +154,9 @@ func TestAMessageIntoASensitiveSessionWaitsForDeyao(t *testing.T) {
 	if ds := m.deliveries(); len(ds) != 1 || !ds[0].Preview || ds[0].Attest != nil {
 		t.Fatalf("only a preview reached the machine: %+v", ds)
 	}
-	if len(*m.dms) != 1 || !strings.Contains((*m.dms)[0], "Peer message") {
-		t.Fatalf("dm %q", *m.dms)
+	messageWG.Wait() // the hand-over DMs after the message is in the Inbox
+	if len(m.dms()) != 1 || !strings.Contains(m.dms()[0], "Peer message") {
+		t.Fatalf("dm %q", m.dms())
 	}
 	// it is in the Inbox, under its session, with the exact text and who asks
 	var it *InboxItem
@@ -170,8 +171,10 @@ func TestAMessageIntoASensitiveSessionWaitsForDeyao(t *testing.T) {
 	}
 	// a second message waiting doesn't DM again (one DM per session while any waits)
 	m.sendPeer(t, "sfrom", nil, "and the other one")
-	if ps2 := m.waitPending(t, 2); len(ps2) != 2 || len(*m.dms) != 1 {
-		t.Fatalf("%+v (dms %d)", ps2, len(*m.dms))
+	ps2 := m.waitPending(t, 2)
+	messageWG.Wait()
+	if len(ps2) != 2 || len(m.dms()) != 1 {
+		t.Fatalf("%+v (dms %d)", ps2, len(m.dms()))
 	}
 	m.r.DenyMessages([]string{func() string {
 		for _, pm := range m.pending() {
@@ -410,8 +413,8 @@ func TestJarvisOwnMessagesGoStraightIntoASensitiveSession(t *testing.T) {
 			t.Fatalf("%s not delivered straight in: %+v", d.Kind, ds)
 		}
 	}
-	if len(m.pending()) != 0 || len(*m.dms) != 0 {
-		t.Fatalf("held %+v, dms %q", m.pending(), *m.dms)
+	if len(m.pending()) != 0 || len(m.dms()) != 0 {
+		t.Fatalf("held %+v, dms %q", m.pending(), m.dms())
 	}
 }
 

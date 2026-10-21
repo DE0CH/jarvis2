@@ -337,7 +337,7 @@ func (r *Router) startAndCertify(sid string, approval *Doc) {
 	if op == nil {
 		op = r.lcBegin(sid, map[bool]string{true: "resume", false: "boot"}[s.Cert != nil])
 	}
-	op.handed.Store(true)
+	op.run.handed.Store(true)
 	fail := func(msg string) {
 		r.setState(sid, "failed", msg)
 		op.note("", msg)

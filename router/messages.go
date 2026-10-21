@@ -669,6 +669,7 @@ var messageRun = struct {
 	busy map[string]bool
 }{busy: map[string]bool{}}
 
+// messageWG: the message goroutines in flight (approved deliveries, peer notes handed over)
 var messageWG sync.WaitGroup
 
 // deliverApprovedHook: a seam for tests

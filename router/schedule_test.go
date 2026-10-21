@@ -152,13 +152,15 @@ func (f *fakeDelivery) got() []string {
 	return append([]string{}, f.texts...)
 }
 
-func captureDM(t *testing.T) *[]string {
+// captureDM: the DMs sent from now on; the func reads them under the hook's lock (a DM is sent from a handler's or
+// a flow's goroutine, which an answer over a real connection doesn't order before the test's read for the race detector)
+func captureDM(t *testing.T) func() []string {
 	var mu sync.Mutex
 	var dms []string
 	old := dmHook
 	dmHook = func(s string) { mu.Lock(); dms = append(dms, s); mu.Unlock() }
 	t.Cleanup(func() { dmHook = old })
-	return &dms
+	return func() []string { mu.Lock(); defer mu.Unlock(); return append([]string{}, dms...) }
 }
 
 // waitIdle: the tick's goroutines are done
@@ -245,8 +247,8 @@ func TestWakeupFailuresBackOffThenDrop(t *testing.T) {
 	if ws, _ := r.ListWakeups("s2"); len(ws) != 0 {
 		t.Fatalf("dropped after %d attempts: %+v", scheduleMaxAttempt, ws)
 	}
-	if len(*dms) != 1 || !strings.Contains((*dms)[0], "could not be delivered") {
-		t.Fatalf("dms %q", *dms)
+	if len(dms()) != 1 || !strings.Contains(dms()[0], "could not be delivered") {
+		t.Fatalf("dms %q", dms())
 	}
 }
 

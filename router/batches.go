@@ -515,7 +515,7 @@ func (r *Router) fileBatchItem(c Caller, method, path string, b *Batch, it *batc
 	switch {
 	case it.note != nil: // a peer message that isn't upward: delivered now, as POST …/requests/peer delivers it
 		o.Batch = ""
-		go r.deliverPeerNote(*it.note, o, "")
+		r.goPeerNote(*it.note, o, "")
 		res.Direction, res.Delivering, res.To = it.note.Direction, true, it.note.To
 		return res, nil
 	case it.kind == requestKindRestore: // its own review page, so its own request beside the batch

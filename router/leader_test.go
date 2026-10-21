@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -103,16 +104,25 @@ func TestLeaderHandoverNoFailedRequests(t *testing.T) {
 			}
 		}(i)
 	}
-	time.Sleep(300 * time.Millisecond)
+	// answers seen, by leader: what the handover waits on (fixed sleeps gave a loaded machine too little time for any
+	// answer from A before the handover, or from B after it)
+	answers := func(who string, n int) {
+		t.Helper()
+		waitFor(t, fmt.Sprintf("%d more answers from %s", n, who), func() bool {
+			mu.Lock()
+			defer mu.Unlock()
+			return seen[who] >= n
+		})
+	}
+	answers("A", 20) // through both pods, before the handover
 	// the old leader's handover (leadership.handOver without WireGuard), state frozen
 	st := &State{dir: dir}
 	(&leadership{lock: lockA, self: srvA.URL, handler: pubA}).handOver(st)
 	<-led
-	time.Sleep(300 * time.Millisecond)
 	mu.Lock()
 	before := seen["B"]
 	mu.Unlock()
-	time.Sleep(200 * time.Millisecond)
+	answers("B", before+20) // the new leader serves what reaches either pod
 	close(stop)
 	wg.Wait()
 	if fails.Load() != 0 {

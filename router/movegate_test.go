@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
@@ -36,7 +37,7 @@ func TestHandoverEndsLongPollsAtOnce(t *testing.T) {
 		io.WriteString(w, "what it has") // the Claude login's poll answers what it has
 	})
 	pub.HandleFunc("POST /act", func(w http.ResponseWriter, req *http.Request) {
-		time.Sleep(400 * time.Millisecond) // a call in flight that isn't a long poll runs to its end
+		<-r.handingOver() // a call in flight that isn't a long poll runs to its end: it answers after the freeze began
 		select {
 		case <-req.Context().Done():
 			io.WriteString(w, "cancelled")
@@ -52,7 +53,7 @@ func TestHandoverEndsLongPollsAtOnce(t *testing.T) {
 		code int
 		body string
 		hdr  http.Header
-		took time.Duration
+		end  time.Time
 	}
 	run := func(f func() res) chan res {
 		ch := make(chan res, 1)
@@ -60,20 +61,19 @@ func TestHandoverEndsLongPollsAtOnce(t *testing.T) {
 		return ch
 	}
 	cmds := run(func() res {
-		start := time.Now()
 		code, out := m.do(t, mh, "GET", "/m/commands", "")
-		return res{code: code, body: strings.TrimSpace(strings.Join([]string{toJSON(out)}, "")), took: time.Since(start)}
+		return res{code: code, body: strings.TrimSpace(strings.Join([]string{toJSON(out)}, "")), end: time.Now()}
 	})
 	pubReq := func(method, path string) func() res {
 		return func() res {
-			start := time.Now()
 			w := httptest.NewRecorder()
 			ph.ServeHTTP(w, httptest.NewRequest(method, path, nil))
-			return res{w.Code, w.Body.String(), w.Header(), time.Since(start)}
+			return res{w.Code, w.Body.String(), w.Header(), time.Now()}
 		}
 	}
 	poll, act, login := run(pubReq("GET", "/peer/claude-login")), run(pubReq("POST", "/act")), run(pubReq("GET", "/api/claude-login"))
-	time.Sleep(200 * time.Millisecond)
+	// all four are inside a handler before the freeze (a fixed sleep let a slow one arrive after it, under load)
+	inFlight(t, r, 4)
 
 	start := time.Now()
 	r.freezeRequests(proxyTo("http://self", next.URL), 5*time.Second)
@@ -81,8 +81,8 @@ func TestHandoverEndsLongPollsAtOnce(t *testing.T) {
 		t.Fatalf("the freeze waited %s for the requests in flight", d)
 	}
 	c := <-cmds
-	if c.code != 200 || !strings.Contains(c.body, `"commands":[]`) || c.took > 2*time.Second {
-		t.Fatalf("/m/commands: %d %s after %s", c.code, c.body, c.took)
+	if took := c.end.Sub(start); c.code != 200 || !strings.Contains(c.body, `"commands":[]`) || took > 2*time.Second {
+		t.Fatalf("/m/commands: %d %s %s after the freeze began", c.code, c.body, took)
 	}
 	p := <-poll
 	if p.code != 200 || p.body != "next leader" {
@@ -108,11 +108,21 @@ func TestHandoverEndsLongPollsAtOnce(t *testing.T) {
 	// an aborted move serves again
 	r.thawRequests()
 	poll = run(pubReq("GET", "/peer/claude-login"))
-	time.Sleep(100 * time.Millisecond)
+	inFlight(t, r, 1)
 	close(block)
 	if p := <-poll; p.body != "old" {
 		t.Fatalf("after a thaw: %q", p.body)
 	}
+}
+
+// inFlight: until n requests are inside a gated handler
+func inFlight(t *testing.T, r *Router, n int) {
+	t.Helper()
+	waitFor(t, fmt.Sprintf("%d requests in flight", n), func() bool {
+		r.gate.mu.Lock()
+		defer r.gate.mu.Unlock()
+		return r.gate.reqs == n
+	})
 }
 
 func toJSON(m map[string]any) string {

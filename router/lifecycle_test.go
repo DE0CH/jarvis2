@@ -453,3 +453,30 @@ func keysTexts(es []map[string]any) []string {
 	}
 	return out
 }
+
+// an operation stays current until its end record is written: whoever sees none running (a test's TempDir cleanup, the
+// app) finds its end in the file and nothing of it still being written (TestAHandoverStartsTheNext… failed its TempDir
+// cleanup under load; DECISIONS 213). The file lock held here stands for a slow write.
+func TestAnOperationEndsOnceItsRecordIsWritten(t *testing.T) {
+	r := newTestRouter(t)
+	addSession(r, "sA", "started", "mA", false)
+	op := r.lcBegin("sA", "boot")
+	r.lc.file.Lock()
+	ended := make(chan struct{})
+	go func() { op.end("done", ""); close(ended) }()
+	for i := 0; i < 50; i++ { // the old order dropped it from current at once, with its record still to write
+		if r.lcCurrent("sA") == nil {
+			r.lc.file.Unlock()
+			t.Fatal("no running operation while its end record is still unwritten")
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	r.lc.file.Unlock()
+	<-ended
+	if r.lcCurrent("sA") != nil {
+		t.Fatal("the operation is still current after its end")
+	}
+	if o, _ := opEntries(t, r, "sA"); o["state"] != "done" {
+		t.Fatalf("%v", o)
+	}
+}

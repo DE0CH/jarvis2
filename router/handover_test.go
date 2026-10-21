@@ -24,8 +24,14 @@ type slowFlyCore struct {
 	mu        sync.Mutex
 	killsLeft int
 	refuse    bool // approve_by_dead_machine refuses (the resume goes to the phone)
-	events    []string
-	killed    []map[string]any // the bodies of the kills that went through
+	// withKill: Fly answers m1's kills only once m2's start has reached it, and reports m1 destroyed only once m2 is up.
+	// The start and the first kill are sent together, so which one reaches the core first is the scheduler's pick;
+	// a router that waited for a kill's answer (or Fly's report) before starting m2 would never see m1 destroyed.
+	withKill bool
+	sawStart chan struct{} // closed when the start came
+	sawInit  bool
+	events   []string
+	killed   []map[string]any // the bodies of the kills that went through
 }
 
 func (c *slowFlyCore) event(e string) {
@@ -49,10 +55,20 @@ func (c *slowFlyCore) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	switch req.URL.Path {
 	case "/start":
 		c.event("start " + b["size"].(string))
+		c.mu.Lock()
+		select {
+		case <-c.sawStart:
+		default:
+			close(c.sawStart)
+		}
+		c.mu.Unlock()
 		writeJSON(w, 200, k.doc(map[string]any{"kind": "created", "id": "m2", "image": b["image"]}))
 		return
 	case "/init":
 		c.event("started m2")
+		c.mu.Lock()
+		c.sawInit = true
+		c.mu.Unlock()
 		writeJSON(w, 200, k.doc(map[string]any{"kind": "started", "machine": map[string]string{"id": "m2", "requested": "x", "image": "x"}}))
 		return
 	case "/approve/by-dead-machine":
@@ -74,9 +90,15 @@ func (c *slowFlyCore) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		return
 	case "/kill":
 		m := b["machine"].(string)
+		if m == "m1" && c.withKill {
+			select {
+			case <-c.sawStart:
+			case <-time.After(10 * time.Second): // the router waits for this kill's answer before it starts m2
+			}
+		}
 		c.mu.Lock()
-		slow := m == "m1" && c.killsLeft > 0
-		if slow {
+		slow := m == "m1" && (c.killsLeft > 0 || c.withKill && !c.sawInit)
+		if slow && c.killsLeft > 0 {
 			c.killsLeft--
 		}
 		c.mu.Unlock()
@@ -101,7 +123,7 @@ func (c *slowFlyCore) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 
 func slowFlyRig(t *testing.T, killsLeft int) (*rig, *slowFlyCore) {
 	rg, vc := v2Rig(t)
-	c := &slowFlyCore{v2Core: vc, killsLeft: killsLeft}
+	c := &slowFlyCore{v2Core: vc, killsLeft: killsLeft, sawStart: make(chan struct{})}
 	cs := httptest.NewServer(c)
 	t.Cleanup(cs.Close)
 	rg.r.core = &CoreClient{base: cs.URL, http: http.DefaultClient}
@@ -118,6 +140,7 @@ func index(events []string, e string) int { return slices.Index(events, e) }
 func TestAHandoverStartsTheNextMachineBeforeFlyReportsTheOldOneDestroyed(t *testing.T) {
 	fastKills(t)
 	rg, c := slowFlyRig(t, 30)
+	c.withKill = true
 	failedWithMachine(rg, "kill: core: fly destroy: timeout")
 	if err := rg.r.Resume("s1", false); err != nil {
 		t.Fatal(err)
@@ -151,6 +174,12 @@ func TestAHandoverStartsTheNextMachineBeforeFlyReportsTheOldOneDestroyed(t *test
 		t.Fatalf("the kill that let the cert through names the final snapshot: %v", k)
 	}
 	waitFor(t, "m2 is the session's", func() bool { return sessionOf(rg).MachineID == "m2" })
+	// the resume's action has ended (its lock is released after its deferred end): its operation goes on until m2
+	// reports in (startAndCertify took it over), so nothing writes into an operation that is already over
+	waitFor(t, "the resume's action ended", func() bool { return !rg.r.busy("s1") })
+	if rg.r.lcCurrent("s1") == nil {
+		t.Fatal("the resume's operation ended before its machine reported in")
+	}
 	booted(t, rg, "m2")
 }
 

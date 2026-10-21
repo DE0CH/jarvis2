@@ -5,13 +5,15 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
 
 // a fake Machines API: org → apps, app → machines (raw Fly JSON, env included) and volumes; records the tokens used
-func fakeFlyOrgs(t *testing.T, orgTokens map[string]string, apps map[string][]string, machines map[string][]map[string]any, volumes map[string][]map[string]any) (*httptest.Server, *[]string) {
-	seen := &[]string{}
+func fakeFlyOrgs(t *testing.T, orgTokens map[string]string, apps map[string][]string, machines map[string][]map[string]any, volumes map[string][]map[string]any) (*httptest.Server, func() []string) {
+	var mu sync.Mutex // the overview asks for every app's machines and volumes in parallel
+	var seen []string
 	appOrg := map[string]string{}
 	for org, as := range apps {
 		for _, a := range as {
@@ -20,7 +22,9 @@ func fakeFlyOrgs(t *testing.T, orgTokens map[string]string, apps map[string][]st
 	}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		auth := req.Header.Get("Authorization")
-		*seen = append(*seen, req.URL.Path+" "+auth)
+		mu.Lock()
+		seen = append(seen, req.URL.Path+" "+auth)
+		mu.Unlock()
 		org := req.URL.Query().Get("org_slug")
 		if req.URL.Path == "/v1/apps" {
 			if auth != "Bearer "+orgTokens[org] {
@@ -48,7 +52,7 @@ func fakeFlyOrgs(t *testing.T, orgTokens map[string]string, apps map[string][]st
 		}
 	}))
 	t.Cleanup(srv.Close)
-	return srv, seen
+	return srv, func() []string { mu.Lock(); defer mu.Unlock(); return append([]string{}, seen...) }
 }
 
 func rawM(id, state, created string) map[string]any {
@@ -119,7 +123,7 @@ func TestFlyOrgsOverviewEveryOrgReadOnly(t *testing.T) {
 		t.Fatal("a machine's env left the router")
 	}
 	// each org is read with its own token, and never with another org's
-	for _, s := range *seen {
+	for _, s := range seen() {
 		if (strings.Contains(s, "kamyee-jarvis3-sessions") && !strings.HasSuffix(s, "tok-k")) ||
 			(strings.Contains(s, "de0ch-claude-sessions") && !strings.HasSuffix(s, "tok-p")) {
 			t.Fatalf("wrong token: %s", s)

@@ -77,6 +77,10 @@ type lcRun struct {
 	stop     chan struct{}
 	stopOnce sync.Once
 	job      bool // an upgrade or restart: its pause and resume join it
+	ending   bool // end is writing its record: the operation is still current until it is written
+	// handed: startAndCertify took over ending it (lcAwaitBoot ends it once the machine reports in). On the run, not
+	// on a handle: startAndCertify holds its own (lcCurrent's), and the resume's deferred endFromState checks its own
+	handed atomic.Bool
 }
 
 // lcHandle: what a flow holds. joined: the flow runs inside a job's operation, which the job ends
@@ -84,7 +88,6 @@ type lcHandle struct {
 	r      *Router
 	run    *lcRun
 	joined bool
-	handed atomic.Bool // startAndCertify took over ending it
 }
 
 type lifecycle struct {
@@ -155,7 +158,7 @@ func (r *Router) lcStart(session, kind string, job bool) *lcHandle {
 	r.lc.mu.Lock()
 	if prev := r.lc.cur[session]; prev != nil {
 		prev.mu.Lock()
-		running := prev.op.State == "running"
+		running := prev.op.State == "running" && !prev.ending // one ending is over: nothing joins it
 		job := prev.job
 		prev.mu.Unlock()
 		if running && job {
@@ -245,20 +248,26 @@ func (h *lcHandle) machine(m string) {
 }
 
 // end: the operation is over (state done or failed); its Fly tail goes on for lifecycle.tail. A joined handle ends nothing.
+// The end record is written before the operation stops being current: whoever sees no running operation (lcCurrent
+// nil) also finds its end in the file, and nothing of it is still being written (DECISIONS 213).
 func (h *lcHandle) end(state, errMsg string) {
 	if h == nil || h.joined {
 		return
 	}
 	h.run.mu.Lock()
-	if h.run.op.State != "running" {
+	if h.run.op.State != "running" || h.run.ending {
 		h.run.mu.Unlock()
 		return
 	}
-	h.run.op.State, h.run.op.Error, h.run.op.Ended = state, errMsg, nowText()
+	h.run.ending = true
 	op := h.run.op
+	op.State, op.Error, op.Ended = state, errMsg, nowText()
 	op.Machines = append([]string{}, op.Machines...)
 	h.run.mu.Unlock()
 	h.r.lcWrite(op.Session, lcRec{Op: &op})
+	h.run.mu.Lock()
+	h.run.op.State, h.run.op.Error, h.run.op.Ended = op.State, op.Error, op.Ended
+	h.run.mu.Unlock()
 }
 
 // endJob: a job (upgrade, restart) ends its own operation
@@ -276,7 +285,7 @@ func (h *lcHandle) endJob(err error) {
 
 // endFromState: done, or failed with the session's error (its state failed, or an error left on it)
 func (h *lcHandle) endFromState() {
-	if h == nil || h.joined || h.handed.Load() {
+	if h == nil || h.joined || h.run.handed.Load() {
 		return
 	}
 	var state, errMsg string

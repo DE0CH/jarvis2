@@ -314,8 +314,8 @@ func TestTaskLifecycle(t *testing.T) {
 	if code != 200 || out["log"] != "line 1\nline 2\n" || out["output"] != "result" {
 		t.Fatalf("%d %v", code, out)
 	}
-	if len(*dms) != 0 {
-		t.Fatalf("a manual success DMed: %v", *dms)
+	if len(dms()) != 0 {
+		t.Fatalf("a manual success DMed: %v", dms())
 	}
 	// overview
 	code, out = appDo(t, r, "GET", "/api/tasks", "")
@@ -382,8 +382,8 @@ func TestScheduledRunFailsAndDMs(t *testing.T) {
 	if x.Phase != "failed" || x.Reason != "exit code 3" {
 		t.Fatalf("%+v", x)
 	}
-	if len(*dms) != 1 || !strings.Contains((*dms)[0], "Scheduled task “T” (daily "+hhmm+" UTC) failed — exit code 3") || !strings.Contains((*dms)[0], "boom") {
-		t.Fatalf("%v", *dms)
+	if len(dms()) != 1 || !strings.Contains(dms()[0], "Scheduled task “T” (daily "+hhmm+" UTC) failed — exit code 3") || !strings.Contains(dms()[0], "boom") {
+		t.Fatalf("%v", dms())
 	}
 	waitFor(t, "paused", func() bool { return r.sessionOf(sid).State == "paused" })
 }
@@ -429,8 +429,8 @@ func TestTimeoutLostAndResumeFailure(t *testing.T) {
 	if r.instance(id).Active != run.ID {
 		t.Fatal("the requeued run didn't start")
 	}
-	if len(*dms) != 1 || !strings.Contains((*dms)[0], "timed out") {
-		t.Fatalf("%v", *dms)
+	if len(dms()) != 1 || !strings.Contains(dms()[0], "timed out") {
+		t.Fatalf("%v", dms())
 	}
 }
 
@@ -657,8 +657,8 @@ func TestLockedStoreFailsTheStart(t *testing.T) {
 	}
 	r.tasksTick(time.Now().Add(taskStartMax + 2*time.Minute)) // and the line is paused
 	waitFor(t, "paused", func() bool { return r.sessionOf(sid).State == "paused" })
-	if len(*dms) != 1 || !strings.Contains((*dms)[0], "locked store") {
-		t.Fatalf("%v", *dms)
+	if len(dms()) != 1 || !strings.Contains(dms()[0], "locked store") {
+		t.Fatalf("%v", dms())
 	}
 }
 

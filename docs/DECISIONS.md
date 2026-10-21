@@ -2221,3 +2221,22 @@ snapshot failed with "no space left on device", the machine was destroyed anyway
      reader, or a `state.json` saved in between, saw a record with no archive: `TestALiveCopyFailureKeepsEveryLiveFile`
      failed 54 times in 400 under load). Under load, 0 failures in 1600 and 800 runs after, against 61 in 1200 and 54
      in 400 before. No retries or skips.
+213. **A start's lifecycle operation ends when its machine reports in, and its end record is written before it stops
+     being current; three handover tests wait on events, not sleeps (Claude, 2026-10-21).** Under load
+     `TestAHandoverStartsTheNextMachineBeforeFlyReportsTheOldOneDestroyed`, `TestHandoverEndsLongPollsAtOnce` and
+     `TestLeaderHandoverNoFailedRequests` failed (62, 21 and 77 in 1200 runs on main; 27, 16 and 39 in 600 before
+     DECISIONS 212, so they are older than it). One router bug: startAndCertify marked the resume's operation "handed"
+     (lcAwaitBoot ends it once the machine reports in) on its own handle from lcCurrent, while the resume's deferred
+     endFromState checked the resume's handle, so the operation ended "done" at the cert and lcAwaitBoot's "reported
+     in" note and end landed in an operation already over (and in a test's TempDir as it was removed). The flag is on
+     the operation now. Also `end` set the operation's state before writing its record, so a reader that saw no
+     running operation could still meet the write; the record is written first (`TestAnOperationEndsOnceItsRecordIsWritten`).
+     The rest were test timing: the handover test assumed the spare's start reaches the core before the first kill
+     (they are sent together; the fake Fly now answers the old machine's kills only once the start has come, and
+     reports it destroyed only once the new one is up, so a router that waited would never finish); the long-poll
+     test slept 200 ms for its four requests to be inside a handler (it now waits for the gate's count, and the POST
+     answers once the freeze began); the leader test slept and hoped for answers from A before and B after the
+     handover (it waits for them). Two test-helper data races went: the fake Fly orgs server's request log and the DM
+     capture (one race-free helper; peer-message hand-overs are counted in messageWG, so a test waits for their DM).
+     Under load (4 CPU burners + 4 parallel instances, -race, -cpu 1,2,8): 0 failures in 1560 runs of each after.
+     No retries or skips.
