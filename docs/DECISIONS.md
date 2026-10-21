@@ -2137,3 +2137,19 @@ snapshot failed with "no space left on device", the machine was destroyed anyway
      delivered, the attested delivery goes in as before. Such a machine checks no phone signature, so in those sessions
      the router alone gates it, as before 203, until the session restarts onto the newest image. Every harness's own
      delivery path (claude's channel, harness-send's queue for paseo-claude, OpenCode and OpenClaw) was fine.
+
+## Deleted volumes are not leaks, 2026-10-21
+
+208. **A volume Fly lists as `pending_destroy` or `destroying` is already deleted: the Machines view leaves it out and
+     the budget doesn't bill it (`volumeGone`, `router/budget.go`).** Deyao saw 30 "Not attached to a machine: billed for
+     nothing" volumes in `jarvis2-sessions` on 2026-10-21. Every one was in state `pending_destroy`: the core's kill had
+     deleted it (DECISIONS 177) and Fly keeps a deleted volume listed, soft-deleted, until it purges it. The only volumes
+     in `created` were the three of the three running machines; kamyee and personal had none. So no volume had
+     outlived its machine; the view and `burnRate` both treated every state but `destroyed` as a live, billed volume
+     (the budget counted USD 0.15/GB-month for each, USD 45/month of phantom rate with 30 of them). Fly's pricing
+     bills provisioned volumes; on deleted ones Fly's community answers say "Volumes in pending_destroy state do not
+     accrue charges" (community.fly.io t/27376) and, from Fly staff, they stay `pending_destroy` before being fully
+     deleted "but they shouldn't be shown in UI" (t/25542). Their snapshots are still billed and still counted
+     (DECISIONS 180: the snapshot lister reads each volume a session or record names). The sweep (195) already acts
+     only on `created` volumes. *Not chosen*: showing deleted volumes greyed out with a note, since Fly itself hides
+     them and there is nothing to do about one.

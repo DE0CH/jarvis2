@@ -201,7 +201,7 @@ func scanFlyOrg(org, token string, own func() ([]machineView, error), now time.T
 				av.Error = err.Error()
 			}
 			for _, v := range vs {
-				if v.State != "destroyed" {
+				if !volumeGone(v.State) { // deleted ones (pending_destroy) are not billed: not leaks
 					av.Volumes = append(av.Volumes, volumeViewOf(v))
 				}
 			}

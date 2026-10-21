@@ -186,6 +186,13 @@ type flyVolume struct {
 	CreatedAt         string `json:"created_at"`
 }
 
+// volumeGone: Fly has deleted the volume. A deleted volume stays listed in `pending_destroy` (then `destroying`)
+// until Fly purges it; it is not billed (Fly staff, community.fly.io t/27376 and t/25542: "Volumes in pending_destroy
+// state do not accrue charges", "they shouldn't be shown in UI"). Its snapshots are billed and counted separately.
+func volumeGone(state string) bool {
+	return state == "destroyed" || state == "pending_destroy" || state == "destroying"
+}
+
 // hourlyMachineCost: $/hour while started (a stopped machine bills cents a month for its rootfs: ignored)
 func hourlyMachineCost(g *flyGuest) float64 {
 	if g == nil {
@@ -221,7 +228,7 @@ func burnRate(ms []flyMachine, vs []flyVolume) burn {
 		}
 	}
 	for _, v := range vs {
-		if v.State != "destroyed" {
+		if !volumeGone(v.State) {
 			b.RatePerHour += hourlyVolumeCost(v.SizeGB)
 			b.Volumes++
 		}

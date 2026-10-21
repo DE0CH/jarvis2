@@ -37,7 +37,8 @@ func TestCosts(t *testing.T) {
 		{State: "stopped", Config: struct {
 			Guest *flyGuest `json:"guest"`
 		}{perf}},
-	}, []flyVolume{{State: "created", SizeGB: 10}, {State: "destroyed", SizeGB: 99}})
+	}, []flyVolume{{State: "created", SizeGB: 10}, {State: "destroyed", SizeGB: 99},
+		{State: "pending_destroy", SizeGB: 10}, {State: "destroying", SizeGB: 10}}) // deleted: not billed
 	if b.Running != 1 || b.Volumes != 1 || !near(b.RatePerHour, hourlyMachineCost(small)+hourlyVolumeCost(10)) {
 		t.Fatalf("%+v", b)
 	}

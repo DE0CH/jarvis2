@@ -64,7 +64,8 @@ func TestFlyOrgsOverviewEveryOrgReadOnly(t *testing.T) {
 		map[string][]string{"jarvis2-370": {"jarvis2-sessions", "zz-stray"}, "kamyee": {"kamyee-jarvis3-sessions"}, "personal": {"de0ch-claude-sessions"}},
 		map[string][]map[string]any{"zz-stray": {rawM("st1", "started", old)}, "kamyee-jarvis3-sessions": {rawM("k1", "stopped", old), rawM("k2", "started", old)},
 			"de0ch-claude-sessions": {rawM("p1", "started", old), rawM("p2", "stopped", old)}},
-		map[string][]map[string]any{"zz-stray": {{"id": "vol_1", "state": "created", "size_gb": 1, "created_at": old}}})
+		map[string][]map[string]any{"zz-stray": {{"id": "vol_1", "state": "created", "size_gb": 1, "created_at": old},
+			{"id": "vol_deleted", "state": "pending_destroy", "size_gb": 10, "created_at": old}}})
 	oldBase := flyAPIBase
 	defer func() { flyAPIBase = oldBase }()
 	flyAPIBase = srv.URL
@@ -89,7 +90,8 @@ func TestFlyOrgsOverviewEveryOrgReadOnly(t *testing.T) {
 		t.Fatalf("own machines %+v", j2.Apps[0].Machines)
 	}
 	stray := j2.Apps[1]
-	if stray.Own || stray.Machines[0].Attention == "" || stray.Machines[0].NoDestroy == "" || stray.Volumes[0].Attention == "" {
+	// a deleted volume (pending_destroy: Fly purges it, unbilled) is not listed, so not a leak
+	if stray.Own || stray.Machines[0].Attention == "" || stray.Machines[0].NoDestroy == "" || len(stray.Volumes) != 1 || stray.Volumes[0].Attention == "" {
 		t.Fatalf("stray app %+v", stray)
 	}
 	k := orgs[1].Apps[0]
