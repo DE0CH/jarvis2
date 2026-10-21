@@ -2153,3 +2153,10 @@ snapshot failed with "no space left on device", the machine was destroyed anyway
      (DECISIONS 180: the snapshot lister reads each volume a session or record names). The sweep (195) already acts
      only on `created` volumes. *Not chosen*: showing deleted volumes greyed out with a note, since Fly itself hides
      them and there is nothing to do about one.
+209. **The Machines view names the apps Jarvis 2 itself runs that aren't session apps, with their monthly cost
+     (Deyao, 2026-10-21; `jarvisOwnApps`, `router/flyorgs.go`).** `jarvis2-log-shipper` showed "Used by: No Jarvis" and
+     its machine the amber "In an app no Jarvis runs sessions in". Its label is now "Jarvis 2's log shipper: sends the
+     session machines' logs to Grafana Cloud · USD 2.52/month" and its machine isn't flagged for being there (a stopped
+     or failed one still is). The cost is computed from its started machines' guests at budget.go's rates (Fly's
+     lhr prices, the ones the budget uses), not hard-coded, so a resize shows; RUNBOOK's USD 2.19 was the price
+     without lhr's markup. It is the only such app (jarvis2-370 holds just it and `jarvis2-sessions`).

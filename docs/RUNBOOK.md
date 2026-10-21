@@ -788,8 +788,8 @@ metric series, 14 days). The account logs in **with GitHub as DE0CH** (no Grafan
 - **Session machines:** the Fly app `jarvis2-log-shipper` (`services/log-shipper`; deploy: `FLY_API_TOKEN=$JARVIS2_FLY_TOKEN
   flyctl deploy -c services/log-shipper/fly.toml --ha=false --remote-only`). Its secrets: `ORG=jarvis2-370`,
   `ACCESS_TOKEN` (`flyctl tokens create readonly jarvis2-370 --from-existing` with the org token), `LOKI_URL=https://logs-prod-012.grafana.net`,
-  `LOKI_USERNAME=1833850`, `LOKI_PASSWORD` = `GRAFANA_WRITE_TOKEN`. One shared-cpu-1x 256 MB machine (USD 2.19/month, in
-  the Fly budget).
+  `LOKI_USERNAME=1833850`, `LOKI_PASSWORD` = `GRAFANA_WRITE_TOKEN`. One shared-cpu-1x 256 MB machine (USD 2.52/month at the budget's lhr rates, in
+  the Fly budget; the Machines tab labels the app with what it is and this cost, `jarvisOwnApps` in `router/flyorgs.go`).
 - **Alerts:** `GRAFANA_ADMIN_TOKEN=… GRAFANA_DISCORD_WEBHOOK=… infra/grafana.py apply --boxes control,services` (name only
   the boxes that exist; `show` lists the rules), to Discord #jarvis2-alerts (channel 1560217907072344104 in DE0CH's
   server). The probe: `GRAFANA_SM_TOKEN=… HEALTH_PROBE_ID=… HEALTH_PROBE_SECRET=… infra/grafana.py probe`.

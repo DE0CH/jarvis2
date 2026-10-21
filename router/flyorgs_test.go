@@ -154,3 +154,39 @@ func TestFlyOrgsOverviewFailuresAreShown(t *testing.T) {
 		t.Fatal(cerr)
 	}
 }
+
+// an app Jarvis 2 itself runs (the log shipper) says what it is and what it costs, and its machine isn't flagged
+func TestFlyOrgsOverviewOwnInfraApp(t *testing.T) {
+	now := time.Now().UTC()
+	old := now.Add(-48 * time.Hour).Format(time.RFC3339)
+	ship := rawM("ls1", "started", old)
+	ship["config"].(map[string]any)["guest"] = map[string]any{"cpu_kind": "shared", "cpus": 1, "memory_mb": 256}
+	srv, _ := fakeFlyOrgs(t, map[string]string{"jarvis2-370": "tok-j2"},
+		map[string][]string{"jarvis2-370": {"jarvis2-sessions", "jarvis2-log-shipper"}},
+		map[string][]map[string]any{"jarvis2-log-shipper": {ship}}, nil)
+	oldBase := flyAPIBase
+	defer func() { flyAPIBase = oldBase }()
+	flyAPIBase = srv.URL
+	t.Setenv("FLY_ORG_READ_TOKENS", `{"jarvis2-370":"tok-j2"}`)
+	t.Setenv("FLY_PERSONAL_READ_TOKEN", "")
+	r := newTestRouter(t)
+	orgs, _ := r.flyOrgsOverview(nil, now)
+	var a *flyAppView
+	for i := range orgs[0].Apps {
+		if orgs[0].Apps[i].App == "jarvis2-log-shipper" {
+			a = &orgs[0].Apps[i]
+		}
+	}
+	// shared-cpu-1x 256 MB at budget.go's lhr rates: 8.465e-7 × 3600 × 1.134615385 × 730 h
+	want := "Jarvis 2's log shipper: sends the session machines' logs to Grafana Cloud · USD 2.52/month"
+	if a == nil || a.Label != want || len(a.Machines) != 1 || a.Machines[0].Attention != "" {
+		t.Fatalf("log shipper %+v", a)
+	}
+	// a stopped one is still flagged (the Stopped line), and costs nothing started
+	if got := attentionOf("stopped", old, false, "", "jarvis2-log-shipper", now); !strings.HasPrefix(got, "Stopped") {
+		t.Fatalf("stopped: %q", got)
+	}
+	if got := ownAppLabel("x", nil); got != "x" {
+		t.Fatalf("no machines: %q", got)
+	}
+}

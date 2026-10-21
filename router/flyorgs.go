@@ -35,6 +35,27 @@ var knownFlyApps = map[string]string{
 	"kamyee-jarvis3-sessions": "KAMYEE's Jarvis 3 sessions",
 }
 
+// the apps Jarvis 2 itself runs that are not session apps: what each is for (the Machines tab's label, with the
+// monthly cost of its started machines added); their machines are expected, so not flagged as unexplained
+var jarvisOwnApps = map[string]string{
+	"jarvis2-log-shipper": "Jarvis 2's log shipper: sends the session machines' logs to Grafana Cloud",
+}
+
+// ownAppLabel: what the app is for, plus what its started machines cost a month at budget.go's rates (Fly's price
+// list for lhr; a machine in another region is priced the same, which is close enough for a label)
+func ownAppLabel(what string, ms []flyMachineDetail) string {
+	perHour := 0.0
+	for _, m := range ms {
+		if m.State == "started" {
+			perHour += hourlyMachineCost(m.Config.Guest)
+		}
+	}
+	if perHour == 0 {
+		return what
+	}
+	return fmt.Sprintf("%s · USD %.2f/month", what, perHour*hoursPerMonth)
+}
+
 // a machine still created/starting after this is stuck
 const stuckAfter = 15 * time.Minute
 
@@ -83,7 +104,7 @@ func attentionOf(state, created string, own bool, sessionID, app string, now tim
 	if own && sessionID == "" {
 		return "No session"
 	}
-	if !own && app != "" && knownFlyApps[app] == "" {
+	if !own && app != "" && knownFlyApps[app] == "" && jarvisOwnApps[app] == "" {
 		return "In an app no Jarvis runs sessions in"
 	}
 	return ""
@@ -193,6 +214,9 @@ func scanFlyOrg(org, token string, own func() ([]machineView, error), now time.T
 					if m.State != "destroyed" {
 						av.Machines = append(av.Machines, otherMachineView(m, name, now))
 					}
+				}
+				if what := jarvisOwnApps[name]; what != "" {
+					av.Label = ownAppLabel(what, ms)
 				}
 				sortMachineViews(av.Machines)
 			}
