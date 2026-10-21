@@ -70,27 +70,27 @@ def rule(uid, title, summary, ds, expr, threshold, for_="2m", kind="prom", sever
 def rules(boxes):
     r = [
         # memory pressure: the share of time every task stalled on memory (PSI "full"), the warning before a thrash
-        rule("j2-mem-pressure", "Memory pressure on {{ $labels.box }}",
+        rule("j2-mem-pressure", "Memory pressure",
              "The {{ $labels.box }} box is short of memory: its tasks stalled on memory over 2 % of the time for 2 min.",
              PROM, 'sum by (box) (rate(node_pressure_memory_stalled_seconds_total{box=~"control|services"}[2m]))', 0.02,
              meaning="Something on it is using too much memory; left alone it can slow to a crawl (2026-10-15 started like this).",
              action="Look at container_memory_working_set_bytes for that box in Grafana to see which pod grew."),
-        rule("j2-oom", "OOM kill on {{ $labels.box }}",
+        rule("j2-oom", "OOM kill",
              "The kernel killed a process for memory on the {{ $labels.box }} box in the last 5 min.",
              PROM, 'sum by (box) (increase(node_vmstat_oom_kill{box=~"control|services"}[5m]))', 0, for_="0s",
              meaning="A program on it ran out of memory and was stopped; k3s usually restarts it.",
              action="Check the journal (unit kernel) for which process, and whether it keeps happening."),
-        rule("j2-disk", "Disk above 80 % on {{ $labels.box }}",
+        rule("j2-disk", "Disk above 80 %",
              "The root filesystem of the {{ $labels.box }} box is over 80 % full.",
              PROM, 'max by (box) (1 - node_filesystem_avail_bytes{box=~"control|services",mountpoint="/"} / node_filesystem_size_bytes{box=~"control|services",mountpoint="/"})', 0.8, for_="10m",
              meaning="Nothing breaks yet; at 100 % pods fail to write and images can't be pulled.",
              action="Find what grew (images, logs, volumes) and prune it through git."),
-        rule("j2-flux", "Flux failing on {{ $labels.box }}",
+        rule("j2-flux", "Flux failing",
              "Flux on the {{ $labels.box }} box has failed to reconcile for 10 min.",
              LOKI, 'sum by (box) (count_over_time({box=~"control|services", container="manager"} |~ "(?i)reconciliation failed" [10m]))', 5, for_="10m", kind="loki",
              meaning="New commits to main aren't reaching that box; what runs keeps running.",
              action="Read Flux's logs (container manager) in Grafana and fix the commit it rejects."),
-        rule("j2-restarts", "Control plane restarting on {{ $labels.box }}",
+        rule("j2-restarts", "Control plane restarting",
              "A control-plane container (core, router, cloudflared) was restarted by the kubelet in the last 10 min.",
              LOKI, 'sum by (box) (count_over_time({box="control", source="journal", unit="k3s.service"} |~ "(?i)(back-off restarting|liveness probe failed|readiness probe failed).*(core|router|cloudflared)" [10m]))', 3, for_="0s", kind="loki",
              meaning="Jarvis 2 may have dropped out briefly; if it keeps restarting, it is down.",
@@ -120,7 +120,7 @@ def rules(boxes):
     ]
     for b in boxes:
         # absent_over_time gives a series only when the box has sent nothing for 5 min: no data = the box is sending
-        r.append(rule(f"j2-silent-{b}", f"The {b} box has gone quiet",
+        r.append(rule(f"j2-silent-{b}", "Gone quiet",
                       f"No metrics have arrived from the {b} box for 5 min.",
                       PROM, f'absent_over_time(node_time_seconds{{box="{b}"}}[5m])', 0, for_="0s", severity="critical",
                       meaning=f"The {b} box, its Alloy (the shipper) or its WARP link is down"
@@ -129,7 +129,9 @@ def rules(boxes):
     return r
 
 
-TEMPLATE = """{{ define "jarvis2.name" }}{{ if .Labels.rulename }}{{ .Labels.rulename }}{{ else }}{{ .Labels.alertname }}{{ end }}{{ end }}
+# the rule's name, then "on <box>" from the label (Grafana doesn't fill in a template inside a rule's title, so the
+# titles stay plain: "OOM kill on {{ $labels.box }}" reached Discord as written, 2026-10-21)
+TEMPLATE = """{{ define "jarvis2.name" }}{{ if .Labels.rulename }}{{ .Labels.rulename }}{{ else }}{{ .Labels.alertname }}{{ end }}{{ with .Labels.box }} on the {{ . }} box{{ end }}{{ end }}
 {{ define "jarvis2.title" }}{{ if eq .Status "firing" }}{{ if eq .CommonLabels.severity "critical" }}Critical{{ else }}Alert{{ end }}{{ else }}Resolved{{ end }}: {{ with index .Alerts 0 }}{{ template "jarvis2.name" . }}{{ end }}{{ if gt (len .Alerts) 1 }} ({{ len .Alerts }} alerts){{ end }}{{ end }}
 {{ define "jarvis2.message" }}{{ range .Alerts.Firing }}**{{ template "jarvis2.name" . }}**
 {{ .Annotations.summary }}

@@ -60,7 +60,7 @@ spec:
           startupProbe: { httpGet: { path: /healthz, port: 8090 }, periodSeconds: 5, failureThreshold: 180 }
           livenessProbe: { httpGet: { path: /healthz, port: 8090 }, periodSeconds: 10, timeoutSeconds: 5, failureThreshold: 6 }
           readinessProbe: { httpGet: { path: /readyz, port: 8090 }, periodSeconds: 2, timeoutSeconds: 3, failureThreshold: 2 }
-          resources: { requests: { cpu: 50m, memory: 256Mi }, limits: { cpu: 500m, memory: 448Mi } }  # outside the control plane: hard memory and CPU caps (DECISIONS 168)
+          resources: { requests: { cpu: 50m, memory: 384Mi }, limits: { cpu: 500m, memory: 1Gi } }  # outside the control plane: hard memory and CPU caps; 448Mi was OOM-killed at 80k chunks while an index run reloaded the vectors (2026-10-21)
           securityContext: { runAsNonRoot: true, runAsUser: 65532, runAsGroup: 65532, allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: { drop: [ALL] }, seccompProfile: { type: RuntimeDefault } }
       volumes:
         - { name: data, persistentVolumeClaim: { claimName: search-data } }
