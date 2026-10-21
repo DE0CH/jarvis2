@@ -2208,3 +2208,16 @@ snapshot failed with "no space left on device", the machine was destroyed anyway
      severity, instead of Grafana's default label dump (template `jarvis2`, checked with Grafana's template preview
      API). *Not chosen*: execErrState OK (an error would resolve a real firing alert, then re-fire it); a longer
      pending period on the gone-quiet rules (it would delay a real outage page as well).
+
+212. **A lifecycle action ends when it releases the session's lock, not when it sets its end state (Claude,
+     2026-10-21).** `TestLastSnapshotNeverWaitsOnABootingMachine` failed CI builds (a second Pause met "in the middle
+     of another action: pausing"; a TempDir cleanup found files still being written) because `waitState` returned as
+     soon as the paused state was set, while the action's deferred lifecycle write and unlock were still to run. The
+     same gap sat under every pause-then-resume chain (disk grow, memory upgrade, restart), hidden by a 30 s errBusy
+     retry in `handoverResume`. `waitState` now waits for the state and for the action's lock to be released; the
+     per-session lock is a set under a router mutex, so `busy()` reads it instead of TryLock-and-Unlock (which made a
+     real lock fail as busy 307 times in 20000 against a polling reader). A destroyed session's record is written in
+     the same state change that removes the session, with its archive, kept live transcripts and archive error (a
+     reader, or a `state.json` saved in between, saw a record with no archive: `TestALiveCopyFailureKeepsEveryLiveFile`
+     failed 54 times in 400 under load). Under load, 0 failures in 1600 and 800 runs after, against 61 in 1200 and 54
+     in 400 before. No retries or skips.
