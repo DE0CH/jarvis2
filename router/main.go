@@ -16,6 +16,7 @@ import (
 
 type Config struct {
 	CoreURL         string            // the core, inside the cluster
+	KernelURL       string            // the kernel's components, %s = the role (KERNEL_URL; "" = no kernel on this box)
 	DataDir         string            // state.json + snapshots (a volume on the box)
 	WebDir          string            // the web page (expo export), served at /
 	SessionImage    string            // the image new sessions get (a tag; resume pins what Fly reported)
@@ -48,6 +49,7 @@ func main() {
 	stall, _ := strconv.Atoi(env("SNAPSHOT_STALL_SECONDS", "600"))
 	cfg := Config{
 		CoreURL:         env("CORE_URL", "http://core.jarvis2-core.svc.cluster.local:8090"),
+		KernelURL:       os.Getenv("KERNEL_URL"),
 		DataDir:         env("DATA_DIR", "/data"),
 		WebDir:          env("WEB_DIR", "/web"),
 		SessionImage:    env("SESSION_IMAGE", "ghcr.io/de0ch/jarvis2-session:latest"),

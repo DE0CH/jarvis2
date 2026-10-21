@@ -113,6 +113,9 @@ func (r *Router) finalSnapshotAndKillWith(id, machine string, destroying, force 
 	}
 	r.lcNote(id, machine, map[bool]string{true: "asked the core to stop the machine, take its volume's backup snapshot and destroy it on Fly",
 		false: "asked the core to destroy the machine on Fly"}[vol != nil])
+	if r.isKernelMachine(machine) { // kernelline.go: the spawner kills it into the line's next source
+		return r.kernelKillDone(id, machine, destroying, serr, &ok)
+	}
 	kd, err := r.killMachine(machine, !destroying) // vouch.go: with the snapshot's hash; a pause only with it vouched for
 	if err != nil && destroying {
 		kd, err = r.destroyKillFallback(id, machine, force, err)

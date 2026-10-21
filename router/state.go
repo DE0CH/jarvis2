@@ -4,6 +4,8 @@ package main
 // trusted by anyone else: the certs are core-signed and the snapshots machine-signed.
 
 import (
+	"github.com/DE0CH/jarvis2/kernel/gv"
+
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -62,6 +64,7 @@ type Session struct {
 	NoSnapshot     string      `json:"noSnapshot,omitempty"`     // the line's last machine left no snapshot: Resume refuses
 	Backups        []Backup    `json:"backups,omitempty"`        // the core's volume backups of the line's machines, newest first
 	DiskGB         int         `json:"diskGb,omitempty"`         // disk.go: the volume size the next machine gets (0 = the core's default)
+	Kernel         *KernelLine `json:"kernel,omitempty"`         // kernelline.go: the line is the kernel's (not the old core's)
 	noSnapshotDMed bool        // a refused resume DMed once
 	taskConfig     *TaskConfig // vouch.go: a task line's instance + parameters while its first challenge is made (not kept)
 }
@@ -106,7 +109,8 @@ type Started struct {
 	Image         string  `json:"image"`
 	EncryptionKey string  `json:"encryptionKey"`
 	SigningKey    string  `json:"signingKey"`
-	Volume        *Volume `json:"volume,omitempty"` // snapsafe.go: the machine's Fly volume (a core with volumes)
+	Volume        *Volume `json:"volume,omitempty"`     // snapsafe.go: the machine's Fly volume (a core with volumes)
+	KernelPred    string  `json:"kernelPred,omitempty"` // kernelline.go: the machine whose snapshot this one restores
 }
 
 type persisted struct {
@@ -132,6 +136,7 @@ type persisted struct {
 	Leases      *LeaseState              `json:"leases,omitempty"`      // leases.go: shared-device leases (holder + queue per device)
 	Outcomes    map[string][]*Outcome    `json:"outcomes,omitempty"`    // outcomes.go: session id → decisions on its Inbox filings, until delivered
 	ActiveCore  string                   `json:"activeCore,omitempty"`  // nextcore.go: the core URL that serves after a flip
+	KernelRoot  *gv.Signed               `json:"kernelRoot,omitempty"`  // kernelline.go: the root key's ⊤ on the sink
 	// messages.go: messages held for Deyao to deliver or deny, and his per-kind rules
 	Messages     map[string]*PendingMessage `json:"messages,omitempty"`
 	MessageRules map[string]*MessageRule    `json:"messageRules,omitempty"`

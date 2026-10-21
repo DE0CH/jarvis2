@@ -12,9 +12,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/DE0CH/jarvis2/kernel/internal/h2c"
-	"github.com/DE0CH/jarvis2/kernel/internal/perm"
-	"github.com/DE0CH/jarvis2/kernel/internal/sig"
+	"github.com/DE0CH/jarvis2/kernel/h2c"
+	"github.com/DE0CH/jarvis2/kernel/perm"
+	"github.com/DE0CH/jarvis2/kernel/sig"
 )
 
 // ---- objects ---------------------------------------------------------------------------------------------------
@@ -27,7 +27,7 @@ const Sink Object = "sink"
 var (
 	sourceRE = regexp.MustCompile(`^source-[0-9a-f]{32}$`)
 	flyRE    = regexp.MustCompile(`^fly-[0-9a-f]{8,32}$`)
-	imageRE  = regexp.MustCompile(`^[a-z0-9./-]+@sha256:[0-9a-f]{64}$`)
+	imageRE  = regexp.MustCompile(`^[a-z0-9./-]+(:[A-Za-z0-9_][A-Za-z0-9_.-]{0,127})?@sha256:[0-9a-f]{64}$`)
 	hex64RE  = regexp.MustCompile(`^[0-9a-f]{64}$`)
 )
 

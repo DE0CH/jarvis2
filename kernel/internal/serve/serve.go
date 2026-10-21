@@ -12,7 +12,7 @@ import (
 	"net/http"
 	"os"
 
-	"github.com/DE0CH/jarvis2/kernel/internal/sig"
+	"github.com/DE0CH/jarvis2/kernel/sig"
 )
 
 // Error: an error with the HTTP status it answers

@@ -11,7 +11,7 @@ import (
 	"net/http"
 	"strconv"
 
-	"github.com/DE0CH/jarvis2/kernel/internal/gv"
+	"github.com/DE0CH/jarvis2/kernel/gv"
 )
 
 func Handler(c *Secrets) http.Handler {

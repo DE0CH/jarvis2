@@ -7,11 +7,11 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/DE0CH/jarvis2/kernel/internal/doc"
-	"github.com/DE0CH/jarvis2/kernel/internal/gv"
+	"github.com/DE0CH/jarvis2/kernel/doc"
+	"github.com/DE0CH/jarvis2/kernel/gv"
 	"github.com/DE0CH/jarvis2/kernel/internal/kt"
-	"github.com/DE0CH/jarvis2/kernel/internal/perm"
-	"github.com/DE0CH/jarvis2/kernel/internal/sig"
+	"github.com/DE0CH/jarvis2/kernel/perm"
+	"github.com/DE0CH/jarvis2/kernel/sig"
 )
 
 // kernel: secrets Recovered in a kernel test world (same box key), with a machine to pull for

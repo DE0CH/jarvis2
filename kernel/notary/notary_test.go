@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/DE0CH/jarvis2/kernel/internal/doc"
-	"github.com/DE0CH/jarvis2/kernel/internal/sig"
+	"github.com/DE0CH/jarvis2/kernel/doc"
+	"github.com/DE0CH/jarvis2/kernel/sig"
 )
 
 const subj = "00000000000000000000000000000000000000000000000000000000000000ab"

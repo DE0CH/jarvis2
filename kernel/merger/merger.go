@@ -3,10 +3,10 @@
 package merger
 
 import (
-	"github.com/DE0CH/jarvis2/kernel/internal/doc"
-	"github.com/DE0CH/jarvis2/kernel/internal/gv"
+	"github.com/DE0CH/jarvis2/kernel/doc"
+	"github.com/DE0CH/jarvis2/kernel/gv"
 	"github.com/DE0CH/jarvis2/kernel/internal/serve"
-	"github.com/DE0CH/jarvis2/kernel/internal/sig"
+	"github.com/DE0CH/jarvis2/kernel/sig"
 )
 
 type Input struct {

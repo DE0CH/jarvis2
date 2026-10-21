@@ -209,6 +209,7 @@ func (r *Router) buildHandlers() {
 	}))
 	device("POST /api/core/wipe", "/wipe")
 	r.registerBackups(app)
+	r.registerKernel(app) // kernelline.go
 	r.registerLineState(app)
 	app("GET /api/policy", func(w http.ResponseWriter, req *http.Request) { writeJSON(w, 200, r.policy) })
 
@@ -494,6 +495,14 @@ func (r *Router) buildHandlers() {
 	})
 
 	// ---- machines --------------------------------------------------------------------------------------
+	m("GET /m/kernel/boot", func(w http.ResponseWriter, req *http.Request, machine string, _ []byte) {
+		out, err := r.kernelBoot(machine) // kernelline.go
+		if err != nil {
+			writeJSON(w, 404, map[string]string{"error": err.Error()})
+			return
+		}
+		writeJSON(w, 200, out)
+	})
 	m("GET /m/cert", func(w http.ResponseWriter, req *http.Request, machine string, _ []byte) {
 		var cert, pred *Doc
 		r.st.Do(func(d *persisted) {
@@ -517,6 +526,10 @@ func (r *Router) buildHandlers() {
 	m("GET /m/snapshot", func(w http.ResponseWriter, req *http.Request, machine string, _ []byte) {
 		var pred string
 		r.st.Do(func(d *persisted) {
+			if st := d.Started[machine]; st != nil && st.KernelPred != "" { // kernelline.go: the source's machine
+				pred = st.KernelPred
+				return
+			}
 			if cert := d.Certs[machine]; cert != nil {
 				var c struct {
 					PredID string `json:"predecessorId"`
@@ -569,6 +582,22 @@ func (r *Router) buildHandlers() {
 		writeJSON(w, 200, map[string]bool{"ok": true})
 	}))
 	m("POST /m/pull-secrets", func(w http.ResponseWriter, req *http.Request, machine string, body []byte) {
+		if r.isKernelMachine(machine) { // kernelline.go: the kernel's secrets, with the line's grant
+			d, err := r.kernelPull(machine)
+			r.noteSecretsPull(machine, err)
+			if err != nil {
+				writeErr(w, err)
+				return
+			}
+			markPulled(machine)
+			r.st.Do(func(dd *persisted) {
+				if s := dd.Sessions[dd.Machines[machine]]; s != nil && s.MachineID == machine && s.State == "initialising" {
+					s.State, s.Error = "started", ""
+				}
+			})
+			writeJSON(w, 200, d)
+			return
+		}
 		var cert *Doc
 		r.st.Do(func(d *persisted) { cert = d.Certs[machine] })
 		if cert == nil {

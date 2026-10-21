@@ -1,6 +1,7 @@
 # built from the repo root: the router + the app's web export (app/dist, made by the workflow first)
 FROM golang:1.25-bookworm AS build
-WORKDIR /src
+WORKDIR /src/router
+COPY kernel/ /src/kernel/
 COPY router/ ./
 RUN CGO_ENABLED=0 go vet ./... && CGO_ENABLED=0 go build -trimpath -o /out/router .
 

@@ -6,9 +6,9 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/DE0CH/jarvis2/kernel/internal/doc"
-	"github.com/DE0CH/jarvis2/kernel/internal/perm"
-	"github.com/DE0CH/jarvis2/kernel/internal/sig"
+	"github.com/DE0CH/jarvis2/kernel/doc"
+	"github.com/DE0CH/jarvis2/kernel/perm"
+	"github.com/DE0CH/jarvis2/kernel/sig"
 )
 
 // Signed: a grant and what vouches for its signer

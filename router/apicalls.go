@@ -475,6 +475,10 @@ var callRules = map[string]callRule{
 	"POST /api/machines/{id}/destroy":             callBody,
 	"GET /api/models":                             callBody,
 	"GET /api/policy":                             callBody,
+	"GET /api/kernel":                             callBody, // kernelline.go: whether the kernel is here and serves
+	"POST /api/kernel/root-grant":                 callNo,   // the root key's grant, signed on the phone
+	"GET /api/kernel/secrets/{path...}":           callNo,   // the kernel's secrets, relayed for the app (claim, unlock: the phone's)
+	"POST /api/kernel/secrets/{path...}":          callNo,
 	"GET /api/records":                            callBody,
 	"POST /api/records":                           callBody,
 	"DELETE /api/records/{id}":                    callBody,

@@ -23,10 +23,10 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/DE0CH/jarvis2/kernel/internal/doc"
-	"github.com/DE0CH/jarvis2/kernel/internal/perm"
+	"github.com/DE0CH/jarvis2/kernel/doc"
+	"github.com/DE0CH/jarvis2/kernel/perm"
 	"github.com/DE0CH/jarvis2/kernel/internal/serve"
-	"github.com/DE0CH/jarvis2/kernel/internal/sig"
+	"github.com/DE0CH/jarvis2/kernel/sig"
 )
 
 // SessionRepo: the only image the spawner starts, pinned by digest

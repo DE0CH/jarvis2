@@ -24,6 +24,8 @@ type Router struct {
 	st    *State
 	core  *CoreClient
 	lines *lineKeeper // linestate.go
+	// kernel: the kernel's components (kernel.go, kernelline.go); nil while this box has none (KERNEL_URL unset)
+	kernel *KernelClient
 
 	cmdMu    sync.Mutex
 	commands map[string]chan string     // machine id → pending commands (snapshot)
@@ -57,6 +59,7 @@ type Router struct {
 
 func NewRouter(cfg Config, st *State, core *CoreClient, policy Policy) *Router {
 	r := &Router{cfg: cfg, st: st, core: core, policy: policy, setupSeen: map[string]time.Time{}, commands: map[string]chan string{}, execs: map[string]chan execItem{}, results: map[string]chan ExecResult{}, snapped: map[string]*snapWait{}, sup: &supLogs{next: map[string]int64{}}, lc: newLifecycle()}
+	r.kernel = newKernelClient(cfg.KernelURL)
 	if core != nil { // linestate.go: the core's line state, kept as its answers name a new one
 		r.lines = newLineKeeper(r.lineStatePath(), core)
 		core.onLineSeq = r.lines.seen
@@ -577,7 +580,7 @@ func (r *Router) CreateSession(in NewSession) (string, error) {
 	if err != nil {
 		return "", bad("%v", err)
 	}
-	stores = withAccountStore(stores, account) // claudestores.go: the account's core store, once certs name it
+	stores = withAccountStore(stores, account)       // claudestores.go: the account's core store, once certs name it
 	content, err := r.checkContentStores(in.Content) // content.go: each an existing store
 	if err != nil {
 		return "", err
@@ -603,10 +606,15 @@ func (r *Router) CreateSession(in NewSession) (string, error) {
 		r.st.Do(func(d *persisted) { delete(d.Sessions, s.ID) })
 		return "", err
 	}
-	ch, err := r.succession(nil, "", s.Stores, s.Harness, s.PermissionMode, r.cfg.SessionImage, config, "")
-	if err != nil {
-		r.st.Do(func(d *persisted) { delete(d.Sessions, s.ID) })
-		return "", err
+	// kernelline.go: a new line goes on the kernel once it serves (D7); the old core's lines go on there
+	kernel := r.kernelServes() && in.Import == nil && !isTaskHarness(s.Harness)
+	var ch *Doc
+	if !kernel {
+		ch, err = r.succession(nil, "", s.Stores, s.Harness, s.PermissionMode, r.cfg.SessionImage, config, "")
+		if err != nil {
+			r.st.Do(func(d *persisted) { delete(d.Sessions, s.ID) })
+			return "", err
+		}
 	}
 	opts := map[string]string{"model": s.Model, "size": s.Size, "permissionMode": s.PermissionMode, "repos": s.Repos}
 	if s.ClaudeAccount != "" {
@@ -619,6 +627,13 @@ func (r *Router) CreateSession(in NewSession) (string, error) {
 	opsOptions(s, opts)
 	if in.Import != nil {
 		opts["restore"] = in.Import.Shown // the app shows it beside the signed "Restores machine" and hash
+	}
+	if kernel {
+		if err := r.kernelNewSessionApproval(s, config, opts, in); err != nil {
+			r.st.Do(func(d *persisted) { delete(d.Sessions, s.ID) })
+			return "", err
+		}
+		return s.ID, nil
 	}
 	go func() {
 		r.addApproval(&Approval{Kind: "new-session", Session: s.ID, Label: s.Label, Challenge: ch,
@@ -661,6 +676,9 @@ func (r *Router) Respond(id, signature string) (*Doc, string, error) {
 	}
 	if a.Kind == "add-store" {
 		return r.respondAddStore(a, signature)
+	}
+	if a.Kind == kernelApprovalKind {
+		return r.respondKernel(a, signature)
 	}
 	in := map[string]any{"challenge": a.Challenge, "signature": signature}
 	// a start the answer leads to is a tracked lifecycle action (drain.go): during a drain the answer is refused before
@@ -931,7 +949,7 @@ func (r *Router) pauseWith(id string, next *nextMachine) error {
 		unlock()
 		return nil // already what was asked for
 	}
-	if s.ID == "" || s.MachineID == "" || s.Cert == nil {
+	if s.ID == "" || s.MachineID == "" || !s.hasLine() {
 		unlock()
 		return fmt.Errorf("session %s isn't running (it is %s): nothing to pause", id, orState(s.State))
 	}
@@ -996,6 +1014,9 @@ func (r *Router) Resume(id string, upgrade bool) error {
 	}
 	if upgrade {
 		op.note("", "on the newest session image")
+	}
+	if s.Kernel != nil { // kernelline.go
+		return r.kernelResume(s, upgrade, unlock, op)
 	}
 	if s.Cert == nil {
 		// a new line whose first start failed (a machine left over from it holds no cert, so no secret: the start
@@ -1242,7 +1263,14 @@ func (r *Router) destroy(id string, o destroyOpts) error {
 			r.setState(id, "paused", "archive: "+aerr.Error()+" — nothing was lost (the session is paused): Destroy again once the Storage Box answers, or Destroy anyway (it goes without its archive)")
 			return
 		}
-		if s.Cert != nil {
+		if s.Kernel != nil { // kernelline.go: the line's source ends
+			if err := r.kernelBurn(id); err != nil {
+				log.Printf("session %s: burn: %v", id, err)
+				op.note("", "ending the line (burn): "+err.Error())
+			} else {
+				op.note("", "the line ended: its source burned")
+			}
+		} else if s.Cert != nil {
 			// end the line: a succession to the null image, answered by the dead-machine responder → burn cert
 			ch, err := r.succession(s.Cert, "", nil, "", "", nullImage, "", "")
 			var a *Doc

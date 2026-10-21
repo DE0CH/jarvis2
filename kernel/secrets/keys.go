@@ -22,7 +22,7 @@ import (
 	"crypto/sha256"
 
 	"encoding/hex"
-	"github.com/DE0CH/jarvis2/kernel/internal/gv"
+	"github.com/DE0CH/jarvis2/kernel/gv"
 	"regexp"
 	"sort"
 	"strings"

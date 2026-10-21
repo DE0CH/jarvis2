@@ -193,7 +193,7 @@ func (r *Router) endCutOff() {
 			why := ""
 			switch s.State {
 			case "resuming", "starting":
-				if s.Cert != nil && s.MachineID == "" {
+				if s.hasLine() && s.MachineID == "" {
 					s.State, s.Error = "paused", "the resume was cut off by a router crash: resume it again"
 				} else {
 					s.State, s.Error = "failed", "the start was cut off by a router crash: start it again"
