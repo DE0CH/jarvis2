@@ -2165,3 +2165,20 @@ snapshot failed with "no space left on device", the machine was destroyed anyway
      or failed one still is). The cost is computed from its started machines' guests at budget.go's rates (Fly's
      lhr prices, the ones the budget uses), not hard-coded, so a resize shows; RUNBOOK's USD 2.19 was the price
      without lhr's markup. It is the only such app (jarvis2-370 holds just it and `jarvis2-sessions`).
+
+210. **Only an upward peer message (and a resume prompt) waits for Deyao; Jarvis's own messages go straight in (Deyao,
+     2026-10-21).** Message approvals (203) held every delivery into a session holding a sensitive store, so the
+     result of a request a session filed itself (an Inbox outcome) waited in Deyao's Inbox as "Jarvis's Inbox (what
+     became of requests this session filed)", and in his TestFlight build, which predates 203 (the replica gate had
+     kept every build since from shipping), it showed as "New session" with "(no API call recorded)" and couldn't be
+     approved. Deyao: Jarvis's own messages come from Jarvis, not from a peer holding less, and never need him; only
+     real peer messages go by direction. Now `needsApproval` (router) and `needsMessageApproval` (machine) agree: a
+     resume prompt always; into a sensitive session an upward peer message; nothing else. Inbox outcomes, the watchdog's
+     check-in, "continue", lease and upgrade notes, the session's own wakeups, crons and watches, and equal or downward
+     peer messages go straight in, vouched for by the core's attestation as before 203 (the machine checks a peer
+     message's direction against its own cert). A machine on a 203 image still asks for the approval of those kinds;
+     the router then holds them as before until the session restarts onto the newest image. A message card says who
+     sends what to whom ("Message from session “X” to session “Y”", From, To, the text). Every Inbox kind the router
+     files is named by both apps, and an unknown one shows as "Unknown request (kind)" instead of "New session":
+     `router/inbox_kinds_test.go` fails when the router has a kind an app doesn't name. Claude's choice: message rules
+     stay (an existing one is harmless) though no kind that waits can be ruled any more; removing them is a later cut.

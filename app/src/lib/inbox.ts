@@ -25,8 +25,10 @@ export function inboxTitle(it: InboxItem): string {
     case "add-store": return "Add store";
     case "resume-upgrade": return "Resume on latest image";
     case "restore": return "Restore store";
+    case "new-session": return it.options?.restore ? "Restore session" : "New session";
   }
-  return it.options?.restore ? "Restore session" : "New session";
+  // a kind this build doesn't know (router/inbox_kinds_test.go keeps the list in step): say so, never guess
+  return `Unknown request (${it.kind}): reload the page`;
 }
 
 /** what the entry is about, as labelled rows (display only: the review page renders its own from what it signs) */

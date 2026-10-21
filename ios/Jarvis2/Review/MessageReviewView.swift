@@ -44,7 +44,7 @@ struct MessageReviewView: View {
         }
         ForEach(Array(list.enumerated()), id: \.element.id) { i, m in
           Section {
-            MessageRows(m: m)
+            MessageRows(m: m, to: model.session(sessionId)?.title ?? sessionId)
             HStack {
               Button("Deliver", systemImage: "faceid") { Task { await deliver([m]) } }
                 .disabled(busy != nil)
@@ -200,6 +200,8 @@ struct MessageReviewView: View {
 /// and when it expires
 struct MessageRows: View {
   let m: PendingMessage
+  /// the receiving session's title
+  let to: String
   var body: some View {
     VStack(alignment: .leading, spacing: 6) {
       HStack {
@@ -207,7 +209,9 @@ struct MessageRows: View {
         Spacer()
         if !m.ruleable { StatusPill(text: "Asked each time", color: .secondary) }
       }
+      // who sends what to whom, plainly: "From: Session “X” (s…)", "To: session “Y”", then the exact text
       LabeledContent("From", value: m.from).accessibilityIdentifier("msg-from-\(m.id)")
+      LabeledContent("To", value: "Session “\(to)”").accessibilityIdentifier("msg-to-\(m.id)")
       Text(m.text)
         .font(.body)
         .frame(maxWidth: .infinity, alignment: .leading)

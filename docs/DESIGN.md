@@ -853,7 +853,7 @@ Deyao handing a feature a shell, and the session's own allow list is the session
 | Wakeups, crons | (c) the session's own signed request + the core's attestation; the line records what it delivered (in the snapshot): a wakeup once, a cron once per run and at most every half period |
 | The watchdog's nudge, "continue" after a re-login, "upgraded" after an Upgrade | the image: texts built into it; the router picks when, never what (numbers, or a size: small, medium, large or a doubling past it) |
 | An Inbox request's outcome | (c) the session's own signed filing (an Inbox request, or the wakeup/cron/watch whose message Deyao denied or let lapse) + image texts; per item the router names an outcome word, an id, a status number, and a proof the machine checks for approvals (phone grant, core-signed cert or approval, core key answer); the core attests it; each item once |
-| Any of these into a session holding a sensitive store | also the phone's signature over that very message, or a phone-signed rule for its kind ("Message approvals") |
+| An upward peer message into a session holding a sensitive store | also the phone's signature over that very message ("Message approvals") |
 | An added store | (a) the new cert, phone-approved |
 | The OpenClaw runtime | (d) the GitHub release, pinned by sha256 in the image |
 | Jarvis 1's restore-snapshot (would fetch unsigned state from the Storage Box when a store holds its credentials) | removed from the image |
@@ -871,15 +871,17 @@ hashes, signs and appends.
 
 ## Message approvals (Deyao, 2026-10-20)
 
-Deyao: a message into a session holding a sensitive store is approved or denied **per message**, never by letting a
-router feature in for a while. So every delivery into such a session (a wakeup, a cron run, a met or given-up watch,
-the watchdog's check-in, a login "continue", an Inbox outcome, a peer message, a lease or upgrade note), and every
-resume prompt that goes into an already running session (any session: nothing else vouches for Deyao's words from the
-app), waits in the Inbox as a **pending message** (`router/messages.go`, `machine/messages.go`):
+Deyao: a message from a session holding less into a session holding a sensitive store is approved or denied **per
+message**, never by letting a router feature in for a while; Jarvis's own messages never need him (Deyao, 2026-10-21;
+DECISIONS 210). So an **upward peer message** into such a session (from a session holding fewer stores, or less
+permissive), and every resume prompt that goes into an already running session (any session: nothing else vouches for
+Deyao's words from the app), waits in the Inbox as a **pending message** (`router/messages.go`, `machine/messages.go`).
+Jarvis's own messages (an Inbox outcome, the watchdog's check-in, a login "continue", a lease or upgrade note), the
+session's own wakeups, cron runs and watches, and equal or downward peer messages go straight in, vouched for by the
+core's attestation as "Inputs to a machine" says (the machine checks a peer message's direction against its own cert):
 
-- **What Deyao sees**: the kind, the specific requester ("Jarvis's watchdog (the session idled 20 min while 2
-  background jobs ran)", "this session's own wakeup “ci”", "session “X” (…), a peer message", "Deyao (the prompt given
-  with Resume in the app)"), and the exact text. A running machine renders the text itself (a preview delivery: nothing
+- **What Deyao sees**: who sends what to whom, plainly ("Message from session “X” to session “Y”"; From: Session “X”
+  (id), To: session “Y”; "Deyao (the prompt given with Resume in the app)"), and the exact text. A running machine renders the text itself (a preview delivery: nothing
   attested, sent or recorded); for a paused session the router renders the kinds it has twins for and holds the
   message without starting anything; a peer message first starts the receiver. Messages for one session are listed
   together in one Inbox entry.
@@ -893,7 +895,7 @@ app), waits in the Inbox as a **pending message** (`router/messages.go`, `machin
   sender, or the session for its own wakeup, cron or watch (the outcome of the request that armed it). The same for a
   lapse (24 h without an answer) and for a failure after approval. A newer message of the same thing (the next
   check-in, the cron's next run) replaces one still waiting.
-- **A rule** for one kind into one session ("Always deliver Jarvis's watchdog check-ins to this session"): the phone
+- **A rule** for one kind into one session (made when every kind waited; now no kind that waits can be ruled): the phone
   signs `{kind "message-rule", session <line>, delivery <kind>, issued, until}` (a year); the router attaches it to every
   delivery of that kind until Deyao removes it from the session's card (the router stops at once; the signature stays
   valid on the machine until it ends, as with a grant). No rule covers a peer message or a resume prompt. There are no

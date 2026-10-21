@@ -224,13 +224,14 @@ var deliverPeerHook = func(r *Router, note PeerNote, o Origin) error {
 	return r.deliverVouchedOpts(note.To, Delivery{Kind: "peer", Peer: &note}, true, &o)
 }
 
-// heldPeerNote: a message into a session holding a sensitive store isn't filed as an upward peer request: Deyao
-// delivers or denies the message itself, signed (messages.go), so an upward one carries his approval in that signature
+// heldPeerNote: an upward message into a session holding a sensitive store isn't filed as an upward peer request:
+// Deyao delivers or denies the message itself, signed (messages.go), so it carries his approval in that signature. An
+// equal or downward one goes straight in, as into any session (DECISIONS 210)
 func heldPeerNote(note PeerNote, recv *Session) (PeerNote, bool) {
-	if !certSensitive(recv.Cert) {
+	if !certSensitive(recv.Cert) || note.Direction != "upward" {
 		return note, false
 	}
-	note.Approved = note.Direction == "upward"
+	note.Approved = true
 	return note, true
 }
 

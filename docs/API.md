@@ -651,8 +651,8 @@ starts again at seq 0. The core before R2 (the running one until its release) ke
 Jarvis 1's shapes. The session arms them under `/m/api/sessions/:id/…` (through its machine's local proxy, below: its
 own signed request is what vouches for the delivery); the app lists and cancels them under `/api/sessions/:id/…`, and
 its `POST` (wakeup or cron) answers 400 saying the session arms them. At the due time the router hands the machine a
-core-attested delivery of the session's own signed request, resuming a paused session first; into a session holding a
-sensitive store it waits in the Inbox for Deyao instead ("Message approvals" below). A wakeup or cron belongs to its
+core-attested delivery of the session's own signed request, resuming a paused session first (straight in, whatever
+stores the session holds: DECISIONS 210). A wakeup or cron belongs to its
 session and ends with it.
 
 | Call | Does |
@@ -671,9 +671,11 @@ approved or tells the session (an Inbox outcome of the request that armed it) wh
 
 ## Message approvals (`router/messages.go`; docs/DESIGN.md "Message approvals")
 
-Every delivery into a session holding a sensitive store, and every resume prompt into a running session, waits as a
-pending message until Deyao delivers (phone-signed) or denies it. Each pending one is also an Inbox item (`kind:
-"message"`, `callerText` = who asks, `explanation` = the kind's label, `params.text` = the exact text, `open: {kind:
+An upward peer message into a session holding a sensitive store, and every resume prompt into a running session,
+waits as a pending message until Deyao delivers (phone-signed) or denies it; Jarvis's own messages, the session's own
+wakeups, crons and watches, and equal or downward peer messages go straight in (DECISIONS 210). Each pending one is also
+an Inbox item (`kind: "message"`, `callerText` = who sends it, `explanation` = the plain headline "Message from session
+“X” to session “Y”" (another kind: "<label> for session “Y”"), `params.text` = the exact text, `open: {kind:
 "message", options: {messageId, sessionId}}`), and `/api/state` carries `messages` and `messageRules`, and per session
 `pendingMessages` (a count) and `messageRules`.
 
@@ -687,8 +689,7 @@ pending message until Deyao delivers (phone-signed) or denies it. Each pending o
 | `POST /api/sessions/:id/message-rules` | `{payload, sig}` → the rule; that session's pending messages of the kind go in under it |
 | `GET /api/sessions/:id/message-rules` | `{rules}`; `DELETE /api/message-rules/:rid` removes one (the router stops using it at once) |
 
-Kinds: `wakeup`, `cron`, `watch`, `watch-fail`, `nudge` (the watchdog's check-in), `continue`, `upgraded`,
-`lease-granted`, `lease-taken`, `lease-back`, `request-outcome`, `peer`, `resume-prompt`. A pending message lapses
+Kinds that wait: `peer` (upward, into a sensitive session) and `resume-prompt`. A pending message lapses
 after 24 h; a newer one of the same thing replaces one still waiting; Deyao gets one DM when a session's first one
 waits.
 

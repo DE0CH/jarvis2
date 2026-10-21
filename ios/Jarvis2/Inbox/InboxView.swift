@@ -108,7 +108,7 @@ private struct InboxRow: View {
   }
 
   private var kindName: String {
-    ["repo-key": "Repo key", "grant": "Grant", "unlock": "Unlock", "new-session": "New session", "resume-upgrade": "Resume", "add-store": "Add a store", "api-call": "API call", "restore": "Restore store", "peer-message": "Peer message"][it.kind] ?? it.kind
+    ["repo-key": "Repo key", "grant": "Grant", "unlock": "Unlock", "new-session": "New session", "resume-upgrade": "Resume", "add-store": "Add a store", "api-call": "API call", "restore": "Restore store", "peer-message": "Peer message", "message": "Message"][it.kind] ?? it.kind
   }
   /// the list's title: the core action (or the phone grant) the entry leads to, a fixed name per kind
   private var action: String { it.actionTitle }
@@ -150,7 +150,8 @@ private struct MessageGroupRow: View {
         }
         ForEach(g.items) { it in
           VStack(alignment: .leading, spacing: 2) {
-            Text("\(it.explanation.isEmpty ? "Message" : it.explanation) · \(it.callerText)").font(.subheadline).foregroundStyle(Color.primary)
+            // the router's plain headline: "Message from session “X” to session “Y”"
+            Text(it.explanation.isEmpty ? "Message from \(it.callerText)" : it.explanation).font(.subheadline).foregroundStyle(Color.primary)
             if let t = it.params["text"].text { Text(t).font(.footnote).foregroundStyle(Color.secondary).lineLimit(2) }
           }
         }

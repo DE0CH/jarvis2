@@ -1,10 +1,10 @@
 package main
 
 // Message approvals (docs/DESIGN.md "Message approvals"; router/messages.go): a session holding a sensitive store takes
-// a delivery (a wakeup, a cron, a watch, the watchdog's check-in, a login "continue", an Inbox outcome, a peer message,
-// a lease or upgrade note) only when Deyao's phone signed THAT message, or signed a standing per-kind rule for this
-// line. A resume prompt (Deyao's own words, typed in the app) needs the phone's signature in every session: nothing
-// else vouches for its bytes.
+// an UPWARD peer message (words from a session holding less, or less permissive) only when Deyao's phone signed THAT
+// message. A resume prompt (Deyao's own words, typed in the app) needs the phone's signature in every session: nothing
+// else vouches for its bytes. Jarvis's own messages (Inbox outcomes, the watchdog, "continue", lease and upgrade notes),
+// the session's own wakeups, crons and watches, and equal or downward peer messages go straight in (DECISIONS 210).
 //
 // What the phone signs (the key comes from this machine's core-signed cert, like a grant):
 //
@@ -55,9 +55,18 @@ type MessageItem struct {
 // unruleable: kinds no standing rule covers (their words come from another session, or from Deyao's app login)
 var unruleable = map[string]bool{"peer": true, "resume-prompt": true}
 
-// needsMessageApproval: this delivery must carry the phone's approval
-func needsMessageApproval(cert Cert, kind string) bool {
-	return cert.Sensitive || kind == "resume-prompt"
+// needsMessageApproval: this delivery must carry the phone's approval: a resume prompt in every session; in a session
+// holding a sensitive store, an upward peer message (peer.go checks the direction against this machine's own cert).
+// Jarvis's own messages and the session's own wakeups, crons and watches need none (DECISIONS 210): the core's
+// attestation still vouches for every one
+func needsMessageApproval(cert Cert, d Delivery) bool {
+	switch d.Kind {
+	case "resume-prompt":
+		return true
+	case "peer":
+		return cert.Sensitive && d.Peer != nil && d.Peer.Direction == "upward"
+	}
+	return false
 }
 
 // errNeedsApproval: the machine's answer when a delivery came without (a valid) approval; the router files it for Deyao
@@ -70,10 +79,10 @@ var errTextDiffers = errors.New("message approval: the signed text isn't the tex
 // checkMessageApproval: nil (and the item id to record once delivered, "" for a rule) when the phone approved exactly
 // this delivery; text is what this machine would put into the harness, attested the bytes the core attested
 func checkMessageApproval(cert Cert, d Delivery, attested []byte, text string, now time.Time) (string, error) {
-	if !needsMessageApproval(cert, d.Kind) {
+	if !needsMessageApproval(cert, d) {
 		return "", nil
 	}
-	why := "this session holds a sensitive store, so Deyao approves each message on the phone"
+	why := "this session holds a sensitive store, so Deyao approves each message from a session holding less on the phone"
 	if !cert.Sensitive {
 		why = "a resume prompt is delivered only as the phone approved it"
 	}

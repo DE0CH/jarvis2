@@ -95,21 +95,66 @@ func previewOK(d Delivery) DeliveryResult {
 	return DeliveryResult{OK: true}
 }
 
+// sendPeer: session from (added, started, holding stores) sends s1 a peer message through SendPeer; s1 holds
+// claude+default, so a sender holding fewer stores sends UPWARD
+func (m *msgRig) sendPeer(t *testing.T, from string, stores []string, text string) map[string]any {
+	t.Helper()
+	m.r.st.Do(func(d *persisted) {
+		if d.Sessions[from] == nil {
+			d.Sessions[from] = &Session{ID: from, State: "started", MachineID: "m" + from, Label: "label " + from, Harness: "claude", Stores: stores}
+			d.Machines["m"+from] = from
+		}
+	})
+	out, err := m.r.SendPeer(from, "s1", text, &SignedRequest{Machine: "m" + from, Method: "POST", Path: "/m/api/requests/peer", Sig: "p" + randID()}, "POST", "/m/api/requests/peer")
+	if err != nil {
+		t.Fatal(out, err)
+	}
+	return out
+}
+
+// waitPending: until n messages are held (SendPeer hands them over in the background)
+func (m *msgRig) waitPending(t *testing.T, n int) []*PendingMessage {
+	t.Helper()
+	var ps []*PendingMessage
+	for i := 0; i < 300; i++ {
+		if ps = m.pending(); len(ps) >= n {
+			return ps
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("%d held, want %d: %+v", len(ps), n, ps)
+	return nil
+}
+
+// waitDeliveries: until the fake machine got n deliveries
+func (m *msgRig) waitDeliveries(t *testing.T, n int) []Delivery {
+	t.Helper()
+	var ds []Delivery
+	for i := 0; i < 300; i++ {
+		if ds = m.deliveries(); len(ds) >= n {
+			return ds
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("%d deliveries, want %d: %+v", len(ds), n, ds)
+	return nil
+}
+
 func TestAMessageIntoASensitiveSessionWaitsForDeyao(t *testing.T) {
 	m := newMsgRig(t, "mmsg1", true, previewOK)
-	// the watchdog's check-in: held (the caller sees it handed over), with the machine's own text
-	if err := m.r.DeliverCanned("s1", Delivery{Kind: "nudge", Minutes: 20, Jobs: 2}, ""); err != nil {
-		t.Fatal(err)
+	// an upward peer message: held (the sender sees it handed over), with the machine's own text
+	if out := m.sendPeer(t, "sfrom", nil, "please run the report"); out["waiting"] != "message" {
+		t.Fatal(out)
 	}
-	ps := m.pending()
-	want := nudgeText(2, 20*time.Minute)
-	if len(ps) != 1 || ps[0].Kind != "nudge" || ps[0].Text != want || ps[0].State != "pending" || !strings.Contains(ps[0].From, "watchdog") {
+	ps := m.waitPending(t, 1)
+	want := ps[0].Text
+	if len(ps) != 1 || ps[0].Kind != "peer" || !strings.Contains(want, "please run the report") || ps[0].State != "pending" || !strings.Contains(ps[0].From, "sfrom") {
 		t.Fatalf("held %+v", ps)
 	}
 	if ds := m.deliveries(); len(ds) != 1 || !ds[0].Preview || ds[0].Attest != nil {
 		t.Fatalf("only a preview reached the machine: %+v", ds)
 	}
-	if len(*m.dms) != 1 || !strings.Contains((*m.dms)[0], "Watchdog check-in") {
+	if len(*m.dms) != 1 || !strings.Contains((*m.dms)[0], "Peer message") {
 		t.Fatalf("dm %q", *m.dms)
 	}
 	// it is in the Inbox, under its session, with the exact text and who asks
@@ -120,25 +165,33 @@ func TestAMessageIntoASensitiveSessionWaitsForDeyao(t *testing.T) {
 			it = &x
 		}
 	}
-	if it == nil || it.Session != "s1" || it.Params.Text != want || it.CallerText != ps[0].From || it.Explanation != "Watchdog check-in" {
+	if it == nil || it.Session != "s1" || it.Params.Text != want || it.CallerText != ps[0].From || !strings.HasPrefix(it.Explanation, "Message from session “") {
 		t.Fatalf("inbox %+v", it)
 	}
-	// the next check-in replaces it (one DM per session while any waits)
-	m.r.DeliverCanned("s1", Delivery{Kind: "nudge", Minutes: 35, Jobs: 2}, "")
-	if ps2 := m.pending(); len(ps2) != 1 || ps2[0].ID == ps[0].ID || ps2[0].Text != nudgeText(2, 35*time.Minute) || len(*m.dms) != 1 {
-		t.Fatalf("not replaced: %+v (dms %d)", ps2, len(*m.dms))
+	// a second message waiting doesn't DM again (one DM per session while any waits)
+	m.sendPeer(t, "sfrom", nil, "and the other one")
+	if ps2 := m.waitPending(t, 2); len(ps2) != 2 || len(*m.dms) != 1 {
+		t.Fatalf("%+v (dms %d)", ps2, len(*m.dms))
 	}
+	m.r.DenyMessages([]string{func() string {
+		for _, pm := range m.pending() {
+			if pm.ID != ps[0].ID {
+				return pm.ID
+			}
+		}
+		return ""
+	}()})
 
 	// Deliver: the phone signs the draft; the machine gets exactly that message with the signature, attested
-	id := m.pending()[0].ID
+	id := ps[0].ID
 	text, sid, line, err := m.r.DraftMessages([]string{id})
 	if err != nil || sid != "s1" || line != "L1" {
 		t.Fatal(err)
 	}
 	var a messageApproval
 	json.Unmarshal([]byte(text), &a)
-	sum := sha256.Sum256([]byte(nudgeText(2, 35*time.Minute)))
-	if a.Kind != "messages" || a.Session != "L1" || len(a.Items) != 1 || a.Items[0].Sha256 != hex.EncodeToString(sum[:]) || a.Items[0].Text != nudgeText(2, 35*time.Minute) {
+	sum := sha256.Sum256([]byte(want))
+	if a.Kind != "messages" || a.Session != "L1" || len(a.Items) != 1 || a.Items[0].Sha256 != hex.EncodeToString(sum[:]) || a.Items[0].Text != want {
 		t.Fatalf("draft %s", text)
 	}
 	stranger, _ := ecdh.P256().GenerateKey(rand.Reader)
@@ -153,7 +206,7 @@ func TestAMessageIntoASensitiveSessionWaitsForDeyao(t *testing.T) {
 	messageWG.Wait()
 	ds := m.deliveries()
 	last := ds[len(ds)-1]
-	if last.Preview || last.Kind != "nudge" || last.Approval == nil || last.Approval.Payload != text || last.Attest == nil {
+	if last.Preview || last.Kind != "peer" || last.Approval == nil || last.Approval.Payload != text || last.Attest == nil {
 		t.Fatalf("delivered %+v", last)
 	}
 	if len(m.pending()) != 0 {
@@ -164,29 +217,31 @@ func TestAMessageIntoASensitiveSessionWaitsForDeyao(t *testing.T) {
 	}
 }
 
+// a resume prompt is rendered by the router itself, so a paused session isn't started just to hold it
 func TestAPausedSensitiveSessionIsntStartedToHoldAMessage(t *testing.T) {
 	m := newMsgRig(t, "mmsg2", true, previewOK)
 	m.r.st.Do(func(d *persisted) { d.Sessions["s1"].State, d.Sessions["s1"].MachineID = "paused", "" })
-	body := []byte(`{"name":"ci","prompt":"check   the CI","delaySeconds":60}`)
-	signed := &SignedRequest{Machine: "mmsg2", Method: "POST", Path: "/m/api/sessions/s1/wakeup", At: "1", Body: base64.StdEncoding.EncodeToString(body), Sig: "sg"}
-	if err := m.r.deliverVouched("s1", Delivery{Kind: "wakeup", Request: signed}); err != nil {
+	if err := m.r.deliverVouched("s1", Delivery{Kind: "resume-prompt", Text: "check   the CI"}); err != nil {
 		t.Fatal(err)
 	}
 	if st, _ := m.r.sessionState("s1"); st != "paused" {
 		t.Fatalf("started it: %s", st)
 	}
 	ps := m.pending()
-	if len(ps) != 1 || ps[0].Text != `[scheduled wakeup "ci"] check the CI` || ps[0].Origin == nil || ps[0].Origin.Signed != signed {
+	if len(ps) != 1 || ps[0].Kind != "resume-prompt" || !strings.Contains(ps[0].Text, "check") || !strings.Contains(ps[0].From, "Deyao") {
 		t.Fatalf("%+v", ps)
 	}
-	// Deny: nothing goes in; the session hears it as the outcome of the request that armed the wakeup
-	if got := m.r.DenyMessages([]string{ps[0].ID}); len(got) != 1 {
+	// a second one replaces it, still without starting anything
+	m.r.deliverVouched("s1", Delivery{Kind: "resume-prompt", Text: "no, carry on"})
+	if ps2 := m.pending(); len(ps2) != 1 || ps2[0].ID == ps[0].ID || ps2[0].Text != "no, carry on" {
+		t.Fatalf("not replaced: %+v", ps2)
+	}
+	// Deny: nothing goes in
+	if got := m.r.DenyMessages([]string{m.pending()[0].ID}); len(got) != 1 {
 		t.Fatal("not denied")
 	}
-	var oc []*Outcome
-	m.r.st.Do(func(d *persisted) { oc = d.Outcomes["s1"] })
-	if len(m.pending()) != 0 || len(oc) != 1 || oc[0].Outcome != outcomeDenied || oc[0].Ref != ps[0].ID || oc[0].Request != signed {
-		t.Fatalf("outcomes %+v", oc)
+	if st, _ := m.r.sessionState("s1"); len(m.pending()) != 0 || st != "paused" {
+		t.Fatalf("pending %+v, state %s", m.pending(), st)
 	}
 	if len(m.deliveries()) != 0 {
 		t.Fatal("something reached the machine")
@@ -209,55 +264,52 @@ func TestADeliveryIntoAPlainSessionIsntHeldButAResumePromptIs(t *testing.T) {
 	}
 }
 
-func TestARuleDeliversItsKindAndOnlyThat(t *testing.T) {
+// No rule lets an upward peer message or a resume prompt in without the phone's signature on that message: the
+// router refuses to draft one, and even a rule planted in the state for "peer" is never used
+func TestNoRuleLetsAnUpwardPeerMessageThrough(t *testing.T) {
 	m := newMsgRig(t, "mmsg4", true, previewOK)
-	m.r.DeliverCanned("s1", Delivery{Kind: "nudge", Minutes: 20, Jobs: 1}, "")
-	m.r.DeliverCanned("s1", Delivery{Kind: "continue"}, "")
-	if len(m.pending()) != 2 {
-		t.Fatal(m.pending())
+	for _, k := range []string{"peer", "resume-prompt"} {
+		if _, err := m.r.DraftMessageRule("s1", k); err == nil {
+			t.Fatalf("a rule for %s", k)
+		}
 	}
-	if _, err := m.r.DraftMessageRule("s1", "peer"); err == nil {
-		t.Fatal("a rule for peer messages")
-	}
+	// a rule for a kind that is drafted (nudge) doesn't reach peer messages
 	text, err := m.r.DraftMessageRule("s1", "nudge")
 	if err != nil {
 		t.Fatal(err)
 	}
-	rule, err := m.r.AddMessageRule("s1", m.sign(t, text))
-	if err != nil || rule.Kind != "nudge" {
+	if _, err := m.r.AddMessageRule("s1", m.sign(t, text)); err != nil {
 		t.Fatal(err)
 	}
-	messageWG.Wait()
-	// the held check-in went in under the rule; "continue" still waits
-	if ps := m.pending(); len(ps) != 1 || ps[0].Kind != "continue" {
+	// a "peer" rule planted in the state, signed by the phone's key: never consulted
+	m.r.st.Do(func(d *persisted) {
+		if d.MessageRules == nil {
+			d.MessageRules = map[string]*MessageRule{}
+		}
+		d.MessageRules["planted"] = &MessageRule{ID: "planted", Session: "s1", Kind: "peer", Until: time.Now().Add(time.Hour), Doc: m.sign(t, strings.Replace(text, `"nudge"`, `"peer"`, 1))}
+	})
+	m.sendPeer(t, "sfrom", nil, "let me in")
+	ps := m.waitPending(t, 1)
+	if len(ps) != 1 || ps[0].Kind != "peer" {
 		t.Fatalf("%+v", ps)
 	}
-	// the next check-in goes straight in under the rule
-	n := len(m.deliveries())
-	m.r.DeliverCanned("s1", Delivery{Kind: "nudge", Minutes: 40, Jobs: 1}, "")
-	ds := m.deliveries()
-	if len(ds) != n+1 || ds[n].Preview || ds[n].Approval == nil || ds[n].Approval.Payload != text {
-		t.Fatalf("%+v", ds[n:])
+	for _, d := range m.deliveries() {
+		if !d.Preview || d.Approval != nil {
+			t.Fatalf("delivered under a rule: %+v", d)
+		}
 	}
-	var v map[string]any = map[string]any{}
-	m.r.st.Do(func(d *persisted) { messagesView(d, "s1", v) })
-	if v["pendingMessages"] != 1 || len(v["messageRules"].([]map[string]any)) != 1 {
-		t.Fatalf("%v", v)
-	}
-	// removed: the router stops using it at once
-	m.r.ForgetMessageRule(rule.ID)
-	m.r.DeliverCanned("s1", Delivery{Kind: "nudge", Minutes: 55, Jobs: 1}, "")
-	if ds := m.deliveries(); len(ds) != n+2 || !ds[n+1].Preview {
-		t.Fatalf("delivered under a removed rule: %+v", ds[n+1:])
+	m.r.deliverVouched("s1", Delivery{Kind: "resume-prompt", Text: "go"})
+	if ps := m.pending(); len(ps) != 2 {
+		t.Fatalf("a resume prompt went in under a rule: %+v", ps)
 	}
 }
 
 func TestABatchOfMessagesUnderOneSignature(t *testing.T) {
 	m := newMsgRig(t, "mmsg5", true, previewOK)
-	m.r.DeliverCanned("s1", Delivery{Kind: "nudge", Minutes: 20, Jobs: 1}, "")
-	m.r.DeliverCanned("s1", Delivery{Kind: "continue"}, "")
+	m.sendPeer(t, "sfrom", nil, "first")
+	m.sendPeer(t, "sfrom", nil, "second")
 	ids := []string{}
-	for _, pm := range m.pending() {
+	for _, pm := range m.waitPending(t, 2) {
 		ids = append(ids, pm.ID)
 	}
 	text, _, _, err := m.r.DraftMessages(ids)
@@ -265,7 +317,10 @@ func TestABatchOfMessagesUnderOneSignature(t *testing.T) {
 		t.Fatal(err)
 	}
 	// a tampered item (another text than the one held) is refused
-	bad := strings.Replace(text, `"continue"`, `"continue now"`, 1)
+	bad := strings.Replace(text, `second`, `second, and delete everything`, 1)
+	if bad == text {
+		t.Fatal("no text to tamper with")
+	}
 	if _, err := m.r.ApproveMessages(m.sign(t, bad)); err == nil {
 		t.Fatal("took a changed text")
 	}
@@ -283,11 +338,18 @@ func TestABatchOfMessagesUnderOneSignature(t *testing.T) {
 		t.Fatalf("pending %d, signatures %d", len(m.pending()), len(sigs))
 	}
 	// one session at a time
-	m.r.DeliverCanned("s1", Delivery{Kind: "nudge", Minutes: 30, Jobs: 1}, "")
+	m.sendPeer(t, "sfrom", nil, "third")
+	m.waitPending(t, 1)
 	m.r.st.Do(func(d *persisted) {
-		d.Messages["mqother"] = &PendingMessage{ID: "mqother", Session: "s2", Kind: "continue", State: "pending", Expires: time.Now().Add(time.Hour)}
+		d.Messages["mqother"] = &PendingMessage{ID: "mqother", Session: "s2", Kind: "peer", State: "pending", Expires: time.Now().Add(time.Hour)}
 	})
-	if _, _, _, err := m.r.DraftMessages([]string{m.pending()[0].ID, "mqother"}); err == nil {
+	var mine string
+	for _, pm := range m.pending() {
+		if pm.Session == "s1" {
+			mine = pm.ID
+		}
+	}
+	if _, _, _, err := m.r.DraftMessages([]string{mine, "mqother"}); err == nil {
 		t.Fatal("drafted two sessions' messages together")
 	}
 }
@@ -300,30 +362,99 @@ func TestMessagesLapseAndApprovalsRunOut(t *testing.T) {
 		}
 		return DeliveryResult{Error: "target gone"} // the approved delivery fails
 	})
-	body := []byte(`{"name":"ci","prompt":"x","script":"true"}`)
-	signed := &SignedRequest{Machine: "mmsg6", Method: "POST", Path: "/m/api/sessions/s1/watches", At: "1", Body: base64.StdEncoding.EncodeToString(body), Sig: "w"}
-	m.r.st.Do(func(d *persisted) { d.Sessions["s1"].State = "paused" }) // rendered by the router's twin
-	m.r.deliverVouched("s1", Delivery{Kind: "watch", Request: signed})
-	m.r.st.Do(func(d *persisted) { d.Sessions["s1"].State = "started" })
-	ps := m.pending()
-	if len(ps) != 1 || ps[0].Text != `[watch "ci" met] x` || ps[0].Note == "" {
+	m.sendPeer(t, "sfrom", nil, "x")
+	ps := m.waitPending(t, 1)
+	if len(ps) != 1 || ps[0].Kind != "peer" || ps[0].Origin == nil || ps[0].Origin.Caller.Session != "sfrom" {
 		t.Fatalf("%+v", ps)
 	}
-	// a day on, nobody answered: it lapses and the session hears so
+	// a day on, nobody answered: it lapses and the sender hears so
 	m.r.messageTickOnce(time.Now().Add(messageTTL + time.Minute))
 	var oc []*Outcome
-	m.r.st.Do(func(d *persisted) { oc = d.Outcomes["s1"] })
+	m.r.st.Do(func(d *persisted) { oc = d.Outcomes["sfrom"] })
 	if len(m.pending()) != 0 || len(oc) != 1 || oc[0].Outcome != outcomeLapsed {
 		t.Fatalf("%+v", oc)
 	}
-	// approved but the machine fails it: failed, and the session hears so
-	m.r.DeliverCanned("s1", Delivery{Kind: "continue"}, "")
-	id := m.pending()[0].ID
+	// approved but the machine fails it: failed, and it says why
+	m.sendPeer(t, "sfrom", nil, "y")
+	id := m.waitPending(t, 1)[0].ID
 	text, _, _, _ := m.r.DraftMessages([]string{id})
 	m.r.ApproveMessages(m.sign(t, text))
 	messageWG.Wait()
 	if ps := m.pending(); len(ps) != 1 || ps[0].State != "failed" || !strings.Contains(ps[0].Error, "target gone") {
 		t.Fatalf("%+v", ps)
+	}
+}
+
+// DECISIONS 210: Jarvis's own messages (an Inbox outcome, the watchdog, "continue", an upgrade note) and the session's
+// own wakeups go straight into a running session holding a sensitive store: never held, no preview, no signature
+func TestJarvisOwnMessagesGoStraightIntoASensitiveSession(t *testing.T) {
+	m := newMsgRig(t, "mmsg10", true, previewOK)
+	wake := &SignedRequest{Machine: "mmsg10", Method: "POST", Path: "/m/api/sessions/s1/wakeup", At: "1",
+		Body: base64.StdEncoding.EncodeToString([]byte(`{"name":"ci","prompt":"check the CI","delaySeconds":60}`)), Sig: "sw"}
+	filed := &SignedRequest{Machine: "mmsg10", Method: "POST", Path: "/m/api/requests/add-store", At: "1", Body: base64.StdEncoding.EncodeToString([]byte(`{}`)), Sig: "sr"}
+	for i, d := range []Delivery{
+		{Kind: "request-outcome", Request: filed, Outcomes: []OutcomeItem{{Outcome: outcomeApproved, Ref: "q1"}}},
+		{Kind: "nudge", Minutes: 20, Jobs: 2},
+		{Kind: "wakeup", Request: wake},
+		{Kind: "continue"},
+		{Kind: "upgraded", From: "medium", To: "large"},
+	} {
+		if m.r.needsApproval("s1", d) {
+			t.Fatalf("%s needs approval", d.Kind)
+		}
+		if err := m.r.deliverVouched("s1", d); err != nil {
+			t.Fatalf("%s: %v", d.Kind, err)
+		}
+		ds := m.deliveries()
+		if len(ds) != i+1 || ds[i].Kind != d.Kind || ds[i].Preview || ds[i].Approval != nil || ds[i].Attest == nil {
+			t.Fatalf("%s not delivered straight in: %+v", d.Kind, ds)
+		}
+	}
+	if len(m.pending()) != 0 || len(*m.dms) != 0 {
+		t.Fatalf("held %+v, dms %q", m.pending(), *m.dms)
+	}
+}
+
+// DECISIONS 210: into a session holding a sensitive store, an equal or downward peer message goes straight in (no
+// Inbox, no signature); only an upward one (from a session holding less) waits for Deyao
+func TestOnlyAnUpwardPeerMessageIntoASensitiveSessionIsHeld(t *testing.T) {
+	m := newMsgRig(t, "mmsg11", true, previewOK)
+	if out := m.sendPeer(t, "sequal", []string{"claude", "default"}, "same stores"); out["direction"] != "equal" || out["waiting"] != nil {
+		t.Fatal(out)
+	}
+	if out := m.sendPeer(t, "sdown", []string{"claude", "default", "infra"}, "more stores"); out["direction"] != "downward" || out["waiting"] != nil {
+		t.Fatal(out)
+	}
+	ds := m.waitDeliveries(t, 2)
+	for _, d := range ds {
+		if d.Kind != "peer" || d.Preview || d.Approval != nil || d.Attest == nil || d.Peer.Approved {
+			t.Fatalf("not straight in: %+v", d)
+		}
+	}
+	if len(m.pending()) != 0 {
+		t.Fatalf("held %+v", m.pending())
+	}
+	for _, q := range m.r.Inbox() {
+		t.Fatalf("an Inbox item for an equal/downward message: %+v", q)
+	}
+	if out := m.sendPeer(t, "sup", []string{"claude"}, "fewer stores"); out["direction"] != "upward" || out["waiting"] != "message" {
+		t.Fatal(out)
+	}
+	if ps := m.waitPending(t, 1); len(ps) != 1 || ps[0].Kind != "peer" || ps[0].Delivery.Peer.From != "sup" {
+		t.Fatalf("%+v", ps)
+	}
+	// the same rule on the router's side, peer by peer
+	for dir, want := range map[string]bool{"equal": false, "downward": false, "upward": true} {
+		if got := m.r.needsApproval("s1", Delivery{Kind: "peer", Peer: &PeerNote{Direction: dir}}); got != want {
+			t.Fatalf("%s: needsApproval %v", dir, got)
+		}
+	}
+	// into a plain session not even an upward one waits for a signature (it is a one-tap upward request instead)
+	m.r.st.Do(func(d *persisted) {
+		d.Sessions["s1"].Cert = &Doc{Payload: `{"kind":"succession-cert","line":"L1","sensitive":false}`}
+	})
+	if m.r.needsApproval("s1", Delivery{Kind: "peer", Peer: &PeerNote{Direction: "upward"}}) {
+		t.Fatal("an upward peer into a plain session needs the phone's signature")
 	}
 }
 
@@ -415,7 +546,7 @@ func oldImageMachine(d Delivery) DeliveryResult {
 // An upward peer message into a sensitive session whose machine can't preview was reported FAILED to its sender
 // within 0.2 s, before Deyao ever saw it ("It was approved but carrying it out failed", the Paseo test session's two
 // replies to "Jarvis 2 works", 2026-10-20). It is held with Jarvis's own rendering instead, and delivered once Deyao
-// delivers it; the same for Jarvis's other messages into such a session.
+// delivers it.
 func TestAMessageIntoAnOldImageMachineIsHeldWithJarvisText(t *testing.T) {
 	m := newMsgRig(t, "mmsg9", true, oldImageMachine)
 	addSession(m.r, "sfrom", "started", "mfrom", false)
@@ -455,11 +586,12 @@ func TestAMessageIntoAnOldImageMachineIsHeldWithJarvisText(t *testing.T) {
 		t.Fatalf("outcomes %+v, pending %+v", oc, m.pending())
 	}
 
-	// Jarvis's own kinds too: the watchdog's check-in is held with the router's twin of the text
+	// Jarvis's own kinds aren't held at all (DECISIONS 210): the watchdog's check-in goes straight in, attested
+	n := len(m.deliveries())
 	if err := m.r.DeliverCanned("s1", Delivery{Kind: "nudge", Minutes: 20, Jobs: 2}, ""); err != nil {
 		t.Fatal(err)
 	}
-	if ps := m.pending(); len(ps) != 1 || ps[0].Kind != "nudge" || ps[0].Text != nudgeText(2, 20*time.Minute) {
-		t.Fatalf("nudge %+v", ps)
+	if ds := m.deliveries(); len(ds) != n+1 || ds[n].Kind != "nudge" || ds[n].Preview || ds[n].Attest == nil || len(m.pending()) != 0 {
+		t.Fatalf("nudge %+v, pending %+v", ds[n:], m.pending())
 	}
 }

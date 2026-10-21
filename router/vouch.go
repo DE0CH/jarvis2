@@ -410,7 +410,7 @@ func (r *Router) deliverVouchedOpts(sid string, d Delivery, boot bool, o *Origin
 	}
 	defer done()
 	// messages.go: into a session holding a sensitive store (and any resume prompt) only as the phone approved it
-	gated := d.Approval == nil && r.needsApproval(sid, d.Kind)
+	gated := d.Approval == nil && r.needsApproval(sid, d)
 	if gated {
 		if rule := r.ruleFor(sid, d.Kind); rule != nil {
 			d.Approval, gated = rule, false

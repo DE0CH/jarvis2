@@ -101,6 +101,7 @@ function MessageEntry({ m, n, deny }: { m: MessageView; n: number; deny?: () => 
       <P size={2} weight="medium" id={"message-label-" + m.id}>{n ? `${n}. ${m.kindLabel}` : m.kindLabel}</P>
       <Rows>
         <Row label="From" id={"message-from-" + m.id}>{m.from}</Row>
+        <Row label="To" id={"message-to-" + m.id}>{"Session “" + m.sessionName + "”"}</Row>
         <Row label="Asked">{ago(m.created)}</Row>
         {!!m.expires && <Row label="Expires" id={"message-expires-" + m.id}>{when(m.expires)}</Row>}
       </Rows>

@@ -478,7 +478,9 @@ extension InboxItem {
     case "restore": return "Restore store"
     case "peer-message": return "Peer message"
     case "message": return "Deliver a message"
-    default: return j["options"]["restore"].text != nil ? "Restore" : "New session"
+    case "new-session": return j["options"]["restore"].text != nil ? "Restore" : "New session"
+    // a kind this build doesn't know (router/inbox_kinds_test.go keeps the list in step): say so, never guess
+    default: return "Unknown request (\(kind)): update the app"
     }
   }
 }

@@ -128,13 +128,20 @@ func ruleText(k string) string { return messageKinds[k][1] }
 // previewOnly: kinds only the machine renders (its cert, the proofs): a paused session is started for them first
 func previewOnly(kind string) bool { return kind == "peer" || kind == "request-outcome" }
 
-// needsApproval: the session's machine takes this kind only as the phone approved it
-func (r *Router) needsApproval(sid, kind string) bool {
-	if kind == "resume-prompt" {
+// needsApproval: the session's machine takes this delivery only as the phone approved it (machine/messages.go
+// needsMessageApproval decides the same): a resume prompt (Deyao's words from the app) always; into a session holding a
+// sensitive store, an UPWARD peer message (words from a session holding less, or less permissive). Jarvis's own
+// messages (Inbox outcomes, the watchdog, "continue", lease and upgrade notes) and the session's own wakeups, crons and
+// watches go straight in, and so does an equal or downward peer message (DECISIONS 210)
+func (r *Router) needsApproval(sid string, d Delivery) bool {
+	switch d.Kind {
+	case "resume-prompt":
 		return true
+	case "peer":
+		_, sensitive := r.sessionState(sid)
+		return sensitive && d.Peer != nil && d.Peer.Direction == "upward"
 	}
-	_, sensitive := r.sessionState(sid)
-	return sensitive
+	return false
 }
 
 // ---- the router's twins of the machine's texts (machine/deliver.go deliveryText) --------------------------------
@@ -210,10 +217,10 @@ func messageFrom(d Delivery) string {
 	switch d.Kind {
 	case "peer":
 		if d.Peer != nil {
-			return fmt.Sprintf("session “%s” (%s), a peer message (%s)", clip(d.Peer.FromTitle, 80), d.Peer.From, d.Peer.Direction)
+			return fmt.Sprintf("Session “%s” (%s)", clip(strings.Join(strings.Fields(d.Peer.FromTitle), " "), 80), d.Peer.From)
 		}
 	case "request-outcome":
-		return "Jarvis's Inbox (what became of requests this session filed)"
+		return "Jarvis: the result of a request this session filed"
 	}
 	_, from, _, _ := messageText(d)
 	return from
@@ -862,10 +869,19 @@ func messageInboxItems(d *persisted) []InboxItem {
 		exp := pm.Expires
 		out = append(out, InboxItem{ID: pm.ID, Kind: requestKindMsg, Params: RequestParams{Session: pm.Session, Text: pm.Text},
 			Session: pm.Session, SessionName: inboxSessionName(d, pm.Session), Caller: c, CallerText: pm.From,
-			Explanation: kindLabel(pm.Kind), Created: pm.Created, Expires: &exp,
+			Explanation: messageHeadline(d, pm), Created: pm.Created, Expires: &exp,
 			Open: map[string]any{"kind": requestKindMsg, "options": map[string]any{"messageId": pm.ID, "sessionId": pm.Session}}})
 	}
 	return out
+}
+
+// messageHeadline: who sends what to whom, in plain words, for the Inbox: "Message from session “X” to session “Y”"
+func messageHeadline(d *persisted, pm *PendingMessage) string {
+	to := "session “" + inboxSessionName(d, pm.Session) + "”"
+	if pm.Kind == "peer" && pm.Delivery.Peer != nil {
+		return "Message from session “" + inboxSessionName(d, pm.Delivery.Peer.From) + "” to " + to
+	}
+	return kindLabel(pm.Kind) + " for " + to
 }
 
 func (r *Router) registerMessages(app appRoute) {

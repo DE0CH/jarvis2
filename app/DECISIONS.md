@@ -438,3 +438,12 @@ fixes, 34–40 carried over from the old app and still true, 41–43 the web pag
     up, the iPhone app offers Latest in the toolbar, which goes back to the tail and resumes following. The replica and
     the walkthrough check it in their Log step: the end marker (`log-end`) is on screen when the log opens; after
     scrolling up it stays off screen through a few polls; Latest brings it back and then hides.
+
+## Inbox kinds and message cards (2026-10-21)
+
+79. **Every Inbox kind is named; an unknown one says so** (both apps; docs/DECISIONS.md 210). The list title of an Inbox
+    entry no longer falls back to "New session": `new-session` is its own case, and a kind the build doesn't know shows
+    as "Unknown request (kind): update the app" (web: "reload the page"). The router's `inbox_kinds_test.go` reads both
+    apps' kind tables and fails when one misses a kind the router files. A pending message's card says who sends what
+    to whom: the Inbox row is the router's headline ("Message from session “X” to session “Y”"), the review page has
+    From and To rows above the exact text.
