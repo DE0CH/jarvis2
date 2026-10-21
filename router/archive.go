@@ -163,6 +163,9 @@ func (r *Router) latestSnapshot(sessionID string) (machine string, cert *Doc, at
 			if sid == sessionID {
 				machines = append(machines, m)
 				certs[m] = d.Certs[m]
+				if st := d.Started[m]; certs[m] == nil && st != nil && st.KernelCert != nil {
+					certs[m] = st.KernelCert // kernelline.go: a kernel machine's, the spawner's cert naming its key
+				}
 			}
 		}
 	})

@@ -111,6 +111,7 @@ type Started struct {
 	SigningKey    string  `json:"signingKey"`
 	Volume        *Volume `json:"volume,omitempty"`     // snapsafe.go: the machine's Fly volume (a core with volumes)
 	KernelPred    string  `json:"kernelPred,omitempty"` // kernelline.go: the machine whose snapshot this one restores
+	KernelCert    *Doc    `json:"kernelCert,omitempty"` // kernelline.go: the spawner's cert naming it (what its archive keeps)
 }
 
 type persisted struct {

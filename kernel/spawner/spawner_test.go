@@ -216,6 +216,27 @@ func TestARequiredSnapshotKeepsTheMachine(t *testing.T) {
 	if kc.Source.Snapshot != "" {
 		t.Fatal("an unvouched snapshot was named")
 	}
+	// a machine of a source with a snapshot that signs none passes that snapshot on
+	r2 := newRig(t)
+	src := kt.SourceContent("t")
+	src.Image, src.Snapshot = img, strings.Repeat("cd", 32)
+	cert := r2.w.Cert(doc.ByIPhone, doc.Sink, kt.Source(), perm.Top(), src, nil)
+	out, err := r2.sp.Spawn(SpawnInput{Cert: cert, Notarized: r2.notarize(cert), Notarizer: r2.w.C["notarizer"].Identity, Region: "lhr", Size: "medium"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id2 := out.(map[string]any)["id"].(string)
+	r2.fly.start(id2)
+	if _, err := r2.sp.Init(id2); err != nil {
+		t.Fatal(err)
+	}
+	kd2, err := r2.sp.Kill(id2, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if kc2, _ := doc.OpenCert(kd2, r2.w.C["spawner"].Identity.SigningKey); kc2.Source.Snapshot != src.Snapshot {
+		t.Fatalf("the source's snapshot wasn't passed on: %q", kc2.Source.Snapshot)
+	}
 }
 
 // ✱ a spawn from a cert that isn't notarized, or not into a source, or with another image; ✱ Fly running another digest

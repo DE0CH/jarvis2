@@ -629,7 +629,7 @@ func (r *Router) CreateSession(in NewSession) (string, error) {
 		opts["restore"] = in.Import.Shown // the app shows it beside the signed "Restores machine" and hash
 	}
 	if kernel {
-		if err := r.kernelNewSessionApproval(s, config, opts, in); err != nil {
+		if err := r.kernelNewSessionApproval(s, config, opts, in, ""); err != nil {
 			r.st.Do(func(d *persisted) { delete(d.Sessions, s.ID) })
 			return "", err
 		}
@@ -679,6 +679,9 @@ func (r *Router) Respond(id, signature string) (*Doc, string, error) {
 	}
 	if a.Kind == kernelApprovalKind {
 		return r.respondKernel(a, signature)
+	}
+	if a.Kind == kernelAddApprovalKind {
+		return r.respondKernelAdd(a, signature)
 	}
 	in := map[string]any{"challenge": a.Challenge, "signature": signature}
 	// a start the answer leads to is a tracked lifecycle action (drain.go): during a drain the answer is refused before
@@ -1368,6 +1371,9 @@ func (r *Router) addStoreApproval(machine, store string, o Origin, explanation, 
 			s = *x
 		}
 	})
+	if s.ID != "" && s.MachineID == machine && s.Kernel != nil { // kernelline.go
+		return r.kernelAddStoreApproval(s, store, o, explanation, batch)
+	}
 	if s.ID == "" || s.MachineID != machine || s.Cert == nil {
 		return "", fmt.Errorf("this machine isn't a running session")
 	}

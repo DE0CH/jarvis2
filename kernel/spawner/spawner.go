@@ -322,8 +322,12 @@ func (sp *Spawner) Kill(id string, snap *Snapshot) (sig.Doc, error) {
 	} else {
 		b := make([]byte, 16)
 		rand.Read(b)
+		// a machine that signed no snapshot passes on the one its source named: it has no newer state the spawner
+		// vouched for (the router kills a booted machine without one only when told to)
 		src := m.Content
-		src.Snapshot = sum
+		if sum != "" {
+			src.Snapshot = sum
+		}
 		c := doc.Cert{Kind: "succession", Pred: doc.Object("fly-" + id), Succ: doc.NewSource(b), Pair: perm.Top(),
 			Source: &src, Signer: doc.BySpawner, IssuedAt: doc.Now()}
 		if err := c.Check(); err != nil {

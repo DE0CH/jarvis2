@@ -530,6 +530,10 @@ func (r *Router) buildHandlers() {
 				pred = st.KernelPred
 				return
 			}
+			if st := d.Started[machine]; st != nil && st.KernelCert != nil {
+				pred = "restore" // a kernel line's first machine: the archived snapshot its source names, if any (below)
+				return
+			}
 			if cert := d.Certs[machine]; cert != nil {
 				var c struct {
 					PredID string `json:"predecessorId"`
@@ -538,6 +542,16 @@ func (r *Router) buildHandlers() {
 				pred = c.PredID
 			}
 		})
+		if pred == "restore" {
+			dir := r.restoreFilesFor(machine) // restore.go: only a restoring line's first machine
+			if dir == "" {
+				writeJSON(w, 404, map[string]string{"error": "no predecessor"})
+				return
+			}
+			w.Header().Set("Content-Type", "application/gzip")
+			http.ServeFile(w, req, filepath.Join(dir, "snapshot.tar.gz"))
+			return
+		}
 		if pred == "" {
 			writeJSON(w, 404, map[string]string{"error": "no predecessor"})
 			return
@@ -660,6 +674,20 @@ func (r *Router) buildHandlers() {
 			return
 		}
 		writeJSON(w, 200, pub)
+	})
+	m("POST /m/kernel/downgrade", func(w http.ResponseWriter, req *http.Request, machine string, body []byte) {
+		var in struct {
+			Keep []string `json:"keep"`
+		}
+		if json.Unmarshal(body, &in) != nil || in.Keep == nil {
+			writeJSON(w, 400, map[string]string{"error": "{keep: [stores]}"})
+			return
+		}
+		if err := r.kernelDowngrade(machine, in.Keep); err != nil { // kernelline.go
+			writeErr(w, err)
+			return
+		}
+		writeJSON(w, 200, map[string]any{"ok": true, "keep": in.Keep})
 	})
 	m("POST /m/add-store", func(w http.ResponseWriter, req *http.Request, machine string, body []byte) {
 		var in struct {

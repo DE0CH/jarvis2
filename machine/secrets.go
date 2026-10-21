@@ -149,6 +149,9 @@ func (h *heldSecrets) pull(c *client) (int, error) {
 // failed pull empties the RAM copy (a downgrade: what the old keys opened must not stay).
 // lockHeld: the caller (a downgrade) holds the secrets lock already.
 func (h *heldSecrets) reload(c *client, drop, lockHeld bool) (int, error) {
+	if _, kernel := readKernelTrust(); kernel {
+		return h.reloadKernel(c, drop, lockHeld)
+	}
 	coreKey, err := readTrim(coreKeyPath)
 	if err != nil {
 		return 0, err

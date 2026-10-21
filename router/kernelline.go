@@ -26,6 +26,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"slices"
 	"strings"
 	"time"
 
@@ -103,8 +104,8 @@ func (r *Router) kernelSourceDraft(s *Session, config, image, snapshot string) (
 }
 
 // kernelNewSessionApproval: the new session's Inbox approval (the phone signs the draft's payload)
-func (r *Router) kernelNewSessionApproval(s *Session, config string, opts map[string]string, in NewSession) error {
-	draft, err := r.kernelSourceDraft(s, config, r.cfg.SessionImage, "")
+func (r *Router) kernelNewSessionApproval(s *Session, config string, opts map[string]string, in NewSession, snapshot string) error {
+	draft, err := r.kernelSourceDraft(s, config, r.cfg.SessionImage, snapshot)
 	if err != nil {
 		return err
 	}
@@ -239,6 +240,7 @@ func (r *Router) kernelSpawn(sid string) {
 			mc, _ := doc.PeekCert(mcert)
 			r.st.Do(func(d *persisted) {
 				d.Started[id].Image, d.Started[id].SigningKey, d.Started[id].EncryptionKey = mc.Machine.Image, mc.Machine.SigningKey, mc.Machine.EncryptionKey
+				d.Started[id].KernelCert = &Doc{Payload: mcert.Payload, Sig: mcert.Sig}
 				if x := d.Sessions[sid]; x != nil && x.Kernel != nil {
 					x.Kernel.MachineCert, x.Kernel.MachineNz, x.Kernel.Grant = &mcert, &mnz, &g
 					x.MachineID, x.Image, x.State, x.Error, x.PausedAt = id, mc.Machine.Image, "initialising", "", nil
@@ -594,4 +596,142 @@ func sessionLine(s *Session) string {
 		return s.ID
 	}
 	return certField(s.Cert, "line")
+}
+
+// kernelDowngrade: the machine keeps only these stores: the identity signer's (fly-M, fly-M, P), P the kept stores
+// for the session, notarized; the main grant moves along it (a move only narrows); the machine pulls again
+func (r *Router) kernelDowngrade(machine string, keep []string) error {
+	var s Session
+	r.st.Do(func(d *persisted) {
+		if x := d.Sessions[d.Machines[machine]]; x != nil && x.MachineID == machine {
+			s = *x
+		}
+	})
+	if s.Kernel == nil || s.Kernel.Grant == nil {
+		return errors.New("this machine isn't a running kernel line")
+	}
+	allowed := []string{}
+	for _, st := range keep {
+		allowed = append(allowed, "store:"+st)
+	}
+	p := perm.Pair{Allowed: perm.Only(allowed...), Conditions: []string{"session:" + s.ID}}
+	c, err := r.kernel.Doc("identity", "/sign", map[string]any{"machine": "fly-" + machine, "pair": p})
+	if err != nil {
+		return err
+	}
+	nz, err := r.kernel.Notarize(c)
+	if err != nil {
+		return err
+	}
+	g, err := r.kernel.Move(*s.Kernel.Grant, c, nz)
+	if err != nil {
+		return err
+	}
+	r.st.Do(func(d *persisted) {
+		if x := d.Sessions[s.ID]; x != nil && x.Kernel != nil && x.MachineID == machine {
+			x.Kernel.Grant, x.Stores = &g, keep
+		}
+	})
+	return nil
+}
+
+// kernelAddApprovalKind: an add-store on a kernel line: the phone signs two certs under one Face ID, the cert into a
+// new source holding the store (sink → source-a, P_add = the store for the session) and the cert from it onto the
+// running machine (source-a → fly-M, ⊤); the answer is the two signatures, one per line, in that order
+const kernelAddApprovalKind = "kernel-add-store"
+
+func (r *Router) kernelAddStoreApproval(s Session, store string, o Origin, explanation, batch string) (string, error) {
+	l := s.Kernel
+	if l == nil || l.MachineCert == nil || l.SourceCert == nil {
+		return "", errors.New("this machine isn't a running kernel line")
+	}
+	mc, err := doc.PeekCert(*l.MachineCert)
+	if err != nil {
+		return "", err
+	}
+	sc, err := doc.PeekCert(*l.SourceCert)
+	if err != nil {
+		return "", err
+	}
+	b := make([]byte, 16)
+	rand.Read(b)
+	add := doc.NewSource(b)
+	src := *sc.Source
+	src.Snapshot = ""
+	c1 := doc.Cert{Kind: "succession", Pred: doc.Sink, Succ: add, Pair: perm.Pair{Allowed: perm.Only("store:" + store), Conditions: []string{"session:" + s.ID}},
+		Source: &src, Signer: doc.ByIPhone, IssuedAt: doc.Now()}
+	c2 := doc.Cert{Kind: "succession", Pred: add, Succ: mc.Succ, Pair: perm.Top(), Machine: mc.Machine, Signer: doc.ByIPhone, IssuedAt: doc.Now()}
+	if err := c1.Check(); err != nil {
+		return "", err
+	}
+	if err := c2.Check(); err != nil {
+		return "", err
+	}
+	p1, _ := json.Marshal(c1)
+	p2, _ := json.Marshal(c2)
+	a := &Approval{Kind: kernelAddApprovalKind, Session: s.ID, Machine: s.MachineID, Label: s.Label, Challenge: &Doc{Payload: string(p1)},
+		Earlier: []*Doc{{Payload: string(p2)}}, Options: map[string]string{"store": store}, Origin: &o, Explanation: explanation, Batch: batch}
+	r.addApproval(a)
+	return a.ID, nil
+}
+
+// respondKernelAdd: the two signatures → the store's grant moved onto the machine and merged with the main grant
+// (both carry exactly session:<id>), then the machine pulls again
+func (r *Router) respondKernelAdd(a *Approval, signatures string) (*Doc, string, error) {
+	sigs := strings.Fields(signatures)
+	if len(sigs) != 2 || len(a.Earlier) != 1 {
+		return nil, "", errors.New("an add-store on a kernel line takes two signatures (one per line)")
+	}
+	c1 := sig.Doc{Payload: a.Challenge.Payload, Sig: sigs[0]}
+	c2 := sig.Doc{Payload: a.Earlier[0].Payload, Sig: sigs[1]}
+	var root, main *gv.Signed
+	r.st.Do(func(d *persisted) {
+		root = d.KernelRoot
+		if s := d.Sessions[a.Session]; s != nil && s.Kernel != nil && s.MachineID == a.Machine {
+			main = s.Kernel.Grant
+		}
+	})
+	if root == nil || main == nil {
+		return nil, "", errors.New("the machine isn't running on the kernel any more")
+	}
+	nz1, err := r.kernel.Notarize(c1)
+	if err != nil {
+		return nil, "", err
+	}
+	g, err := r.kernel.Move(*root, c1, nz1)
+	if err != nil {
+		return nil, "", err
+	}
+	nz2, err := r.kernel.Notarize(c2)
+	if err != nil {
+		return nil, "", err
+	}
+	if g, err = r.kernel.Move(g, c2, nz2); err != nil {
+		return nil, "", err
+	}
+	mid, err := r.kernel.Identity("merger")
+	if err != nil {
+		return nil, "", err
+	}
+	md, err := r.kernel.Doc("merger", "/merge", map[string]any{"a": main, "b": g})
+	if err != nil {
+		return nil, "", err
+	}
+	merged := gv.Signed{Grant: md, By: "merger", Signer: &mid}
+	store := a.Options["store"]
+	r.st.Do(func(d *persisted) {
+		delete(d.Approvals, a.ID)
+		if s := d.Sessions[a.Session]; s != nil && s.Kernel != nil && s.MachineID == a.Machine {
+			s.Kernel.Grant = &merged
+			if !slices.Contains(s.Stores, store) {
+				s.Stores = append(s.Stores, store)
+				slices.Sort(s.Stores)
+			}
+		}
+		if a.Origin != nil {
+			noteOutcome(d, a.Origin, "add-store", a.Session, outcomeApproved, 0, &Doc{Payload: nz2.Payload, Sig: nz2.Sig})
+		}
+	})
+	r.send(a.Machine, "refresh-secrets")
+	return &Doc{Payload: md.Payload, Sig: md.Sig}, a.Session, nil
 }

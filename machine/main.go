@@ -312,6 +312,7 @@ func prepare() error {
 		if err := kernelRestore(c, cert.Snapshot); err != nil {
 			return fmt.Errorf("snapshot: %w", err)
 		}
+		restoredArchive = firstMachine // a new line restoring an archive: its line keys come with it (deliver.go)
 	} else if kernel {
 		if !firstMachine {
 			log.Printf("the source names no snapshot of %s: starting with no predecessor state", cert.PredID)
@@ -341,8 +342,11 @@ func prepare() error {
 		}
 	}
 	// 2b. a new line restoring a destroyed session's archived snapshot (restore.go): only the one the cert names
-	if err := restoreArchived(c, coreKey, me, &cert, v); err != nil {
-		return fmt.Errorf("restore: %w", err)
+	// (a kernel line's source names its archived snapshot by hash, restored above: the phone signed it)
+	if !kernel {
+		if err := restoreArchived(c, coreKey, me, &cert, v); err != nil {
+			return fmt.Errorf("restore: %w", err)
+		}
 	}
 	trustLineKeys(cert) // deliver.go: this line's signing keys, for what it asked to be delivered later
 
@@ -1027,6 +1031,9 @@ func (sp downgradeSpec) keepFor(held []string) ([]string, error) {
 // between the challenge and its answer makes the challenge stale (the core takes only the newest cert), and the
 // downgrade starts again from the new cert, with a new key pair (nothing was kept from the stale try).
 func downgrade(sp downgradeSpec) error {
+	if _, kernel := readKernelTrust(); kernel {
+		return downgradeKernel(sp) // kernelboot.go
+	}
 	return withSecretsLock(func() error {
 		var err error
 		for try := 0; try < 3; try++ {

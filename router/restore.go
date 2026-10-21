@@ -132,14 +132,26 @@ func (r *Router) RestoreRecord(recordID, requestID string) (string, error) {
 		r.st.Do(func(d *persisted) { delete(d.Sessions, sid) })
 		return fail(err)
 	}
+	what := label
+	if what == "" {
+		what = recordID
+	}
+	if r.kernelServes() { // kernelline.go: the restore on the kernel; the phone signs the snapshot's hash into the source
+		sum, err := sha256hex(filepath.Join(dir, "snapshot.tar.gz"))
+		if err == nil {
+			err = r.kernelNewSessionApproval(s, config, map[string]string{"model": s.Model, "size": s.Size, "permissionMode": s.PermissionMode,
+				"repos": s.Repos, "restore": fmt.Sprintf("%s (destroyed %s)", what, rec.DestroyedAt.UTC().Format("2006-01-02"))}, NewSession{}, sum)
+		}
+		if err != nil {
+			r.st.Do(func(d *persisted) { delete(d.Sessions, sid) })
+			return fail(err)
+		}
+		return sid, nil
+	}
 	ch, err := r.succession(nil, "", s.Stores, s.Harness, s.PermissionMode, r.cfg.SessionImage, config, "")
 	if err != nil {
 		r.st.Do(func(d *persisted) { delete(d.Sessions, sid) })
 		return fail(err)
-	}
-	what := label
-	if what == "" {
-		what = recordID
 	}
 	r.addApproval(&Approval{Kind: "new-session", Session: sid, Label: s.Label, Challenge: ch,
 		Options: map[string]string{"model": s.Model, "size": s.Size, "permissionMode": s.PermissionMode, "repos": s.Repos,
@@ -165,10 +177,20 @@ func (r *Router) checkRestoreFiles(dir string) (*Doc, error) {
 			SigningKey string `json:"signingKey"`
 		} `json:"machine"`
 	}
-	if cert.Decode(&c) != nil || c.Kind != "succession-cert" || c.Machine == nil {
-		return nil, errors.New("the archive's cert.json isn't a succession cert")
+	var kc struct {
+		Kind    string `json:"kind"`
+		Machine *struct {
+			SigningKey string `json:"signingKey"`
+		} `json:"machine"`
 	}
-	if key, err := r.core.Key(); err == nil && key["signingKey"] != "" && !verifyP256(key["signingKey"], []byte(cert.Payload), cert.Sig) &&
+	if cert.Decode(&kc) == nil && kc.Kind == "succession" && kc.Machine != nil { // a kernel line's: the spawner's cert
+		c.Kind, c.Machine = "succession-cert", &struct {
+			ID         string `json:"id"`
+			SigningKey string `json:"signingKey"`
+		}{SigningKey: kc.Machine.SigningKey}
+	} else if cert.Decode(&c) != nil || c.Kind != "succession-cert" || c.Machine == nil {
+		return nil, errors.New("the archive's cert.json isn't a succession cert")
+	} else if key, err := r.core.Key(); err == nil && key["signingKey"] != "" && !verifyP256(key["signingKey"], []byte(cert.Payload), cert.Sig) &&
 		!r.earlierCoreSigned(dir, &cert) {
 		return nil, errors.New("the archive's cert isn't signed by this core, nor by an earlier core the master key claimed")
 	}

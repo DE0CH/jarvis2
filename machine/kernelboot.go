@@ -270,3 +270,74 @@ func checkKernelAttest(t kernelTrust, me, kind string, attested []byte, d *Signe
 	}
 	return nil
 }
+
+// reloadKernel: a kernel machine's reload (refresh-secrets: its grant changed, an add-store or a downgrade): its boot
+// documents again, checked the same way (the grant names the stores now), then a pull with it
+func (h *heldSecrets) reloadKernel(c *client, drop, lockHeld bool) (int, error) {
+	keys, err := ownKeys()
+	if err != nil {
+		return 0, err
+	}
+	refresh := refreshSecrets
+	if lockHeld {
+		refresh = refreshUnlocked
+	}
+	n, err := refresh(func() error {
+		var b kernelBootDocs
+		if err := c.json("GET", "/m/kernel/boot", nil, &b); err != nil {
+			return err
+		}
+		cert, trust, err := checkKernelBoot(b, strings.TrimSpace(os.Getenv(kernelBoxEnv)), strings.TrimSpace(os.Getenv(kernelSourceEnv)), c.me, keys)
+		if err != nil {
+			return err
+		}
+		tb, _ := json.Marshal(trust)
+		raw, _ := json.Marshal(cert)
+		os.WriteFile(kernelTrustPath, tb, 0o644)
+		return os.WriteFile(certPath, raw, 0o644)
+	}, func() (map[string]string, error) {
+		h.pullMu.Lock()
+		defer h.pullMu.Unlock()
+		return pullSecrets(c, "", c.me)
+	})
+	if err != nil && drop {
+		h.set(map[string]string{})
+	}
+	return n, err
+}
+
+// downgradeKernel: `jarvis2 downgrade` on a kernel machine: the router has the identity signer narrow this machine's
+// grant to the stores kept (a cert (M, M, P), notarized, the grant moved along it) and the supervisor pulls with the
+// narrower grant, holding only those stores' keys from then on (no key rotation: secrets serves a pull only to the
+// stores the grant names)
+func downgradeKernel(sp downgradeSpec) error {
+	b, err := os.ReadFile(certPath)
+	if err != nil {
+		return err
+	}
+	var cert Cert
+	if json.Unmarshal(b, &cert) != nil {
+		return errors.New("couldn't read this session's grant, so the stores it holds aren't known; nothing changed")
+	}
+	keep, err := sp.keepFor(cert.Stores)
+	if errors.Is(err, errNothingToDrop) {
+		fmt.Fprintf(os.Stderr, "nothing changed: this session holds %s\n", strings.Join(cert.Stores, " "))
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	c, err := newClient()
+	if err != nil {
+		return err
+	}
+	if err := c.json("POST", "/m/kernel/downgrade", map[string]any{"keep": keep}, nil); err != nil {
+		return err
+	}
+	r, err := askSecrets(secretsReq{Op: "reload", Drop: true}, 20*time.Minute) // the supervisor's RAM copy, at once
+	if err != nil {
+		r.N = 0 // locked or empty: nothing kept
+	}
+	fmt.Fprintf(os.Stderr, "downgraded to %v: the supervisor holds %d keys. Values already loaded in running processes stay there until they exit.\n", keep, r.N)
+	return nil
+}

@@ -115,6 +115,33 @@ func TestAKernelLinesLife(t *testing.T) {
 	if st := kernelSession(rg, sid).State; st != "started" {
 		t.Fatalf("state %s", st)
 	}
+	// add-store: the phone signs both certs; the store's grant, moved onto the machine, merges with the main one
+	aid, err := rg.r.addStoreApproval(m1.ID, "extra", Origin{}, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var add *Approval
+	rg.r.st.Do(func(d *persisted) { add = d.Approvals[aid] })
+	if add == nil || add.Kind != kernelAddApprovalKind {
+		t.Fatalf("%+v", add)
+	}
+	s1, _ := k.Phone.Sign([]byte(add.Challenge.Payload))
+	s2, _ := k.Phone.Sign([]byte(add.Earlier[0].Payload))
+	if _, _, err := rg.r.Respond(aid, s1+"\n"+s2); err != nil {
+		t.Fatal(err)
+	}
+	g, err = gv.Open(*kernelSession(rg, sid).Kernel.Grant, k.Box.PublicKey())
+	if err != nil || !g.Pair.Allowed.Contains("store:extra") || g.Machine != doc.Object("fly-"+m1.ID) {
+		t.Fatal(err, g)
+	}
+	// downgrade: the identity signer narrows the grant to what is kept
+	if code, body := kdo(t, h, m1, "POST", "/m/kernel/downgrade", `{"keep":[]}`); code != 200 {
+		t.Fatal(code, string(body))
+	}
+	g, err = gv.Open(*kernelSession(rg, sid).Kernel.Grant, k.Box.PublicKey())
+	if err != nil || g.Pair.Allowed.Contains("store:extra") || g.Machine != doc.Object("fly-"+m1.ID) {
+		t.Fatal(err, g)
+	}
 	// pause: the machine's signed snapshot is here; the spawner kills it into a source holding its hash
 	tarball := makeTar(t, rg.files)
 	sum := sha256.Sum256(tarball)
@@ -162,6 +189,40 @@ func TestAKernelLinesLife(t *testing.T) {
 		rg.r.st.Do(func(d *persisted) { gone = d.Sessions[sid] == nil })
 		return gone
 	})
+	rec := rg.r.record(sid)
+	if rec == nil || rec.Archive == nil || rec.Archive.Signer != m1.ID {
+		t.Fatalf("the archive: %+v", rec)
+	}
+	// restore: a new kernel line whose source names the archived snapshot's hash (the phone signs it); its first
+	// machine gets that snapshot
+	nsid, err := rg.r.RestoreRecord(sid, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ra *Approval
+	waitFor(t, "the restore's approval", func() bool {
+		rg.r.st.Do(func(d *persisted) {
+			for _, x := range d.Approvals {
+				if x.Session == nsid {
+					ra = x
+				}
+			}
+		})
+		return ra != nil
+	})
+	var rc doc.Cert
+	if ra == nil || ra.Kind != kernelApprovalKind || json.Unmarshal([]byte(ra.Challenge.Payload), &rc) != nil || rc.Source.Snapshot != hex.EncodeToString(sum[:]) {
+		t.Fatalf("%+v", ra)
+	}
+	rsig, _ := k.Phone.Sign([]byte(ra.Challenge.Payload))
+	if _, _, err := rg.r.Respond(ra.ID, rsig); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "the restored machine", func() bool { s := kernelSession(rg, nsid); return s.MachineID != "" && s.Kernel != nil && s.Kernel.MachineCert != nil })
+	m3 := k.Fly.Machine(kernelSession(rg, nsid).MachineID)
+	if code, body := kdo(t, h, m3, "GET", "/m/snapshot", ""); code != 200 || string(body) != string(tarball) {
+		t.Fatalf("the archived snapshot: %d", code)
+	}
 }
 
 // ✱ without the root grant, new sessions stay on the old core
