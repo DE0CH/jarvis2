@@ -122,7 +122,7 @@ export type Session = {
   credsExpiresAt?: string | number; discordChannel?: string; statusUpdatedAt?: string; lastReport?: string; refusals?: Refusal[];
   wakeups?: Wakeup[]; crons?: Cron[]; watches?: Watch[]; resumePrompt?: string; createRequestId?: string; repos?: string;
   // a lifecycle action holding the session (others are refused 409) and a permission-mode / restart job
-  // what a pause or destroy is waiting on, in plain words (e.g. "waiting for the machine's last snapshot (up to 10 min)")
+  // what a pause or destroy is waiting on, in plain words (e.g. "waiting for the machine's last snapshot")
   waiting?: string;
   // the Claude account it runs on (router/claudeaccounts.go), fixed when it was made
   claudeAccount?: string | null;

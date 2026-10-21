@@ -30,7 +30,7 @@ type Router struct {
 	execs    map[string]chan execItem   // machine id → holder-signed shell commands (grants.go)
 	results  map[string]chan ExecResult // exec request id → its waiting caller
 	hk       holders
-	snapped  map[string]chan struct{}
+	snapped  map[string]*snapWait // snapwait.go: machine id → the final snapshot a pause or destroy waits for
 	locksMu  sync.Mutex
 	locks    map[string]bool // session id → a lifecycle action holds it (lock): one at a time
 	drain    drainState      // drain.go: the lifecycle goroutines running, refused once SIGTERM came
@@ -56,7 +56,7 @@ type Router struct {
 }
 
 func NewRouter(cfg Config, st *State, core *CoreClient, policy Policy) *Router {
-	r := &Router{cfg: cfg, st: st, core: core, policy: policy, setupSeen: map[string]time.Time{}, commands: map[string]chan string{}, execs: map[string]chan execItem{}, results: map[string]chan ExecResult{}, snapped: map[string]chan struct{}{}, sup: &supLogs{next: map[string]int64{}}, lc: newLifecycle()}
+	r := &Router{cfg: cfg, st: st, core: core, policy: policy, setupSeen: map[string]time.Time{}, commands: map[string]chan string{}, execs: map[string]chan execItem{}, results: map[string]chan ExecResult{}, snapped: map[string]*snapWait{}, sup: &supLogs{next: map[string]int64{}}, lc: newLifecycle()}
 	if core != nil { // linestate.go: the core's line state, kept as its answers name a new one
 		r.lines = newLineKeeper(r.lineStatePath(), core)
 		core.onLineSeq = r.lines.seen
@@ -1447,7 +1447,7 @@ func (r *Router) send(machine, cmd string) {
 }
 
 // lastSnapshot: before a pause or destroy kills the machine, its last snapshot (or its "nothing to snapshot"
-// while booting), waiting up to SnapshotWait with the reason shown in the app. A machine that never got past boot
+// while booting), waiting as long as the snapshot makes progress (snapwait.go) with the reason shown in the app. A machine that never got past boot
 // (no status report from it) isn't asked at all: it has nothing to snapshot, and an older image may never answer
 // (e.g. stuck pulling the secrets of a locked store).
 // silentAfter: a booted machine whose last report is older than this isn't asked for a snapshot
@@ -1500,28 +1500,26 @@ func (r *Router) lastSnapshotThen(id, machine string, stopSent func()) error {
 	if stopSent != nil {
 		stopSent()
 	}
-	r.setWaiting(id, "waiting for the machine's last snapshot (up to "+waitText(r.cfg.SnapshotWait)+")")
+	r.setWaiting(id, "waiting for the machine's last snapshot")
 	defer r.setWaiting(id, "")
-	select {
-	case <-done:
-		if err := r.snapshotError(machine); err != nil {
-			r.lcNote(id, machine, "the snapshot failed: "+err.Error())
-			return err
+	if err := r.waitSnapshot(machine, done); err != nil {
+		log.Printf("session %s: %s: %v", id, machine, err)
+		r.lcNote(id, machine, err.Error())
+		if ferr := r.snapshotError(machine); ferr != nil {
+			return ferr
 		}
-		if fi, err := os.Stat(r.st.snapshotPath(machine)); err == nil {
-			r.lcNote(id, machine, fmt.Sprintf("the final snapshot arrived (%.1f MB, signed by the machine)", float64(fi.Size())/(1<<20)))
-		} else {
-			r.lcNote(id, machine, "the machine answered: nothing to snapshot")
-		}
-		return nil // its snapshot, or "nothing to snapshot" from a machine still booting
-	case <-time.After(r.cfg.SnapshotWait):
-		log.Printf("session %s: no snapshot from %s within %s", id, machine, r.cfg.SnapshotWait)
-		r.lcNote(id, machine, "no snapshot from the machine within "+waitText(r.cfg.SnapshotWait))
-		if err := r.snapshotError(machine); err != nil {
-			return err
-		}
-		return fmt.Errorf("no snapshot from the machine within %s", waitText(r.cfg.SnapshotWait))
+		return err
 	}
+	if err := r.snapshotError(machine); err != nil {
+		r.lcNote(id, machine, "the snapshot failed: "+err.Error())
+		return err
+	}
+	if fi, err := os.Stat(r.st.snapshotPath(machine)); err == nil {
+		r.lcNote(id, machine, fmt.Sprintf("the final snapshot arrived (%.1f MB, signed by the machine)", float64(fi.Size())/(1<<20)))
+	} else {
+		r.lcNote(id, machine, "the machine answered: nothing to snapshot")
+	}
+	return nil // its snapshot, or "nothing to snapshot" from a machine still booting
 }
 
 func haveSnapshot(p string) bool {
@@ -1544,23 +1542,6 @@ func waitText(d time.Duration) string {
 		return fmt.Sprintf("%d min", int(d.Round(time.Minute)/time.Minute))
 	}
 	return fmt.Sprintf("%d s", int(d/time.Second))
-}
-
-func (r *Router) awaitSnapshot(machine string) chan struct{} {
-	r.cmdMu.Lock()
-	defer r.cmdMu.Unlock()
-	c := make(chan struct{})
-	r.snapped[machine] = c
-	return c
-}
-
-func (r *Router) snapshotArrived(machine string) {
-	r.cmdMu.Lock()
-	defer r.cmdMu.Unlock()
-	if c := r.snapped[machine]; c != nil {
-		close(c)
-		delete(r.snapped, machine)
-	}
 }
 
 func normMode(m string) string {

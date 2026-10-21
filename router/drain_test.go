@@ -16,7 +16,7 @@ func TestDrainLetsInFlightFinishAndRefusesNew(t *testing.T) {
 	os.Remove(rg.r.st.snapshotPath("m1") + ".sig") // m1 runs: it hasn't sent its final snapshot yet
 	r := rg.r
 	r.cfg.NoAccess = true
-	r.cfg.SnapshotWait = 30 * time.Second
+	r.cfg.SnapshotStall = 30 * time.Second
 	r.st.Do(func(d *persisted) {
 		s := d.Sessions["s1"]
 		s.State, s.MachineID, s.Booted, s.Cert = "started", "m1", "m1", rg.cert

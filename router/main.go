@@ -30,7 +30,7 @@ type Config struct {
 	SetupKey        string            // the setup session's public key: it signs every /setup call
 	AllowedEmail    string            // the only person
 	NoAccess        bool              // CI only: no Cloudflare in front, skip the JWT checks
-	SnapshotWait    time.Duration     // how long a pause waits for the machine's snapshot
+	SnapshotStall   time.Duration     // snapwait.go: a pause stops waiting for the machine's snapshot after this long with no progress
 }
 
 func env(k, def string) string {
@@ -45,7 +45,7 @@ func main() {
 		restoreCommand(os.Args[2:]) // backup.go
 		return
 	}
-	wait, _ := strconv.Atoi(env("SNAPSHOT_WAIT_SECONDS", "600"))
+	stall, _ := strconv.Atoi(env("SNAPSHOT_STALL_SECONDS", "600"))
 	cfg := Config{
 		CoreURL:         env("CORE_URL", "http://core.jarvis2-core.svc.cluster.local:8090"),
 		DataDir:         env("DATA_DIR", "/data"),
@@ -62,7 +62,7 @@ func main() {
 		SetupKey:        os.Getenv("SETUP_KEY"),
 		AllowedEmail:    env("ALLOWED_EMAIL", "chendeyao000@gmail.com"),
 		NoAccess:        os.Getenv("NO_ACCESS") == "1",
-		SnapshotWait:    time.Duration(wait) * time.Second,
+		SnapshotStall:   time.Duration(stall) * time.Second,
 	}
 	if cfg.NoAccess {
 		log.Printf("NO_ACCESS=1: Cloudflare Access checks are OFF (CI only)")

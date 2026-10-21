@@ -544,8 +544,8 @@ by the core, approved by the phone; the box alone can never make one, and no AI 
   The snapshot streams into the router as it is made, so it needs no free disk on the machine; the machine signs the
   router's hash of what arrived (`router/snapstream.go`). A machine paused while still booting signs its predecessor's
   snapshot (the one its cert names: it has no state of its own yet) and stops booting, so the line keeps it.
-  **A pause never loses state (2026-10-15, `router/snapsafe.go`):** a machine whose snapshot fails (an error, the wait
-  running out, or a machine gone silent) and that has no volume is kept, never destroyed (session `failed`,
+  **A pause never loses state (2026-10-15, `router/snapsafe.go`):** a machine whose snapshot fails (an error, the snapshot
+  making no progress for 10 min, or a machine gone silent) and that has no volume is kept, never destroyed (session `failed`,
   `snapshotFailed`, a "needs you" DM); with a volume the kill goes on and the core's backup holds its last state. A line
   whose last kill named no snapshot doesn't resume (it would start empty): the session says why (`noSnapshot`) and
   Deyao gets a DM naming the backup; recovery from a backup is by hand. No secret moves.

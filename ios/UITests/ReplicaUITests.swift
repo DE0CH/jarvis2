@@ -393,7 +393,7 @@ final class ReplicaUITests: JarvisUITestCase {
           el("destroy-\(stuckSid)").tap()
           answer("Destroy session", timeout: 30)
           let t0 = Date()
-          let wait10 = app.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS 'up to 10 min'")).firstMatch
+          let wait10 = app.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS 'last snapshot'")).firstMatch
           if wait10.waitForExistence(timeout: 5) { XCTFail("a never-booted session's destroy waits for a snapshot: \(wait10.label)") }
           XCTAssertTrue(gone(el("srow-\(stuckSid)"), 90), "a session stuck at boot is destroyed within 90 s")
           note("stuck-destroy-seconds", "\(Int(Date().timeIntervalSince(t0)))")

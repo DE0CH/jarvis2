@@ -126,6 +126,7 @@ func (r *Router) registerSnapProgress(m machineRoute) {
 			writeJSON(w, 200, map[string]bool{"ok": false}) // nothing waits on it: not shown
 			return
 		}
+		r.snapshotReported(machine, p) // snapwait.go: numbers that moved keep the wait going
 		r.setWaiting(sid, text)
 		now := time.Now()
 		if last, ok := progressNotes.Load(machine); !ok || now.Sub(last.(time.Time)) >= progressNoteEvery {

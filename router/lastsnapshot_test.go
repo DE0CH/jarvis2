@@ -14,7 +14,7 @@ import (
 func TestLastSnapshotNeverWaitsOnABootingMachine(t *testing.T) {
 	rg := newRig(t)
 	r := rg.r
-	r.cfg.SnapshotWait = 30 * time.Second
+	r.cfg.SnapshotStall = 30 * time.Second
 	os.Remove(r.st.snapshotPath("m1") + ".sig") // m1 runs: it hasn't sent its final snapshot yet
 	running := func(booted string) {
 		r.st.Do(func(d *persisted) {
@@ -47,7 +47,7 @@ func TestLastSnapshotNeverWaitsOnABootingMachine(t *testing.T) {
 		time.Sleep(20 * time.Millisecond)
 		r.st.Do(func(d *persisted) { waiting = d.Sessions["s1"].Waiting })
 	}
-	if waiting != "waiting for the machine's last snapshot (up to 30 s)" {
+	if waiting != "waiting for the machine's last snapshot" {
 		t.Fatalf("waiting = %q", waiting)
 	}
 	r.snapshotArrived("m1") // what POST /m/snapshot with X-Snapshot-None does

@@ -11,8 +11,9 @@ package main
 // and a scheduler/autopilot/task tick sees errBusy and tries again on its next tick, i.e. in the next pod — while
 // everything already running finishes. Reads, the machines' reports (/m: status, snapshots — a pause in flight needs
 // its snapshot) and the Claude login's long polls go on being served throughout. Then the process exits.
-// k8s/control/apps/router/router.yaml gives the drain terminationGracePeriodSeconds: the longest job is a pause waiting
-// SnapshotWait for the snapshot plus the kill.
+// k8s/control/apps/router/router.yaml gives the drain terminationGracePeriodSeconds (DRAIN_SECONDS under it). A pause
+// waits for its snapshot as long as it makes progress (snapwait.go), so a snapshot still uploading when the drain gives
+// up is cut off with the old pod like any other action (the session goes failed and keeps its machine; Pause again).
 //
 // A crash (OOM, node reboot, a drain past the grace period) still cuts actions off; endCutOff (below) turns what
 // it left behind into a plain failed or paused session with the reason, and Deyao runs the action again. Nothing

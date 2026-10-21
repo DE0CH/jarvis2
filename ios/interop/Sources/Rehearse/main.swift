@@ -11,7 +11,7 @@
 //   rehearse session STORE…     unlock the session's stores (split key), New session (harness claude), the phone
 //                               checks and signs the challenge; waits until started. Prints SESSION and MACHINE.
 //   rehearse stuck STORE        a session with STORE left LOCKED (its machine loops on "store is locked" at boot),
-//                               then destroy: it must end within 90 s, not wait out the snapshot wait (10 min)
+//                               then destroy: it must end within 90 s, not wait for a snapshot
 //   rehearse destroy SESSION    and waits until it is in the records
 // Env: REHEARSE_BASE (https://<host>/), REHEARSE_ACCESS_ID/SECRET, REHEARSE_KEYS (box.pub, setup.pub),
 //      REHEARSE_MASTER_PEM, REHEARSE_PHONE (the software phone's keys, made on first use; test keys only).
@@ -255,7 +255,7 @@ case "stuck":
   ok("session \(id) is stuck at boot on machine \(m) (\(args[1]) locked)")
   print("STUCK \(m)")
   let took = destroyAndWait(id, within: 90)
-  ok("destroyed in \(Int(took)) s, not after the 10-minute snapshot wait")
+  ok("destroyed in \(Int(took)) s, without waiting for a snapshot")
 
 case "destroy":
   guard args.count > 1 else { fail("usage: destroy SESSION") }

@@ -137,7 +137,7 @@ wait_empty "$OLD"
 "$RH" recover "$W/expect.json"
 session_check
 
-step "a session stuck at boot on a locked store is destroyed at once (no 10-minute snapshot wait)"
+step "a session stuck at boot on a locked store is destroyed at once (no wait for a snapshot)"
 "$RH" stuck rh-marked
 
 step "failure 2: the app's restart (the kit ends the core; Kubernetes starts a new one) → Recover"

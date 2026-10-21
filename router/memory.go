@@ -311,7 +311,7 @@ func (r *Router) Upgrade(id string) (map[string]any, error) {
 			fail(err)
 			return
 		}
-		if err := r.waitState(id, "paused", r.cfg.SnapshotWait+3*time.Minute); err != nil {
+		if err := r.waitActionEnd(id, "paused"); err != nil {
 			fail(err)
 			return
 		}

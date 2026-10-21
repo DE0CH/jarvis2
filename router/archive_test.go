@@ -265,7 +265,7 @@ func newRig(t *testing.T) *rig {
 		t.Fatal(err)
 	}
 	pol := Policy{Harnesses: map[string]HarnessPolicy{"claude": {Stores: []string{"tunnel"}}}}
-	r := NewRouter(Config{DataDir: st.dir, SnapshotWait: time.Second, SessionImage: "img"}, st, &CoreClient{base: cs.URL, http: http.DefaultClient}, pol)
+	r := NewRouter(Config{DataDir: st.dir, SnapshotStall: time.Second, SessionImage: "img"}, st, &CoreClient{base: cs.URL, http: http.DefaultClient}, pol)
 	sboxOnce.Do(func() {})
 	sbox = newStorageBox(ds.URL, "u", "p")
 	mkey := newTestKey()

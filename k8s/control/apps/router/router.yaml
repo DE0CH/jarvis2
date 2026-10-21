@@ -30,9 +30,10 @@ spec:
       priorityClassName: jarvis2-control
       automountServiceAccountToken: false
       enableServiceLinks: false
-      # SIGTERM drains (router/drain.go): running lifecycle actions finish before the pod exits. The longest is a
-      # restart/upgrade job: a pause (SNAPSHOT_WAIT_SECONDS 600 + the kill) then a resume (a machine's init, up to
-      # 12 min); DRAIN_SECONDS (1740) stays under this.
+      # SIGTERM drains (router/drain.go): running lifecycle actions finish before the pod exits. A pause waits for its
+      # snapshot while it makes progress (router/snapwait.go: no overall limit; it stops after SNAPSHOT_STALL_SECONDS,
+      # 600, with none), then the kill; a restart/upgrade job adds a resume (a machine's init, up to 12 min). A drain
+      # past DRAIN_SECONDS (1740, under this) cuts what still runs off.
       terminationGracePeriodSeconds: 1800
       securityContext: { fsGroup: 65532 }
       containers:

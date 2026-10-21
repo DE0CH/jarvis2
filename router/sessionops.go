@@ -613,7 +613,7 @@ func (r *Router) Restart(id string, in RestartRequest) (map[string]any, error) {
 				fail(err)
 				return
 			}
-			if err := r.waitState(id, "paused", r.cfg.SnapshotWait+3*time.Minute); err != nil {
+			if err := r.waitActionEnd(id, "paused"); err != nil {
 				fail(err)
 				return
 			}
@@ -710,6 +710,32 @@ func (r *Router) waitState(id, want string, timeout time.Duration) error {
 }
 
 var opsPoll = 500 * time.Millisecond
+
+// waitActionEnd: a job's step (a pause it began, which holds the session's lock) has ended, with no deadline of its
+// own: the action ends by itself (a pause once its snapshot arrives, stalls or its machine goes silent: snapwait.go,
+// then the kill's own limit). want = the state it should end in; failed or anything else is the error.
+func (r *Router) waitActionEnd(id, want string) error {
+	for {
+		var st, msg string
+		r.st.Do(func(d *persisted) {
+			if x := d.Sessions[id]; x != nil {
+				st, msg = x.State, x.Error
+			}
+		})
+		switch {
+		case st == "":
+			return errNoSession
+		case r.busy(id):
+		case st == want:
+			return nil
+		case st == "failed":
+			return fmt.Errorf("the session failed: %s", msg)
+		default:
+			return fmt.Errorf("the session is %s", st)
+		}
+		time.Sleep(opsPoll)
+	}
+}
 
 // ---- routes -------------------------------------------------------------------------------------------------
 

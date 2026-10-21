@@ -92,7 +92,7 @@ func (r *Router) registerSnapStream(mmux *http.ServeMux, m machineRoute) {
 		}
 		tmp := f.Name()
 		h := sha256.New()
-		n, err := io.Copy(io.MultiWriter(f, h), io.LimitReader(req.Body, snapshotMax+1))
+		n, err := io.Copy(io.MultiWriter(f, h), io.LimitReader(movedReader{req.Body, r, machine}, snapshotMax+1)) // snapwait.go: every read is progress
 		if cerr := f.Close(); err == nil {
 			err = cerr
 		}

@@ -265,7 +265,7 @@ func (r *Router) MoreDisk(id string) (map[string]any, error) {
 				fail(err)
 				return
 			}
-			if err := r.waitState(id, "paused", r.cfg.SnapshotWait+killMax); err != nil {
+			if err := r.waitActionEnd(id, "paused"); err != nil {
 				fail(err)
 				return
 			}

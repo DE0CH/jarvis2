@@ -95,7 +95,7 @@ func sessionS1(rg *rig) (s Session) {
 func TestAFailedFinalSnapshotKeepsTheMachine(t *testing.T) {
 	rg := newRig(t)
 	dms := captureDM(t)
-	rg.r.cfg.SnapshotWait = 200 * time.Millisecond
+	rg.r.cfg.SnapshotStall = 200 * time.Millisecond
 	runningM2(rg, false)
 	if err := rg.r.Pause("s1"); err != nil {
 		t.Fatal(err)
@@ -104,7 +104,7 @@ func TestAFailedFinalSnapshotKeepsTheMachine(t *testing.T) {
 		t.Fatal(err)
 	}
 	s := sessionS1(rg)
-	if s.MachineID != "m2" || !strings.Contains(s.SnapshotFailed, "no snapshot from the machine") || !strings.Contains(s.Error, "is kept") {
+	if s.MachineID != "m2" || !strings.Contains(s.SnapshotFailed, "made no progress for") || !strings.Contains(s.Error, "is kept") {
 		t.Fatalf("session %+v", s)
 	}
 	rg.core.mu.Lock()
@@ -118,8 +118,8 @@ func TestAFailedFinalSnapshotKeepsTheMachine(t *testing.T) {
 	if !strings.Contains(dms()[0], "needs you") || !strings.Contains(dms()[0], "kept instead of destroyed") {
 		t.Fatalf("%q", dms())
 	}
-	// the machine reports its failure: the next pause stops waiting at once (no SnapshotWait)
-	rg.r.cfg.SnapshotWait = time.Minute
+	// the machine reports its failure: the next pause stops waiting at once (no stall wait)
+	rg.r.cfg.SnapshotStall = time.Minute
 	rg.r.st.Do(func(d *persisted) { d.Sessions["s1"].State = "started" })
 	t0 := time.Now()
 	if err := rg.r.Pause("s1"); err != nil {
@@ -137,7 +137,7 @@ func TestAFailedFinalSnapshotKeepsTheMachine(t *testing.T) {
 		t.Fatalf("%+v", s)
 	}
 	// Destroy anyway goes on past it
-	rg.r.cfg.SnapshotWait = 200 * time.Millisecond
+	rg.r.cfg.SnapshotStall = 200 * time.Millisecond
 	if err := rg.r.DestroyWith("s1", true); err != nil { // waitState saw the pause end, its lock gone too
 		t.Fatal(err)
 	}
@@ -153,7 +153,7 @@ func TestAFailedFinalSnapshotKeepsTheMachine(t *testing.T) {
 func TestNoSnapshotStopsTheResumeAndNamesTheBackup(t *testing.T) {
 	rg, vc := volRig(t)
 	dms := captureDM(t)
-	rg.r.cfg.SnapshotWait = 200 * time.Millisecond
+	rg.r.cfg.SnapshotStall = 200 * time.Millisecond
 	runningM2(rg, true)
 	if err := rg.r.Pause("s1"); err != nil {
 		t.Fatal(err)

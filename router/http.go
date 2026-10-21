@@ -870,7 +870,11 @@ func (r *Router) requireMachineStream(fn func(w http.ResponseWriter, req *http.R
 		}
 		tmp := f.Name()
 		h := sha256.New()
-		n, err := io.Copy(io.MultiWriter(f, h), io.LimitReader(req.Body, snapshotMax+1))
+		var body io.Reader = req.Body
+		if req.URL.Path == "/m/snapshot" {
+			body = movedReader{req.Body, r, machine} // snapwait.go: the final snapshot's bytes arriving are progress
+		}
+		n, err := io.Copy(io.MultiWriter(f, h), io.LimitReader(body, snapshotMax+1))
 		if cerr := f.Close(); err == nil {
 			err = cerr
 		}

@@ -896,7 +896,7 @@ Deyao: several actions approved together with ONE Face ID; the caller groups the
      that would begin it during a drain, ends `failed` with "the Fly org is at its machine limit and the router is
      updating: start it again". Change: let it wait in the next pod (it would need the saved state we just removed).
 151. **Grace 30 min, not 15.** `terminationGracePeriodSeconds: 1800`, `DRAIN_SECONDS` 1740: the longest tracked job is a
-     restart/upgrade (a pause's 600 s snapshot wait + the kill, then a resume's machine init, up to 12 min). Flux applies
+     restart/upgrade (a pause's snapshot, waited for while it makes progress (DECISIONS 214), + the kill, then a resume's machine init, up to 12 min). Flux applies
      with `wait: false` and no workflow waits on the rollout, so the long grace delays only the new pod. A drain past it is
      cut off like a crash.
 152. **After a crash: `paused` for a cut-off resume, `failed` otherwise.** A resume cut off before certify keeps its line
@@ -1438,7 +1438,7 @@ snapshot failed with "no space left on device", the machine was destroyed anyway
      compressing to a tmpfs (RAM is the next thing to run out).
 
 176. **A machine whose final snapshot fails and that has no volume is kept, never destroyed; Deyao gets a "needs you"
-     DM** (`router/snapsafe.go`). Failure = an error the machine reports, no snapshot within `SNAPSHOT_WAIT`, or a booted
+     DM** (`router/snapsafe.go`). Failure = an error the machine reports, a snapshot that stalls (DECISIONS 214), or a booted
      machine silent for 3 min (it can't send one). The session goes `failed` with its machine and `snapshotFailed`; Pause
      again retries, Destroy anyway (`force`) goes on without it. A kill that can't finish (the core's backup or destroy,
      45 min) also keeps the machine and DMs. A machine paused while still booting signs its predecessor's snapshot (its
@@ -2240,3 +2240,25 @@ snapshot failed with "no space left on device", the machine was destroyed anyway
      capture (one race-free helper; peer-message hand-overs are counted in messageWG, so a test waits for their DM).
      Under load (4 CPU burners + 4 parallel instances, -race, -cpu 1,2,8): 0 failures in 1560 runs of each after.
      No retries or skips.
+
+## The final snapshot is waited for while it makes progress, 2026-10-21
+
+214. **A pause or destroy waits for the machine's final snapshot as long as the snapshot makes progress, with no
+     overall limit (Deyao, 2026-10-21: "get rid of the 10 min timeout — it's too crude, and a large upload or a bad
+     network might actually take very long").** The fixed `SNAPSHOT_WAIT` (600 s) cut off "YYC AI on Jarvis 3"
+     (machine 811114df974358) mid-snapshot: the session left no snapshot and didn't resume. Now (`router/snapwait.go`)
+     the wait ends only when the snapshot arrives or the machine reports it failed, when nothing has moved for
+     `SNAPSHOT_STALL_SECONDS` (600: the stream is stuck, or the supervisor before it), or when nothing has moved for 3
+     min and the machine's status reports stopped as long (it is gone; its supervisor reports at least every 60 s, also
+     while the session is frozen). Progress = the command being sent, every read of the snapshot body as it reaches the
+     router (`/m/snapshot-stream`, or an older image's whole-file `/m/snapshot`), and a progress report whose numbers
+     moved (DECISIONS 201; one repeating the same numbers is a live machine stuck, so it doesn't count). The machine is
+     unchanged (it already reported progress every 3 s), and so is the core. The session's status line says "waiting
+     for the machine's last snapshot" (no limit to show), then the progress. The jobs that pause and go on (restart,
+     upgrade, the disk resize) wait for the pause to end however long it takes (`waitActionEnd`), no deadline of
+     their own. A stall or silence is a snapshot failure as before (DECISIONS 176: no volume, the machine is kept; with
+     one, the core's backup). *Not chosen*: a bigger fixed limit (still crude, and a stuck stream would hold the pause
+     for it); measuring the TCP connection (the bytes read are the same signal, and also cover an older image).
+     *Not done*: a router rollout still drains for at most `DRAIN_SECONDS` (1740); a snapshot still uploading then is
+     cut off with the old pod (session failed, machine kept; Pause again). A rollout during a multi-hour upload is
+     rare, and holding every rollout for hours would be worse.
