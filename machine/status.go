@@ -39,7 +39,7 @@ const (
 func readStatus() string {
 	ctx, cancel := context.WithTimeout(context.Background(), statusEvery)
 	defer cancel()
-	out, _ := sessionCommand(ctx, "bash", "-c", regCmd).Output()
+	out, _ := rescueCommand(ctx, "bash", "-c", regCmd).Output()
 	// __WORKERS__: the subagent and background-job count per conversation, held by the supervisor (workers.go)
 	out = append(out, "__WORKERS__\n"+workers.report()...)
 	// __HARNESS__: the keeper's record of the harness: its starts, and how and when it last ended (keeper.go)

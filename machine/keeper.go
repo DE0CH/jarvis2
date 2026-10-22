@@ -125,13 +125,28 @@ var privileged = func() bool { return os.Geteuid() == 0 }
 // unprotected`, which takes user claude's identity for good and the default OOM score, then execs it; otherwise (a
 // CLI command, the tests) it runs as it is. ctx may be nil.
 var sessionCommand = func(ctx context.Context, name string, args ...string) *exec.Cmd {
+	return unprotectedCommand(ctx, "", name, args...)
+}
+
+// rescueCommand: a command the router runs to look at or rescue the machine (a grant's exec, such as the terminal
+// holder's; the status and screen readers): as sessionCommand, but in the rescue cgroup, outside the session's
+// memory limit (oomguard.go), so it still runs on a machine the session has filled
+var rescueCommand = func(ctx context.Context, name string, args ...string) *exec.Cmd {
+	return unprotectedCommand(ctx, "--rescue", name, args...)
+}
+
+func unprotectedCommand(ctx context.Context, flag, name string, args ...string) *exec.Cmd {
 	if !privileged() {
 		if ctx == nil {
 			return exec.Command(name, args...)
 		}
 		return exec.CommandContext(ctx, name, args...)
 	}
-	argv := append([]string{"unprotected", "--", name}, args...)
+	argv := []string{"unprotected"}
+	if flag != "" {
+		argv = append(argv, flag)
+	}
+	argv = append(append(argv, "--", name), args...)
 	if ctx == nil {
 		return exec.Command("/proc/self/exe", argv...)
 	}
@@ -139,16 +154,22 @@ var sessionCommand = func(ctx context.Context, name string, args ...string) *exe
 }
 
 // unprotected: back to the default OOM score (as root this also sets the floor, so the command can't take -1000
-// back), then, as root, user claude's uid, gid and groups for good; then exec the command
+// back), then, as root, into the session's memory cgroup (--rescue: the rescue one) and user claude's uid, gid and
+// groups for good; then exec the command
 func unprotected(args []string) error {
+	cgroup := sessionCgroup
+	if len(args) > 0 && args[0] == "--rescue" {
+		cgroup, args = rescueCgroup, args[1:]
+	}
 	if len(args) > 0 && args[0] == "--" {
 		args = args[1:]
 	}
 	if len(args) == 0 {
-		return errors.New("usage: jarvis2-machine unprotected -- <command> [args…]")
+		return errors.New("usage: jarvis2-machine unprotected [--rescue] -- <command> [args…]")
 	}
 	os.WriteFile("/proc/self/oom_score_adj", []byte("0\n"), 0o644)
 	if privileged() {
+		joinCgroup(cgroup) // oomguard.go: under the session's memory limit, or the rescue one's
 		if err := dropToSession(); err != nil {
 			return err
 		}
@@ -281,6 +302,8 @@ func keeper() error {
 			select {}
 		}
 		protectFromOOM()
+		makeCgroups()        // oomguard.go: the session's and the rescue memory limits, before the boot steps start
+		lockMemory("keeper") // oomguard.go
 		notDumpable()
 	} else {
 		log.Printf("the keeper isn't root: the session can signal it (an image whose USER isn't root?)")

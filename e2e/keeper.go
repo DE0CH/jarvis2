@@ -20,6 +20,26 @@ func keeperStep(id, m string) {
 	expectOnMachine(m, "h=$(cat /run/jarvis2-keeper/harness.pid); ps -o user=,sid= -p $h | awk -v h=$h '{print $1, ($2==h)}'", "claude 1")
 	expectOnMachine(m, "cat /proc/$(pgrep -o -f 'jarvis2-machine boot')/oom_score_adj /proc/$(pgrep -o -f 'supervisor --worker')/oom_score_adj", "-1000\n-1000")
 
+	step("memory for the supervisor (machine/oomguard.go): the session is under a memory limit below the machine's RAM, the rescue path (terminal grants) under its own; the keeper's and the worker's pages are locked; a session hog over the limit is killed inside it and the supervisor reports on")
+	expectOnMachine(m, "G=/sys/fs/cgroup/memory/jarvis2-session; t=$(awk '/MemTotal/{print $2*1024}' /proc/meminfo); l=$(cat $G/memory.limit_in_bytes); "+
+		"[ $l -lt $t ] && [ $((t-l)) -ge $((512<<20)) ] && echo limited", "limited")
+	expectOnMachine(m, "R=/sys/fs/cgroup/memory/jarvis2-rescue; [ $(cat $R/memory.limit_in_bytes) -le $((384<<20)) ] && echo limited", "limited")
+	expectOnMachine(m, "/usr/local/bin/jarvis2-machine unprotected --rescue -- cat /proc/self/cgroup | grep -o ':memory:.*'", ":memory:/jarvis2-rescue")
+	expectOnMachine(m, "G=/sys/fs/cgroup/memory/jarvis2-session; for p in $(cat /run/jarvis2-keeper/harness.pid) $(pgrep -o -x claude); do grep -qx $p $G/cgroup.procs && echo in; done | sort -u", "in")
+	expectOnMachine(m, "for p in $(pgrep -o -f 'jarvis2-machine boot') $(pgrep -o -f 'supervisor --worker'); do awk '/VmLck/{print ($2>0)}' /proc/$p/status; done", "1\n1")
+	expectOnMachine(m, "G=/sys/fs/cgroup/memory/jarvis2-session; grep -qx $(pgrep -o -f 'supervisor --worker') $G/cgroup.procs && echo in || echo out", "out")
+	hogBefore, _ := session(id)["lastReport"].(string)
+	expectOnMachine(m, "/usr/local/bin/jarvis2-machine unprotected -- python3 -c 'a=[]\nwhile True: a.append(b\"x\"*(64<<20))' >/dev/null 2>&1; echo $?", "137")
+	for i := 0; ; i++ {
+		if lr, _ := session(id)["lastReport"].(string); lr != "" && lr != hogBefore {
+			break
+		}
+		if i > 45 {
+			log.Fatal("no status report from the machine after the session's hog")
+		}
+		time.Sleep(2 * time.Second)
+	}
+
 	step("the session can't touch the supervisor: kill, pkill -f, a group kill, its OOM score and its environ all fail as claude")
 	for _, c := range []string{
 		"kill -TERM $K", "kill -KILL $K", "kill -TERM -$K", "kill -TERM $W", "kill -STOP $W",

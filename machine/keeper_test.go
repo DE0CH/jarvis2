@@ -24,6 +24,9 @@ func keeperStandIn() {
 	if u := os.Getenv("JARVIS2_TEST_SESSION_USER"); u != "" {
 		sessionUser = u
 	}
+	if g, r, ok := strings.Cut(os.Getenv("JARVIS2_TEST_CGROUPS"), ","); ok { // oomguard_test.go
+		sessionCgroup, rescueCgroup = g, r
+	}
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
 		case "unprotected":

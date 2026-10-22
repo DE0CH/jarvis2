@@ -67,6 +67,7 @@ func exitText(err error) string {
 func supervise() error {
 	logToSupervisorLog()
 	if privileged() {
+		lockMemory("supervisor worker")             // oomguard.go: mlock isn't inherited from the keeper
 		if err := sessionFileAccess(); err != nil { // keeper.go: user claude's file access, root's uid
 			return fmt.Errorf("the worker's file access: %w", err)
 		}

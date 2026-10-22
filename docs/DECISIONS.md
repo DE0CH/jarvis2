@@ -2400,3 +2400,35 @@ snapshot failed with "no space left on device", the machine was destroyed anyway
      (`WriteKey`), nor after a pull that finds a store behind a write (`refreshAfterPull`, removed). A session holding
      the store gets the key at its next pull with a new cert (an add-store, a resume). A store restore Deyao approved
      and a session's move to a new core still ask for their unlock. Router-only: the core is unchanged.
+
+## Memory for the control plane, 2026-10-22
+
+221. **The session can't take the control plane's memory** (Deyao, 2026-10-22: "only the supervisor needs to be
+     protected, the rest dont matter"; "The point is to keep control plane alive so we still can send restart command
+     and also terminal grant to rescue"; machine/oomguard.go). Session s940709ec6ffdba71 ("YYC news monitor") filled
+     its 4 GB machine (229 MB free at 04:21 UTC); with no swap the machine thrashed without the OOM killer running, and
+     from 04:24 the router heard nothing, so no snapshot, Upgrade, pause or terminal command could reach it.
+     `oom_score_adj` -1000 (DECISIONS 192) only keeps the OOM killer off the supervisor. Added:
+     - **A memory limit for the session:** at boot the keeper makes the cgroup v1 memory cgroup `jarvis2-session`
+       (root's) with `memory.limit_in_bytes` = MemTotal − 640 MB (never under half the machine), and `unprotected`
+       joins it before it drops to user claude, so the boot steps, the harness, claude, its agents and browsers are
+       all charged there. At the limit the kernel reclaims and OOM-kills inside the cgroup. Nothing is killed early,
+       and the session isn't protected from itself.
+     - **A rescue cgroup:** `jarvis2-rescue`, limit 384 MB (at most a quarter of the machine). `unprotected --rescue`
+       (`rescueCommand`) joins it instead: a grant's exec (the terminal holder's commands: restarting Claude, killing
+       a hog) and the status and screen readers. So a rescue runs with memory to spare beside a full session, and a
+       runaway rescue command can't fill the machine either.
+     - **The supervisor's pages locked:** the keeper and the worker each `mlockall(MCL_CURRENT|MCL_FUTURE|MCL_ONFAULT)`
+       after raising `RLIMIT_MEMLOCK`, so their code is never dropped from RAM and read back from disk. ONFAULT keeps
+       the Go runtime's reserved arenas from being filled in up front. The router's commands (pause/resume-harness,
+       free, snapshot) run inside the worker, so they need nothing more.
+     - The 256 MB neither cgroup may take is for the supervisor (27 MB measured: keeper 11, worker 16), Fly's init and
+       hallpass, and the kernel (the network stack, a snapshot's page cache).
+     - The router's starvation watch is unchanged: a kill inside a cgroup raises the machine's `oom_kill` count, and PSI
+       counts the session's stalls, so the Upgrade DM still goes out.
+     Tested: `TestSessionLimit`, `TestSessionCgroupAsRoot` (the limits set; a hog of the session user over the limit
+     SIGKILLed inside the cgroup), `TestRescueOutsideTheSessionAsRoot` (session and rescue commands each in their own
+     cgroup; with a hog holding the session at its limit, a rescue command allocates more than the session's whole
+     limit and kills the hog), `TestLockMemoryAsRoot`; the e2e (`e2e/keeper.go`) checks both limits, the harness and
+     claude in the session's cgroup, a rescue command in the rescue one, the worker outside, both locked, and a hog's
+     kill with the status reports going on.

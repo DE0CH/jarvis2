@@ -780,6 +780,14 @@ so that process is the supervisor's and nothing in the session can end it (`mach
   also sets the floor, so a session process can't take -1000 back. A restarted worker carries on from files in
   `/run/jarvis2` (the signed final snapshot, the worker count, how far the log was pushed) and the secrets in the
   keeper's memfd.
+- **Memory for the control plane** (`oomguard.go`, DECISIONS 221). Every session process runs under the cgroup v1
+  memory cgroup `jarvis2-session`, which the keeper makes at boot with a limit of the machine's RAM minus 640 MB;
+  `unprotected` joins it as root before it drops. The rescue path (a grant's exec, such as the terminal holder's, and
+  the status and screen readers) goes through `unprotected --rescue` into `jarvis2-rescue` (384 MB) instead, so a
+  terminal command can still restart Claude or kill a hog on a machine the session has filled. The session hits its
+  own limit (the kernel OOM-kills inside it) before it can take the memory the supervisor, Fly's init and the kernel
+  need. The keeper and the worker lock their pages in RAM (`mlockall`, MCL_ONFAULT), so a thrashing machine never drops
+  their code.
 - **The teardown.** SIGTERM, SIGINT (Fly's stop signal, 5 s by default before SIGKILL), SIGHUP and SIGQUIT to the
   keeper start a clean teardown that uploads the most important first (Deyao, 2026-10-21: "Transcript tail is the
   most important, artifacts is less"), each step counting on its own: the worker (SIGUSR1) sends the transcripts that
