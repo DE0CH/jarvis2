@@ -543,7 +543,7 @@ func main() {
 	// the Claude login sync is the supervisor's (machine/claudelogin.go credsSync, started once booted)
 	expectOnMachine(om, "grep -c 'the supervisor keeps the pair in step' /run/jarvis2/supervisor.log", "1")
 	// the supervisor (the keeper and its worker) is out of the OOM killer's reach; the harness is not
-	expectOnMachine(om, "for p in /proc/[0-9]*; do case \"$(tr '\\0' ' ' < $p/cmdline 2>/dev/null)\" in '/proc/self/exe supervisor '*|*'jarvis2-machine boot '*) cat $p/oom_score_adj;; esac; done | sort | uniq -c | awk '{print $1, $2}'", "2 -1000")
+	expectOnMachine(om, "for p in /proc/[0-9]*; do case \"$(tr '\\0' ' ' < $p/cmdline 2>/dev/null)\" in '/proc/self/exe supervisor '*|'/usr/local/bin/jarvis2-machine boot '*) cat $p/oom_score_adj;; esac; done | sort | uniq -c | awk '{print $1, $2}'", "2 -1000")
 	expectOnMachine(om, "cat /proc/$(pgrep -o -f harness-claude)/oom_score_adj", "0")
 	// its log reaches the router
 	for i := 0; ; i++ {
