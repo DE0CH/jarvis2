@@ -193,7 +193,7 @@ export type FlyAppView = { app: string; label: string; own: boolean; status: str
 export type FlyOrgView = { org: string; via: string; error: string; checkedAt: string; apps: FlyAppView[] };
 export type MachinesOverview = { app: string; org: string; machines: Machine[]; orgs: FlyOrgView[]; attention: number; configError: string; checkedAt: string };
 export type SignedDoc = { payload: string; sig: string };
-export type ApprovalKind = "new-session" | "resume-upgrade" | "add-store";
+export type ApprovalKind = "new-session" | "resume-upgrade" | "add-store" | "kernel-source" | "kernel-add-store";
 export type Approval = {
   id: string; kind: ApprovalKind; created?: string; session?: string | null; label?: string;
   challenge: SignedDoc; machine?: string; options?: Record<string, unknown>;
