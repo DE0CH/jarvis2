@@ -2392,3 +2392,11 @@ snapshot failed with "no space left on device", the machine was destroyed anyway
      clean cut: no fallback to auto. Switching a RUNNING or paused session's mode (`POST /api/sessions/:id/permission-mode`,
      the `terminal` grant for raising it to bypass) is unchanged, so a session can still be lowered to auto; existing
      sessions keep the mode they have.
+
+## A written key files no Inbox request, 2026-10-22
+
+220. **Writing or deleting a key asks Deyao for nothing** (Deyao, 2026-10-22: "it shouldn't send me a request"). The
+     router no longer files an unlock request for the running sessions that hold the store after a key write
+     (`WriteKey`), nor after a pull that finds a store behind a write (`refreshAfterPull`, removed). A session holding
+     the store gets the key at its next pull with a new cert (an add-store, a resume). A store restore Deyao approved
+     and a session's move to a new core still ask for their unlock. Router-only: the core is unchanged.

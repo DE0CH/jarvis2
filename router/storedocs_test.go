@@ -218,13 +218,9 @@ func TestASessionWritesAKey(t *testing.T) {
 	if r.readStoreDocs()["default"].Keys["NEW_KEY"] != "The new API's key" {
 		t.Fatal("the explanation wasn't kept")
 	}
-	// sA doesn't hold default; sB and sC do and run; sP is paused
-	asked := out["refreshAsked"].([]any)
-	if len(asked) != 2 || asked[0] != "sB" || asked[1] != "sC" {
-		t.Fatalf("refresh asked of %v", asked)
-	}
-	if bs := r.InboxBatches(nil); len(bs) != 1 || len(bs[0].Items) != 2 {
-		t.Fatalf("batches %+v", bs)
+	// sB and sC hold default and run: no request goes to Deyao for them (they get it at their next pull, Deyao 2026-10-22)
+	if _, ok := out["refreshAsked"]; ok || len(r.Inbox()) != 0 || len(r.InboxBatches(nil)) != 0 {
+		t.Fatalf("a write filed a request: %v inbox %+v", out, r.Inbox())
 	}
 	// a documented key needs no explanation again
 	if code, out := m.do(t, h, "POST", "/m/stores/default/keys/NEW_KEY", writeBody("")); code != 200 {
@@ -279,20 +275,10 @@ func TestTheSetupSessionWritesAKey(t *testing.T) {
 	}
 }
 
-// a pull whose stores are behind files a refresh for that session; the phone's unlock for a running, booted machine's
-// cert makes that machine pull again
-func TestARefreshFollowsAStalePullAndAnUnlockPullsAgain(t *testing.T) {
+// the phone's unlock for a running, booted machine's cert makes that machine pull again
+func TestAnUnlockPullsAgain(t *testing.T) {
 	r, c, _ := storeRouter(t)
 	addSession(r, "sA", "started", "mA", false)
-	r.refreshAfterPull("mA", c.key.doc(map[string]any{"kind": "secrets", "stale": []string{"yyc"}}))
-	items := r.Inbox()
-	if len(items) != 1 || items[0].Kind != requestKindUnlock || !strings.Contains(items[0].Explanation, "yyc") {
-		t.Fatalf("inbox %+v", items)
-	}
-	r.refreshAfterPull("mA", c.key.doc(map[string]any{"kind": "secrets", "stale": []string{}}))
-	if len(r.Inbox()) != 1 {
-		t.Fatal("a fresh pull filed a request")
-	}
 	payload, _ := json.Marshal(map[string]any{"line": "LsA", "nonce": "N1"})
 	r.st.Do(func(d *persisted) {
 		d.Sessions["sA"].Cert = &Doc{Payload: string(payload)}

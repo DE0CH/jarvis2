@@ -36,7 +36,6 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -369,12 +368,11 @@ func (r *Router) WriteKey(writer, machine, store, key string, in keyWriteIn) (ma
 	if in.Wrapped != nil {
 		core["wrapped"] = in.Wrapped
 	}
-	var sid string
 	if writer == "machine" {
 		var cert *Doc
 		r.st.Do(func(d *persisted) {
 			if s := d.Sessions[d.Machines[machine]]; s != nil && s.MachineID == machine && s.State == "started" {
-				sid, cert = s.ID, s.Cert
+				cert = s.Cert
 			}
 		})
 		if cert == nil {
@@ -407,18 +405,8 @@ func (r *Router) WriteKey(writer, machine, store, key string, in keyWriteIn) (ma
 			log.Printf("store %s: the explanation of %s wasn't kept: %v", store, key, err)
 		}
 	}
-	who := "the setup session"
-	if sid != "" {
-		who = "session " + inboxSessionNameOf(r, sid)
-	}
-	verb := map[bool]string{true: "deleted", false: "written"}[in.Delete]
-	asked := r.refreshHolders(store, fmt.Sprintf("Key %s of store %s was %s by %s. Unlock gives these sessions the store as it is now.", key, store, verb, who))
-	return map[string]any{"ok": true, "receipt": receipt, "refreshAsked": asked}, nil
-}
-
-func inboxSessionNameOf(r *Router, sid string) (n string) {
-	r.st.Do(func(d *persisted) { n = inboxSessionName(d, sid) })
-	return
+	// no Inbox request: a session holding the store gets the key at its next pull with a new cert (Deyao, 2026-10-22)
+	return map[string]any{"ok": true, "receipt": receipt}, nil
 }
 
 // refreshHolders: every running session whose cert names the store gets an unlock request (one batch when several),
@@ -456,31 +444,6 @@ func (r *Router) fileRefresh(sids []string, why string) {
 				log.Printf("refresh %v: %d %v", part, code, out)
 			}
 		}
-	}
-}
-
-// refreshAfterPull: a pull whose stores were behind the core's (stale): the session's copy predates a write
-func (r *Router) refreshAfterPull(machine string, pulled *Doc) {
-	var x struct {
-		Stale []string `json:"stale"`
-	}
-	if pulled == nil || pulled.Decode(&x) != nil {
-		return
-	}
-	// the Claude account stores are written by this router at every refresh: their machines take the pair from the
-	// long poll, so a copy behind them needs no unlock (claudestores.go)
-	x.Stale = slices.DeleteFunc(x.Stale, func(n string) bool { return accountStoreRE.MatchString(n) })
-	if len(x.Stale) == 0 {
-		return
-	}
-	var sid string
-	r.st.Do(func(d *persisted) {
-		if s := d.Sessions[d.Machines[machine]]; s != nil && s.MachineID == machine {
-			sid = s.ID
-		}
-	})
-	if sid != "" {
-		r.fileRefresh([]string{sid}, fmt.Sprintf("This session's copy of %s is older than the store: keys were written since. Unlock gives it the stores as they are now.", strings.Join(x.Stale, ", ")))
 	}
 }
 

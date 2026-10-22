@@ -386,7 +386,7 @@ def main():
         me = identity()  # a delete seals nothing (only the setup key signs it), so no master pin is needed
         for k in args[1:]:
             out = call("POST", f"/setup/stores/{args[0]}/keys/{k}", key_write(args[0], k, None, me))
-            print(f"ok: {args[0]}: {k} deleted; refresh asked of {len(out.get('refreshAsked') or [])} running session(s)")
+            print(f"ok: {args[0]}: {k} deleted; sessions holding it get the change at their next pull with a new cert")
     elif cmd == "pin-master":
         me = identity()
         if not me["master"]:
@@ -422,7 +422,7 @@ def main():
             print(f"note: {name} existed as not sensitive; marked sensitive before writing", file=sys.stderr)
         for k in sorted(vals):
             out = call("POST", f"/setup/stores/{name}/keys/{k}", key_write(name, k, vals[k], me, explain.get(k, "")))
-            print(f"ok: {name}: {k} written (backed up first); refresh asked of {len(out.get('refreshAsked') or [])} running session(s)")
+            print(f"ok: {name}: {k} written (backed up first); sessions holding it get it at their next pull with a new cert")
         if want_sensitive and not store_list()[name]["sensitive"]:
             # the one-way upgrade, at once (it only adds protection), rather than stopping with it undone
             call("POST", "/setup/stores/mark-sensitive", {"name": name})

@@ -10,9 +10,8 @@ package main
 //	jarvis2 put-key STORE KEY [--explain TEXT] < value     the value from stdin (never an argument)
 //	jarvis2 delete-key STORE KEY
 //
-// The session's own copy doesn't change: every running session holding the store (this one too) gets the new
-// value once Deyao allows the refresh the router files (the phone's unlock), and then pulls it by itself (supervisor:
-// refresh-secrets).
+// The session's own copy doesn't change: a session holding the store (this one too) gets the new value at its next
+// pull with a new cert (an add-store, a resume); the router files no request for it (Deyao, 2026-10-22).
 
 import (
 	"crypto/aes"
@@ -191,15 +190,13 @@ func putKeyCmd(args []string, del bool) error {
 	if err != nil {
 		return err
 	}
-	var out struct {
-		RefreshAsked []string `json:"refreshAsked"`
-	}
+	var out struct{}
 	if err := c.json("POST", "/m/stores/"+store+"/keys/"+key, req, &out); err != nil {
 		return err
 	}
 	verb := map[bool]string{true: "deleted", false: "written"}[del]
-	fmt.Fprintf(os.Stderr, "%s %s in %s (backed up first). Sessions holding %s get it once Deyao allows their refresh in the Jarvis 2 Inbox (asked for %d running session(s)); this session's supervisor takes it then too, if it holds the store.\n",
-		key, verb, store, store, len(out.RefreshAsked))
+	fmt.Fprintf(os.Stderr, "%s %s in %s (backed up first). Sessions holding %s get it at their next pull with a new cert (an add-store, a resume); no request goes to Deyao.\n",
+		key, verb, store, store)
 	return nil
 }
 
