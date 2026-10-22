@@ -26,9 +26,10 @@ metadata: { name: icloud-index, namespace: jarvis2-services }
 spec:
   # Zero-downtime like search: two replicas on the one volume (single node), a writer lease in the database
   # (icloud_index/lease.py): only the holder lists iCloud, reads files, spends the AI budget, embeds and backs up; the
-  # other serves reads and takes the lease on SIGTERM (released) or 45 s after a kill (DECISIONS 171). Back on
-  # (Deyao, 2026-10-15), capped, on the services box.
-  replicas: 2
+  # other serves reads and takes the lease on SIGTERM (released) or 45 s after a kill (DECISIONS 171). Off
+  # (Deyao, 2026-10-22): the iCloud index isn't part of Jarvis; 2 replicas again when he turns it back on. The volume
+  # keeps the index.
+  replicas: 0
   minReadySeconds: 5
   strategy: { type: RollingUpdate, rollingUpdate: { maxUnavailable: 0, maxSurge: 1 } }
   selector: { matchLabels: { app: icloud-index } }
