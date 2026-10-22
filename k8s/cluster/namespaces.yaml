@@ -5,3 +5,10 @@ kind: Namespace
 metadata:
   name: jarvis2-obs
   labels: { pod-security.kubernetes.io/enforce: restricted, jarvis2/ns: obs }
+---
+# jarvis2-edge: cloudflared of the tunnel jarvis2-cluster (only kernel-id.deyaochen.com, behind Access) and what it serves
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: jarvis2-edge
+  labels: { pod-security.kubernetes.io/enforce: restricted, jarvis2/ns: edge }

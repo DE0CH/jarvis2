@@ -1,0 +1,94 @@
+# The one cluster's way in for setup sessions (docs/PLAN-cluster.md step 2a): the remotely managed tunnel
+# jarvis2-cluster (infra/cloudflare.py --cluster) whose only rule is kernel-id.deyaochen.com → kernel-id below, behind
+# the Access app "Jarvis 2 kernel id" (only the service token jarvis2-kernel-id). kernel-id is a test page until the
+# kernel's read-only identity endpoints take its place. Its token: the Secret tunnel-token (k8s/cluster/secrets).
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: cloudflared, namespace: jarvis2-edge }
+spec:
+  replicas: 2
+  minReadySeconds: 5
+  strategy: { type: RollingUpdate, rollingUpdate: { maxUnavailable: 0, maxSurge: 1 } }
+  selector: { matchLabels: { app: cloudflared } }
+  template:
+    metadata: { labels: { app: cloudflared } }
+    spec:
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      terminationGracePeriodSeconds: 45
+      containers:
+        - name: cloudflared
+          image: cloudflare/cloudflared:2026.9.3@sha256:072c067d25ccbe61d46e18f0d0723255f2bb5304f7317caa95b27031520ff92c
+          args: [tunnel, --no-autoupdate, --metrics, "0.0.0.0:2000", --grace-period, 30s, run]
+          readinessProbe: { httpGet: { path: /ready, port: 2000 }, periodSeconds: 2, failureThreshold: 1 }
+          livenessProbe: { httpGet: { path: /ready, port: 2000 }, initialDelaySeconds: 30, periodSeconds: 10, failureThreshold: 6 }
+          env: [{ name: TUNNEL_TOKEN, valueFrom: { secretKeyRef: { name: tunnel-token, key: token } } }]
+          resources: { requests: { cpu: 50m, memory: 64Mi }, limits: { memory: 128Mi } }
+          securityContext: { runAsNonRoot: true, runAsUser: 65532, runAsGroup: 65532, allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: { drop: [ALL] }, seccompProfile: { type: RuntimeDefault } }
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata: { name: cloudflared, namespace: jarvis2-edge }
+spec:
+  minAvailable: 1
+  selector: { matchLabels: { app: cloudflared } }
+---
+# cloudflared reaches only DNS, kernel-id and Cloudflare's edge
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: { name: cloudflared, namespace: jarvis2-edge }
+spec:
+  podSelector: { matchLabels: { app: cloudflared } }
+  policyTypes: [Ingress, Egress]
+  egress:
+    - to: [{ namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: kube-system } }, podSelector: { matchLabels: { k8s-app: kube-dns } } }]
+      ports: [{ port: 53, protocol: UDP }, { port: 53, protocol: TCP }]
+    - to: [{ podSelector: { matchLabels: { app: kernel-id } } }]
+      ports: [{ port: 8080 }]
+    - to: [{ ipBlock: { cidr: 0.0.0.0/0, except: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16] } }]
+      ports: [{ port: 7844, protocol: UDP }, { port: 7844, protocol: TCP }, { port: 443, protocol: TCP }]
+---
+# the test page behind kernel-id.deyaochen.com (step 2a only)
+apiVersion: v1
+kind: ConfigMap
+metadata: { name: kernel-id-page, namespace: jarvis2-edge }
+data: { index.html: "jarvis2-cluster kernel-id: the tunnel works (PLAN-cluster step 2a)\n" }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: kernel-id, namespace: jarvis2-edge }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: kernel-id } }
+  template:
+    metadata: { labels: { app: kernel-id } }
+    spec:
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      containers:
+        - name: page
+          image: busybox:1.37.0@sha256:bdf57e528e45e4433820e045b29b4597825a1c9e38353532d90a01445013f82e
+          args: [httpd, -f, -p, "8080", -h, /www]
+          ports: [{ containerPort: 8080 }]
+          volumeMounts: [{ name: page, mountPath: /www }]
+          resources: { requests: { cpu: 10m, memory: 8Mi }, limits: { memory: 16Mi } }
+          securityContext: { runAsNonRoot: true, runAsUser: 65534, runAsGroup: 65534, allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: { drop: [ALL] }, seccompProfile: { type: RuntimeDefault } }
+      volumes: [{ name: page, configMap: { name: kernel-id-page } }]
+---
+apiVersion: v1
+kind: Service
+metadata: { name: kernel-id, namespace: jarvis2-edge }
+spec:
+  selector: { app: kernel-id }
+  ports: [{ port: 8080, targetPort: 8080 }]
+---
+# kernel-id takes connections only from cloudflared
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: { name: kernel-id, namespace: jarvis2-edge }
+spec:
+  podSelector: { matchLabels: { app: kernel-id } }
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from: [{ podSelector: { matchLabels: { app: cloudflared } } }]
+      ports: [{ port: 8080 }]
