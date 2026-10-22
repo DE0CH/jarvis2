@@ -23,5 +23,15 @@ Deyao guides every step: each step is shown in chat, then a go/no-go, then done.
 6. The router in its proper form.
 7. Drain the old clusters; delete their VMs.
 
-## Open
-- Keys across restarts: kept on a small volume per component, or new each start (Face ID each time).
+- Everything about the kernel's identity lives in RAM only (Deyao, 2026-10-22): a component makes a new key at every
+  start, so after a restart or release it works again only once the one-time setup has run for it (Face ID).
+- Git manages the whole cluster (Deyao, 2026-10-22): Flux applies k8s/cluster as cluster admin, its own sync included;
+  only the k3s install and the age key come from cloud-init.
+- Setup sessions reach only the kernel's read-only identity endpoints, at kernel-id.deyaochen.com behind Cloudflare
+  Access (service token jarvis2-kernel-id, infra store KERNEL_ID_ACCESS_ID/SECRET); no Kubernetes login.
+
+## Done
+- Step 1 (2026-10-22): jarvis2-cluster-1 (cx23, fsn1, 10.77.0.4), k3s --cluster-init, Flux on k8s/cluster; logs in
+  Grafana as box="cluster".
+- Step 2a (2026-10-22): the tunnel jarvis2-cluster, its cloudflared in jarvis2-edge; kernel-id.deyaochen.com answers 200
+  with the service token and 403 without (a test page until the kernel's identity endpoints replace it).
