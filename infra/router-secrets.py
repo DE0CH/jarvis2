@@ -9,6 +9,7 @@ Flux decrypts them (k8s/flux/<box>.yaml, Kustomization <box>-secrets).
 the new Secret). Each box gets only its own parts:
   control   (default), backup, github, flyorgs, flypersonal, flyvolumes, browserbase, devices, alloy
   services  search, icloud-index, icloud-session, alloy
+  cluster   alloy
 
 SRC is `env:VAR` (default `env:KEY`) or `file:PATH`. A part is one Secret, rewritten whole each run, so name
 every key of that part (nobody can read the old values back: only the box holds the age key):
@@ -51,6 +52,7 @@ BOXES = {  # box → (age recipient file, secrets dir, {part: manifest path unde
     "services": ("keys/services-age.pub", "k8s/services/secrets", {
         "search": "search/search.yaml", "icloud-index": "icloud-index/icloud-index.yaml",
         "icloud-session": "icloud-index/icloud-index.yaml", "alloy": None}),
+    "cluster": ("keys/cluster-age.pub", "k8s/cluster/secrets", {"alloy": None}),  # the one cluster (docs/PLAN-cluster.md)
 }
 PARTS = {  # part → (file, Secret name, annotation, namespace)
     "": ("router.enc.yaml", "router-secrets", "jarvis2/secrets-rev", "jarvis2-router"),
