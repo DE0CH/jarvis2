@@ -479,14 +479,15 @@ func main() {
 	}
 	expectExec(id, "echo the rule still holds", "the rule still holds") // grants name the line, not the machine
 
-	step("the permission mode is signed: resuming in bypass is a change the iPhone approves")
+	// a new session starts in bypass, the only start mode: the switch goes to auto
+	step("the permission mode is signed: resuming in auto is a change the iPhone approves")
 	must2(call(router, "POST", "/api/sessions/"+id+"/pause", nil, nil))
 	waitState(id, "paused", 12*time.Minute)
-	must2(call(router, "POST", "/api/sessions/"+id+"/permission-mode", map[string]string{"mode": "bypass"}, nil))
+	must2(call(router, "POST", "/api/sessions/"+id+"/permission-mode", map[string]string{"mode": "auto"}, nil))
 	must2(call(router, "POST", "/api/sessions/"+id+"/resume", map[string]bool{"upgrade": false}, nil))
 	a = waitApproval("resume-upgrade", id)
-	if !strings.Contains(a.Challenge.Payload, `"permissionMode":"bypass"`) {
-		log.Fatal("the challenge doesn't carry the bypass mode")
+	if !strings.Contains(a.Challenge.Payload, `"permissionMode":"auto"`) {
+		log.Fatal("the challenge doesn't carry the auto mode")
 	}
 	approve(p, a)
 	waitState(id, "started", 8*time.Minute)

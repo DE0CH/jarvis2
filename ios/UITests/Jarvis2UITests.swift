@@ -58,7 +58,7 @@ final class Jarvis2UITests: JarvisUITestCase {
     let (up, _) = routerRaw("POST", "api/uploads", body: Self.testPNG, headers: ["x-upload-id": "ci-web-\(tag)", "x-upload-name": "web.png"])
     XCTAssertEqual(up, 200, "[\(tag)] the web page's upload")
     let req: [String: Any] = ["requestId": "ci-web-\(tag)", "label": "web image", "prompt": "what is in this image?", "stores": ["default"], "harness": "claude",
-                              "permissionMode": "auto", "attachments": ["uploadId": "ci-web-\(tag)", "files": [["name": "web.png"]]]]
+                              "permissionMode": "bypass", "attachments": ["uploadId": "ci-web-\(tag)", "files": [["name": "web.png"]]]]
     let (made, out) = routerRaw("POST", "api/sessions", body: try? JSONSerialization.data(withJSONObject: req), headers: ["Content-Type": "application/json"])
     XCTAssertEqual(made, 200, "[\(tag)] the web page's session request: \(String(decoding: out, as: UTF8.self))")
     tabRoot("Inbox")
@@ -294,7 +294,8 @@ final class Jarvis2UITests: JarvisUITestCase {
     XCTAssertFalse(el("secure-store-core").exists, "[\(tag)] the core store is not offered")
     XCTAssertFalse(el("secure-store-claude-login").exists, "[\(tag)] the harness's own store is not offered as a pick")
     XCTAssertTrue(scrolledTo(el("ns-harness-store-claude-login")), "[\(tag)] …but listed as what the harness brings")
-    XCTAssertTrue(scrolledTo(el("secure-mode-bypass")), "[\(tag)] the page picks the permission mode")
+    XCTAssertTrue(scrolledTo(el("ns-permission-mode")) && said(el("ns-permission-mode")).contains("bypass"), "[\(tag)] the page shows bypass, the only start mode (no picker)")
+    XCTAssertFalse(el("secure-mode-auto").exists, "[\(tag)] no permission-mode picker")
     let unlocks = el("ns-unlocks")
     XCTAssertTrue(scrolledTo(unlocks) && said(unlocks).contains("claude-login"), "[\(tag)] Start says it unlocks the locked harness store")
     scrolledUpTo(el("ns-title"))

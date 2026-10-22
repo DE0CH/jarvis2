@@ -73,19 +73,18 @@ type J1ImportManifest struct {
 // j1Record: the parts of Jarvis 1's session.json the router uses to fill in the new session (all of it goes to
 // the phone in the challenge or the approval's options)
 type j1Record struct {
-	ID             string            `json:"id"`
-	Label          string            `json:"label"`
-	Title          string            `json:"title"`
-	Model          string            `json:"model"`
-	Size           string            `json:"size"`
-	Harness        string            `json:"harness"`
-	PermissionMode string            `json:"permissionMode"`
-	AutoPause      string            `json:"autoPause"`
-	OneShot        bool              `json:"oneShot"`
-	Repos          string            `json:"repos"`
-	Environment    string            `json:"environment"`
-	PausedAt       string            `json:"pausedAt"`
-	Metadata       map[string]string `json:"metadata"`
+	ID          string            `json:"id"`
+	Label       string            `json:"label"`
+	Title       string            `json:"title"`
+	Model       string            `json:"model"`
+	Size        string            `json:"size"`
+	Harness     string            `json:"harness"`
+	AutoPause   string            `json:"autoPause"`
+	OneShot     bool              `json:"oneShot"`
+	Repos       string            `json:"repos"`
+	Environment string            `json:"environment"`
+	PausedAt    string            `json:"pausedAt"`
+	Metadata    map[string]string `json:"metadata"`
 }
 
 // j1Source: where the paused sessions are — the Storage Box (production), or JARVIS1_PAUSED_URL (the end-to-end
@@ -439,7 +438,7 @@ func (r *Router) ImportJarvis1(id string, in J1ImportIn, o Origin) (string, erro
 		paused = paused[:10]
 	}
 	ns := NewSession{
-		RequestID: "jarvis1-import:" + id + ":" + sum[:16], Label: label, Prompt: prompt, Model: rec.Model, PermissionMode: rec.PermissionMode,
+		RequestID: "jarvis1-import:" + id + ":" + sum[:16], Label: label, Prompt: prompt, Model: rec.Model, PermissionMode: "bypass", // the only start mode
 		Size: size, Harness: harness, Stores: in.Stores, Account: in.Account, Repos: strings.Join(repos, ","), AutoPause: &auto,
 		Origin: &o, Explanation: in.Explanation, Batch: in.Batch,
 		Import: &J1ImportRef{Session: id, Sha256: sum, Shown: fmt.Sprintf("Jarvis 1 session “%s” (%s, paused %s)", label, id, paused)},

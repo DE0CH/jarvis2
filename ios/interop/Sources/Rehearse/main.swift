@@ -151,7 +151,7 @@ func newSession(_ picked: [String], leaveLocked locked: Set<String> = []) -> Str
   }
   guard let a = approval else { fail("no new-session approval for \(label)") }
   let r = try! Checks.review(challenge: a.challenge, coreKey: core)
-  do { try Checks.matchesPicked(r, stores: picked, harnessStores: harnessStores, harness: "claude", permissionMode: "auto") } catch { fail("the challenge doesn't match what was picked: \(error)") }
+  do { try Checks.matchesPicked(r, stores: picked, harnessStores: harnessStores, harness: "claude", permissionMode: "bypass") } catch { fail("the challenge doesn't match what was picked: \(error)") }
   ok("the challenge is the core's and names \(r.stores) (sensitive \(r.sensitive)), harness \(r.harness)")
   struct RespondDTO: Decodable { let answer: SignedDoc; let session: String }
   let resp = json("POST", "api/approvals/\(a.id)/respond", ["signature": try! phoneSigning.signature(for: Data(a.challenge.payload.utf8)).derRepresentation.base64EncodedString()], as: RespondDTO.self)

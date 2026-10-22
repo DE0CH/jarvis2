@@ -73,7 +73,7 @@ export function NewSession() {
   const [picked, setPicked] = useState<string[]>([]);
   const touched = useRef(false);
   useEffect(() => { if (!touched.current) setPicked(plain.some((s) => s.name === "default" && !s.sensitive) ? ["default"] : []); }, [plain.map((s) => s.name).join(",")]);
-  const [perm, setPerm] = useState("bypass"), [model, setModel] = useState(""), [size, setSize] = useState("medium"), [harness, setHarness] = useState("claude");
+  const [model, setModel] = useState(""), [size, setSize] = useState("medium"), [harness, setHarness] = useState("claude");
   // the models of the chosen harness (the router swaps a model of another harness for that harness's default)
   const models = MODELS.filter((m) => (m.harness || "claude") === harness);
   useEffect(() => { setModel((m) => (models.some((x) => x.id === m) ? m : models[0]?.id || "")); }, [harness, models.map((m) => m.id).join(",")]);
@@ -145,7 +145,7 @@ export function NewSession() {
     if (!canStart) return;
     const chosen = repoList.filter((r) => repos.includes(r.name));
     const withRepos = [...new Set([...picked, ...repoStores(chosen)])];
-    const body = { requestId: requestId.current, label: label.trim(), prompt: prompt.trim(), model, permissionMode: perm, size, harness, stores: withRepos, oneShot, autoPause: !oneShot && autoPause.includes("on"),
+    const body = { requestId: requestId.current, label: label.trim(), prompt: prompt.trim(), model, permissionMode: "bypass", size, harness, stores: withRepos, oneShot, autoPause: !oneShot && autoPause.includes("on"),
       repos: chosen.map((r) => r.url).join(","), apiProxy: apiProxy.includes("on"), ...(content.length ? { content } : {}),
       ...(takesAccount && account ? { account } : {}) };
     try {
@@ -198,11 +198,6 @@ export function NewSession() {
       {contentList === null ? <Flex gap={2} align="center"><Spinner /><Muted>Loading content stores…</Muted></Flex>
         : contentList.length ? <CheckboxCards id="ns-content" value={content} onChange={setContent} options={contentList.map((c) => ({ value: c.name, title: c.name, sub: `${c.files} file${c.files === 1 ? "" : "s"} · ~/content/${c.name}` }))} />
         : <Muted>No content stores (the Content tab).</Muted>}
-      <Lbl>Permission mode</Lbl>
-      <RadioCards id="ns-perm" value={perm} onChange={setPerm} options={[
-        { value: "auto", title: "Auto", sub: "Auto-approve safe actions; the permission classifier gates the rest." },
-        { value: "bypass", title: "Dangerously skip permissions", sub: "No prompts at all (--dangerously-skip-permissions)." },
-      ]} />
       {models.length > 0 && <><Lbl>Model</Lbl>
         <RadioCards id="ns-model" value={model} onChange={setModel} options={models.map((m) => ({ value: m.id, title: m.label || m.id, sub: m.id }))} /></>}
       {!oneShot && <><Lbl>Idle</Lbl>

@@ -7,6 +7,8 @@
 // these files, by the sha256 and size of the bytes hashed here (docs/DECISIONS.md 94, 95, 97).
 // DE0CH/claude-env comes pre-selected with its store when it is on the repo list (Deyao, 2026-10-11); sensitive stores
 // are never pre-selected, and picking one shows a warning.
+// Every new session starts in bypass, the only start mode (Deyao, 2026-10-22; docs/DECISIONS.md): no picker, the page
+// shows it and Start checks the signed challenge names it. A running session can still switch (SessionDetailView).
 import SwiftUI
 
 struct NewSessionView: View {
@@ -15,7 +17,7 @@ struct NewSessionView: View {
   @State private var stores: [StoreView] = []
   @State private var picked: Set<String> = []
   @State private var harness = "claude"
-  @State private var perm = "bypass"
+  private let perm = "bypass" // the only start mode
   @State private var oneShot = false
   @State private var prompt = ""
   @State private var label = ""
@@ -203,13 +205,10 @@ struct NewSessionView: View {
   }
 
   @ViewBuilder private var modeSection: some View {
-    Section("Permission mode") {
-      CheckRow(on: perm == "auto", id: "secure-mode-auto", action: { perm = "auto" }) {
-        VStack(alignment: .leading) { Text("Auto"); Text("Auto-approve safe actions; the permission classifier gates the rest.").font(.footnote).foregroundStyle(Color.secondary) }
-      }
-      CheckRow(on: perm == "bypass", id: "secure-mode-bypass", action: { perm = "bypass" }) {
-        VStack(alignment: .leading) { Text("Dangerously skip permissions"); Text("No prompts at all (--dangerously-skip-permissions).").font(.footnote).foregroundStyle(Color.secondary) }
-      }
+    Section {
+      LabeledContent("Permission mode", value: "bypass").accessibilityIdentifier("ns-permission-mode")
+    } footer: {
+      Text("Every session starts with no prompts at all (--dangerously-skip-permissions). A running session can switch to auto.")
     }
   }
 

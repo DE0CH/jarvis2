@@ -2309,3 +2309,15 @@ snapshot failed with "no space left on device", the machine was destroyed anyway
        restore choice). A machine that signed no snapshot passes on its source's (the spawner vouched for it).
      - *The spawner takes no Fly volume backups* (Deyao's first ask, 2026-10-21, which the old core keeps until it
        goes).
+
+## Bypass is the only start mode, 2026-10-22
+
+218. **Every new session starts in bypass** (Deyao, 2026-10-22: "change bypass permission to be the only and default
+     option for starting a session"). Neither app has a permission-mode picker on New session any more; the iPhone page
+     shows "bypass" as a fixed row, and Start still checks that the signed challenge names it (the mode stays signed,
+     DECISIONS 30). The router's `CreateSession` takes `permissionMode` "bypass" or none and refuses any other value
+     (400), so every path that starts a line does the same: a session's `jarvis2-request new-session`, the web page, a
+     task instance, a Jarvis 1 import, and a restore of a destroyed session (whatever mode the archived one ran in). A
+     clean cut: no fallback to auto. Switching a RUNNING or paused session's mode (`POST /api/sessions/:id/permission-mode`,
+     the `terminal` grant for raising it to bypass) is unchanged, so a session can still be lowered to auto; existing
+     sessions keep the mode they have.

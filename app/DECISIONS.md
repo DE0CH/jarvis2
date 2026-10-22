@@ -53,7 +53,8 @@ fixes, 34–40 carried over from the old app and still true, 41–43 the web pag
     it, and an action on one record (Lock of one open unlock) is keyed by that record, so a neighbour's action never
     leaves its button disabled with the tap dropped.
 14. **New session is one page** (Deyao, 2026-10-10): kind (session / one-shot), prompt, title, stores, harness, repos,
-    permission mode, model, size, auto-pause, API proxy. `default` is pre-picked when it isn't sensitive; DE0CH/claude-env
+    model, size, auto-pause, API proxy. No permission-mode picker (Deyao, 2026-10-22; docs/DECISIONS.md 218): every
+    session starts in bypass; the iPhone page shows it as a fixed row and Start checks the challenge signs bypass. `default` is pre-picked when it isn't sensitive; DE0CH/claude-env
     and its store are pre-picked when the repo is on the list (Deyao, 2026-10-11), never a sensitive store. Start makes the
     session, waits for the core's challenge, checks it (items 24, 31) and signs it under one Face ID that also unlocks the
     session's locked stores for that session only.

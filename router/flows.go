@@ -571,8 +571,12 @@ func (r *Router) CreateSession(in NewSession) (string, error) {
 	if in.Model, err = sessionModel(in.Harness, in.Model); err != nil { // harness.go
 		return "", err
 	}
-	if in.PermissionMode != "bypass" {
-		in.PermissionMode = "auto"
+	// bypass is the only start mode (Deyao, 2026-10-22; DECISIONS): a running session may still switch (sessionops.go)
+	switch in.PermissionMode {
+	case "", "bypass":
+		in.PermissionMode = "bypass"
+	default:
+		return "", bad("permission mode %q: a new session always starts in bypass, the only start mode", in.PermissionMode)
 	}
 	// the harness's stores come with it (the policy document); the app doesn't list them
 	// the shared login's old store is gone: dropped (its account comes as the session's account), as a restore does
