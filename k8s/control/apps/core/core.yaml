@@ -53,7 +53,7 @@ spec:
   template:
     # restart: change this value (a commit) to end the running core without its master key; a new, empty
     # core takes its place and waits for Reset or Recover in the app (docs/RUNBOOK.md "Emptying the core")
-    metadata: { labels: { app: core, color: green }, annotations: { jarvis2/restart: "0" } }
+    metadata: { labels: { app: core, color: green }, annotations: { jarvis2/restart: "1" } }
     spec:
       priorityClassName: jarvis2-control
       automountServiceAccountToken: false
