@@ -48,6 +48,30 @@ type Registry struct {
 	// (machine/claudelogin.go afterSwitch); AccountSection: the image reports it at all
 	AccountProof   string `json:"accountProof,omitempty"`
 	AccountSection bool   `json:"accountSection,omitempty"`
+	// the keeper's record of the harness (machine/keeper.go): how often it was started on this machine and how it
+	// last ended; nil: an image from before the keeper
+	Harness *HarnessRun `json:"harness,omitempty"`
+}
+
+// HarnessRun: the __HARNESS__ section (machine/keeper.go harnessState). Starts > 1: the harness's launcher died and
+// the keeper started it again, the machine staying up.
+type HarnessRun struct {
+	Starts     int    `json:"starts"`
+	Running    bool   `json:"running"`
+	LastExit   string `json:"lastExit,omitempty"`
+	LastExitAt string `json:"lastExitAt,omitempty"`
+	LastUpSecs int64  `json:"lastUpSecs,omitempty"`
+}
+
+// parseHarness: the __HARNESS__ section's line
+func parseHarness(section string) *HarnessRun {
+	for _, e := range jsonLines(section) {
+		h := &HarnessRun{Starts: int(min(max(num(e, "starts"), 0), 1<<20)), LastExit: clip(str(e, "lastExit"), 80),
+			LastExitAt: clip(str(e, "lastExitAt"), 40), LastUpSecs: max(num(e, "lastUpSecs"), 0)}
+		h.Running, _ = e["running"].(bool)
+		return h
+	}
+	return nil
 }
 
 // Workers: what the host conversation's harness has running besides itself (machine/workers.go, from Claude
@@ -201,6 +225,7 @@ func parseRegistry(raw string) *Registry {
 	oneShotPart, rest4 := cut(rest3, "__AUTH__")
 	authPart, rest5 := cut(rest4, "__REFUSAL__")
 	refusalPart, workersPart := cut(rest5, "__WORKERS__")
+	workersPart, harnessPart := cut(workersPart, "__HARNESS__")                     // images from 2026-10-21 on (the keeper)
 	refusalPart, accountPart, hasAccount := strings.Cut(refusalPart, "__ACCOUNT__") // images from 2026-10-20 on
 	proof := ""
 	for _, e := range jsonLines(accountPart) {
@@ -251,6 +276,6 @@ func parseRegistry(raw string) *Registry {
 		BridgeSessionID: str(host, "bridgeSessionId"), HostPid: num(host, "pid"), SessionID: sid,
 		AuthFailed: failed[sid], CredsExpiresAt: credsExp, SessionsInside: len(entries),
 		OneShotDone: oneShotDone, Refusals: refusals, Workers: parseWorkers(workersPart, sid),
-		AccountSection: hasAccount, AccountProof: proof,
+		AccountSection: hasAccount, AccountProof: proof, Harness: parseHarness(harnessPart),
 	}
 }

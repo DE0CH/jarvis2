@@ -467,19 +467,19 @@ func fileExists(p string) bool { _, err := os.Stat(p); return err == nil }
 func sendToHarness(harness, mode, from, text string) error {
 	var cmd *exec.Cmd
 	if viaHarnessSend(harness) { // harnesses.go
-		cmd = unprotectedCommand(nil, "/usr/local/bin/harness-send", "--queue")
+		cmd = sessionCommand(nil, "/usr/local/bin/harness-send", "--queue")
 		cmd.Stdin = strings.NewReader(text)
 	} else if channelSend != "" && fileExists(channelSend) && fileExists(channelConfig) {
 		// the Jarvis channel (session-image/bin/jarvis-channel): the image refuses every cross-session peer message, so
 		// Jarvis's own messages go in through its channel, whatever the session's permission mode
-		cmd = unprotectedCommand(nil, channelSend, "--from", from)
+		cmd = sessionCommand(nil, channelSend, "--from", from)
 		cmd.Stdin = strings.NewReader(text)
 	} else { // an image before the channel: the peer socket, in the mode class claude runs in
 		fm := "prompting"
 		if mode == "bypass" {
 			fm = "bypass"
 		}
-		cmd = unprotectedCommand(nil, "python3", "-I", "-c", peerPy, base64.StdEncoding.EncodeToString([]byte(text)), "", fm, from)
+		cmd = sessionCommand(nil, "python3", "-I", "-c", peerPy, base64.StdEncoding.EncodeToString([]byte(text)), "", fm, from)
 	}
 	done := make(chan struct{})
 	var out []byte
@@ -730,7 +730,7 @@ func rerunCheck(w *watchReq) string {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), rerunTimeout)
 	defer cancel()
-	cmd := unprotectedCommand(ctx, "bash", "-l", f)
+	cmd := sessionCommand(ctx, "bash", "-l", f)
 	cmd.Dir = dir
 	cmd.Env = append(os.Environ(), "WATCH_NAME="+w.Name)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}

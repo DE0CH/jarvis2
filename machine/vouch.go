@@ -340,20 +340,52 @@ func fetchExceptions(c *client) FormatExceptions {
 // harnessEnv: the clean env plus exactly what the cert, the secrets and the format exceptions give.
 // firstMachine: the first machine of a new line (the first prompt and its attachments are its alone).
 func harnessEnv(clean []string, v Vouched, me string, firstMachine bool, secrets map[string]string) []string {
+	return harnessSpec{Clean: clean, Fixed: harnessFixed(v, me, firstMachine)}.env(secrets)
+}
+
+// harnessSpec: the harness's env without any secret value, as boot hands it to the keeper (keeper.go), which adds the
+// secrets the supervisor holds at each start of the harness: the clean env, then the secrets over it, then Fallback
+// where neither set the key, then Fixed over everything.
+type harnessSpec struct {
+	Clean    []string          `json:"clean"`
+	Fixed    map[string]string `json:"fixed"`
+	Fallback map[string]string `json:"fallback,omitempty"`
+}
+
+func (h harnessSpec) env(secrets map[string]string) []string {
 	m := map[string]string{}
-	for _, kv := range clean {
+	for _, kv := range h.Clean {
 		if k, val, ok := strings.Cut(kv, "="); ok {
 			m[k] = val
 		}
-	}
-	sid := v.Ex.SessionID
-	if sid == "" {
-		sid = me
 	}
 	for k, val := range secrets { // the secrets in the harness's env (RAM only; the supervisor holds them, secrets.go)
 		if envNameRE.MatchString(k) {
 			m[k] = val
 		}
+	}
+	for k, val := range h.Fallback {
+		if _, ok := m[k]; !ok {
+			m[k] = val
+		}
+	}
+	for k, val := range h.Fixed {
+		m[k] = val
+	}
+	out := make([]string, 0, len(m))
+	for k, val := range m {
+		out = append(out, k+"="+val)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// harnessFixed: what the cert and the format exceptions set in the harness's env (over the clean env and the secrets)
+func harnessFixed(v Vouched, me string, firstMachine bool) map[string]string {
+	m := map[string]string{}
+	sid := v.Ex.SessionID
+	if sid == "" {
+		sid = me
 	}
 	m["SESSION_HARNESS"], m["SESSION_PERMISSION_MODE"] = v.Cert.Options.Harness, certMode(v.Cert)
 	m["SESSION_ID"], m["JARVIS2_SESSION_ID"], m["TUNNEL_ID"] = sid, sid, sid
@@ -392,12 +424,7 @@ func harnessEnv(clean []string, v Vouched, me string, firstMachine bool, secrets
 	case !firstMachine && v.Once.Prompt != "":
 		m["SESSION_PROMPT"] = v.Once.Prompt
 	}
-	out := make([]string, 0, len(m))
-	for k, val := range m {
-		out = append(out, k+"="+val)
-	}
-	sort.Strings(out)
-	return out
+	return m
 }
 
 // vouchedPath: what the supervisor process (started before the cert is read) needs of the vouched values

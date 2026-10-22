@@ -17,14 +17,21 @@
 #   SESSION_ONE_SHOT        "1" = one-shot: claude exits once SESSION_PROMPT is done and Jarvis
 #                           archives + destroys the machine (see one_shot_watch in harness-claude.sh)
 #   SESSION_MODEL           model id (default claude-opus-5-5, see harness-claude.sh)
+#   JARVIS2_HARNESS_START   which start of the harness this is on this machine (1, 2, …): the keeper starts it again
+#                           whenever it ends; a restart (> 1) skips the one-time steps below (the Claude login and
+#                           account, which the supervisor keeps current; the content stores, which may hold unpushed
+#                           changes; the on-start hooks, still running)
 # Fly itself sets FLY_MACHINE_ID. jarvis2-machine runs first (machine/main.go): it restores the predecessor's signed
 # snapshot (transcripts placed under the project, ~/.claude.json, ~/workspace, ~/artifacts), has the supervisor pull
-# the secrets and sets the env, then execs this script; harness-claude.sh then `claude --resume`s the newest transcript.
+# the secrets and builds the env; then the keeper (machine/keeper.go, root, Fly's main child) starts this script as
+# user claude, in its own session; harness-claude.sh then `claude --resume`s the newest transcript.
 set -uo pipefail
 HOME=/home/claude; cd "$HOME"
 # ~/artifacts: anything the session puts (or symlinks) here is archived to the Storage Box by
 # Jarvis when the session is destroyed (alongside the transcripts) — see CLAUDE.md.
 mkdir -p "$HOME/.claude" "$HOME/workspace" "$HOME/artifacts"
+RESTART=0; [ "${JARVIS2_HARNESS_START:-1}" -gt 1 ] 2>/dev/null && RESTART=1
+[ "$RESTART" = 1 ] && echo "[entrypoint] harness start ${JARVIS2_HARNESS_START} on this machine: the one-time steps are skipped"
 
 # --- environment secrets ---------------------------------------------------
 # The secrets are already in this process's env (RAM only): jarvis2-machine boot took them from the supervisor,
@@ -45,7 +52,8 @@ if [ -n "${SESSION_SECRET_CONFLICTS:-}" ]; then
 fi
 
 # --- Claude auth -----------------------------------------------------------
-if [ -n "${CLAUDE_CREDENTIALS:-}" ]; then
+# (the first start only: on a restart the supervisor's Claude login sync holds the current pair and account)
+if [ "$RESTART" = 0 ] && [ -n "${CLAUDE_CREDENTIALS:-}" ]; then
   printf '%s' "$CLAUDE_CREDENTIALS" > "$HOME/.claude/.credentials.json"
   chmod 600 "$HOME/.claude/.credentials.json"
 fi
@@ -54,7 +62,7 @@ fi
 # brand-new machine. Existing ~/.claude.json fields (projects trust, etc.) are preserved, then
 # the account + fixed flags are merged on top.
 MID="$(tr -d - < /proc/sys/kernel/random/uuid)"
-python3 - "$MID" <<'PY'
+[ "$RESTART" = 0 ] && python3 - "$MID" <<'PY'
 import json,os,sys
 mid=sys.argv[1]; p=os.path.expanduser("~/.claude.json")
 try: existing=json.load(open(p))
@@ -111,7 +119,7 @@ fi
 # session's token; a failure only leaves the folder missing (retry: `content-sync pull`).
 # A hand-off session (no Jarvis access) gets them from Jarvis's in-machine step instead, in
 # ~/.jarvis-delivery/content/<store>/ — read-only copies there, since content-sync push can't reach Jarvis.
-if [ -n "${SESSION_CONTENT:-}" ]; then
+if [ "$RESTART" = 0 ] && [ -n "${SESSION_CONTENT:-}" ]; then
   rm -rf "$HOME/content" "$HOME/.content-sync"
   if [ -d "$DELIVERY/content" ]; then
     mv "$DELIVERY/content" "$HOME/content" && echo "[entrypoint] content: delivered by Jarvis: $(ls "$HOME/content" | tr '\n' ' ')"
@@ -134,7 +142,7 @@ mapfile -t DIRS < <(find "$HOME/workspace" -mindepth 1 -maxdepth 1 -type d 2>/de
 # Background servers a session started (a tunnel page, a watcher) die when Jarvis pauses the machine.
 # Executables in ~/artifacts/on-start/ come back with the pause snapshot and are run here, in the
 # background, on every boot, so the session's pages return on Start. Log: <script>.log next to it.
-if [ -d "$HOME/artifacts/on-start" ]; then
+if [ "$RESTART" = 0 ] && [ -d "$HOME/artifacts/on-start" ]; then
   for f in "$HOME"/artifacts/on-start/*; do
     [ -f "$f" ] && [ -x "$f" ] || continue
     (cd "$WD" && setsid nohup "$f" >"$f.log" 2>&1 </dev/null &)

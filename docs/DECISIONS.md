@@ -2309,3 +2309,71 @@ snapshot failed with "no space left on device", the machine was destroyed anyway
        restore choice). A machine that signed no snapshot passes on its source's (the spawner vouched for it).
      - *The spawner takes no Fly volume backups* (Deyao's first ask, 2026-10-21, which the old core keeps until it
        goes).
+
+## The supervisor is Fly's main child, 2026-10-21
+
+218. **The keeper (`jarvis2-machine boot`, root) is Fly's main child for the machine's whole life; the harness is its
+     child, as user claude, started again whenever it ends; a stop signal is a teardown that uploads the most important
+     first** (Deyao, 2026-10-21: "The supervisor should be the main child. Nothing should be able to kill the
+     supervisor other than a sigterm or sigkill from something with higher privilege." and "sigterm sigint etc should
+     trigger a clean but also priority driven teardown. As in upload the most important items first quickly.
+     Transcript tail is the most important, artifacts is less."). Session s4a0dda11e231bdda's machine died at
+     23:30:57Z: a subagent ran `ps aux | grep "[a]gent-K/home\|[5]184" | awk '{print $2}' | xargs -r kill` to stop its
+     dev server on port 5184; the pattern matched Fly's main child, `/bin/bash /usr/local/bin/harness-claude.sh` (most
+     likely its VSZ or RSS column read 5184), whose `while true; sleep 5` loop has no trap, so it died of SIGTERM
+     (oom_killed false, requested_stop false), Fly tore the VM down and the supervisor (which ran as claude and only in
+     its own session) died with it, so the Upgrade's final snapshot failed. Boot used to start the supervisor and then
+     exec into the entrypoint, which exec'd the launcher. Now (`machine/keeper.go`, DESIGN "The supervisor and the
+     guard", The keeper):
+     - The image's USER is root for the entry point only. The keeper starts the boot steps (`jarvis2-machine prepare`,
+       claude), the worker (root) and the harness (claude), each with setsid, never in the keeper's process group.
+     - *How the worker keeps claude's files*: root's uid with claude's fsuid/fsgid and groups (every thread,
+       `AllThreadsSyscall`; the image builds with CGO off). Its files, sockets, `~`, `/data` and `/run/jarvis2` stay
+       exactly as before, while kill(2) from claude fails (the target's real and saved uid are 0) and its `/proc` files
+       are root's. Every command it runs for the session goes through `jarvis2-machine unprotected`, which as root
+       sets the default OOM score (and so the floor: the session can't take -1000 back), drops to claude's uid, gid and
+       groups for good, then execs (`sessionCommand`; a test fails on a new direct `exec.Command`). The freeze's
+       `kill(-1)` runs as claude through it (as root it would stop every process on the machine).
+       *Not chosen*: a dedicated uid (it couldn't write claude's files without chowning everything it writes, restore
+       and the volume included); ruid root with euid claude (bash resets its euid to the real uid, so every shell the
+       supervisor starts would be root); a root keeper with a claude worker (the session could still kill the worker:
+       `pkill -f jarvis2-machine` would cut a snapshot off).
+     - *The secrets*: `boot-env` goes to the keeper (uid 0 and the worker's parent) at each start of the harness, and to
+       the boot steps (named in the keeper's root-owned `/run/jarvis2-keeper/harness.pid`) before booted; the harness's
+       env without values comes from the boot steps over a pipe. A restarted harness gets what the supervisor holds then
+       (a downgrade sticks), never more than a reboot's resume would. The sockets serve claude and root
+       (`sessionPeer`), as before.
+     - *Restarting the harness* (Claude's guesses, reversible): backoff 1 s doubling to 1 min, back to 1 s after 10 min
+       up; what is left of the dead launcher's process group (its loops: api-proxy, inbox, tunnel) is ended first
+       (SIGTERM, SIGKILL after 5 s), since the next launcher starts its own; `JARVIS2_HARNESS_START=n` makes the
+       entrypoint skip the Claude login and account (the supervisor keeps them current; the boot-time account would
+       undo a switch), the content stores (`rm -rf ~/content` would lose unpushed changes) and the on-start hooks
+       (still running); `harness-claude.sh` keeps a Claude host still running in tmux (its turn goes on) and starts
+       one only when it is gone (`--resume` of the newest conversation, as a reboot). Not once the final snapshot is
+       signed. Visible as supervisor log lines ("HARNESS ENDED (killed by SIGTERM) after …") and the status report's
+       `__HARNESS__` (the router's `registry.harness`): no DM, the session goes on by itself.
+     - *The teardown*: SIGTERM, SIGINT, SIGHUP, SIGQUIT to the keeper → SIGUSR1 to the worker, which sends (1) the
+       transcripts that changed since the live sync last sent them, newest first, then the subagents'
+       (`/m/live-transcript`: the router keeps each as it arrives, in `.live`, which the archive and the transcript
+       search take), then (2) the final snapshot, streamed with `snapshotPaths` now in priority order (the
+       conversations, `~/.claude.json`, the small records, the other harnesses' state, the workspace, the artifacts
+       last) and committed; then the keeper ends the harness's group and every claude process and exits. With the
+       snapshot committed, Pause finds it there and the session resumes from it. A machine whose final snapshot is
+       already committed (a pause: the snapshot, then the core's stop) uploads nothing.
+     - *Not done, needs Deyao*: (a) Fly's stop gives the main child **5 s** (SIGINT, then SIGKILL; the core sets no
+       `stop_config`, checked on this machine's config). That is enough for the transcript tail, rarely for a
+       workspace's snapshot. A longer one (`stop_config: {signal: SIGTERM, timeout: …}`, fly.toml's documented
+       maximum is 300 s) is set where the machine is created: `core/fly.go` (a core release, Recover) and
+       `kernel/spawner/fly.go`, so it waits for his go. (b) A snapshot cut off partway is not usable for a resume
+       (the machine signs only the whole one, and the core's kill names one hash). Making each step usable on resume
+       would need a snapshot in signed layers (each step its own stream, a signed manifest naming them; machine and
+       router only, no core change) and a decision on what a resume from a partial snapshot means (a session without
+       its workspace). Until then the volume's backup at the kill (core) holds everything else.
+     Tests: machine unit tests (the env split, boot-env, restarts, the dead group cleared, no restart after the final
+     snapshot, the teardown's order with the stream cut off partway) and, as root with a throwaway second user
+     (`TestKeeperAsRoot`, `TestWorkerIdentityAsRoot`): the harness is that user's, in its own session, at OOM score 0
+     with its floor; `kill`, `kill -KILL`, a group kill, `kill -STOP`, `pkill -f`, writing the keeper's
+     `oom_score_adj` and reading the worker's environ all fail; the user's SIGTERM to the launcher and its `kill -TERM
+     -1` leave the keeper up and the harness started again; the teardown ends the user's processes. e2e (`e2e/keeper.go`):
+     the same on a real Fly machine, then a SIGTERM to the main child → the transcript tail and the committed snapshot
+     at the router, the session paused and resumed from it.

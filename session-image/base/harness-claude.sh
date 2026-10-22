@@ -1,8 +1,8 @@
 #!/bin/bash
 # harness-claude.sh: the Claude harness's launcher (the entrypoint execs it). It is NOT the supervisor: that is
-# jarvis2-machine's (machine/supervisor.go), which talks to the router. This one only
-# keeps a `claude --remote-control` host alive in a tmux session for this machine's
-# whole lifetime (foreground, so the Fly Machine stays up until Jarvis stops it).
+# jarvis2-machine's (machine/supervisor.go), which talks to the router, under the keeper (machine/keeper.go), Fly's
+# main child, which starts this launcher and starts it again if it ever ends. This one only
+# keeps a `claude --remote-control` host alive in a tmux session.
 # tmux lets the Claude app spawn extra sessions inside this same container/env.
 set -u
 WD="${1:-$HOME/workspace}"
@@ -246,7 +246,7 @@ send_first_prompt() {
 # The JARVIS does the rest: its one-shot loop sees the marker via the registry exec, archives
 # the transcript + ~/artifacts to the Storage Box, and destroys the machine (force: even with
 # uncommitted/unpushed work — it DMs Deyao on Discord when that was the case). This launcher
-# therefore keeps the machine alive after claude exits (the watchdog below does not relaunch
+# therefore stays up after claude exits (the watchdog below does not relaunch
 # once the marker exists); nothing here talks to Jarvis.
 ONE_SHOT_IDLE_S=60
 ONE_SHOT_IDLE_BG_S=900
@@ -312,7 +312,14 @@ if [ "${SESSION_API_PROXY:-}" = 1 ]; then
   export ANTHROPIC_BASE_URL="http://127.0.0.1:$API_PROXY_PORT"
   echo "[harness-claude] api proxy on 127.0.0.1:$API_PROXY_PORT (log: ~/artifacts/api-log)"
 fi
-start
+# A restart by the keeper (JARVIS2_HARNESS_START > 1: this launcher died, the machine didn't): a Claude host still
+# running in tmux is kept as it is (its turn goes on); only a dead one is started again, resuming the newest
+# conversation as a reboot would.
+if [ "${JARVIS2_HARNESS_START:-1}" -gt 1 ] 2>/dev/null && pgrep -u "$(id -u)" -f 'claude .*--model' >/dev/null 2>&1; then
+  echo "[harness-claude] restart ${JARVIS2_HARNESS_START}: the remote-control host is still running; keeping it"
+else
+  start
+fi
 send_first_prompt &
 one_shot_watch &
 # The Claude login (pushing a pair claude refreshed by itself, taking the router's) and the live transcript copy

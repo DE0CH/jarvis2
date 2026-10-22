@@ -126,7 +126,7 @@ func runExec(c *client, e Exec) {
 	} else {
 		t := time.Duration(max(1, min(r.Timeout, 600))) * time.Second
 		ctx, cancel := context.WithTimeout(context.Background(), t)
-		cmd := unprotectedCommand(ctx, "bash", "-lc", r.Cmd) // supervisor.go: back under the OOM killer
+		cmd := sessionCommand(ctx, "bash", "-lc", r.Cmd) // supervisor.go: back under the OOM killer
 		var out, errb capped
 		cmd.Stdout, cmd.Stderr = &out, &errb
 		err := cmd.Run()

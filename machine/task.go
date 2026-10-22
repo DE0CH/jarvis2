@@ -227,7 +227,7 @@ func execTask(args []string, stdin string, env []string, dir, logPath string, ti
 		return -1, false, err
 	}
 	defer f.Close()
-	cmd := exec.Command(args[0], args[1:]...)
+	cmd := sessionCommand(nil, args[0], args[1:]...)
 	cmd.Env, cmd.Dir, cmd.Stdout, cmd.Stderr = env, dir, f, f
 	if stdin != "" {
 		cmd.Stdin = strings.NewReader(stdin)

@@ -249,7 +249,7 @@ func serveSecrets(c *client) {
 func handleSecrets(c *client, conn net.Conn) {
 	defer conn.Close()
 	pid, uid, comm := peerOf(conn)
-	if uid != os.Getuid() && uid != 0 {
+	if !sessionPeer(uid) {
 		log.Printf("secrets: refused a caller of uid %d (pid %d %s)", uid, pid, comm)
 		return
 	}
@@ -258,7 +258,7 @@ func handleSecrets(c *client, conn net.Conn) {
 	if err := json.NewDecoder(io.LimitReader(conn, 1<<16)).Decode(&req); err != nil {
 		return
 	}
-	resp := answerSecrets(c, req, pid, fmt.Sprintf("pid %d %s", pid, comm))
+	resp := answerSecrets(c, req, pid, uid, fmt.Sprintf("pid %d %s", pid, comm))
 	json.NewEncoder(conn).Encode(resp)
 }
 
@@ -270,9 +270,10 @@ func handleSecrets(c *client, conn net.Conn) {
 //     way to ask for every key: a request must name each key it needs (no "all" op, no empty list, no wildcard),
 //     and a name not held is an error naming it.
 //
-// The one hand-over of every value is "boot-env": the harness's environment, built by boot before anything of the
-// agent runs (only to the boot process, harness.pid, and only before bootedPath exists).
-func answerSecrets(c *client, req secretsReq, pid int, caller string) secretsResp {
+// The one hand-over of every value is "boot-env": the harness's environment. Only to the keeper (root, the worker's
+// parent: it builds the harness's env at each start of the harness, keeper.go), and to the boot steps (the process
+// the keeper named in harness.pid, a root-owned file) before bootedPath exists.
+func answerSecrets(c *client, req secretsReq, pid, uid int, caller string) secretsResp {
 	switch req.Op {
 	case "names":
 		m := held.snapshot()
@@ -282,11 +283,12 @@ func answerSecrets(c *client, req secretsReq, pid int, caller string) secretsRes
 	case "get":
 		return answerGet(req.Keys, caller)
 	case "boot-env":
-		if booted() {
+		keeper := uid == 0 && pid == keeperPID() && pid > 1
+		if !keeper && booted() {
 			log.Printf("secrets: refused boot-env for %s: the machine has booted", caller)
 			return secretsResp{Error: "boot-env is only for the boot, before the harness starts; ask for the keys a command needs (session-secret --keys K1,K2 …)"}
 		}
-		if s, _ := readTrim(harnessPIDPath); s != strconv.Itoa(pid) {
+		if s, _ := readTrim(harnessPIDPath); !keeper && s != strconv.Itoa(pid) {
 			log.Printf("secrets: refused boot-env for %s: not the boot process", caller)
 			return secretsResp{Error: "boot-env is only for the boot process"}
 		}

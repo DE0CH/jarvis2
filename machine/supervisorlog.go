@@ -1,7 +1,7 @@
 package main
 
 // The supervisor log: what boot and the supervisor do, one JSON line each ({"at","text"}) in supervisorLogPath
-// (tmpfs, this machine only). Boot, the keeper and the worker append to it (each write opens the file, so a rotation
+// (tmpfs, this machine only). The boot steps, the keeper and the worker append to it (each write opens the file, so a rotation
 // never loses a line); the worker pushes new lines to the router (POST /m/supervisor-log), which keeps the session's
 // log for its whole life and shows it in the app (Supervisor log, and inside each Lifecycle log). The lines name
 // commands, ids, counts, key names and errors, never a command's text, a prompt or a secret value; as a second line
@@ -45,6 +45,9 @@ func (f fileLog) Write(p []byte) (int, error) {
 	text := strings.TrimSuffix(strings.TrimPrefix(string(p), "[jarvis2] "), "\n")
 	b, _ := json.Marshal(logLine{At: time.Now().UTC().Format(time.RFC3339Nano), Text: f.tag + ": " + text})
 	if fh, err := os.OpenFile(f.path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600); err == nil {
+		if privileged() { // the keeper (root): the file stays user claude's, as the worker reads and rotates it
+			fh.Chown(session().uid, session().gid)
+		}
 		fh.Write(append(b, '\n'))
 		fh.Close()
 	}
@@ -54,8 +57,13 @@ func (f fileLog) Write(p []byte) (int, error) {
 // logToSupervisorLog: this process's log lines also go to the supervisor log
 func logToSupervisorLog() {
 	tag := supervisorLogTag
-	if len(os.Args) > 1 && os.Args[1] == "boot" {
-		tag = "boot"
+	if len(os.Args) > 1 {
+		switch os.Args[1] {
+		case "prepare":
+			tag = "boot"
+		case "boot":
+			tag = "keeper"
+		}
 	}
 	log.SetOutput(io.MultiWriter(os.Stderr, fileLog{supervisorLogPath, tag}))
 }

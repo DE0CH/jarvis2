@@ -29,7 +29,6 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync/atomic"
@@ -397,11 +396,11 @@ var (
 	oauthProfileURL = "https://api.anthropic.com/api/oauth/profile"
 	profileHTTP     = &http.Client{Timeout: 20 * time.Second}
 	paneText        = func() string {
-		out, _ := exec.Command("tmux", "capture-pane", "-p", "-t", "claude").Output()
+		out, _ := sessionCommand(nil, "tmux", "capture-pane", "-p", "-t", "claude").Output()
 		return string(out)
 	}
 	sendKeys = func(args ...string) error {
-		return exec.Command("tmux", append([]string{"send-keys", "-t", "claude"}, args...)...).Run()
+		return sessionCommand(nil, "tmux", append([]string{"send-keys", "-t", "claude"}, args...)...).Run()
 	}
 )
 

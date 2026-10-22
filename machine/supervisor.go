@@ -31,19 +31,18 @@ package main
 //	                                                      request logged; the deploy keys in its ssh-agent;
 //	                                                      refresh-secrets pulls again (putkey.go)
 //
-// It is kept out of the OOM killer's reach: `jarvis2-machine supervisor` (the keeper) sets its own oom_score_adj to
-// -1000 through sudo, then runs the worker (`supervisor --worker`, which inherits it) and starts it again whenever it
-// exits. What the supervisor starts for the session (exec commands, the text into the harness, a watch's check)
-// goes back to the default score first (`jarvis2-machine unprotected`), so only the supervisor itself is protected;
-// the harness and everything else in the session are not.
+// It runs as root with user claude's file access, a child of the keeper (keeper.go), which is Fly's main child and
+// starts it again whenever it exits; the session (user claude) can't signal either. Both are out of the OOM killer's
+// reach (oom_score_adj -1000, set by the keeper and inherited); what the supervisor starts for the session (exec
+// commands, the text into the harness, a watch's check, git, tmux) goes through sessionCommand: user claude, back at
+// the default OOM score. A stop signal reaches the keeper, which asks the worker for the teardown (SIGUSR1).
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"log"
 	"os"
-	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -54,40 +53,7 @@ import (
 
 const oomProtected = "-1000"
 
-var (
-	harnessPIDPath    = dir + "/harness.pid"    // the boot process's pid, which became the harness (exec)
-	harnessPausedPath = dir + "/harness-paused" // the pids pause-harness stopped, for resume-harness
-)
-
-// supervisor: the keeper (no flag) or the worker (--worker)
-func supervisor(worker bool) error {
-	logToSupervisorLog()
-	if worker {
-		return supervise()
-	}
-	protectFromOOM(os.Getpid())
-	mem, err := newMemfd() // secrets.go: the RAM copy of the secrets, kept across worker restarts
-	if err != nil {
-		log.Printf("secrets memfd: %v (a restarted worker pulls again)", err)
-	}
-	backoff := time.Second
-	for {
-		started := time.Now()
-		cmd := exec.Command("/proc/self/exe", "supervisor", "--worker")
-		cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
-		if mem != nil {
-			cmd.ExtraFiles = []*os.File{mem} // fd 3
-			cmd.Env = append(os.Environ(), secretsFDEnv+"=3")
-		}
-		err := cmd.Run()
-		if time.Since(started) > time.Minute {
-			backoff = time.Second
-		}
-		log.Printf("supervisor worker exited (%v); starting it again in %s", exitText(err), backoff)
-		time.Sleep(backoff)
-		backoff = min(2*backoff, 30*time.Second)
-	}
-}
+var harnessPausedPath = dir + "/harness-paused" // the pids pause-harness stopped, for resume-harness
 
 func exitText(err error) string {
 	if err == nil {
@@ -96,62 +62,26 @@ func exitText(err error) string {
 	return err.Error()
 }
 
-// protectFromOOM: oom_score_adj -1000 (never chosen by the OOM killer) for pid, through the sudo the session user
-// has; only on a Fly machine
-var protectFromOOM = func(pid int) {
-	if os.Getenv("FLY_MACHINE_ID") == "" {
-		return
-	}
-	cmd := exec.Command("sudo", "-n", "tee", fmt.Sprintf("/proc/%d/oom_score_adj", pid))
-	cmd.Stdin = strings.NewReader(oomProtected + "\n")
-	if out, err := cmd.CombinedOutput(); err != nil {
-		log.Printf("OOM protection: %v %s", err, strings.TrimSpace(string(out)))
-		return
-	}
-	log.Printf("OOM protection on (oom_score_adj %s)", oomProtected)
-}
-
-// unprotectedCommand: a command the supervisor starts for the session, run through `jarvis2-machine unprotected` so
-// it (and anything it leaves running) is back at the default OOM score; ctx may be nil. Off a Fly machine (tests)
-// nothing is protected, so the command runs as is.
-func unprotectedCommand(ctx context.Context, name string, args ...string) *exec.Cmd {
-	argv := append([]string{"unprotected", "--", name}, args...)
-	if os.Getenv("FLY_MACHINE_ID") == "" {
-		name, argv = argv[2], argv[3:]
-		if ctx == nil {
-			return exec.Command(name, argv...)
-		}
-		return exec.CommandContext(ctx, name, argv...)
-	}
-	if ctx == nil {
-		return exec.Command("/proc/self/exe", argv...)
-	}
-	return exec.CommandContext(ctx, "/proc/self/exe", argv...)
-}
-
-// unprotected: oom_score_adj 0 for this process (raising it needs no privilege), then exec the command
-func unprotected(args []string) error {
-	if len(args) > 0 && args[0] == "--" {
-		args = args[1:]
-	}
-	if len(args) == 0 {
-		return errors.New("usage: jarvis2-machine unprotected -- <command> [args…]")
-	}
-	os.WriteFile("/proc/self/oom_score_adj", []byte("0\n"), 0o644)
-	path, err := exec.LookPath(args[0])
-	if err != nil {
-		return err
-	}
-	return syscall.Exec(path, args, os.Environ())
-}
-
 // supervise: the worker. While the machine boots it answers a snapshot with the predecessor's (or "nothing to
 // snapshot"); once booted it uploads real snapshots and starts the reports, the local Jarvis API and the live sync.
 func supervise() error {
+	logToSupervisorLog()
+	if privileged() {
+		if err := sessionFileAccess(); err != nil { // keeper.go: user claude's file access, root's uid
+			return fmt.Errorf("the worker's file access: %w", err)
+		}
+	}
 	c, err := newClient()
 	if err != nil {
 		return err
 	}
+	usr1 := make(chan os.Signal, 1)
+	signal.Notify(usr1, syscall.SIGUSR1)
+	go func() { // the keeper's teardown (a stop signal): upload, most important first, then end
+		<-usr1
+		teardown(c)
+		os.Exit(0)
+	}()
 	if _, _, err := finalSnapshotSum(); err == nil {
 		frozen.Store(true) // an earlier worker of this machine took the final snapshot: nothing guarded runs again
 	}
@@ -245,14 +175,14 @@ func clip(s string, n int) string {
 
 // ---- the Claude process: pause and resume -----------------------------------------------------------------
 
-// harnessPID: the harness's launcher (boot exec'd into it)
+// harnessPID: the harness's launcher (the keeper names it: keeper.go), or the boot steps while booting
 func harnessPID() int {
 	s, _ := readTrim(harnessPIDPath)
 	n, _ := strconv.Atoi(s)
 	return n
 }
 
-// keeperPID: the supervisor's keeper (the worker's parent), never stopped or killed by the supervisor itself
+// keeperPID: the keeper (the worker's parent), never stopped or killed by the supervisor itself
 func keeperPID() int { return os.Getppid() }
 
 // children: pid → its children, from /proc
@@ -287,7 +217,7 @@ var children = func() map[int][]int {
 // tmuxPanes: the pid of every pane's process (the Claude host runs in tmux session `claude`, whose server is not a
 // child of the launcher)
 var tmuxPanes = func() []int {
-	out, err := exec.Command("tmux", "list-panes", "-a", "-F", "#{pane_pid}").Output()
+	out, err := sessionCommand(nil, "tmux", "list-panes", "-a", "-F", "#{pane_pid}").Output()
 	if err != nil {
 		return nil
 	}
@@ -369,8 +299,8 @@ func resumeHarness() error {
 
 // ---- the whole session, for the final snapshot -------------------------------------------------------------
 
-// freezeSession: the Claude process first (pauseHarness), then SIGSTOP to every other process this user may signal
-// (kill(-1) spares the caller); the keeper is let go on at once. Only on a Fly machine.
+// freezeSession: the Claude process first (pauseHarness), then SIGSTOP to every other process of user claude
+// (signalSession: never root's, so never the keeper or this worker). Only on a Fly machine.
 var freezeSession = func() {
 	if os.Getenv("FLY_MACHINE_ID") == "" {
 		return
@@ -378,11 +308,8 @@ var freezeSession = func() {
 	if err := pauseHarness(); err != nil {
 		log.Printf("freezing the session: %v", err)
 	}
-	if err := syscall.Kill(-1, syscall.SIGSTOP); err != nil {
+	if err := signalSession("STOP"); err != nil {
 		log.Printf("freezing the session: %v", err)
-	}
-	if k := keeperPID(); k > 1 {
-		syscall.Kill(k, syscall.SIGCONT)
 	}
 	log.Printf("session stopped for the final snapshot")
 }
@@ -393,7 +320,7 @@ var thawSession = func() {
 	if os.Getenv("FLY_MACHINE_ID") == "" {
 		return
 	}
-	if err := syscall.Kill(-1, syscall.SIGCONT); err != nil {
+	if err := signalSession("CONT"); err != nil {
 		log.Printf("thawing the session: %v", err)
 	}
 	os.Remove(harnessPausedPath)

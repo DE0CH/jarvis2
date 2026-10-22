@@ -674,14 +674,16 @@ A batch is told once, all items together; a paused session hears at its next sta
 
 ## Machine side (in the image)
 
-Boot makes the machine's keys and waits. `jarvis2-init` (run by the core through Fly, no arguments) prints the
+`jarvis2-machine boot`, the image's entry point, runs as root and is Fly's main child for the machine's whole life:
+the keeper ("The supervisor and the guard", The keeper). It starts the boot steps as user `claude`; they make the machine's keys and wait. `jarvis2-init` (run by the core through Fly, no arguments) prints the
 public keys and lets boot go on: it takes the core's key from its own Fly config (the core sets it when it creates
 the machine; only the core's token, and the setup session's org token, can create or change machines in the app,
 the router's are read-only, plus one that can only delete volumes: DECISIONS 195), fetches its core-signed succession cert through the router, checks it against the
 core key and that it names its own keys; if the predecessor is a real machine it fetches the snapshot and checks
-it against the hash the cert names and the predecessor's signing key from the cert. Then it starts the harness from
-the cert's options and pulls its secrets. Any failed check → start nothing. Everything else it takes: below. Before
-any of this, boot starts the supervisor ("The supervisor and the guard").
+it against the hash the cert names and the predecessor's signing key from the cert. Then it pulls its secrets and
+hands the harness's env (no secret value) to the keeper, which starts the harness from the cert's options. Any failed
+check → start nothing. Everything else it takes: below. Once init asked, the keeper starts the supervisor ("The
+supervisor and the guard").
 
 **The volume (`machine/volume.go`).** A machine with a volume (mounted at `/data` by Fly, as the core asked) keeps the
 session's state on it: before restoring anything, boot bind-mounts each of the snapshot's directories (`~/workspace`,
@@ -717,9 +719,10 @@ refused, so claude.ai MCP connectors are not available in these sessions.
 ### The supervisor and the guard (Deyao, 2026-10-16)
 
 **The supervisor** is the machine's one long-running process that talks to the control plane (`jarvis2-machine
-supervisor`, `machine/supervisor.go`). Boot starts it before anything else, so it answers the router from the
-machine's first second to the kill; then boot goes on and finally execs the harness's launcher (for Claude
-`harness-claude.sh`, which only keeps the `claude --remote-control` host alive in tmux). Its components:
+supervisor --worker`, `machine/supervisor.go`), a child of the keeper (below). The keeper starts it as soon as init
+asked, before the boot steps need it, so it answers the router from the machine's first seconds to the kill; the
+harness's launcher (for Claude `harness-claude.sh`, which only keeps the `claude --remote-control` host alive in tmux)
+is another child of the keeper. Its components:
 
 | component | file | guarded | what it does |
 |---|---|---|---|
@@ -745,13 +748,48 @@ resume-harness), the hook's count notifications and everything the supervisor on
 can't carry an instruction and are not guarded. Nothing guarded runs once the session is frozen for its final
 snapshot, and resume-harness is refused then too.
 
-**Kept alive.** The supervisor is protected from the OOM killer: `jarvis2-machine supervisor` (the keeper) sets its
-own `oom_score_adj` to -1000 through the sudo the session user has, then runs the worker (`supervisor --worker`, which
-inherits it) and starts it again whenever it exits (backoff 1 s doubling to 30 s). The harness and the session's
-other processes are not protected: what the supervisor starts for the session (an exec, the text into the harness, a
-watch's check) goes back to the default score first (`jarvis2-machine unprotected`). The freeze and the Upgrade's
-free spare the keeper. A restarted worker carries on from files in `/run/jarvis2` (the signed final snapshot, the
-worker count, how far the log was pushed).
+**The keeper (Deyao, 2026-10-21):** "The supervisor should be the main child. Nothing should be able to kill the supervisor other than a sigterm or
+sigkill from something with higher privilege." Fly ends a machine when its main child (the image's entry point) ends,
+so that process is the supervisor's and nothing in the session can end it (`machine/keeper.go`, DECISIONS 218):
+
+- **The keeper** is `jarvis2-machine boot`, run as root for the machine's whole life. Its children, each in its own
+  session (setsid): the boot steps (`jarvis2-machine prepare`, user `claude`, which end by handing the harness's env
+  over a pipe, never on disk), the supervisor's worker (`supervisor --worker`, started again whenever it exits, backoff
+  1 s doubling to 30 s) and the harness (Jarvis 1's entrypoint, then `harness-*.sh`, user `claude`).
+- **The uid split.** The session runs as `claude` (with its sudo: root through sudo is the higher privilege, accepted).
+  The keeper and the worker run as root, so `kill`, `pkill -f jarvis2-machine`, `kill -TERM -1` and process-group
+  kills from the session fail with EPERM on them; their `/proc` files (environ, mem, oom_score_adj) are root's and
+  both are marked not dumpable. The worker keeps root's uid but takes `claude`'s file identity (setfsuid/setfsgid and
+  `claude`'s groups), so what it reads and writes under `~`, `/data` and `/run/jarvis2` (its sockets included) is
+  checked and owned exactly as before, and its sockets serve `claude` and root. Every command it runs for the session
+  (git, tmux, an exec, the text into the harness, a watch's check, the freeze's `kill -1`) goes through
+  `jarvis2-machine unprotected`, which takes `claude`'s uid, gid and groups for good and the default OOM score; the
+  freeze and the Upgrade's free signal only `claude`'s processes. What only the keeper writes is in
+  `/run/jarvis2-keeper` (root's): `harness.pid` (the boot steps', then each harness's launcher) and `harness.json`.
+- **The harness is started again.** A harness that ends (killed by anything, or exiting) never ends the machine: the
+  keeper logs how it ended (exit status or signal) and its uptime in the supervisor log, ends what is left of its
+  process group (SIGTERM, SIGKILL after 5 s) and starts it again after a backoff (1 s doubling to 1 min, back to 1 s
+  after 10 min up) with the secrets the supervisor holds now (`boot-env`, answered to the keeper: a downgrade sticks)
+  and `JARVIS2_HARNESS_START=n`. The entrypoint then skips its one-time steps (the Claude login and account, which the
+  supervisor keeps current; the content stores, which may hold unpushed changes; the on-start hooks, still running),
+  and `harness-claude.sh` keeps a Claude host still running in tmux, else resumes the newest conversation as a
+  reboot's resume would. Not once the session is stopped for its final snapshot. The status report carries the
+  keeper's record (`__HARNESS__`: starts, running, last end; `registry.harness` in the router).
+- **Kept alive.** The keeper sets its own `oom_score_adj` to -1000 as root; the worker inherits it. The harness and the
+  session's other processes are not protected: `unprotected` sets the default score as root before it drops, which
+  also sets the floor, so a session process can't take -1000 back. A restarted worker carries on from files in
+  `/run/jarvis2` (the signed final snapshot, the worker count, how far the log was pushed) and the secrets in the
+  keeper's memfd.
+- **The teardown.** SIGTERM, SIGINT (Fly's stop signal, 5 s by default before SIGKILL), SIGHUP and SIGQUIT to the
+  keeper start a clean teardown that uploads the most important first (Deyao, 2026-10-21: "Transcript tail is the
+  most important, artifacts is less"), each step counting on its own: the worker (SIGUSR1) sends the transcripts that
+  changed since their last copy (newest first, then the subagents': the live sync's `/m/live-transcript`, so the
+  router's archive and search have them), then streams the final snapshot in priority order (the conversations and
+  `~/.claude.json`, the small records, the other harnesses' state, the workspace, the artifacts last) and commits it
+  with its one signature; with it the session resumes as after a pause. A snapshot cut off by the kill is not used
+  (the router keeps the transcripts of the first step; the volume's backup has the rest). A machine whose final
+  snapshot the router already has (a pause) uploads nothing. Then the harness's process group and every other
+  process of `claude` get SIGTERM, then SIGKILL, and the keeper exits.
 
 **Secrets, in RAM only (Deyao, 2026-10-16).** The supervisor alone pulls the session's secrets from the core (sealed
 to this machine, through the router): at boot when boot asks, on the router's `refresh-secrets`, and when a process of
@@ -771,16 +809,17 @@ user (and root) can reach, `/run/jarvis2/secrets.sock`, and keeps two kinds of r
 No mode of either prints a value, and a malformed invocation prints usage without asking. Each request is logged in
 the supervisor log with its op, the key names asked for (or a count) and the caller's pid and command, never a value.
 It needs no guard check: it carries no instruction, and it serves only what the core sealed. The harness's env carries
-the values (boot builds it from them, RAM only, through the one hand-over of every value, `boot-env`, which the
-supervisor answers only to the boot process before the machine has booted), so `$VAR` works in the agent's commands;
+the values (the keeper builds it from them at each start of the harness, RAM only, through the one hand-over of every
+value, `boot-env`, which the supervisor answers only to the keeper (root, its parent) and, before the machine has
+booted, to the boot steps named in the keeper's `harness.pid`), so `$VAR` works in the agent's commands;
 a process started before a change gets a key through `session-secret --keys KEY --exec`. The repos' deploy keys stay in RAM too: the
 supervisor's own ssh-agent (`/run/jarvis2/ssh-agent.sock`, read-only to callers, every signature logged with the
 repo and the caller) holds them, and `~/.ssh` has only their public halves, which each repo's SSH alias names
 (`IdentityFile …pub`, `IdentitiesOnly`, `IdentityAgent`). What stays on disk by Deyao's choice: the Claude login
 (`~/.claude/.credentials.json`) and a file a session writes itself with `session-secret --keys … --write`.
 
-**The supervisor log.** Boot, the keeper and the worker write each log line as JSON (`{at, text}`, the text prefixed
-`boot:` or `supervisor:`) to `/run/jarvis2/supervisor.log` (tmpfs, rotated once pushed); the worker pushes new lines
+**The supervisor log.** The boot steps, the keeper and the worker write each log line as JSON (`{at, text}`, the text
+prefixed `boot:`, `keeper:` or `supervisor:`) to `/run/jarvis2/supervisor.log` (`claude`'s file) (tmpfs, rotated once pushed); the worker pushes new lines
 to the router every 2 s (`POST /m/supervisor-log`), which keeps the session's log for its whole life and puts it in
 the session's archive on Destroy. Lines name commands, ids, counts and errors, never a command's text, a prompt or a
 secret value; as a second line of defence every secret value the supervisor holds (8 characters or more) is replaced by `[secret]`

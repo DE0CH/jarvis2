@@ -8,7 +8,6 @@ package main
 import (
 	"context"
 	"log"
-	"os/exec"
 	"strings"
 	"time"
 )
@@ -26,7 +25,7 @@ const (
 func readScreen() (screen, cursor string, ok bool) {
 	ctx, cancel := context.WithTimeout(context.Background(), screenEvery)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, "bash", "-c", screenCmd).Output()
+	out, err := sessionCommand(ctx, "bash", "-c", screenCmd).Output()
 	if err != nil {
 		return "", "", false
 	}

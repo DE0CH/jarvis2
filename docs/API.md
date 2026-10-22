@@ -663,7 +663,7 @@ off.
 | `POST /m/delivery-result` | `{id, ok, error?}`: the machine's answer to a delivery. Deliveries arrive in `GET /m/commands` as `{deliveries: [{id, kind: wakeup\|cron\|nudge\|continue\|upgraded, request?, run?, minutes?, jobs?, from?, to?, attest}]}` (`upgraded`: a text built into the image from the two sizes, each small, medium, large or a doubling past it): a wakeup/cron is the session's own signed request, `attest` the core's input-log entry for it. |
 | `GET /m/attachments` | `{files: [{name, size, isImage}], attest: {<name>: <core doc>}}`: the first-prompt attachments bound to this machine's session (404 none), each with the core's input-log entry for it (`/attest` machine, input `attachment`, origin `cert`, the sha256 of the file as it is on the volume; 502 when the core doesn't answer). The machine takes a file only when its bytes match the cert's sha256 + size AND its attestation. `GET /m/attachments/:name` the bytes; `DELETE /m/attachments` drops the router's copy once fetched. |
 | `POST /m/task-result` | A task line's machine (harness `task:<template>`, below) after its run: `{run, exitCode, timedOut, error, startedAt, finishedAt, log /* tail ≤ 256 KB */, output /* ≤ 64 KB */}`, store values already redacted by the machine. `run: ""` = a boot with no run (the line's first machine). The router records the run and pauses the line. 403 for a machine that isn't a running task line. |
-| `POST /m/status` | Body `{raw, appTitle}`: `raw` = the output of Jarvis 1's registry command (`machine/status.go`), sent by the supervisor when it changes and at least every 60 s; parsed by the router (`router/registry.go`). `appTitle` = the Claude app's title of the session's Remote Control entry, which the machine reads (at most once a minute) from `api.anthropic.com/v1/code/sessions/cse_<bridge>` with the session's own Claude login (`machine/apptitle.go`); "" keeps the last one. It becomes the session's `serverTitle`, and a resume without a label passes it on as `SESSION_RESUME_TITLE` (Jarvis 1's supervisor names a fresh Remote Control entry with it). |
+| `POST /m/status` | Body `{raw, appTitle}`: `raw` = the output of Jarvis 1's registry command (`machine/status.go`), sent by the supervisor when it changes and at least every 60 s; parsed by the router (`router/registry.go`); its last section, `__HARNESS__`, is the keeper's record of the harness (`machine/keeper.go`: starts on this machine, running, last end), the session's `registry.harness`. `appTitle` = the Claude app's title of the session's Remote Control entry, which the machine reads (at most once a minute) from `api.anthropic.com/v1/code/sessions/cse_<bridge>` with the session's own Claude login (`machine/apptitle.go`); "" keeps the last one. It becomes the session's `serverTitle`, and a resume without a label passes it on as `SESSION_RESUME_TITLE` (Jarvis 1's supervisor names a fresh Remote Control entry with it). |
 | `POST /m/live-transcript` | Header `X-Name: <uuid>.jsonl`, body = the whole transcript (≤ 256 MB). The machine sends each conversation under `~/.claude/projects` that changed, every `JARVIS2_LIVE_SYNC_SECONDS` (default 300; router env `LIVE_SYNC_SECONDS` sets it), skipping Jarvis's delivery relays (`machine/livesync.go`). The router PUTs it to `claude-records/.live/<session id>/<name>` with its own Storage Box credentials — Jarvis 1's layout, which transcript search indexes — and records `liveSync` on the session; with no Storage Box (or `RECORDS_OFF=1`) it answers `{ok, stored: false}`. A destroy deletes only the copies its archive holds (Archives above). 403 for a machine with no running session. |
 
 ## The input log (`router/vouch.go`, `core/audit.go`)
@@ -894,7 +894,7 @@ Deyao's email or any service token of the account; the router then admits a toke
 
 Jarvis 1's session scripts call `$JARVIS_URL/api/…`. A Jarvis 2 machine gets `JARVIS_URL=http://127.0.0.1:7171`
 (plus placeholder `CF_ACCESS_CLIENT_ID/SECRET` and `SESSION_API_TOKEN`, which the scripts insist on; not for
-OpenCode/OpenClaw, whose harness scripts read CF_ACCESS_* as "publish the web UI"). There `jarvis2-machine supervisor`
+OpenCode/OpenClaw, whose harness scripts read CF_ACCESS_* as "publish the web UI"). There `jarvis2-machine supervisor --worker`
 serves a proxy that drops the scripts' headers and sends `/m/api/<rest>` (query kept, unsigned; the path is
 signed as every `/m` call). Any `:id` in the path must be the calling machine's session (403 otherwise).
 
@@ -939,7 +939,7 @@ permission mode. An image without the channel takes them on the peer socket as b
 
 ### The supervisor's secrets socket (`/run/jarvis2/secrets.sock`)
 
-Not HTTP: a unix socket on the machine (0600, the session user; root may connect), one JSON request per connection,
+Not HTTP: a unix socket on the machine (0600, the session user's; the supervisor serves the session user and root), one JSON request per connection,
 one JSON answer `{ok, error?, locked?, names?, stores?, secrets?, n?}` (machine/secrets.go). Callers are identified by
 SO_PEERCRED; every request is logged in the supervisor log with its op, the key names and the caller's pid and command,
 never a value. Pulling and asking are separate: a pull never answers a value, and asking never pulls.
@@ -950,7 +950,7 @@ never a value. Pulling and asking are separate: a pull never answers a value, an
 | `{"op":"get","keys":["K1","K2"]}` | `session-secret --keys K1,K2 --exec CMD \| --write FILE` | `secrets`: exactly those keys. Refused: no keys, a name that isn't an env name, a key not held (the error names it). There is no request for all keys. |
 | `{"op":"reload"}` (`drop`, `held`: a downgrade's) | `pull-secrets`, add-store's waiter, `downgrade` | the router's newest cert, then a pull with it into RAM: `n`, `names`, `stores`; no value. `locked` when a store is locked. |
 | `{"op":"pull"}` | boot | a pull with the cert on disk (waits for a locked store): `n`, `names`, `stores`; no value |
-| `{"op":"boot-env"}` | boot only | every held value, for the harness's env: answered only to the boot process (`harness.pid`) before `/run/jarvis2/booted` exists; refused to anyone else and after the boot |
+| `{"op":"boot-env"}` | the keeper; the boot steps | every held value, for the harness's env: answered to the keeper (root, the worker's parent) at each start of the harness, and to the boot steps (the pid in the keeper's root-owned `/run/jarvis2-keeper/harness.pid`) before `/run/jarvis2/booted` exists; refused to anyone else |
 
 ## Transcript search (`services/search`)
 

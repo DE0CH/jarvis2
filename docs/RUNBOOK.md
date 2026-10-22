@@ -758,16 +758,28 @@ not running in time. The video, screenshots and logs (core, router, the setup an
 
 - What the core did: it keeps no log of its own (R2: as small and stateless as it can be); every change it makes is a
   signed answer the router keeps (certs, the input log in the router's `input-log.jsonl`).
-- A session's supervisor log (boot and the supervisor, DESIGN "The supervisor and the guard"): the app's Log beside
+- A session's supervisor log (boot, the keeper and the supervisor, DESIGN "The supervisor and the guard"): the app's Log beside
   the terminal (source Supervisor), or `GET /api/sessions/:id/events`; kept for the session's life, and in its archive
   (`jarvis2/supervisor-log.jsonl`) after Destroy. On the machine itself: `/run/jarvis2/supervisor.log`.
 - What a boot, pause, resume, Upgrade or destroy did, step by step (the router's steps, Fly's events and platform log,
   the supervisor's lines): the same Log, each operation from its start mark to its end mark; archived as
   `jarvis2/lifecycle.json`.
 - A session machine's log: `FLY_API_TOKEN=$JARVIS2_FLY_TOKEN flyctl logs -a jarvis2-sessions --machine <id> --no-tail`
-- The supervisor stopped answering (a pause waits on "the machine never reported"): its keeper restarts the worker
-  within 30 s; the restarts are in the supervisor log ("supervisor worker exited …"). It is out of the OOM killer's
-  reach (`oom_score_adj` -1000), so an out-of-memory machine loses harness processes, not the supervisor.
+- The supervisor stopped answering (a pause waits on "the machine never reported"): the keeper (Fly's main child,
+  `jarvis2-machine boot`, root) restarts the worker within 30 s; the restarts are in the supervisor log ("supervisor
+  worker exited …"). Both are out of the OOM killer's reach (`oom_score_adj` -1000) and out of the session's reach
+  (root: user claude can't signal them), so an out-of-memory machine or a stray `kill` loses harness processes, not
+  the supervisor (DESIGN "The supervisor and the guard", The keeper).
+- The harness died (Remote Control gone, the app's session "disconnected"), the machine still up: the keeper starts it
+  again with the same conversation; each end is a supervisor log line `keeper: HARNESS ENDED (<how>) after <uptime>
+  (start n, pid p) … starting it again in <backoff>`, and the session's `registry.harness` (`/api/state`) has the count
+  and the last end. On the machine: `/run/jarvis2-keeper/harness.json`. Who killed it is not recorded; a signal name
+  (`killed by SIGTERM`) with no OOM in Fly's log points at a process of the session.
+- A machine that stopped by itself (Fly's stop, a host event): the keeper's teardown logged `teardown 1/2` (the
+  transcripts it sent) and `snapshot streamed and committed` when the final snapshot made it; Pause then finds the
+  snapshot already there and the session resumes from it. Fly's stop allows 5 s by default (the core sets no
+  `stop_config`), so a large workspace's snapshot is usually cut off: the transcripts of step 1 are in the session's
+  `.live` copies (archive and search), the rest on the volume's backup.
 - The boxes themselves: no way in by design; their logs and metrics are in Grafana Cloud (next section): Flux's
   reconciles (`container="manager"`), the kubelet and the kernel (`source="journal"`), every pod.
 

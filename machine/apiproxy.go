@@ -23,7 +23,6 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -185,16 +184,16 @@ func repoChanges(workspace string) []repoChange {
 	for _, g := range dirs {
 		d := filepath.Dir(g)
 		rc := repoChange{Name: filepath.Base(d)}
-		if b, err := exec.Command("git", "-C", d, "status", "--porcelain").Output(); err == nil {
+		if b, err := sessionCommand(nil, "git", "-C", d, "status", "--porcelain").Output(); err == nil {
 			for _, l := range strings.Split(string(b), "\n") {
 				if strings.TrimSpace(l) != "" {
 					rc.Uncommitted++
 				}
 			}
 		}
-		if exec.Command("git", "-C", d, "rev-parse", "--abbrev-ref", "@{u}").Run() != nil {
+		if sessionCommand(nil, "git", "-C", d, "rev-parse", "--abbrev-ref", "@{u}").Run() != nil {
 			rc.Unpushed = -1
-		} else if b, err := exec.Command("git", "-C", d, "rev-list", "@{u}..HEAD", "--count").Output(); err == nil {
+		} else if b, err := sessionCommand(nil, "git", "-C", d, "rev-list", "@{u}..HEAD", "--count").Output(); err == nil {
 			rc.Unpushed, _ = strconv.Atoi(strings.TrimSpace(string(b)))
 		}
 		out = append(out, rc)

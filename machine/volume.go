@@ -98,7 +98,7 @@ func setupVolume() bool {
 		}
 		// what the image has there goes onto the volume first (cp -a keeps modes, links and times)
 		if ents, _ := os.ReadDir(dst); len(ents) > 0 {
-			if out, err := exec.Command("cp", "-a", dst+"/.", src+"/").CombinedOutput(); err != nil {
+			if out, err := sessionCommand(nil, "cp", "-a", dst+"/.", src+"/").CombinedOutput(); err != nil {
 				log.Printf("volume: copying the image's %s: %v %s", rel, err, out)
 				continue
 			}

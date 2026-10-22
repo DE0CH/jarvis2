@@ -24,7 +24,6 @@ import (
 	"log"
 	"net"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -137,13 +136,13 @@ func setupDeployKeys(secrets map[string]string) error {
 	}
 	// git: drop the earlier rewrites, then one per repo URL form (exact `.git` URLs: a rewrite is a prefix match,
 	// so a URL without `.git` would also catch <name>-something)
-	if out, err := exec.Command("git", "config", "--global", "--name-only", "--get-regexp", `^url\.git@`+strings.ReplaceAll(aliasPrefix, ".", `\.`)).Output(); err == nil {
+	if out, err := sessionCommand(nil, "git", "config", "--global", "--name-only", "--get-regexp", `^url\.git@`+strings.ReplaceAll(aliasPrefix, ".", `\.`)).Output(); err == nil {
 		seen := map[string]bool{}
 		for _, l := range strings.Split(strings.TrimSpace(string(out)), "\n") {
 			sec := strings.TrimSuffix(l, ".insteadof")
 			if l != "" && !seen[sec] {
 				seen[sec] = true
-				exec.Command("git", "config", "--global", "--remove-section", sec).Run()
+				sessionCommand(nil, "git", "config", "--global", "--remove-section", sec).Run()
 			}
 		}
 	}
@@ -156,7 +155,7 @@ func setupDeployKeys(secrets map[string]string) error {
 			forms["ssh://git@github.com/"+r+".git"] = true
 		}
 		for f := range forms {
-			if err := exec.Command("git", "config", "--global", "--add", to, f).Run(); err != nil {
+			if err := sessionCommand(nil, "git", "config", "--global", "--add", to, f).Run(); err != nil {
 				return fmt.Errorf("git config: %w", err)
 			}
 		}
@@ -255,7 +254,7 @@ func serveSSHAgent() {
 		go func() {
 			defer conn.Close()
 			pid, uid, comm := peerOf(conn)
-			if uid != os.Getuid() && uid != 0 {
+			if !sessionPeer(uid) {
 				log.Printf("ssh-agent: refused a caller of uid %d (pid %d %s)", uid, pid, comm)
 				return
 			}

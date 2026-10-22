@@ -13,14 +13,50 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"sort"
+	"sync"
 	"time"
 )
 
 const liveSyncMaxBytes = 256 << 20 // the router refuses more
 
 type liveSyncer struct {
+	mu   sync.Mutex
 	sent map[string]time.Time // file → the modification time last sent
 	send func(name string, body []byte) error
+}
+
+var (
+	liveOnce sync.Once
+	live     *liveSyncer // the worker's one syncer: the live sync and the teardown share what was sent
+)
+
+// liveSyncerFor: the worker's syncer, sending through c
+func liveSyncerFor(c *client) *liveSyncer {
+	liveOnce.Do(func() {
+		live = &liveSyncer{sent: map[string]time.Time{}, send: func(name string, body []byte) error {
+			b, _, status, err := c.raw("POST", "/m/live-transcript", body, "X-Name", name)
+			if err != nil {
+				return err
+			}
+			if status != 200 {
+				return fmt.Errorf("HTTP %d %s", status, bytes.TrimSpace(b[:min(len(b), 200)]))
+			}
+			return nil
+		}}
+	})
+	return live
+}
+
+// mainTranscripts, subagentTranscripts: the conversations' files, and their subagents' (<conversation>/subagents/)
+func mainTranscripts() []string {
+	f, _ := filepath.Glob(filepath.Join(claudeHome, ".claude/projects/*/*.jsonl"))
+	return f
+}
+
+func subagentTranscripts() []string {
+	f, _ := filepath.Glob(filepath.Join(claudeHome, ".claude/projects/*/*/subagents/*.jsonl"))
+	return f
 }
 
 func liveSyncInterval() time.Duration {
@@ -30,15 +66,29 @@ func liveSyncInterval() time.Duration {
 	return 300 * time.Second
 }
 
-// once: one pass over the transcripts; the number sent
-func (l *liveSyncer) once() int {
-	files, _ := filepath.Glob(filepath.Join(claudeHome, ".claude/projects/*/*.jsonl"))
-	n := 0
+// once: one pass over the conversations' transcripts; the number sent
+func (l *liveSyncer) once() int { return l.pass(mainTranscripts()) }
+
+// pass: each of files that changed since its last copy, the newest first; the number sent
+func (l *liveSyncer) pass(files []string) int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	type cand struct {
+		path string
+		fi   os.FileInfo
+	}
+	var cs []cand
 	for _, f := range files {
 		fi, err := os.Stat(f)
 		if err != nil || !fi.Mode().IsRegular() {
 			continue
 		}
+		cs = append(cs, cand{f, fi})
+	}
+	sort.SliceStable(cs, func(i, j int) bool { return cs[i].fi.ModTime().After(cs[j].fi.ModTime()) })
+	n := 0
+	for _, c := range cs {
+		f, fi := c.path, c.fi
 		if t, ok := l.sent[f]; ok && !fi.ModTime().After(t) {
 			continue
 		}
@@ -67,16 +117,7 @@ func (l *liveSyncer) once() int {
 
 // liveSync: the supervisor's live transcript sync (started by supervise once booted)
 func liveSync(c *client) {
-	l := &liveSyncer{sent: map[string]time.Time{}, send: func(name string, body []byte) error {
-		b, _, status, err := c.raw("POST", "/m/live-transcript", body, "X-Name", name)
-		if err != nil {
-			return err
-		}
-		if status != 200 {
-			return fmt.Errorf("HTTP %d %s", status, bytes.TrimSpace(b[:min(len(b), 200)]))
-		}
-		return nil
-	}}
+	l := liveSyncerFor(c)
 	every := liveSyncInterval()
 	for {
 		time.Sleep(every)

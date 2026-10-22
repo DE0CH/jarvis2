@@ -18,6 +18,7 @@ import (
 
 // the machine's own run dir doesn't exist on a test host: the restore temp files go to a temp dir
 func TestMain(m *testing.M) {
+	keeperStandIn() // keeper_test.go: when the binary is re-run as jarvis2-machine
 	d, _ := os.MkdirTemp("", "jarvis2-run")
 	restoreTmp, predecessorTmp = filepath.Join(d, "restore.tar.gz"), filepath.Join(d, "predecessor.tar.gz")
 	code := m.Run()

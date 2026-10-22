@@ -20,7 +20,6 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"syscall"
 	"time"
@@ -53,7 +52,7 @@ func writeChanges() {
 	ctx, cancel := context.WithTimeout(context.Background(), changesTimeout)
 	defer cancel()
 	t0 := time.Now()
-	cmd := exec.CommandContext(ctx, "bash", "-c", changesScript)
+	cmd := sessionCommand(ctx, "bash", "-c", changesScript)
 	cmd.Env = append(os.Environ(), "GIT_OPTIONAL_LOCKS=0", "GIT_CONFIG_COUNT=1", "GIT_CONFIG_KEY_0=core.fsmonitor", "GIT_CONFIG_VALUE_0=false")
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) } // bash and every git it started

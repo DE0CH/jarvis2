@@ -1,14 +1,19 @@
 // jarvis2-machine: the session machine's side of Jarvis 2 (docs/DESIGN.md,
 // "Machine side"). It is the image's entry point and its fixed init entry point:
 //
-//	jarvis2-machine boot       ENTRYPOINT: make the machine's key pairs, wait for init, then check the
-//	                           succession cert, restore the predecessor's snapshot, pull the secrets and
-//	                           hand over to Jarvis 1's entrypoint (the harness). Any failed check → start
-//	                           nothing.
+//	jarvis2-machine boot       ENTRYPOINT, as root: the keeper (keeper.go), Fly's main child for the machine's
+//	                           whole life. It starts the boot steps (prepare), the supervisor's worker and then
+//	                           the harness, each as its own child, restarts the worker and the harness when they
+//	                           die, and turns Fly's stop signal into the priority teardown.
+//	jarvis2-machine prepare    the boot steps, as user claude (started by the keeper): make the machine's key
+//	                           pairs, wait for init, then check the succession cert, restore the predecessor's
+//	                           snapshot, have the supervisor pull the secrets, clone the repos and hand the
+//	                           harness's env (no secret value) to the keeper. Any failed check → start nothing.
 //	jarvis2-machine init       what the core runs through Fly exec (no arguments): asks boot to go on.
-//	jarvis2-machine supervisor started by boot before anything else: the machine's long-running process that
+//	jarvis2-machine supervisor --worker
+//	                           started by the keeper once init asked: the machine's long-running process that
 //	                           talks to the router (supervisor.go), with the guard (guard.go) in front of the
-//	                           commands that need it.
+//	                           commands that need it. Root, with user claude's file access (keeper.go).
 //	jarvis2-machine stores [--json]
 //	                           every store and the key NAMES it holds (never a value), to know which store to
 //	                           ask for (stores.go).
@@ -41,7 +46,6 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"maps"
 	"net"
 	"net/http"
 	"os"
@@ -65,8 +69,9 @@ const (
 	certPath    = dir + "/cert.json"
 	bootedPath  = dir + "/booted"      // written once the boot is done (cert, snapshot, secrets, repos): the harness starts next
 	clientPath  = dir + "/client.json" // the router URL + this machine's id, for later commands
-	baseEntry   = "/usr/local/bin/entrypoint.sh"
 )
+
+var baseEntry = "/usr/local/bin/entrypoint.sh" // Jarvis 1's entrypoint: the harness (a var: the keeper's tests)
 
 var b64 = base64.StdEncoding
 
@@ -113,7 +118,9 @@ func main() {
 	var err error
 	switch os.Args[1] {
 	case "boot":
-		err = boot()
+		err = keeper() // keeper.go
+	case "prepare": // keeper.go starts it, as user claude
+		err = prepareCmd()
 	case "init":
 		err = initCmd()
 	case "add-store":
@@ -137,10 +144,15 @@ func main() {
 		if sp, err = downgradeArgs(os.Args[2:]); err == nil {
 			err = downgrade(sp)
 		}
-	case "supervisor": // supervisor.go: started by boot; restarts its worker if it dies
-		err = supervisor(len(os.Args) > 2 && os.Args[2] == "--worker")
-	case "unprotected": // supervisor.go: a child of the supervisor, back under the OOM killer, then exec
+	case "supervisor": // supervisor.go: the worker, started (and restarted) by the keeper
+		if len(os.Args) != 3 || os.Args[2] != "--worker" {
+			log.Fatal("usage: jarvis2-machine supervisor --worker (the keeper starts it)")
+		}
+		err = supervise()
+	case "unprotected": // keeper.go: a command for the session: back under the OOM killer, as user claude, then exec
 		err = unprotected(os.Args[2:])
+	case "signal-session": // keeper.go: a signal to every process of user claude (kill -1 as claude)
+		err = signalSessionCmd(os.Args[2:])
 	case "workers-hook":
 		workersHook() // workers.go: a Claude Code hook; never fails
 		return
@@ -156,13 +168,10 @@ func main() {
 
 // ---- boot -----------------------------------------------------------------------------------------
 
-func boot() error {
-	// first: the env this machine was started with is thrown away, except what the image, Fly and the core set
-	// (vouch.go). Re-execs once.
-	if err := ensureCleanEnv(); err != nil {
-		log.Printf("REFUSING TO START: %v", err)
-		select {}
-	}
+// prepareCmd: the boot steps, as user claude, a child of the keeper (which already threw away the env this machine
+// was started with, keeping what the image, Fly and the core set: vouch.go). On success the harness's env (no secret
+// value) goes to the keeper on fd 3 and this process ends; the keeper starts the harness.
+func prepareCmd() error {
 	if err := keygen(); err != nil {
 		return fmt.Errorf("keygen: %w", err)
 	}
@@ -174,12 +183,18 @@ func boot() error {
 		}
 		time.Sleep(time.Second)
 	}
-	if err := prepare(); err != nil {
+	spec, err := prepare()
+	if err != nil {
 		// any failed check → start nothing; keep the machine up so the failure is visible in its log
 		log.Printf("REFUSING TO START: %v", err)
 		select {}
 	}
-	return nil // prepare execs the harness
+	out := os.NewFile(3, "harness-spec") // keeper.go startPrepare
+	if out == nil {
+		return errors.New("no fd 3 from the keeper")
+	}
+	defer out.Close()
+	return json.NewEncoder(out).Encode(spec)
 }
 
 // initCmd: the one command the core runs through Fly (no arguments). It prints this machine's public keys
@@ -230,7 +245,7 @@ func sudo(args ...string) error {
 	return exec.Command("sudo", append([]string{"-n"}, args...)...).Run()
 }
 
-func prepare() error {
+func prepare() (spec harnessSpec, err error) {
 	me := os.Getenv("FLY_MACHINE_ID")
 	// the core: the one that created this machine. It sets its signing key in the machine's Fly config, and only
 	// the core's Fly token (besides the setup session's org token) can create or change machines in this app —
@@ -238,27 +253,20 @@ func prepare() error {
 	coreKey := strings.TrimSpace(os.Getenv(coreKeyEnv))
 	kernel := strings.TrimSpace(os.Getenv(kernelBoxEnv)) != "" // kernelboot.go: the kernel's spawner started it
 	if coreKey == "" && !kernel {
-		return errors.New("no core key in the machine's config (" + coreKeyEnv + ")")
+		return spec, errors.New("no core key in the machine's config (" + coreKeyEnv + ")")
 	}
 	keys, err := ownKeys()
 	if err != nil {
-		return err
+		return spec, err
 	}
 	c, err := newClient()
 	if err != nil {
-		return err
+		return spec, err
 	}
-	// 0. the supervisor, first (supervisor.go): it answers the router's commands at every stage of this machine's
-	// life, so a pause or destroy never waits on a machine still booting (e.g. looping on a locked store): until
-	// bootedPath exists a snapshot command gets "nothing to snapshot"
+	// 0. the supervisor's worker is the keeper's (keeper.go), up since init asked: it answers the router's commands at
+	// every stage of this machine's life, so a pause or destroy never waits on a machine still booting (e.g. looping
+	// on a locked store): until bootedPath exists a snapshot command gets "nothing to snapshot"
 	os.Remove(bootedPath)
-	os.WriteFile(harnessPIDPath, []byte(strconv.Itoa(os.Getpid())), 0o644) // this process becomes the harness (exec below)
-	supCmd := exec.Command("/proc/self/exe", "supervisor")
-	supCmd.Stdout, supCmd.Stderr = os.Stdout, os.Stderr
-	supCmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
-	if err := supCmd.Start(); err != nil {
-		return fmt.Errorf("supervisor: %w", err)
-	}
 
 	// 1. this machine's succession cert: core-signed, naming this machine and its own keys (a kernel machine: its
 	// kernel documents, kernelboot.go)
@@ -269,7 +277,7 @@ func prepare() error {
 	}
 	if kernel {
 		if cert, err = kernelBootCert(c, me, keys); err != nil {
-			return err
+			return spec, err
 		}
 	} else {
 		for i := 0; ; i++ {
@@ -278,18 +286,18 @@ func prepare() error {
 				break
 			}
 			if i > 300 {
-				return fmt.Errorf("no cert: %v", err)
+				return spec, fmt.Errorf("no cert: %v", err)
 			}
 			time.Sleep(2 * time.Second)
 		}
 		if err := os.WriteFile(coreKeyPath, []byte(coreKey), 0o644); err != nil {
-			return err
+			return spec, err
 		}
 		if err := verifyDoc(coreKey, certs.Cert, &cert); err != nil || cert.Kind != "succession-cert" || cert.Machine == nil {
-			return fmt.Errorf("the cert isn't a succession cert signed by the core (%v)", err)
+			return spec, fmt.Errorf("the cert isn't a succession cert signed by the core (%v)", err)
 		}
 		if cert.Machine.ID != me || cert.Machine.EncryptionKey != keys["encryptionKey"] || cert.Machine.SigningKey != keys["signingKey"] {
-			return errors.New("the cert names another machine or other keys")
+			return spec, errors.New("the cert names another machine or other keys")
 		}
 		raw, _ := json.Marshal(certs.Cert)
 		os.WriteFile(certPath, raw, 0o644)
@@ -298,7 +306,7 @@ func prepare() error {
 
 	v, err := vouch(cert) // vouch.go: what the cert vouches for
 	if err != nil {
-		return err
+		return spec, err
 	}
 	v.Ex = fetchExceptions(c) // the few router values whose format can't carry an instruction
 	writeVouched(v)
@@ -310,7 +318,7 @@ func prepare() error {
 	// 2. the predecessor's snapshot: the one whose hash the cert names, signed by the predecessor
 	if kernel && cert.Snapshot != "" {
 		if err := kernelRestore(c, cert.Snapshot); err != nil {
-			return fmt.Errorf("snapshot: %w", err)
+			return spec, fmt.Errorf("snapshot: %w", err)
 		}
 		restoredArchive = firstMachine // a new line restoring an archive: its line keys come with it (deliver.go)
 	} else if kernel {
@@ -320,19 +328,19 @@ func prepare() error {
 	} else if !firstMachine && cert.PredID != me {
 		var pc Cert
 		if err := verifyDoc(coreKey, certs.PredecessorCert, &pc); err != nil || pc.Kind != "succession-cert" || pc.Machine == nil || pc.Machine.ID != cert.PredID {
-			return fmt.Errorf("the predecessor's cert isn't core-signed for %s (%v)", cert.PredID, err)
+			return spec, fmt.Errorf("the predecessor's cert isn't core-signed for %s (%v)", cert.PredID, err)
 		}
 		if cert.Snapshot != "" {
 			predecessorKey = pc.Machine.SigningKey
 			if err := restore(c, pc.Machine.SigningKey, v); err != nil {
-				return fmt.Errorf("snapshot: %w", err)
+				return spec, fmt.Errorf("snapshot: %w", err)
 			}
 		} else if v.Config.Restore != nil {
 			// a line whose machines never left a snapshot (an import stopped mid-way): the import its signed config
 			// names again, Jarvis 1 imports only (restore.go reimportJarvis1)
 			predecessorKey = pc.Machine.SigningKey
 			if err := reimportJarvis1(c, v); err != nil {
-				return fmt.Errorf("re-import: %w", err)
+				return spec, fmt.Errorf("re-import: %w", err)
 			}
 		} else {
 			log.Printf("the cert names no snapshot of %s: starting with no predecessor state", cert.PredID)
@@ -345,7 +353,7 @@ func prepare() error {
 	// (a kernel line's source names its archived snapshot by hash, restored above: the phone signed it)
 	if !kernel {
 		if err := restoreArchived(c, coreKey, me, &cert, v); err != nil {
-			return fmt.Errorf("restore: %w", err)
+			return spec, fmt.Errorf("restore: %w", err)
 		}
 	}
 	trustLineKeys(cert) // deliver.go: this line's signing keys, for what it asked to be delivered later
@@ -358,11 +366,12 @@ func prepare() error {
 	if _, err := askSecrets(secretsReq{Op: "pull"}, 20*time.Minute); errors.Is(err, errStoresLocked) {
 		log.Printf("%v: starting without secrets; the supervisor takes them once the store is unlocked (Unlock… in the app, or `jarvis2-request unlock`)", err)
 	} else if err != nil {
-		return err
+		return spec, err
 	} else {
-		r, err := askSecrets(secretsReq{Op: "boot-env"}, time.Minute) // the harness's env: the one hand-over of every value
+		awaitHarnessPID(10 * time.Second)                             // keeper.go: the keeper names this process first
+		r, err := askSecrets(secretsReq{Op: "boot-env"}, time.Minute) // the repos and a task's env (the harness gets its own from the keeper)
 		if err != nil {
-			return err
+			return spec, err
 		}
 		for k, v := range r.Secrets { // (an empty answer carries no map)
 			secrets[k] = v
@@ -375,11 +384,11 @@ func prepare() error {
 	placeImportedTranscripts()     // jarvis1import.go: an import's transcripts, under the working dir's project
 	rearmJarvis1(c, sessionID(me)) // jarvis1import.go: its wakeups and crons, as this line's own requests
 
-	// 5. booted: from now on a snapshot command gets a real snapshot; then Jarvis 1's entrypoint runs the harness —
+	// 5. booted: from now on a snapshot command gets a real snapshot; then the keeper runs Jarvis 1's entrypoint (the harness) —
 	// unless a pause already took the predecessor's snapshot as this machine's (snapstream.go): it goes no further
 	holdIfCarried()
 	if err := os.WriteFile(bootedPath, []byte(time.Now().UTC().Format(time.RFC3339)), 0o644); err != nil {
-		return fmt.Errorf("booted marker: %w", err)
+		return spec, fmt.Errorf("booted marker: %w", err)
 	}
 	clean := os.Environ() // already the clean env (ensureCleanEnv)
 	if t, ok := strings.CutPrefix(cert.Options.Harness, taskHarnessPrefix); ok {
@@ -389,18 +398,22 @@ func prepare() error {
 		}
 		runTask(c, t, secrets, cert.Stores, certMode(cert)) // task.go: the template instead of a harness; never returns
 	}
-	// 6. the Claude login (claudelogin.go): the pair of the session's Claude account, kept in step
-	if account := sessionClaudeLogin(c); account != "" && secrets["CLAUDE_ACCOUNT"] == "" {
-		secrets = maps.Clone(secrets)
-		secrets["CLAUDE_ACCOUNT"] = account // Jarvis 1's entrypoint merges it into ~/.claude.json
+	// 6. the harness's env, without the secrets: the keeper adds the ones the supervisor holds at each start
+	spec = harnessSpec{Clean: clean, Fixed: harnessFixed(v, me, firstMachine), Fallback: map[string]string{}}
+	// the Claude login (claudelogin.go): the pair of the session's Claude account, kept in step
+	if account := sessionClaudeLogin(c); account != "" {
+		spec.Fallback["CLAUDE_ACCOUNT"] = account // Jarvis 1's entrypoint merges it into ~/.claude.json (a store's own wins)
 	}
-	env := harnessEnv(clean, v, me, firstMachine, secrets)
 	if !firstMachine && v.Once.Prompt != "" {
 		home, _ := os.UserHomeDir()
 		os.Remove(filepath.Join(home, ".claude", ".first-prompt-sent")) // the supervisor types the approved resume prompt
 	}
 	if firstMachine && len(v.Config.Attachments) > 0 {
-		env = append(env, fetchAttachments(c, coreKey, v.Config.Attachments)...) // attachments.go: hash-checked against the cert
+		for _, kv := range fetchAttachments(c, coreKey, v.Config.Attachments) { // attachments.go: hash-checked against the cert
+			if k, val, ok := strings.Cut(kv, "="); ok {
+				spec.Fixed[k] = val
+			}
+		}
 	}
 	if runsClaudeCode(cert.Options.Harness) { // harnesses.go
 		if home, err := os.UserHomeDir(); err == nil {
@@ -410,8 +423,8 @@ func prepare() error {
 		}
 	}
 	waitAPIProxy(15 * time.Second) // the entrypoint's first calls ($JARVIS_URL: content-sync pull) need it up
-	log.Printf("starting the harness")
-	return syscall.Exec(baseEntry, []string{baseEntry}, env)
+	log.Printf("booted: the keeper starts the harness")
+	return spec, nil
 }
 
 // waitAPIProxy: the supervisor starts the local Jarvis API once bootedPath exists (polled every second); the
@@ -520,7 +533,7 @@ func cloneRepos(repos []string) {
 		if _, err := os.Stat(filepath.Join(dst, ".git")); err == nil {
 			continue // restored from the snapshot
 		}
-		cmd := exec.Command("git", "clone", "-q", "--", url, dst)
+		cmd := sessionCommand(nil, "git", "clone", "-q", "--", url, dst)
 		cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
 		if out, err := cmd.CombinedOutput(); err != nil {
 			log.Printf("clone %s failed: %s", name, strings.TrimSpace(string(out)))
@@ -535,9 +548,13 @@ func cloneRepos(repos []string) {
 // what a snapshot holds (relative to $HOME): the conversation, the work, the artefacts, and the OpenCode/Paseo and
 // OpenClaw harnesses' own state (Paseo's daemon identity and pairings, OpenCode's sessions, the OpenClaw gateway's
 // state and device pairings), so their apps stay paired across a pause, as in Jarvis 1 (its lib/archive.js)
-var snapshotPaths = []string{".claude/projects", ".claude.json", ".claude/.first-prompt-sent", "workspace", "artifacts",
-	".paseo", ".claude/.paseo-agent", ".local/share/opencode", ".openclaw",
-	allowFile, changesFile, lineKeysFile, deliveredFile}
+//
+// In the order of what matters most (Deyao, 2026-10-21: the teardown uploads the most important first): the
+// conversations and ~/.claude.json, the small records, the other harnesses' state, then the workspace and the
+// artifacts last. The stream (snapstream.go) sends them in this order.
+var snapshotPaths = []string{".claude/projects", ".claude.json", ".claude/.first-prompt-sent", ".claude/.paseo-agent",
+	allowFile, changesFile, lineKeysFile, deliveredFile,
+	".paseo", ".local/share/opencode", ".openclaw", "workspace", "artifacts"}
 
 // snapshotSkip: what the snapshot leaves out under those roots (filepath.Match against the path relative to $HOME):
 // the harnesses' logs, pid files, caches and downloaded binaries, which a successor rebuilds (Jarvis 1's excludes)

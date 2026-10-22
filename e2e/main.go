@@ -347,6 +347,8 @@ func main() {
 		" && chown -R claude /home/claude/.claude/projects && echo ok", "ok")
 	waitLiveSync(id, tname, 3*time.Minute)
 
+	keeperStep(id, m1) // keeper.go: the keeper and the uid split; the harness killed and started again
+
 	step("store key names: the core's, listed to the session for every store (not only its own)")
 	expectOnMachine(m1, "su - claude -c 'jarvis2 stores' | grep -c '^e2e-extra \\[sensitive, locked\\]: E2E_EXTRA$'", "1")
 	expectOnMachine(m1, "su - claude -c 'jarvis2 stores' | grep -c '^e2e \\[in this session, locked\\]: E2E_SECRET$'", "1")
@@ -518,6 +520,8 @@ func main() {
 		time.Sleep(3 * time.Second)
 	}
 
+	keeperTeardownStep(p, secret) // keeper.go: a stop signal to the main child → the transcript tail, then the snapshot
+
 	step("one-shot: once the supervisor marks the prompt done the router destroys it by itself, forcefully, and DMs the work lost")
 	// no stores: a new line with the same stores, options and image as the first session would get the same
 	// challenge nonce (the core derives it from the request), which the core refuses to certify twice
@@ -538,8 +542,8 @@ func main() {
 	expectOnMachine(om, "grep -c e2e-fake-refresh /home/claude/.claude/.credentials.json; stat -c %a /home/claude/.claude/.credentials.json", "1\n600")
 	// the Claude login sync is the supervisor's (machine/claudelogin.go credsSync, started once booted)
 	expectOnMachine(om, "grep -c 'the supervisor keeps the pair in step' /run/jarvis2/supervisor.log", "1")
-	// the supervisor (keeper and worker) is out of the OOM killer's reach; the harness is not
-	expectOnMachine(om, "for p in /proc/[0-9]*; do case \"$(tr '\\0' ' ' < $p/cmdline 2>/dev/null)\" in '/proc/self/exe supervisor '*) cat $p/oom_score_adj;; esac; done | sort | uniq -c | awk '{print $1, $2}'", "2 -1000")
+	// the supervisor (the keeper and its worker) is out of the OOM killer's reach; the harness is not
+	expectOnMachine(om, "for p in /proc/[0-9]*; do case \"$(tr '\\0' ' ' < $p/cmdline 2>/dev/null)\" in '/proc/self/exe supervisor '*|*'jarvis2-machine boot '*) cat $p/oom_score_adj;; esac; done | sort | uniq -c | awk '{print $1, $2}'", "2 -1000")
 	expectOnMachine(om, "cat /proc/$(pgrep -o -f harness-claude)/oom_score_adj", "0")
 	// its log reaches the router
 	for i := 0; ; i++ {

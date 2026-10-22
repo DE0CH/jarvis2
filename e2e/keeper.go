@@ -1,0 +1,118 @@
+package main
+
+// The keeper (machine/keeper.go, DECISIONS 218): jarvis2-machine boot is Fly's main child for the machine's life,
+// as root; the session (user claude) can't signal it or the supervisor's worker; a dead harness is started again with
+// the machine staying up; a stop signal to the main child uploads the transcript tail, then the final snapshot.
+
+import (
+	"log"
+	"os"
+	"path/filepath"
+	"strings"
+	"time"
+)
+
+// keeperStep: on a running session's machine m
+func keeperStep(id, m string) {
+	step("the keeper: Fly's main child is jarvis2-machine boot as root; the supervisor's worker is root; the harness is claude's, in its own session")
+	expectOnMachine(m, "k=$(pgrep -o -f 'jarvis2-machine boot'); ps -o user=,ppid= -p $k | awk '{print $1, $2}'", "root 1")
+	expectOnMachine(m, "ps -o user= -p $(pgrep -f 'supervisor --worker' | head -1)", "root")
+	expectOnMachine(m, "h=$(cat /run/jarvis2-keeper/harness.pid); ps -o user=,sid= -p $h | awk -v h=$h '{print $1, ($2==h)}'", "claude 1")
+	expectOnMachine(m, "cat /proc/$(pgrep -o -f 'jarvis2-machine boot')/oom_score_adj /proc/$(pgrep -f 'supervisor --worker' | head -1)/oom_score_adj", "-1000\n-1000")
+
+	step("the session can't touch the supervisor: kill, pkill -f, a group kill, its OOM score and its environ all fail as claude")
+	for _, c := range []string{
+		"kill -TERM $K", "kill -KILL $K", "kill -TERM -$K", "kill -TERM $W", "kill -STOP $W",
+		"echo 1000 > /proc/$K/oom_score_adj", "cat /proc/$W/environ",
+	} {
+		expectOnMachine(m, "K=$(pgrep -o -f 'jarvis2-machine boot'); W=$(pgrep -f 'supervisor --worker' | head -1); "+
+			"su claude -s /bin/sh -c \""+c+"\" >/dev/null 2>&1 && echo worked || echo refused", "refused")
+	}
+	expectOnMachine(m, "K=$(pgrep -o -f 'jarvis2-machine boot'); su claude -s /bin/sh -c 'pkill -f jarvis2-machine'; sleep 1; kill -0 $K && pgrep -f 'supervisor --worker' >/dev/null && echo up", "up")
+
+	step("the incident of 2026-10-21: a session process SIGTERMs the harness's launcher → the machine stays up, the harness starts again")
+	expectOnMachine(m, "su claude -s /bin/sh -c 'kill -TERM $(cat /run/jarvis2-keeper/harness.pid)' && echo sent", "sent")
+	expectOnMachine(m, "for i in $(seq 1 40); do grep -q '\"starts\":2,\"running\":true' /run/jarvis2-keeper/harness.json && break; sleep 1; done; "+
+		"grep -o '\"starts\":[0-9]*,\"running\":true' /run/jarvis2-keeper/harness.json; grep -o '\"lastExit\":\"[^\"]*\"' /run/jarvis2-keeper/harness.json",
+		"\"starts\":2,\"running\":true\n\"lastExit\":\"killed by SIGTERM\"")
+	expectOnMachine(m, "grep -c 'HARNESS ENDED (killed by SIGTERM)' /run/jarvis2/supervisor.log", "1")
+
+	step("kill -TERM -1 as claude: every session process ends, the keeper and the worker don't; the harness starts again")
+	expectOnMachine(m, "su claude -s /bin/sh -c 'kill -TERM -1'; sleep 2; pgrep -o -f 'jarvis2-machine boot' >/dev/null && pgrep -f 'supervisor --worker' >/dev/null && echo up", "up")
+	expectOnMachine(m, "for i in $(seq 1 60); do grep -q '\"starts\":3,\"running\":true' /run/jarvis2-keeper/harness.json && break; sleep 1; done; "+
+		"grep -o '\"starts\":[0-9]*,\"running\":true' /run/jarvis2-keeper/harness.json", "\"starts\":3,\"running\":true")
+	// the status report goes on through it all (the supervisor answers the router)
+	before, _ := session(id)["lastReport"].(string)
+	for i := 0; ; i++ {
+		if lr, _ := session(id)["lastReport"].(string); lr != "" && lr != before {
+			break
+		}
+		if i > 45 {
+			log.Fatal("no status report from the machine after the harness restarts")
+		}
+		time.Sleep(2 * time.Second)
+	}
+}
+
+// keeperTeardownStep: a stop signal to the main child (as Fly's stop sends it) → the changed transcripts reach the
+// router first, then the final snapshot, committed; the session pauses and resumes from it
+func keeperTeardownStep(p *phone, secret string) {
+	step("a stop signal to Fly's main child: the transcript tail first, then the final snapshot; the session resumes from it")
+	s, b := call(router, "POST", "/api/sessions", map[string]any{"label": "e2e teardown", "stores": []string{}, "size": "small", "harness": "claude"}, nil)
+	must(s, b, "create the teardown session")
+	a := waitApproval("new-session", "")
+	id := approve(p, a)
+	waitState(id, "started", 6*time.Minute)
+	m := machineOf(id)
+	tname := "0e2e0000-2222-4333-8444-" + secret[:12] + ".jsonl"
+	expectOnMachine(m, "mkdir -p /home/claude/.claude/projects/-e2e && echo '{\"type\":\"user\",\"message\":{\"content\":\"e2e tail "+secret[:8]+"\"}}' > /home/claude/.claude/projects/-e2e/"+tname+
+		" && chown -R claude /home/claude/.claude && kill -TERM $(pgrep -o -f 'jarvis2-machine boot') && echo sent", "sent")
+	waitLiveSync(id, tname, 3*time.Minute)
+	deadline := time.Now().Add(5 * time.Minute)
+	for {
+		var sl struct {
+			Events []struct{ Source, Text string } `json:"events"`
+		}
+		call(router, "GET", "/api/sessions/"+id+"/events", nil, &sl)
+		var tail, committed, done bool
+		for _, l := range sl.Events {
+			tail = tail || strings.Contains(l.Text, "teardown 1/2:")
+			committed = committed || strings.Contains(l.Text, "snapshot streamed and committed")
+			done = done || strings.Contains(l.Text, "keeper: teardown done")
+		}
+		if tail && committed && done {
+			log.Printf("   the teardown: transcripts, then the snapshot, then the keeper's exit")
+			break
+		}
+		if time.Now().After(deadline) {
+			dumpState()
+			log.Fatalf("the teardown's log never reached the router (tail %v, committed %v, done %v)", tail, committed, done)
+		}
+		time.Sleep(3 * time.Second)
+	}
+	if dd := os.Getenv("E2E_DATA_DIR"); dd != "" {
+		if _, err := os.Stat(filepath.Join(dd, "snapshots", m+".tar.gz.sig")); err != nil {
+			log.Fatalf("the router has no signed snapshot of %s after the teardown: %v", m, err)
+		}
+	}
+	must2(call(router, "POST", "/api/sessions/"+id+"/pause", nil, nil))
+	waitState(id, "paused", 12*time.Minute)
+	must2(call(router, "POST", "/api/sessions/"+id+"/resume", map[string]bool{"upgrade": false}, nil))
+	waitState(id, "started", 8*time.Minute)
+	expectOnMachine(machineOf(id), "grep -c 'e2e tail "+secret[:8]+"' /home/claude/.claude/projects/-e2e/"+tname, "1")
+	must2(call(router, "POST", "/api/sessions/"+id+"/destroy", nil, nil))
+	deadline = time.Now().Add(12 * time.Minute)
+	for {
+		var recs struct {
+			Records []map[string]any `json:"records"`
+		}
+		call(router, "GET", "/api/records", nil, &recs)
+		if len(recs.Records) > 0 && recs.Records[0]["id"] == id {
+			break
+		}
+		if time.Now().After(deadline) {
+			log.Fatal("the teardown session's destroy didn't finish")
+		}
+		time.Sleep(3 * time.Second)
+	}
+}

@@ -161,13 +161,14 @@ var freedFile = "artifacts/jarvis2-upgrade-freed.txt"
 // signalProc: the kill(2) the free step uses (a test replaces it)
 var signalProc = func(pid int, sig syscall.Signal) error { return syscall.Kill(pid, sig) }
 
-// freeMemory: stop the harness (the process boot exec'd into), kill every other process of this user except the
-// supervisor (its worker and its keeper), and record what was killed. Only on a Fly machine.
+// freeMemory: stop the harness (the launcher the keeper started), kill every other process of user claude (never
+// root's: the keeper, this worker, Fly's), and record what was killed. Only on a Fly machine.
 func freeMemory() {
-	if os.Getenv("FLY_MACHINE_ID") == "" || os.Getuid() == 0 { // never as root: it would kill the whole machine
+	uid := session().uid
+	if os.Getenv("FLY_MACHINE_ID") == "" || uid == 0 { // never root's processes: it would kill the whole machine
 		return
 	}
-	freeProcesses(os.Getpid(), harnessPID(), os.Getuid())
+	freeProcesses(os.Getpid(), harnessPID(), uid)
 }
 
 func freeProcesses(self, main, uid int) []proc {

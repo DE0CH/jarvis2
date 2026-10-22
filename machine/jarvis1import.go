@@ -30,7 +30,6 @@ import (
 	"io"
 	"log"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -349,7 +348,7 @@ func j1FixRemotes(ws string) {
 		if _, err := os.Stat(filepath.Join(repo, ".git")); err != nil {
 			continue
 		}
-		out, _ := exec.Command("git", "-C", repo, "config", "--get-regexp", `^remote\..*\.url$`).Output()
+		out, _ := sessionCommand(nil, "git", "-C", repo, "config", "--get-regexp", `^remote\..*\.url$`).Output()
 		for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
 			key, url, ok := strings.Cut(line, " ")
 			if !ok {
@@ -357,7 +356,7 @@ func j1FixRemotes(ws string) {
 			}
 			fixed := j1FixURL(url)
 			if fixed != url {
-				if err := exec.Command("git", "-C", repo, "config", key, fixed).Run(); err == nil {
+				if err := sessionCommand(nil, "git", "-C", repo, "config", key, fixed).Run(); err == nil {
 					log.Printf("jarvis1 import: %s %s → %s", e.Name(), key, fixed)
 				}
 			}
@@ -570,7 +569,7 @@ func moveAcross(src, dst string) error {
 	if !errors.Is(err, syscall.EXDEV) {
 		return err
 	}
-	if out, err := exec.Command("cp", "-a", "--", src, dst).CombinedOutput(); err != nil {
+	if out, err := sessionCommand(nil, "cp", "-a", "--", src, dst).CombinedOutput(); err != nil {
 		return fmt.Errorf("copying %s across filesystems: %v %s", filepath.Base(src), err, strings.TrimSpace(string(out)))
 	}
 	return os.RemoveAll(src)

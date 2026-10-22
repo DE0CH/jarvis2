@@ -76,16 +76,19 @@ func TestUnguardedCommands(t *testing.T) {
 	runCommand(nil, "rm -rf /") // not a command: ignored, nothing runs
 }
 
-// off a Fly machine nothing is protected, so a child runs as is; on one it goes through `unprotected`
-func TestUnprotectedCommand(t *testing.T) {
-	t.Setenv("FLY_MACHINE_ID", "")
-	if c := unprotectedCommand(nil, "bash", "-c", "true"); filepath.Base(c.Path) != "bash" {
-		t.Fatalf("off Fly: %v", c.Args)
+// not root (a CLI command, the tests): a command runs as it is; as root (the worker) it goes through `unprotected`,
+// which takes user claude's identity and the default OOM score
+func TestSessionCommand(t *testing.T) {
+	old := privileged
+	defer func() { privileged = old }()
+	privileged = func() bool { return false }
+	if c := sessionCommand(nil, "bash", "-c", "true"); filepath.Base(c.Path) != "bash" {
+		t.Fatalf("not root: %v", c.Args)
 	}
-	t.Setenv("FLY_MACHINE_ID", "m1")
-	c := unprotectedCommand(nil, "bash", "-c", "true")
-	if strings.Join(c.Args[1:4], " ") != "unprotected -- bash" {
-		t.Fatalf("on Fly: %v", c.Args)
+	privileged = func() bool { return true }
+	c := sessionCommand(nil, "bash", "-c", "true")
+	if c.Path != "/proc/self/exe" || strings.Join(c.Args[1:4], " ") != "unprotected -- bash" {
+		t.Fatalf("as root: %v", c.Args)
 	}
 }
 

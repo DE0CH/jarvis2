@@ -5,12 +5,12 @@ package main
 // supervisor runs the same shell locally every 10 s and POSTs the raw output to /m/status when it changed, and at
 // least once a minute as a heartbeat; the router parses it (router/registry.go). It prints claude's registry
 // files, ai-title lines, background-job counts, the one-shot marker, transcript ids ending on "Please run
-// /login", the credentials file's expiry, refusal entries, the checked account of an account switch, then the subagent/background-job counts the supervisor holds (workers.go) — never a token.
+// /login", the credentials file's expiry, refusal entries, the checked account of an account switch, then the subagent/background-job counts the supervisor holds (workers.go), and the keeper's harness record (starts, last end) — never a token.
 
 import (
 	"context"
+	"encoding/json"
 	"log"
-	"os/exec"
 	"time"
 )
 
@@ -39,9 +39,14 @@ const (
 func readStatus() string {
 	ctx, cancel := context.WithTimeout(context.Background(), statusEvery)
 	defer cancel()
-	out, _ := exec.CommandContext(ctx, "bash", "-c", regCmd).Output()
+	out, _ := sessionCommand(ctx, "bash", "-c", regCmd).Output()
 	// __WORKERS__: the subagent and background-job count per conversation, held by the supervisor (workers.go)
 	out = append(out, "__WORKERS__\n"+workers.report()...)
+	// __HARNESS__: the keeper's record of the harness: its starts, and how and when it last ended (keeper.go)
+	if h := readHarnessState(); h != nil {
+		b, _ := json.Marshal(h)
+		out = append(out, "\n__HARNESS__\n"+string(b)+"\n"...)
+	}
 	if len(out) > statusMaxBytes {
 		out = out[:statusMaxBytes]
 	}

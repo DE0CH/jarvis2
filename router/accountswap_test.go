@@ -285,6 +285,24 @@ func TestAccountSwitchTransparentRemoteControlAndProof(t *testing.T) {
 	}
 }
 
+// the keeper's harness record (machine/keeper.go): parsed when the image sends it, nil from an older image, and the
+// workers' section before it is unchanged
+func TestRegistryHarnessSection(t *testing.T) {
+	base := `{"pid":7,"sessionId":"s1","bridgeSessionId":"cse_1","status":"idle","startedAt":1}` + "\n__TITLES__\n__BG__\n__ONESHOT__\n__AUTH__\n__CREDS__\n5\n__REFUSAL__\n"
+	w := `{"workersOf":"s1","subagents":2,"jobs":{"shell":1},"at":3}` + "\n"
+	g := parseRegistry(base + "__WORKERS__\n" + w)
+	if g.Harness != nil || g.Workers == nil || g.Workers.Subagents != 2 {
+		t.Fatalf("%+v", g)
+	}
+	g = parseRegistry(base + "__WORKERS__\n" + w + "\n__HARNESS__\n" + `{"starts":3,"running":true,"lastExit":"killed by SIGTERM","lastExitAt":"2026-10-21T23:30:57Z","lastUpSecs":42}` + "\n")
+	if g.Harness == nil || g.Harness.Starts != 3 || !g.Harness.Running || g.Harness.LastExit != "killed by SIGTERM" || g.Harness.LastUpSecs != 42 {
+		t.Fatalf("%+v", g.Harness)
+	}
+	if g.Workers == nil || g.Workers.Subagents != 2 || g.Workers.Jobs["shell"] != 1 {
+		t.Fatalf("workers %+v", g.Workers)
+	}
+}
+
 func TestRegistryAccountSection(t *testing.T) {
 	base := `{"pid":7,"sessionId":"s1","bridgeSessionId":"cse_1","status":"idle","startedAt":1}` + "\n__TITLES__\n__BG__\n__ONESHOT__\n__AUTH__\n__CREDS__\n5\n__REFUSAL__\n"
 	g := parseRegistry(base + "__WORKERS__\n")

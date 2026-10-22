@@ -1,7 +1,7 @@
 # Jarvis 2 session image: the base (session-image/base/: tools, harnesses, entrypoint, supervisor, carried over from
 # Jarvis 1's session image) with Jarvis 2's machine side in front of it. jarvis2-machine is the entry point: it makes the machine's key pairs, waits
 # for the core's init (which prints them), takes the core's key from its Fly config (the core sets it), checks the succession cert, restores the predecessor's snapshot, pulls the secrets,
-# then execs the base's entrypoint. The base is pinned by digest in BASE below; moving it is a visible commit (the
+# then runs the base's entrypoint as its child (the keeper: machine/keeper.go). The base is pinned by digest in BASE below; moving it is a visible commit (the
 # images workflow's pin job writes it after building a changed session-image/base/, and builds this image from that
 # new base in the same run through --build-arg BASE).
 ARG BASE=ghcr.io/de0ch/jarvis2-session:base-sha-395e52012bf4@sha256:be5fa35bdfdbc5df6ea140e0357cdc6c99401be3c710c42f62cecd66f08410fd
@@ -50,4 +50,8 @@ RUN set -e; for d in $(find /etc/claude-code -type d); do [ -r "$d" ] && [ -x "$
     for f in /etc/claude-code/*.json; do python3 -c 'import json,sys; json.load(open(sys.argv[1]))' "$f"; done; \
     for b in jarvis2-machine jarvis2-request jarvis2-message jarvis-channel jarvis-channel-send; do [ -x /usr/local/bin/$b ] || { echo "not runnable: $b" >&2; exit 1; }; done; \
     ls /etc/claude-code/managed-settings.d >/dev/null 2>&1 || [ ! -e /etc/claude-code/managed-settings.d ]
+# The entry point runs as root: jarvis2-machine boot is the keeper (machine/keeper.go), Fly's main child for the
+# machine's whole life, which the session (user claude) can't signal; it starts the boot steps and the harness as
+# user claude and the supervisor's worker as root with claude's file access (DECISIONS 2026-10-21).
+USER root
 ENTRYPOINT ["/usr/local/bin/jarvis2-machine", "boot"]
