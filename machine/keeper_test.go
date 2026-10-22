@@ -136,6 +136,14 @@ func keeperRig(t *testing.T, script string) (k *keeperT, starts func() []string,
 	harnessStatePath = filepath.Join(d, "harness.json")
 	k = newKeeper()
 	k.secretsFn = func() map[string]string { return map[string]string{"API_KEY": "held-now"} }
+	t.Cleanup(func() { // a loop never outlives its test
+		k.mu.Lock()
+		if !k.stopping {
+			k.stopping = true
+			close(k.stopCh)
+		}
+		k.mu.Unlock()
+	})
 	done = make(chan struct{})
 	go func() {
 		k.harnessLoop(harnessSpec{Clean: []string{"PATH=" + os.Getenv("PATH"), "JARVIS2_TEST_SESSION_USER=" + os.Getenv("JARVIS2_TEST_SESSION_USER")}, Fixed: map[string]string{}})

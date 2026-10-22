@@ -16,16 +16,16 @@ import (
 func keeperStep(id, m string) {
 	step("the keeper: Fly's main child is jarvis2-machine boot as root; the supervisor's worker is root; the harness is claude's, in its own session")
 	expectOnMachine(m, "k=$(pgrep -o -f 'jarvis2-machine boot'); ps -o user=,ppid= -p $k | awk '{print $1, $2}'", "root 1")
-	expectOnMachine(m, "ps -o user= -p $(pgrep -f 'supervisor --worker' | head -1)", "root")
+	expectOnMachine(m, "ps -o user= -p $(pgrep -o -f 'supervisor --worker')", "root")
 	expectOnMachine(m, "h=$(cat /run/jarvis2-keeper/harness.pid); ps -o user=,sid= -p $h | awk -v h=$h '{print $1, ($2==h)}'", "claude 1")
-	expectOnMachine(m, "cat /proc/$(pgrep -o -f 'jarvis2-machine boot')/oom_score_adj /proc/$(pgrep -f 'supervisor --worker' | head -1)/oom_score_adj", "-1000\n-1000")
+	expectOnMachine(m, "cat /proc/$(pgrep -o -f 'jarvis2-machine boot')/oom_score_adj /proc/$(pgrep -o -f 'supervisor --worker')/oom_score_adj", "-1000\n-1000")
 
 	step("the session can't touch the supervisor: kill, pkill -f, a group kill, its OOM score and its environ all fail as claude")
 	for _, c := range []string{
 		"kill -TERM $K", "kill -KILL $K", "kill -TERM -$K", "kill -TERM $W", "kill -STOP $W",
 		"echo 1000 > /proc/$K/oom_score_adj", "cat /proc/$W/environ",
 	} {
-		expectOnMachine(m, "K=$(pgrep -o -f 'jarvis2-machine boot'); W=$(pgrep -f 'supervisor --worker' | head -1); "+
+		expectOnMachine(m, "K=$(pgrep -o -f 'jarvis2-machine boot'); W=$(pgrep -o -f 'supervisor --worker'); "+
 			"su claude -s /bin/sh -c \""+c+"\" >/dev/null 2>&1 && echo worked || echo refused", "refused")
 	}
 	expectOnMachine(m, "K=$(pgrep -o -f 'jarvis2-machine boot'); su claude -s /bin/sh -c 'pkill -f jarvis2-machine'; sleep 1; kill -0 $K && pgrep -f 'supervisor --worker' >/dev/null && echo up", "up")

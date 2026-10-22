@@ -465,7 +465,9 @@ func (k *keeperT) harnessLoop(spec harnessSpec) {
 		cmd := sessionCommand(nil, baseEntry)
 		cmd.Env = env
 		cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
-		cmd.Dir = session().home
+		if fi, err := os.Stat(session().home); err == nil && fi.IsDir() {
+			cmd.Dir = session().home
+		}
 		cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true} // its own session and process group, never the keeper's
 		k.mu.Lock()
 		if k.stopping {
