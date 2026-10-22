@@ -143,6 +143,12 @@ func (r *Router) draining() bool {
 
 // Drain: refuse new lifecycle actions, then wait (at most max) for the running ones. true = all finished.
 func (r *Router) Drain(max time.Duration) bool {
+	return r.drainUntil(max, nil)
+}
+
+// drainUntil: Drain that also stops waiting once abort closes (nextcore.go: the flip's standby went away); false then.
+// It stays draining either way: the caller undrains.
+func (r *Router) drainUntil(max time.Duration, abort <-chan struct{}) bool {
 	d := &r.drain
 	d.mu.Lock()
 	if !d.draining {
@@ -169,6 +175,11 @@ func (r *Router) Drain(max time.Duration) bool {
 			d.mu.Lock()
 			log.Printf("draining: still running: %v", d.inflight)
 			d.mu.Unlock()
+		case <-abort:
+			d.mu.Lock()
+			log.Printf("drain aborted; still running: %v", d.inflight)
+			d.mu.Unlock()
+			return false
 		case <-deadline:
 			d.mu.Lock()
 			log.Printf("drain gave up after %s; cut off: %v", max, d.inflight)

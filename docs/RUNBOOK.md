@@ -52,15 +52,29 @@ core (`NEXT_CORE_URL`): empty, or Recovered alongside as a standby. A core resta
    namespace: jarvis2-core, annotations: { jarvis2/core-pin: hold } }`; a core change that waits for Deyao's go: delete
    the annotation, push, `gh workflow run images -R DE0CH/jarvis2`). The serving core is never restarted by CI. Even a
    comment in `core/` is a release (the next core restarts empty): keep such edits for a real core change.
+   **A release holds the core it lands on** (the pin commit adds the annotation; DECISIONS 224): once pinned, that core
+   may be Recovered alongside or mid-flip, which CI can't see, so a later core change is built but not pinned until the
+   hold goes. Delete a hold only when `/setup/status` shows that core `empty` (a newer release then lands on it: push,
+   or `gh workflow run images`), or in the commit after the flip (step 4). Never while it is a `standby`.
 2. Deyao Recovers the new core alongside in the app (its Reset-or-Recover page reaches the next core with `?core=next`;
    `/setup/status` → `core.next.serving` = `standby`). Nothing waits on him meanwhile: the serving core goes on.
 3. The router flips by itself (`FLIP_AUTO=1`), or `POST /setup/core/flip` (setup-signed): drain, `POST /handoff` to the
    serving core (its final line state), `POST /takeover` on the standby, every later core call to it. It records the
    flip in its state (`activeCore`), so a restarted router talks to the same core. `/setup/status` → `core.current` /
-   `core.next` show each core's URL, `serving` and identity. A refused takeover leaves no core serving and DMs Deyao; run
-   the flip again (it reuses the kept final state; a handed-off core stays handed off).
-4. Then one commit: `active.txt` = the new serving colour, and the router's `CORE_URL` / `NEXT_CORE_URL` swapped to
-   match, so the next release goes into the core that now doesn't serve.
+   `core.next` show each core's URL, `serving` and identity, and `core.activeCore`. A refused takeover leaves no core
+   serving and DMs Deyao; run the flip again (it reuses the kept final state; a handed-off core stays handed off).
+   The drain looks at the standby every 30 s and once more after it ends: a standby that went (restarted empty,
+   Recovered with another kit) aborts the flip before anything is handed off; the serving core goes on and Deyao gets
+   a DM. Recover the next core alongside again for a new flip.
+   **A flip whose takeover already happened** (the current core `handed-off`, the next one Recovered with the kit and
+   serving the final state its bundle carried) is finished by the same automatic tick or `POST /setup/core/flip`: the
+   router checks the next core has the handed-off core's signing key and a line state at least as new as the kept final
+   state, switches to it, records `activeCore` and drops `core-final.json`. Both cores `serving` changes nothing.
+4. Then one commit: `active.txt` = the new serving colour, the router's `CORE_URL` / `NEXT_CORE_URL` swapped to
+   match, and the `jarvis2/core-pin: hold` deleted from the new serving colour's Deployment, so the next release goes
+   into the core that now doesn't serve. `CORE_URL` must be the `core.activeCore` that `/setup/status` shows: at
+   start the router switches to `activeCore` whenever it equals `NEXT_CORE_URL` (`applyActiveCore`), so an env
+   edit that names the serving core as the next one flips the router back to it. Never "flip" by editing the env alone.
 
 `infra/setup.py identity` says which core is live and what it serves; the pin annotations and PLAN.md don't.
 

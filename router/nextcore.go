@@ -162,35 +162,68 @@ func (r *Router) relayFor(w http.ResponseWriter, req *http.Request, method, path
 // coreServing: what c's signed state says it does — "serving", "standby" (Recovered alongside, waiting for a
 // takeover), "handed-off" ("" for an empty core) — and its signing key
 func coreServing(c *CoreClient) (serving, key string, err error) {
+	v, err := coreView(c)
+	return v.serving, v.key, err
+}
+
+// coreInfo: a core's identity as the flip reads it
+type coreInfo struct {
+	serving string // serving | standby | handed-off | "" (empty)
+	key     string // its signing key: the same for every Recover with the same kit
+	lineSeq int    // its newest line state's number
+}
+
+func coreView(c *CoreClient) (coreInfo, error) {
 	status, b, err := c.Raw("GET", "/identity", nil)
 	if err != nil {
-		return "", "", err
+		return coreInfo{}, err
 	}
 	if status != 200 {
-		return "", "", fmt.Errorf("core /identity: HTTP %d", status)
+		return coreInfo{}, fmt.Errorf("core /identity: HTTP %d", status)
 	}
 	var id struct {
 		SigningKey string `json:"signingKey"`
 		State      Doc    `json:"state"`
 	}
 	if err := json.Unmarshal(b, &id); err != nil {
-		return "", "", err
+		return coreInfo{}, err
 	}
 	var st struct {
 		Master  any    `json:"master"`
 		Serving string `json:"serving"`
+		LineSeq int    `json:"lineSeq"`
 	}
 	id.State.Decode(&st)
 	if m, _ := st.Master.(string); m == "" {
-		return "", id.SigningKey, nil
+		return coreInfo{key: id.SigningKey}, nil
 	}
 	if st.Serving == "" {
 		st.Serving = "serving" // a core from before continuity
 	}
-	return st.Serving, id.SigningKey, nil
+	return coreInfo{serving: st.Serving, key: id.SigningKey, lineSeq: st.LineSeq}, nil
 }
 
-// FlipCore: the next core serves from now on (see the top of the file)
+// drainWatchEvery: how often the flip's drain looks at the next core again
+var drainWatchEvery = 30 * time.Second
+
+// standbyGone: why the next core is no longer the standby it was before the drain ("" = it still is). A core release
+// restarts it empty (the outage of 2026-10-22: CI pinned a new core into the standby while the flip drained), a wipe
+// or a Recover with another kit gives it another key.
+func standbyGone(c *CoreClient, key string) string {
+	v, err := coreView(c)
+	switch {
+	case err != nil:
+		return "the next core doesn't answer: " + err.Error()
+	case v.serving != "standby":
+		return fmt.Sprintf("the next core is %s now, no longer a standby", orEmptyCore(v.serving))
+	case v.key != key:
+		return "the next core has another signing key now (Recovered again, with another kit?)"
+	}
+	return ""
+}
+
+// FlipCore: the next core serves from now on (see the top of the file). A flip whose takeover already happened (the
+// next core serves and the current one is handed off) is finished instead (finishFlip).
 func (r *Router) FlipCore(drainMax time.Duration) error {
 	n := r.nextOf()
 	n.flipMu.Lock()
@@ -198,16 +231,48 @@ func (r *Router) FlipCore(drainMax time.Duration) error {
 	if n.next == nil {
 		return errors.New("there is no next core (NEXT_CORE_URL)")
 	}
-	serving, _, err := coreServing(n.next)
+	nv, err := coreView(n.next)
 	if err != nil {
 		return fmt.Errorf("the next core: %w", err)
 	}
-	if serving != "standby" {
-		return fmt.Errorf("the next core is %q, not a standby: Recover it alongside first (the app's Reset-or-Recover page, next core)", orEmptyCore(serving))
+	if nv.serving == "serving" {
+		return r.finishFlip(n, nv)
+	}
+	if nv.serving != "standby" {
+		return fmt.Errorf("the next core is %q, not a standby: Recover it alongside first (the app's Reset-or-Recover page, next core)", orEmptyCore(nv.serving))
 	}
 	log.Printf("[flip] draining before the core flip")
-	r.Drain(drainMax)
+	// the drain can take up to drainMax (29 minutes): it ends early once the next core stops being this standby
+	abort, stop, gone, every := make(chan struct{}), make(chan struct{}), make(chan string, 1), drainWatchEvery
+	go func() {
+		for {
+			select {
+			case <-stop:
+				return
+			case <-time.After(every):
+			}
+			if w := standbyGone(n.next, nv.key); w != "" {
+				gone <- w
+				close(abort)
+				return
+			}
+		}
+	}()
+	r.drainUntil(drainMax, abort)
+	close(stop)
 	defer r.Undrain()
+	// and once more after it: the serving core is handed off only to the standby that was checked before the drain
+	var why string
+	select {
+	case why = <-gone:
+	default:
+		why = standbyGone(n.next, nv.key)
+	}
+	if why != "" && n.final == nil {
+		log.Printf("[flip] aborted, the serving core goes on: %s", why)
+		r.DM("Jarvis 2: the core flip was aborted after its drain, nothing was handed off and the serving core goes on: " + why + ". Recover the next core alongside again for a new flip.")
+		return fmt.Errorf("flip aborted, the serving core goes on: %s", why)
+	}
 	final := n.final
 	if final == nil {
 		final, err = n.handoff.Finalize(r.core)
@@ -224,6 +289,46 @@ func (r *Router) FlipCore(drainMax time.Duration) error {
 		r.DM("Jarvis 2: the core flip failed half way — the old core is handed off and the next one refused the takeover, so no core serves. Retry: POST /setup/core/flip. " + err.Error())
 		return fmt.Errorf("the next core refused the takeover (the old one is handed off: retry the flip): %w", err)
 	}
+	r.switchCores(n)
+	return nil
+}
+
+// finishFlip: the next core serves while the current one is handed off — a takeover went through the next core's own
+// Recover (its bundle carried the final state the current core sealed) rather than the flip's POST /takeover. The router
+// switches to it only if it has the handed-off core's signing key (the same kit) and a line state at least as new as the
+// final state the router kept.
+func (r *Router) finishFlip(n *nextCores, nv coreInfo) error {
+	cv, err := coreView(r.core)
+	if err != nil {
+		return fmt.Errorf("the next core serves, but the current core doesn't answer (is it handed off?): %w", err)
+	}
+	if cv.serving != "handed-off" {
+		return fmt.Errorf("both cores say they serve (current %s, next serving): nothing changed, look at both before anything else", orEmptyCore(cv.serving))
+	}
+	if nv.key != cv.key {
+		return errors.New("the next core serves with another signing key than the handed-off one (another kit): nothing changed")
+	}
+	if n.final != nil {
+		var fs struct {
+			Head Doc `json:"head"`
+		}
+		var h struct {
+			Seq int `json:"seq"`
+		}
+		json.Unmarshal(n.final, &fs)
+		fs.Head.Decode(&h)
+		if nv.lineSeq < h.Seq {
+			return fmt.Errorf("the next core serves line state %d, older than the final state %d the current core handed off: nothing changed", nv.lineSeq, h.Seq)
+		}
+	}
+	log.Printf("[flip] the next core took the final state over by its own Recover: finishing the flip")
+	r.switchCores(n)
+	return nil
+}
+
+// switchCores: every later core call goes to the next core, and the state says so (activeCore), so a restarted router
+// talks to it too. The final state is no longer needed.
+func (r *Router) switchCores(n *nextCores) {
 	cur, nxt := r.core.URL(), n.next.URL()
 	r.core.SetURL(nxt)
 	n.next.SetURL(cur)
@@ -231,10 +336,9 @@ func (r *Router) FlipCore(drainMax time.Duration) error {
 	os.Remove(filepath.Join(r.cfg.DataDir, "core-final.json"))
 	r.st.Do(func(d *persisted) { d.ActiveCore = nxt })
 	log.Printf("[flip] %s serves now; %s is final (the next release goes there)", nxt, cur)
-	return nil
 }
 
-// nextCoreLoop: FLIP_AUTO=1 flips once a next core that was seen empty is set up
+// nextCoreLoop: FLIP_AUTO=1 flips once the next core is a standby, and finishes a flip whose takeover already happened
 func (r *Router) nextCoreLoop(every, drainMax time.Duration) {
 	for {
 		r.nextCoreTick(drainMax)
@@ -247,10 +351,20 @@ func (r *Router) nextCoreTick(drainMax time.Duration) {
 	if n.next == nil || os.Getenv("FLIP_AUTO") != "1" {
 		return
 	}
-	if serving, _, err := coreServing(n.next); err == nil && serving == "standby" {
-		if err := r.FlipCore(drainMax); err != nil {
-			log.Printf("[flip] automatic flip: %v", err)
+	serving, _, err := coreServing(n.next)
+	if err != nil {
+		return
+	}
+	if serving == "serving" {
+		// a takeover by the next core's own Recover: finished only while the current core is handed off
+		if cur, _, err := coreServing(r.core); err != nil || cur != "handed-off" {
+			return
 		}
+	} else if serving != "standby" {
+		return
+	}
+	if err := r.FlipCore(drainMax); err != nil {
+		log.Printf("[flip] automatic flip: %v", err)
 	}
 }
 
@@ -275,6 +389,7 @@ func (r *Router) nextCoreStatus() map[string]any {
 		return v
 	}
 	out := map[string]any{"current": view(r.core)}
+	r.st.Do(func(d *persisted) { out["activeCore"] = d.ActiveCore })
 	if n.next != nil {
 		nx := view(n.next)
 		nx["finalPending"] = n.final != nil

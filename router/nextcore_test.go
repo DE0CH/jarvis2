@@ -16,6 +16,7 @@ import (
 type handoffCore struct {
 	mu        sync.Mutex
 	serving   string // "" = empty
+	key       string // its signing key ("K" unless a test sets another)
 	seq       int
 	handoffs  int
 	takeovers []string
@@ -23,7 +24,7 @@ type handoffCore struct {
 }
 
 func newHandoffCore(t *testing.T, serving string, seq int) *handoffCore {
-	f := &handoffCore{serving: serving, seq: seq}
+	f := &handoffCore{serving: serving, seq: seq, key: "K"}
 	f.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		f.mu.Lock()
 		defer f.mu.Unlock()
@@ -34,7 +35,7 @@ func newHandoffCore(t *testing.T, serving string, seq int) *handoffCore {
 				st["master"], st["serving"], st["lineSeq"] = "M", f.serving, f.seq
 			}
 			p, _ := json.Marshal(st)
-			json.NewEncoder(w).Encode(map[string]any{"signingKey": "K", "state": Doc{Payload: string(p), Sig: "s"}})
+			json.NewEncoder(w).Encode(map[string]any{"signingKey": f.key, "state": Doc{Payload: string(p), Sig: "s"}})
 		case "POST /handoff":
 			if f.serving != "serving" && f.serving != "handed-off" {
 				http.Error(w, `{"error":"not serving"}`, 409)
@@ -193,4 +194,174 @@ func TestMoveCarriesTheCore(t *testing.T) {
 	}
 	g.pubB.set(g.serveB)
 	g.joiner.finish()
+}
+
+func (f *handoffCore) set(fn func(f *handoffCore)) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	fn(f)
+}
+
+// catchDMs: the DMs sent while a test runs
+func catchDMs(t *testing.T) func() []string {
+	var mu sync.Mutex
+	var dms []string
+	old := dmHook
+	dmHook = func(s string) { mu.Lock(); dms = append(dms, s); mu.Unlock() }
+	t.Cleanup(func() { dmHook = old })
+	return func() []string { mu.Lock(); defer mu.Unlock(); return append([]string(nil), dms...) }
+}
+
+// The outage of 2026-10-22: a core release restarted the standby (empty) while the flip drained. The drain ends early
+// and nothing is handed off: the serving core goes on, and Deyao hears why.
+func TestFlipAbortsWhenTheStandbyGoesDuringTheDrain(t *testing.T) {
+	old := drainWatchEvery
+	drainWatchEvery = 20 * time.Millisecond
+	defer func() { drainWatchEvery = old }()
+	dms := catchDMs(t)
+	r := newTestRouter(t)
+	cur, next := newHandoffCore(t, "serving", 7), newHandoffCore(t, "standby", 7)
+	r.core = &CoreClient{base: cur.srv.URL, http: http.DefaultClient}
+	r.setNextCore(next.srv.URL, httpHandoff{})
+	done, err := r.begin("s1", "pause") // a lifecycle action that outlasts the flip's drain
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer done()
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		next.set(func(f *handoffCore) { f.serving, f.seq = "", 0 }) // CI pinned a new core into it: empty
+	}()
+	start := time.Now()
+	err = r.FlipCore(time.Minute)
+	if err == nil || !strings.Contains(err.Error(), "empty") {
+		t.Fatalf("the flip must abort: %v", err)
+	}
+	if time.Since(start) > 10*time.Second {
+		t.Fatal("the drain must end as soon as the standby goes, not at its maximum")
+	}
+	if cur.state() != "serving" || cur.handoffs != 0 || r.core.URL() != cur.srv.URL {
+		t.Fatalf("the serving core must go on: %s, %d handoffs", cur.state(), cur.handoffs)
+	}
+	if r.draining() {
+		t.Fatal("an aborted flip must undrain")
+	}
+	if d := dms(); len(d) != 1 || !strings.Contains(d[0], "aborted") {
+		t.Fatalf("DMs %q", d)
+	}
+}
+
+// The standby changes in a way the watch doesn't see in time (here: Recovered again with another kit just before the
+// drain ends): the check after the drain still refuses the handoff.
+func TestFlipRechecksTheStandbyAfterTheDrain(t *testing.T) {
+	old := drainWatchEvery
+	drainWatchEvery = time.Hour
+	defer func() { drainWatchEvery = old }()
+	dms := catchDMs(t)
+	r := newTestRouter(t)
+	cur, next := newHandoffCore(t, "serving", 7), newHandoffCore(t, "standby", 7)
+	r.core = &CoreClient{base: cur.srv.URL, http: http.DefaultClient}
+	r.setNextCore(next.srv.URL, httpHandoff{})
+	done, err := r.begin("s1", "pause")
+	if err != nil {
+		t.Fatal(err)
+	}
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		next.set(func(f *handoffCore) { f.key = "OTHER" })
+		done()
+	}()
+	if err := r.FlipCore(time.Minute); err == nil || !strings.Contains(err.Error(), "signing key") {
+		t.Fatalf("the flip must abort: %v", err)
+	}
+	if cur.state() != "serving" || cur.handoffs != 0 || next.state() != "standby" {
+		t.Fatalf("nothing may be handed off: current %s, next %s", cur.state(), next.state())
+	}
+	if r.draining() || len(dms()) != 1 {
+		t.Fatalf("undrained %v, DMs %q", !r.draining(), dms())
+	}
+	// the same standby once more: the flip goes through
+	next.set(func(f *handoffCore) { f.key = "K" })
+	if err := r.FlipCore(time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	if next.state() != "serving" || r.core.URL() != next.srv.URL {
+		t.Fatal("the flip after it must go through")
+	}
+}
+
+// The takeover happened by the next core's own Recover (its bundle carried the final state): the router finishes the
+// flip — the automatic tick and POST /setup/core/flip alike — and keeps it over a restart.
+func TestFinishAFlipTheNextCoreTookOverByRecover(t *testing.T) {
+	r := newTestRouter(t)
+	cur, next := newHandoffCore(t, "serving", 7), newHandoffCore(t, "standby", 9) // refused: older than its Recover
+	r.core = &CoreClient{base: cur.srv.URL, http: http.DefaultClient}
+	r.setNextCore(next.srv.URL, httpHandoff{})
+	catchDMs(t)
+	if err := r.FlipCore(time.Second); err == nil {
+		t.Fatal("the takeover must be refused")
+	}
+	finalFile := r.cfg.DataDir + "/core-final.json"
+	if _, err := os.Stat(finalFile); err != nil {
+		t.Fatal("the final state is kept")
+	}
+	// another kit's core serving there: not switched to
+	next.set(func(f *handoffCore) { f.serving, f.seq, f.key = "serving", 7, "OTHER" })
+	if err := r.FlipCore(time.Second); err == nil || r.core.URL() != cur.srv.URL {
+		t.Fatalf("another kit's core must not be switched to: %v", err)
+	}
+	// an older line state than the final one: not switched to
+	next.set(func(f *handoffCore) { f.seq, f.key = 6, "K" })
+	if err := r.FlipCore(time.Second); err == nil || r.core.URL() != cur.srv.URL {
+		t.Fatalf("an older line state must not be switched to: %v", err)
+	}
+	// Recovered (restarted empty, then Recover with the kit: the bundle had the final state) → it serves
+	next.set(func(f *handoffCore) { f.seq = 7 })
+	t.Setenv("FLIP_AUTO", "1")
+	r.nextCoreTick(time.Second)
+	if r.core.URL() != next.srv.URL || r.nextOf().next.URL() != cur.srv.URL {
+		t.Fatal("the automatic tick must finish the flip")
+	}
+	if len(next.takeovers) != 0 {
+		t.Fatal("no takeover call: it already serves")
+	}
+	var active string
+	r.st.Do(func(d *persisted) { active = d.ActiveCore })
+	if active != next.srv.URL || r.nextOf().final != nil {
+		t.Fatalf("activeCore %q, final kept %v", active, r.nextOf().final != nil)
+	}
+	if _, err := os.Stat(finalFile); !os.IsNotExist(err) {
+		t.Fatal("core-final.json must go")
+	}
+	if r.nextCoreStatus()["activeCore"] != next.srv.URL {
+		t.Fatal("the status shows activeCore")
+	}
+	// a restarted router with the env unchanged talks to the new core
+	r2 := NewRouter(r.cfg, r.st, &CoreClient{base: cur.srv.URL, http: http.DefaultClient}, Policy{})
+	r2.setNextCore(next.srv.URL, nil)
+	r2.applyActiveCore()
+	if r2.core.URL() != next.srv.URL {
+		t.Fatal("a restart must keep the finished flip")
+	}
+	// nothing more to finish: the tick leaves it alone (the handed-off core is next now)
+	r.nextCoreTick(time.Second)
+	if r.core.URL() != next.srv.URL {
+		t.Fatal("a second tick must change nothing")
+	}
+}
+
+// Both cores serving (the next one Recovered on its own while the current one never handed off): no switch.
+func TestNoFinishWhileTheCurrentCoreServes(t *testing.T) {
+	r := newTestRouter(t)
+	cur, next := newHandoffCore(t, "serving", 7), newHandoffCore(t, "serving", 7)
+	r.core = &CoreClient{base: cur.srv.URL, http: http.DefaultClient}
+	r.setNextCore(next.srv.URL, httpHandoff{})
+	t.Setenv("FLIP_AUTO", "1")
+	r.nextCoreTick(time.Second)
+	if err := r.FlipCore(time.Second); err == nil || !strings.Contains(err.Error(), "both cores") {
+		t.Fatalf("%v", err)
+	}
+	if r.core.URL() != cur.srv.URL {
+		t.Fatal("no switch while the current core serves")
+	}
 }

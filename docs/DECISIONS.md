@@ -2452,3 +2452,47 @@ snapshot failed with "no space left on device", the machine was destroyed anyway
      on Fly until their retention ends; nothing lists them. The kernel's spawner already took none (DECISIONS 217).
      The core change ships only when Deyao Recovers the new core; until then the serving core still snapshots each
      volume at a kill, which the router no longer shows, and the router's kill wait stays 45 minutes for it.
+
+## The flip that left no core serving, 2026-10-22
+
+At 07:05:50 UTC Deyao Recovered core blue alongside; at 07:06:01 the router began the automatic flip (`FLIP_AUTO=1`),
+draining for up to `DRAIN_SECONDS` (1740 s). At 07:08 the `images` workflow pinned a new core image into blue (7c410fe,
+the core change of 222), so blue restarted empty. At 07:35:01 the drain ended, green handed off its final state and
+blue refused the takeover with 409 "this core isn't standing by": no core served until green was restarted empty
+(463ae61) and Recovered with the router's kept final state. Three fixes, router and CI only (no core change):
+
+223. **The flip hands off only to the standby it checked before the drain** (`router/nextcore.go` `FlipCore`). It
+     notes the standby's signing key before the drain, looks at the next core every 30 s during the drain
+     (`drainWatchEvery`) and once more after it. If it is no longer a standby with that key (restarted empty, wiped,
+     Recovered with another kit, not answering), the drain ends at once (`drainUntil`'s abort, router/drain.go), nothing
+     is handed off, the router undrains, logs it and DMs Deyao; the serving core goes on and a new Recover alongside
+     starts a new flip. A final state kept from an earlier attempt (the serving core already handed off) skips the
+     abort, since nothing serves either way and the takeover is the only way back. Tested:
+     `TestFlipAbortsWhenTheStandbyGoesDuringTheDrain` (the standby restarted empty mid-drain: the drain ends early, no
+     handoff, one DM), `TestFlipRechecksTheStandbyAfterTheDrain` (another key just before the drain ends: refused; the
+     same standby again: the flip goes through).
+
+224. **A core release holds the core it lands on** (`.github/workflows/images.yml`, the pin job). The pin commit that
+     moves a core image into the next colour also puts `jarvis2/core-pin: hold` on that Deployment, so no later release
+     restarts it. Why this design: once pinned, the core may be Recovered alongside or mid-flip at any moment, and the
+     pin job can't see that: it runs on GitHub with only its deploy key and the image signing key, and the router's
+     status is behind Cloudflare Access (no path past it, no service token for CI). The router can't mark it either:
+     it has no push credential, and the boxes change only through git. So the guard is the existing hold, set by the
+     release itself: a core is unheld only while it is known empty. It also covers the window between a flip and the
+     commit that names the new serving colour, when `active.txt` still names the handed-off core and the "other" colour
+     is the one serving. The annotation is on the Deployment's metadata, not the pod template, so setting or deleting it
+     restarts nothing. The commit after a flip deletes it from the new serving colour (RUNBOOK "A core release", step 4);
+     a hold on a core `/setup/status` shows `empty` may be deleted to let a newer release land. Cost: a second core change
+     before the flip is built but not pinned (it lands on the other colour after the flip, or once the hold is deleted).
+     Blue (pinned with 222's core, empty, waiting for Deyao's Recover) got the hold by hand in the same commit.
+
+225. **A flip whose takeover already happened is finished** (`finishFlip`). When the current core is `handed-off` and
+     the next one serves (Recovered with the kit after a refused takeover: its bundle carried the final state), the
+     automatic tick and `POST /setup/core/flip` switch the router to it, provided it has the handed-off core's signing
+     key (the same kit) and, with a final state kept, a line state at least as new; then `activeCore` is recorded and
+     `core-final.json` dropped. Both cores serving, another key or an older line state change nothing (an error says
+     which). `applyActiveCore` at start switches to `activeCore` whenever it equals `NEXT_CORE_URL`, so the commit after
+     a flip must set `CORE_URL` to the `activeCore` that `/setup/status` now shows (RUNBOOK step 4); an env edit alone
+     flips the router back. Tested: `TestFinishAFlipTheNextCoreTookOverByRecover` (another key and an older line state
+     refused; the tick finishes it without a takeover call; `activeCore` set, `core-final.json` gone, kept over a
+     restart), `TestNoFinishWhileTheCurrentCoreServes`.

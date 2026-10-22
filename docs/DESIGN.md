@@ -335,8 +335,13 @@ The app's Reset-or-Recover calls (`/api/core/identity`, `/api/core/claim`, `/api
 calls `POST /handoff` on the serving core and `POST /takeover` with that final state on the next, then points every
 later core call at it and records it in the state (`activeCore`), so a restarted router talks to the same core; the
 drain ends. A takeover refused after the handoff leaves no core serving: the router DMs Deyao, keeps the final state
-and a retry of the flip reuses it (a handed-off core stays handed off; there is no undo). `/setup/status` shows each
-core's URL, `serving` value and identity (`core`).
+and a retry of the flip reuses it (a handed-off core stays handed off; there is no undo). The serving core is handed
+off only to the standby checked before the drain: the drain looks at it again every 30 s and once more after it ends,
+and a standby that went (restarted empty, another signing key) aborts the flip with nothing handed off, undrains and DMs
+Deyao. A takeover that happened through the next core's own Recover (the current core handed off, the next one serving
+with its signing key and a line state at least as new as the final one) is finished the same way: the router switches
+to it and records `activeCore`. `/setup/status` shows each core's URL, `serving` value and identity, and `activeCore`
+(`core`).
 
 ## The boxes (Deyao, 2026-10-15)
 
@@ -374,9 +379,10 @@ Cloudflare, so no credential on a machine opens anything on the edge.
 
 **A core release never empties the serving core.** CI pins a new core only into the core that doesn't serve
 (`k8s/control/apps/core/active.txt` names the serving one; never one whose Deployment carries `jarvis2/core-pin:
-hold`); Deyao Recovers it alongside as a standby and the router flips to it ("Core continuity", "The flip"); a commit
-then names the new serving colour in `active.txt` (and swaps the router's `CORE_URL`/`NEXT_CORE_URL`), so the next
-release goes into the other core. RUNBOOK "A core release: blue/green and the flip".
+hold`, and the pin itself puts that hold on the core it lands on, so no later release restarts it while it may be a
+standby); Deyao Recovers it alongside as a standby and the router flips to it ("Core continuity", "The flip"); a commit
+then names the new serving colour in `active.txt` (swaps the router's `CORE_URL`/`NEXT_CORE_URL` and deletes the
+hold), so the next release goes into the other core. RUNBOOK "A core release: blue/green and the flip".
 
 ### Logs and metrics
 
