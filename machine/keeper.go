@@ -302,7 +302,7 @@ func keeper() error {
 	s := <-sigs
 	go func() { // a second stop signal while tearing down: logged, nothing more (Fly's SIGKILL ends it)
 		for s2 := range sigs {
-			log.Printf("keeper: %v during the teardown; carrying on", s2)
+			log.Printf("%v during the teardown; carrying on", s2)
 		}
 	}()
 	k.teardown(s)
@@ -628,7 +628,7 @@ func readHarnessState() *harnessState {
 // snapshot; then the harness's process group and the rest of the session are stopped; then the keeper exits (Fly
 // ends the machine).
 func (k *keeperT) teardown(s os.Signal) {
-	log.Printf("keeper: %v: the teardown (the transcripts, then the final snapshot, then the session's processes)", s)
+	log.Printf("%v: the teardown (the transcripts, then the final snapshot, then the session's processes)", s)
 	start := time.Now()
 	k.mu.Lock()
 	k.stopping = true
@@ -638,12 +638,12 @@ func (k *keeperT) teardown(s os.Signal) {
 	if w != nil {
 		w.Signal(syscall.SIGUSR1) // supervisor.go teardown; the worker exits when it is done
 	} else {
-		log.Printf("keeper: no supervisor worker running (still booting, or between restarts)")
+		log.Printf("no supervisor worker running (still booting, or between restarts)")
 	}
 	select {
 	case <-k.workerEnd:
 	case <-time.After(teardownMax):
-		log.Printf("keeper: the worker's teardown is still going after %s; going on without it", teardownMax)
+		log.Printf("the worker's teardown is still going after %s; going on without it", teardownMax)
 		k.mu.Lock()
 		if k.worker != nil {
 			k.worker.Kill()
@@ -658,13 +658,13 @@ func (k *keeperT) teardown(s os.Signal) {
 	}
 	if privileged() { // every other process of the session (kill(-1) as user claude; never as anyone else)
 		if err := signalSession("CONT"); err != nil { // a frozen session: let it see the TERM
-			log.Printf("keeper: %v", err)
+			log.Printf("%v", err)
 		}
 		signalSession("TERM")
 		time.Sleep(time.Second)
 		signalSession("KILL")
 	}
-	log.Printf("keeper: teardown done in %s; exiting", time.Since(start).Round(time.Millisecond))
+	log.Printf("teardown done in %s; exiting", time.Since(start).Round(time.Millisecond))
 	pushKeeperLog()
 }
 

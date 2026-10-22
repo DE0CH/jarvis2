@@ -2374,6 +2374,9 @@ snapshot failed with "no space left on device", the machine was destroyed anyway
      (`TestKeeperAsRoot`, `TestWorkerIdentityAsRoot`): the harness is that user's, in its own session, at OOM score 0
      with its floor; `kill`, `kill -KILL`, a group kill, `kill -STOP`, `pkill -f`, writing the keeper's
      `oom_score_adj` and reading the worker's environ all fail; the user's SIGTERM to the launcher and its `kill -TERM
-     -1` leave the keeper up and the harness started again; the teardown ends the user's processes. e2e (`e2e/keeper.go`):
-     the same on a real Fly machine, then a SIGTERM to the main child → the transcript tail and the committed snapshot
-     at the router, the session paused and resumed from it.
+     -1` leave the keeper up and the harness started again; the teardown ends the user's processes. The built binary
+     as root in a private mount and pid namespace on a session machine (a stand-in router): the process tree (keeper
+     root, worker root with fsuid/fsgid 1001, boot steps claude), `/run/jarvis2` all claude's, `session-secret` and
+     `pull-secrets` reach the root worker, every kill from claude refused, SIGINT → teardown → exit. The e2e
+     (`e2e/keeper.go`) checks the same on a real Fly machine, then a SIGTERM to the main child → the transcript tail
+     and the committed snapshot at the router, the session paused and resumed from it.
