@@ -1,6 +1,7 @@
 #!/bin/bash
-# create.sh — make one of the two Jarvis 2 boxes: BOX_KIND=control|services (docs/DESIGN.md "The boxes"; docs/RUNBOOK.md
-# "Rebuilding a box").
+# create.sh — make a Jarvis 2 box: BOX_KIND=control|services (docs/DESIGN.md "The boxes"; docs/RUNBOOK.md "Rebuilding a
+# box") or BOX_KIND=cluster, the first node of the one cluster (docs/PLAN-cluster.md step 1: no tunnel, no peer, no box
+# key; git manages the whole cluster).
 #   HETZNER_JARVIS2_MOCK_API  the jarvis2 Hetzner project's token
 #   JARVIS2_FLY_TOKEN         to (re)make the box's WireGuard peer in Fly org jarvis2-370
 #   ~/.jarvis2/cloudflare.env from infra/cloudflare.py (run it first; ROTATE=1 on a rebuild if the file is gone)
@@ -34,7 +35,8 @@ BOX_KIND="${BOX_KIND:-}"
 case "$BOX_KIND" in
   control)  NAME="${1:-jarvis2-control}"; TYPE="${SERVER_TYPE:-cx23}"; PRIVATE_IP="${PRIVATE_IP:-10.77.0.2}" ;;
   services) NAME="${1:-jarvis2-services}"; TYPE="${SERVER_TYPE:-cx33}"; PRIVATE_IP="${PRIVATE_IP:-10.77.0.3}" ;;
-  *) echo "BOX_KIND is control or services"; exit 1 ;;
+  cluster)  NAME="${1:-jarvis2-cluster-1}"; TYPE="${SERVER_TYPE:-cx23}"; PRIVATE_IP="${PRIVATE_IP:-10.77.0.4}" ;;
+  *) echo "BOX_KIND is control, services or cluster"; exit 1 ;;
 esac
 [ "$PRIVATE_IP" = none ] && PRIVATE_IP=""
 LOC="${LOCATION:-fsn1}"; PRIVATE_ALLOW="${PRIVATE_ALLOW:-}"
@@ -45,7 +47,7 @@ export HCLOUD_PROJECT_TOKEN="${HCLOUD_PROJECT_TOKEN:-${HETZNER_JARVIS2_MOCK_API:
 PEER="${WG_PEER:-none}"; CFENV="${CF_ENV:-$D/cloudflare.env}"; KOUT="${KEYS_OUT:-$HERE/../keys}"
 DEFAULT_LABELS="{\"role\":\"jarvis2-$BOX_KIND\"}"
 export FIREWALL="${FIREWALL:-jarvis2}" LABELS="${LABELS:-$DEFAULT_LABELS}"
-if [ "$BOX_KIND" != services ]; then
+if [ "$BOX_KIND" = control ]; then
   [ -s "$CFENV" ] || { echo "run infra/cloudflare.py $CFENV first"; exit 1; }
   set -a; . "$CFENV"; set +a
 fi
@@ -60,7 +62,7 @@ UD="$(mktemp)"; KEY="$(mktemp -d)"; trap 'rm -rf "$UD" "$KEY"' EXIT; chmod 600 "
 # a fresh WireGuard peer for the box (router/wg.go); machines reach it as $PEER._peer.internal (production:
 # jarvis2-box, MACHINE_URL in k8s/control/apps/router/router.yaml). Its config goes only into the box (user-data).
 : > "$KEY/wg.conf"
-if [ "$BOX_KIND" != services ] && [ "$PEER" != none ]; then
+if [ "$BOX_KIND" = control ] && [ "$PEER" != none ]; then
   FLY_API_TOKEN="$JARVIS2_FLY_TOKEN" flyctl wireguard remove jarvis2-370 "$PEER" >/dev/null 2>&1 || true
   rm -f "$KEY/wg.conf" # flyctl refuses to write over a file, even an empty one
   (umask 077; FLY_API_TOKEN="$JARVIS2_FLY_TOKEN" flyctl wireguard create jarvis2-370 lhr "$PEER" "$KEY/wg.conf" >/dev/null)
@@ -69,7 +71,7 @@ fi
 # its public half into git (keys/box-next.pub, then keys/box.pub), where the app checks the core's identity against it.
 mkdir -p "$KOUT"
 BOXPUB="$KOUT/box-next.pub"; AGEPUB="$KOUT/$BOX_KIND-age.pub"
-[ "$BOX_KIND" = services ] && BOXPUB=/dev/null
+[ "$BOX_KIND" = control ] || BOXPUB=/dev/null
 python3 - "$KEY" "$BOXPUB" <<'PY'
 import base64, sys
 from cryptography.hazmat.primitives.asymmetric import ec
@@ -84,7 +86,7 @@ age-keygen -o "$KEY/age.key" 2>/dev/null
 age-keygen -y "$KEY/age.key" > "$AGEPUB"
 { echo '#!/bin/bash'
   printf 'BOX_KIND=%q\nPRIVATE_ALLOW=%q\nDEBUG_SSH=%q\n' "$BOX_KIND" "$PRIVATE_ALLOW" "${DEBUG_SSH:-}"
-  printf 'TUNNEL_TOKEN=%q\nWG_CONF=%q\nBOX_KEY=%q\nAGE_KEY=%q\n' "$TUNNEL_TOKEN" "$(cat "$KEY/wg.conf")" "$([ "$BOX_KIND" = services ] || cat "$KEY/box-key.pem")" "$(cat "$KEY/age.key")"
+  printf 'TUNNEL_TOKEN=%q\nWG_CONF=%q\nBOX_KEY=%q\nAGE_KEY=%q\n' "$TUNNEL_TOKEN" "$(cat "$KEY/wg.conf")" "$([ "$BOX_KIND" != control ] || cat "$KEY/box-key.pem")" "$(cat "$KEY/age.key")"
   printf 'SYNC_YAML=%q\nEXTRA_MANIFEST=%q\n' "$(cat "${SYNC_YAML_FILE:-/dev/null}")" "$(cat "${EXTRA_MANIFEST_FILE:-/dev/null}")"
   cat "$HERE/warp-host.sh" "$HERE/cloud-init.sh"; } > "$UD"
 # Hetzner mails a root password when a server has no SSH key: give it a throwaway key whose private half

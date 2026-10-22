@@ -4,7 +4,8 @@
 # git can't fix is replaced, not repaired. Secrets (the tunnel token, the router's WireGuard peer, the box key, the age key) arrive
 # in user-data and become k8s Secrets here; the user-data is shredded at the end.
 # create.sh also puts infra/warp-host.sh (warp_host_setup) ahead of this file.
-# Injected: BOX_KIND  control | services (docs/DESIGN.md "The boxes")
+# Injected: BOX_KIND  control | services (docs/DESIGN.md "The boxes") | cluster (docs/PLAN-cluster.md: the one cluster's
+#           first node; git manages all of it through k8s/cluster, so no bootstrap, tunnel, peer or box key here)
 #           TUNNEL_TOKEN WG_CONF (the wg-quick file of `fly wireguard create`) BOX_KEY (the box key, PEM) — not on
 #           the services box; on the control box WG_CONF may be empty (a router move brings the peer's config along)
 #           AGE_KEY (Flux decrypts the box's SOPS secrets with it)
@@ -15,7 +16,7 @@
 set -uo pipefail
 export DEBIAN_FRONTEND=noninteractive
 BOX_KIND="${BOX_KIND:-}" PRIVATE_ALLOW="${PRIVATE_ALLOW:-}"
-case "$BOX_KIND" in control|services) ;; *) echo "BOX_KIND is control or services"; exit 1 ;; esac
+case "$BOX_KIND" in control|services|cluster) ;; *) echo "BOX_KIND is control, services or cluster"; exit 1 ;; esac
 exec > >(tee -a /var/log/jarvis2-bootstrap.log) 2>&1
 echo "=== jarvis2 bootstrap $(date -u +%FT%TZ) ==="
 apt-get update -y && apt-get install -y --no-install-recommends ca-certificates curl git gnupg
@@ -93,21 +94,23 @@ K3S
 # pinned versions: no lookup of a "latest" (update.k3s.io served a self-signed certificate on 2026-10-10 and every
 # unpinned bootstrap failed: "Finding release for channel stable … Download failed"); bump them here
 K3S_VERSION=v1.36.5+k3s1 FLUX_VERSION=2.9.6
-curl -sfL https://get.k3s.io | INSTALL_K3S_VERSION="$K3S_VERSION" INSTALL_K3S_EXEC="server --disable traefik" sh - || exit 1
+curl -sfL https://get.k3s.io | INSTALL_K3S_VERSION="$K3S_VERSION" INSTALL_K3S_EXEC="server --disable traefik$([ "$BOX_KIND" != cluster ] || echo " --cluster-init")" sh - || exit 1  # cluster: embedded etcd, so more nodes and control planes can join
 export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
 for i in $(seq 1 60); do kubectl get nodes 2>/dev/null | grep -q ' Ready' && break; sleep 5; done
 
 curl -s https://fluxcd.io/install.sh | FLUX_VERSION="$FLUX_VERSION" bash || exit 1
 # only the two controllers Jarvis 2 uses (no Helm, no notifications): less memory on a cx23 control box
 flux install --components source-controller,kustomize-controller --timeout 5m || exit 1
-# a Kustomization that names no service account applies as the powerless `default`, never as the controller
-kubectl -n flux-system patch deployment kustomize-controller --type=json \
-  -p='[{"op":"add","path":"/spec/template/spec/containers/0/args/-","value":"--default-service-account=default"}]'
+if [ "$BOX_KIND" != cluster ]; then  # the cluster: Flux applies k8s/cluster as the controller (git manages it all)
+  # a Kustomization that names no service account applies as the powerless `default`, never as the controller
+  kubectl -n flux-system patch deployment kustomize-controller --type=json \
+    -p='[{"op":"add","path":"/spec/template/spec/containers/0/args/-","value":"--default-service-account=default"}]'
+fi
 kubectl -n flux-system rollout status deployment/kustomize-controller --timeout=120s
 
 git clone --depth 1 https://github.com/DE0CH/jarvis2.git /root/jarvis2 || exit 1
-kubectl apply -k "/root/jarvis2/k8s/bootstrap-$BOX_KIND" || exit 1
-if [ "$BOX_KIND" != services ]; then
+[ "$BOX_KIND" = cluster ] || kubectl apply -k "/root/jarvis2/k8s/bootstrap-$BOX_KIND" || exit 1
+if [ "$BOX_KIND" = control ]; then
   kubectl -n jarvis2-edge create secret generic tunnel-token --from-literal=token="$TUNNEL_TOKEN"
   if [ -n "${WG_CONF:-}" ]; then
     printf '%s\n' "$WG_CONF" > /root/wg.conf
@@ -128,6 +131,8 @@ if [ -n "${EXTRA_MANIFEST:-}" ]; then
 fi
 if [ -n "${SYNC_YAML:-}" ]; then
   printf '%s\n' "$SYNC_YAML" | kubectl apply -f - || exit 1
+elif [ "$BOX_KIND" = cluster ]; then
+  kubectl apply -f /root/jarvis2/k8s/cluster/flux-sync.yaml || exit 1  # Flux keeps it from then on (it is in k8s/cluster)
 else
   kubectl apply -f "/root/jarvis2/k8s/flux/$BOX_KIND.yaml" || exit 1
 fi
