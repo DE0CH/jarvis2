@@ -216,8 +216,8 @@ func (r *Router) succession(pred *Doc, machine string, stores []string, harness,
 // the router's waits on the core's single-shot machine calls (tests shorten them)
 var (
 	initStep, initMax = 5 * time.Second, 12 * time.Minute // a session image's first pull on a Fly host takes minutes
-	// killMax: a machine with a volume is stopped and its volume snapshotted before Fly destroys it (core/volumes.go):
-	// minutes for a large volume
+	// killMax: a core older than DECISIONS 222 (until Deyao Recovers the new one) stops a machine with a volume and
+	// snapshots the volume before Fly destroys it: minutes for a large volume
 	killStep, killMax = time.Second, 45 * time.Minute
 )
 

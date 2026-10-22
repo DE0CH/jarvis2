@@ -144,8 +144,6 @@ export type Session = {
   // a low-disk episode: More disk grows the volume to nextGb (canGrow), or why it can't
   diskAlert?: { since: string; reason: string; detail: string; canGrow: boolean; nextGb?: number; why?: string } | null;
   diskGb?: number; // the volume size the line's next machine gets (0 = the core's default, 10 GB)
-  // the core's Fly volume backups of the line's machines (one per pause), newest first: for recovery by hand only
-  backups?: Backup[];
   // the line's last machine left no signed snapshot: Resume is refused (it would start empty)
   noSnapshot?: string | null;
   // the final snapshot failed and the machine (no volume) is kept: state failed with a machine
@@ -153,7 +151,6 @@ export type Session = {
   // how many messages for it wait in the Inbox for Deyao (PendingMessage, state "pending"); absent = none
   pendingMessages?: number;
 };
-export type Backup = { machine: string; volume: string; snapshot: string; at: string; retentionDays: number; expiresAt: string; sizeBytes?: number; signedSnapshot: boolean };
 export type RepoEntry = { name: string; url: string; repo: string; store: string; sensitive?: boolean; fingerprint?: string; keyAt?: string };
 export type GhRepo = { fullName: string; url: string; htmlUrl: string; description?: string; language?: string; private?: boolean; fork?: boolean; archived?: boolean; pushedAt?: string };
 export type UsageLimit = { kind: string; group: string; percent: number; severity?: string; resetsAt: string | null; model: string | null; surface: string | null; active: boolean };

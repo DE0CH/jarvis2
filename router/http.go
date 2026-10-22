@@ -840,8 +840,8 @@ func sessionView(s *Session, d *persisted) map[string]any {
 		"kernel": s.Kernel != nil, // kernelline.go: its stores unlock in the kernel's secrets
 	}
 	liveView(s, v)
-	backupsView(s, v) // snapsafe.go
-	diskView(s, v)    // disk.go
+	snapshotView(s, v) // snapsafe.go
+	diskView(s, v)     // disk.go
 	scheduleView(d, s.ID, v)
 	messagesView(d, s.ID, v) // messages.go
 	opsView(s, v)

@@ -22,6 +22,7 @@ type volCore struct {
 	kills   int
 	extends []map[string]any
 	restart bool
+	oldKill bool // the kill record names a volume backup, as an earlier core's did: read without acting on it
 }
 
 func (c *volCore) ServeHTTP(w http.ResponseWriter, req *http.Request) {
@@ -41,12 +42,11 @@ func (c *volCore) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		if in.Snapshot != nil {
 			sum = in.Snapshot.Sha256
 		}
-		days := 3
-		if sum == "" {
-			days = 60
+		rec := map[string]any{"kind": "killed", "id": in.Machine, "snapshot": sum}
+		if c.oldKill {
+			rec["backup"] = map[string]any{"volume": "vol_" + in.Machine, "snapshot": "vs_" + in.Machine, "at": "2026-10-15T05:00:00Z", "retentionDays": 60, "signedSnapshot": sum != ""}
 		}
-		writeJSON(w, 200, c.key.doc(map[string]any{"kind": "killed", "id": in.Machine, "snapshot": sum,
-			"backup": map[string]any{"volume": "vol_" + in.Machine, "snapshot": "vs_" + in.Machine, "at": "2026-10-15T05:00:00Z", "retentionDays": days, "signedSnapshot": sum != ""}}))
+		writeJSON(w, 200, c.key.doc(rec))
 	case "/extend":
 		var in map[string]any
 		json.NewDecoder(req.Body).Decode(&in)
@@ -148,8 +148,8 @@ func TestAFailedFinalSnapshotKeepsTheMachine(t *testing.T) {
 	})
 }
 
-// a machine with a volume whose snapshot fails is kept too (2026-10-21: the YYC session's was killed, and Fly couldn't
-// restore its volume backup): no kill, a "needs you" DM
+// a machine with a volume whose snapshot fails is kept too (2026-10-21: the YYC session's was killed after its
+// snapshot failed): no kill, a "needs you" DM
 func TestAFailedFinalSnapshotKeepsAMachineWithAVolume(t *testing.T) {
 	rg, vc := volRig(t)
 	dms := captureDM(t)
@@ -170,10 +170,12 @@ func TestAFailedFinalSnapshotKeepsAMachineWithAVolume(t *testing.T) {
 	}
 }
 
-// a kill that goes on past a failed snapshot (force) of a machine with a volume: the core's backup; a line whose last
-// machine left no snapshot won't resume (it would start empty): the session and a DM say so and name the backup
-func TestNoSnapshotStopsTheResumeAndNamesTheBackup(t *testing.T) {
+// a kill that goes on past a failed snapshot (force) of a machine with a volume: a line whose last machine left no
+// snapshot won't resume (it would start empty): the session and a DM say so. A kill record that still names a volume
+// backup (an earlier core's) is read without acting on it.
+func TestNoSnapshotStopsTheResume(t *testing.T) {
 	rg, vc := volRig(t)
+	vc.oldKill = true
 	dms := captureDM(t)
 	rg.r.cfg.SnapshotStall = 200 * time.Millisecond
 	runningM2(rg, true)
@@ -182,18 +184,15 @@ func TestNoSnapshotStopsTheResumeAndNamesTheBackup(t *testing.T) {
 	}
 	rg.r.st.Do(func(d *persisted) { d.Sessions["s1"].State, d.Sessions["s1"].MachineID = "paused", "" }) // as a pause leaves it
 	s := sessionS1(rg)
-	if vc.kills != 1 || len(s.Backups) != 1 || s.Backups[0].Snapshot != "vs_m2" || s.Backups[0].RetentionDays != 60 || s.Backups[0].Signed {
-		t.Fatalf("kills %d, backups %+v", vc.kills, s.Backups)
-	}
-	if !strings.Contains(s.NoSnapshot, "machine m2 left no snapshot") {
-		t.Fatalf("noSnapshot %q", s.NoSnapshot)
+	if vc.kills != 1 || !strings.Contains(s.NoSnapshot, "machine m2 left no snapshot") {
+		t.Fatalf("kills %d, noSnapshot %q", vc.kills, s.NoSnapshot)
 	}
 	waitFor(t, "DM", func() bool { return len(dms()) == 1 })
-	if !strings.Contains(dms()[0], "won't resume") || !strings.Contains(dms()[0], "vs_m2") || !strings.Contains(dms()[0], "2026-12-14") {
+	if !strings.Contains(dms()[0], "won't resume") || strings.Contains(dms()[0], "vs_m2") || strings.Contains(dms()[0], "backup") {
 		t.Fatalf("%q", dms())
 	}
 	err := rg.r.Resume("s1", false)
-	if err == nil || !strings.Contains(err.Error(), "would start empty") || !strings.Contains(err.Error(), "vs_m2") || !strings.Contains(err.Error(), "machine m1's") {
+	if err == nil || !strings.Contains(err.Error(), "would start empty") || !strings.Contains(err.Error(), "machine m1's") {
 		t.Fatalf("resume: %v", err)
 	}
 	rg.r.Resume("s1", false)
@@ -202,14 +201,14 @@ func TestNoSnapshotStopsTheResumeAndNamesTheBackup(t *testing.T) {
 	}
 	rg.r.st.Do(func(d *persisted) {
 		v := sessionView(d.Sessions["s1"], d)
-		if b, _ := v["backups"].([]Backup); len(b) != 1 || v["noSnapshot"] == nil {
-			t.Fatalf("view %v %v", v["backups"], v["noSnapshot"])
+		if _, ok := v["backups"]; ok || v["noSnapshot"] == nil {
+			t.Fatalf("view %v", v)
 		}
 	})
 }
 
-// a pause whose machine did send its snapshot: no noSnapshot, the backup is the short-lived second copy
-func TestASignedSnapshotPausesNormallyWithItsBackup(t *testing.T) {
+// a pause whose machine did send its snapshot: no noSnapshot
+func TestASignedSnapshotPausesNormally(t *testing.T) {
 	rg, _ := volRig(t)
 	runningM2(rg, true)
 	rg.writeSnapshot(t, "m2", rg.files)
@@ -219,8 +218,7 @@ func TestASignedSnapshotPausesNormallyWithItsBackup(t *testing.T) {
 	if err := rg.r.waitState("s1", "paused", 5*time.Second); err != nil {
 		t.Fatal(err)
 	}
-	s := sessionS1(rg)
-	if s.NoSnapshot != "" || len(s.Backups) != 1 || !s.Backups[0].Signed || s.Backups[0].RetentionDays != 3 {
+	if s := sessionS1(rg); s.NoSnapshot != "" {
 		t.Fatalf("%+v", s)
 	}
 }

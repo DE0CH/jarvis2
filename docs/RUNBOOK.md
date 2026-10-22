@@ -779,7 +779,7 @@ not running in time. The video, screenshots and logs (core, router, the setup an
   transcripts it sent) and `snapshot streamed and committed` when the final snapshot made it; Pause then finds the
   snapshot already there and the session resumes from it. Fly's stop allows 5 s by default (the core sets no
   `stop_config`), so a large workspace's snapshot is usually cut off: the transcripts of step 1 are in the session's
-  `.live` copies (archive and search), the rest on the volume's backup.
+  `.live` copies (archive and search), and the rest is lost (no volume snapshot is taken: DECISIONS 222).
 - The boxes themselves: no way in by design; their logs and metrics are in Grafana Cloud (next section): Flux's
   reconciles (`container="manager"`), the kubelet and the kernel (`source="journal"`), every pod.
 
@@ -792,14 +792,12 @@ exited (DECISIONS 194).
 - **The router sweeps them** (`router/volsweep.go`, DECISIONS 195): every 10 minutes (the first 2 minutes after a leader
   starts) it lists the app's volumes and machines with `FLY_READ_TOKEN` and deletes, with `FLY_VOLUME_TOKEN`, each volume
   named `jarvis2_state`, state `created`, attached to nothing, in no listed machine's `config.mounts`, at least 15 minutes
-  old, and named by no session it knows (a session's current or booted machine's cert or start record, or a backup whose
-  retention runs). At most 20 a sweep; a failed delete is looked at again next sweep, 404 counts as done. Each sweep logs
-  one line, `[volsweep] N volumes, M machines …: deleted [...], failed map[...], kept map[category:count]` (Grafana:
+  old, and named by no session it knows (a session's current or booted machine's cert or start record). At most 20 a
+  sweep; a failed delete is looked at again next sweep, 404 counts as done. Each sweep logs one line, `[volsweep] N volumes, M machines …: deleted [...], failed map[...], kept map[category:count]` (Grafana:
   `{box="control",container="router"} |= "volsweep"`), and `infra/setup.py status` shows the last one as `volumeSweep`
   (with `FLY_VOLUME_TOKEN` among `secrets`). Without either token the sweep is off and says so once at start.
 - A volume the sweep keeps because a session still names it (`named`) and that is really left over (a failed session
-  whose machine is gone, say) goes once that session is destroyed or its backup's retention ends. Its snapshots stay for
-  their retention either way.
+  whose machine is gone, say) goes once that session is destroyed.
 - Test runs still delete their own at teardown (`infra/run-volumes.py` in the replica's `down` and the e2e's cleanup);
   for a teardown that didn't run: `FLY_TOKEN=$JARVIS2_FLY_TOKEN python3 -I infra/run-volumes.py <the run's
   DATA_DIR>/state.json <its core.log>` deletes only what those files name. What it misses, the production sweep takes

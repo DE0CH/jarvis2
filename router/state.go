@@ -62,7 +62,6 @@ type Session struct {
 	// snapsafe.go: what the machine's final snapshot left behind
 	SnapshotFailed string      `json:"snapshotFailed,omitempty"` // the final snapshot failed and the machine (no volume) is kept
 	NoSnapshot     string      `json:"noSnapshot,omitempty"`     // the line's last machine left no snapshot: Resume refuses
-	Backups        []Backup    `json:"backups,omitempty"`        // the core's volume backups of the line's machines, newest first
 	DiskGB         int         `json:"diskGb,omitempty"`         // disk.go: the volume size the next machine gets (0 = the core's default)
 	Kernel         *KernelLine `json:"kernel,omitempty"`         // kernelline.go: the line is the kernel's (not the old core's)
 	noSnapshotDMed bool        // a refused resume DMed once

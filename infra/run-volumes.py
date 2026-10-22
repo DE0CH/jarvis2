@@ -8,8 +8,8 @@ volume carries no label of its own (every core names its volumes jarvis2_state, 
 way to tell this run's volumes from production's in the same app is the run's own records:
 
   - its router's state (state.json under DATA_DIR): every machine the run's core started, with its volume
-    (`started`), and every kill's backup (`volume`), which the router never forgets;
-  - its core's log: the volume ids the core logs at a kill (backup, delete, a failed delete).
+    (`started`);
+  - its core's log: the volume ids the core logs (each volume it makes, an extend, a failed delete).
 
 Every id found there and nowhere else is a candidate. One is deleted only when Fly lists it in the app, named
 jarvis2_state, in state `created`, attached to nothing and mounted by no machine Fly lists (destroyed ones aside); a
@@ -36,13 +36,11 @@ LOG_ID = re.compile(r"\bvolume (vol_[a-z0-9]+)\b")
 
 
 def ids_in_state(doc, out):
-    """every volume id a router state names: {"volume": {"id": …}} (started, certs) or {"volume": "vol_…"} (backups)"""
+    """every volume id a router state names: {"volume": {"id": …}} (started, certs)"""
     if isinstance(doc, dict):
         for k, v in doc.items():
             if k == "volume":
-                if isinstance(v, str) and VOL_ID.match(v):
-                    out.add(v)
-                elif isinstance(v, dict) and isinstance(v.get("id"), str) and VOL_ID.match(v["id"]):
+                if isinstance(v, dict) and isinstance(v.get("id"), str) and VOL_ID.match(v["id"]):
                     out.add(v["id"])
             ids_in_state(v, out)
     elif isinstance(doc, list):

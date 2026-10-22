@@ -145,9 +145,9 @@ type lineState struct {
 	Stores       map[string]map[string]*KeyEntry `json:"stores"`
 	RepoOwner    map[string]string               `json:"repoOwner"`
 	NotSensitive []string                        `json:"notSensitive"`
-	// volumes.go: each live machine's volume, each killed machine's backup, the volumes whose delete failed
+	// volumes.go: each live machine's volume, the volumes whose delete failed. (A line state an earlier core sealed
+	// may still hold "backups": it is not read.)
 	Volumes    map[string]*VolumeInfo `json:"volumes,omitempty"`
-	Backups    map[string]*Backup     `json:"backups,omitempty"`
 	VolOrphans []string               `json:"volumeOrphans,omitempty"`
 }
 
@@ -181,7 +181,7 @@ func (c *Core) lineSnapshot() lineState {
 	st := lineState{Latest: c.latest, Created: c.created, Signing: c.signing, Killed: c.killed, Used: setList(c.used),
 		Approvals: setList(c.approvalsUsed), AuditHead: c.auditHead, AuditSeq: c.auditSeq, Adopted: c.adopted, Phone: c.phoneAgreement,
 		Stores: c.stores, RepoOwner: c.repoOwner, NotSensitive: setList(c.notSensitive),
-		Volumes: c.vol.live, Backups: c.vol.backups, VolOrphans: setList(c.vol.orphans)}
+		Volumes: c.vol.live, VolOrphans: setList(c.vol.orphans)}
 	return st
 }
 
@@ -293,12 +293,9 @@ func (c *Core) restoreLine(st lineState, all bool) []string {
 		c.approvalsUsed[n] = true
 	}
 	c.auditHead, c.auditSeq = st.AuditHead, st.AuditSeq
-	c.vol = newVolState() // volumes.go: the machines' volumes and backups go on with the line
+	c.vol = newVolState() // volumes.go: the machines' volumes go on with the line
 	for m, v := range st.Volumes {
 		c.vol.live[m] = v
-	}
-	for m, b := range st.Backups {
-		c.vol.backups[m] = b
 	}
 	for _, v := range st.VolOrphans {
 		c.vol.orphans[v] = true

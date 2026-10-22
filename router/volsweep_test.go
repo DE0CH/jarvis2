@@ -73,24 +73,21 @@ func certWithVolume(vol string) *Doc {
 func TestSweepNamed(t *testing.T) {
 	r := newTestRouter(t)
 	r.st.Do(func(d *persisted) {
-		d.Sessions["s1"] = &Session{ID: "s1", State: "running", MachineID: "m1", Booted: "m0",
-			Backups: []Backup{{Volume: "vol_backup_live", Snapshot: "snap1", ExpiresAt: sweepNow.Add(time.Hour)},
-				{Volume: "vol_backup_expired", Snapshot: "snap0", ExpiresAt: sweepNow.Add(-time.Hour)}}}
+		d.Sessions["s1"] = &Session{ID: "s1", State: "running", MachineID: "m1", Booted: "m0"}
 		d.Certs["m1"] = certWithVolume("vol_current_cert")
 		d.Started["m0"] = &Started{ID: "m0", Volume: &Volume{ID: "vol_booted_started"}}
 		// an earlier machine of the same session: its volume is no longer named (the leak the sweep exists for)
 		d.Started["m_old"] = &Started{ID: "m_old", Volume: &Volume{ID: "vol_old_machine"}}
 		d.Certs["m_old"] = certWithVolume("vol_old_machine")
 		d.Machines["m_old"] = "s1"
-		d.Records = append(d.Records, &Record{Session: Session{Backups: []Backup{{Volume: "vol_record", Snapshot: "snapR", ExpiresAt: sweepNow.Add(time.Hour)}}}})
 	})
-	named := r.sweepNamed(sweepNow)
-	for _, v := range []string{"vol_backup_live", "vol_current_cert", "vol_booted_started", "vol_record"} {
+	named := r.sweepNamed()
+	for _, v := range []string{"vol_current_cert", "vol_booted_started"} {
 		if named[v] == "" {
 			t.Errorf("%s not named: %v", v, named)
 		}
 	}
-	for _, v := range []string{"vol_backup_expired", "vol_old_machine"} {
+	for _, v := range []string{"vol_old_machine"} {
 		if named[v] != "" {
 			t.Errorf("%s named (%s)", v, named[v])
 		}

@@ -209,7 +209,7 @@ type Core struct {
 	// the line state seq a standing-by core was Recovered with (a takeover brings one at least as new)
 	mode        string
 	standbyFrom int
-	vol         volState // volumes.go: each machine's Fly volume, its kill's backup snapshot
+	vol         volState // volumes.go: each machine's Fly volume
 
 	fly    Fly
 	github GitHub // deploy keys only, with the token the phone unlocks for that one call
@@ -798,8 +798,8 @@ func (c *Core) Certify(approval, started *SignedDoc, carry string) (SignedDoc, e
 // starts with no predecessor state — a kill needs no snapshot, only a successor's restore does. Only a caller that
 // asks for it (snapshot.required: a pause, which would rather keep the machine than lose its state) gets the kill
 // refused instead (409, the machine untouched). The first kill fixes the snapshot.
-// A machine with a volume (volumes.go) is first stopped and its volume snapshotted (the backup, named in the record);
-// only once Fly reports that snapshot created is the machine destroyed and the volume deleted.
+// A machine with a volume (volumes.go) has its volume deleted once Fly reports the machine destroyed; no volume
+// snapshot is taken.
 func (c *Core) KillWithSnapshot(id string, snapshot *SnapshotClaim) (SignedDoc, error) {
 	return c.Kill(id, snapshot, nil)
 }
@@ -858,9 +858,6 @@ func (c *Core) Kill(id string, snapshot *SnapshotClaim, legacy *LegacyCert) (Sig
 		adopt = nil
 		c.logf("kill %s: %s; killed without naming a snapshot", id, refused)
 	}
-	if err := c.backupVolume(id, sum != ""); err != nil {
-		return SignedDoc{}, err
-	}
 	fm, err := c.fly.Inspect(id)
 	if err != nil {
 		return SignedDoc{}, fail(502, "fly: %v", err)
@@ -909,14 +906,9 @@ func (c *Core) Kill(id string, snapshot *SnapshotClaim, legacy *LegacyCert) (Sig
 	return c.sign(out)
 }
 
-// killedRecord: the kill's signed record — the snapshot its successor restores, and the volume's backup (volumes.go)
-// when it had one (callers hold c.mu)
+// killedRecord: the kill's signed record — the snapshot its successor restores (callers hold c.mu)
 func (c *Core) killedRecord(id string) map[string]any {
-	out := map[string]any{"kind": "killed", "id": id, "snapshot": c.killed[id]}
-	if b := c.backupOf(id); b != nil {
-		out["backup"] = b
-	}
-	return out
+	return map[string]any{"kind": "killed", "id": id, "snapshot": c.killed[id]}
 }
 
 // NullImage: a succession to the null image burns the predecessor — start() makes no machine, only marks the

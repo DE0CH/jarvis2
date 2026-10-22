@@ -6,7 +6,7 @@ package main
 // An operation's log is, in time order:
 //
 //   - the router's own steps (source "router"): asked the core to start a machine, the machine is up, the cert, asked
-//     the machine for its final snapshot, the snapshot arrived, asked the core to stop the machine, the archive…;
+//     the machine for its final snapshot, the snapshot arrived, asked the core to destroy the machine, the archive…;
 //   - what Fly did (source "fly"), read by the router itself with its READ-ONLY token (FLY_READ_TOKEN, app
 //     jarvis2-sessions; no core change): the machine's Fly events (launch, start, exit, destroy, with their source and
 //     exit code), polled every 2 s while the operation runs and for 30 s after it (Fly keeps only a few

@@ -448,3 +448,8 @@ fixes, 34–40 carried over from the old app and still true, 41–43 the web pag
     apps' kind tables and fails when one misses a kind the router files. A pending message's card says who sends what
     to whom: the Inbox row is the router's headline ("Message from session “X” to session “Y”"), the review page has
     From and To rows above the exact text.
+
+80. **No volume backups on either app** (docs/DECISIONS.md 222; Deyao, 2026-10-22). The core takes no Fly volume
+    snapshot, so the router's session has no `backups`: the web card's "Volume backups" list and the iPhone's "Volume
+    backups" section are gone, and a line that won't resume (`noSnapshot`) says only that Destroy archives its newest
+    signed snapshot. Disk, More disk and kept machines are as in 72.

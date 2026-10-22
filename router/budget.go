@@ -10,11 +10,10 @@ package main
 // kill) and DM, and keep pausing anything started while the month stays over the cap.
 // Raising a line above the month's spend so far re-arms it: its DM fires again when the spend reaches the new line.
 //
-// Volume snapshots count too (DECISIONS 179): the sessions' volumes are backed up at every kill (core/volumes.go) and
-// Fly bills their snapshots' stored size, including those of volumes already deleted (kept for their retention). Every
-// snapshotEvery the router lists the snapshots of each volume Fly still has and of each volume a session or record
-// names a backup of (still within its retention), sums their sizes once each, takes off Fly's free 10 GB and adds that
-// GB-month rate to the burn.
+// Volume snapshots count too (DECISIONS 179): Jarvis takes none (DECISIONS 222: volumes are made with Fly's automatic
+// snapshots off, and a kill takes none), but Fly bills any that exist by their stored size. Every snapshotEvery the
+// router lists the snapshots of each volume Fly has, sums their sizes once each, takes off Fly's free 10 GB and adds
+// that GB-month rate to the burn.
 //
 // The budget uses FLY_READ_TOKEN, read-only on app jarvis2-sessions (infra/fly-read-token.sh): it lists machines,
 // volumes and the volumes' snapshots, nothing else. The router's only Fly token that changes anything is
@@ -83,36 +82,16 @@ func hourlySnapshotCost(storedBytes int64) float64 {
 	return max(0, gb-rates.snapshotFreeGB) * rates.snapshotPerGBHour
 }
 
-// snapshotVolumes: every volume whose snapshots may still be billed — the ones Fly lists, and those a session's or a
-// record's backup names while its retention runs
-func (r *Router) snapshotVolumes(vs []flyVolume, now time.Time) []string {
+// snapshotVolumes: every volume Fly lists, each once, sorted
+func snapshotVolumes(vs []flyVolume) []string {
 	seen := map[string]bool{}
 	out := []string{}
-	add := func(id string) {
-		if id != "" && !seen[id] {
-			seen[id] = true
-			out = append(out, id)
-		}
-	}
 	for _, v := range vs {
-		add(v.ID)
+		if v.ID != "" && !seen[v.ID] {
+			seen[v.ID] = true
+			out = append(out, v.ID)
+		}
 	}
-	r.st.Do(func(d *persisted) {
-		for _, s := range d.Sessions {
-			for _, b := range s.Backups {
-				if b.ExpiresAt.After(now) {
-					add(b.Volume)
-				}
-			}
-		}
-		for _, rec := range d.Records {
-			for _, b := range rec.Backups {
-				if b.ExpiresAt.After(now) {
-					add(b.Volume)
-				}
-			}
-		}
-	})
 	sort.Strings(out)
 	return out
 }
@@ -440,7 +419,7 @@ func (r *Router) budgetTick(fly flyReader, now time.Time, capUSD, warnUSD float6
 		return budgetActions{}, nil, nil
 	}
 	b := burnRate(ms, vs)
-	stored, nsnap, serr := snapshotStorage(fly, r.snapshotVolumes(vs, now), now)
+	stored, nsnap, serr := snapshotStorage(fly, snapshotVolumes(vs), now)
 	b.SnapshotBytes, b.Snapshots = stored, nsnap
 	b.RatePerHour += hourlySnapshotCost(stored)
 	if serr != nil {

@@ -197,8 +197,6 @@ private struct SessionDetailList: View {
         LabeledContent("Session id") { Text(m.id).font(.footnote.monospaced()).textSelection(.enabled) }
       }
 
-      if !m.backups.isEmpty { BackupsSection(m: m) }
-
       Section {
         Button("Destroy", systemImage: "trash", role: .destructive) { Task { await model.destroy(m.id) } }
           .disabled(busy != nil || m.state == "destroying")
@@ -307,46 +305,10 @@ private struct SnapshotProblemSection: View {
       if let n = m.noSnapshot {
         ErrorRow(text: n, id: "no-snapshot-\(m.id)")
         LabeledContent("Resume", value: "Refused")
-        if let b = m.backups.first {
-          LabeledContent("Volume backup") { Text(b.snapshot).font(.footnote.monospaced()).textSelection(.enabled) }
-          if let e = b.expiresAt { LabeledContent("Kept until", value: e.formatted(date: .abbreviated, time: .omitted)) }
-        } else {
-          LabeledContent("Volume backup", value: "None")
-        }
       }
     } header: {
       Label(m.snapshotFailed != nil ? "Final snapshot failed" : "No snapshot", systemImage: "externaldrive.badge.exclamationmark")
         .foregroundStyle(.red)
-    }
-  }
-}
-
-/// the core's Fly volume backups of this line's machines, newest first: for recovery by hand, nothing restores them
-private struct BackupsSection: View {
-  @Environment(AppModel.self) private var model
-  let m: Session
-
-  var body: some View {
-    Section {
-      ForEach(m.backups) { b in
-        VStack(alignment: .leading, spacing: 4) {
-          LabeledContent("Snapshot") { Text(b.snapshot).font(.footnote.monospaced()).textSelection(.enabled) }
-          LabeledContent("Volume") { Text(b.volume).font(.footnote.monospaced()).textSelection(.enabled) }
-          if let at = b.at { LabeledContent("Taken", value: Fmt.ago(at)) }
-          if let e = b.expiresAt { LabeledContent("Kept until", value: e.formatted(date: .abbreviated, time: .omitted)) }
-          LabeledContent("Machine's own snapshot", value: b.signed ? "Yes" : "No")
-          if let n = b.sizeBytes, n > 0 { LabeledContent("Size", value: Fmt.bytes(n)) }
-        }
-        .contextMenu {
-          Button("Copy snapshot id", systemImage: "doc.on.doc") { model.copy(b.snapshot, "Snapshot id") }
-          Button("Copy volume id", systemImage: "doc.on.doc") { model.copy(b.volume, "Volume id") }
-        }
-        .accessibilityIdentifier("backup-\(b.snapshot)")
-      }
-    } header: {
-      Label("Volume backups", systemImage: "externaldrive.badge.timemachine")
-    } footer: {
-      Text("Fly volume snapshots the core took at each pause, for recovery by hand.")
     }
   }
 }

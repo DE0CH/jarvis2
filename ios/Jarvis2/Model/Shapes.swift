@@ -81,8 +81,6 @@ struct Session: Identifiable, Equatable, Hashable {
   }
   /// the volume size the line's next machine gets (0 = the core's default)
   var diskGB: Int { j["diskGb"].int ?? 0 }
-  /// the core's Fly volume backups of the line's machines, newest first (for recovery by hand; nothing restores them)
-  var backups: [VolumeBackup] { j["backups"].array.map(VolumeBackup.init) }
   /// the line's last machine left no signed snapshot: Resume is refused (it would start empty)
   var noSnapshot: String? { j["noSnapshot"].text }
   /// the final snapshot failed and the machine (no volume) is kept: Pause again or Destroy anyway
@@ -127,20 +125,6 @@ struct DiskAlert: Equatable, Hashable {
   var nextGB: Int? { j["nextGb"].int }
   /// why it can't grow (a machine without a volume)
   var why: String? { j["why"].text }
-}
-
-/// a kill's Fly volume backup (router/snapsafe.go Backup)
-struct VolumeBackup: Identifiable, Equatable, Hashable {
-  let j: JSON
-  var id: String { snapshot }
-  var machine: String { j["machine"].text ?? "" }
-  var volume: String { j["volume"].text ?? "" }
-  var snapshot: String { j["snapshot"].text ?? "" }
-  var at: Date? { j["at"].string?.isoDate }
-  var expiresAt: Date? { j["expiresAt"].string?.isoDate }
-  var retentionDays: Int { j["retentionDays"].int ?? 0 }
-  var sizeBytes: Int? { j["sizeBytes"].int }
-  var signed: Bool { j["signedSnapshot"].bool == true }
 }
 
 struct Wakeup: Identifiable, Equatable, Hashable {

@@ -11,7 +11,7 @@ package main
 //   - attached to nothing and in no listed machine's `config.mounts`,
 //   - at least 15 minutes old (a volume between its create and its machine's create looks like a leftover), and
 //   - named by no session the router knows: neither its current machine's nor its booted machine's volume (the
-//     machine's cert or start record), nor the volume of a backup whose retention still runs (sessions and records).
+//     machine's cert or start record).
 //
 // A delete Fly answers 404 (already gone) counts as done; a failed one is simply looked at again next sweep. A test
 // router (the replica's, the e2e's) has no FLY_VOLUME_TOKEN and never sweeps. The core is unchanged: a volume the
@@ -121,7 +121,7 @@ func certVolume(d *Doc) string {
 }
 
 // sweepNamed: every volume a session the router knows still names (called with nothing held)
-func (r *Router) sweepNamed(now time.Time) map[string]string {
+func (r *Router) sweepNamed() map[string]string {
 	named := map[string]string{}
 	add := func(vol, who string) {
 		if vol != "" && named[vol] == "" {
@@ -139,18 +139,6 @@ func (r *Router) sweepNamed(now time.Time) map[string]string {
 				add(certVolume(d.Certs[m]), "session "+s.ID+"'s machine "+m)
 				if st := d.Started[m]; st != nil && st.Volume != nil {
 					add(st.Volume.ID, "session "+s.ID+"'s machine "+m)
-				}
-			}
-			for _, b := range s.Backups {
-				if b.ExpiresAt.After(now) {
-					add(b.Volume, "session "+s.ID+"'s backup "+b.Snapshot)
-				}
-			}
-		}
-		for _, rec := range d.Records {
-			for _, b := range rec.Backups {
-				if b.ExpiresAt.After(now) {
-					add(b.Volume, "a record's backup "+b.Snapshot)
 				}
 			}
 		}
@@ -205,7 +193,7 @@ func (r *Router) volumeSweep(token string, now time.Time) ([]string, error) {
 	}
 	// the named set is read AFTER the Fly lists: a session that starts in between names its volume by then, or its
 	// volume is under 15 minutes old
-	ch := sweepSelect(vols, ms, r.sweepNamed(now), now)
+	ch := sweepSelect(vols, ms, r.sweepNamed(), now)
 	deleted, failed := []string{}, map[string]string{}
 	for _, id := range ch.Delete {
 		if err := volumeDelete(token, id); err != nil {

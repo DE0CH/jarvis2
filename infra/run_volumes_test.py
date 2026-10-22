@@ -77,14 +77,12 @@ def main():
                     "m3": {"id": "m3", "volume": {"id": "vol_gone", "sizeGb": 10, "path": "/data"}},
                     "m4": {"id": "m4", "volume": {"id": "vol_renamed", "sizeGb": 10, "path": "/data"}},
                     "m5": {"id": "m5", "volume": {"id": "vol_mounted", "sizeGb": 10, "path": "/data"}}},
-        "sessions": {"s1": {"backups": [{"machine": "m0", "volume": "vol_backedup", "snapshot": "vs_1"}]}},
     }, open(state, "w"))
     log = os.path.join(d, "core.log")
-    open(log, "w").write("2026/10/16 machine m9: volume vol_fromlog snapshot asked for\nunrelated vol_prod line\n")
+    open(log, "w").write("2026/10/22 machine m9: volume vol_fromlog (10 GB)\nunrelated vol_prod line\n")
 
     fake = FakeFly()
     fake.vol("vol_leaked")                         # the run's, its machine gone: deleted
-    fake.vol("vol_backedup")                       # named by a kill's backup: deleted
     fake.vol("vol_fromlog")                        # named only in the core's log: deleted
     fake.vol("vol_attached", attached="m2")        # the run's, its machine still going away: deleted on a later look
     fake.vol("vol_renamed", name="something_else")  # not a session volume: left
@@ -95,12 +93,12 @@ def main():
     fake.vol("vol_prod2", attached="mprod")
 
     ids = rv.run_ids([state, log, os.path.join(d, "missing.log")])
-    assert ids == {"vol_leaked", "vol_attached", "vol_gone", "vol_renamed", "vol_mounted", "vol_backedup", "vol_fromlog"}, ids
+    assert ids == {"vol_leaked", "vol_attached", "vol_gone", "vol_renamed", "vol_mounted", "vol_fromlog"}, ids
 
     srv = serve(fake)
     fly = rv.Fly(f"http://127.0.0.1:{srv.server_address[1]}", "jarvis2-sessions", "tok")
     deleted = rv.sweep(fly, ids, rounds=3, wait=0.01)
-    assert sorted(fake.deleted) == ["vol_attached", "vol_backedup", "vol_fromlog", "vol_leaked"], fake.deleted
+    assert sorted(fake.deleted) == ["vol_attached", "vol_fromlog", "vol_leaked"], fake.deleted
     assert sorted(deleted) == sorted(fake.deleted)
     for keep in ("vol_prod", "vol_prod2", "vol_renamed", "vol_mounted"):
         assert fake.volumes[keep]["state"] != "destroyed", keep

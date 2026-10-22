@@ -2432,3 +2432,23 @@ snapshot failed with "no space left on device", the machine was destroyed anyway
      limit and kills the hog), `TestLockMemoryAsRoot`; the e2e (`e2e/keeper.go`) checks both limits, the harness and
      claude in the session's cgroup, a rescue command in the rescue one, the worker outside, both locked, and a hog's
      kill with the status reports going on.
+
+## No Fly volume snapshots, 2026-10-22
+
+222. **The core takes no Fly volume snapshot of any kind** (Deyao, 2026-10-22: "modify to not take volumn snapshot").
+     A kill is: the machine's own signed snapshot (unchanged) → one Fly destroy → once Fly reports the machine
+     destroyed, its volume deleted (`core/volumes.go`). Volumes are made with `auto_backup_enabled: false` (Fly's daily
+     automatic snapshots off) and no `snapshot_retention`. **A machine's signed snapshot is the only copy of its state**:
+     a machine killed without one (a forced destroy after a failed final snapshot, a kill whose claim didn't check)
+     leaves nothing else behind. A failed final snapshot still keeps the machine and its volume (DECISIONS 215).
+     Removed (a clean cut): the core's stop-and-snapshot step before the destroy (`backupVolume`), the `Backup` record
+     and the kill record's `backup` field, the backup retentions (3 and 60 days of DECISIONS 177), the Fly calls only it
+     used (`Stop`, `SetRetention`, `CreateSnapshot`, `Snapshots` on the core's Fly), the line state's `backups`; in the
+     router the session's `backups` list (`/api/state`), the DM and Resume refusal naming a backup, the leftover-volume
+     sweep's and the budget's reading of backups (the budget still counts the snapshots of the volumes Fly lists:
+     DECISIONS 179); the "Volume backups" sections of the web page and the iPhone app. Old documents still read: a
+     line state or a kill record an earlier core signed with a `backup` field decodes as before (the field is ignored),
+     and the router's state with sessions' `backups` loads without them. Snapshots the earlier core already took stay
+     on Fly until their retention ends; nothing lists them. The kernel's spawner already took none (DECISIONS 217).
+     The core change ships only when Deyao Recovers the new core; until then the serving core still snapshots each
+     volume at a kill, which the router no longer shows, and the router's kill wait stays 45 minutes for it.

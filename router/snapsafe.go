@@ -6,15 +6,15 @@ package main
 //   - The machine's final snapshot streams to the router (snapstream.go): it needs no free disk on the machine.
 //   - A machine whose final snapshot fails (an error the machine reports, no progress for the stall time, a machine
 //     that went silent) is KEPT, never destroyed, with or without a volume (Deyao, 2026-10-21: session
-//     sad35945f04b2124d's machine was killed after its snapshot failed, and Fly couldn't restore its volume backup):
-//     the session goes "failed" with snapshotFailed set, and Deyao gets a "needs you" DM. Pause again retries;
-//     Destroy anyway (force) goes on without it.
-//   - A machine with a volume (a core with volumes, core/volumes.go) whose kill goes on: the core stops it, takes the
-//     volume's backup snapshot and destroys it only once that exists. The kill's signed record names the backup; the
-//     session lists it (backups) for recovery by hand. No resume or restore reads a backup (Deyao, 2026-10-15).
+//     sad35945f04b2124d's machine was killed after its snapshot failed): the session goes "failed" with
+//     snapshotFailed set, and Deyao gets a "needs you" DM. Pause again retries; Destroy anyway (force) goes on
+//     without it.
+//   - A machine with a volume (a core with volumes, core/volumes.go) whose kill goes on: the core destroys it and
+//     deletes the volume. No volume snapshot is taken (DECISIONS 222): the machine's signed snapshot is the only copy
+//     of its state.
 //   - A line whose last machine left no signed snapshot (while an earlier machine of it did, or it had booted) is
 //     marked noSnapshot: Resume refuses (it would start the session empty), says why on the session, and Deyao gets a
-//     DM naming the backup. Destroy still archives the newest signed snapshot it has (and every live transcript copy
+//     DM. Destroy still archives the newest signed snapshot it has (and every live transcript copy
 //     it doesn't hold, livearchive.go), never DMs about it, and notes the missing snapshot in the record.
 //   - A kill that doesn't finish (the core still can't destroy it after killMax) leaves the session failed with its
 //     machine, and DMs too.
@@ -32,20 +32,6 @@ type Volume struct {
 	SizeGB int    `json:"sizeGb"`
 	Path   string `json:"path"`
 }
-
-// Backup: a kill's volume backup (core/volumes.go Backup), with the machine it came from
-type Backup struct {
-	Machine       string    `json:"machine"`
-	Volume        string    `json:"volume"`
-	Snapshot      string    `json:"snapshot"`
-	At            time.Time `json:"at"`
-	RetentionDays int       `json:"retentionDays"`
-	ExpiresAt     time.Time `json:"expiresAt"`
-	SizeBytes     int64     `json:"sizeBytes,omitempty"`
-	Signed        bool      `json:"signedSnapshot"` // the machine signed its own snapshot too
-}
-
-const maxBackupsKept = 20
 
 // machineVolume: the volume the machine's cert names (nil: a machine of a core without volumes)
 func (r *Router) machineVolume(machine string) *Volume {
@@ -108,11 +94,7 @@ func (r *Router) finalSnapshotAndKillWith(id, machine string, destroying, force 
 	if serr != nil {
 		log.Printf("session %s: %s's final snapshot: %v; going on (destroy anyway)", id, machine, serr)
 	}
-	if vol != nil {
-		r.setWaiting(id, "stopping the machine and taking its volume's backup snapshot (up to "+waitText(killMax)+")")
-	}
-	r.lcNote(id, machine, map[bool]string{true: "asked the core to stop the machine, take its volume's backup snapshot and destroy it on Fly",
-		false: "asked the core to destroy the machine on Fly"}[vol != nil])
+	r.lcNote(id, machine, "asked the core to destroy the machine on Fly")
 	if r.isKernelMachine(machine) { // kernelline.go: the spawner kills it into the line's next source
 		return r.kernelKillDone(id, machine, destroying, serr, &ok)
 	}
@@ -169,7 +151,7 @@ func (r *Router) keepMachine(id, machine string, serr error) {
 func (r *Router) killFailed(id, machine string, hasVolume, destroying bool, err error) {
 	what := "its machine is kept"
 	if hasVolume {
-		what = "its machine (perhaps stopped) and its volume are kept"
+		what = "its machine and its volume are kept"
 	}
 	action, retry := "pause", "Pause again to retry"
 	if destroying {
@@ -179,29 +161,15 @@ func (r *Router) killFailed(id, machine string, hasVolume, destroying bool, err 
 	r.DM(fmt.Sprintf("🔴 Session “%s” needs you — its %s couldn't finish (%v); %s, nothing was destroyed. %s.", r.dmName(id), action, err, what, retry))
 }
 
-// recordKill: the kill's record — the backup goes on the session's list; a kill that names no snapshot of a line
+// recordKill: the kill's record — a kill that names no snapshot of a line
 // that had state marks it noSnapshot (Resume refuses) and DMs. A destroy's kill never DMs: a destroy isn't a resume,
 // so there is nothing to refuse; the reason goes into its record (ArchiveInfo.NoSnapshot, the archive's session.json).
 func (r *Router) recordKill(id, machine string, kd *Doc, serr error, destroying bool) {
 	var k struct {
 		Snapshot string `json:"snapshot"`
-		Backup   *struct {
-			Volume        string    `json:"volume"`
-			Snapshot      string    `json:"snapshot"`
-			At            time.Time `json:"at"`
-			RetentionDays int       `json:"retentionDays"`
-			SizeBytes     int64     `json:"sizeBytes"`
-			Signed        bool      `json:"signedSnapshot"`
-		} `json:"backup"`
 	}
 	if kd != nil {
 		kd.Decode(&k)
-	}
-	var b *Backup
-	if k.Backup != nil && k.Backup.Snapshot != "" {
-		x := k.Backup
-		b = &Backup{Machine: machine, Volume: x.Volume, Snapshot: x.Snapshot, At: x.At, RetentionDays: x.RetentionDays,
-			ExpiresAt: x.At.Add(time.Duration(x.RetentionDays) * 24 * time.Hour), SizeBytes: x.SizeBytes, Signed: x.Signed}
 	}
 	older, _, olderAt := r.latestSnapshot(id) // archive.go: the newest signed snapshot the router still holds
 	if older == machine {
@@ -214,12 +182,6 @@ func (r *Router) recordKill(id, machine string, kd *Doc, serr error, destroying 
 			return
 		}
 		s.SnapshotFailed = ""
-		if b != nil {
-			s.Backups = append([]Backup{*b}, s.Backups...)
-			if len(s.Backups) > maxBackupsKept {
-				s.Backups = s.Backups[:maxBackupsKept]
-			}
-		}
 		if k.Snapshot != "" || (s.Booted != machine && older == "") {
 			s.NoSnapshot, s.noSnapshotDMed = "", false // a snapshot, or a line with no state yet (its first machine never booted)
 			return
@@ -239,27 +201,20 @@ func (r *Router) recordKill(id, machine string, kd *Doc, serr error, destroying 
 		return
 	}
 	log.Printf("session %s: %s; it won't resume", id, reason)
-	r.DM(fmt.Sprintf("🔴 Session “%s” needs you — %s, so it won't resume (it would start empty). %s", r.dmName(id), reason, stateLeft(b, older, olderAt)))
+	r.DM(fmt.Sprintf("🔴 Session “%s” needs you — %s, so it won't resume (it would start empty). %s", r.dmName(id), reason, stateLeft(older, olderAt)))
 }
 
 // stateLeft: where the session's last state is, for the DM and the refusal
-func stateLeft(b *Backup, older string, olderAt time.Time) string {
-	out := ""
-	if b != nil {
-		out = fmt.Sprintf("Its last state is in the Fly volume backup %s (volume %s, kept until %s) for recovery by hand.", b.Snapshot, b.Volume, b.ExpiresAt.Format("2006-01-02"))
-	} else {
-		out = "Its machine had no volume, so there is no volume backup."
+func stateLeft(older string, olderAt time.Time) string {
+	if older == "" {
+		return "There is no other copy of its state."
 	}
-	if older != "" {
-		out += fmt.Sprintf(" The newest signed snapshot is machine %s's from %s (Destroy archives it).", older, olderAt.UTC().Format("2006-01-02 15:04 UTC"))
-	}
-	return out
+	return fmt.Sprintf("The newest signed snapshot is machine %s's from %s (Destroy archives it).", older, olderAt.UTC().Format("2006-01-02 15:04 UTC"))
 }
 
 // resumeRefusal: nil, or why Resume won't start the session (noSnapshot), DMed once per refusal episode
 func (r *Router) resumeRefusal(id string) error {
 	var reason string
-	var b *Backup
 	dm := false
 	r.st.Do(func(d *persisted) {
 		s := d.Sessions[id]
@@ -267,10 +222,6 @@ func (r *Router) resumeRefusal(id string) error {
 			return
 		}
 		reason = s.NoSnapshot
-		if len(s.Backups) > 0 {
-			x := s.Backups[0]
-			b = &x
-		}
 		if !s.noSnapshotDMed {
 			s.noSnapshotDMed, dm = true, true
 		}
@@ -279,25 +230,17 @@ func (r *Router) resumeRefusal(id string) error {
 		return nil
 	}
 	older, _, olderAt := r.latestSnapshot(id)
-	msg := fmt.Sprintf("session %s won't resume: its %s, so it would start empty. %s", id, reason, stateLeft(b, older, olderAt))
+	msg := fmt.Sprintf("session %s won't resume: its %s, so it would start empty. %s", id, reason, stateLeft(older, olderAt))
 	if dm {
 		r.DM("🔴 Session “" + r.dmName(id) + "” needs you — a resume was refused: " + msg)
 	}
 	return fmt.Errorf("%s", msg)
 }
 
-// backupsView: the session's backups in /api/state and the records
-func backupsView(s *Session, v map[string]any) {
-	v["backups"] = orEmptyBackups(s.Backups)
+// snapshotView: what the final snapshot left behind, in /api/state and the records
+func snapshotView(s *Session, v map[string]any) {
 	v["noSnapshot"] = nullIfEmpty(s.NoSnapshot)
 	v["snapshotFailed"] = nullIfEmpty(s.SnapshotFailed)
-}
-
-func orEmptyBackups(b []Backup) []Backup {
-	if b == nil {
-		return []Backup{}
-	}
-	return b
 }
 
 // destroyKillFallback: a destroy's kill that failed (DECISIONS 181). A refused snapshot claim (a machine from an

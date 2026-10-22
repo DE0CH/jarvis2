@@ -1,6 +1,6 @@
 import { useRef } from "react";
 import { Linking, View } from "react-native";
-import { api, ago, isTaskLine, challengeRequest, cronEvery, holderTitle, HOLDERS, HARNESS, REGION, sessionTitle, storesOf, when, type Approval, type Backup, type Lease, type MessageRule, type Session, type State } from "../lib/api";
+import { api, ago, isTaskLine, challengeRequest, cronEvery, holderTitle, HOLDERS, HARNESS, REGION, sessionTitle, storesOf, when, type Approval, type Lease, type MessageRule, type Session, type State } from "../lib/api";
 import { useStore, setTab, getStore, pend, refresh, refreshUntil, pendUntil, settle, ask, askText, toast, failed, exclusive, BUSY_LABEL } from "../lib/store";
 import { hasShell, requestSecure } from "../lib/shell";
 import { requestGrant } from "../lib/grants";
@@ -63,8 +63,7 @@ function SessionPill({ m }: { m: Session }) {
   }
   return <Pill kind="dim">{m.state}</Pill>;
 }
-// what a moving session waits on, in plain words (router: "stopping the machine and taking its volume's backup snapshot
-// (up to 45 min)"): a line that wraps inside its card
+// what a moving session waits on, in plain words (router Session.waiting): a line that wraps inside its card
 function MovingDetail({ m }: { m: Session }) {
   if (!MOVING[m.state] || !m.waiting) return null;
   return <P size={1} color={m.state === "destroying" ? "red" : "amber"} mb={1} id={"session-waiting-" + m.id}>{`${m.waiting[0].toUpperCase()}${m.waiting.slice(1)}`}</P>;
@@ -329,11 +328,8 @@ function DiskAlert({ m, busy }: { m: Session; busy: string | null }) {
     </Callout>
   );
 }
-const day = (iso: string) => new Date(iso).toISOString().slice(0, 10);
-const sizeText = (b?: number) => !b ? "" : b >= 1 << 30 ? `${(b / (1 << 30)).toFixed(1)} GB` : `${Math.max(1, Math.round(b / (1 << 20)))} MB`;
 // the final snapshot failed and the machine was kept; or the line's last machine left none and it won't resume
 function SnapshotTrouble({ m, busy }: { m: Session; busy: string | null }) {
-  const b = (m.backups || [])[0];
   if (m.snapshotFailed) return (
     <Callout color="red" variant="surface" mt={2} data={{ snapshotFailed: "1" }} id={"snapshot-failed-" + m.id}>
       <CalloutText color="red">{`The final snapshot failed (${m.snapshotFailed}), so its machine was kept instead of destroyed: nothing is lost. Free what blocks it, then Pause again; Destroy anyway drops what changed since its last snapshot.`}</CalloutText>
@@ -346,39 +342,10 @@ function SnapshotTrouble({ m, busy }: { m: Session; busy: string | null }) {
   if (m.noSnapshot) return (
     <Callout color="red" variant="surface" mt={2} data={{ noSnapshot: "1" }} id={"no-snapshot-" + m.id}>
       <CalloutText color="red">{`It won't resume: its ${m.noSnapshot}, so it would start empty.`}</CalloutText>
-      <CalloutText color="red">{b ? `Its last state is in the Fly volume backup ${b.snapshot} (volume ${b.volume}), kept until ${day(b.expiresAt)}, for recovery by hand.` : "Its machine had no volume, so there is no volume backup. Destroy archives its newest signed snapshot."}</CalloutText>
+      <CalloutText color="red">Destroy archives its newest signed snapshot.</CalloutText>
     </Callout>
   );
   return null;
-}
-const copyable = (label: string, v: string) => canCopy ? () => copyText(v).then(() => toast(label + " copied", "ok"), (e) => failed(e, "Could not copy: ")) : undefined;
-// the core's Fly volume backups of the line's machines (one per pause), newest first: for recovery by hand only
-function Backups({ m }: { m: Session }) {
-  const list = m.backups || [];
-  if (!list.length) return null;
-  const row = (x: Backup) => (
-    <Box key={x.snapshot} data={{ backup: x.snapshot }}>
-      <Rows>
-        <Row label="Snapshot" mono>{x.snapshot}</Row>
-        <Row label="Volume" mono>{x.volume}</Row>
-        <Row label="Taken">{`${ago(x.at)} · kept until ${day(x.expiresAt)}`}</Row>
-        <Row label="Signed snapshot">{x.signedSnapshot ? "Yes (the machine's own, too)" : "No: this is the only copy"}</Row>
-        {!!x.sizeBytes && <Row label="Size">{sizeText(x.sizeBytes)}</Row>}
-      </Rows>
-      {canCopy && <Flex gap={2} mt={1} wrap>
-        <Button size={1} variant="ghost" color="gray" id={"copy-snap-" + x.snapshot} onPress={copyable("Snapshot id", x.snapshot)}>Copy snapshot id</Button>
-        <Button size={1} variant="ghost" color="gray" id={"copy-vol-" + x.snapshot} onPress={copyable("Volume id", x.volume)}>Copy volume id</Button>
-      </Flex>}
-    </Box>
-  );
-  return (
-    <Box mt={2} id={"backups-" + m.id}>
-      <Lbl>{`Volume backups (${list.length})`}</Lbl>
-      <Muted>Fly volume snapshots taken at each pause, for recovery by hand; no resume uses them.</Muted>
-      {list.slice(0, 3).map(row)}
-      {list.length > 3 && <Muted>{`and ${list.length - 3} older (GET api/state lists them all)`}</Muted>}
-    </Box>
-  );
 }
 // a bypass switch waiting on its terminal grant in the Inbox (router sessionops.go askModeGrant)
 function ModeWaiting({ m }: { m: Session }) {
@@ -521,7 +488,6 @@ export function Sessions() {
                 {m.wake?.kind === "account" && m.wake.phase === "failed" && <P size={2} color="red" mt={1} id={"account-failed-" + m.id}>{"Account switch failed: " + (m.wake.error || "no reason given")}</P>}
                 <MessageRules m={m} />
                 {!!m.error && <P size={2} color="red" mt={1}>{m.error}</P>}
-                <Backups m={m} />
                 {!!m.discordChannel && <Flex mt={1}><Button size={1} variant="ghost" color="gray" id={"discord-" + m.id} onPress={() => openDiscord(m.discordChannel!)}>Discord channel ↗</Button></Flex>}
                 <Flex gap={2} pt={3} wrap style={{ marginTop: "auto" }} data={{ actions: "1" }}>
                   {busy ? <BusyButton variant="soft" color="gray" label={busy} />

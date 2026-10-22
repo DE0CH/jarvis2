@@ -1,11 +1,10 @@
 package main
 
 // The machine's volume (core/volumes.go): a machine the core made with a Fly volume finds it mounted at /data. The
-// session's state — what the snapshot holds — lives on it, so the core's backup snapshot of the volume at the pause
-// has it all: each of the snapshot's directories is bind-mounted from /data/home/<path> onto ~/<path> (the paths
-// stay the same for every program, so Claude's project directory names don't change), and the snapshot's single
-// files (~/.claude.json and the Jarvis records), which programs replace by rename and so can't be bind-mounted, are
-// copied to /data/home/ every minute and right before the final snapshot.
+// session's state — what the snapshot holds — lives on it: each of the snapshot's directories is bind-mounted from
+// /data/home/<path> onto ~/<path> (the paths stay the same for every program, so Claude's project directory names
+// don't change), and the snapshot's single files (~/.claude.json and the Jarvis records), which programs replace by
+// rename and so can't be bind-mounted, are copied to /data/home/ every minute and right before the final snapshot.
 //
 // The volume is always new and empty at boot: no resume reads it (a successor's state is its predecessor's signed
 // snapshot, restored onto the bind-mounted paths, so onto its own volume). Whatever the image put at those paths is

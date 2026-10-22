@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"strings"
 	"testing"
-	"time"
 )
 
 // volFly: the tests' fake Fly with volumes (volumes.go)
@@ -14,32 +13,27 @@ type volFly struct {
 	n         int
 	vols      map[string]*fakeVol
 	mounts    map[string]string // machine → volume
-	stopSlow  bool              // a stop leaves the machine "stopping"
-	snapFail  bool              // the next snapshot comes out failed
 	calls     []string
-	clock     func() time.Time
 	createErr error
 }
 
 type fakeVol struct {
-	size      int
-	retention int
-	deleted   bool
-	snaps     []VolumeSnapshot
+	size    int
+	deleted bool
 }
 
 func withVolumes(c *Core, f *fakeFly) *volFly {
-	v := &volFly{fakeFly: f, vols: map[string]*fakeVol{}, mounts: map[string]string{}, clock: c.now}
+	v := &volFly{fakeFly: f, vols: map[string]*fakeVol{}, mounts: map[string]string{}}
 	c.fly = v
 	return v
 }
 
 func (v *volFly) log(s string, a ...any) { v.calls = append(v.calls, fmt.Sprintf(s, a...)) }
 
-func (v *volFly) CreateVolume(region string, sizeGB, retention int) (string, error) {
+func (v *volFly) CreateVolume(region string, sizeGB int) (string, error) {
 	v.n++
 	id := fmt.Sprintf("vol_%d", v.n)
-	v.vols[id] = &fakeVol{size: sizeGB, retention: retention}
+	v.vols[id] = &fakeVol{size: sizeGB}
 	v.log("create-volume %s %d", id, sizeGB)
 	return id, nil
 }
@@ -50,40 +44,6 @@ func (v *volFly) CreateWithVolume(r StartRequest, guest map[string]any, env map[
 	id, err := v.fakeFly.Create(r, guest, env)
 	v.mounts[id] = volume + ":" + path
 	return id, err
-}
-func (v *volFly) Stop(id string) error {
-	v.log("stop %s", id)
-	if v.stopSlow {
-		v.machines[id].state = "stopping"
-	} else {
-		v.machines[id].state = "stopped"
-	}
-	return nil
-}
-func (v *volFly) SetRetention(vol string, days int) error {
-	v.vols[vol].retention = days
-	v.log("retention %s %d", vol, days)
-	return nil
-}
-func (v *volFly) CreateSnapshot(vol string) error {
-	fv := v.vols[vol]
-	st := "running"
-	if v.snapFail {
-		st, v.snapFail = "failed", false
-	}
-	fv.snaps = append(fv.snaps, VolumeSnapshot{ID: fmt.Sprintf("vs_%s_%d", vol, len(fv.snaps)+1), Status: st, Size: 123, CreatedAt: v.clock()})
-	v.log("snapshot %s", vol)
-	return nil
-}
-func (v *volFly) Snapshots(vol string) ([]VolumeSnapshot, error) {
-	return append([]VolumeSnapshot{}, v.vols[vol].snaps...), nil
-}
-func (v *volFly) finishSnapshots(vol string) {
-	for i := range v.vols[vol].snaps {
-		if v.vols[vol].snaps[i].Status == "running" {
-			v.vols[vol].snaps[i].Status = "created"
-		}
-	}
 }
 func (v *volFly) ExtendVolume(vol string, size int) (bool, error) {
 	v.vols[vol].size = size
@@ -124,7 +84,7 @@ func TestAStartMakesTheMachinesOwnVolume(t *testing.T) {
 	v := withVolumes(c, f)
 	d, id := newLine(t, c, p, "default")
 	vol := volumeOf(t, v, id)
-	if v.mounts[id] != vol+":/data" || v.vols[vol].size != defaultDiskGB || v.vols[vol].retention != backupRetentionDays {
+	if v.mounts[id] != vol+":/data" || v.vols[vol].size != defaultDiskGB {
 		t.Fatalf("volume %s %+v", v.mounts[id], v.vols[vol])
 	}
 	cert := certOf(t, d)
@@ -149,98 +109,36 @@ func TestAStartMakesTheMachinesOwnVolume(t *testing.T) {
 	}
 }
 
-// the kill: stop, the volume's snapshot, and only once Fly reports it created the destroy and the volume's delete;
-// the signed record names the backup
-func TestAKillBacksTheVolumeUpBeforeDestroying(t *testing.T) {
+// the kill: the destroy, and only once Fly reports it destroyed the volume's delete; no volume snapshot, no stop
+// first, and the signed record names only the machine's own snapshot
+func TestAKillDestroysThenDeletesTheVolume(t *testing.T) {
 	c, f, p := setup(t)
 	v := withVolumes(c, f)
 	_, id := newLine(t, c, p, "default")
 	vol := volumeOf(t, v, id)
 	sum := strings.Repeat("ab", 32)
 	claim := &SnapshotClaim{Sha256: sum, Sig: machineSign(f.machines[id].sig, sum)}
-
-	v.stopSlow = true
-	if _, err := c.KillWithSnapshot(id, claim); status(err) != 409 || !strings.Contains(err.Error(), "stopping") {
-		t.Fatalf("stopping: %v", err)
-	}
-	v.stopSlow = false
-	if _, err := c.KillWithSnapshot(id, claim); status(err) != 409 || !strings.Contains(err.Error(), "asked for") {
-		t.Fatalf("snapshot asked: %v", err)
-	}
-	if _, err := c.KillWithSnapshot(id, claim); status(err) != 409 || !strings.Contains(err.Error(), "running") {
-		t.Fatalf("snapshot running: %v", err)
-	}
-	if f.machines[id].destroyed || v.vols[vol].deleted || c.isKilled(id) {
-		t.Fatal("destroyed before the backup was created")
-	}
-	v.finishSnapshots(vol)
 	k := pl(t)(c.KillWithSnapshot(id, claim))
-	b, _ := k["backup"].(map[string]any)
-	if k["snapshot"] != sum || b == nil || b["volume"] != vol || b["snapshot"] != "vs_"+vol+"_1" || b["retentionDays"] != float64(backupRetentionDays) || b["signedSnapshot"] != true {
+	if k["snapshot"] != sum || k["backup"] != nil {
 		t.Fatalf("record %v", k)
 	}
 	if !f.machines[id].destroyed || !v.vols[vol].deleted {
 		t.Fatal("machine or volume left")
 	}
-	want := []string{"stop " + id, "snapshot " + vol, "destroy " + id, "delete-volume " + vol}
+	want := []string{"destroy " + id, "delete-volume " + vol}
 	got := []string{}
 	for _, x := range v.calls {
-		for _, w := range want {
-			if x == w && (len(got) == 0 || got[len(got)-1] != x) {
-				got = append(got, x)
-			}
+		if !strings.HasPrefix(x, "create-volume") {
+			got = append(got, x)
 		}
 	}
 	if strings.Join(got, ",") != strings.Join(want, ",") {
-		t.Fatalf("order %v", v.calls)
+		t.Fatalf("calls %v", v.calls)
 	}
-	if k2 := pl(t)(c.KillWithSnapshot(id, nil)); k2["backup"] == nil {
-		t.Fatal("asked again: the backup is gone from the record")
-	}
-}
-
-// without the machine's own snapshot the backup is the only copy: Fly's longest retention, set before the snapshot;
-// a failed snapshot destroys nothing and is asked for again
-func TestABackupWithoutTheMachinesSnapshotIsKeptLongest(t *testing.T) {
-	c, f, p := setup(t)
-	v := withVolumes(c, f)
-	_, id := newLine(t, c, p, "default")
-	vol := volumeOf(t, v, id)
-	v.snapFail = true
-	c.KillWithSnapshot(id, nil) // stop + ask
-	if _, err := c.KillWithSnapshot(id, nil); status(err) != 502 {
-		t.Fatalf("a failed snapshot: %v", err)
-	}
-	if f.machines[id].destroyed {
-		t.Fatal("destroyed after a failed backup")
-	}
-	c.KillWithSnapshot(id, nil) // asked again
-	v.finishSnapshots(vol)
-	k := pl(t)(c.KillWithSnapshot(id, nil))
-	b, _ := k["backup"].(map[string]any)
-	if b == nil || b["retentionDays"] != float64(noSnapshotRetentionDays) || b["signedSnapshot"] != false || v.vols[vol].retention != noSnapshotRetentionDays {
-		t.Fatalf("record %v, volume %+v", k, v.vols[vol])
-	}
-	if k["snapshot"] != "" {
-		t.Fatalf("a snapshot named: %v", k)
-	}
-}
-
-// a machine that never got a cert never held a session's state: no backup, its volume just goes
-func TestAnUncertifiedMachineHasNoBackup(t *testing.T) {
-	c, f, _ := setup(t)
-	v := withVolumes(c, f)
-	created := pl(t)(c.Start(StartRequest{Image: img, Region: "lhr", Size: "large"}))
-	id := created["id"].(string)
-	pl(t)(c.Init(id))
-	k := pl(t)(c.KillWithSnapshot(id, nil))
-	if k["backup"] != nil || !v.vols[volumeOf(t, v, id)].deleted {
+	// without the machine's own snapshot the kill is the same
+	_, id2 := newLine(t, c, p, "default")
+	if k := pl(t)(c.KillWithSnapshot(id2, nil)); k["snapshot"] != "" || k["backup"] != nil || !v.vols[volumeOf(t, v, id2)].deleted {
 		t.Fatalf("record %v", k)
-	}
-	for _, x := range v.calls {
-		if strings.HasPrefix(x, "snapshot") || strings.HasPrefix(x, "stop") {
-			t.Fatalf("backed up: %v", v.calls)
-		}
 	}
 }
 
@@ -265,27 +163,29 @@ func TestExtendGrowsTheLiveVolumeOnly(t *testing.T) {
 	}
 }
 
-// a core that takes the line over (continuity.go) knows the live machines' volumes and the kills' backups
-func TestTheLineStateCarriesVolumesAndBackups(t *testing.T) {
+// a core that takes the line over (continuity.go) knows the live machines' volumes; a line state an earlier core
+// sealed with "backups" still reads
+func TestTheLineStateCarriesVolumes(t *testing.T) {
 	c, f, p := setup(t)
 	v := withVolumes(c, f)
 	_, a := newLine(t, c, p, "default")
-	_, b := newLine(t, c, p, "default")
-	c.KillWithSnapshot(b, nil)
-	c.KillWithSnapshot(b, nil)
-	v.finishSnapshots(volumeOf(t, v, b))
-	pl(t)(c.KillWithSnapshot(b, nil))
 	c.mu.Lock()
 	st := c.lineSnapshot()
 	c.mu.Unlock()
 	raw, _ := json.Marshal(st)
+	var m map[string]any
+	json.Unmarshal(raw, &m)
+	m["backups"] = map[string]any{"m0": map[string]any{"volume": "vol_0", "snapshot": "vs_0", "retentionDays": 3}}
+	raw, _ = json.Marshal(m)
 	var back lineState
-	json.Unmarshal(raw, &back)
+	if err := json.Unmarshal(raw, &back); err != nil {
+		t.Fatal(err)
+	}
 	c2, _, _ := newCore(t)
 	c2.mu.Lock()
 	c2.restoreLine(back, false)
 	c2.mu.Unlock()
-	if c2.vol.live[a] == nil || c2.vol.live[a].ID != volumeOf(t, v, a) || c2.vol.backups[b] == nil || c2.vol.backups[b].Snapshot == "" {
-		t.Fatalf("live %v backups %v", c2.vol.live, c2.vol.backups)
+	if c2.vol.live[a] == nil || c2.vol.live[a].ID != volumeOf(t, v, a) {
+		t.Fatalf("live %v", c2.vol.live)
 	}
 }
