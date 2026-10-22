@@ -613,3 +613,78 @@ func TestRecordsListNoTranscriptsAsArray(t *testing.T) {
 		t.Fatalf("transcripts = %s, want []", got)
 	}
 }
+
+// DECISIONS 226: the uploads run in parallel, each directory is made once (parents first), progress is reported, and
+// a failed upload fails the archive without leaving temp files
+func TestArchiveParallelUploadsAndProgress(t *testing.T) {
+	rg := newRig(t)
+	t0 := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+	files := append([]tfile{}, rg.files...)
+	for i := 0; i < 60; i++ {
+		files = append(files, tfile{name: fmt.Sprintf("artifacts/deep/d%d/e/f%d.txt", i%7, i), body: fmt.Sprint("file ", i), at: t0})
+	}
+	rg.writeSnapshot(t, "m1", files)
+	every := archiveProgressEvery
+	archiveProgressEvery = 0
+	defer func() { archiveProgressEvery = every }()
+	info, err := rg.r.archive("s1")
+	if err != nil || info == nil {
+		t.Fatalf("archive: %v %v", info, err)
+	}
+	got := map[string]bool{}
+	for _, f := range rg.dav.under(info.Dir) {
+		got[f] = true
+	}
+	for i := 0; i < 60; i++ {
+		f := fmt.Sprintf("artifacts/deep/d%d/e/f%d.txt", i%7, i)
+		if !got[f] || string(rg.dav.get(info.Dir+"/"+f)) != fmt.Sprint("file ", i) {
+			t.Fatalf("%s missing or wrong", f)
+		}
+	}
+	if info.Artifacts != 64 || len(info.Transcripts) != 2 {
+		t.Fatalf("artifacts %d transcripts %v", info.Artifacts, info.Transcripts)
+	}
+	var s Session
+	rg.r.st.Do(func(d *persisted) { s = *d.Sessions["s1"] })
+	if s.Waiting != "" {
+		t.Fatalf("waiting left as %q", s.Waiting)
+	}
+	tmp := filepath.Join(rg.r.cfg.DataDir, "tmp")
+	if left, _ := os.ReadDir(tmp); len(left) != 0 {
+		t.Fatalf("temp files left: %d", len(left))
+	}
+
+	// a failing upload: the archive fails, nothing is left in tmp
+	rg = newRig(t)
+	rg.writeSnapshot(t, "m1", files)
+	tmp = filepath.Join(rg.r.cfg.DataDir, "tmp")
+	rg.dav.mu.Lock()
+	rg.dav.fail = "claude-records/2026-10-01 Fix the router/artifacts/deep/d3"
+	rg.dav.mu.Unlock()
+	if _, err := rg.r.archive("s1"); err == nil || !strings.Contains(err.Error(), "507") {
+		t.Fatalf("want the 507, got %v", err)
+	}
+	if left, _ := os.ReadDir(tmp); len(left) != 0 {
+		t.Fatalf("temp files left after the failure: %d", len(left))
+	}
+}
+
+func TestArchiveProgressText(t *testing.T) {
+	rg := newRig(t)
+	every := archiveProgressEvery
+	archiveProgressEvery = time.Hour
+	defer func() { archiveProgressEvery = every }()
+	p := rg.r.archiveProgress("s1")
+	p(1, 10) // the first is always shown
+	p(2, 10) // within the interval: not
+	var s Session
+	rg.r.st.Do(func(d *persisted) { s = *d.Sessions["s1"] })
+	if s.Waiting != "archiving to the Storage Box: 1 of 10 files uploaded" {
+		t.Fatalf("waiting %q", s.Waiting)
+	}
+	p(10, 10) // the last always
+	rg.r.st.Do(func(d *persisted) { s = *d.Sessions["s1"] })
+	if s.Waiting != "archiving to the Storage Box: 10 of 10 files uploaded" {
+		t.Fatalf("waiting %q", s.Waiting)
+	}
+}

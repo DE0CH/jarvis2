@@ -36,7 +36,11 @@ func recordsBoxFromEnv() *StorageBox {
 }
 
 func newStorageBox(base, user, pass string) *StorageBox {
-	return &StorageBox{base: strings.TrimSuffix(base, "/") + "/", user: user, pass: pass, http: &http.Client{Timeout: 30 * time.Minute}}
+	// its own transport: the default keeps 2 idle connections per host, too few for an archive's parallel uploads
+	// (archiveUploads), which would then open a new TLS connection for most files
+	t := http.DefaultTransport.(*http.Transport).Clone()
+	t.MaxIdleConnsPerHost = 8
+	return &StorageBox{base: strings.TrimSuffix(base, "/") + "/", user: user, pass: pass, http: &http.Client{Timeout: 30 * time.Minute, Transport: t}}
 }
 
 func davURL(base, p string) string {
@@ -76,14 +80,22 @@ func (b *StorageBox) Mkcols(dir string) error {
 			continue
 		}
 		cur += s + "/"
-		resp, err := b.do("MKCOL", strings.TrimSuffix(cur, "/"), nil, 0, nil)
-		if err != nil {
+		if err := b.mkcol(strings.TrimSuffix(cur, "/")); err != nil {
 			return err
 		}
-		resp.Body.Close()
-		if resp.StatusCode >= 300 && resp.StatusCode != 405 {
-			return fmt.Errorf("MKCOL %s: HTTP %d", cur, resp.StatusCode)
-		}
+	}
+	return nil
+}
+
+// mkcol: one directory whose parent exists (an existing one answers 405, which is fine)
+func (b *StorageBox) mkcol(dir string) error {
+	resp, err := b.do("MKCOL", strings.Trim(dir, "/"), nil, 0, nil)
+	if err != nil {
+		return err
+	}
+	resp.Body.Close()
+	if resp.StatusCode >= 300 && resp.StatusCode != 405 {
+		return fmt.Errorf("MKCOL %s/: HTTP %d", strings.Trim(dir, "/"), resp.StatusCode)
 	}
 	return nil
 }

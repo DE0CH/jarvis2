@@ -2496,3 +2496,22 @@ blue refused the takeover with 409 "this core isn't standing by": no core served
      flips the router back. Tested: `TestFinishAFlipTheNextCoreTookOverByRecover` (another key and an older line state
      refused; the tick finishes it without a takeover call; `activeCore` set, `core-final.json` gone, kept over a
      restart), `TestNoFinishWhileTheCurrentCoreServes`.
+
+226. **A destroy's archive uploads in parallel and says how far it is** (`router/archive.go` `uploadSnapshotFiles`,
+     `archiveProgress`). The archive put the snapshot's transcripts and `~/artifacts` files on the Storage Box one PUT
+     at a time, and every file's directory again segment by segment from `claude-records/` (a MKCOL per segment), so a
+     session with thousands of artifact files spent most of its destroy in round trips (2026-10-22: 2094 files took
+     20 min; a 1.6 GB artifacts tree ran past the flip's 29-minute drain, which gave up on it), with nothing in the app,
+     the lifecycle log or the router's log between "archiving the session to the Storage Box" and the end: the session
+     just sat in `destroying`. Now `archiveUploads` (4) workers upload while the tar is read in order (each file in a
+     temp file the worker deletes once it is up, so only a few are on disk), each directory is made once with one MKCOL
+     (its parents first), and the Storage Box client keeps up to 8 idle connections per host (the default 2 would open
+     a new TLS connection for most uploads). The first failed upload stops the walk and fails the archive as before
+     (the destroy keeps the session paused with the error). Progress goes into the session's `waiting` ("archiving to
+     the Storage Box: N of M files uploaded", which the app shows on the destroying session) and, at most every 20 s,
+     into the destroy's lifecycle log and the router's log; `waiting` is cleared when the uploads end. Why 4: the
+     Storage Box also serves the router's backups and live transcript copies, and Hetzner limits a sub-account's
+     concurrent connections; 4 cuts the wall time by about that factor without nearing the limit. Tested:
+     `TestArchiveParallelUploadsAndProgress` (60 files over nested directories the fake DAV only accepts with their
+     parents made; all arrive, counts right, `waiting` cleared, no temp files; a failing PUT fails the archive and
+     leaves no temp files), `TestArchiveProgressText`.

@@ -308,7 +308,8 @@ func (r *Router) archiveSnapshot(box *StorageBox, s *Session) (*ArchiveInfo, err
 	if err := os.MkdirAll(tmp, 0o700); err != nil {
 		return nil, err
 	}
-	up, err := uploadSnapshotFiles(box, dir, snap, tmp)
+	up, err := uploadSnapshotFiles(box, dir, snap, tmp, r.archiveProgress(s.ID))
+	r.setWaiting(s.ID, "")
 	if err != nil {
 		return nil, err
 	}
@@ -399,7 +400,36 @@ type uploaded struct {
 // uploadSnapshotFiles: the transcripts and ~/artifacts out of the snapshot, as plain files. Two passes: the
 // first learns the names, the modification times and the symlinks under artifacts/ (followed when they
 // point inside the snapshot, like Jarvis 1's `find -L`), the second uploads.
-func uploadSnapshotFiles(box *StorageBox, dir, snap, tmp string) (*uploaded, error) {
+// archiveProgress: an archive's upload progress, as the session's waiting text (the app shows it on the destroying
+// session) and, at most every 20 s, a line in the destroy's lifecycle log and the router's log
+func (r *Router) archiveProgress(sid string) func(done, total int) {
+	var mu sync.Mutex
+	var last time.Time
+	return func(done, total int) {
+		mu.Lock()
+		defer mu.Unlock()
+		if done < total && time.Since(last) < archiveProgressEvery {
+			return
+		}
+		last = time.Now()
+		text := fmt.Sprintf("archiving to the Storage Box: %d of %d files uploaded", done, total)
+		r.setWaiting(sid, text)
+		r.lcNote(sid, "", text)
+		log.Printf("session %s: %s", sid, text)
+	}
+}
+
+var archiveProgressEvery = 20 * time.Second
+
+// archiveUploads: how many artifact/transcript uploads of one archive run at once
+var archiveUploads = 4
+
+// errStopWalk: the tar walk ends early because an upload already failed (that error is the one returned)
+var errStopWalk = errors.New("an upload failed")
+
+// uploadSnapshotFiles: progress (may be nil) hears every finished upload: done of total (a file a symlink also names
+// counts once per name)
+func uploadSnapshotFiles(box *StorageBox, dir, snap, tmp string, progress func(done, total int)) (*uploaded, error) {
 	type entry struct {
 		at time.Time
 	}
@@ -463,49 +493,126 @@ func uploadSnapshotFiles(box *StorageBox, dir, snap, tmp string) (*uploaded, err
 		out.transcripts = append(out.transcripts, "transcript-"+path.Base(t))
 	}
 	sort.Strings(out.unresolved)
-	made := map[string]bool{}
+	total := 0
+	for _, ds := range dests {
+		total += len(ds)
+	}
+	// the uploads run archiveUploads at a time (DECISIONS 226): one by one, a session with thousands of artifact files
+	// took the Storage Box's round trip per file (2094 files: 20 min) and its destroy looked stuck. The tar is read in
+	// order; each file goes to a temp file the worker deletes once it is up, so at most a few are on disk at once.
+	type job struct {
+		name, local string
+		ds          []string
+	}
+	jobs := make(chan job)
+	var (
+		mu       sync.Mutex
+		firstErr error
+		done     int
+		wg       sync.WaitGroup
+	)
+	fail := func(err error) {
+		mu.Lock()
+		if firstErr == nil {
+			firstErr = err
+		}
+		mu.Unlock()
+	}
+	failed := func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return firstErr != nil
+	}
+	for i := 0; i < archiveUploads; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := range jobs {
+				for _, d := range j.ds {
+					if failed() {
+						break
+					}
+					if err := box.PutFile(dir+"/"+d, j.local); err != nil {
+						fail(err)
+						break
+					}
+					mu.Lock()
+					done++
+					n := done
+					if strings.HasPrefix(d, "artifacts/") {
+						out.artifacts++
+						out.artifactNames = append(out.artifactNames, strings.TrimPrefix(d, "artifacts/"))
+					}
+					mu.Unlock()
+					if progress != nil {
+						progress(n, total)
+					}
+				}
+				os.Remove(j.local)
+			}
+		}()
+	}
+	made := map[string]bool{dir: true, dir + "/jarvis2": true} // the archive dir is made by the caller
+	mkdirs := func(p string) error {                           // each directory once, its parents first, one MKCOL each
+		if p == "." || made[dir+"/"+p] {
+			return nil
+		}
+		segs := strings.Split(p, "/")
+		for i := range segs {
+			d := dir + "/" + strings.Join(segs[:i+1], "/")
+			if made[d] {
+				continue
+			}
+			if err := box.mkcol(d); err != nil {
+				return err
+			}
+			made[d] = true
+		}
+		return nil
+	}
 	err = walkTar(snap, func(h *tar.Header, body io.Reader) error {
 		name := path.Clean(h.Name)
 		ds := dests[name]
 		if h.Typeflag != tar.TypeReg || len(ds) == 0 {
 			return nil
 		}
+		if failed() {
+			return errStopWalk
+		}
 		f, err := os.CreateTemp(tmp, "archive-*")
 		if err != nil {
 			return err
 		}
-		defer os.Remove(f.Name())
 		_, err = io.Copy(f, body)
 		if cerr := f.Close(); err == nil {
 			err = cerr
 		}
-		if err != nil {
-			return err
-		}
-		if isTranscript(name) {
-			sum, err := sumFile(f.Name())
-			if err != nil {
-				return err
+		if err == nil && isTranscript(name) {
+			var sum fileSum
+			if sum, err = sumFile(f.Name()); err == nil {
+				out.sums[path.Base(name)] = sum
 			}
-			out.sums[path.Base(name)] = sum
 		}
 		for _, d := range ds {
-			if p := path.Dir(d); p != "." && !made[p] {
-				if err := box.Mkcols(dir + "/" + p); err != nil {
-					return err
-				}
-				made[p] = true
-			}
-			if err := box.PutFile(dir+"/"+d, f.Name()); err != nil {
-				return err
-			}
-			if strings.HasPrefix(d, "artifacts/") {
-				out.artifacts++
-				out.artifactNames = append(out.artifactNames, strings.TrimPrefix(d, "artifacts/"))
+			if err == nil {
+				err = mkdirs(path.Dir(d))
 			}
 		}
+		if err != nil {
+			os.Remove(f.Name())
+			return err
+		}
+		jobs <- job{name: name, local: f.Name(), ds: ds}
 		return nil
 	})
+	close(jobs)
+	wg.Wait()
+	if err == errStopWalk {
+		err = nil
+	}
+	if err == nil {
+		err = firstErr
+	}
 	if err != nil {
 		return nil, err
 	}
