@@ -169,7 +169,7 @@ func main() {
 
 	step("a new session on the kernel; the phone signs its source")
 	var created struct{ ID string }
-	must("POST", router+"/api/sessions", map[string]any{"label": "e2e on the kernel", "harness": "opencode", "permissionMode": "auto", "size": "small"}, &created)
+	must("POST", router+"/api/sessions", map[string]any{"label": "e2e on the kernel", "harness": "opencode", "size": "small"}, &created)
 	var a struct {
 		ID, Kind  string
 		Challenge sig.Doc

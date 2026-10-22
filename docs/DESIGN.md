@@ -973,8 +973,8 @@ store key P + K and the deploy-key stores stay valid: "Core continuity"); a long
 - **Nothing the router says decides what is signed**: the stores a harness brings are pinned in the app from git
   (`policy/stores.json`); Start refuses a store that wasn't picked and isn't the harness's, and a sensitive one it didn't
   pick. The image must carry CI's signature (`keys/ci.pub`).
-- **New session is one page** (Deyao, 2026-10-10): prompt, title, stores, harness, repos, permission mode, model and the
-  other options; its **Start** signs the session and, under the same Face ID, unlocks every store the session gets that is
+- **New session is one page** (Deyao, 2026-10-10): prompt, title, stores, harness, repos, model and the other options;
+  the permission mode is always bypass, shown but not picked (DECISIONS 219), and still signed; its **Start** signs the session and, under the same Face ID, unlocks every store the session gets that is
   locked, for that session only. An approval made elsewhere (the web page, a restore, a task) and an add-store do the same
   under their one Face ID. A request from elsewhere (a session, the web page, Claude's setup session) waits in the Inbox
   and opens the same review page, with **Allow** (Face ID) and **Deny**.

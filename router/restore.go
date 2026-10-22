@@ -124,7 +124,7 @@ func (r *Router) RestoreRecord(recordID, requestID string) (string, error) {
 	if label == "" {
 		label = rec.Archive.Title
 	}
-	s := &Session{ID: sid, State: "approval", Created: time.Now().UTC(), Label: label, Model: rec.Model, PermissionMode: rec.PermissionMode,
+	s := &Session{ID: sid, State: "approval", Created: time.Now().UTC(), Label: label, Model: rec.Model, PermissionMode: "bypass", // the only start mode, whatever the destroyed session ran in
 		Size: rec.Size, Harness: rec.Harness, Stores: stores, ClaudeAccount: account, Repos: rec.Repos, RequestID: requestID, RestoreFrom: recordID, RestoreCert: cert, RestoreCoreCert: coreCert}
 	r.st.Do(func(d *persisted) { d.Sessions[sid] = s })
 	config, err := r.sessionConfig(s) // vouch.go: names the snapshot this line restores (machine + sha256)

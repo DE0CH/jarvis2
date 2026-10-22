@@ -67,7 +67,7 @@ func kernelSession(rg *rig, sid string) Session {
 // machine restores the old one's snapshot), and the destroy archives it and burns its source
 func TestAKernelLinesLife(t *testing.T) {
 	rg, k := kernelRig(t)
-	sid, err := rg.r.CreateSession(NewSession{Label: "on the kernel", Harness: "claude", PermissionMode: "auto"})
+	sid, err := rg.r.CreateSession(NewSession{Label: "on the kernel", Harness: "claude"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -93,7 +93,7 @@ func TestAKernelLinesLife(t *testing.T) {
 		Harness, PermissionMode string
 	}
 	json.Unmarshal(c.Source.Settings, &settings)
-	if settings.Harness != "claude" || settings.PermissionMode != "auto" || c.Pair.Conditions[0] != "session:"+sid {
+	if settings.Harness != "claude" || settings.PermissionMode != "bypass" || c.Pair.Conditions[0] != "session:"+sid {
 		t.Fatalf("%s %+v", c.Source.Settings, c.Pair)
 	}
 	signature, _ := k.Phone.Sign([]byte(a.Challenge.Payload))

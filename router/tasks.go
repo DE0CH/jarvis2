@@ -900,7 +900,7 @@ func (r *Router) newTaskLine(inst *TaskInstance, requestID string) error {
 	}
 	sid, err := taskOps.create(r, NewSession{RequestID: requestID, Label: "Task: " + inst.Name, Harness: taskHarnessPrefix + inst.Template,
 		Stores: inst.Stores, Content: inst.Content, Account: inst.Account, NeedsAccount: inst.Account != "", Size: inst.Size, AutoPause: &off,
-		PermissionMode: "auto", Task: tc})
+		PermissionMode: "bypass", Task: tc})
 	if err != nil {
 		return err
 	}

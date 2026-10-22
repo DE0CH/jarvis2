@@ -2380,3 +2380,15 @@ snapshot failed with "no space left on device", the machine was destroyed anyway
      `pull-secrets` reach the root worker, every kill from claude refused, SIGINT → teardown → exit. The e2e
      (`e2e/keeper.go`) checks the same on a real Fly machine, then a SIGTERM to the main child → the transcript tail
      and the committed snapshot at the router, the session paused and resumed from it.
+
+## Bypass is the only start mode, 2026-10-22
+
+219. **Every new session starts in bypass** (Deyao, 2026-10-22: "change bypass permission to be the only and default
+     option for starting a session"). Neither app has a permission-mode picker on New session any more; the iPhone page
+     shows "bypass" as a fixed row, and Start still checks that the signed challenge names it (the mode stays signed,
+     DECISIONS 30). The router's `CreateSession` takes `permissionMode` "bypass" or none and refuses any other value
+     (400), so every path that starts a line does the same: a session's `jarvis2-request new-session`, the web page, a
+     task instance, a Jarvis 1 import, and a restore of a destroyed session (whatever mode the archived one ran in). A
+     clean cut: no fallback to auto. Switching a RUNNING or paused session's mode (`POST /api/sessions/:id/permission-mode`,
+     the `terminal` grant for raising it to bypass) is unchanged, so a session can still be lowered to auto; existing
+     sessions keep the mode they have.

@@ -179,6 +179,20 @@ func TestNewSessionClaudeAccount(t *testing.T) {
 	if id, err := r.CreateSession(NewSession{Label: "x", Harness: "claude"}); err != nil || acct(id) != "" {
 		t.Fatal("a Claude session with no account at all", err)
 	}
+	// bypass is the only start mode (Deyao, 2026-10-22): unnamed → bypass, bypass → bypass, anything else refused
+	mode := func(id string) (m string) {
+		r.st.Do(func(d *persisted) { m = d.Sessions[id].PermissionMode })
+		return
+	}
+	if id, err := r.CreateSession(NewSession{Label: "m", Harness: "claude"}); err != nil || mode(id) != "bypass" {
+		t.Fatal("no mode named", err, mode(id))
+	}
+	if id, err := r.CreateSession(NewSession{Label: "m", Harness: "claude", PermissionMode: "bypass"}); err != nil || mode(id) != "bypass" {
+		t.Fatal("bypass named", err)
+	}
+	if _, err := r.CreateSession(NewSession{Label: "m", Harness: "claude", PermissionMode: "auto"}); err == nil || !strings.Contains(err.Error(), "only start mode") {
+		t.Fatal("auto must be refused", err)
+	}
 	r.accounts().add("main")
 	r.accounts().add("work")
 	id, err := r.CreateSession(NewSession{Label: "x", Harness: "claude"})

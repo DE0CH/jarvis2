@@ -511,6 +511,9 @@ func TestRestoreRecord(t *testing.T) {
 	if appr == nil || appr.Kind != "new-session" || !strings.HasPrefix(appr.Options["restore"], "Fix the: router (destroyed ") {
 		t.Fatalf("approval %+v", appr)
 	}
+	if s.PermissionMode != "bypass" || appr.Options["permissionMode"] != "bypass" { // the only start mode, whatever s1 ran in
+		t.Fatalf("restored in %q (approval %q)", s.PermissionMode, appr.Options["permissionMode"])
+	}
 	// the first machine gets the old cert in its env; a later one doesn't
 	env := rg.r.machineEnv(&s)
 	if env["JARVIS2_RESTORE_CERT"] == "" {

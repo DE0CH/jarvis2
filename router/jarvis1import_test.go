@@ -33,7 +33,7 @@ const j1TestUUID = "0fa81372-5d1c-49af-b680-25a842f5df96"
 func j1Snapshot(t *testing.T, rg *rig) map[string][]byte {
 	files := map[string][]byte{
 		"session.json": []byte(`{"id":"` + j1TestID + `","title":"OWCS ticket cron","label":"","model":"claude-opus-5-5","size":"xlarge",` +
-			`"harness":"claude","permissionMode":"bypass","autoPause":"on","repos":"https://github.com/de0ch/claude-env.git https://github.com/DE0CH/YCC.git",` +
+			`"harness":"claude","permissionMode":"auto","autoPause":"on","repos":"https://github.com/de0ch/claude-env.git https://github.com/DE0CH/YCC.git",` +
 			`"pausedAt":"2026-10-12T13:50:30.612Z","metadata":{"cron_owcs":"{\"name\":\"owcs\",\"prompt\":\"check\",\"every\":86400,\"nextAt\":1}"}}`),
 		"manifest.txt":           []byte(j1TestUUID + ".jsonl\n"),
 		j1TestUUID + ".jsonl":    []byte(`{"type":"user"}` + "\n"),
@@ -128,7 +128,7 @@ func TestJarvis1ImportPrepareAndImport(t *testing.T) {
 		return appr != nil
 	})
 	if s.State != "approval" || s.ImportFrom != j1TestID || s.ImportSha != sum || s.Label != "OWCS ticket cron" || s.Size != "large" ||
-		s.PermissionMode != "bypass" || s.Model != "claude-opus-5-5" || s.Repos != "https://github.com/de0ch/claude-env.git,https://github.com/DE0CH/YCC.git" ||
+		s.PermissionMode != "bypass" /* Jarvis 1 ran it in auto: bypass is the only start mode */ || s.Model != "claude-opus-5-5" || s.Repos != "https://github.com/de0ch/claude-env.git,https://github.com/DE0CH/YCC.git" ||
 		strings.Join(s.Stores, ",") != "default,tunnel" || s.Live == nil || s.Live.AutoPauseOff {
 		t.Fatalf("session %+v", s)
 	}
