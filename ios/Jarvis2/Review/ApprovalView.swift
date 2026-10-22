@@ -26,6 +26,8 @@ struct ApprovalView: View {
   /// sensitive stores: the core's signed store list's marks joined with the challenge's (a newer core drops the latter)
   @State private var sens: [String] = []
   @State private var signed: [SignedFact]?
+  /// an approval on the kernel: its own page (KernelApprovalView)
+  @State private var kernel: RouterClient.ApprovalDTO?
   @State private var loadError: String?
   @State private var busy: String?
   @State private var failure: String?
@@ -40,6 +42,14 @@ struct ApprovalView: View {
   }
 
   var body: some View {
+    if let kernel {
+      KernelApprovalView(a: kernel, inbox: inbox, request: request, onFinish: onFinish)
+    } else {
+      coreForm
+    }
+  }
+
+  private var coreForm: some View {
     Form {
       if let inbox { RequestReviewSection(inboxId: inbox, signed: signed, request: request) }
       if let loadError {
@@ -164,6 +174,7 @@ struct ApprovalView: View {
   private func load() async {
     do {
       guard let x = try await RouterClient.shared.approval(approvalId) else { loadError = "This approval is gone (answered or rejected elsewhere)."; return }
+      if x.kind.hasPrefix("kernel-") { kernel = x; return }
       let rv = try Checks.review(challenge: x.challenge, coreKey: try CoreTrust.key())
       // which session this continues comes from the signed predecessor, never the router's label (audit findings 1, 5)
       let id = try Checks.continues(rv, coreKey: try CoreTrust.key())
