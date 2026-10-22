@@ -213,6 +213,11 @@ jobs:
           # one), never while that core is held (jarvis2/core-pin: hold on its Deployment): a core restart is a new, empty
           # core, so the serving core is never restarted by CI. Deyao then Recovers the new one alongside and the router
           # flips (docs/DESIGN.md "Core continuity"); after a flip, active.txt is changed to the new serving colour.
+          # A release HOLDS the core it lands on, in the same commit: from then on Deyao may Recover it alongside (a
+          # standby) and the router may flip to it, which this job can't see (it can't reach the router), so no later
+          # release may restart it (DECISIONS 223: on 2026-10-22 one restarted the standby during the flip's drain). The
+          # commit after the flip deletes the hold (RUNBOOK "A core release"). The annotation sits on the Deployment's own
+          # metadata, not the pod template, so adding or deleting it restarts nothing.
           CF=k8s/control/apps/core/core.yaml
           if [ -f "$CF" ]; then
             active="$(tr -d '[:space:]' < k8s/control/apps/core/active.txt)"; other=blue; [ "$active" = blue ] && other=green
@@ -233,7 +238,11 @@ jobs:
           parts=s.split("\n---\n")
           for i,p in enumerate(parts):
               if "kind: Deployment" in p and "name: core-"+col+"," in p:
-                  parts[i]=re.sub(r"ghcr.io/de0ch/jarvis2-core:sha-[0-9a-f]{12}(@sha256:[0-9a-f]{64})?", img, p)
+                  p=re.sub(r"ghcr.io/de0ch/jarvis2-core:sha-[0-9a-f]{12}(@sha256:[0-9a-f]{64})?", img, p)
+                  p,n=re.subn(r"metadata: \{ name: core-"+col+r", namespace: jarvis2-core \}",
+                              "metadata: { name: core-"+col+", namespace: jarvis2-core, annotations: { jarvis2/core-pin: hold } }", p)
+                  if n!=1: sys.exit("core-"+col+": no plain metadata line to put the hold on")
+                  parts[i]=p
           open(f,"w").write("\n---\n".join(parts))
           PY
             fi

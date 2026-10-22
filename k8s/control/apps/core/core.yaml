@@ -3,12 +3,14 @@
 # other is the NEXT core (NEXT_CORE_URL): empty, or Recovered alongside as a standby with the same kit, ready for the
 # router's flip (POST /handoff to the serving one, POST /takeover to the standby). A core release goes only into the
 # core that doesn't serve (active.txt here names the serving one; images.yml reads it), so a release never empties
-# the core the sessions use: Deyao Recovers the new one alongside, the router flips, nothing waits on him.
+# the core the sessions use: Deyao Recovers the new one alongside, the router flips, nothing waits on him. The release
+# also puts jarvis2/core-pin: hold on the Deployment it lands on, so no later release restarts a standby; the commit
+# after the flip deletes it (DECISIONS 224; Deployment metadata, so it restarts nothing).
 # No service-account token, no volume, read-only root. Only the router may reach them; they may reach the internet
 # (Fly's API) but nothing inside the cluster.
 apiVersion: apps/v1
 kind: Deployment
-metadata: { name: core-blue, namespace: jarvis2-core }
+metadata: { name: core-blue, namespace: jarvis2-core, annotations: { jarvis2/core-pin: hold } }
 spec:
   replicas: 1
   strategy: { type: Recreate }
