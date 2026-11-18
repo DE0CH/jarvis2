@@ -5,8 +5,7 @@ name: images
 # harnesses, entrypoint) is built only when that directory changed since the base it pins (or on a dispatch with
 # base=true), pushed as jarvis2-session:base-sha-<12>, and pinned in session-image/Dockerfile's BASE by the pin job.
 on:
-  push:
-    branches: [main]
+  push:  # every branch: the gate merges a branch when this is green; main alone pins
     paths: [core/**, kernel/**, router/**, machine/**, session-image/**, policy/**, tasks/**, app/**, infra/setup.py, infra/setup_trust_test.py, infra/setup_write_test.py, infra/image-unpacked-size.py, .github/workflows/images.yml]
   workflow_dispatch:
     inputs:
@@ -19,7 +18,7 @@ permissions:
   packages: write
   attestations: write
   id-token: write
-concurrency: { group: images, cancel-in-progress: false }
+concurrency: { group: "images-${{ github.ref }}", cancel-in-progress: false }
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -112,7 +111,7 @@ jobs:
           build-args: ${{ (matrix.name == 'session' && needs.base.outputs.ref) && format('BASE={0}', needs.base.outputs.ref) || '' }}
           tags: |
             ghcr.io/de0ch/jarvis2-${{ matrix.name }}:${{ steps.tag.outputs.sha }}
-            ghcr.io/de0ch/jarvis2-${{ matrix.name }}:latest
+            ${{ github.ref == 'refs/heads/main' && format('ghcr.io/de0ch/jarvis2-{0}:latest', matrix.name) || '' }}
       - name: build attestation (what the iPhone will check for "CI build from <date>")
         uses: actions/attest-build-provenance@v2
         with:
